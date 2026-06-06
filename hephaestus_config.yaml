@@ -19,6 +19,16 @@ llm:
   default_model: xiaomi/mimo-v2.5
   default_temperature: 0.7
   default_max_tokens: 4000
+
+  # LiteLLM Proxy (optional - routes through deneb-server for cost tracking)
+  # When enabled, all LLM calls go through LiteLLM proxy with a custom "user"
+  # field set to the feature name, enabling per-feature cost tracking.
+  # litellm_proxy:
+  #   url: http://deneb-server:4000
+  #   api_key_env: LITELLM_API_KEY        # Virtual key for proxy authentication
+  #   cost_api_key_env: LITELLM_MASTER_KEY # Admin key for querying spend endpoints
+  #   cost_tracking: true                  # Enable per-feature cost tracking
+
   providers:
     openai:
       api_key_env: OPENAI_API_KEY
