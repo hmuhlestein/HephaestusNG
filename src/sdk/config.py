@@ -26,6 +26,12 @@ class HephaestusConfig:
     openrouter_api_key: Optional[str] = None
     groq_api_key: Optional[str] = None
 
+    # LiteLLM Proxy (optional - routes through deneb-server for cost tracking)
+    litellm_proxy_url: Optional[str] = None  # e.g., "http://deneb-server:4000"
+    litellm_api_key: Optional[str] = None    # Virtual key for LiteLLM proxy
+    litellm_cost_tracking: bool = False      # Enable cost tracking per feature
+    litellm_cost_api_key: Optional[str] = None  # Admin key for querying spend endpoints
+
     # Server
     mcp_port: int = 8000
     mcp_host: str = "127.0.0.1"

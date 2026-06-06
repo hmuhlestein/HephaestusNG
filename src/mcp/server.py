@@ -1977,6 +1977,61 @@ async def save_memory(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+class SearchMemoryRequest(BaseModel):
+    """Request model for searching memories."""
+    query: str
+    limit: int = 10
+    memory_type: Optional[str] = None
+
+
+class SearchMemoryResponse(BaseModel):
+    """Response model for memory search."""
+    results: List[Dict[str, Any]]
+    total: int
+
+
+@app.post("/search_memory", response_model=SearchMemoryResponse)
+async def search_memory(request: SearchMemoryRequest):
+    """Search the knowledge base for relevant memories using semantic search."""
+    logger.info(f"Searching memory: '{request.query[:100]}' (limit={request.limit})")
+
+    try:
+        query_embedding = await server_state.llm_provider.generate_embedding(request.query)
+
+        filters = None
+        if request.memory_type:
+            filters = {"must": [{"key": "memory_type", "match": {"value": request.memory_type}}]}
+
+        results = await server_state.vector_store.search(
+            collection="memories",
+            query_vector=query_embedding,
+            limit=request.limit,
+            filters=filters,
+        )
+
+        formatted_results = []
+        for r in results:
+            formatted_results.append({
+                "id": r.get("id", ""),
+                "content": r.get("payload", {}).get("content", ""),
+                "memory_type": r.get("payload", {}).get("memory_type", ""),
+                "score": r.get("score", 0),
+                "metadata": {
+                    k: v for k, v in r.get("payload", {}).items()
+                    if k not in ("content", "memory_id", "timestamp")
+                },
+            })
+
+        return SearchMemoryResponse(
+            results=formatted_results,
+            total=len(formatted_results),
+        )
+
+    except Exception as e:
+        logger.error(f"Failed to search memory: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/report_results", response_model=ReportResultsResponse)
 async def report_results(
     request: ReportResultsRequest,
@@ -4234,6 +4289,19 @@ async def list_tools():
                 }
             },
             {
+                "name": "search_memory",
+                "description": "Search the knowledge base for relevant memories using semantic search",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "Search query to find relevant memories"},
+                        "limit": {"type": "integer", "description": "Maximum number of results (default: 10)"},
+                        "memory_type": {"type": "string", "description": "Filter by memory type (e.g., decision, discovery, learning)"}
+                    },
+                    "required": ["query"]
+                }
+            },
+            {
                 "name": "get_task_status",
                 "description": "Get status of all tasks",
                 "input_schema": {
@@ -4512,6 +4580,14 @@ async def execute_tool(request: Dict[str, Any]):
                 related_files=arguments.get("related_files", [])
             ),
             agent_id="mcp-claude"
+        )
+    elif tool_name == "search_memory":
+        return await search_memory(
+            SearchMemoryRequest(
+                query=arguments.get("query", ""),
+                limit=arguments.get("limit", 10),
+                memory_type=arguments.get("memory_type"),
+            )
         )
     elif tool_name == "get_task_status":
         return await task_progress()
