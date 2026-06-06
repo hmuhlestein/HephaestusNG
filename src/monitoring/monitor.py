@@ -617,6 +617,19 @@ class MonitoringLoop:
                     message=analysis.get('steering_message'),  # Guardian should map from steering_recommendation
                 )
 
+                # Auto-restart if agent keeps ignoring steering
+                past = self._get_past_summaries_for_agent(agent.id, limit=5)
+                consecutive_stuck = sum(
+                    1 for s in past
+                    if s.get('needs_steering') and s.get('steering_type') in ('stuck', 'idle')
+                )
+                if consecutive_stuck >= self.config.max_ignored_steering:
+                    logger.warning(
+                        f"Agent {agent.id[:8]} ignored steering {consecutive_stuck} times. "
+                        f"Auto-restarting..."
+                    )
+                    await self._auto_restart_agent(agent)
+
             # Update agent health based on trajectory alignment
             await self._update_agent_health_from_trajectory(agent, analysis)
 
@@ -625,6 +638,27 @@ class MonitoringLoop:
         except Exception as e:
             logger.error(f"Guardian analysis failed for agent {agent.id}: {e}")
             return None
+
+    async def _auto_restart_agent(self, agent: Agent) -> None:
+        """Kill a stuck agent's tmux session and mark it for restart."""
+        try:
+            if agent.tmux_session_name:
+                self.agent_manager.tmux_server.kill_session(agent.tmux_session_name)
+                logger.info(f"Killed tmux session {agent.tmux_session_name}")
+
+            session = self.db_manager.get_session()
+            try:
+                agent.status = "terminated"
+                agent.health_check_failures = 0
+                session.commit()
+            finally:
+                session.close()
+
+            # Record the restart
+            self.guardian._record_steering(agent.id, "AUTO_RESTART", "Agent ignored steering too many times, auto-restarted")
+
+        except Exception as e:
+            logger.error(f"Failed to auto-restart agent {agent.id}: {e}")
 
     def _get_past_summaries_for_agent(self, agent_id: str, limit: int = 10) -> List[Dict[str, Any]]:
         """Get past Guardian summaries for an agent.

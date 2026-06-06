@@ -312,6 +312,46 @@ class Conductor:
 
         return summary
 
+    async def review_qa_report(
+        self,
+        qa_report: str,
+        prd_content: str,
+        phase_intent: str,
+        spec: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Review a QA report against PRD and phase intent using LLM.
+
+        Args:
+            qa_report: The QA report content (HTML or markdown)
+            prd_content: The PRD content
+            phase_intent: What the phase was supposed to accomplish
+            spec: Acceptance criteria (max_failed_tests, required_pass_rate, etc.)
+
+        Returns:
+            Dictionary with verdict, reasoning, and recommendations
+        """
+        try:
+            from src.interfaces import get_llm_provider
+            llm_provider = get_llm_provider()
+
+            if not llm_provider:
+                logger.error("No LLM provider available for QA review")
+                return {"up_to_spec": False, "reasoning": "No LLM provider available"}
+
+            result = await llm_provider.review_qa_report(
+                qa_report=qa_report,
+                prd_content=prd_content,
+                phase_intent=phase_intent,
+                spec=spec,
+            )
+
+            logger.info(f"QA review result: up_to_spec={result.get('up_to_spec')}")
+            return result
+
+        except Exception as e:
+            logger.error(f"QA review failed: {e}")
+            return {"up_to_spec": False, "reasoning": f"Review failed: {e}"}
+
     def _get_empty_analysis(self) -> Dict[str, Any]:
         """Get empty analysis structure when no agents active."""
         return {

@@ -20,15 +20,29 @@ mcp = FastMCP("Qdrant with OpenAI Embeddings")
 QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
 COLLECTION_NAME = os.getenv("COLLECTION_NAME", "hephaestus_agent_memories")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-3-large")
 
 # Initialize clients
 qdrant_client = QdrantClient(url=QDRANT_URL)
-openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+
+if OPENROUTER_API_KEY:
+    from openai import AsyncOpenAI
+    openai_client = AsyncOpenAI(
+        api_key=OPENROUTER_API_KEY,
+        base_url="https://openrouter.ai/api/v1",
+    )
+elif OPENAI_API_KEY:
+    from openai import AsyncOpenAI
+    openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+else:
+    openai_client = None
 
 
 async def generate_embedding(text: str) -> List[float]:
-    """Generate embedding using OpenAI."""
+    """Generate embedding using OpenAI or OpenRouter."""
+    if not openai_client:
+        raise Exception("No API key available. Set OPENROUTER_API_KEY or OPENAI_API_KEY.")
     try:
         response = await openai_client.embeddings.create(
             model=EMBEDDING_MODEL,
@@ -109,11 +123,12 @@ async def qdrant_store(content: str, metadata: Dict[str, Any] = None) -> str:
 
 if __name__ == "__main__":
     # Validate configuration
-    if not OPENAI_API_KEY:
-        print("Error: OPENAI_API_KEY environment variable is required", file=sys.stderr)
+    if not OPENAI_API_KEY and not OPENROUTER_API_KEY:
+        print("Error: Set OPENROUTER_API_KEY or OPENAI_API_KEY environment variable", file=sys.stderr)
         sys.exit(1)
 
-    print(f"Starting Qdrant MCP with OpenAI embeddings", file=sys.stderr)
+    provider = "OpenRouter" if OPENROUTER_API_KEY else "OpenAI"
+    print(f"Starting Qdrant MCP with {provider} embeddings", file=sys.stderr)
     print(f"  Model: {EMBEDDING_MODEL}", file=sys.stderr)
     print(f"  Collection: {COLLECTION_NAME}", file=sys.stderr)
     print(f"  Qdrant: {QDRANT_URL}", file=sys.stderr)

@@ -195,6 +195,31 @@ class MultiProviderLLM(LLMProviderInterface):
             system_goals=system_goals
         )
 
+    async def review_qa_report(
+        self,
+        qa_report: str,
+        prd_content: str,
+        phase_intent: str,
+        spec: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Review a QA report against PRD and phase intent.
+
+        Args:
+            qa_report: The QA report content
+            prd_content: The PRD content
+            phase_intent: What the phase was supposed to accomplish
+            spec: Acceptance criteria
+
+        Returns:
+            Dictionary with verdict, reasoning, and recommendations
+        """
+        return await self.client.review_qa_report(
+            qa_report=qa_report,
+            prd_content=prd_content,
+            phase_intent=phase_intent,
+            spec=spec,
+        )
+
     def get_model_name(self) -> str:
         """Get the name of the model being used.
 

@@ -6,18 +6,17 @@ paths:
   database: ./hephaestus.db
   phases_folder: ./example_workflows/crackme_solving
   worktree_base: /tmp/hephaestus_worktrees
-  project_root: /tmp/test_3gaur34
+  project_root: /Users/hmuhlestein/code/sotto
 git:
-  main_repo_path: /tmp/test_3gaur34
+  main_repo_path: /Users/hmuhlestein/code/sotto
   worktree_branch_prefix: agent-
   auto_commit: true
   conflict_resolution: newest_file_wins
 llm:
   embedding_model: text-embedding-3-large
-  embedding_provider: openai
+  embedding_provider: openrouter
   default_provider: openrouter
-  default_model: openai/gpt-oss-120b
-  default_openrouter_provider: cerebras
+  default_model: xiaomi/mimo-v2.5
   default_temperature: 0.7
   default_max_tokens: 4000
   providers:
@@ -31,38 +30,32 @@ llm:
   model_assignments:
     task_enrichment:
       provider: openrouter
-      openrouter_provider: Cerebras
-      model: openai/gpt-oss-120b
+      model: xiaomi/mimo-v2.5
       temperature: 0.7
       max_tokens: 4000
     agent_monitoring:
       provider: openrouter
-      openrouter_provider: Cerebras
-      model: openai/gpt-oss-120b
+      model: xiaomi/mimo-v2.5
       temperature: 0.3
       max_tokens: 2000
     guardian_analysis:
       provider: openrouter
-      openrouter_provider: Cerebras
-      model: openai/gpt-oss-120b
+      model: xiaomi/mimo-v2.5
       temperature: 0.5
       max_tokens: 8000
     conductor_analysis:
       provider: openrouter
-      openrouter_provider: Cerebras
-      model: openai/gpt-oss-120b
+      model: xiaomi/mimo-v2.5
       temperature: 0.4
       max_tokens: 4000
     agent_prompts:
       provider: openrouter
-      openrouter_provider: Cerebras
-      model: openai/gpt-oss-120b
+      model: xiaomi/mimo-v2.5
       temperature: 0.8
       max_tokens: 4000
 agents:
-  default_cli_tool: claude
-  cli_model: GLM-4.6
-  glm_api_token_env: GLM_API_TOKEN
+  default_cli_tool: opencode
+  cli_model: openrouter/xiaomi/mimo-v2.5
   tmux_session_prefix: agent
   health_check_interval: 60
   max_health_failures: 3
@@ -78,6 +71,7 @@ monitoring:
   log_format: json
   stuck_agent_threshold: 300
   guardian_min_agent_age_seconds: 60
+  max_ignored_steering: 3
 mcp:
   auth_required: false
   session_timeout: 3600
@@ -90,7 +84,7 @@ task_deduplication:
   embedding_dimension: 3072
   batch_size: 100
 diagnostic_agent:
-  enabled: false
+  enabled: true
   cooldown_seconds: 60
   min_stuck_time_seconds: 60
   max_agents_to_analyze: 15
@@ -103,4 +97,4 @@ ticket_tracking:
   embedding:
     model: text-embedding-3-large
     dimensions: 3072
-    provider: openai
+    provider: openrouter

@@ -219,7 +219,7 @@ class OpenCodeAgent(CLIAgentInterface):
 
         # OpenCode command with -p flag to load the prompt
         # The prompt will be added to the input but not submitted
-        command = f"opencode -p \"$(cat {prompt_file})\" --model {model}"
+        command = f"opencode run \"$(cat {prompt_file})\" --model {model}"
 
         return command
 

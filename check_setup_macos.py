@@ -100,8 +100,15 @@ class SetupChecker:
                     env_vars[key.strip()] = value.strip()
 
         # Check required keys
-        required_keys = ['OPENAI_API_KEY']
-        optional_keys = ['OPENROUTER_API_KEY', 'ANTHROPIC_API_KEY']
+        required_keys = []  # No single key is strictly required
+        optional_keys = ['OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'ANTHROPIC_API_KEY']
+
+        # At least one of OPENAI_API_KEY or OPENROUTER_API_KEY should be present
+        has_any_key = (
+            ('OPENAI_API_KEY' in env_vars and env_vars['OPENAI_API_KEY']) or
+            ('OPENROUTER_API_KEY' in env_vars and env_vars['OPENROUTER_API_KEY'])
+        )
+        self.results['api_keys']['OPENAI_API_KEY or OPENROUTER_API_KEY'] = has_any_key
 
         for key in required_keys:
             has_key = key in env_vars and env_vars[key] and env_vars[key] != ''
