@@ -591,6 +591,91 @@ class LangChainLLMClient:
                     return self._default_coherence_analysis()
                 await asyncio.sleep(1)
 
+    async def review_qa_report(
+        self,
+        qa_report: str,
+        prd_content: str,
+        phase_intent: str,
+        spec: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Review a QA report against PRD and phase intent.
+
+        Args:
+            qa_report: The QA report content (HTML or markdown)
+            prd_content: The PRD content
+            phase_intent: What the phase was supposed to accomplish
+            spec: Acceptance criteria (max_failed_tests, required_pass_rate, etc.)
+
+        Returns:
+            Dictionary with verdict, reasoning, and recommendations
+        """
+        assignment = self.config.model_assignments.get('conductor_analysis')
+        logger.info(f"🔵 [LLM CALL] Conductor review_qa_report | Provider: {assignment.provider} | Model: {assignment.model}")
+
+        model = self._get_model_for_component(ComponentType.CONDUCTOR_ANALYSIS)
+        if not model:
+            logger.warning("⚠️ [LLM CALL] No model available for conductor_analysis, using fallback")
+            return {"up_to_spec": False, "reasoning": "No LLM available for review"}
+
+        prompt = f"""You are a QA reviewer evaluating whether a project's output meets its requirements.
+
+## PRD (Product Requirements Document)
+{prd_content[:4000]}
+
+## Phase Intent
+{phase_intent}
+
+## Acceptance Criteria
+{json.dumps(spec, indent=2)}
+
+## QA Report
+{qa_report[:6000]}
+
+---
+
+Based on the QA report above, evaluate whether this output meets the PRD requirements and phase intent.
+
+Respond with a JSON object containing:
+{{
+    "up_to_spec": true/false,
+    "pass_rate": 85.5,
+    "failed_count": 2,
+    "critical_issues": ["list of critical issues found"],
+    "reasoning": "Detailed explanation of your verdict - what meets spec and what doesn't",
+    "recommendations": ["list of specific improvements needed to meet spec"]
+}}
+
+Be strict but fair. The output must actually satisfy the PRD's goals, not just have passing tests.
+Consider:
+1. Does the code implement what the PRD describes?
+2. Are the tests comprehensive enough to verify the requirements?
+3. Are there any critical bugs or security issues?
+4. Does the documentation accurately describe the system?
+"""
+
+        messages = [
+            SystemMessage(content="You are a senior QA engineer reviewing project output against requirements. Be thorough and critical."),
+            HumanMessage(content=prompt)
+        ]
+
+        for attempt in range(3):
+            try:
+                response = await model.ainvoke(messages)
+
+                # Parse the response as structured output
+                parser = JsonOutputParser()
+                result = parser.parse(response.content)
+
+                logger.info(f"✅ [LLM CALL] Conductor review_qa_report completed | up_to_spec={result.get('up_to_spec')} | Provider: {assignment.provider} | Model: {assignment.model}")
+                return result
+
+            except Exception as e:
+                logger.error(f"❌ [LLM CALL] Conductor review_qa_report failed (attempt {attempt + 1}/3) | Provider: {assignment.provider} | Model: {assignment.model} | Error: {e}")
+                if attempt == 2:
+                    logger.warning("⚠️ [LLM CALL] Conductor review_qa_report exhausted retries, using fallback")
+                    return {"up_to_spec": False, "reasoning": f"LLM review failed: {e}"}
+                await asyncio.sleep(1)
+
     def get_model_name(self, component: ComponentType) -> str:
         """Get the name of the model being used for a component.
 

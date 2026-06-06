@@ -165,6 +165,33 @@ class LLMProviderInterface(ABC):
         """
         pass
 
+    @abstractmethod
+    async def review_qa_report(
+        self,
+        qa_report: str,
+        prd_content: str,
+        phase_intent: str,
+        spec: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Review a QA report against PRD and phase intent.
+
+        Args:
+            qa_report: The QA report content (HTML or markdown)
+            prd_content: The PRD (Product Requirements Document) content
+            phase_intent: Description of what the phase was supposed to accomplish
+            spec: Acceptance criteria (max_failed_tests, required_pass_rate, etc.)
+
+        Returns:
+            Dictionary containing:
+                - up_to_spec: Whether output meets requirements (bool)
+                - pass_rate: Percentage of tests passed
+                - failed_count: Number of failed tests
+                - critical_issues: List of critical issues found
+                - reasoning: Explanation of the verdict
+                - recommendations: List of improvements needed
+        """
+        pass
+
 
 class OpenAIProvider(LLMProviderInterface):
     """OpenAI GPT implementation."""

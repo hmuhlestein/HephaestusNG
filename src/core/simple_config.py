@@ -90,6 +90,7 @@ class Config:
         self.log_format = monitoring.get('log_format', 'json')
         self.stuck_agent_threshold = monitoring.get('stuck_agent_threshold', 300)
         self.guardian_min_agent_age_seconds = monitoring.get('guardian_min_agent_age_seconds', 60)
+        self.max_ignored_steering = monitoring.get('max_ignored_steering', 3)
 
         # MCP settings
         mcp = config.get('mcp', {})

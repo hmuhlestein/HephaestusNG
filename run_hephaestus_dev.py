@@ -36,6 +36,7 @@ from example_workflows.index_repo.phases import INDEX_REPO_PHASES, INDEX_REPO_CO
 from example_workflows.feature_development.phases import FEATURE_DEV_PHASES, FEATURE_DEV_CONFIG, \
     FEATURE_DEV_LAUNCH_TEMPLATE
 from example_workflows.documentation_generation.phases import DOC_GEN_PHASES, DOC_GEN_CONFIG, DOC_GEN_LAUNCH_TEMPLATE
+from example_workflows.qa.phases import QA_PHASES, QA_WORKFLOW_CONFIG, QA_LAUNCH_TEMPLATE
 
 from src.sdk import HephaestusSDK
 from src.sdk.models import WorkflowDefinition
@@ -326,10 +327,14 @@ def main():
     print("🔥 Hephaestus Quick Example Runner 🔥")
     print("=" * 50)
 
-    # Step 0: Check and setup sub-agents
-    if not check_and_setup_sub_agents():
-        print("[Error] Failed to setup sub-agents. Workflow cannot proceed.")
-        sys.exit(1)
+    # Step 0: Check and setup sub-agents (only needed for Claude Code)
+    cli_tool = os.getenv("HEPHAESTUS_CLI_TOOL", "opencode")
+    if cli_tool == "claude":
+        if not check_and_setup_sub_agents():
+            print("[Error] Failed to setup sub-agents. Workflow cannot proceed.")
+            sys.exit(1)
+    else:
+        print(f"[Sub-Agents] Skipping Claude sub-agent setup (using {cli_tool})")
 
     # Step 1: Get and setup project path
     project_path = get_project_path(args.path)
@@ -406,18 +411,30 @@ def main():
             launch_template=DOC_GEN_LAUNCH_TEMPLATE,
         )
 
+        qa_definition = WorkflowDefinition(
+            id="qa",
+            name="QA Testing",
+            phases=QA_PHASES,
+            config=QA_WORKFLOW_CONFIG,
+            description="Comprehensive QA with browser automation and log analysis",
+            launch_template=QA_LAUNCH_TEMPLATE,
+        )
+
         sdk = HephaestusSDK(
             workflow_definitions=[index_repo_definition, bug_fix_definition, feature_dev_definition, doc_gen_definition,
-                                  prd_definition],  # Multi-workflow support
+                                  prd_definition, qa_definition],  # Multi-workflow support
             database_path=db_path,
             qdrant_url=qdrant_url,
-            # LLM configuration now comes from hephaestus_config.yaml
             working_directory=project_path,
             mcp_port=mcp_port,
             monitoring_interval=monitoring_interval,
 
+            # LLM Configuration
+            llm_provider="openrouter",
+            llm_model="xiaomi/mimo-v2.5",
+
             # Agent Configuration
-            default_cli_tool="claude",  # Options: "claude", "opencode", "codex", "droid"
+            default_cli_tool=cli_tool,  # Options: "claude", "opencode", "codex", "droid"
 
             # Git Configuration
             main_repo_path=project_path,
@@ -433,7 +450,7 @@ def main():
     # Step 7: Start services
     print("[Hephaestus] Starting services...")
     try:
-        sdk.start(enable_tui=False, timeout=30)
+        sdk.start(enable_tui=False, timeout=60)
     except Exception as e:
         print(f"[Error] Failed to start services: {e}")
         sys.exit(1)
@@ -467,6 +484,7 @@ def main():
     print("  - Index Repository: Scan and index a codebase to build knowledge")
     print("  - Feature Development: Add features to existing codebases")
     print("  - Documentation Generation: Generate docs for existing codebases")
+    print("  - QA Testing: Comprehensive QA with browser automation and log analysis")
     print()
     print("To launch a workflow:")
     print("  1. Go to 'Workflow Executions' page")
