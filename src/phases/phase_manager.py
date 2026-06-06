@@ -484,8 +484,11 @@ class PhaseManager:
 
                 logger.info(f"Marked phase {phase_id} as complete")
 
-                # Start next phase if exists
-                self._start_next_phase(session, phase_id)
+                # Start next phase if exists, or complete the workflow
+                next_started = self._start_next_phase(session, phase_id)
+                if not next_started:
+                    # This was the last phase — complete the workflow
+                    self._complete_workflow(session)
 
         except Exception as e:
             logger.error(f"Failed to mark phase complete: {e}")
@@ -493,16 +496,19 @@ class PhaseManager:
         finally:
             session.close()
 
-    def _start_next_phase(self, session, current_phase_id: str) -> None:
+    def _start_next_phase(self, session, current_phase_id: str) -> bool:
         """Start the next phase after current one completes.
 
         Args:
             session: Database session
             current_phase_id: Current phase ID
+
+        Returns:
+            True if a next phase was started, False if this was the last phase
         """
         current_phase = session.query(Phase).filter_by(id=current_phase_id).first()
         if not current_phase:
-            return
+            return False
 
         # Find next phase
         next_phase = session.query(Phase).filter(
@@ -522,6 +528,20 @@ class PhaseManager:
                 session.commit()
 
                 logger.info(f"Started next phase: {next_phase.name}")
+                return True
+
+        return False
+
+    def _complete_workflow(self, session) -> None:
+        """Mark the workflow as completed when the last phase finishes."""
+        if not self.workflow_id:
+            return
+
+        workflow = session.query(Workflow).filter_by(id=self.workflow_id).first()
+        if workflow and workflow.status == "active":
+            workflow.status = "completed"
+            session.commit()
+            logger.info(f"Workflow {self.workflow_id} completed (all phases done)")
 
     def get_workflow_status(self) -> Dict[str, Any]:
         """Get current workflow status.
