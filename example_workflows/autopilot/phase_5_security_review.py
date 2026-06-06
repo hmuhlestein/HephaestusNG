@@ -1,0 +1,239 @@
+"""
+Phase 5: Security Review
+
+Performs a focused security review of the implementation.
+Checks for vulnerabilities, authentication/authorization issues,
+data handling problems, and compliance with security requirements.
+"""
+
+from src.sdk.models import Phase
+
+PHASE_5_SECURITY_REVIEW = Phase(
+    id=5,
+    name="security_review",
+    description="""Perform focused security review and fix vulnerabilities found.
+
+Analyzes the codebase for security vulnerabilities, authentication issues,
+authorization bypasses, data handling problems, and FIXES critical security
+issues before they ship.""",
+    done_definitions=[
+        "Authentication/authorization mechanisms reviewed",
+        "Input validation verified across all endpoints",
+        "Data handling and storage security assessed",
+        "Secret management reviewed",
+        "Dependency vulnerabilities checked",
+        "Security-related code paths traced end-to-end",
+        "OWASP Top 10 considerations addressed",
+        "Critical and high vulnerabilities FIXED in the code",
+        "security_report.md created with findings and fixes applied",
+        "Memory saved with security findings",
+        "Task marked as done",
+    ],
+    working_directory=".",
+    additional_notes="""═══════════════════════════════════════════════════════════════════════
+YOU ARE A SECURITY REVIEWER - FIND AND FIX VULNERABILITIES
+═══════════════════════════════════════════════════════════════════════
+
+YOUR MISSION: Find security vulnerabilities and FIX them yourself
+
+═══════════════════════════════════════════════════════════════════════
+STEP 1: READ SECURITY REQUIREMENTS
+═══════════════════════════════════════════════════════════════════════
+
+Read:
+- requirements_analysis.md - What security requirements exist?
+- architecture.md - How is security designed?
+- review_report.md - Any security concerns from adversarial review?
+
+═══════════════════════════════════════════════════════════════════════
+STEP 2: AUTHENTICATION & AUTHORIZATION
+═══════════════════════════════════════════════════════════════════════
+
+Review authentication mechanisms:
+- Password hashing (algorithm, salt, cost factor)
+- Token generation (JWT secrets, expiry, refresh)
+- Session management
+- Multi-factor authentication (if applicable)
+
+Review authorization:
+- Role-based access control
+- Resource-level permissions
+- API endpoint protection
+- Privilege escalation risks
+
+═══════════════════════════════════════════════════════════════════════
+STEP 3: INPUT VALIDATION
+═══════════════════════════════════════════════════════════════════════
+
+Check all input points:
+- API request bodies
+- URL parameters
+- Headers
+- File uploads
+- Query strings
+- WebSocket messages
+
+Verify:
+- Validation at entry points (not deep in code)
+- Type checking and sanitization
+- Length limits enforced
+- Format validation (email, URL, etc.)
+- SQL injection prevention
+- XSS prevention
+
+═══════════════════════════════════════════════════════════════════════
+STEP 4: DATA HANDLING
+═══════════════════════════════════════════════════════════════════════
+
+Review data flows:
+- Sensitive data in logs?
+- Sensitive data in error messages?
+- Data encryption at rest?
+- Data encryption in transit?
+- PII handling compliance?
+- Data retention policies?
+
+═══════════════════════════════════════════════════════════════════════
+STEP 5: DEPENDENCY SECURITY
+═══════════════════════════════════════════════════════════════════════
+
+Check dependencies:
+- Run `npm audit` or `pip audit` if available
+- Check for known CVEs
+- Verify dependency versions are pinned
+- Check for typosquatting risks
+
+═══════════════════════════════════════════════════════════════════════
+STEP 6: TRACE SECURITY-CRITICAL CODE PATHS
+═══════════════════════════════════════════════════════════════════════
+
+Follow these flows end-to-end:
+1. User registration → password storage
+2. Login → token generation → token validation
+3. API request → authentication → authorization → response
+4. File upload → validation → storage
+5. Database query → parameterization → execution
+
+═══════════════════════════════════════════════════════════════════════
+STEP 7: CREATE SECURITY REPORT
+═══════════════════════════════════════════════════════════════════════
+
+Write security_report.md with:
+
+# Security Review Report
+
+## Summary
+- Critical vulnerabilities found: [count]
+- Critical vulnerabilities FIXED: [count]
+- High vulnerabilities found: [count]
+- High vulnerabilities FIXED: [count]
+- Medium vulnerabilities: [count]
+- Low vulnerabilities: [count]
+- Overall security posture: [STRONG/ACCEPTABLE/WEAK/CRITICAL]
+
+## Vulnerabilities Found and Fixed
+
+### [Vulnerability 1]
+- **Type:** [injection, XSS, auth bypass, etc.]
+- **File:** [path:line]
+- **Description:** [what was wrong]
+- **Impact:** [what an attacker could have done]
+- **Fix Applied:** [what you changed to fix it]
+- **Status:** FIXED
+
+## Medium Vulnerabilities (not fixed - document for future)
+...
+
+## Low Vulnerabilities / Findings
+...
+
+## Authentication Review
+[Findings about auth implementation]
+
+## Authorization Review
+[Findings about permission checks]
+
+## Input Validation Review
+[Findings about validation]
+
+## Dependency Audit
+[Results of dependency checks]
+
+## Compliance Notes
+[Any compliance considerations]
+
+═══════════════════════════════════════════════════════════════════════
+STEP 8: FIX CRITICAL AND HIGH VULNERABILITIES (MANDATORY)
+═══════════════════════════════════════════════════════════════════════
+
+For EVERY critical and high vulnerability you find, you MUST fix it:
+
+1. Read the affected file
+2. Understand the vulnerability
+3. Write the security fix directly in the code
+4. Verify the fix is correct
+5. Document what you changed in the security report
+
+DO NOT just report vulnerabilities - FIX THEM. You have write access to the code.
+
+Common fixes:
+- SQL injection: Use parameterized queries
+- XSS: Sanitize and escape output
+- Auth bypass: Add proper authentication checks
+- Weak hashing: Use bcrypt/argon2 with proper cost
+- Missing validation: Add input validation at entry points
+- Secrets in code: Move to environment variables
+
+## Authentication Review
+[Findings about auth implementation]
+
+## Authorization Review
+[Findings about permission checks]
+
+## Input Validation Review
+[Findings about validation]
+
+## Dependency Audit
+[Results of dependency checks]
+
+## Compliance Notes
+[Any compliance considerations]
+
+═══════════════════════════════════════════════════════════════════════
+STEP 9: SAVE TO MEMORY
+═══════════════════════════════════════════════════════════════════════
+
+Save security findings to memory:
+- Common vulnerability patterns found
+- Security best practices to maintain
+- Areas that need ongoing security attention
+
+═══════════════════════════════════════════════════════════════════════
+CRITICAL RULES
+═══════════════════════════════════════════════════════════════════════
+
+DO:
+- Fix critical vulnerabilities immediately
+- Trace security code paths end-to-end
+- Check OWASP Top 10 systematically
+- Verify dependencies are secure
+- Document all findings with file:line references
+
+DO NOT:
+- Ignore "it's probably fine" without verifying
+- Skip input validation checks
+- Forget about dependency vulnerabilities
+- Leave critical issues unfixed
+- Assume authentication is correct without reading code
+""",
+    outputs=[
+        "security_report.md with vulnerability findings",
+        "Fixed critical security issues",
+        "Dependency audit results",
+        "Security best practices documentation",
+    ],
+    next_steps=[
+        "QA will validate security fixes work correctly",
+        "All critical vulnerabilities must be fixed before deployment",
+    ],
+)
