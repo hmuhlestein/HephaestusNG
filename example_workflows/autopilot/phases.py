@@ -43,7 +43,7 @@ AUTOPILOT_PHASES = [
 AUTOPILOT_WORKFLOW_CONFIG = WorkflowConfig(
     has_result=True,
     result_criteria="Feature validated and committed to git, ready for human review",
-    on_result_found="complete",
+    on_result_found="do_nothing",
     enable_tickets=True,
     board_config={
         "columns": [

@@ -135,7 +135,11 @@ Save architectural decisions to memory:
 STEP 7: CREATE ARCHITECTURE DOCUMENT
 ═══════════════════════════════════════════════════════════════════════
 
-Write architecture.md with:
+IMPORTANT: Read your task description for the correct paths:
+- "Docs Path:" tells you where to write architecture.md
+- "Project Path:" tells you where implementation code goes
+
+Write architecture.md to the "Docs Path" location from your task description.
 
 # Architecture: [Project Name]
 
