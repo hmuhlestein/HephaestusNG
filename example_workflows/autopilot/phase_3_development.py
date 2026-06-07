@@ -39,8 +39,11 @@ STEP 1: READ ARCHITECTURE AND GUIDELINES
 ═══════════════════════════════════════════════════════════════════════
 
 Read:
+- Your task description for "Docs Path:" and "Project Path:" locations
 - AGENTS.md - Coding style, naming conventions, test commands, commit format
-- architecture.md from Phase 2 - Component interfaces and contracts
+- architecture.md (from Docs Path) - Component interfaces and contracts
+
+Write implementation code (src/, tests/) to the "Project Path" location.
 
 Understand:
 - Component interfaces and contracts

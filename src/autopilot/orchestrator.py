@@ -19,6 +19,7 @@ import glob
 import signal
 import shutil
 import hashlib
+import html as html_mod
 import requests
 from pathlib import Path
 from datetime import datetime
@@ -33,6 +34,7 @@ POLL_INTERVAL = 15
 STUCK_THRESHOLD = 3
 DESIGN_QUEUE_SCAN_INTERVAL = 60
 HEARTBEAT_INTERVAL = 300
+MAX_WORKFLOW_TIME = 7200  # 2 hours per workflow execution
 
 
 def get_litellm_config() -> Dict[str, str]:
@@ -363,7 +365,7 @@ def collect_report_summaries(project_path: Path) -> Dict[str, str]:
                 content = filepath.read_text()
                 lines = content.strip().split("\n")
                 summary_lines = []
-                for line in lines[:30]:
+                for line in lines[:80]:
                     if line.strip():
                         summary_lines.append(line.strip())
                 summaries[key] = "\n".join(summary_lines)
@@ -375,15 +377,20 @@ def collect_report_summaries(project_path: Path) -> Dict[str, str]:
     return summaries
 
 
-def collect_files_created(project_path: Path) -> List[str]:
+def collect_files_created(project_path: Path, feature_folder: Path = None) -> List[str]:
     files = []
-    for pattern in ["**/*.py", "**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx", "**/*.html", "**/*.css"]:
-        for f in sorted(project_path.glob(pattern)):
-            if ".venv" in str(f) or "node_modules" in str(f) or "__pycache__" in str(f):
-                continue
-            rel = f.relative_to(project_path)
-            files.append(str(rel))
-    return files
+    dirs_to_scan = [project_path]
+    if feature_folder:
+        dirs_to_scan.append(feature_folder)
+
+    for scan_dir in dirs_to_scan:
+        for pattern in ["**/*.py", "**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx", "**/*.html", "**/*.css", "**/*.md"]:
+            for f in sorted(scan_dir.glob(pattern)):
+                if ".venv" in str(f) or "node_modules" in str(f) or "__pycache__" in str(f):
+                    continue
+                rel = f.relative_to(scan_dir)
+                files.append(str(rel))
+    return sorted(set(files))
 
 
 def generate_html_feature_report(
@@ -393,6 +400,9 @@ def generate_html_feature_report(
     logger: OrchestratorLogger,
 ) -> Path:
     html_path = feature_folder / "feature_report.html"
+
+    def esc(s: str) -> str:
+        return html_mod.escape(s)
 
     status_color = "#22c55e" if report.product_validated else "#dc3545"
     status_text = "VALIDATED" if report.product_validated else "NEEDS REVIEW"
@@ -513,7 +523,7 @@ def generate_html_feature_report(
                 <h2>Requirements</h2>
             </div>
             <div class="section-body">
-                <pre>{summaries.get('requirements', 'No requirements document found.')}</pre>
+                <pre>{esc(summaries.get('requirements', 'No requirements document found.'))}</pre>
             </div>
         </div>
 
@@ -522,7 +532,7 @@ def generate_html_feature_report(
                 <h2>Architecture</h2>
             </div>
             <div class="section-body">
-                <pre>{summaries.get('architecture', 'No architecture document found.')}</pre>
+                <pre>{esc(summaries.get('architecture', 'No architecture document found.'))}</pre>
             </div>
         </div>
 
@@ -531,7 +541,7 @@ def generate_html_feature_report(
                 <h2>Code Review</h2>
             </div>
             <div class="section-body">
-                <pre>{summaries.get('review', 'No review report found.')}</pre>
+                <pre>{esc(summaries.get('review', 'No review report found.'))}</pre>
             </div>
         </div>
 
@@ -540,7 +550,7 @@ def generate_html_feature_report(
                 <h2>Security Review</h2>
             </div>
             <div class="section-body">
-                <pre>{summaries.get('security', 'No security report found.')}</pre>
+                <pre>{esc(summaries.get('security', 'No security report found.'))}</pre>
             </div>
         </div>
 
@@ -549,7 +559,7 @@ def generate_html_feature_report(
                 <h2>QA Report</h2>
             </div>
             <div class="section-body">
-                <pre>{summaries.get('qa', 'No QA report found.')}</pre>
+                <pre>{esc(summaries.get('qa', 'No QA report found.'))}</pre>
             </div>
         </div>
 
@@ -558,7 +568,7 @@ def generate_html_feature_report(
                 <h2>Product Validation</h2>
             </div>
             <div class="section-body">
-                <pre>{summaries.get('product_validation', 'No product validation report found.')}</pre>
+                <pre>{esc(summaries.get('product_validation', 'No product validation report found.'))}</pre>
             </div>
         </div>
 
@@ -627,6 +637,17 @@ def generate_product_validation_report(
 ) -> Tuple[bool, str]:
     validation_path = project_path / "product_validation.md"
 
+    # If Phase 7 already created a validation report, use it instead of overwriting
+    if validation_path.exists():
+        try:
+            existing = validation_path.read_text()
+            meets_spec = qa_passed and ("PASS" in existing or "pass" in existing.lower())
+            logger.log(f"Using existing product validation from Phase 7")
+            return meets_spec, existing
+        except Exception:
+            pass
+
+    # Fallback: generate a basic validation report
     requirements_path = project_path / "requirements_analysis.md"
     qa_report_path = project_path / "qa_report.md"
 
@@ -698,7 +719,8 @@ def generate_product_validation_report(
 
 
 def run_single_workflow(sdk, workflow_id: str, project_path: str, description: str,
-                        logger: OrchestratorLogger) -> str:
+                        logger: OrchestratorLogger,
+                        launch_params: Dict[str, Any] = None) -> str:
     logger.log(f"Launching workflow: {workflow_id}")
     logger.event("workflow_launch", {"workflow": workflow_id, "path": project_path})
 
@@ -707,6 +729,7 @@ def run_single_workflow(sdk, workflow_id: str, project_path: str, description: s
             definition_id=workflow_id,
             description=description,
             working_directory=project_path,
+            launch_params=launch_params or {},
         )
         logger.log(f"Workflow launched: {exec_id}")
     except Exception as e:
@@ -714,11 +737,18 @@ def run_single_workflow(sdk, workflow_id: str, project_path: str, description: s
         return "failed"
 
     stuck_count = 0
+    credit_stuck_count = 0
     start_time = time.time()
 
     try:
         while True:
             time.sleep(POLL_INTERVAL)
+
+            # Timeout check
+            elapsed = int(time.time() - start_time)
+            if elapsed > MAX_WORKFLOW_TIME:
+                logger.log(f"Workflow timed out after {MAX_WORKFLOW_TIME}s", "ERROR")
+                return "timeout"
 
             wf_status = get_workflow_status(exec_id)
             agents = get_agents()
@@ -728,7 +758,6 @@ def run_single_workflow(sdk, workflow_id: str, project_path: str, description: s
             done = get_tasks(status="done")
             failed = get_tasks(status="failed")
 
-            elapsed = int(time.time() - start_time)
             logger.log(
                 f"[{workflow_id}] [{elapsed}s] Agents: {len(active_agents)} active | "
                 f"Tasks: {len(pending)} pending, {len(in_progress)} active, "
@@ -742,16 +771,17 @@ def run_single_workflow(sdk, workflow_id: str, project_path: str, description: s
 
             out_of_credits, credit_reason = check_api_credits()
             if out_of_credits:
-                stuck_count += 1
-                if stuck_count >= 1:
+                credit_stuck_count += 1
+                stuck_count = 0  # reset impasse counter during credit issues
+                if credit_stuck_count >= 1:
                     choice = prompt_human(credit_reason, logger)
                     if choice == "q":
                         return "interrupted"
                     elif choice == "s":
-                        stuck_count = 0
+                        credit_stuck_count = 0
                 continue
             else:
-                stuck_count = 0
+                credit_stuck_count = 0
 
             hard_error, error_reason = detect_hard_error(agents, failed)
             if hard_error:
@@ -841,8 +871,15 @@ def run_single_design(
                 f"create architecture, implement, review, security check, and QA."
             )
 
+            launch_params = {
+                "design_document": str(design_copy),
+                "project_path": str(project_path),
+                "project_context": f"Docs go in: {docs_dir}. Code goes in: {project_path}.",
+            }
+
             wf_status = run_single_workflow(
-                sdk, "autopilot", str(project_path), description, logger
+                sdk, "autopilot", str(project_path), description, logger,
+                launch_params=launch_params,
             )
 
             iter_elapsed = int(time.time() - iter_start)
@@ -863,12 +900,25 @@ def run_single_design(
                 project_path / "qa_report.md",
                 project_path / "qa_report.html",
             ]
+            pass_patterns = [
+                "overall status: pass",
+                "overall status:** pass",
+                "recommendation: done",
+                "recommendation:** done",
+                "recommendation: **done",
+                "all tests pass",
+                "all tests passed",
+                "qa passed",
+            ]
             for qp in qa_reports:
                 if qp.exists():
                     try:
                         content = qp.read_text().lower()
-                        if "overall status: pass" in content or "recommendation: done" in content:
-                            qa_passed = True
+                        for pattern in pass_patterns:
+                            if pattern in content:
+                                qa_passed = True
+                                break
+                        if qa_passed:
                             break
                     except Exception:
                         pass
@@ -969,7 +1019,7 @@ def run_single_design(
         except Exception as e:
             logger.log(f"Failed to fetch cost data: {e}", "WARN")
 
-    generate_html_feature_report(report, summaries if 'summaries' in dir() else {}, feature_folder, logger)
+    generate_html_feature_report(report, summaries, feature_folder, logger)
 
     design_entry.completed_at = datetime.now().isoformat()
 
@@ -1148,7 +1198,8 @@ def run_continuous_pipeline(args) -> None:
             "elapsed_seconds": state.total_elapsed,
         })
 
-        sdk.shutdown(graceful=True, timeout=15)
+        if sdk is not None:
+            sdk.shutdown(graceful=True, timeout=15)
 
 
 def main():

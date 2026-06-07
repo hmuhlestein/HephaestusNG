@@ -40,10 +40,11 @@ STEP 1: READ REQUIREMENTS AND CONTEXT
 ═══════════════════════════════════════════════════════════════════════
 
 Read:
-- requirements_analysis.md - What must it do?
-- architecture.md - How should it work?
-- review_report.md - What issues were found?
-- security_report.md - What security fixes were made?
+- Your task description for "Docs Path:" and "Project Path:" locations
+- requirements_analysis.md (from Docs Path) - What must it do?
+- architecture.md (from Docs Path) - How should it work?
+- review_report.md (from Docs Path) - What issues were found?
+- security_report.md (from Docs Path) - What security fixes were made?
 
 ═══════════════════════════════════════════════════════════════════════
 STEP 2: VALIDATE TEST ENVIRONMENT
@@ -62,20 +63,28 @@ find . -name "test_*.py" -o -name "*_test.py" | head -20
 ```
 
 ═══════════════════════════════════════════════════════════════════════
-STEP 3: RUN EXISTING TESTS
+STEP 3: DISCOVER AND RUN TESTS
 ═══════════════════════════════════════════════════════════════════════
 
-Execute all test suites:
+First, discover where tests actually live:
 ```bash
-# Unit tests
-python -m pytest tests/unit -v --tb=short 2>&1 | tee unit_results.txt
-
-# Integration tests
-python -m pytest tests/integration -v --tb=short 2>&1 | tee integration_results.txt
-
-# All tests
-python -m pytest -v --tb=short 2>&1 | tee all_results.txt
+# Find test directories and files
+find . -name "test_*.py" -o -name "*_test.py" -o -name "*.test.*" -o -name "*.spec.*" | head -20
+find . -type d -name "tests" -o -name "test" -o -name "__tests__" | head -10
 ```
+
+Then run whatever tests you find:
+```bash
+# If pytest tests exist
+python -m pytest -v --tb=short 2>&1 | tee all_results.txt
+
+# If npm/node tests exist
+npm test 2>&1 | tee all_results.txt
+
+# If no tests exist, note this and create basic smoke tests
+```
+
+If no tests exist, create minimal smoke tests based on the architecture document to validate the core functionality works.
 
 Capture:
 - Pass/fail counts
