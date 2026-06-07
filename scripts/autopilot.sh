@@ -241,17 +241,22 @@ show_usage() {
 ${BOLD}${CYAN}Hephaestus Autopilot - Continuous Multi-Agent Workflow Engine${NC}
 
 ${BOLD}USAGE:${NC}
-    $0 --design-queue ./designs --project-path ./project
+    $0 --project-path ./project
 
 ${BOLD}OPTIONS:${NC}
-    --design-queue DIR          Directory to watch for design documents (required)
-    --project-path DIR          Root directory for builds and features (required)
+    --project-path DIR          Project directory (required)
+    --design-queue DIR          Override design queue location (default: <project-path>/docs/design-queue)
     --max-iterations N          Maximum iterations per design (default: 3)
     --drop-db                   Drop database before starting
     --no-frontend               Skip frontend dashboard
     --stop                      Stop all services
     --status                    Show service status
     --help                      Show this help
+
+${BOLD}DESIGN QUEUE:${NC}
+    Drop .md or .txt files into <project-path>/docs/design-queue/
+    The pipeline watches this directory and processes designs in
+    modification-time order (oldest first).
 
 ${BOLD}LITELLM PROXY (Optional - for cost tracking):${NC}
     Set environment variables to route through LiteLLM proxy:
@@ -265,14 +270,17 @@ ${BOLD}LITELLM PROXY (Optional - for cost tracking):${NC}
     cost tracking. Costs are displayed in the HTML feature report.
 
 ${BOLD}EXAMPLES:${NC}
-    # Start continuous pipeline
-    $0 --design-queue ./designs --project-path ./project
+    # Start continuous pipeline (design queue at ./project/docs/design-queue/)
+    $0 --project-path ./project
 
     # With more iterations per design
-    $0 --design-queue ./designs --project-path ./project --max-iterations 5
+    $0 --project-path ./project --max-iterations 5
+
+    # With custom design queue location
+    $0 --project-path ./project --design-queue ./my-designs
 
     # Check what's in the queue
-    ls ./designs/
+    ls ./project/docs/design-queue/
 
     # Check status
     $0 --status
@@ -299,9 +307,10 @@ ${BOLD}PIPELINE PHASES:${NC}
 
 ${BOLD}OUTPUT:${NC}
     Each design produces:
-    - builds/<name>/           - Implementation code
-    - features/<name>/         - Reports and artifacts
-    - features/<name>/feature_report.html  - Human review report
+    - features/<name>/              - Reports, artifacts, HTML report
+    - features/<name>/artifacts/    - Requirements, architecture, review docs
+    - features/<name>/feature_report.html - Human review report
+    - <project-path>/               - Implementation code (src/, tests/, etc.)
 
 ${BOLD}STOP CONDITIONS:${NC)
     - Product validation passes (SUCCESS - moves to next design)
@@ -318,14 +327,6 @@ EOF
 validate_inputs() {
     local valid=true
 
-    if [ -z "$DESIGN_QUEUE" ]; then
-        err "Missing required: --design-queue"
-        valid=false
-    elif [ ! -d "$DESIGN_QUEUE" ]; then
-        mkdir -p "$DESIGN_QUEUE"
-        log "Created design queue directory: $DESIGN_QUEUE"
-    fi
-
     if [ -z "$PROJECT_PATH" ]; then
         err "Missing required: --project-path"
         valid=false
@@ -335,6 +336,11 @@ validate_inputs() {
         echo ""
         show_usage
         exit 1
+    fi
+
+    # Default design queue to <project-path>/docs/design-queue
+    if [ -z "$DESIGN_QUEUE" ]; then
+        DESIGN_QUEUE="$PROJECT_PATH/docs/design-queue"
     fi
 
     mkdir -p "$PROJECT_PATH"

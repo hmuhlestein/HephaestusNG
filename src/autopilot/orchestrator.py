@@ -778,14 +778,15 @@ def run_single_workflow(sdk, workflow_id: str, project_path: str, description: s
 def run_single_design(
     sdk,
     design_entry: DesignEntry,
-    base_project_path: Path,
+    project_path: Path,
     max_iterations: int,
     logger: OrchestratorLogger,
 ) -> Tuple[DesignStatus, FeatureReport]:
-    project_path = base_project_path / "builds" / design_entry.name.lower().replace(" ", "_")
+    # project_path: where implementation code lives (the actual project)
+    # docs_dir: where generated docs/reports go (inside feature folder)
     project_path.mkdir(parents=True, exist_ok=True)
 
-    feature_folder = create_feature_folder(base_project_path, design_entry.name, logger)
+    feature_folder = create_feature_folder(project_path, design_entry.name, logger)
     design_entry.project_path = project_path
     design_entry.feature_folder = feature_folder
     design_entry.started_at = datetime.now().isoformat()
@@ -795,7 +796,7 @@ def run_single_design(
     logger.log("=" * 70)
     logger.log(f"PROCESSING DESIGN: {design_entry.name}")
     logger.log(f"  Source: {design_entry.path}")
-    logger.log(f"  Build: {project_path}")
+    logger.log(f"  Project: {project_path}")
     logger.log(f"  Feature: {feature_folder}")
     logger.log("=" * 70)
 
@@ -814,6 +815,10 @@ def run_single_design(
     design_start = time.time()
     stop_reason = StopReason.COMPLETED
 
+    # docs_dir: where generated docs (requirements, architecture, reports) go
+    docs_dir = feature_folder / "artifacts"
+    docs_dir.mkdir(exist_ok=True)
+
     try:
         for iteration in range(1, max_iterations + 1):
             iter_start = time.time()
@@ -827,8 +832,11 @@ def run_single_design(
                 f"Autopilot: {design_entry.name} - Iteration {iteration}\n"
                 f"Design Document: {design_copy}\n"
                 f"Project Path: {project_path}\n"
+                f"Docs Path: {docs_dir}\n"
                 f"Feature Folder: {feature_folder}\n"
                 f"Context: Building from design document. "
+                f"Generated docs (requirements, architecture, reports) go in: {docs_dir}\n"
+                f"Implementation code (src/, tests/) goes in: {project_path}\n"
                 f"Read the design doc carefully, extract requirements, "
                 f"create architecture, implement, review, security check, and QA."
             )
@@ -872,14 +880,6 @@ def run_single_design(
             report.qa_passed = qa_passed
             report.product_validated = product_validated
 
-            summaries = collect_report_summaries(project_path)
-            report.requirements_summary = summaries.get("requirements", "")
-            report.architecture_summary = summaries.get("architecture", "")
-            report.security_summary = summaries.get("security", "")
-            report.qa_summary = summaries.get("qa", "")
-            report.product_validation_summary = summaries.get("product_validation", "")
-            report.files_created = collect_files_created(project_path)
-
             if product_validated:
                 logger.log("")
                 logger.log(f"DESIGN VALIDATED: {design_entry.name}")
@@ -904,6 +904,29 @@ def run_single_design(
     except KeyboardInterrupt:
         stop_reason = StopReason.USER_INTERRUPT
         logger.log("Design processing interrupted")
+
+    # Organize: move any stray docs from project root into feature artifacts
+    for md_file in project_path.glob("*.md"):
+        dest = docs_dir / md_file.name
+        if not dest.exists():
+            shutil.move(str(md_file), str(dest))
+            logger.log(f"Moved doc: {md_file.name} -> features/.../artifacts/")
+
+    # Also check feature_folder root for misplaced docs
+    for md_file in feature_folder.glob("*.md"):
+        dest = docs_dir / md_file.name
+        if not dest.exists():
+            shutil.move(str(md_file), str(dest))
+            logger.log(f"Moved doc: {md_file.name} -> features/.../artifacts/")
+
+    # Collect summaries from the correct locations (docs in features, code in builds)
+    summaries = collect_report_summaries(docs_dir)
+    report.requirements_summary = summaries.get("requirements", "")
+    report.architecture_summary = summaries.get("architecture", "")
+    report.security_summary = summaries.get("security", "")
+    report.qa_summary = summaries.get("qa", "")
+    report.product_validation_summary = summaries.get("product_validation", "")
+    report.files_created = collect_files_created(project_path)
 
     report.total_time_seconds = int(time.time() - design_start)
     report.stop_reason = stop_reason.value
@@ -1134,16 +1157,20 @@ def main():
     parser = argparse.ArgumentParser(
         description="Autopilot Continuous Pipeline - Design Queue to Validated Software"
     )
-    parser.add_argument("--design-queue", required=True,
-                        help="Directory to watch for design documents (.md, .txt)")
+    parser.add_argument("--design-queue", default=None,
+                        help="Directory to watch for design documents (default: <project-path>/docs/design-queue)")
     parser.add_argument("--project-path", required=True,
-                        help="Root directory for builds and features")
+                        help="Project directory for implementation code")
     parser.add_argument("--max-iterations", type=int, default=3,
                         help="Maximum review-fix-QA iterations per design")
     parser.add_argument("--drop-db", action="store_true",
                         help="Drop database before starting")
 
     args = parser.parse_args()
+
+    # Default design queue to <project-path>/docs/design-queue
+    if not args.design_queue:
+        args.design_queue = str(Path(args.project_path) / "docs" / "design-queue")
 
     if args.drop_db:
         db = HEPHAESTUS_DIR / "hephaestus.db"
