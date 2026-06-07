@@ -25,9 +25,8 @@ completed designs, and produces a comprehensive requirements document.""",
         "Component dependencies mapped",
         "Technology constraints noted (respecting existing stack)",
         "Integration points with existing system identified",
-        "requirements_analysis.md created",
+        "requirements_analysis.md created in Docs Path location",
         "Memory saved with key decisions and project context",
-        "Phase 2 task created with full requirements and context",
         "Task marked as done",
     ],
     working_directory=".",
@@ -58,7 +57,7 @@ Before reading the design document, understand the LARGER PROJECT:
    - README.md (project overview)
    - Any existing source code
 
-2. If previous features exist, read their reports:
+3. If previous features exist, read their reports:
    - features/*/feature_report.html (summary of what's built)
    - features/*/artifacts/ (design docs for previous features)
 
@@ -167,7 +166,12 @@ and flag it for the architect to resolve.
 STEP 4: CREATE REQUIREMENTS DOCUMENT
 ═══════════════════════════════════════════════════════════════════════
 
-Write requirements_analysis.md with:
+IMPORTANT: Read your task description for the correct paths:
+- "Design Document:" tells you where the design doc is
+- "Docs Path:" tells you where to write requirements_analysis.md
+- "Project Path:" tells you where implementation code goes
+
+Write requirements_analysis.md to the "Docs Path" location from your task description.
 
 # Requirements Analysis: [Feature Name]
 
@@ -242,14 +246,13 @@ mcp__hephaestus__save_memory({
 These memories will be searchable by future Phase 1 agents processing subsequent designs.
 
 ═══════════════════════════════════════════════════════════════════════
-STEP 6: CREATE PHASE 2 TASK
+STEP 6: MARK TASK COMPLETE
 ═══════════════════════════════════════════════════════════════════════
 
-Create a Phase 2 task with:
-- Reference to requirements_analysis.md
-- Full context from the design document
-- List of existing components to consider
-- Integration requirements
+Your requirements document is complete. Mark your task as done.
+The orchestrator will advance to the next phase automatically.
+
+Ensure requirements_analysis.md is saved to the "Docs Path" location.
 
 ═══════════════════════════════════════════════════════════════════════
 CRITICAL RULES

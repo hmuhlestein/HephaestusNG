@@ -40,9 +40,10 @@ STEP 1: READ ARCHITECTURE AND REQUIREMENTS
 ═══════════════════════════════════════════════════════════════════════
 
 Read:
-- architecture.md - What was the design?
-- requirements_analysis.md - What should it do?
-- Your goal: Did the implementation match the design?
+- Your task description for "Docs Path:" and "Project Path:" locations
+- architecture.md (from Docs Path) - What was the design?
+- requirements_analysis.md (from Docs Path) - What should it do?
+- Your goal: Did the implementation (in Project Path) match the design?
 
 ═══════════════════════════════════════════════════════════════════════
 STEP 2: REVIEW EACH COMPONENT

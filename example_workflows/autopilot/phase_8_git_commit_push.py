@@ -44,6 +44,14 @@ YOU ARE A GIT OPERATOR - COMMIT AND MERGE VALIDATED CODE
 
 YOUR MISSION: Create feature branch, commit, merge to main, and pull
 
+CRITICAL: Read your task description for the "Project Path:" location.
+All git operations must be performed in that directory, NOT in the current directory.
+
+```bash
+cd <Project Path from task description>
+git status
+```
+
 ═══════════════════════════════════════════════════════════════════════
 STEP 1: CHECK CURRENT STATE
 ═══════════════════════════════════════════════════════════════════════
@@ -138,9 +146,9 @@ feat: Add user authentication system
 Autopilot validated: 2026-06-06
 ```
 
-Commit with --no-verify for automated pipeline:
+Commit following project conventions (see AGENTS.md):
 ```bash
-git commit -m "feat: <your message>" --no-verify
+git commit -m "feat: <your message>"
 ```
 
 ═══════════════════════════════════════════════════════════════════════
@@ -221,7 +229,7 @@ The working directory should now be on main with no uncommitted changes.
 Record the merge commit hash for the feature report.
 
 ═══════════════════════════════════════════════════════════════════════
-STEP 12: SAVE TO MEMORY
+STEP 11: SAVE TO MEMORY
 ═══════════════════════════════════════════════════════════════════════
 
 Save the commit reference to memory:
