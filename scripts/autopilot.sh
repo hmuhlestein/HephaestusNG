@@ -312,7 +312,7 @@ ${BOLD}OUTPUT:${NC}
     - features/<name>/feature_report.html - Human review report
     - <project-path>/               - Implementation code (src/, tests/, etc.)
 
-${BOLD}STOP CONDITIONS:${NC)
+${BOLD}STOP CONDITIONS:${NC}
     - Product validation passes (SUCCESS - moves to next design)
     - Hard error (crashed agents, critical failures)
     - Impasse (stuck agents, no progress)

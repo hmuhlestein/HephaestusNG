@@ -41,9 +41,10 @@ STEP 1: READ SECURITY REQUIREMENTS
 ═══════════════════════════════════════════════════════════════════════
 
 Read:
-- requirements_analysis.md - What security requirements exist?
-- architecture.md - How is security designed?
-- review_report.md - Any security concerns from adversarial review?
+- Your task description for "Docs Path:" and "Project Path:" locations
+- requirements_analysis.md (from Docs Path) - What security requirements exist?
+- architecture.md (from Docs Path) - How is security designed?
+- review_report.md (from Docs Path) - Any security concerns from adversarial review?
 
 ═══════════════════════════════════════════════════════════════════════
 STEP 2: AUTHENTICATION & AUTHORIZATION
@@ -183,21 +184,6 @@ Common fixes:
 - Weak hashing: Use bcrypt/argon2 with proper cost
 - Missing validation: Add input validation at entry points
 - Secrets in code: Move to environment variables
-
-## Authentication Review
-[Findings about auth implementation]
-
-## Authorization Review
-[Findings about permission checks]
-
-## Input Validation Review
-[Findings about validation]
-
-## Dependency Audit
-[Results of dependency checks]
-
-## Compliance Notes
-[Any compliance considerations]
 
 ═══════════════════════════════════════════════════════════════════════
 STEP 9: SAVE TO MEMORY
