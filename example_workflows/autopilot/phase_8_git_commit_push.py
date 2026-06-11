@@ -16,9 +16,10 @@ After product validation passes, this phase:
 1. Creates a feature branch from main
 2. Stages and commits all changes
 3. Pushes the feature branch
-4. Merges the feature branch into main
-5. Cleans up the feature branch
-6. Checks out main and pulls from main""",
+4. Creates a pull request
+5. Merges the pull request
+6. Cleans up the feature branch
+7. Checks out main and pulls from main""",
     done_definitions=[
         "Current branch identified",
         "Main branch up to date with remote",
@@ -27,13 +28,14 @@ After product validation passes, this phase:
         "Descriptive commit message created",
         "Commit created on feature branch",
         "Feature branch pushed to remote",
-        "Feature branch merged into main (--no-ff)",
+        "Pull request created with summary",
+        "Pull request merged into main",
         "Main branch pushed to remote",
         "Feature branch deleted locally and remotely",
         "Checked out main branch",
         "Pulled latest from main",
         "Working directory clean on main",
-        "Commit hash recorded in feature report",
+        "Commit hash and PR URL recorded",
         "Memory saved with commit reference",
         "Task marked as done",
     ],
@@ -157,61 +159,61 @@ STEP 6: PUSH FEATURE BRANCH
 
 Push the feature branch to remote:
 ```bash
-git push origin HEAD
-```
-
-If the branch doesn't exist on remote yet:
-```bash
 git push -u origin feature/<feature-name-slug>
 ```
 
 ═══════════════════════════════════════════════════════════════════════
-STEP 7: MERGE TO MAIN
+STEP 7: CREATE PULL REQUEST
 ═══════════════════════════════════════════════════════════════════════
 
-Switch to main and merge the feature branch:
+Create a pull request using the GitHub CLI:
+```bash
+gh pr create --title "feat: <feature name>" --body "$(cat <<'EOF'
+## Summary
+- <bullet point 1: what was built>
+- <bullet point 2: key components>
+- <bullet point 3: integration points>
+
+## Pipeline Results
+- QA: PASSED
+- Security: PASSED
+- Product Validation: PASSED
+
+## Files Changed
+<list key files changed>
+
+Autopilot validated: <date>
+EOF
+)"
+```
+
+Record the PR URL returned by the command.
+
+═══════════════════════════════════════════════════════════════════════
+STEP 8: MERGE PULL REQUEST
+═══════════════════════════════════════════════════════════════════════
+
+Merge the PR using the GitHub CLI:
+```bash
+gh pr merge --merge --delete-branch
+```
+
+This merges the PR into main and deletes the remote feature branch.
+
+If `gh` is not available or the PR can't be merged via CLI,
+fall back to local merge:
 ```bash
 git checkout main
 git merge feature/<feature-name-slug> --no-ff -m "Merge feature/<feature-name-slug> into main"
-```
-
-The --no-ff flag creates a merge commit to preserve branch history.
-
-If there are merge conflicts:
-```bash
-# Resolve conflicts in the files, then:
-git add -A
-git commit --no-verify
-```
-
-═══════════════════════════════════════════════════════════════════════
-STEP 8: PUSH MAIN
-═══════════════════════════════════════════════════════════════════════
-
-Push the merged main branch:
-```bash
 git push origin main
-```
-
-═══════════════════════════════════════════════════════════════════════
-STEP 9: CLEAN UP FEATURE BRANCH
-═══════════════════════════════════════════════════════════════════════
-
-Delete the local feature branch (it's merged, no longer needed):
-```bash
-git branch -d feature/<feature-name-slug>
-```
-
-Delete the remote feature branch:
-```bash
 git push origin --delete feature/<feature-name-slug>
 ```
 
 ═══════════════════════════════════════════════════════════════════════
-STEP 10: CHECKOUT MAIN AND PULL (FINAL STEP)
+STEP 9: CHECKOUT MAIN AND PULL (FINAL STEP)
 ═══════════════════════════════════════════════════════════════════════
 
-This is the definitive final git action. Ensure we are on main and fully synced:
+Ensure we are on main and fully synced:
 ```bash
 git checkout main
 git pull origin main
@@ -221,23 +223,22 @@ Verify clean state:
 ```bash
 git status
 git log --oneline -3
-git branch
 ```
 
 The working directory should now be on main with no uncommitted changes.
 
-Record the merge commit hash for the feature report.
+Record the merge commit hash and PR URL for the feature report.
 
 ═══════════════════════════════════════════════════════════════════════
-STEP 11: SAVE TO MEMORY
+STEP 10: SAVE TO MEMORY
 ═══════════════════════════════════════════════════════════════════════
 
-Save the commit reference to memory:
+Save the commit and PR reference to memory:
 ```python
 mcp__hephaestus__save_memory({
-    "content": f"Committed feature '{feature_name}': branch feature/{slug} merged to main at {commit_hash}",
+    "content": f"Committed feature '{feature_name}': branch feature/{slug} merged to main at {commit_hash}. PR: {pr_url}",
     "memory_type": "decision",
-    "tags": ["git", "commit", "deployment"]
+    "tags": ["git", "commit", "deployment", "pr"]
 })
 ```
 

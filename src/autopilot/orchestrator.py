@@ -106,6 +106,7 @@ class FeatureReport:
     security_summary: str = ""
     qa_summary: str = ""
     product_validation_summary: str = ""
+    forensics_summary: str = ""
     files_created: List[str] = field(default_factory=list)
     issues_resolved: List[str] = field(default_factory=list)
     outstanding_issues: List[str] = field(default_factory=list)
@@ -356,6 +357,7 @@ def collect_report_summaries(project_path: Path) -> Dict[str, str]:
         "security": "security_report.md",
         "qa": "qa_report.md",
         "product_validation": "product_validation.md",
+        "forensics": "forensics_report.md",
     }
 
     for key, filename in report_files.items():
@@ -569,6 +571,15 @@ def generate_html_feature_report(
             </div>
             <div class="section-body">
                 <pre>{esc(summaries.get('product_validation', 'No product validation report found.'))}</pre>
+            </div>
+        </div>
+
+        <div class="section">
+            <div class="section-header">
+                <h2>Forensics Analysis</h2>
+            </div>
+            <div class="section-body">
+                <pre>{esc(summaries.get('forensics', 'No forensics report found.'))}</pre>
             </div>
         </div>
 
@@ -849,6 +860,40 @@ def run_single_design(
     docs_dir = feature_folder / "artifacts"
     docs_dir.mkdir(exist_ok=True)
 
+    # Copy phase definitions BEFORE workflow so forensics agent can read them
+    phases_dir = docs_dir / "phase_prompts"
+    phases_dir.mkdir(exist_ok=True)
+    phase_files = list((HEPHAESTUS_DIR / "example_workflows" / "autopilot").glob("phase_*.py"))
+    for pf in sorted(phase_files):
+        shutil.copy2(pf, phases_dir / pf.name)
+    logger.log(f"Copied {len(phase_files)} phase prompts to {phases_dir}")
+
+    # Write initial pipeline_metrics.json BEFORE workflow so forensics agent can read it
+    # (will be updated with final values after workflow completes)
+    initial_metrics = {
+        "design_name": design_entry.name,
+        "design_document": str(design_entry.path),
+        "project_path": str(project_path),
+        "docs_dir": str(docs_dir),
+        "feature_folder": str(feature_folder),
+        "started_at": design_entry.started_at,
+        "max_iterations": max_iterations,
+        "phases": [
+            {"id": 1, "name": "product_requirements", "output": "requirements_analysis.md"},
+            {"id": 2, "name": "architecture_design", "output": "architecture.md"},
+            {"id": 3, "name": "development", "output": "source code in project path"},
+            {"id": 4, "name": "adversarial_review", "output": "review_report.md"},
+            {"id": 5, "name": "security_review", "output": "security_report.md"},
+            {"id": 6, "name": "qa_validation", "output": "qa_report.md"},
+            {"id": 7, "name": "product_validation", "output": "product_validation.md"},
+            {"id": 8, "name": "git_commit_push", "output": "git history"},
+            {"id": 9, "name": "forensics_analysis", "output": "forensics_report.md"},
+        ],
+    }
+    metrics_path = docs_dir / "pipeline_metrics.json"
+    metrics_path.write_text(json.dumps(initial_metrics, indent=2, default=str))
+    logger.log(f"Initial pipeline metrics: {metrics_path}")
+
     try:
         for iteration in range(1, max_iterations + 1):
             iter_start = time.time()
@@ -976,7 +1021,40 @@ def run_single_design(
     report.security_summary = summaries.get("security", "")
     report.qa_summary = summaries.get("qa", "")
     report.product_validation_summary = summaries.get("product_validation", "")
-    report.files_created = collect_files_created(project_path)
+    report.forensics_summary = summaries.get("forensics", "")
+    report.files_created = collect_files_created(project_path, feature_folder)
+
+    # Update pipeline_metrics.json with final values
+    metrics = {
+        "design_name": design_entry.name,
+        "design_document": str(design_entry.path),
+        "project_path": str(project_path),
+        "docs_dir": str(docs_dir),
+        "feature_folder": str(feature_folder),
+        "iterations": report.iterations,
+        "total_time_seconds": report.total_time_seconds,
+        "stop_reason": report.stop_reason,
+        "qa_passed": report.qa_passed,
+        "product_validated": report.product_validated,
+        "cost_total": report.cost_total,
+        "files_created_count": len(report.files_created),
+        "started_at": design_entry.started_at,
+        "completed_at": design_entry.completed_at,
+        "phases": [
+            {"id": 1, "name": "product_requirements", "output": "requirements_analysis.md"},
+            {"id": 2, "name": "architecture_design", "output": "architecture.md"},
+            {"id": 3, "name": "development", "output": "source code in project path"},
+            {"id": 4, "name": "adversarial_review", "output": "review_report.md"},
+            {"id": 5, "name": "security_review", "output": "security_report.md"},
+            {"id": 6, "name": "qa_validation", "output": "qa_report.md"},
+            {"id": 7, "name": "product_validation", "output": "product_validation.md"},
+            {"id": 8, "name": "git_commit_push", "output": "git history"},
+            {"id": 9, "name": "forensics_analysis", "output": "forensics_report.md"},
+        ],
+    }
+    metrics_path = docs_dir / "pipeline_metrics.json"
+    metrics_path.write_text(json.dumps(metrics, indent=2, default=str))
+    logger.log(f"Final pipeline metrics: {metrics_path}")
 
     report.total_time_seconds = int(time.time() - design_start)
     report.stop_reason = stop_reason.value

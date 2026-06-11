@@ -10,6 +10,7 @@ A fully automated pipeline that takes design documents and iterates through:
 6. QA Testing & Validation
 7. Product Validation (final spec check)
 8. Git Commit & Push
+9. Forensics Analysis (pipeline self-improvement)
 
 The workflow loops until the original intent is satisfied or a hard stop
 condition is met (hard error, impasse, or major architectural issue).
@@ -26,6 +27,7 @@ from example_workflows.autopilot.phase_5_security_review import PHASE_5_SECURITY
 from example_workflows.autopilot.phase_6_qa_validation import PHASE_6_QA_VALIDATION
 from example_workflows.autopilot.phase_7_product_validation import PHASE_7_PRODUCT_VALIDATION
 from example_workflows.autopilot.phase_8_git_commit_push import PHASE_8_GIT_COMMIT_PUSH
+from example_workflows.autopilot.phase_9_forensics import PHASE_9_FORENSICS
 
 from src.sdk.models import WorkflowConfig, LaunchTemplate, LaunchParameter
 
@@ -38,6 +40,7 @@ AUTOPILOT_PHASES = [
     PHASE_6_QA_VALIDATION,
     PHASE_7_PRODUCT_VALIDATION,
     PHASE_8_GIT_COMMIT_PUSH,
+    PHASE_9_FORENSICS,
 ]
 
 AUTOPILOT_WORKFLOW_CONFIG = WorkflowConfig(
