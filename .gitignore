@@ -63,6 +63,10 @@ site/
 
 # Qdrant
 qdrant_data/
+
+# Local library clones
+lib/
+
 .playwright-mcp/
 frontend/node_modules/
 # Tmux

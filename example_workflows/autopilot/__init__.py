@@ -2,9 +2,9 @@
 Autopilot Multi-Agent Pipeline
 
 A continuous workflow engine that watches a design queue and processes
-designs through the full 8-phase pipeline: product requirements,
+designs through the full 9-phase pipeline: product requirements,
 architecture, development, adversarial review, security review, QA,
-product validation, and git commit.
+product validation, git commit, and forensics analysis.
 """
 
 from example_workflows.autopilot.phases import (

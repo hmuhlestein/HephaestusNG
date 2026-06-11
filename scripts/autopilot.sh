@@ -32,6 +32,7 @@
 #
 
 set -e
+set -o pipefail
 
 HEPHAESTUS_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 PYTHON="$HEPHAESTUS_DIR/.venv/bin/python"
@@ -57,6 +58,15 @@ check_python() {
         err "Run: python -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt"
         exit 1
     fi
+}
+
+install_deps() {
+    log "Installing Python dependencies..."
+    cd "$HEPHAESTUS_DIR"
+    # Source Rust if available (needed for turbovec source builds)
+    [ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"
+    "$PYTHON" -m pip install -r requirements.txt --quiet 2>&1 | tail -5
+    ok "Dependencies installed"
 }
 
 check_docker() {
@@ -120,7 +130,9 @@ start_backend() {
     LLM_PROVIDER=openrouter \
     LLM_MODEL=xiaomi/mimo-v2.5 \
     DATABASE_PATH="$HEPHAESTUS_DIR/hephaestus.db" \
-    QDRANT_URL=http://localhost:6333 \
+    EMBEDDING_BACKEND=fastembed \
+    VECTOR_STORE_BACKEND=turbovec \
+    TURBOVEC_DATA_DIR="$HEPHAESTUS_DIR/data/turbovec" \
     MCP_PORT=8000 \
     DEFAULT_CLI_TOOL=opencode \
     PROJECT_ROOT="$PROJECT_PATH" \
@@ -172,10 +184,15 @@ stop_services() {
 show_status() {
     header "Service Status"
 
-    if curl -s http://localhost:6333/ >/dev/null 2>&1; then
-        ok "Qdrant:      running (port 6333)"
+    # Show vector store status based on backend
+    if [ "${VECTOR_STORE_BACKEND:-turbovec}" = "qdrant" ]; then
+        if curl -s http://localhost:6333/ >/dev/null 2>&1; then
+            ok "Qdrant:      running (port 6333)"
+        else
+            err "Qdrant:      not running"
+        fi
     else
-        err "Qdrant:      not running"
+        ok "TurboVec:    local (no container)"
     fi
 
     if curl -s http://localhost:8000/health 2>/dev/null | grep -q '"healthy"'; then
@@ -300,10 +317,12 @@ ${BOLD}PIPELINE PHASES:${NC}
     1. Product Requirements  - Context-aware extraction from design docs
     2. Architecture & Design - Technical spec respecting existing system
     3. Development           - Implementation with tests
-    4. Adversarial Review    - Critical code review
-    5. Security Review       - Vulnerability assessment
+    4. Adversarial Review    - Critical code review and fixes
+    5. Security Review       - Vulnerability assessment and fixes
     6. QA Validation         - Comprehensive testing
     7. Product Validation    - Final spec compliance check
+    8. Git Commit & Push     - Branch, commit, merge to main
+    9. Forensics Analysis    - Pipeline self-improvement review
 
 ${BOLD}OUTPUT:${NC}
     Each design produces:
@@ -358,8 +377,14 @@ run_autopilot() {
     show_queue_status "$DESIGN_QUEUE"
 
     check_python
-    check_docker || exit 1
-    start_qdrant || exit 1
+    install_deps
+
+    # Only start Docker/Qdrant if using qdrant backend
+    if [ "${VECTOR_STORE_BACKEND:-turbovec}" = "qdrant" ]; then
+        check_docker || exit 1
+        start_qdrant || exit 1
+    fi
+
     start_backend || exit 1
     start_monitor
     start_frontend
