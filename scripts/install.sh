@@ -254,27 +254,36 @@ PYTHON="$VENV_DIR/bin/python"
 
 header "Dependencies"
 
-log "Installing requirements..."
-if [ "$PKG_MGR" = "uv" ]; then
-    uv pip install -r "$PREFIX/requirements.txt" --quiet --python "$PYTHON"
-elif [ "$PKG_MGR" = "poetry" ]; then
-    cd "$PREFIX" && poetry install --no-interaction --quiet 2>&1 | tail -3
+# Check if core deps are already installed
+if "$PYTHON" -c "import fastapi, uvicorn, sqlalchemy" 2>/dev/null; then
+    ok "Backend dependencies already installed"
 else
-    "$VENV_DIR/bin/pip" install --upgrade pip --quiet 2>/dev/null
-    "$VENV_DIR/bin/pip" install -r "$PREFIX/requirements.txt" --quiet 2>&1 | tail -1
+    log "Installing requirements..."
+    if [ "$PKG_MGR" = "uv" ]; then
+        uv pip install -r "$PREFIX/requirements.txt" --quiet --python "$PYTHON"
+    elif [ "$PKG_MGR" = "poetry" ]; then
+        cd "$PREFIX" && poetry install --no-interaction --quiet 2>&1 | tail -3
+    else
+        "$VENV_DIR/bin/pip" install --upgrade pip --quiet 2>/dev/null
+        "$VENV_DIR/bin/pip" install -r "$PREFIX/requirements.txt" --quiet 2>&1 | tail -1
+    fi
+    ok "Backend dependencies installed"
 fi
-ok "Backend dependencies installed"
 
 if [ "$DEV_MODE" = true ]; then
-    log "Installing dev dependencies..."
-    if [ "$PKG_MGR" = "uv" ]; then
-        uv pip install pytest pytest-asyncio pytest-cov black flake8 mypy ipython --quiet --python "$PYTHON"
-    elif [ "$PKG_MGR" = "poetry" ]; then
-        cd "$PREFIX" && poetry install --with dev --no-interaction --quiet 2>&1 | tail -3
+    if "$PYTHON" -c "import pytest" 2>/dev/null; then
+        ok "Dev dependencies already installed"
     else
-        "$VENV_DIR/bin/pip" install pytest pytest-asyncio pytest-cov black flake8 mypy ipython --quiet
+        log "Installing dev dependencies..."
+        if [ "$PKG_MGR" = "uv" ]; then
+            uv pip install pytest pytest-asyncio pytest-cov black flake8 mypy ipython --quiet --python "$PYTHON"
+        elif [ "$PKG_MGR" = "poetry" ]; then
+            cd "$PREFIX" && poetry install --with dev --no-interaction --quiet 2>&1 | tail -3
+        else
+            "$VENV_DIR/bin/pip" install pytest pytest-asyncio pytest-cov black flake8 mypy ipython --quiet
+        fi
+        ok "Dev dependencies installed"
     fi
-    ok "Dev dependencies installed"
 fi
 
 # ─── 5. heph CLI ──────────────────────────────────────────────────
@@ -283,17 +292,20 @@ header "heph CLI"
 
 HEPH_BIN="$VENV_DIR/bin/heph"
 
-cat > "$HEPH_BIN" << WRAPPER
+if [ -x "$HEPH_BIN" ] && "$HEPH_BIN" --version >/dev/null 2>&1; then
+    ok "heph already installed: $("$HEPH_BIN" --version 2>&1)"
+else
+    cat > "$HEPH_BIN" << WRAPPER
 #!/bin/bash
 export PYTHONPATH="$PREFIX\${PYTHONPATH:+:\$PYTHONPATH}"
 exec "$PYTHON" -m src.cli.main "\$@"
 WRAPPER
-chmod +x "$HEPH_BIN"
-
-if "$HEPH_BIN" --version >/dev/null 2>&1; then
-    ok "heph installed: $("$HEPH_BIN" --version 2>&1)"
-else
-    warn "heph CLI created but version check failed"
+    chmod +x "$HEPH_BIN"
+    if "$HEPH_BIN" --version >/dev/null 2>&1; then
+        ok "heph installed: $("$HEPH_BIN" --version 2>&1)"
+    else
+        warn "heph CLI created but version check failed"
+    fi
 fi
 
 # ─── 6. Environment file ──────────────────────────────────────────
@@ -338,8 +350,13 @@ fi
 
 header "Database"
 
-log "Initializing SQLite..."
-"$PYTHON" "$PREFIX/scripts/init_db.py" 2>/dev/null && ok "Database ready" || warn "Database init skipped (may already exist)"
+DB_FILE="$PREFIX/hephaestus.db"
+if [ -f "$DB_FILE" ]; then
+    ok "Database exists ($(du -h "$DB_FILE" | cut -f1))"
+else
+    log "Initializing SQLite..."
+    "$PYTHON" "$PREFIX/scripts/init_db.py" 2>/dev/null && ok "Database ready" || warn "Database init failed"
+fi
 
 # ─── 8. Qdrant (only if configured as backend) ─────────────────
 
@@ -378,10 +395,16 @@ if [ "$SKIP_FRONTEND" = false ]; then
 
     FRONTEND_DIR="$PREFIX/frontend"
     if [ -f "$FRONTEND_DIR/package.json" ]; then
-        log "Installing frontend deps..."
-        cd "$FRONTEND_DIR"
-        npm install --silent 2>/dev/null && ok "Frontend ready" || warn "npm install failed"
-        cd "$PREFIX"
+        if [ -d "$FRONTEND_DIR/node_modules" ] && [ "$UPDATE" = false ]; then
+            ok "Frontend dependencies already installed"
+        else
+            log "Installing frontend deps..."
+            cd "$FRONTEND_DIR"
+            npm install --silent 2>/dev/null && ok "Frontend ready" || warn "npm install failed"
+            cd "$PREFIX"
+        fi
+    else
+        warn "Frontend package.json not found — skipping"
     fi
 fi
 
@@ -394,16 +417,41 @@ echo -e "${BOLD}Location:${NC}  $PREFIX"
 echo -e "${BOLD}heph:${NC}      $HEPH_BIN"
 echo ""
 
-# Add to PATH instruction
+# Add to PATH
 case ":$PATH:" in
     *":$VENV_DIR/bin:"*) ok "heph is on PATH" ;;
     *)
-        echo -e "${BOLD}Add heph to PATH:${NC}"
-        echo ""
-        echo -e "  ${CYAN}export PATH=\"$VENV_DIR/bin:\$PATH\"${NC}"
-        echo ""
-        echo -e "Add to ~/.zshrc or ~/.bashrc for persistence."
-        echo ""
+        # Detect shell profile
+        SHELL_NAME="$(basename "$SHELL")"
+        case "$SHELL_NAME" in
+            zsh) PROFILE="$HOME/.zshrc" ;;
+            bash) PROFILE="$HOME/.bashrc" ;;
+            *) PROFILE="" ;;
+        esac
+
+        PATH_LINE="export PATH=\"$VENV_DIR/bin:\$PATH\""
+
+        if [ -n "$PROFILE" ] && [ -f "$PROFILE" ]; then
+            if grep -qF "$VENV_DIR/bin" "$PROFILE" 2>/dev/null; then
+                ok "heph already in $PROFILE"
+            else
+                echo "" >> "$PROFILE"
+                echo "# Hephaestus heph CLI" >> "$PROFILE"
+                echo "$PATH_LINE" >> "$PROFILE"
+                ok "Added heph to $PROFILE"
+            fi
+        else
+            echo ""
+            echo -e "${BOLD}Add heph to PATH:${NC}"
+            echo ""
+            echo -e "  ${CYAN}$PATH_LINE${NC}"
+            echo ""
+            echo -e "Add to your shell profile for persistence."
+            echo ""
+        fi
+
+        # Export for current session
+        export PATH="$VENV_DIR/bin:$PATH"
         ;;
 esac
 
