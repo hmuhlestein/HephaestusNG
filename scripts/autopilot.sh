@@ -133,6 +133,8 @@ start_backend() {
     EMBEDDING_BACKEND=fastembed \
     VECTOR_STORE_BACKEND=turbovec \
     TURBOVEC_DATA_DIR="$HEPHAESTUS_DIR/data/turbovec" \
+    DESIGN_QUEUE_DIR="$DESIGN_QUEUE" \
+    FEATURES_DIR="$PROJECT_PATH/features" \
     MCP_PORT=8000 \
     DEFAULT_CLI_TOOL=opencode \
     PROJECT_ROOT="$PROJECT_PATH" \

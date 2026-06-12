@@ -684,8 +684,15 @@ async def startup_event():
     # Add authentication routes
     app.include_router(auth_router)
 
+    # Add autopilot routes (configure BEFORE including)
+    from src.mcp.autopilot_api import router as autopilot_router, configure_autopilot_api
+    configure_autopilot_api(
+        design_queue_dir=os.environ.get("DESIGN_QUEUE_DIR", ""),
+        features_dir=os.environ.get("FEATURES_DIR", ""),
+    )
+    app.include_router(autopilot_router)
+
     # Load phases if folder is specified
-    import os
     from pathlib import Path
 
     logger.info("=== PHASE LOADING DEBUG ===")

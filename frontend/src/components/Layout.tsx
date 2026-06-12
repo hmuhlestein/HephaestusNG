@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { NavLink, Outlet } from 'react-router-dom';
-import { Home, FileText, Bot, Database, GitBranch, Activity, Layers, Monitor, Compass, ListChecks, Menu, ChevronLeft, Ticket, Workflow } from 'lucide-react';
+import { Home, FileText, Bot, Database, GitBranch, Activity, Layers, Monitor, Compass, ListChecks, Menu, ChevronLeft, Ticket, Workflow, Rocket } from 'lucide-react';
 import { useWebSocket } from '@/context/WebSocketContext';
 import { format } from 'date-fns';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -31,6 +31,7 @@ const Layout: React.FC = () => {
 
     const navItems = [
       { to: '/', icon: Home, label: 'Dashboard' },
+      { to: '/autopilot', icon: Rocket, label: 'Autopilot' },
       { to: '/workflows', icon: Workflow, label: 'Workflows' },
       { to: '/overview', icon: Compass, label: 'Overview' },
       { to: '/tasks', icon: FileText, label: 'Tasks' },
