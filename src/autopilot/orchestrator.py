@@ -28,7 +28,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 HEPHAESTUS_DIR = Path(__file__).parent.parent.parent
-API_BASE = "http://127.0.0.1:8000"
+API_BASE = os.environ.get("HEPHAESTUS_API_BASE", "http://127.0.0.1:8000")
 
 from src.core.constants import AUTOPILOT_STATE_DIR
 
@@ -275,7 +275,8 @@ def detect_architectural_issue(report_paths: List[str]) -> Tuple[bool, str]:
     return False, ""
 
 
-def prompt_human(reason: str, logger: OrchestratorLogger) -> str:
+def prompt_human(reason: str, logger: OrchestratorLogger, timeout: int = 300) -> str:
+    """Prompt for human input. Auto-continues after timeout seconds."""
     import sys
     import uuid
 
@@ -295,6 +296,7 @@ def prompt_human(reason: str, logger: OrchestratorLogger) -> str:
         "timestamp": datetime.now().isoformat(),
         "options": ["c", "s", "q"],
         "labels": {"c": "Continue", "s": "Skip design", "q": "Quit pipeline"},
+        "timeout_seconds": timeout,
     }, indent=2)
     tmp = request_file.with_suffix(".tmp")
     tmp.write_text(payload)
@@ -307,11 +309,12 @@ def prompt_human(reason: str, logger: OrchestratorLogger) -> str:
     print("=" * 60)
     print(f"Reason: {reason}")
     print(f"Request ID: {request_id}")
-    print("Options: [c] Continue  [s] Skip  [q] Quit")
+    print(f"Options: [c] Continue  [s] Skip  [q] Quit  (auto-continue in {timeout}s)")
     print("Respond via web UI or terminal.")
     print("=" * 60)
 
-    while True:
+    start = time.time()
+    while time.time() - start < timeout:
         # Check file response
         if response_file.exists():
             try:
@@ -342,13 +345,19 @@ def prompt_human(reason: str, logger: OrchestratorLogger) -> str:
         except (OSError, ValueError):
             time.sleep(2)
 
+    # Timeout — auto-continue
+    logger.log(f"Human input timed out after {timeout}s, auto-continuing", "WARN")
+    logger.event("human_input", {"choice": "timeout", "reason": reason, "request_id": request_id})
+    request_file.unlink(missing_ok=True)
+    return "c"
+
 
 def scan_design_queue(queue_dir: Path, processed_hashes: Set[str]) -> List[DesignEntry]:
     designs = []
     if not queue_dir.exists():
         return designs
 
-    for ext in ("*.md", "*.txt", "*.pdf"):
+    for ext in ("*.md", "*.txt"):
         for filepath in sorted(queue_dir.glob(ext)):
             if filepath.is_dir():
                 continue
@@ -1050,19 +1059,19 @@ def run_single_design(
         stop_reason = StopReason.USER_INTERRUPT
         logger.log("Design processing interrupted")
 
-    # Organize: move any stray docs from project root into feature artifacts
+    # Organize: copy stray docs from project root into feature artifacts (don't move — iteration loop needs them)
     for md_file in project_path.glob("*.md"):
         dest = docs_dir / md_file.name
         if not dest.exists():
-            shutil.move(str(md_file), str(dest))
-            logger.log(f"Moved doc: {md_file.name} -> features/.../artifacts/")
+            shutil.copy2(str(md_file), str(dest))
+            logger.log(f"Copied doc: {md_file.name} -> features/.../artifacts/")
 
     # Also check feature_folder root for misplaced docs
     for md_file in feature_folder.glob("*.md"):
         dest = docs_dir / md_file.name
         if not dest.exists():
-            shutil.move(str(md_file), str(dest))
-            logger.log(f"Moved doc: {md_file.name} -> features/.../artifacts/")
+            shutil.copy2(str(md_file), str(dest))
+            logger.log(f"Copied doc: {md_file.name} -> features/.../artifacts/")
 
     # Collect summaries from the correct locations (docs in features, code in builds)
     summaries = collect_report_summaries(docs_dir)
@@ -1187,7 +1196,7 @@ def run_continuous_pipeline(args) -> None:
     from src.sdk.models import WorkflowDefinition
     from example_workflows.autopilot.phases import AUTOPILOT_PHASES, AUTOPILOT_WORKFLOW_CONFIG, AUTOPILOT_LAUNCH_TEMPLATE
 
-    cli_tool = os.getenv("HEPHAESTUS_CLI_TOOL", "opencode")
+    cli_tool = os.getenv("HEPHAESTUS_CLI_TOOL", os.getenv("DEFAULT_CLI_TOOL", "opencode"))
 
     autopilot_def = WorkflowDefinition(
         id="autopilot",
@@ -1201,13 +1210,13 @@ def run_continuous_pipeline(args) -> None:
     logger.log("Initializing SDK...")
     sdk = HephaestusSDK(
         workflow_definitions=[autopilot_def],
-        database_path=str(HEPHAESTUS_DIR / "hephaestus.db"),
-        qdrant_url="http://localhost:6333",
+        database_path=os.environ.get("DATABASE_PATH", str(HEPHAESTUS_DIR / "hephaestus.db")),
+        qdrant_url=os.environ.get("QDRANT_URL", "http://localhost:6333"),
         working_directory=str(project_path),
-        mcp_port=8000,
+        mcp_port=int(os.environ.get("MCP_PORT", "8000")),
         monitoring_interval=60,
-        llm_provider="openrouter",
-        llm_model="xiaomi/mimo-v2.5",
+        llm_provider=os.environ.get("LLM_PROVIDER", "openrouter"),
+        llm_model=os.environ.get("LLM_MODEL", "xiaomi/mimo-v2.5"),
         default_cli_tool=cli_tool,
         main_repo_path=str(project_path),
         project_root=str(project_path),

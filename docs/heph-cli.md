@@ -274,5 +274,5 @@ Each command module exposes:
 └── orchestrator.pid
 ```
 
-`heph stop` reads these PIDs and sends SIGTERM, then SIGKILL after 5 seconds.
-No fragile `pkill -f` pattern matching.
+`heph stop` and `heph autopilot stop` read these PIDs and send SIGTERM,
+then SIGKILL after 5 seconds. No pattern matching against process names.

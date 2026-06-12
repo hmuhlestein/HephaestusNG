@@ -54,6 +54,17 @@ cd <Project Path from task description>
 git status
 ```
 
+Before starting, discover the remote and default branch:
+```bash
+# Get the default remote (usually origin)
+REMOTE=$(git remote | head -1)
+# Get the default branch
+DEFAULT_BRANCH=$(git symbolic-ref refs/remotes/$REMOTE/HEAD 2>/dev/null | sed "s@refs/remotes/$REMOTE/@@" || echo "main")
+echo "Remote: $REMOTE, Branch: $DEFAULT_BRANCH"
+```
+
+Use $REMOTE and $DEFAULT_BRANCH for all subsequent git commands instead of hardcoding "origin" and "main".
+
 ═══════════════════════════════════════════════════════════════════════
 STEP 1: CHECK CURRENT STATE
 ═══════════════════════════════════════════════════════════════════════
