@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Claude MCP Client for Hephaestus
-This client connects to the Hephaestus server running on port 8000
+This client connects to the Hephaestus server running on port 8300
 """
 
 from fastmcp import FastMCP
@@ -12,7 +12,7 @@ import asyncio
 mcp = FastMCP("hephaestus-client")
 
 # Hephaestus server URL
-HEPHAESTUS_URL = "http://localhost:8000"
+HEPHAESTUS_URL = "http://localhost:8300"
 DEFAULT_AGENT_ID = "main-session-agent"
 
 @mcp.tool()
@@ -22,7 +22,7 @@ def health_check() -> str:
         import requests
         response = requests.get(f"{HEPHAESTUS_URL}/health", timeout=5)
         if response.status_code == 200:
-            return "✅ Hephaestus server is healthy and running on port 8000"
+            return "✅ Hephaestus server is healthy and running on port 8300"
         else:
             return f"⚠️ Server responded with status {response.status_code}"
     except Exception as e:
@@ -1579,7 +1579,7 @@ Stats:
 # Run the MCP server
 if __name__ == "__main__":
     print("🚀 Starting Claude MCP Client for Hephaestus...")
-    print("📡 Connecting to Hephaestus server at http://localhost:8000")
+    print("📡 Connecting to Hephaestus server at http://localhost:8300")
     print("✨ Available tools:")
     print("\n📋 Task Management:")
     print("  - health_check: Check server status")

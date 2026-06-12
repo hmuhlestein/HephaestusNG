@@ -83,7 +83,7 @@ QA_LAUNCH_TEMPLATE = LaunchTemplate(
             label="Services URL",
             type="text",
             required=False,
-            description="Base URL for services (default: http://localhost:8000)"
+            description="Base URL for services (default: http://localhost:8300)"
         ),
         LaunchParameter(
             name="frontend_url",

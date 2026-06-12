@@ -263,11 +263,11 @@ Infrastructure must be built FIRST before any features can be implemented.
 
 **🚨🚨🚨 CRITICAL PROJECT STRUCTURE RULES - MUST FOLLOW! 🚨🚨🚨**
 
-**1. PORT 8000 IS RESERVED - NEVER USE IT!**
-- Port 8000 is used by Hephaestus MCP server and MUST remain open
+**1. PORT 8300 IS RESERVED - NEVER USE IT!**
+- Port 8300 is used by Hephaestus MCP server and MUST remain open
 - If your project needs a backend server, use a DIFFERENT port (8002, 3000, 5000, etc.)
-- ❌ WRONG: Backend runs on port 8000
-- ✅ CORRECT: Backend runs on port 8002 (or any port except 8000)
+- ❌ WRONG: Backend runs on port 8300
+- ✅ CORRECT: Backend runs on port 8002 (or any port except 8300)
 
 **2. FRONTEND AND BACKEND MUST BE IN SEPARATE DIRECTORIES!**
 - Create a `frontend/` directory for ALL frontend code
@@ -347,7 +347,7 @@ project-root/
 **All of the above are WRONG! Auth, Login, User models are FEATURES, not infrastructure!**
 
 ❌ **WRONG - VIOLATES PROJECT STRUCTURE RULES:**
-- ❌ "Backend Infrastructure: Set up FastAPI on port 8000" ← Port 8000 is RESERVED!
+- ❌ "Backend Infrastructure: Set up FastAPI on port 8300" ← Port 8300 is RESERVED!
 - ❌ "Create single src/ directory with both frontend and backend code" ← Must be separate!
 - ❌ "Set up unified codebase in src/" ← Frontend and backend MUST be in separate directories!
 
@@ -1390,7 +1390,7 @@ CRITICAL RULES
 - Read the entire PRD document carefully
 - Identify infrastructure needs FIRST (project setup, build tools, etc.)
 - **Specify frontend/ and backend/ directories for web apps** (NEVER single src/)
-- **Specify PORT 8002 for backend servers** (PORT 8000 is RESERVED!)
+- **Specify PORT 8002 for backend servers** (PORT 8300 is RESERVED!)
 - Determine implementation order and dependencies
 - Identify ALL major components
 - Save comprehensive memories for the hive mind
@@ -1405,7 +1405,7 @@ CRITICAL RULES
 - Write code (that's Phase 3)
 - Test anything (that's Phase 4)
 - Skip infrastructure identification (CRITICAL!)
-- **Allow backend to use PORT 8000** (it's RESERVED - use 8002!)
+- **Allow backend to use PORT 8300** (it's RESERVED - use 8002!)
 - **Allow mixed frontend/backend in single src/** (must be separate directories!)
 - Create component tickets without considering dependencies
 - Create tickets without corresponding tasks (must be 1:1!)

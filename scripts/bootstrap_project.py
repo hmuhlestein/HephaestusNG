@@ -65,7 +65,7 @@ def ensure_qdrant() -> None:
         ) from e
 
 
-def poll_backend(timeout: int = 60, base_url: str = "http://127.0.0.1:8000") -> None:
+def poll_backend(timeout: int = 60, base_url: str = "http://127.0.0.1:8300") -> None:
     """Wait until backend /health is healthy or timeout."""
     start = time.time()
     while time.time() - start < timeout:
@@ -83,7 +83,7 @@ def poll_backend(timeout: int = 60, base_url: str = "http://127.0.0.1:8000") -> 
 def create_phase1_task(
     prd_path: str,
     project_name: str,
-    base_url: str = "http://127.0.0.1:8000",
+    base_url: str = "http://127.0.0.1:8300",
     agent_id: str = "main-session-agent",
 ) -> None:
     """Create the Phase 1 task programmatically."""
@@ -138,7 +138,7 @@ def main() -> None:
     parser.add_argument("--prd", required=True, help="Absolute path to PRD file")
     parser.add_argument("--clean-qdrant", action="store_true", help="Clean Qdrant collections before starting")
     parser.add_argument("--drop-db", action="store_true", help="Drop database before starting")
-    parser.add_argument("--mcp-port", default="8000", help="MCP server port (default: 8000)")
+    parser.add_argument("--mcp-port", default="8300", help="MCP server port (default: 8300)")
     args = parser.parse_args()
 
     # Sanity checks

@@ -53,7 +53,7 @@ STEP 2: VALIDATE TEST ENVIRONMENT
 Check:
 ```bash
 # Check services are running
-curl -s http://localhost:8000/health || echo "Backend not running"
+curl -s http://localhost:8300/health || echo "Backend not running"
 
 # Check test dependencies
 python -m pytest --version || echo "pytest not installed"

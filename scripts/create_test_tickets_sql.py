@@ -134,7 +134,7 @@ try:
 
     conn.commit()
     print("\n✅ Test data created successfully!")
-    print(f"\nView the board at: http://localhost:8000/tickets")
+    print(f"\nView the board at: http://localhost:8300/tickets")
 
 except Exception as e:
     conn.rollback()

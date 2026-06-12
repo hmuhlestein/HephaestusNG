@@ -454,7 +454,7 @@ def main():
         qdrant_url="http://localhost:6333",
         llm_provider=os.getenv("LLM_PROVIDER", "openai"),
         working_directory=".",
-        mcp_port=8000,
+        mcp_port=8300,
         monitoring_interval=60
     )
 
@@ -733,7 +733,7 @@ for task in tasks:
 ### View Agent Status
 ```bash
 # Check active agents
-curl http://localhost:8000/api/agents/status
+curl http://localhost:8300/api/agents/status
 ```
 
 ## Next Steps

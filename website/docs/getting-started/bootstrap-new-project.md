@@ -39,7 +39,7 @@ python scripts/bootstrap_project.py \
 ## After Bootstrap
 
 - Frontend: http://localhost:5173
-- Backend API: http://localhost:8000
-- Tickets board: http://localhost:8000/tickets
+- Backend API: http://localhost:8300
+- Tickets board: http://localhost:8300/tickets
 
 The Phase 1 agent will automatically analyze your PRD and create tickets with proper dependencies.

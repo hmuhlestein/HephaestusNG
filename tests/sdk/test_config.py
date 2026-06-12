@@ -16,7 +16,7 @@ def test_config_defaults():
     assert config.database_path == "./hephaestus.db"
     assert config.qdrant_url == "http://localhost:6333"
     assert config.llm_provider == "anthropic"
-    assert config.mcp_port == 8000
+    assert config.mcp_port == 8300
     assert config.monitoring_interval == 60
 
     # Cleanup

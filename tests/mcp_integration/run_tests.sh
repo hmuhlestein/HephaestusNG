@@ -18,7 +18,7 @@ echo ""
 
 # Check if server is running
 echo -e "${YELLOW}Checking if Hephaestus server is running...${NC}"
-if curl -s http://localhost:8000/health > /dev/null 2>&1; then
+if curl -s http://localhost:8300/health > /dev/null 2>&1; then
     echo -e "${GREEN}✓ Server is running${NC}"
 else
     echo -e "${RED}✗ Server is not running${NC}"

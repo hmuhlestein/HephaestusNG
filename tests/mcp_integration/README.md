@@ -27,7 +27,7 @@ These tests verify that the MCP endpoints work correctly without actually runnin
    python run_server.py
    ```
 
-2. Ensure the server is running on port 8000
+2. Ensure the server is running on port 8300
 
 ### Run Tests
 

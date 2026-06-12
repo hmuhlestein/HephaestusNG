@@ -1,35 +1,9 @@
-#!/usr/bin/env bash
-#
-# heph — Hephaestus CLI
-#
-# Standalone command that finds the project and Python automatically.
-# Works from any install location — no hardcoded paths.
-#
-
-set -e
-
-# Resolve the real location of this script (follows symlinks)
-SOURCE="${BASH_SOURCE[0]}"
-while [ -L "$SOURCE" ]; do
-    DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
-    SOURCE="$(readlink "$SOURCE")"
-    [[ $SOURCE != /* ]] && SOURCE="$DIR/$SOURCE"
-done
-HEPH_DIR="$(cd -P "$(dirname "$SOURCE")/.." && pwd)"
-
-# Find Python: prefer venv, fall back to system
-if [ -x "$HEPH_DIR/.venv/bin/python" ]; then
-    PYTHON="$HEPH_DIR/.venv/bin/python"
-elif command -v python3 >/dev/null 2>&1; then
-    PYTHON="$(command -v python3)"
-elif command -v python >/dev/null 2>&1; then
-    PYTHON="$(command -v python)"
+#!/bin/bash
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+if [[ "$SCRIPT_DIR" == */.venv/bin ]]; then
+  HEPH_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 else
-    echo "Error: Python not found. Run ./scripts/install.sh first." >&2
-    exit 1
+  HEPH_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 fi
-
-# Set PYTHONPATH so imports resolve
-export PYTHONPATH="$HEPH_DIR${PYTHONPATH:+:$PYTHONPATH}"
-
-exec "$PYTHON" -m src.cli.main "$@"
+export PYTHONPATH="${HEPH_DIR}${PYTHONPATH:+:$PYTHONPATH}"
+exec "${HEPH_DIR}/.venv/bin/python" -m src.cli.main "$@"

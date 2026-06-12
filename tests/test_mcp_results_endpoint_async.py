@@ -13,7 +13,7 @@ import uuid
 class TestReportResultsEndpointAsync:
     """Test suite for the /report_results MCP endpoint."""
 
-    BASE_URL = "http://localhost:8000"
+    BASE_URL = "http://localhost:8300"
 
     @pytest.fixture
     def valid_markdown_file(self):

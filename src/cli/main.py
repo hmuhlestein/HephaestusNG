@@ -14,7 +14,7 @@ Commands:
     task        Task management (list, create, inspect)
     autopilot   Autopilot pipeline (start, stop, status, queue)
     memory      Knowledge base (search, save)
-    exec        Test and execute services
+    exec        Execute commands and interact with services (run, ping, tool, endpoints, raw)
     config      Show and edit configuration
 """
 
@@ -53,7 +53,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--host", default="127.0.0.1", help="Backend host (default: 127.0.0.1)"
     )
     parser.add_argument(
-        "--port", type=int, default=8000, help="Backend port (default: 8000)"
+        "--port", type=int, default=8300, help="Backend port (default: 8300)"
     )
 
     sub = parser.add_subparsers(dest="command", help="Available commands")

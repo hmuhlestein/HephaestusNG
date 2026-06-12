@@ -267,7 +267,7 @@ class SimpleConfig:
     @property
     def server_port(self) -> int:
         """Get server port."""
-        return self.get('server.port', 8000)
+        return self.get('server.port', 8300)
 
     @property
     def monitoring_interval(self) -> int:

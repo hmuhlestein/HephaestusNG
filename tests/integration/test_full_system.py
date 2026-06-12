@@ -155,7 +155,7 @@ class HephaestusIntegrationTest:
         self.server_process = None
         self.monitor_process = None
         self.db_manager = None
-        self.base_url = "http://localhost:8000"
+        self.base_url = "http://localhost:8300"
         self.test_dir = Path("tests/integration/test_data")
         self.test_dir.mkdir(parents=True, exist_ok=True)
 
@@ -284,7 +284,7 @@ class HephaestusIntegrationTest:
         env = os.environ.copy()
         env.update({
             "DATABASE_PATH": "./hephaestus_test.db",
-            "MCP_PORT": "8000",
+            "MCP_PORT": "8300",
             "MONITORING_INTERVAL_SECONDS": "5",
             "LLM_PROVIDER": "openai",  # Will be mocked
             "OPENAI_API_KEY": "test-key",
