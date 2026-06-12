@@ -44,7 +44,7 @@ Before running tests, verify:
 
 ```bash
 # Check services are running
-curl -s http://localhost:8000/health || echo "Backend not running"
+curl -s http://localhost:8300/health || echo "Backend not running"
 curl -s http://localhost:6333/ || echo "Qdrant not running"
 
 # Check Chrome is available for CDP tests
