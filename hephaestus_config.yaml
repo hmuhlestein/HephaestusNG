@@ -71,9 +71,13 @@ agents:
   max_health_failures: 3
   termination_delay: 5
 vector_store:
-  qdrant_url: http://localhost:6333
+  backend: turbovec
   collection_prefix: hephaestus
-  embedding_dimension: 1536
+  embedding_dimension: 384
+  # turbovec settings (default - no Docker required)
+  turbovec_data_dir: data/turbovec
+  # qdrant settings (optional - requires Docker, set VECTOR_STORE_BACKEND=qdrant)
+  # qdrant_url: http://localhost:6333
 monitoring:
   enabled: true
   interval_seconds: 60
@@ -90,8 +94,9 @@ task_deduplication:
   enabled: true
   similarity_threshold: 0.999
   related_threshold: 0.5
-  embedding_model: text-embedding-3-large
-  embedding_dimension: 3072
+  embedding_model: BAAI/bge-small-en-v1.5
+  embedding_dimension: 384
+  embedding_backend: fastembed
   batch_size: 100
 diagnostic_agent:
   enabled: true
@@ -105,6 +110,6 @@ ticket_tracking:
   default_human_review: false
   default_approval_timeout: 1800
   embedding:
-    model: text-embedding-3-large
-    dimensions: 3072
-    provider: openrouter
+    model: BAAI/bge-small-en-v1.5
+    dimensions: 384
+    backend: fastembed

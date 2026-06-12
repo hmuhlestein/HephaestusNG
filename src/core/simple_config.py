@@ -78,9 +78,11 @@ class Config:
 
         # Vector store settings
         vector_store = config.get('vector_store', {})
+        self.vector_store_backend = vector_store.get('backend', 'turbovec')
         self.qdrant_url = vector_store.get('qdrant_url', 'http://localhost:6333')
         self.qdrant_collection_prefix = vector_store.get('collection_prefix', 'hephaestus')
-        self.embedding_dimension = vector_store.get('embedding_dimension', 1536)
+        self.embedding_dimension = vector_store.get('embedding_dimension', 384)
+        self.turbovec_data_dir = vector_store.get('turbovec_data_dir', 'data/turbovec')
 
         # Monitoring settings
         monitoring = config.get('monitoring', {})
@@ -103,8 +105,9 @@ class Config:
         self.task_dedup_enabled = dedup.get('enabled', True)
         self.task_similarity_threshold = dedup.get('similarity_threshold', 0.7)
         self.task_related_threshold = dedup.get('related_threshold', 0.4)
-        self.task_embedding_model = dedup.get('embedding_model', 'text-embedding-3-large')
-        self.task_embedding_dimension = dedup.get('embedding_dimension', 3072)
+        self.task_embedding_model = dedup.get('embedding_model', 'BAAI/bge-small-en-v1.5')
+        self.task_embedding_dimension = dedup.get('embedding_dimension', 384)
+        self.task_embedding_backend = dedup.get('embedding_backend', 'fastembed')
         self.task_dedup_batch_size = dedup.get('batch_size', 100)
 
         # Additional settings from original config
@@ -179,6 +182,10 @@ class Config:
             self.qdrant_url = os.getenv("QDRANT_URL")
         if os.getenv("QDRANT_COLLECTION_PREFIX"):
             self.qdrant_collection_prefix = os.getenv("QDRANT_COLLECTION_PREFIX")
+        if os.getenv("VECTOR_STORE_BACKEND"):
+            self.vector_store_backend = os.getenv("VECTOR_STORE_BACKEND")
+        if os.getenv("TURBOVEC_DATA_DIR"):
+            self.turbovec_data_dir = os.getenv("TURBOVEC_DATA_DIR")
 
         # MCP settings
         if os.getenv("MCP_HOST"):
@@ -317,6 +324,10 @@ class Config:
         # Database and storage paths
         if self.database_path:
             env["DATABASE_PATH"] = str(self.database_path)
+        if hasattr(self, 'vector_store_backend') and self.vector_store_backend:
+            env["VECTOR_STORE_BACKEND"] = self.vector_store_backend
+        if hasattr(self, 'turbovec_data_dir') and self.turbovec_data_dir:
+            env["TURBOVEC_DATA_DIR"] = self.turbovec_data_dir
         if self.qdrant_url:
             env["QDRANT_URL"] = self.qdrant_url
         if self.qdrant_collection_prefix:
