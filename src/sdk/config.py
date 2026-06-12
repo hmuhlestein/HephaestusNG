@@ -15,9 +15,6 @@ class HephaestusConfig:
     # Database
     database_path: str = "./hephaestus.db"
 
-    # Qdrant
-    qdrant_url: str = "http://localhost:6333"
-
     # LLM - Basic settings
     llm_provider: str = "anthropic"  # or "openai"
     llm_model: Optional[str] = None
@@ -68,9 +65,13 @@ class HephaestusConfig:
     termination_delay: int = 5
 
     # Vector Store Configuration
+    vector_store_backend: str = "turbovec"
     collection_prefix: str = "hephaestus"
-    embedding_dimension: int = 1536
-    embedding_model: str = "text-embedding-3-large"
+    embedding_dimension: int = 384
+    embedding_model: str = "BAAI/bge-small-en-v1.5"
+    embedding_backend: str = "fastembed"
+    turbovec_data_dir: str = "data/turbovec"
+    qdrant_url: str = "http://localhost:6333"
 
     # MCP Server Configuration
     auth_required: bool = False
@@ -127,10 +128,13 @@ class HephaestusConfig:
             "DATABASE_PATH": self.database_path,
 
             # Qdrant / Vector Store
+            "VECTOR_STORE_BACKEND": self.vector_store_backend,
             "QDRANT_URL": self.qdrant_url,
             "VECTOR_STORE_COLLECTION_PREFIX": self.collection_prefix,
             "EMBEDDING_DIMENSION": str(self.embedding_dimension),
             "EMBEDDING_MODEL": self.embedding_model,
+            "EMBEDDING_BACKEND": self.embedding_backend,
+            "TURBOVEC_DATA_DIR": self.turbovec_data_dir,
 
             # LLM
             "LLM_PROVIDER": self.llm_provider,
