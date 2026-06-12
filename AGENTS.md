@@ -7,10 +7,68 @@
 - `scripts/` provides setup helpers; architecture details live in `docs/` and `design_docs/`; configuration files sit in `config/`.
 
 ## Build, Test, and Development Commands
-- `poetry install` (preferred) or `pip install -r requirements.txt` (installs turbovec + fastembed by default).
-- `python scripts/init_db.py` and `python scripts/init_qdrant.py` initialize SQLite tables and vector collections.
-- `python run_server.py` exposes the MCP API on port 8000 (`--reload` optional); `python run_monitor.py` enables the self-healing monitor.
-- `cd frontend && npm install && npm run dev` serves the UI; `npm run build` produces production assets.
+
+### Install
+```bash
+# Remote install (no repo needed)
+curl -sSL https://raw.githubusercontent.com/hmuhlestein/Hephaestus/main/scripts/install.sh | bash
+
+# Local install (from cloned repo)
+./scripts/install.sh
+
+# Add heph to PATH
+export PATH="$HOME/.hephaestus/.venv/bin:$PATH"
+```
+
+### Service Management (heph CLI)
+```bash
+heph start                       # Start backend, monitor, frontend, Qdrant
+heph stop                        # Stop all services
+heph restart                     # Restart all services
+heph status                      # Health check
+heph init                        # Initialize database and Qdrant
+heph exec test                   # Test service connectivity
+```
+
+### Workflow & Agents
+```bash
+heph workflow list                # List workflow definitions
+heph workflow launch <id> -d "..." # Launch a workflow
+heph agent list                  # List active agents
+heph task list --status pending  # List tasks by status
+```
+
+### Autopilot Pipeline
+```bash
+heph autopilot start --project-path ~/my-project   # Start pipeline
+heph autopilot stop                                # Stop pipeline
+heph autopilot status                              # Pipeline status
+heph autopilot queue --project-path ~/my-project   # View design queue
+heph autopilot add design.md --project-path ~/my-project  # Add to queue
+```
+
+### Knowledge Base
+```bash
+heph memory search "query"       # Search vector DB
+heph memory save "content" --type discovery  # Save to vector DB
+```
+
+### Legacy Commands (direct)
+```bash
+poetry install                   # or pip install -r requirements.txt
+python scripts/init_db.py        # Initialize SQLite tables
+python scripts/init_qdrant.py    # Initialize Qdrant collections
+python run_server.py             # Start MCP API on port 8000
+python run_monitor.py            # Start self-healing monitor
+cd frontend && npm install && npm run dev  # Start UI dashboard
+```
+
+### Frontend
+```bash
+cd frontend && npm install && npm run dev   # Dev server
+cd frontend && npm run build                # Production build
+cd frontend && npm run type-check           # TypeScript check
+```
 
 ## Vector Store Backends
 - **Default: turbovec** (local, in-process, zero Docker). Uses `data/turbovec/` for storage.
