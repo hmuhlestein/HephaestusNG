@@ -8,10 +8,11 @@ import toast from 'react-hot-toast';
 
 interface AddDesignModalProps {
   open: boolean;
+  projectId: string | null;
   onClose: () => void;
 }
 
-const AddDesignModal: React.FC<AddDesignModalProps> = ({ open, onClose }) => {
+const AddDesignModal: React.FC<AddDesignModalProps> = ({ open, projectId, onClose }) => {
   const queryClient = useQueryClient();
   const [name, setName] = useState('');
   const [content, setContent] = useState('');
@@ -26,9 +27,13 @@ const AddDesignModal: React.FC<AddDesignModalProps> = ({ open, onClose }) => {
   }, [open]);
 
   const addMutation = useMutation({
-    mutationFn: () => apiService.addToAutopilotQueue(name, content, extension),
+    mutationFn: () => {
+      if (!projectId) throw new Error('No project selected');
+      return apiService.addAutopilotProjectDesign(projectId, name, content, extension);
+    },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['autopilot-queue'] });
+      queryClient.invalidateQueries({ queryKey: ['autopilot-project-designs', projectId] });
+      queryClient.invalidateQueries({ queryKey: ['autopilot-projects'] });
       queryClient.invalidateQueries({ queryKey: ['autopilot-status'] });
       toast.success(`"${name}" added to queue`);
       setName('');

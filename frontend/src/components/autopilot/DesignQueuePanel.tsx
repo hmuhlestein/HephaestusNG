@@ -27,33 +27,43 @@ import { formatDistanceToNow } from 'date-fns';
 import toast from 'react-hot-toast';
 
 interface DesignQueuePanelProps {
+  projectId: string | null;
   onAddDesign: () => void;
 }
 
-const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ onAddDesign }) => {
+const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDesign }) => {
   const queryClient = useQueryClient();
   const [previewFile, setPreviewFile] = useState<string | null>(null);
   const [previewContent, setPreviewContent] = useState<string>('');
   const [search, setSearch] = useState('');
   const [localOrder, setLocalOrder] = useState<any[] | null>(null);
 
-  const { data: queue, isLoading } = useQuery({
-    queryKey: ['autopilot-queue'],
-    queryFn: () => apiService.getAutopilotQueue(),
+  const { data: designs, isLoading } = useQuery({
+    queryKey: ['autopilot-project-designs', projectId],
+    queryFn: () => projectId ? apiService.getAutopilotProjectDesigns(projectId) : Promise.resolve([]),
+    enabled: !!projectId,
     refetchInterval: 30000,
   });
 
-  const items = localOrder ?? queue ?? [];
+  const items = localOrder ?? designs ?? [];
 
   useEffect(() => {
-    if (queue) setLocalOrder(queue);
-  }, [queue]);
+    if (designs) setLocalOrder(designs);
+  }, [designs]);
+
+  useEffect(() => {
+    setLocalOrder(null);
+  }, [projectId]);
 
   const removeMutation = useMutation({
-    mutationFn: (filename: string) => apiService.removeFromAutopilotQueue(filename),
+    mutationFn: (filename: string) => {
+      if (!projectId) throw new Error('No project selected');
+      return apiService.removeAutopilotProjectDesign(projectId, filename);
+    },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['autopilot-queue'] });
-      toast.success('Design removed from queue');
+      queryClient.invalidateQueries({ queryKey: ['autopilot-project-designs', projectId] });
+      queryClient.invalidateQueries({ queryKey: ['autopilot-projects'] });
+      toast.success('Design removed');
     },
     onError: (error: any) => {
       toast.error(error?.response?.data?.detail || 'Failed to remove design');
@@ -61,9 +71,12 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ onAddDesign }) => {
   });
 
   const reorderMutation = useMutation({
-    mutationFn: (filenames: string[]) => apiService.reorderAutopilotQueue(filenames),
+    mutationFn: (designIds: string[]) => {
+      if (!projectId) throw new Error('No project selected');
+      return apiService.reorderAutopilotProjectDesigns(projectId, designIds);
+    },
     onError: () => {
-      queryClient.invalidateQueries({ queryKey: ['autopilot-queue'] });
+      queryClient.invalidateQueries({ queryKey: ['autopilot-project-designs', projectId] });
       toast.error('Failed to save order');
     },
   });
@@ -79,17 +92,18 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ onAddDesign }) => {
 
     setLocalOrder((prev) => {
       if (!prev) return prev;
-      const oldIndex = prev.findIndex((i) => i.filename === active.id);
-      const newIndex = prev.findIndex((i) => i.filename === over.id);
+      const oldIndex = prev.findIndex((i) => i.id === active.id);
+      const newIndex = prev.findIndex((i) => i.id === over.id);
       const reordered = arrayMove(prev, oldIndex, newIndex);
-      reorderMutation.mutate(reordered.map((i) => i.filename));
+      reorderMutation.mutate(reordered.map((i) => i.id));
       return reordered;
     });
   };
 
   const handlePreview = async (filename: string) => {
+    if (!projectId) return;
     try {
-      const result = await apiService.getAutopilotQueueContent(filename);
+      const result = await apiService.getAutopilotProjectDesignContent(projectId, filename);
       setPreviewFile(filename);
       setPreviewContent(result.content);
     } catch (e) {
@@ -101,6 +115,16 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ onAddDesign }) => {
     !search || item.name.toLowerCase().includes(search.toLowerCase()) ||
     item.filename.toLowerCase().includes(search.toLowerCase())
   );
+
+  if (!projectId) {
+    return (
+      <div className="bg-gray-50 border-2 border-dashed border-gray-200 rounded-2xl p-12 text-center">
+        <ListOrdered className="w-12 h-12 text-gray-300 mx-auto mb-4" />
+        <h3 className="text-lg font-semibold text-gray-600 mb-2">No project selected</h3>
+        <p className="text-sm text-gray-400">Select or create a project to view its design queue</p>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-4">
@@ -127,11 +151,15 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ onAddDesign }) => {
         </div>
       ) : filteredQueue.length > 0 ? (
         <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
-          <SortableContext items={filteredQueue.map((i: any) => i.filename)} strategy={verticalListSortingStrategy}>
+          <SortableContext
+            items={filteredQueue.map((i: any) => i.id)}
+            strategy={verticalListSortingStrategy}
+            disabled={!!search}
+          >
             <div className="space-y-2">
               {filteredQueue.map((item: any, index: number) => (
                 <SortableDesignItem
-                  key={item.filename}
+                  key={item.id}
                   item={item}
                   index={index}
                   onPreview={handlePreview}
@@ -208,7 +236,7 @@ const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, on
     transform,
     transition,
     isDragging,
-  } = useSortable({ id: item.filename });
+  } = useSortable({ id: item.id });
 
   const style = {
     transform: CSS.Transform.toString(transform),
@@ -234,7 +262,7 @@ const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, on
             className="flex flex-col items-center gap-1 text-gray-300 hover:text-gray-500 cursor-grab active:cursor-grabbing touch-none"
           >
             <GripVertical className="w-5 h-5" />
-            <span className="text-xs font-mono text-gray-400">#{index + 1}</span>
+            <span className="text-xs font-mono text-gray-400">#{item.ordinal ?? index + 1}</span>
           </button>
 
           <div className="p-2.5 bg-violet-50 rounded-lg">
@@ -246,10 +274,12 @@ const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, on
             <div className="flex items-center gap-3 mt-1">
               <span className="text-xs text-gray-500 font-mono">{item.filename}</span>
               <span className="text-xs text-gray-400">{formatBytes(item.size_bytes)}</span>
-              <span className="text-xs text-gray-400 flex items-center gap-1">
-                <Clock className="w-3 h-3" />
-                {formatDistanceToNow(new Date(item.modified), { addSuffix: true })}
-              </span>
+              {item.modified_at && (
+                <span className="text-xs text-gray-400 flex items-center gap-1">
+                  <Clock className="w-3 h-3" />
+                  {formatDistanceToNow(new Date(item.modified_at), { addSuffix: true })}
+                </span>
+              )}
             </div>
           </div>
 
