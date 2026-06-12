@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useCallback } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
@@ -16,6 +16,7 @@ import FeatureDetailModal from '@/components/autopilot/FeatureDetailModal';
 import MessageCenter from '@/components/autopilot/MessageCenter';
 import AddDesignModal from '@/components/autopilot/AddDesignModal';
 import HumanInputBanner from '@/components/autopilot/HumanInputBanner';
+import ProjectSelector from '@/components/autopilot/ProjectSelector';
 
 type Tab = 'overview' | 'queue' | 'features' | 'messages' | 'logs';
 
@@ -23,6 +24,11 @@ const Autopilot: React.FC = () => {
   const [activeTab, setActiveTab] = useState<Tab>('overview');
   const [selectedFeatureId, setSelectedFeatureId] = useState<string | null>(null);
   const [showAddDesign, setShowAddDesign] = useState(false);
+  const [projectId, setProjectId] = useState<string | null>(null);
+
+  const handleProjectChange = useCallback((id: string) => {
+    setProjectId(id);
+  }, []);
 
   const { data: status, refetch: refetchStatus } = useQuery({
     queryKey: ['autopilot-status'],
@@ -58,6 +64,7 @@ const Autopilot: React.FC = () => {
           </div>
         </div>
         <div className="flex items-center gap-3">
+          <ProjectSelector projectId={projectId} onProjectChange={handleProjectChange} />
           <Button
             variant="outline"
             size="sm"
@@ -71,6 +78,7 @@ const Autopilot: React.FC = () => {
             size="sm"
             onClick={() => setShowAddDesign(true)}
             className="bg-violet-600 hover:bg-violet-700 text-white"
+            disabled={!projectId}
           >
             <Plus className="w-4 h-4 mr-1" />
             New Design
@@ -127,7 +135,7 @@ const Autopilot: React.FC = () => {
             />
           )}
           {activeTab === 'queue' && (
-            <DesignQueuePanel onAddDesign={() => setShowAddDesign(true)} />
+            <DesignQueuePanel projectId={projectId} onAddDesign={() => setShowAddDesign(true)} />
           )}
           {activeTab === 'features' && (
             <FeatureGallery onSelectFeature={setSelectedFeatureId} />
@@ -144,6 +152,7 @@ const Autopilot: React.FC = () => {
       />
       <AddDesignModal
         open={showAddDesign}
+        projectId={projectId}
         onClose={() => setShowAddDesign(false)}
       />
     </div>

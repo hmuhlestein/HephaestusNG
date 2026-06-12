@@ -612,4 +612,52 @@ export const apiService = {
   dismissAutopilotInput: async (requestId: string): Promise<void> => {
     await api.delete(`/autopilot/input/${encodeURIComponent(requestId)}`);
   },
+
+  // Autopilot Projects
+  getAutopilotProjects: async (): Promise<any[]> => {
+    const { data } = await api.get('/autopilot/projects');
+    return data;
+  },
+
+  createAutopilotProject: async (name: string, baseDir: string, isDefault: boolean = false): Promise<any> => {
+    const { data } = await api.post('/autopilot/projects', { name, base_dir: baseDir, is_default: isDefault });
+    return data;
+  },
+
+  updateAutopilotProject: async (projectId: string, updates: { name?: string; base_dir?: string; is_default?: boolean }): Promise<any> => {
+    const { data } = await api.put(`/autopilot/projects/${encodeURIComponent(projectId)}`, updates);
+    return data;
+  },
+
+  deleteAutopilotProject: async (projectId: string): Promise<void> => {
+    await api.delete(`/autopilot/projects/${encodeURIComponent(projectId)}`);
+  },
+
+  syncAutopilotProject: async (projectId: string): Promise<any[]> => {
+    const { data } = await api.post(`/autopilot/projects/${encodeURIComponent(projectId)}/sync`);
+    return data;
+  },
+
+  getAutopilotProjectDesigns: async (projectId: string): Promise<any[]> => {
+    const { data } = await api.get(`/autopilot/projects/${encodeURIComponent(projectId)}/designs`);
+    return data;
+  },
+
+  addAutopilotProjectDesign: async (projectId: string, name: string, content: string, extension: string = '.md'): Promise<any> => {
+    const { data } = await api.post(`/autopilot/projects/${encodeURIComponent(projectId)}/designs`, { name, content, extension });
+    return data;
+  },
+
+  reorderAutopilotProjectDesigns: async (projectId: string, designIds: string[]): Promise<void> => {
+    await api.put(`/autopilot/projects/${encodeURIComponent(projectId)}/designs/reorder`, { design_ids: designIds });
+  },
+
+  removeAutopilotProjectDesign: async (projectId: string, filename: string): Promise<void> => {
+    await api.delete(`/autopilot/projects/${encodeURIComponent(projectId)}/designs/${encodeURIComponent(filename)}`);
+  },
+
+  getAutopilotProjectDesignContent: async (projectId: string, filename: string): Promise<{ filename: string; content: string }> => {
+    const { data } = await api.get(`/autopilot/projects/${encodeURIComponent(projectId)}/designs/${encodeURIComponent(filename)}/content`);
+    return data;
+  },
 };

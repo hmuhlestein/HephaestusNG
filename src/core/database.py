@@ -14,6 +14,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     CheckConstraint,
+    UniqueConstraint,
     JSON,
     Boolean,
 )
@@ -821,6 +822,43 @@ class BoardConfig(Base):
 
     # Relationships
     workflow = relationship("Workflow", backref="board_config")
+
+
+class AutopilotProject(Base):
+    """A project directory that Autopilot scans for design documents."""
+
+    __tablename__ = "autopilot_projects"
+
+    id = Column(String, primary_key=True)  # Format: proj-{uuid}
+    name = Column(String(200), nullable=False)
+    base_dir = Column(Text, nullable=False, unique=True)
+    is_default = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    designs = relationship("AutopilotDesign", back_populates="project", cascade="all, delete-orphan")
+
+
+class AutopilotDesign(Base):
+    """A design document within a project's design queue."""
+
+    __tablename__ = "autopilot_designs"
+
+    id = Column(String, primary_key=True)  # Format: des-{uuid}
+    project_id = Column(String, ForeignKey("autopilot_projects.id", ondelete="CASCADE"), nullable=False)
+    filename = Column(String(500), nullable=False)
+    name = Column(String(500), nullable=False)
+    ordinal = Column(Integer, nullable=False, default=0)
+    size_bytes = Column(Integer, nullable=False, default=0)
+    extension = Column(String(10), nullable=False, default=".md")
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    modified_at = Column(DateTime, default=datetime.utcnow)
+
+    project = relationship("AutopilotProject", back_populates="designs")
+
+    __table_args__ = (
+        UniqueConstraint("project_id", "filename", name="uq_design_project_filename"),
+    )
 
 
 class DatabaseManager:

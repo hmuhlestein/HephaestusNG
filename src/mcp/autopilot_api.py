@@ -386,6 +386,518 @@ async def get_queue_item_content(filename: str):
     return {"filename": filename, "content": filepath.read_text(errors="replace")}
 
 
+# ── Projects ────────────────────────────────────────────────────
+
+import re
+import uuid
+import asyncio as _asyncio
+
+DESIGN_SUBDIR = "docs/design-queue"
+_ORDINAL_RE = re.compile(r"^(\d+)[-_]")
+
+
+class ProjectItem(BaseModel):
+    id: str
+    name: str
+    base_dir: str
+    is_default: bool
+    design_count: int
+    created_at: str
+    updated_at: str
+
+
+class ProjectCreate(BaseModel):
+    name: str
+    base_dir: str
+    is_default: bool = False
+
+
+class ProjectUpdate(BaseModel):
+    name: Optional[str] = None
+    base_dir: Optional[str] = None
+    is_default: Optional[bool] = None
+
+
+class DesignItem(BaseModel):
+    id: str
+    filename: str
+    name: str
+    ordinal: int
+    size_bytes: int
+    extension: str
+    modified_at: Optional[str] = None
+
+
+class DesignReorderRequest(BaseModel):
+    design_ids: List[str]
+
+
+class DesignAddRequest(BaseModel):
+    name: str
+    content: str
+    extension: str = ".md"
+
+
+_project_sync_locks: Dict[str, _asyncio.Lock] = {}
+_project_lock_guard = _asyncio.Lock()
+
+
+async def _get_project_lock(project_id: str) -> _asyncio.Lock:
+    async with _project_lock_guard:
+        if project_id not in _project_sync_locks:
+            _project_sync_locks[project_id] = _asyncio.Lock()
+        return _project_sync_locks[project_id]
+
+
+def _get_design_queue_dir(project_base: str) -> Path:
+    return Path(project_base) / DESIGN_SUBDIR
+
+
+def _extract_ordinal(filename: str) -> Optional[int]:
+    """Extract numeric ordinal from filename prefix (e.g. '01-foo.md' → 1).
+
+    Requires a separator (- or _) between digits and the rest of the name
+    to avoid treating random digit-prefixed filenames as ordered.
+    """
+    stem = Path(filename).stem
+    m = _ORDINAL_RE.match(stem)
+    return int(m.group(1)) if m else None
+
+
+def _sync_project_designs(project_id: str, project_base: str, db) -> List[Dict[str, Any]]:
+    """Scan filesystem and sync designs with DB using the provided session.
+
+    MUST be called within an active DB session (the `db` parameter).
+    Returns list of design dicts.
+    """
+    from src.core.database import AutopilotDesign
+
+    design_dir = _get_design_queue_dir(project_base)
+    design_dir.mkdir(parents=True, exist_ok=True)
+
+    fs_files: Dict[str, Path] = {}
+    for ext in ALLOWED_EXTENSIONS:
+        for f in design_dir.glob(f"*{ext}"):
+            fs_files[f.name] = f
+
+    existing = {
+        d.filename: d
+        for d in db.query(AutopilotDesign).filter_by(project_id=project_id).all()
+    }
+
+    fs_filenames = set(fs_files.keys())
+    db_filenames = set(existing.keys())
+
+    # Remove DB records for deleted files
+    for fname in db_filenames - fs_filenames:
+        db.delete(existing[fname])
+
+    # Add or update DB records — two passes: prefixed first, then unprefixed
+    prefixed = []
+    unprefixed = []
+    for fname, fpath in fs_files.items():
+        if _extract_ordinal(fname) is not None:
+            prefixed.append((fname, fpath))
+        else:
+            unprefixed.append((fname, fpath))
+
+    # Pass 1: files with numeric prefixes (sorted by prefix)
+    for fname, fpath in sorted(prefixed, key=lambda x: _extract_ordinal(x[0])):
+        stat = fpath.stat()
+        stem = fpath.stem
+        name = stem.replace("_", " ").replace("-", " ").title()
+        ordinal = _extract_ordinal(fname)
+
+        if fname in existing:
+            d = existing[fname]
+            d.size_bytes = stat.st_size
+            d.modified_at = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc)
+            d.ordinal = ordinal
+        else:
+            d = AutopilotDesign(
+                id=f"des-{uuid.uuid4().hex[:12]}",
+                project_id=project_id,
+                filename=fname,
+                name=name,
+                ordinal=ordinal,
+                size_bytes=stat.st_size,
+                extension=fpath.suffix,
+                modified_at=datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc),
+            )
+            db.add(d)
+
+    db.flush()
+
+    # Pass 2: unprefixed files (alphabetical), ordinals continue after prefixed max
+    max_prefixed = db.query(AutopilotDesign).filter_by(project_id=project_id).count()
+
+    for fname, fpath in sorted(unprefixed, key=lambda x: x[0]):
+        stat = fpath.stat()
+        stem = fpath.stem
+        name = stem.replace("_", " ").replace("-", " ").title()
+
+        if fname in existing:
+            d = existing[fname]
+            d.size_bytes = stat.st_size
+            d.modified_at = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc)
+            # Only assign ordinal on first insert, don't overwrite manual reorders
+        else:
+            max_prefixed += 1
+            d = AutopilotDesign(
+                id=f"des-{uuid.uuid4().hex[:12]}",
+                project_id=project_id,
+                filename=fname,
+                name=name,
+                ordinal=max_prefixed,
+                size_bytes=stat.st_size,
+                extension=fpath.suffix,
+                modified_at=datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc),
+            )
+            db.add(d)
+
+    db.flush()
+
+    # Re-read to return fresh state (same session, post-flush)
+    designs = (
+        db.query(AutopilotDesign)
+        .filter_by(project_id=project_id)
+        .order_by(AutopilotDesign.ordinal)
+        .all()
+    )
+    return [
+        {
+            "id": d.id,
+            "filename": d.filename,
+            "name": d.name,
+            "ordinal": d.ordinal,
+            "size_bytes": d.size_bytes,
+            "extension": d.extension,
+            "modified_at": d.modified_at.isoformat() if d.modified_at else None,
+        }
+        for d in designs
+    ]
+
+
+def _validate_base_dir(base_dir: str) -> str:
+    """Validate and resolve a project base directory. Returns resolved path or raises."""
+    base = Path(base_dir).expanduser().resolve()
+    if not base.exists():
+        raise HTTPException(400, f"Directory does not exist: {base}")
+    if not base.is_dir():
+        raise HTTPException(400, f"Not a directory: {base}")
+    if not os.access(base, os.R_OK | os.W_OK):
+        raise HTTPException(403, f"Insufficient permissions: {base}")
+    return str(base)
+
+
+@router.get("/projects", response_model=List[ProjectItem])
+async def list_projects():
+    from src.core.database import AutopilotProject, AutopilotDesign, get_db
+
+    with get_db() as db:
+        projects = db.query(AutopilotProject).order_by(AutopilotProject.name).all()
+        result = []
+        for p in projects:
+            count = db.query(AutopilotDesign).filter_by(project_id=p.id).count()
+            result.append(ProjectItem(
+                id=p.id,
+                name=p.name,
+                base_dir=p.base_dir,
+                is_default=p.is_default,
+                design_count=count,
+                created_at=p.created_at.isoformat() if p.created_at else "",
+                updated_at=p.updated_at.isoformat() if p.updated_at else "",
+            ))
+        return result
+
+
+@router.post("/projects", response_model=ProjectItem)
+async def create_project(req: ProjectCreate):
+    from src.core.database import AutopilotProject, get_db
+
+    resolved = _validate_base_dir(req.base_dir)
+
+    with get_db() as db:
+        existing_proj = db.query(AutopilotProject).filter_by(base_dir=resolved).first()
+        if existing_proj:
+            raise HTTPException(409, f"Project already exists for directory: {resolved}")
+
+        if req.is_default:
+            db.query(AutopilotProject).update({"is_default": False})
+
+        proj = AutopilotProject(
+            id=f"proj-{uuid.uuid4().hex[:12]}",
+            name=req.name,
+            base_dir=resolved,
+            is_default=req.is_default,
+        )
+        db.add(proj)
+        db.flush()
+
+        # Sync designs in the SAME session — no nested get_db()
+        designs = _sync_project_designs(proj.id, resolved, db)
+
+        _invalidate("queue", "status")
+
+        return ProjectItem(
+            id=proj.id,
+            name=proj.name,
+            base_dir=proj.base_dir,
+            is_default=proj.is_default,
+            design_count=len(designs),
+            created_at=proj.created_at.isoformat() if proj.created_at else "",
+            updated_at=proj.updated_at.isoformat() if proj.updated_at else "",
+        )
+
+
+@router.get("/projects/{project_id}", response_model=ProjectItem)
+async def get_project(project_id: str):
+    from src.core.database import AutopilotProject, AutopilotDesign, get_db
+
+    with get_db() as db:
+        proj = db.query(AutopilotProject).get(project_id)
+        if not proj:
+            raise HTTPException(404, "Project not found")
+        count = db.query(AutopilotDesign).filter_by(project_id=proj.id).count()
+        return ProjectItem(
+            id=proj.id,
+            name=proj.name,
+            base_dir=proj.base_dir,
+            is_default=proj.is_default,
+            design_count=count,
+            created_at=proj.created_at.isoformat() if proj.created_at else "",
+            updated_at=proj.updated_at.isoformat() if proj.updated_at else "",
+        )
+
+
+@router.put("/projects/{project_id}", response_model=ProjectItem)
+async def update_project(project_id: str, req: ProjectUpdate):
+    from src.core.database import AutopilotProject, AutopilotDesign, get_db
+
+    with get_db() as db:
+        proj = db.query(AutopilotProject).get(project_id)
+        if not proj:
+            raise HTTPException(404, "Project not found")
+
+        if req.name is not None:
+            proj.name = req.name
+        if req.base_dir is not None:
+            resolved = _validate_base_dir(req.base_dir)
+            proj.base_dir = resolved
+        if req.is_default is not None:
+            if req.is_default:
+                db.query(AutopilotProject).update({"is_default": False})
+            proj.is_default = req.is_default
+
+        db.flush()
+
+        # Re-sync if base_dir changed (same session)
+        if req.base_dir is not None:
+            _sync_project_designs(proj.id, proj.base_dir, db)
+
+        count = db.query(AutopilotDesign).filter_by(project_id=proj.id).count()
+        _invalidate("queue", "status", f"project_designs:{project_id}")
+
+        return ProjectItem(
+            id=proj.id,
+            name=proj.name,
+            base_dir=proj.base_dir,
+            is_default=proj.is_default,
+            design_count=count,
+            created_at=proj.created_at.isoformat() if proj.created_at else "",
+            updated_at=proj.updated_at.isoformat() if proj.updated_at else "",
+        )
+
+
+@router.delete("/projects/{project_id}")
+async def delete_project(project_id: str):
+    from src.core.database import AutopilotProject, get_db
+
+    with get_db() as db:
+        proj = db.query(AutopilotProject).get(project_id)
+        if not proj:
+            raise HTTPException(404, "Project not found")
+        db.delete(proj)
+
+    _invalidate("queue", "status", f"project_designs:{project_id}")
+    return {"deleted": project_id}
+
+
+# ── Project Designs (sync + CRUD) ──────────────────────────────
+
+@router.post("/projects/{project_id}/sync", response_model=List[DesignItem])
+async def sync_project_designs(project_id: str):
+    from src.core.database import AutopilotProject, get_db
+
+    lock = await _get_project_lock(project_id)
+    async with lock:
+        with get_db() as db:
+            proj = db.query(AutopilotProject).get(project_id)
+            if not proj:
+                raise HTTPException(404, "Project not found")
+
+            designs = _sync_project_designs(project_id, proj.base_dir, db)
+
+        _invalidate("queue", "status", f"project_designs:{project_id}")
+        return [DesignItem(**d) for d in designs]
+
+
+@router.get("/projects/{project_id}/designs", response_model=List[DesignItem])
+async def list_project_designs(project_id: str):
+    from src.core.database import AutopilotProject, AutopilotDesign, get_db
+
+    cache_key = f"project_designs:{project_id}"
+    cached = _cached(cache_key)
+    if cached is not None:
+        return cached
+
+    with get_db() as db:
+        proj = db.query(AutopilotProject).get(project_id)
+        if not proj:
+            raise HTTPException(404, "Project not found")
+
+        designs = (
+            db.query(AutopilotDesign)
+            .filter_by(project_id=project_id)
+            .order_by(AutopilotDesign.ordinal)
+            .all()
+        )
+        result = [
+            DesignItem(
+                id=d.id,
+                filename=d.filename,
+                name=d.name,
+                ordinal=d.ordinal,
+                size_bytes=d.size_bytes,
+                extension=d.extension,
+                modified_at=d.modified_at.isoformat() if d.modified_at else None,
+            )
+            for d in designs
+        ]
+        return _store(cache_key, result)
+
+
+@router.post("/projects/{project_id}/designs", response_model=DesignItem)
+async def add_project_design(project_id: str, req: DesignAddRequest):
+    from src.core.database import AutopilotProject, AutopilotDesign, get_db
+
+    with get_db() as db:
+        proj = db.query(AutopilotProject).get(project_id)
+        if not proj:
+            raise HTTPException(404, "Project not found")
+        base_dir = proj.base_dir
+
+    design_dir = _get_design_queue_dir(base_dir)
+    design_dir.mkdir(parents=True, exist_ok=True)
+
+    ext = req.extension if req.extension in ALLOWED_EXTENSIONS else ".md"
+    safe_name = "".join(c if c.isalnum() or c in "-_ " else "_" for c in req.name)
+    safe_name = safe_name.strip().replace(" ", "_")
+    if not safe_name:
+        raise HTTPException(400, "Invalid design name")
+    filename = f"{safe_name}{ext}"
+    filepath = _safe_path(str(design_dir), filename)
+
+    if filepath.exists():
+        raise HTTPException(409, f"Design '{filename}' already exists")
+
+    filepath.write_text(req.content)
+    stat = filepath.stat()
+
+    design_id = f"des-{uuid.uuid4().hex[:12]}"
+
+    with get_db() as db:
+        max_ord = db.query(AutopilotDesign).filter_by(project_id=project_id).count()
+        d = AutopilotDesign(
+            id=design_id,
+            project_id=project_id,
+            filename=filename,
+            name=req.name,
+            ordinal=max_ord + 1,
+            size_bytes=stat.st_size,
+            extension=ext,
+            modified_at=datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc),
+        )
+        db.add(d)
+
+    _invalidate("queue", "status", f"project_designs:{project_id}")
+    return DesignItem(
+        id=design_id,
+        filename=filename,
+        name=req.name,
+        ordinal=max_ord + 1,
+        size_bytes=stat.st_size,
+        extension=ext,
+        modified_at=datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
+    )
+
+
+@router.put("/projects/{project_id}/designs/reorder")
+async def reorder_project_designs(project_id: str, req: DesignReorderRequest):
+    from src.core.database import AutopilotDesign, get_db
+
+    with get_db() as db:
+        designs = db.query(AutopilotDesign).filter_by(project_id=project_id).all()
+        by_id = {d.id: d for d in designs}
+
+        for i, design_id in enumerate(req.design_ids):
+            if design_id not in by_id:
+                raise HTTPException(400, f"Unknown design id: {design_id}")
+            by_id[design_id].ordinal = i + 1
+
+    _invalidate("queue", f"project_designs:{project_id}")
+    return {"order": req.design_ids}
+
+
+@router.delete("/projects/{project_id}/designs/{filename}")
+async def remove_project_design(project_id: str, filename: str):
+    from src.core.database import AutopilotProject, AutopilotDesign, get_db
+
+    # Delete DB record first, then file (atomic rollback if file delete fails)
+    found = False
+    with get_db() as db:
+        proj = db.query(AutopilotProject).get(project_id)
+        if not proj:
+            raise HTTPException(404, "Project not found")
+        base_dir = proj.base_dir
+
+        d = db.query(AutopilotDesign).filter_by(
+            project_id=project_id, filename=filename
+        ).first()
+        if d:
+            db.delete(d)
+            found = True
+
+    design_dir = _get_design_queue_dir(base_dir)
+    filepath = _safe_path(str(design_dir), filename)
+    if filepath.exists():
+        filepath.unlink()
+        found = True
+
+    if not found:
+        raise HTTPException(404, f"Design '{filename}' not found")
+
+    _invalidate("queue", "status", f"project_designs:{project_id}")
+    return {"removed": filename}
+
+
+@router.get("/projects/{project_id}/designs/{filename}/content")
+async def get_project_design_content(project_id: str, filename: str):
+    from src.core.database import AutopilotProject, get_db
+
+    with get_db() as db:
+        proj = db.query(AutopilotProject).get(project_id)
+        if not proj:
+            raise HTTPException(404, "Project not found")
+        base_dir = proj.base_dir
+
+    design_dir = _get_design_queue_dir(base_dir)
+    filepath = _safe_path(str(design_dir), filename)
+    if not filepath.exists():
+        raise HTTPException(404, f"Design '{filename}' not found")
+    return {"filename": filename, "content": filepath.read_text(errors="replace")}
+
+
 # ── Features Gallery ─────────────────────────────────────────────
 
 def _scan_features() -> List[Dict[str, Any]]:

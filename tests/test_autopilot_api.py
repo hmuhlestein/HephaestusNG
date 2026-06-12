@@ -442,3 +442,344 @@ class TestLogs:
         resp = client.get("/api/autopilot/logs?lines=3")
         assert len(resp.json()["lines"]) == 3
         assert resp.json()["lines"][0] == "Line 3"
+
+
+# ── Projects ─────────────────────────────────────────────────────
+
+@pytest.fixture
+def project_dirs(tmp_path):
+    """Create a project directory with docs/design-queue containing test files."""
+    project_dir = tmp_path / "myproject"
+    design_dir = project_dir / "docs" / "design-queue"
+    design_dir.mkdir(parents=True)
+
+    (design_dir / "01-auth.md").write_text("# Auth Design\nImplement OAuth2.")
+    (design_dir / "02-payments.md").write_text("# Payments\nStripe integration.")
+    (design_dir / "readme.txt").write_text("General readme.")
+
+    return {
+        "project_dir": project_dir,
+        "design_dir": design_dir,
+    }
+
+
+@pytest.fixture
+def project_client(tmp_path, project_dirs):
+    """Test client with a temporary database for project tests."""
+    import os
+    db_path = str(tmp_path / "test.db")
+    os.environ["HEPHAESTUS_TEST_DB"] = db_path
+
+    from src.core.database import DatabaseManager
+    db_manager = DatabaseManager(db_path)
+    db_manager.create_tables()
+
+    from fastapi.testclient import TestClient
+    from fastapi import FastAPI
+    from src.mcp.autopilot_api import router
+
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+
+    import src.mcp.autopilot_api as api_mod
+    api_mod._cache.clear()
+
+    yield client, project_dirs
+
+    os.environ.pop("HEPHAESTUS_TEST_DB", None)
+    api_mod._cache.clear()
+
+
+class TestProjects:
+    def test_create_project(self, project_client):
+        client, dirs = project_client
+        resp = client.post("/api/autopilot/projects", json={
+            "name": "Test Project",
+            "base_dir": str(dirs["project_dir"]),
+        })
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["name"] == "Test Project"
+        assert data["design_count"] == 3
+        assert data["id"].startswith("proj-")
+
+    def test_create_project_auto_syncs_designs(self, project_client):
+        client, dirs = project_client
+        resp = client.post("/api/autopilot/projects", json={
+            "name": "Test",
+            "base_dir": str(dirs["project_dir"]),
+        })
+        project_id = resp.json()["id"]
+
+        resp = client.get(f"/api/autopilot/projects/{project_id}/designs")
+        assert resp.status_code == 200
+        designs = resp.json()
+        assert len(designs) == 3
+        # Ordinal-prefixed files come first
+        assert designs[0]["filename"] == "01-auth.md"
+        assert designs[0]["ordinal"] == 1
+        assert designs[1]["filename"] == "02-payments.md"
+        assert designs[1]["ordinal"] == 2
+
+    def test_create_project_nonexistent_dir(self, project_client):
+        client, _ = project_client
+        resp = client.post("/api/autopilot/projects", json={
+            "name": "Bad",
+            "base_dir": "/nonexistent/path",
+        })
+        assert resp.status_code == 400
+
+    def test_create_project_duplicate_dir(self, project_client):
+        client, dirs = project_client
+        client.post("/api/autopilot/projects", json={
+            "name": "First",
+            "base_dir": str(dirs["project_dir"]),
+        })
+        resp = client.post("/api/autopilot/projects", json={
+            "name": "Second",
+            "base_dir": str(dirs["project_dir"]),
+        })
+        assert resp.status_code == 409
+
+    def test_list_projects(self, project_client):
+        client, dirs = project_client
+        client.post("/api/autopilot/projects", json={
+            "name": "P1",
+            "base_dir": str(dirs["project_dir"]),
+        })
+        resp = client.get("/api/autopilot/projects")
+        assert resp.status_code == 200
+        assert len(resp.json()) == 1
+        assert resp.json()[0]["name"] == "P1"
+
+    def test_get_project(self, project_client):
+        client, dirs = project_client
+        create = client.post("/api/autopilot/projects", json={
+            "name": "Test",
+            "base_dir": str(dirs["project_dir"]),
+        })
+        project_id = create.json()["id"]
+
+        resp = client.get(f"/api/autopilot/projects/{project_id}")
+        assert resp.status_code == 200
+        assert resp.json()["id"] == project_id
+
+    def test_get_project_not_found(self, project_client):
+        client, _ = project_client
+        resp = client.get("/api/autopilot/projects/nonexistent")
+        assert resp.status_code == 404
+
+    def test_update_project_name(self, project_client):
+        client, dirs = project_client
+        create = client.post("/api/autopilot/projects", json={
+            "name": "Old Name",
+            "base_dir": str(dirs["project_dir"]),
+        })
+        project_id = create.json()["id"]
+
+        resp = client.put(f"/api/autopilot/projects/{project_id}", json={
+            "name": "New Name",
+        })
+        assert resp.status_code == 200
+        assert resp.json()["name"] == "New Name"
+
+    def test_update_project_is_default(self, project_client):
+        client, dirs = project_client
+        create = client.post("/api/autopilot/projects", json={
+            "name": "Test",
+            "base_dir": str(dirs["project_dir"]),
+        })
+        project_id = create.json()["id"]
+
+        resp = client.put(f"/api/autopilot/projects/{project_id}", json={
+            "is_default": True,
+        })
+        assert resp.status_code == 200
+        assert resp.json()["is_default"] is True
+
+    def test_delete_project(self, project_client):
+        client, dirs = project_client
+        create = client.post("/api/autopilot/projects", json={
+            "name": "To Delete",
+            "base_dir": str(dirs["project_dir"]),
+        })
+        project_id = create.json()["id"]
+
+        resp = client.delete(f"/api/autopilot/projects/{project_id}")
+        assert resp.status_code == 200
+
+        resp = client.get(f"/api/autopilot/projects/{project_id}")
+        assert resp.status_code == 404
+
+    def test_delete_project_not_found(self, project_client):
+        client, _ = project_client
+        resp = client.delete("/api/autopilot/projects/nonexistent")
+        assert resp.status_code == 404
+
+
+class TestProjectDesigns:
+    def _create_project(self, client, dirs):
+        resp = client.post("/api/autopilot/projects", json={
+            "name": "Test",
+            "base_dir": str(dirs["project_dir"]),
+        })
+        return resp.json()["id"]
+
+    def test_list_designs(self, project_client):
+        client, dirs = project_client
+        pid = self._create_project(client, dirs)
+
+        resp = client.get(f"/api/autopilot/projects/{pid}/designs")
+        assert resp.status_code == 200
+        assert len(resp.json()) == 3
+
+    def test_designs_sorted_by_ordinal(self, project_client):
+        client, dirs = project_client
+        pid = self._create_project(client, dirs)
+
+        resp = client.get(f"/api/autopilot/projects/{pid}/designs")
+        designs = resp.json()
+        ordinals = [d["ordinal"] for d in designs]
+        assert ordinals == sorted(ordinals)
+
+    def test_add_design(self, project_client):
+        client, dirs = project_client
+        pid = self._create_project(client, dirs)
+
+        resp = client.post(f"/api/autopilot/projects/{pid}/designs", json={
+            "name": "New Feature",
+            "content": "# New Feature\nDescription here.",
+        })
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["name"] == "New Feature"
+        assert data["extension"] == ".md"
+
+        # Verify file was created on disk
+        design_dir = dirs["project_dir"] / "docs" / "design-queue"
+        assert (design_dir / "New_Feature.md").exists()
+
+    def test_add_design_duplicate(self, project_client):
+        client, dirs = project_client
+        pid = self._create_project(client, dirs)
+
+        client.post(f"/api/autopilot/projects/{pid}/designs", json={
+            "name": "Dup Test",
+            "content": "first",
+        })
+        resp = client.post(f"/api/autopilot/projects/{pid}/designs", json={
+            "name": "Dup Test",
+            "content": "second",
+        })
+        assert resp.status_code == 409
+
+    def test_remove_design(self, project_client):
+        client, dirs = project_client
+        pid = self._create_project(client, dirs)
+
+        resp = client.delete(f"/api/autopilot/projects/{pid}/designs/01-auth.md")
+        assert resp.status_code == 200
+
+        # Verify file was deleted
+        design_dir = dirs["project_dir"] / "docs" / "design-queue"
+        assert not (design_dir / "01-auth.md").exists()
+
+        # Verify DB record was deleted
+        resp = client.get(f"/api/autopilot/projects/{pid}/designs")
+        assert len(resp.json()) == 2
+
+    def test_remove_design_not_found(self, project_client):
+        client, dirs = project_client
+        pid = self._create_project(client, dirs)
+
+        resp = client.delete(f"/api/autopilot/projects/{pid}/designs/nonexistent.md")
+        assert resp.status_code == 404
+
+    def test_get_design_content(self, project_client):
+        client, dirs = project_client
+        pid = self._create_project(client, dirs)
+
+        resp = client.get(f"/api/autopilot/projects/{pid}/designs/01-auth.md/content")
+        assert resp.status_code == 200
+        assert "OAuth2" in resp.json()["content"]
+
+    def test_reorder_designs(self, project_client):
+        client, dirs = project_client
+        pid = self._create_project(client, dirs)
+
+        designs = client.get(f"/api/autopilot/projects/{pid}/designs").json()
+        reversed_ids = [d["id"] for d in reversed(designs)]
+
+        resp = client.put(f"/api/autopilot/projects/{pid}/designs/reorder", json={
+            "design_ids": reversed_ids,
+        })
+        assert resp.status_code == 200
+
+        reordered = client.get(f"/api/autopilot/projects/{pid}/designs").json()
+        assert reordered[0]["id"] == reversed_ids[0]
+
+    def test_reorder_invalid_id(self, project_client):
+        client, dirs = project_client
+        pid = self._create_project(client, dirs)
+
+        resp = client.put(f"/api/autopilot/projects/{pid}/designs/reorder", json={
+            "design_ids": ["nonexistent-id"],
+        })
+        assert resp.status_code == 400
+
+    def test_sync_project(self, project_client):
+        client, dirs = project_client
+        pid = self._create_project(client, dirs)
+
+        # Add a new file to the filesystem
+        design_dir = dirs["project_dir"] / "docs" / "design-queue"
+        (design_dir / "03-api.md").write_text("# API Design")
+
+        resp = client.post(f"/api/autopilot/projects/{pid}/sync")
+        assert resp.status_code == 200
+        designs = resp.json()
+        assert len(designs) == 4
+        filenames = [d["filename"] for d in designs]
+        assert "03-api.md" in filenames
+
+    def test_sync_removes_deleted_files(self, project_client):
+        client, dirs = project_client
+        pid = self._create_project(client, dirs)
+
+        # Delete a file from filesystem
+        design_dir = dirs["project_dir"] / "docs" / "design-queue"
+        (design_dir / "01-auth.md").unlink()
+
+        resp = client.post(f"/api/autopilot/projects/{pid}/sync")
+        assert resp.status_code == 200
+        assert len(resp.json()) == 2
+
+    def test_design_not_found_project(self, project_client):
+        client, _ = project_client
+        resp = client.get("/api/autopilot/projects/nonexistent/designs")
+        assert resp.status_code == 404
+
+
+class TestProjectPathTraversal:
+    def test_design_content_rejects_traversal(self, project_client):
+        client, dirs = project_client
+        resp = client.post("/api/autopilot/projects", json={
+            "name": "Test",
+            "base_dir": str(dirs["project_dir"]),
+        })
+        pid = resp.json()["id"]
+
+        resp = client.get(f"/api/autopilot/projects/{pid}/designs/../../etc/passwd/content")
+        assert resp.status_code in (400, 404)
+
+    def test_design_remove_rejects_traversal(self, project_client):
+        client, dirs = project_client
+        resp = client.post("/api/autopilot/projects", json={
+            "name": "Test",
+            "base_dir": str(dirs["project_dir"]),
+        })
+        pid = resp.json()["id"]
+
+        resp = client.delete(f"/api/autopilot/projects/{pid}/designs/../../etc/passwd")
+        assert resp.status_code in (400, 404)
