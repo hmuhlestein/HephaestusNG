@@ -117,10 +117,11 @@ class CostTracker:
             start_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
 
         data = await self._get(
-            "/user/daily/activity",
+            "/global/spend/report",
             params={
                 "start_date": start_date,
                 "end_date": end_date,
+                "group_by": "customer",
             },
         )
 
@@ -128,16 +129,19 @@ class CostTracker:
             return {"results": [], "metadata": {}, "error": "Could not fetch daily activity"}
 
         # Filter results for the specific feature/user
-        results = data.get("results", [])
-        metadata = data.get("metadata", {})
-
-        # Note: LiteLLM's /user/daily/activity returns data for the authenticated user
-        # To filter by the 'user' field (our feature), we'd need to use /spend/logs
-        # or rely on the fact that our proxy key maps to our features
+        all_results = data if isinstance(data, list) else []
+        filtered_results = []
+        for day_entry in all_results:
+            customers = day_entry.get("customers", [])
+            matching = [c for c in customers if c.get("customer") == feature_name]
+            if matching:
+                filtered_results.append({
+                    "date": day_entry.get("date"),
+                    "customers": matching,
+                })
 
         return {
-            "results": results,
-            "metadata": metadata,
+            "results": filtered_results,
             "start_date": start_date,
             "end_date": end_date,
         }

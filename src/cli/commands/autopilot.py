@@ -83,12 +83,29 @@ def start_pipeline(args):
 
 
 def stop_pipeline(args):
-    import subprocess
-    r = subprocess.run(["pkill", "-f", "orchestrator.py"], capture_output=True)
-    if r.returncode == 0:
-        print("Autopilot pipeline stopped.")
+    import signal as sig
+    from src.cli.utils import read_pid, remove_pid, is_process_running
+
+    pid = read_pid("orchestrator")
+    if pid and is_process_running(pid):
+        try:
+            os.kill(pid, sig.SIGTERM)
+            import time
+            for _ in range(5):
+                time.sleep(0.5)
+                if not is_process_running(pid):
+                    break
+            else:
+                if is_process_running(pid):
+                    os.kill(pid, sig.SIGKILL)
+            print(f"Autopilot pipeline stopped (pid {pid})")
+        except OSError as e:
+            print(f"Error stopping pipeline: {e}")
+        finally:
+            remove_pid("orchestrator")
     else:
         print("No autopilot pipeline running.")
+        remove_pid("orchestrator")
     return 0
 
 
