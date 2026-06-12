@@ -1,0 +1,3 @@
+#!/bin/bash
+export PYTHONPATH="/Users/hmuhlestein/code/Hephaestus${PYTHONPATH:+:$PYTHONPATH}"
+exec "/Users/hmuhlestein/code/Hephaestus/.venv/bin/python" -m src.cli.main "$@"
