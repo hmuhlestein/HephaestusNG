@@ -4079,16 +4079,18 @@ async def health_check():
 @app.get("/.well-known/oauth-authorization-server")
 async def oauth_server_metadata():
     """OAuth server metadata with DCR support."""
+    config = get_config()
+    base_url = f"http://localhost:{config.mcp_port}"
     return {
-        "issuer": "http://localhost:8000",
-        "authorization_endpoint": "http://localhost:8000/oauth/authorize",
-        "token_endpoint": "http://localhost:8000/oauth/token",
-        "registration_endpoint": "http://localhost:8000/oauth/register",  # DCR endpoint
+        "issuer": base_url,
+        "authorization_endpoint": f"{base_url}/oauth/authorize",
+        "token_endpoint": f"{base_url}/oauth/token",
+        "registration_endpoint": f"{base_url}/oauth/register",
         "response_types_supported": ["code"],
         "grant_types_supported": ["authorization_code", "refresh_token"],
-        "code_challenge_methods_supported": ["S256"],  # PKCE support
+        "code_challenge_methods_supported": ["S256"],
         "token_endpoint_auth_methods_supported": ["none"],
-        "revocation_endpoint": "http://localhost:8000/oauth/revoke",
+        "revocation_endpoint": f"{base_url}/oauth/revoke",
         "scopes_supported": ["openid", "profile", "email"],
     }
 
@@ -4096,11 +4098,13 @@ async def oauth_server_metadata():
 @app.get("/.well-known/openid-configuration")
 async def openid_config():
     """OpenID configuration - tells Claude no auth needed."""
+    config = get_config()
+    base_url = f"http://localhost:{config.mcp_port}"
     return {
-        "issuer": "http://localhost:8000",
-        "authorization_endpoint": "http://localhost:8000/authorize",
-        "token_endpoint": "http://localhost:8000/token",
-        "userinfo_endpoint": "http://localhost:8000/userinfo",
+        "issuer": base_url,
+        "authorization_endpoint": f"{base_url}/authorize",
+        "token_endpoint": f"{base_url}/token",
+        "userinfo_endpoint": f"{base_url}/userinfo",
         "response_types_supported": ["none"],
         "grant_types_supported": ["none"],
         "subject_types_supported": ["public"],
@@ -4355,6 +4359,186 @@ async def list_tools():
                         "new_status": {"type": "string", "description": "New status value"}
                     },
                     "required": ["ticket_id", "new_status"]
+                }
+            },
+            {
+                "name": "devtools_connect",
+                "description": "Connect to Chrome DevTools Protocol for browser automation",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "session_id": {"type": "string", "description": "Session identifier for this browser connection"},
+                        "debug_url": {"type": "string", "description": "Chrome DevTools debug URL (default: http://localhost:9222)"},
+                        "target_url": {"type": "string", "description": "URL to open in a new tab (optional, connects to existing page if omitted)"}
+                    },
+                    "required": ["session_id"]
+                }
+            },
+            {
+                "name": "devtools_navigate",
+                "description": "Navigate the browser to a URL",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "session_id": {"type": "string", "description": "Browser session ID"},
+                        "url": {"type": "string", "description": "URL to navigate to"}
+                    },
+                    "required": ["session_id", "url"]
+                }
+            },
+            {
+                "name": "devtools_evaluate",
+                "description": "Execute JavaScript in the browser context",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "session_id": {"type": "string", "description": "Browser session ID"},
+                        "expression": {"type": "string", "description": "JavaScript expression to evaluate"}
+                    },
+                    "required": ["session_id", "expression"]
+                }
+            },
+            {
+                "name": "devtools_screenshot",
+                "description": "Capture a screenshot of the current page",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "session_id": {"type": "string", "description": "Browser session ID"},
+                        "path": {"type": "string", "description": "File path to save screenshot (optional, returns base64 if omitted)"},
+                        "format": {"type": "string", "enum": ["png", "jpeg"], "description": "Image format (default: png)"}
+                    },
+                    "required": ["session_id"]
+                }
+            },
+            {
+                "name": "devtools_click",
+                "description": "Click an element by CSS selector",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "session_id": {"type": "string", "description": "Browser session ID"},
+                        "selector": {"type": "string", "description": "CSS selector for the element to click"}
+                    },
+                    "required": ["session_id", "selector"]
+                }
+            },
+            {
+                "name": "devtools_fill",
+                "description": "Fill an input field with a value",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "session_id": {"type": "string", "description": "Browser session ID"},
+                        "selector": {"type": "string", "description": "CSS selector for the input element"},
+                        "value": {"type": "string", "description": "Value to fill in"}
+                    },
+                    "required": ["session_id", "selector", "value"]
+                }
+            },
+            {
+                "name": "devtools_get_console_errors",
+                "description": "Get console errors from the browser",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "session_id": {"type": "string", "description": "Browser session ID"}
+                    },
+                    "required": ["session_id"]
+                }
+            },
+            {
+                "name": "devtools_get_failed_requests",
+                "description": "Get failed network requests from the browser",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "session_id": {"type": "string", "description": "Browser session ID"},
+                        "status": {"type": "integer", "description": "Filter by HTTP status code (optional)"}
+                    },
+                    "required": ["session_id"]
+                }
+            },
+            {
+                "name": "devtools_get_network_logs",
+                "description": "Get all network request logs from the browser",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "session_id": {"type": "string", "description": "Browser session ID"},
+                        "method": {"type": "string", "description": "Filter by HTTP method (GET, POST, etc.)"},
+                        "status": {"type": "integer", "description": "Filter by HTTP status code"},
+                        "failed_only": {"type": "boolean", "description": "Only return failed requests"}
+                    },
+                    "required": ["session_id"]
+                }
+            },
+            {
+                "name": "devtools_get_performance",
+                "description": "Get page performance metrics",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "session_id": {"type": "string", "description": "Browser session ID"}
+                    },
+                    "required": ["session_id"]
+                }
+            },
+            {
+                "name": "devtools_get_page_info",
+                "description": "Get current page title, URL, and content summary",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "session_id": {"type": "string", "description": "Browser session ID"}
+                    },
+                    "required": ["session_id"]
+                }
+            },
+            {
+                "name": "devtools_check_broken_images",
+                "description": "Find broken images on the page",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "session_id": {"type": "string", "description": "Browser session ID"}
+                    },
+                    "required": ["session_id"]
+                }
+            },
+            {
+                "name": "devtools_wait_for_selector",
+                "description": "Wait for a CSS selector to appear in the DOM",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "session_id": {"type": "string", "description": "Browser session ID"},
+                        "selector": {"type": "string", "description": "CSS selector to wait for"},
+                        "timeout_ms": {"type": "integer", "description": "Timeout in milliseconds (default: 5000)"}
+                    },
+                    "required": ["session_id", "selector"]
+                }
+            },
+            {
+                "name": "devtools_get_cookies",
+                "description": "Get all browser cookies",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "session_id": {"type": "string", "description": "Browser session ID"}
+                    },
+                    "required": ["session_id"]
+                }
+            },
+            {
+                "name": "devtools_close",
+                "description": "Close the browser session",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "session_id": {"type": "string", "description": "Browser session ID to close"}
+                    },
+                    "required": ["session_id"]
                 }
             }
         ]
@@ -4643,8 +4827,136 @@ async def execute_tool(request: Dict[str, Any]):
             agent_id=arguments.get("agent_id", "mcp-claude")
         )
         return {"success": True, "result": result}
+    elif tool_name.startswith("devtools_"):
+        return await _handle_devtools_tool(tool_name, arguments)
     else:
         raise HTTPException(status_code=400, detail=f"Unknown tool: {tool_name}")
+
+
+async def _handle_devtools_tool(tool_name: str, arguments: Dict[str, Any]):
+    from src.mcp.devtools import devtools_manager, validate_session_id
+
+    REQUIRED_ARGS = {
+        "devtools_connect": [],
+        "devtools_navigate": ["url"],
+        "devtools_evaluate": ["expression"],
+        "devtools_screenshot": [],
+        "devtools_click": ["selector"],
+        "devtools_fill": ["selector", "value"],
+        "devtools_get_console_errors": [],
+        "devtools_get_failed_requests": [],
+        "devtools_get_network_logs": [],
+        "devtools_get_performance": [],
+        "devtools_get_page_info": [],
+        "devtools_check_broken_images": [],
+        "devtools_wait_for_selector": ["selector"],
+        "devtools_get_cookies": [],
+        "devtools_close": [],
+    }
+
+    required = REQUIRED_ARGS.get(tool_name)
+    if required is None:
+        raise HTTPException(status_code=400, detail=f"Unknown devtools tool: {tool_name}")
+
+    missing = [k for k in required if k not in arguments]
+    if missing:
+        raise HTTPException(status_code=400, detail=f"Missing required arguments: {', '.join(missing)}")
+
+    raw_session = arguments.get("session_id", "default")
+    try:
+        session_id = validate_session_id(raw_session)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    try:
+        if tool_name == "devtools_connect":
+            debug_url = arguments.get("debug_url", "http://localhost:9222")
+            target_url = arguments.get("target_url")
+            if target_url:
+                browser = await devtools_manager.connect_new_tab(session_id, target_url, debug_url)
+            else:
+                browser = await devtools_manager.connect(session_id, debug_url)
+            version = await browser.get_version()
+            return {"success": True, "session_id": session_id, "browser": version.get("Browser", "unknown")}
+
+        browser = devtools_manager.get(session_id)
+        if not browser:
+            raise HTTPException(status_code=404, detail=f"No browser session '{session_id}'. Call devtools_connect first.")
+
+        if tool_name == "devtools_navigate":
+            result = await browser.navigate(arguments["url"])
+            return {"success": True, "result": result}
+
+        elif tool_name == "devtools_evaluate":
+            result = await browser.evaluate(arguments["expression"])
+            return {"success": True, "result": result}
+
+        elif tool_name == "devtools_screenshot":
+            path = arguments.get("path")
+            fmt = arguments.get("format", "png")
+            data = await browser.screenshot(path=path, format=fmt)
+            return {"success": True, "data_length": len(data) if data else 0, "saved_to": path}
+
+        elif tool_name == "devtools_click":
+            await browser.click(arguments["selector"])
+            return {"success": True}
+
+        elif tool_name == "devtools_fill":
+            await browser.fill(arguments["selector"], arguments["value"])
+            return {"success": True}
+
+        elif tool_name == "devtools_get_console_errors":
+            errors = await browser.check_console_errors()
+            return {"success": True, "errors": errors, "count": len(errors)}
+
+        elif tool_name == "devtools_get_failed_requests":
+            status_filter = arguments.get("status")
+            logs = await browser.get_network_logs(failed_only=True, status=status_filter)
+            return {"success": True, "failed_requests": logs, "count": len(logs)}
+
+        elif tool_name == "devtools_get_network_logs":
+            logs = await browser.get_network_logs(
+                method=arguments.get("method"),
+                status=arguments.get("status"),
+                failed_only=arguments.get("failed_only", False),
+            )
+            return {"success": True, "logs": logs, "count": len(logs)}
+
+        elif tool_name == "devtools_get_performance":
+            metrics = await browser.get_performance_metrics()
+            return {"success": True, "metrics": metrics}
+
+        elif tool_name == "devtools_get_page_info":
+            title = await browser.get_page_title()
+            url = await browser.get_page_url()
+            return {"success": True, "title": title, "url": url}
+
+        elif tool_name == "devtools_check_broken_images":
+            broken = await browser.check_broken_images()
+            return {"success": True, "broken_images": broken, "count": len(broken)}
+
+        elif tool_name == "devtools_wait_for_selector":
+            found = await browser.wait_for_selector(
+                arguments["selector"],
+                timeout_ms=arguments.get("timeout_ms", 5000),
+            )
+            return {"success": True, "found": found}
+
+        elif tool_name == "devtools_get_cookies":
+            cookies = await browser.get_cookies()
+            return {"success": True, "cookies": cookies, "count": len(cookies)}
+
+        elif tool_name == "devtools_close":
+            await devtools_manager.close(session_id)
+            return {"success": True, "message": f"Session '{session_id}' closed"}
+
+    except HTTPException:
+        raise
+    except (KeyError, TypeError) as e:
+        raise HTTPException(status_code=400, detail=f"Invalid arguments for {tool_name}: {e}")
+    except Exception as e:
+        logger.error(f"DevTools tool error: {tool_name}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"DevTools error: {str(e)}")
 
 
 @app.get("/resources")

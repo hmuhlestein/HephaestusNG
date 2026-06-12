@@ -69,75 +69,108 @@ tests/qa/
 
 ═══════════════════════════════════════════════════════════════════════
 STEP 3: IMPLEMENT CDP BROWSER AUTOMATION
-═══════════════════════════════════════════════════════════════════════
+══════════════════════════════════════════════════════════════════════
 
-Create `tests/qa/cdp/browser.py`:
+Chrome DevTools Protocol is available as built-in MCP tools. Use these
+tools directly via /tools/execute or curl instead of writing raw CDP code.
+
+Available devtools_* tools:
+  devtools_connect             - Connect to Chrome (start session)
+  devtools_navigate            - Navigate to a URL
+  devtools_evaluate            - Execute JavaScript in the page
+  devtools_screenshot          - Capture page screenshot
+  devtools_click               - Click an element by CSS selector
+  devtools_fill                - Fill an input field
+  devtools_get_console_errors  - Get console errors
+  devtools_get_failed_requests - Get failed network requests
+  devtools_get_network_logs    - Get all network logs
+  devtools_get_performance     - Get page performance metrics
+  devtools_get_page_info       - Get page title, URL
+  devtools_check_broken_images - Find broken images
+  devtools_wait_for_selector   - Wait for element to appear
+  devtools_get_cookies         - Get browser cookies
+  devtools_close               - Close browser session
+
+Create tests/qa/cdp/browser.py as a wrapper around the MCP devtools tools:
 
 ```python
-import asyncio
+import requests
 import json
-import websockets
-from typing import Optional, Callable
+from typing import Any, Dict, Optional
+
+MCP_URL = "http://localhost:8300/tools/execute"
 
 class CDPBrowser:
-    \"\"\"Chrome DevTools Protocol browser automation helper.\"\"\"
+    """Wrapper around Hephaestus built-in DevTools MCP tools."""
 
-    def __init__(self, ws_url: str):
-        self.ws_url = ws_url
-        self.ws: Optional[websockets.WebSocketClientProtocol] = None
-        self.msg_id = 0
-        self.listeners: dict[str, list[Callable]] = {}
+    def __init__(self, session_id: str = "qa", debug_url: str = "http://localhost:9222"):
+        self.session_id = session_id
+        self.debug_url = debug_url
 
-    async def connect(self):
-        self.ws = await websockets.connect(self.ws_url)
-
-    async def send(self, method: str, params: dict = None) -> dict:
-        self.msg_id += 1
-        msg = {"id": self.msg_id, "method": method}
-        if params:
-            msg["params"] = params
-        await self.ws.send(json.dumps(msg))
-        while True:
-            response = json.loads(await self.ws.recv())
-            if response.get("id") == self.msg_id:
-                return response
-
-    async def navigate(self, url: str):
-        await self.send("Page.navigate", {"url": url})
-
-    async def evaluate(self, expression: str) -> any:
-        result = await self.send("Runtime.evaluate", {
-            "expression": expression,
-            "returnByValue": True
+    def _call(self, tool: str, **kwargs) -> Dict[str, Any]:
+        resp = requests.post(MCP_URL, json={
+            "tool": f"devtools_{tool}",
+            "arguments": {"session_id": self.session_id, **kwargs}
         })
-        return result.get("result", {}).get("result", {}).get("value")
+        resp.raise_for_status()
+        return resp.json()
 
-    async def enable_console(self, callback: Callable):
-        await self.send("Console.enable")
-        self.listeners["console"].append(callback)
+    def connect(self, target_url: Optional[str] = None) -> Dict[str, Any]:
+        args = {"debug_url": self.debug_url}
+        if target_url:
+            args["target_url"] = target_url
+        return self._call("connect", **args)
 
-    async def enable_network(self, callback: Callable):
-        await self.send("Network.enable")
-        self.listeners["network"].append(callback)
+    def navigate(self, url: str) -> Dict[str, Any]:
+        return self._call("navigate", url=url)
 
-    async def get_console_logs(self) -> list:
-        logs = []
-        await self.send("Runtime.enable")
-        # Collect logs for a short period
-        return logs
+    def evaluate(self, expression: str) -> Any:
+        result = self._call("evaluate", expression=expression)
+        return result.get("result")
 
-    async def screenshot(self, path: str):
-        result = await self.send("Page.captureScreenshot", {"format": "png"})
-        import base64
-        with open(path, "wb") as f:
-            f.write(base64.b64decode(result["result"]["data"]))
+    def screenshot(self, path: Optional[str] = None, fmt: str = "png") -> Dict[str, Any]:
+        return self._call("screenshot", path=path, format=fmt)
 
-    async def close(self):
-        if self.ws:
-            await self.ws.close()
+    def click(self, selector: str) -> Dict[str, Any]:
+        return self._call("click", selector=selector)
+
+    def fill(self, selector: str, value: str) -> Dict[str, Any]:
+        return self._call("fill", selector=selector, value=value)
+
+    def get_console_errors(self) -> list:
+        result = self._call("get_console_errors")
+        return result.get("errors", [])
+
+    def get_failed_requests(self, status: Optional[int] = None) -> list:
+        args = {}
+        if status:
+            args["status"] = status
+        result = self._call("get_failed_requests", **args)
+        return result.get("failed_requests", [])
+
+    def get_network_logs(self, **kwargs) -> list:
+        result = self._call("get_network_logs", **kwargs)
+        return result.get("logs", [])
+
+    def get_performance(self) -> Dict[str, Any]:
+        result = self._call("get_performance")
+        return result.get("metrics", {})
+
+    def get_page_info(self) -> Dict[str, Any]:
+        return self._call("get_page_info")
+
+    def check_broken_images(self) -> list:
+        result = self._call("check_broken_images")
+        return result.get("broken_images", [])
+
+    def wait_for_selector(self, selector: str, timeout_ms: int = 5000) -> bool:
+        result = self._call("wait_for_selector", selector=selector, timeout_ms=timeout_ms)
+        return result.get("found", False)
+
+    def close(self) -> Dict[str, Any]:
+        return self._call("close")
 ```
 
-═══════════════════════════════════════════════════════════════════════
 STEP 4: IMPLEMENT UNIT TESTS
 ═══════════════════════════════════════════════════════════════════════
 
@@ -175,7 +208,7 @@ import pytest
 import requests
 import time
 
-BASE_URL = os.getenv("TEST_BASE_URL", "http://localhost:8000")
+BASE_URL = os.getenv("TEST_BASE_URL", "http://localhost:8300")
 
 class TestAPIIntegration:
     \"\"\"Integration tests for API endpoints.\"\"\"
@@ -200,58 +233,61 @@ Test:
 
 ═══════════════════════════════════════════════════════════════════════
 STEP 6: IMPLEMENT BROWSER AUTOMATION TESTS
-═══════════════════════════════════════════════════════════════════════
+══════════════════════════════════════════════════════════════════════
 
-Create `tests/qa/test_browser.py`:
+Create `tests/qa/test_browser.py` using the CDPBrowser wrapper from STEP 3:
 
 ```python
 import pytest
-import asyncio
 import os
-from cdp.browser import CDPBrowser
+import sys
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'cdp'))
+from browser import CDPBrowser
 
-CHROME_WS_URL = os.getenv("CHROME_WS_URL", "ws://localhost:9222")
+FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173")
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def browser():
-    return CDPBrowser(CHROME_WS_URL)
+    b = CDPBrowser(session_id="qa-test")
+    b.connect(target_url=FRONTEND_URL)
+    yield b
+    b.close()
 
 class TestBrowserAutomation:
-    \"\"\"Browser tests using Chrome DevTools Protocol.\"\"\"
+    """Browser tests using built-in DevTools MCP tools."""
 
-    @pytest.mark.asyncio
-    async def test_page_loads(self, browser):
-        await browser.connect()
-        await browser.navigate("http://localhost:5173")
-        title = await browser.evaluate("document.title")
-        assert title is not None
-        await browser.close()
+    def test_page_loads(self, browser):
+        browser.navigate(FRONTEND_URL)
+        info = browser.get_page_info()
+        assert info.get("title") is not None
 
-    @pytest.mark.asyncio
-    async def test_console_no_errors(self, browser):
-        await browser.connect()
-        errors = []
-        await browser.enable_console(lambda msg: errors.append(msg))
-        await browser.navigate("http://localhost:5173")
-        await asyncio.sleep(3)
+    def test_console_no_errors(self, browser):
+        browser.navigate(FRONTEND_URL)
+        errors = browser.get_console_errors()
         assert len(errors) == 0, f"Console errors: {errors}"
-        await browser.close()
 
-    @pytest.mark.asyncio
-    async def test_api_calls_succeed(self, browser):
-        await browser.connect()
-        failed_requests = []
-        await browser.enable_network(lambda req: failed_requests.append(req))
-        await browser.navigate("http://localhost:5173")
-        await asyncio.sleep(5)
-        assert len(failed_requests) == 0
-        await browser.close()
+    def test_no_failed_requests(self, browser):
+        browser.navigate(FRONTEND_URL)
+        import time
+        time.sleep(3)
+        failed = browser.get_failed_requests()
+        assert len(failed) == 0, f"Failed requests: {failed}"
+
+    def test_no_broken_images(self, browser):
+        browser.navigate(FRONTEND_URL)
+        broken = browser.check_broken_images()
+        assert len(broken) == 0, f"Broken images: {broken}"
+
+    def test_performance_metrics(self, browser):
+        metrics = browser.get_performance()
+        assert "load_event" in metrics
 ```
 
 To run CDP tests, Chrome must be started with:
   google-chrome --remote-debugging-port=9222
 
-═══════════════════════════════════════════════════════════════════════
+The test uses the built-in devtools MCP tools via the wrapper.
+
 STEP 7: IMPLEMENT LOG CAPTURE
 ═══════════════════════════════════════════════════════════════════════
 
