@@ -14,13 +14,14 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import HTMLResponse, FileResponse
 from pydantic import BaseModel
 
+from src.core.constants import AUTOPILOT_STATE_DIR
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/autopilot", tags=["Autopilot"])
 
 DESIGN_QUEUE_DIR = ""
 FEATURES_DIR = ""
-AUTOPILOT_STATE_DIR = os.path.expanduser("~/.hephaestus/autopilot")
 
 ALLOWED_EXTENSIONS = {".md", ".txt"}
 
