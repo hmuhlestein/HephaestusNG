@@ -17,7 +17,7 @@ services:
     container_name: hephaestus-server
     command: python run_server.py
     ports:
-      - "8000:8000"
+      - "8300:8300"
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs
@@ -31,7 +31,7 @@ services:
       - DATABASE_PATH=/app/data/hephaestus.db
       - QDRANT_URL=http://qdrant:6333
       - MCP_HOST=0.0.0.0
-      - MCP_PORT=8000
+      - MCP_PORT=8300
     depends_on:
       - qdrant
     restart: unless-stopped

@@ -22,7 +22,7 @@ RESET = '\033[0m'
 BOLD = '\033[1m'
 
 # Server configuration
-HEPHAESTUS_URL = "http://localhost:8000"
+HEPHAESTUS_URL = "http://localhost:8300"
 
 
 class MCPIntegrationTester:

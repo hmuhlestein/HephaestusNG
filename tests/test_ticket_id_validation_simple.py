@@ -17,7 +17,7 @@ import os
 # Add parent directory to path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-BASE_URL = "http://localhost:8000"
+BASE_URL = "http://localhost:8300"
 
 
 class TestTicketIDValidationSimple:

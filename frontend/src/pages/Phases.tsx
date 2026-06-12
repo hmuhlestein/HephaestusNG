@@ -110,7 +110,7 @@ export default function Phases() {
 
     setLoadingPhase(prev => ({ ...prev, [phaseId]: true }));
     try {
-      const response = await fetch(`http://localhost:8000/api/phases/${phaseId}/yaml`);
+      const response = await fetch(`http://localhost:8300/api/phases/${phaseId}/yaml`);
       const data = await response.json();
       setPhaseData(prev => ({ ...prev, [phaseId]: data }));
     } catch (error) {

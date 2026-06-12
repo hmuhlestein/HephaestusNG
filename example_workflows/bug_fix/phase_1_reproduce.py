@@ -99,7 +99,7 @@ print("BUG REPRODUCED!" if result != "expected_value" else "Bug NOT reproduced")
 **For API Bugs:**
 ```bash
 # Reproduction steps for API bug
-curl -X POST http://localhost:8000/api/endpoint \
+curl -X POST http://localhost:8300/api/endpoint \
   -H "Content-Type: application/json" \
   -d '{"input": "value_that_triggers_bug"}'
 

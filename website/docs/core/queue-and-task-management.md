@@ -653,7 +653,7 @@ interface QueueSectionProps {
 **Diagnosis Steps:**
 1. Check current agent count:
    ```bash
-   curl http://localhost:8000/api/queue_status | jq
+   curl http://localhost:8300/api/queue_status | jq
    ```
    Verify `active_agents` < `max_concurrent_agents`
 

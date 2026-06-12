@@ -13,9 +13,12 @@ def register(subparsers):
 
 
 def run(args):
-    # Ensure stop args are present
     if not hasattr(args, "force"):
         args.force = False
+    if not hasattr(args, "backend_only"):
+        args.backend_only = False
+    if not hasattr(args, "no_monitor"):
+        args.no_monitor = False
     print("Stopping...")
     stop_run(args)
     time.sleep(2)

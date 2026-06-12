@@ -50,9 +50,9 @@ async def check_prerequisites():
     try:
         import httpx
         async with httpx.AsyncClient() as client:
-            response = await client.get("http://localhost:8000/health", timeout=2)
+            response = await client.get("http://localhost:8300/health", timeout=2)
             if response.status_code == 200:
-                print("   ✅ MCP Server is running on port 8000")
+                print("   ✅ MCP Server is running on port 8300")
             else:
                 issues.append("MCP Server is not responding properly")
     except Exception:

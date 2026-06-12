@@ -413,7 +413,7 @@ validation:
   criteria:
     - description: "API endpoints respond"
       check_type: "command_success"
-      command: "curl -f http://localhost:8000/health"
+      command: "curl -f http://localhost:8300/health"
 
     - description: "OpenAPI spec exists"
       check_type: "file_exists"

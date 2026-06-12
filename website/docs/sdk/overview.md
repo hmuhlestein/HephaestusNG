@@ -312,7 +312,7 @@ sdk = HephaestusSDK(
     conflict_resolution="newest_file_wins",
 
     # Server
-    mcp_port=8000,
+    mcp_port=8300,
     monitoring_interval=60,
 
     # Task Deduplication

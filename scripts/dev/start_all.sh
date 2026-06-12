@@ -18,7 +18,7 @@ qdrant_health() {
 }
 
 backend_health() {
-  curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/health || true
+  curl -s -o /dev/null -w "%{http_code}" http://localhost:8300/health || true
 }
 
 echo "[start] Repo root: $repo_root"
@@ -51,7 +51,7 @@ else
 fi
 
 # 3) Backend server and monitor
-if ! lsof -iTCP:8000 -sTCP:LISTEN -Pn >/dev/null 2>&1; then
+if ! lsof -iTCP:8300 -sTCP:LISTEN -Pn >/dev/null 2>&1; then
   echo "[start] Starting backend server"
   nohup "$repo_root/.venv/bin/python" "$repo_root/run_server.py" > "$LOG_DIR/server.out" 2>&1 &
   sleep 2
@@ -85,7 +85,7 @@ if ! lsof -iTCP:5173 -sTCP:LISTEN -Pn >/dev/null 2>&1; then
 fi
 
 echo "[start] Summary:"
-echo "  Backend:  http://localhost:8000/health"
+echo "  Backend:  http://localhost:8300/health"
 echo "  Qdrant:   http://localhost:6333/health"
 echo "  Frontend: http://localhost:5173/"
 echo "  Logs:     $LOG_DIR"

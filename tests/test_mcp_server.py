@@ -11,7 +11,7 @@ import time
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
-BASE_URL = "http://localhost:8000"
+BASE_URL = "http://localhost:8300"
 TEST_AGENT_ID = f"test-agent-{uuid.uuid4()}"
 
 

@@ -58,7 +58,7 @@ heph memory save "content" --type discovery  # Save to vector DB
 poetry install                   # or pip install -r requirements.txt
 python scripts/init_db.py        # Initialize SQLite tables
 python scripts/init_qdrant.py    # Initialize Qdrant collections
-python run_server.py             # Start MCP API on port 8000
+python run_server.py             # Start MCP API on port 8300
 python run_monitor.py            # Start self-healing monitor
 cd frontend && npm install && npm run dev  # Start UI dashboard
 ```

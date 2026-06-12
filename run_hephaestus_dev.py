@@ -46,13 +46,13 @@ load_dotenv()
 
 
 def kill_existing_services():
-    """Kill any existing Hephaestus services and processes on port 8000."""
+    """Kill any existing Hephaestus services and processes on port 8300."""
     print("[Cleanup] Killing existing services...")
 
-    # Kill processes on port 8000
+    # Kill processes on port 8300
     try:
         result = subprocess.run(
-            ["lsof", "-ti", ":8000"],
+            ["lsof", "-ti", ":8300"],
             capture_output=True,
             text=True,
         )
@@ -61,11 +61,11 @@ def kill_existing_services():
             for pid in pids:
                 try:
                     os.kill(int(pid), signal.SIGKILL)
-                    print(f"  Killed process on port 8000 (PID: {pid})")
+                    print(f"  Killed process on port 8300 (PID: {pid})")
                 except ProcessLookupError:
                     pass
     except Exception as e:
-        print(f"  Warning: Could not kill processes on port 8000: {e}")
+        print(f"  Warning: Could not kill processes on port 8300: {e}")
 
     # Kill guardian processes
     try:
@@ -355,7 +355,7 @@ def main():
 
     # Step 5: Load configuration from environment variables
     qdrant_url = os.getenv("QDRANT_URL", "http://localhost:6333")
-    mcp_port = int(os.getenv("MCP_PORT", "8000"))
+    mcp_port = int(os.getenv("MCP_PORT", "8300"))
     monitoring_interval = int(os.getenv("MONITORING_INTERVAL_SECONDS", "60"))
 
     print(f"[Hephaestus] Initializing SDK with PRD to Software Builder phases...")
@@ -476,7 +476,7 @@ def main():
     print("=" * 60)
     print()
     print("Open the frontend to launch workflows:")
-    print("  http://localhost:3000")
+    print("  http://localhost:5173")
     print()
     print("Available workflows:")
     print("  - PRD to Software Builder: Build software from a PRD")

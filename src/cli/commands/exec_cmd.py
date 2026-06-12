@@ -1,19 +1,30 @@
-"""heph exec — Test and execute services."""
+"""heph exec — Execute commands and interact with services."""
 
+import argparse
+import os
 import sys
 import time
+import json
+import subprocess
+from pathlib import Path
 import httpx
 from src.cli.utils import api_get, api_post, output, table
 
 
+LOG_DIR = Path.home() / ".hephaestus" / "logs"
+
+
 def register(subparsers):
-    p = subparsers.add_parser("exec", help="Test and execute services")
+    p = subparsers.add_parser("exec", help="Execute commands and interact with services")
     sub = p.add_subparsers(dest="subcommand")
 
-    # test health
-    t = sub.add_parser("test", help="Run health checks against services")
-    t.add_argument("--timeout", type=int, default=5, help="Request timeout")
-    t.set_defaults(func=test_services)
+    # run
+    rn = sub.add_parser("run", help="Run a shell command and capture output")
+    rn.add_argument("command", nargs=argparse.REMAINDER, help="Command to execute")
+    rn.add_argument("--timeout", type=int, default=120, help="Timeout in seconds (default: 120)")
+    rn.add_argument("--cwd", default=None, help="Working directory")
+    rn.add_argument("--log", default=None, help="Log file path (default: ~/.hephaestus/logs/exec-<ts>.log)")
+    rn.set_defaults(func=run_command)
 
     # ping
     pg = sub.add_parser("ping", help="Ping the backend")
@@ -39,68 +50,68 @@ def register(subparsers):
     p.set_defaults(func=lambda a: p.print_help() or 0)
 
 
-def test_services(args):
-    """Run health checks against all services."""
-    results = []
+def run_command(args):
+    """Run a shell command, capturing stdout+stderr to a unified log file."""
+    if not args.command:
+        print("Error: No command specified.", file=sys.stderr)
+        return 1
 
-    # Backend
+    cmd_str = " ".join(args.command)
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    log_path = Path(args.log) if args.log else LOG_DIR / f"exec-{int(time.time())}.log"
+
+    env = os.environ.copy()
+    env["HEPH_LOG_DIR"] = str(LOG_DIR)
+
+    print(f"Running: {cmd_str}")
+    print(f"Log:     {log_path}")
+
     start = time.time()
     try:
-        r = httpx.get(f"{args.api_base}/health", timeout=args.timeout)
+        proc = subprocess.run(
+            args.command,
+            cwd=args.cwd,
+            capture_output=True,
+            text=True,
+            timeout=args.timeout,
+            env=env,
+        )
         elapsed = time.time() - start
-        results.append(["Backend", f"{r.status_code}", f"{elapsed*1000:.0f}ms", "OK" if r.status_code == 200 else r.text[:40]])
+
+        with open(log_path, "w") as f:
+            f.write(f"$ {cmd_str}\n")
+            f.write(f"exit code: {proc.returncode}\n")
+            f.write(f"elapsed: {elapsed:.2f}s\n")
+            f.write("-" * 60 + "\n")
+            f.write("STDOUT:\n")
+            f.write(proc.stdout or "(empty)\n")
+            f.write("-" * 60 + "\n")
+            f.write("STDERR:\n")
+            f.write(proc.stderr or "(empty)\n")
+
+        if proc.stdout:
+            print(proc.stdout, end="")
+        if proc.stderr:
+            print(proc.stderr, end="", file=sys.stderr)
+
+        print(f"\nExit: {proc.returncode} ({elapsed:.1f}s) — log: {log_path}")
+        return proc.returncode
+
+    except subprocess.TimeoutExpired:
+        elapsed = time.time() - start
+        with open(log_path, "w") as f:
+            f.write(f"$ {cmd_str}\n")
+            f.write(f"exit code: TIMEOUT\n")
+            f.write(f"elapsed: {elapsed:.2f}s\n")
+            f.write(f"killed after {args.timeout}s timeout\n")
+        print(f"Timeout: killed after {args.timeout}s — log: {log_path}")
+        return 124
+    except FileNotFoundError:
+        print(f"Error: Command not found: {args.command[0]}", file=sys.stderr)
+        return 127
     except Exception as e:
-        results.append(["Backend", "ERR", "-", str(e)[:50]])
-
-    # Qdrant
-    start = time.time()
-    try:
-        r = httpx.get("http://localhost:6333/", timeout=args.timeout)
-        elapsed = time.time() - start
-        results.append(["Qdrant", f"{r.status_code}", f"{elapsed*1000:.0f}ms", "OK" if r.status_code == 200 else "WARN"])
-    except Exception as e:
-        results.append(["Qdrant", "ERR", "-", str(e)[:50]])
-
-    # MCP tools
-    start = time.time()
-    try:
-        r = httpx.get(f"{args.api_base}/tools", timeout=args.timeout)
-        elapsed = time.time() - start
-        tools = r.json() if r.status_code == 200 else []
-        tool_count = len(tools) if isinstance(tools, list) else 0
-        results.append(["MCP Tools", f"{r.status_code}", f"{elapsed*1000:.0f}ms", f"{tool_count} tools"])
-    except Exception as e:
-        results.append(["MCP Tools", "ERR", "-", str(e)[:50]])
-
-    # Workflow API
-    start = time.time()
-    try:
-        r = httpx.get(f"{args.api_base}/api/workflow-definitions", timeout=args.timeout)
-        elapsed = time.time() - start
-        results.append(["Workflow API", f"{r.status_code}", f"{elapsed*1000:.0f}ms", "OK" if r.status_code == 200 else "WARN"])
-    except Exception as e:
-        results.append(["Workflow API", "ERR", "-", str(e)[:50]])
-
-    # SSE
-    start = time.time()
-    try:
-        r = httpx.get(f"{args.api_base}/sse", timeout=2, stream=True)
-        elapsed = time.time() - start
-        results.append(["SSE Stream", f"{r.status_code}", f"{elapsed*1000:.0f}ms", "OK"])
-        r.close()
-    except Exception:
-        results.append(["SSE Stream", "SKIP", "-", "not available"])
-
-    if args.json:
-        import json
-        print(json.dumps(results))
-    else:
-        print(f"Service health checks ({args.api_base}):")
-        print()
-        table(["Service", "Status", "Latency", "Details"], results, indent=2)
-
-    all_ok = all(r[1] in ("200", "OK", "SKIP") for r in results)
-    return 0 if all_ok else 1
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
 
 
 def ping(args):
@@ -167,6 +178,9 @@ def raw_request(args):
         elif args.method == "POST":
             body = json.loads(args.data) if args.data else {}
             r = httpx.post(f"{args.api_base}{args.path}", json=body, timeout=10)
+        elif args.method == "PUT":
+            body = json.loads(args.data) if args.data else {}
+            r = httpx.put(f"{args.api_base}{args.path}", json=body, timeout=10)
         elif args.method == "DELETE":
             r = httpx.delete(f"{args.api_base}{args.path}", timeout=10)
         else:

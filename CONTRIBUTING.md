@@ -257,7 +257,7 @@ Documentation will be available at `http://localhost:3000/Hephaestus/`
 ### Frontend Issues
 
 - Clear node_modules: `rm -rf node_modules && npm install`
-- Check ports: Make sure 3000 and 8000 are available
+- Check ports: Make sure 3000 and 8300 are available
 
 ## 💡 Areas We Need Help
 

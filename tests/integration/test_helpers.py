@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 class IntegrationAssertions:
     """Collection of assertion methods for integration tests."""
 
-    def __init__(self, db_manager, base_url: str = "http://localhost:8000"):
+    def __init__(self, db_manager, base_url: str = "http://localhost:8300"):
         self.db_manager = db_manager
         self.base_url = base_url
 

@@ -59,14 +59,14 @@ args = parser.parse_args()
 
 ```python
 def kill_existing_services():
-    """Kill any existing Hephaestus services on port 8000."""
+    """Kill any existing Hephaestus services on port 8300."""
     try:
-        result = subprocess.run(["lsof", "-ti", ":8000"], capture_output=True, text=True)
+        result = subprocess.run(["lsof", "-ti", ":8300"], capture_output=True, text=True)
         if result.stdout.strip():
             pids = result.stdout.strip().split("\n")
             for pid in pids:
                 os.kill(int(pid), signal.SIGKILL)
-                print(f"  Killed process on port 8000 (PID: {pid})")
+                print(f"  Killed process on port 8300 (PID: {pid})")
     except Exception as e:
         print(f"  Warning: Could not kill processes: {e}")
 
@@ -81,7 +81,7 @@ This ensures a clean start by killing any lingering Hephaestus processes.
 # These come from environment variables or defaults
 db_path = os.getenv("DATABASE_PATH", "./hephaestus.db")
 qdrant_url = os.getenv("QDRANT_URL", "http://localhost:6333")
-mcp_port = int(os.getenv("MCP_PORT", "8000"))
+mcp_port = int(os.getenv("MCP_PORT", "8300"))
 monitoring_interval = int(os.getenv("MONITORING_INTERVAL_SECONDS", "60"))
 working_directory = os.getenv("WORKING_DIRECTORY", "/path/to/project")
 ```
@@ -205,7 +205,7 @@ except Exception as e:
 ```
 
 This starts:
-- FastAPI backend server (port 8000)
+- FastAPI backend server (port 8300)
 - Guardian monitoring process
 - TUI interface (if `--tui` flag used)
 

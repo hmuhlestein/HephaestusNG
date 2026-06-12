@@ -22,56 +22,70 @@ def register(subparsers):
 
 def run(args):
     port = args.port
-
-    if check_backend(args):
-        output(args, {"status": "already_running", "port": port},
-               lambda d: print(f"Backend already running on port {port}"))
-        return 0
-
-    python = _find_python(HEPHAESTUS_DIR)
-    if not python:
-        print("Error: Python not found. Run 'poetry install' first.", file=sys.stderr)
-        return 1
-
     results = {}
 
-    # Start Qdrant (skip if using turbovec)
+    # Check what's already running
+    backend_running = check_backend(args)
+    frontend_pid = read_pid("frontend")
+    frontend_running = frontend_pid and is_process_running(frontend_pid)
+    monitor_pid = read_pid("monitor")
+    monitor_running = monitor_pid and is_process_running(monitor_pid)
+
+    # Frontend (start first so output shows it first)
+    if not args.backend_only and not args.no_frontend:
+        if frontend_running:
+            results["frontend"] = "already running"
+        else:
+            frontend_proc = _start_frontend()
+            results["frontend"] = "started" if frontend_proc else "skipped"
+
+    # Qdrant
     vector_backend = os.environ.get("VECTOR_STORE_BACKEND", "turbovec")
     if vector_backend == "qdrant":
-        qdrant_ok = _ensure_qdrant()
-        results["qdrant"] = "running" if qdrant_ok else "failed"
+        if _check_qdrant():
+            results["qdrant"] = "already running"
+        else:
+            qdrant_ok = _ensure_qdrant()
+            results["qdrant"] = "running" if qdrant_ok else "failed"
     else:
         results["qdrant"] = "skipped (turbovec)"
 
-    # Start backend
-    backend_proc = _start_backend(python, port, args.reload)
-    results["backend"] = "started" if backend_proc else "failed"
-
-    if not backend_proc:
-        output(args, results, lambda d: print("Failed to start backend"))
-        return 1
-
-    # Wait for backend
-    print(f"Waiting for backend on port {port}...")
-    for _ in range(30):
-        time.sleep(1)
-        if check_backend(args):
-            results["backend"] = "healthy"
-            break
+    # Backend
+    if backend_running:
+        results["backend"] = "already running"
     else:
-        results["backend"] = "started_but_not_healthy"
+        python = _find_python(HEPHAESTUS_DIR)
+        if not python:
+            print("Error: Python not found. Run 'poetry install' first.", file=sys.stderr)
+            return 1
 
-    # Start monitor
+        backend_proc = _start_backend(python, port, args.reload)
+        if not backend_proc:
+            results["backend"] = "failed"
+            _print_results(results, port)
+            return 1
+
+        print(f"Waiting for backend on port {port}...", end="", flush=True)
+        for _ in range(30):
+            time.sleep(1)
+            if check_backend(args):
+                results["backend"] = "healthy"
+                print(" ready")
+                break
+        else:
+            results["backend"] = "started but not healthy"
+            print(" timeout")
+
+    # Monitor
     if not args.backend_only and not args.no_monitor:
-        monitor_proc = _start_monitor(python)
-        results["monitor"] = "started" if monitor_proc else "failed"
+        if monitor_running:
+            results["monitor"] = "already running"
+        else:
+            python = _find_python(HEPHAESTUS_DIR)
+            monitor_proc = _start_monitor(python)
+            results["monitor"] = "started" if monitor_proc else "failed"
 
-    # Start frontend
-    if not args.backend_only and not args.no_frontend:
-        frontend_proc = _start_frontend()
-        results["frontend"] = "started" if frontend_proc else "skipped"
-
-    output(args, results, lambda d: _print_results(d, port))
+    _print_results(results, port)
     return 0
 
 
@@ -80,6 +94,15 @@ def _find_python(project_dir: Path) -> str:
     if venv_python.exists():
         return str(venv_python)
     return sys.executable
+
+
+def _check_qdrant() -> bool:
+    import httpx
+    try:
+        r = httpx.get("http://localhost:6333/", timeout=2)
+        return r.status_code == 200
+    except Exception:
+        return False
 
 
 def _ensure_qdrant() -> bool:
@@ -188,11 +211,20 @@ def _start_frontend() -> bool:
 
 
 def _print_results(results, port):
-    for service, status in results.items():
-        icon = "OK" if status in ("running", "healthy", "started") else \
-               "..." if status == "started_but_not_healthy" else \
-               "SKIP" if status == "skipped" else "FAIL"
-        print(f"  {service}: {icon} {status}")
     print()
-    print(f"Backend: http://127.0.0.1:{port}")
-    print(f"Health:  http://127.0.0.1:{port}/health")
+    for service, status in results.items():
+        if status == "already running":
+            icon = "OK"
+        elif status in ("running", "healthy", "started"):
+            icon = "OK"
+        elif status == "started but not healthy":
+            icon = "..."
+        elif status.startswith("skipped"):
+            icon = "--"
+        else:
+            icon = "FAIL"
+        print(f"  {service:12s} {icon:4s} {status}")
+    print()
+    print(f"  Frontend:  http://localhost:5173")
+    print(f"  Backend:   http://127.0.0.1:{port}")
+    print(f"  Health:    http://127.0.0.1:{port}/health")

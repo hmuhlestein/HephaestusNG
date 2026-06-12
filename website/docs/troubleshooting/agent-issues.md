@@ -18,7 +18,7 @@ Agents receive their UUID in the initial prompt under "Your Agent ID: [UUID]". T
 **Verification:**
 ```bash
 # Check your agent ID format
-curl http://127.0.0.1:8000/validate_agent_id/YOUR-AGENT-ID
+curl http://127.0.0.1:8300/validate_agent_id/YOUR-AGENT-ID
 ```
 
 ## Monitor Killing New Agents
@@ -57,7 +57,7 @@ python scripts/bootstrap_project.py \
 
 **Verify backend:**
 ```bash
-curl http://127.0.0.1:8000/health
+curl http://127.0.0.1:8300/health
 ```
 
 **Check database in use:**

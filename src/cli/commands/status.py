@@ -1,6 +1,8 @@
 """heph status — System health and status."""
 
-from src.cli.utils import api_get, output, check_backend, table, status_icon
+import time
+import httpx
+from src.cli.utils import api_get, output, check_backend, table, status_icon, read_pid, is_process_running
 
 
 def register(subparsers):
@@ -11,9 +13,18 @@ def register(subparsers):
 def run(args):
     data = {}
 
-    # Backend health
+    # Backend health (check once, reuse result)
+    start = time.time()
     health = api_get(args, "/health")
+    backend_latency_ms = round((time.time() - start) * 1000)
     data["backend"] = "healthy" if health and "healthy" in str(health) else "unreachable"
+
+    # Frontend (independent of backend)
+    frontend_pid = read_pid("frontend")
+    if frontend_pid and is_process_running(frontend_pid):
+        data["frontend"] = "running"
+    else:
+        data["frontend"] = "not running"
 
     if data["backend"] == "unreachable":
         output(args, data, _print_unreachable)
@@ -45,12 +56,73 @@ def run(args):
     queue = api_get(args, "/api/queue_status")
     data["queue"] = queue if queue else {}
 
+    # Service health checks
+    import os
+    services = []
+    timeout = 5
+
+    # Backend (reuse earlier result)
+    services.append({"name": "Backend", "status": 200, "latency_ms": backend_latency_ms,
+                     "ok": True})
+
+    # Qdrant (only if using qdrant backend)
+    vector_backend = os.environ.get("VECTOR_STORE_BACKEND", "turbovec")
+    if vector_backend == "qdrant":
+        start = time.time()
+        try:
+            r = httpx.get("http://localhost:6333/", timeout=timeout)
+            elapsed = time.time() - start
+            services.append({"name": "Qdrant", "status": r.status_code, "latency_ms": round(elapsed * 1000),
+                             "ok": r.status_code == 200})
+        except Exception as e:
+            services.append({"name": "Qdrant", "status": "ERR", "latency_ms": None, "ok": False, "detail": str(e)[:50]})
+    else:
+        services.append({"name": "Qdrant", "status": "SKIP", "latency_ms": None, "ok": True, "detail": "turbovec"})
+
+    # MCP Tools
+    start = time.time()
+    try:
+        r = httpx.get(f"{args.api_base}/tools", timeout=timeout)
+        elapsed = time.time() - start
+        tools = r.json() if r.status_code == 200 else []
+        tool_count = len(tools) if isinstance(tools, list) else 0
+        services.append({"name": "MCP Tools", "status": r.status_code, "latency_ms": round(elapsed * 1000),
+                         "ok": r.status_code == 200, "detail": f"{tool_count} tools"})
+    except Exception as e:
+        services.append({"name": "MCP Tools", "status": "ERR", "latency_ms": None, "ok": False, "detail": str(e)[:50]})
+
+    # Workflow API
+    start = time.time()
+    try:
+        r = httpx.get(f"{args.api_base}/api/workflow-definitions", timeout=timeout)
+        elapsed = time.time() - start
+        services.append({"name": "Workflow API", "status": r.status_code, "latency_ms": round(elapsed * 1000),
+                         "ok": r.status_code == 200})
+    except Exception as e:
+        services.append({"name": "Workflow API", "status": "ERR", "latency_ms": None, "ok": False, "detail": str(e)[:50]})
+
+    # SSE
+    start = time.time()
+    try:
+        r = httpx.get(f"{args.api_base}/sse", timeout=2, stream=True)
+        elapsed = time.time() - start
+        services.append({"name": "SSE Stream", "status": r.status_code, "latency_ms": round(elapsed * 1000),
+                         "ok": True})
+        r.close()
+    except Exception:
+        services.append({"name": "SSE Stream", "status": "SKIP", "latency_ms": None, "ok": True, "detail": "not available"})
+
+    data["services"] = services
+
     output(args, data, _print_status)
     return 0
 
 
 def _print_unreachable(data):
-    print("Backend: UNREACHABLE")
+    fe_status = data.get("frontend", "not running")
+    fe_icon = "OK" if fe_status == "running" else "FAIL"
+    print(f"Backend:   FAIL unreachable")
+    print(f"Frontend:  {fe_icon} {fe_status}")
     print()
     print("Start services with: heph start")
 
@@ -58,6 +130,10 @@ def _print_unreachable(data):
 def _print_status(data):
     icon = status_icon(data["backend"])
     print(f"Backend:   {icon} {data['backend']}")
+
+    fe_status = data.get("frontend", "not running")
+    fe_icon = "OK" if fe_status == "running" else "FAIL"
+    print(f"Frontend:  {fe_icon} {fe_status}")
     print()
 
     a = data.get("agents", {})
@@ -76,3 +152,15 @@ def _print_status(data):
 
     print(f"Workflows: {data.get('workflow_definitions', 0)} definitions, "
           f"{data.get('workflow_executions', 0)} executions")
+    print()
+
+    services = data.get("services", [])
+    if services:
+        print("Services:")
+        rows = []
+        for s in services:
+            latency = f"{s['latency_ms']}ms" if s.get("latency_ms") is not None else "-"
+            detail = s.get("detail", "OK" if s.get("ok") else "FAIL")
+            status_str = str(s["status"])
+            rows.append([s["name"], status_str, latency, detail])
+        table(["Service", "Status", "Latency", "Details"], rows, indent=2)

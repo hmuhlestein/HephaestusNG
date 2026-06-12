@@ -116,9 +116,9 @@ start_qdrant() {
 }
 
 start_backend() {
-    if lsof -ti :8000 >/dev/null 2>&1; then
-        warn "Port 8000 in use - killing existing process"
-        lsof -ti :8000 | xargs kill -9 2>/dev/null
+    if lsof -ti :8300 >/dev/null 2>&1; then
+        warn "Port 8300 in use - killing existing process"
+        lsof -ti :8300 | xargs kill -9 2>/dev/null
         sleep 1
     fi
 
@@ -135,7 +135,7 @@ start_backend() {
     TURBOVEC_DATA_DIR="$HEPHAESTUS_DIR/data/turbovec" \
     DESIGN_QUEUE_DIR="$DESIGN_QUEUE" \
     FEATURES_DIR="$PROJECT_PATH/features" \
-    MCP_PORT=8000 \
+    MCP_PORT=8300 \
     DEFAULT_CLI_TOOL=opencode \
     PROJECT_ROOT="$PROJECT_PATH" \
     MAIN_REPO_PATH="$PROJECT_PATH" \
@@ -148,8 +148,8 @@ start_backend() {
     log "Waiting for backend to become healthy..."
     for i in $(seq 1 20); do
         sleep 2
-        if curl -s http://localhost:8000/health 2>/dev/null | grep -q '"healthy"'; then
-            ok "Backend healthy on port 8000"
+        if curl -s http://localhost:8300/health 2>/dev/null | grep -q '"healthy"'; then
+            ok "Backend healthy on port 8300"
             return 0
         fi
     done
@@ -177,7 +177,7 @@ start_monitor() {
 
 stop_services() {
     log "Stopping services..."
-    lsof -ti :8000 | xargs kill -9 2>/dev/null && ok "Backend stopped" || warn "No backend to stop"
+    lsof -ti :8300 | xargs kill -9 2>/dev/null && ok "Backend stopped" || warn "No backend to stop"
     pkill -f "npm run dev" 2>/dev/null && ok "Frontend stopped" || warn "No frontend to stop"
     pkill -f "run_monitor.py" 2>/dev/null && ok "Monitor stopped" || warn "No monitor to stop"
     pkill -f "orchestrator.py" 2>/dev/null && ok "Orchestrator stopped" || warn "No orchestrator to stop"
@@ -197,8 +197,8 @@ show_status() {
         ok "TurboVec:    local (no container)"
     fi
 
-    if curl -s http://localhost:8000/health 2>/dev/null | grep -q '"healthy"'; then
-        ok "Backend:     healthy (port 8000)"
+    if curl -s http://localhost:8300/health 2>/dev/null | grep -q '"healthy"'; then
+        ok "Backend:     healthy (port 8300)"
     else
         err "Backend:     not running"
     fi

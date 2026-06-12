@@ -28,7 +28,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 HEPHAESTUS_DIR = Path(__file__).parent.parent.parent
-API_BASE = os.environ.get("HEPHAESTUS_API_BASE", "http://127.0.0.1:8000")
+API_BASE = os.environ.get("HEPHAESTUS_API_BASE", "http://127.0.0.1:8300")
 
 from src.core.constants import AUTOPILOT_STATE_DIR
 
@@ -1213,7 +1213,7 @@ def run_continuous_pipeline(args) -> None:
         database_path=os.environ.get("DATABASE_PATH", str(HEPHAESTUS_DIR / "hephaestus.db")),
         qdrant_url=os.environ.get("QDRANT_URL", "http://localhost:6333"),
         working_directory=str(project_path),
-        mcp_port=int(os.environ.get("MCP_PORT", "8000")),
+        mcp_port=int(os.environ.get("MCP_PORT", "8300")),
         monitoring_interval=60,
         llm_provider=os.environ.get("LLM_PROVIDER", "openrouter"),
         llm_model=os.environ.get("LLM_MODEL", "xiaomi/mimo-v2.5"),

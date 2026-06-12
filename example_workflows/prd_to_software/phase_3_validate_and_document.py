@@ -963,7 +963,7 @@ python scripts/create_admin.py --email admin@example.com
 # Start server
 python src/main.py
 
-# Access at http://localhost:8000
+# Access at http://localhost:8300
 ```
 
 ## Architecture

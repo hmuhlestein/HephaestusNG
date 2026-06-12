@@ -114,7 +114,7 @@ CREATE TABLE agent_results (
 - Validation Agent System (must be implemented)
 - SQLite database with proper schema
 - Python 3.8+ with required dependencies
-- MCP server running on port 8000
+- MCP server running on port 8300
 
 ### Dependencies
 ```python
@@ -323,7 +323,7 @@ import httpx
 async def report_results(task_id, report_path, agent_id):
     async with httpx.AsyncClient() as client:
         response = await client.post(
-            "http://localhost:8000/report_results",
+            "http://localhost:8300/report_results",
             json={
                 "task_id": task_id,
                 "markdown_file_path": report_path,
@@ -487,7 +487,7 @@ echo "# Test Results\n\nTest content" > /tmp/test_results.md
 
 3. Submit results via curl:
 ```bash
-curl -X POST http://localhost:8000/report_results \
+curl -X POST http://localhost:8300/report_results \
   -H "Content-Type: application/json" \
   -H "X-Agent-ID: test-agent-001" \
   -d '{
@@ -601,7 +601,7 @@ OK
     # 4. Submit results
     async with httpx.AsyncClient() as client:
         response = await client.post(
-            "http://localhost:8000/report_results",
+            "http://localhost:8300/report_results",
             json={
                 "task_id": task_id,
                 "markdown_file_path": report_path,

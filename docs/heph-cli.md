@@ -157,8 +157,10 @@ heph memory search "architecture" --type decision
 ### Service Testing (exec)
 
 ```bash
-# Full health check across all services
-heph exec test
+# Run a shell command and capture output to a log file
+heph exec run pytest tests/test_vector_store.py
+heph exec run python scripts/smoke_test.py --cwd ~/my-project --timeout 60
+heph exec run ls -la --log /tmp/my-test.log
 
 # Ping the backend
 heph exec ping

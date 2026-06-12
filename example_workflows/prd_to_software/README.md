@@ -363,7 +363,7 @@ docker run -p 6333:6333 qdrant/qdrant
 **Solution:**
 ```bash
 # Script auto-kills, but if issues persist:
-lsof -ti :8000 | xargs kill -9
+lsof -ti :8300 | xargs kill -9
 ```
 
 ### Workflow seems stuck

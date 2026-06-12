@@ -37,7 +37,7 @@ class Config:
         # Server settings
         server = config.get('server', {})
         self.mcp_host = server.get('host', '0.0.0.0')
-        self.mcp_port = server.get('port', 8000)
+        self.mcp_port = server.get('port', 8300)
         self.enable_cors = server.get('enable_cors', True)
 
         # Paths settings

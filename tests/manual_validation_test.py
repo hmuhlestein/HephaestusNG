@@ -9,7 +9,7 @@ print('='*70)
 # Test 1: SDK agent WITHOUT ticket_id - should SUCCEED
 print('\n### Test 1: SDK Agent Without ticket_id (SHOULD SUCCEED) ###')
 response = requests.post(
-    'http://localhost:8000/create_task',
+    'http://localhost:8300/create_task',
     json={
         'task_description': 'Test 1 - SDK without ticket_id',
         'done_definition': 'Task completed',
@@ -27,7 +27,7 @@ if response.status_code != 200:
 # Test 2: MCP agent WITHOUT ticket_id - should FAIL
 print('\n### Test 2: MCP Agent Without ticket_id (SHOULD FAIL with 400) ###')
 response = requests.post(
-    'http://localhost:8000/create_task',
+    'http://localhost:8300/create_task',
     json={
         'task_description': 'Test 2 - MCP without ticket_id',
         'done_definition': 'Task completed',
@@ -47,7 +47,7 @@ print('\n### Test 3: MCP Agent With ticket_id (SHOULD SUCCEED) ###')
 
 # First create a ticket
 ticket_response = requests.post(
-    'http://localhost:8000/api/tickets/create',
+    'http://localhost:8300/api/tickets/create',
     json={
         'workflow_id': '98f8d41f-026f-4401-8246-7f431c908a8c',
         'title': 'Test Ticket for Validation',
@@ -63,7 +63,7 @@ if ticket_response.status_code == 200:
 
     # Now create task with ticket_id
     response = requests.post(
-        'http://localhost:8000/create_task',
+        'http://localhost:8300/create_task',
         json={
             'task_description': 'Test 3 - MCP with ticket_id',
             'done_definition': 'Task completed',

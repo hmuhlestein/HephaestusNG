@@ -44,7 +44,7 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
 
   useEffect(() => {
     const connectWebSocket = () => {
-      const websocket = new WebSocket('ws://localhost:8000/ws');
+      const websocket = new WebSocket('ws://localhost:8300/ws');
 
       websocket.onopen = () => {
         setIsConnected(true);

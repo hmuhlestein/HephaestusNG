@@ -30,7 +30,7 @@ class HephaestusConfig:
     litellm_cost_api_key: Optional[str] = None  # Admin key for querying spend endpoints
 
     # Server
-    mcp_port: int = 8000
+    mcp_port: int = 8300
     mcp_host: str = "127.0.0.1"
     enable_cors: bool = True
 

@@ -144,11 +144,11 @@ Infrastructure tickets are SETUP ONLY - absolutely NO features or business logic
 
 **🚨🚨🚨 CRITICAL PROJECT STRUCTURE RULES - MUST FOLLOW! 🚨🚨🚨**
 
-**1. PORT 8000 IS RESERVED - NEVER USE IT!**
-- Port 8000 is used by Hephaestus MCP server and MUST remain open
+**1. PORT 8300 IS RESERVED - NEVER USE IT!**
+- Port 8300 is used by Hephaestus MCP server and MUST remain open
 - If your project needs a backend server, use a DIFFERENT port (8002, 3000, 5000, etc.)
-- ❌ WRONG: Backend runs on port 8000
-- ✅ CORRECT: Backend runs on port 8002 (or any port except 8000)
+- ❌ WRONG: Backend runs on port 8300
+- ✅ CORRECT: Backend runs on port 8002 (or any port except 8300)
 
 **2. FRONTEND AND BACKEND MUST BE IN SEPARATE DIRECTORIES!**
 - Create a `frontend/` directory for ALL frontend code
@@ -196,7 +196,7 @@ project-root/
 - Verify setup works (run dev server, hello world endpoint on port 8002)
 
 **❌ INFRASTRUCTURE SHOULD NOT INCLUDE:**
-- Using PORT 8000 for backend (it's RESERVED!)
+- Using PORT 8300 for backend (it's RESERVED!)
 - Mixing frontend and backend in single src/ directory
 - Components, pages, or modules (these are features!)
 - Authentication, APIs, database models (these are features!)
@@ -888,7 +888,7 @@ STEP 13: VERIFY YOUR CODE ACTUALLY WORKS
 python src/main.py  # or uvicorn, flask run, etc.
 
 # In another terminal, test the endpoints
-curl -X POST http://localhost:8000/api/auth/login \
+curl -X POST http://localhost:8300/api/auth/login \
   -H "Content-Type: application/json" \
   -d '{"email": "test@example.com", "password": "test123"}'
 
@@ -1307,7 +1307,7 @@ CRITICAL RULES
 ✅ DO:
 - Read ticket FIRST to understand scope
 - **For web apps: Create frontend/ and backend/ directories** (NEVER single src/)
-- **For backend: Configure server to run on PORT 8002** (PORT 8000 is RESERVED!)
+- **For backend: Configure server to run on PORT 8002** (PORT 8300 is RESERVED!)
 - Design ONE component exhaustively
 - Create [component]_design.md with full specification
 - Implement ALL code per design specification exactly
@@ -1321,7 +1321,7 @@ CRITICAL RULES
 - Create ONE Phase 3 validation task with ticket ID
 
 ❌ DO NOT:
-- **Use PORT 8000 for backend** (it's RESERVED - use 8002!)
+- **Use PORT 8300 for backend** (it's RESERVED - use 8002!)
 - **Mix frontend and backend in single src/** (must be separate directories!)
 - Add features not in ticket description
 - Skip features mentioned in ticket

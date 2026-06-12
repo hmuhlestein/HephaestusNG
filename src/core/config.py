@@ -76,7 +76,7 @@ class MCPConfig(BaseSettings):
         description="Host to bind MCP server",
     )
     port: int = Field(
-        default=8000,
+        default=8300,
         ge=1,
         le=65535,
         description="Port for MCP server",

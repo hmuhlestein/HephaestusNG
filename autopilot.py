@@ -48,7 +48,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 HEPHAESTUS_DIR = Path(__file__).parent
-API_BASE = "http://127.0.0.1:8000"
+API_BASE = "http://127.0.0.1:8300"
 POLL_INTERVAL = 15  # seconds between status checks
 STUCK_THRESHOLD = 3  # consecutive stuck checks before intervention
 GUARDIAN_CHECK_INTERVAL = 60  # seconds between guardian reviews
@@ -409,7 +409,7 @@ def run_orchestrator(args):
         database_path=str(HEPHAESTUS_DIR / "hephaestus.db"),
         qdrant_url="http://localhost:6333",
         working_directory=args.path,
-        mcp_port=8000,
+        mcp_port=8300,
         monitoring_interval=60,
         llm_provider="openrouter",
         llm_model="xiaomi/mimo-v2.5",
@@ -678,7 +678,7 @@ def run_autopilot(args):
         database_path=str(HEPHAESTUS_DIR / "hephaestus.db"),
         qdrant_url="http://localhost:6333",
         working_directory=args.path,
-        mcp_port=8000,
+        mcp_port=8300,
         monitoring_interval=60,
         llm_provider="openrouter",
         llm_model="xiaomi/mimo-v2.5",
