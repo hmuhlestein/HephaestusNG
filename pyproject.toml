@@ -5,6 +5,9 @@ description = "Autonomous AI Agent Orchestration System"
 authors = ["Hephaestus Team"]
 readme = "README.md"
 
+[tool.poetry.scripts]
+heph = "src.cli.main:main"
+
 [tool.poetry.dependencies]
 python = "^3.11"
 fastapi = "^0.104.0"
