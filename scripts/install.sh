@@ -115,6 +115,11 @@ PYTHON_CMD=$(find_python) || {
 }
 ok "Python: $("$PYTHON_CMD" --version 2>&1)"
 
+# uv (optional, faster installs)
+if command -v uv >/dev/null 2>&1; then
+    ok "uv: $(uv --version 2>&1)"
+fi
+
 # Git
 if command -v git >/dev/null 2>&1; then
     ok "Git: $(command -v git)"
@@ -188,31 +193,87 @@ header "Python environment"
 
 VENV_DIR="$PREFIX/.venv"
 
+# Detect package manager: uv (preferred) > poetry > pip
+PKG_MGR=""
+if command -v uv >/dev/null 2>&1; then
+    PKG_MGR="uv"
+    ok "Package manager: uv ($(uv --version 2>&1))"
+elif command -v poetry >/dev/null 2>&1; then
+    PKG_MGR="poetry"
+    ok "Package manager: poetry ($(poetry --version 2>&1))"
+else
+    PKG_MGR="pip"
+    warn "Using pip (install uv for faster installs: https://docs.astral.sh/uv/)"
+fi
+
 if [ -d "$VENV_DIR" ] && [ "$UPDATE" = false ]; then
-    ok "Virtual environment exists"
+    # Validate existing venv: check Python version matches
+    VENV_PYTHON="$VENV_DIR/bin/python"
+    if [ -x "$VENV_PYTHON" ]; then
+        VENV_PY_VER=$("$VENV_PYTHON" -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null || echo "unknown")
+        SYSTEM_PY_VER=$("$PYTHON_CMD" -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null || echo "unknown")
+        if [ "$VENV_PY_VER" = "$SYSTEM_PY_VER" ]; then
+            ok "Virtual environment exists (Python $VENV_PY_VER)"
+        else
+            warn "Virtual environment Python mismatch: venv=$VENV_PY_VER, system=$SYSTEM_PY_VER"
+            log "Recreating virtual environment..."
+            rm -rf "$VENV_DIR"
+            if [ "$PKG_MGR" = "uv" ]; then
+                uv venv "$VENV_DIR" --python "$PYTHON_CMD" --quiet
+            else
+                "$PYTHON_CMD" -m venv "$VENV_DIR"
+            fi
+            ok "Recreated with Python $SYSTEM_PY_VER"
+        fi
+    else
+        warn "Virtual environment exists but Python not executable"
+        log "Recreating virtual environment..."
+        rm -rf "$VENV_DIR"
+        if [ "$PKG_MGR" = "uv" ]; then
+            uv venv "$VENV_DIR" --python "$PYTHON_CMD" --quiet
+        else
+            "$PYTHON_CMD" -m venv "$VENV_DIR"
+        fi
+        ok "Recreated virtual environment"
+    fi
 else
     log "Creating virtual environment..."
-    "$PYTHON_CMD" -m venv "$VENV_DIR"
+    if [ "$PKG_MGR" = "uv" ]; then
+        "$UV" venv "$VENV_DIR" --python "$PYTHON_CMD" --quiet
+    elif [ "$PKG_MGR" = "poetry" ]; then
+        poetry env use "$PYTHON_CMD" --directory "$PREFIX" 2>/dev/null || "$PYTHON_CMD" -m venv "$VENV_DIR"
+    else
+        "$PYTHON_CMD" -m venv "$VENV_DIR"
+    fi
     ok "Created $VENV_DIR"
 fi
 
 PYTHON="$VENV_DIR/bin/python"
-PIP="$VENV_DIR/bin/pip"
-
-log "Upgrading pip..."
-"$PIP" install --upgrade pip --quiet 2>/dev/null
 
 # ─── 4. Python dependencies ───────────────────────────────────────
 
 header "Dependencies"
 
 log "Installing requirements..."
-"$PIP" install -r "$PREFIX/requirements.txt" --quiet 2>&1 | tail -1
+if [ "$PKG_MGR" = "uv" ]; then
+    uv pip install -r "$PREFIX/requirements.txt" --quiet --python "$PYTHON"
+elif [ "$PKG_MGR" = "poetry" ]; then
+    cd "$PREFIX" && poetry install --no-interaction --quiet 2>&1 | tail -3
+else
+    "$VENV_DIR/bin/pip" install --upgrade pip --quiet 2>/dev/null
+    "$VENV_DIR/bin/pip" install -r "$PREFIX/requirements.txt" --quiet 2>&1 | tail -1
+fi
 ok "Backend dependencies installed"
 
 if [ "$DEV_MODE" = true ]; then
     log "Installing dev dependencies..."
-    "$PIP" install pytest pytest-asyncio pytest-cov black flake8 mypy ipython --quiet
+    if [ "$PKG_MGR" = "uv" ]; then
+        uv pip install pytest pytest-asyncio pytest-cov black flake8 mypy ipython --quiet --python "$PYTHON"
+    elif [ "$PKG_MGR" = "poetry" ]; then
+        cd "$PREFIX" && poetry install --with dev --no-interaction --quiet 2>&1 | tail -3
+    else
+        "$VENV_DIR/bin/pip" install pytest pytest-asyncio pytest-cov black flake8 mypy ipython --quiet
+    fi
     ok "Dev dependencies installed"
 fi
 
