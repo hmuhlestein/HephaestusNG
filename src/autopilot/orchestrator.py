@@ -29,7 +29,8 @@ from enum import Enum
 
 HEPHAESTUS_DIR = Path(__file__).parent.parent.parent
 API_BASE = "http://127.0.0.1:8000"
-AUTOPILOT_STATE_DIR = str(Path.home() / ".hephaestus" / "autopilot")
+
+from src.core.constants import AUTOPILOT_STATE_DIR
 
 POLL_INTERVAL = 15
 STUCK_THRESHOLD = 3
