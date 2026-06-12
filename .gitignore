@@ -64,6 +64,9 @@ site/
 # Qdrant
 qdrant_data/
 
+# TurboVec
+data/turbovec/
+
 # Local library clones
 lib/
 
