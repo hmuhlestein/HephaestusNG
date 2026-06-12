@@ -8,8 +8,8 @@
 #     ./install.sh
 #
 #   Remote install (no repo needed):
-#     curl -sSL https://raw.githubusercontent.com/hmuhlestein/Hephaestus/main/install.sh | bash
-#     curl -sSL https://raw.githubusercontent.com/hmuhlestein/Hephaestus/main/install.sh | bash -s -- --dev
+#     curl -sSL https://raw.githubusercontent.com/hmuhlestein/Hephaestus/main/scripts/install.sh | bash
+#     curl -sSL https://raw.githubusercontent.com/hmuhlestein/Hephaestus/main/scripts/install.sh | bash -s -- --dev
 #
 # Flags:
 #   --prefix DIR        Install location (default: ~/.hephaestus)
@@ -78,7 +78,7 @@ while [[ $# -gt 0 ]]; do
             echo "  -h, --help          Show this help"
             echo ""
             echo "Remote install:"
-            echo "  curl -sSL $RAW_URL/install.sh | bash"
+            echo "  curl -sSL $RAW_URL/scripts/install.sh | bash"
             echo ""
             echo "Local install (from cloned repo):"
             echo "  ./install.sh"

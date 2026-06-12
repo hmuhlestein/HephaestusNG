@@ -51,7 +51,7 @@ def show_paths(args):
         "logs": str(Path.home() / ".hephaestus" / "logs"),
         "autopilot_logs": str(Path.home() / ".hephaestus" / "autopilot"),
         "workflows": str(HEPHAESTUS_DIR / "example_workflows"),
-        "phases": str(HEPHAESTUS_DIR / "src" / "phases"),
+        "phases": str(HEPHAESTUS_DIR / "example_workflows"),
         "scripts": str(HEPHAESTUS_DIR / "scripts"),
     }
     output(args, paths, lambda d: [print(f"  {k}: {v}") for k, v in d.items()])

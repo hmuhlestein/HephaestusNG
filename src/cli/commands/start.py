@@ -35,9 +35,13 @@ def run(args):
 
     results = {}
 
-    # Start Qdrant
-    qdrant_ok = _ensure_qdrant()
-    results["qdrant"] = "running" if qdrant_ok else "failed"
+    # Start Qdrant (skip if using turbovec)
+    vector_backend = os.environ.get("VECTOR_STORE_BACKEND", "turbovec")
+    if vector_backend == "qdrant":
+        qdrant_ok = _ensure_qdrant()
+        results["qdrant"] = "running" if qdrant_ok else "failed"
+    else:
+        results["qdrant"] = "skipped (turbovec)"
 
     # Start backend
     backend_proc = _start_backend(python, port, args.reload)
@@ -122,13 +126,17 @@ def _start_backend(python: str, port: int, reload: bool) -> bool:
     if reload:
         cmd.append("--reload")
 
+    log_dir = Path.home() / ".hephaestus" / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_file = open(log_dir / "backend.log", "a")
+
     try:
         proc = subprocess.Popen(
             cmd,
             cwd=str(HEPHAESTUS_DIR),
             env=env,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
         )
         save_pid("backend", proc.pid)
         return True
@@ -138,12 +146,15 @@ def _start_backend(python: str, port: int, reload: bool) -> bool:
 
 
 def _start_monitor(python: str) -> bool:
+    log_dir = Path.home() / ".hephaestus" / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_file = open(log_dir / "monitor.log", "a")
     try:
         proc = subprocess.Popen(
             [python, str(HEPHAESTUS_DIR / "run_monitor.py")],
             cwd=str(HEPHAESTUS_DIR),
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
         )
         save_pid("monitor", proc.pid)
         return True
@@ -156,12 +167,15 @@ def _start_frontend() -> bool:
     frontend_dir = HEPHAESTUS_DIR / "frontend"
     if not (frontend_dir / "package.json").exists():
         return False
+    log_dir = Path.home() / ".hephaestus" / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_file = open(log_dir / "frontend.log", "a")
     try:
         proc = subprocess.Popen(
             ["npm", "run", "dev"],
             cwd=str(frontend_dir),
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
         )
         save_pid("frontend", proc.pid)
         return True
