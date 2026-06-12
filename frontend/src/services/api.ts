@@ -538,4 +538,78 @@ export const apiService = {
     const { data } = await api.post('/sync-blocking-status');
     return data;
   },
+
+  // Autopilot
+  getAutopilotStatus: async (): Promise<any> => {
+    const { data } = await api.get('/autopilot/status');
+    return data;
+  },
+
+  getAutopilotQueue: async (): Promise<any[]> => {
+    const { data } = await api.get('/autopilot/queue');
+    return data;
+  },
+
+  addToAutopilotQueue: async (name: string, content: string, extension: string = '.md'): Promise<any> => {
+    const { data } = await api.post('/autopilot/queue', { name, content, extension });
+    return data;
+  },
+
+  removeFromAutopilotQueue: async (filename: string): Promise<void> => {
+    await api.delete(`/autopilot/queue/${encodeURIComponent(filename)}`);
+  },
+
+  reorderAutopilotQueue: async (filenames: string[]): Promise<void> => {
+    await api.post('/autopilot/queue/reorder', { filenames });
+  },
+
+  getAutopilotQueueContent: async (filename: string): Promise<{ filename: string; content: string }> => {
+    const { data } = await api.get(`/autopilot/queue/${encodeURIComponent(filename)}/content`);
+    return data;
+  },
+
+  getAutopilotFeatures: async (): Promise<any[]> => {
+    const { data } = await api.get('/autopilot/features');
+    return data;
+  },
+
+  getAutopilotFeatureDetail: async (featureId: string): Promise<any> => {
+    const { data } = await api.get(`/autopilot/features/${encodeURIComponent(featureId)}`);
+    return data;
+  },
+
+  getAutopilotFeatureReport: async (featureId: string): Promise<string> => {
+    const { data } = await api.get(`/autopilot/features/${encodeURIComponent(featureId)}/report`, {
+      responseType: 'text',
+    });
+    return data;
+  },
+
+  getAutopilotFeatureArtifact: async (featureId: string, artifactName: string): Promise<{ name: string; content: string }> => {
+    const { data } = await api.get(`/autopilot/features/${encodeURIComponent(featureId)}/artifacts/${encodeURIComponent(artifactName)}`);
+    return data;
+  },
+
+  getAutopilotMessages: async (limit: number = 50): Promise<any[]> => {
+    const { data } = await api.get(`/autopilot/messages?limit=${limit}`);
+    return data;
+  },
+
+  getAutopilotLogs: async (lines: number = 100): Promise<{ lines: string[] }> => {
+    const { data } = await api.get(`/autopilot/logs?lines=${lines}`);
+    return data;
+  },
+
+  getAutopilotInput: async (): Promise<any> => {
+    const { data } = await api.get('/autopilot/input');
+    return data;
+  },
+
+  submitAutopilotInput: async (requestId: string, choice: string): Promise<void> => {
+    await api.post('/autopilot/input', { request_id: requestId, choice });
+  },
+
+  dismissAutopilotInput: async (requestId: string): Promise<void> => {
+    await api.delete(`/autopilot/input/${encodeURIComponent(requestId)}`);
+  },
 };

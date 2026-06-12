@@ -29,6 +29,7 @@ from enum import Enum
 
 HEPHAESTUS_DIR = Path(__file__).parent.parent.parent
 API_BASE = "http://127.0.0.1:8000"
+AUTOPILOT_STATE_DIR = str(Path.home() / ".hephaestus" / "autopilot")
 
 POLL_INTERVAL = 15
 STUCK_THRESHOLD = 3
@@ -274,23 +275,71 @@ def detect_architectural_issue(report_paths: List[str]) -> Tuple[bool, str]:
 
 
 def prompt_human(reason: str, logger: OrchestratorLogger) -> str:
+    import sys
+    import uuid
+
     logger.log(f"DECISION POINT: {reason}", "INTERVENTION")
+
+    input_dir = Path(AUTOPILOT_STATE_DIR)
+    input_dir.mkdir(parents=True, exist_ok=True)
+
+    request_id = str(uuid.uuid4())[:8]
+    request_file = input_dir / f"input_request_{request_id}.json"
+    response_file = input_dir / f"input_response_{request_id}.json"
+
+    # Atomic write via temp+rename
+    payload = json.dumps({
+        "id": request_id,
+        "reason": reason,
+        "timestamp": datetime.now().isoformat(),
+        "options": ["c", "s", "q"],
+        "labels": {"c": "Continue", "s": "Skip design", "q": "Quit pipeline"},
+    }, indent=2)
+    tmp = request_file.with_suffix(".tmp")
+    tmp.write_text(payload)
+    os.rename(tmp, request_file)
+
+    logger.event("human_input_required", {"reason": reason, "request_id": request_id})
+
     print("\n" + "=" * 60)
     print("HUMAN INTERVENTION REQUIRED")
     print("=" * 60)
     print(f"Reason: {reason}")
-    print("\nOptions:")
-    print("  [c] Continue - keep processing")
-    print("  [s] Skip this design - move to next")
-    print("  [q] Quit - stop the pipeline")
+    print(f"Request ID: {request_id}")
+    print("Options: [c] Continue  [s] Skip  [q] Quit")
+    print("Respond via web UI or terminal.")
     print("=" * 60)
 
     while True:
-        choice = input("Your choice: ").strip().lower()
-        if choice in ("c", "s", "q"):
-            logger.event("human_input", {"choice": choice, "reason": reason})
-            return choice
-        print("Invalid choice. Enter c, s, or q.")
+        # Check file response
+        if response_file.exists():
+            try:
+                data = json.loads(response_file.read_text())
+                choice = data.get("choice", "").strip().lower()
+                if choice in ("c", "s", "q"):
+                    logger.event("human_input", {"choice": choice, "reason": reason, "source": "web", "request_id": request_id})
+                    request_file.unlink(missing_ok=True)
+                    response_file.unlink(missing_ok=True)
+                    return choice
+            except (json.JSONDecodeError, OSError) as e:
+                logger.log(f"Error reading response file: {e}", "WARN")
+
+        # Check terminal input (non-blocking on Unix only)
+        try:
+            if sys.platform != "win32" and sys.stdin.isatty():
+                import select as select_mod
+                rlist, _, _ = select_mod.select([sys.stdin], [], [], 1.0)
+                if rlist:
+                    choice = sys.stdin.readline().strip().lower()
+                    if choice in ("c", "s", "q"):
+                        logger.event("human_input", {"choice": choice, "reason": reason, "source": "terminal", "request_id": request_id})
+                        request_file.unlink(missing_ok=True)
+                        response_file.unlink(missing_ok=True)
+                        return choice
+            else:
+                time.sleep(2)
+        except (OSError, ValueError):
+            time.sleep(2)
 
 
 def scan_design_queue(queue_dir: Path, processed_hashes: Set[str]) -> List[DesignEntry]:

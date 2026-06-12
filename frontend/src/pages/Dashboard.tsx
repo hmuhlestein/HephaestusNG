@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { motion } from 'framer-motion';
-import { Bot, FileText, Database, AlertCircle, TrendingUp, Clock, Ban, Rocket } from 'lucide-react';
+import { Bot, FileText, Database, AlertCircle, TrendingUp, Clock, Ban, Rocket, AlertTriangle } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import { apiService } from '@/services/api';
 import { DashboardStats } from '@/types';
 import { useWebSocket } from '@/context/WebSocketContext';
@@ -77,12 +78,19 @@ const Dashboard: React.FC = () => {
   const [showLaunchModal, setShowLaunchModal] = useState(false);
   const { subscribe } = useWebSocket();
   const { selectedExecutionId, selectedExecution, refreshExecutions } = useWorkflow();
+  const navigate = useNavigate();
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['dashboard-stats', selectedExecutionId],
     queryFn: () => apiService.getDashboardStats(selectedExecutionId || undefined),
     refetchInterval: 5000, // Refresh every 5 seconds
     enabled: !!selectedExecutionId,
+  });
+
+  const { data: autopilotInput } = useQuery({
+    queryKey: ['autopilot-input'],
+    queryFn: () => apiService.getAutopilotInput(),
+    refetchInterval: 5000,
   });
 
   const { data: blockedTasks } = useQuery({
@@ -302,6 +310,29 @@ const Dashboard: React.FC = () => {
         <div>
           <BlockedTasksView />
         </div>
+      )}
+
+      {/* Autopilot Human Input Alert */}
+      {autopilotInput && (
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          onClick={() => navigate('/autopilot')}
+          className="bg-gradient-to-r from-amber-50 to-orange-50 border-2 border-amber-300 rounded-xl p-4 cursor-pointer hover:shadow-md transition-shadow"
+        >
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-amber-100 rounded-lg animate-pulse">
+              <AlertTriangle className="w-5 h-5 text-amber-600" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <h4 className="text-sm font-bold text-amber-900">Autopilot needs your input</h4>
+              <p className="text-xs text-amber-700 truncate">{autopilotInput.reason}</p>
+            </div>
+            <span className="text-xs font-medium text-amber-700 bg-amber-100 px-3 py-1.5 rounded-lg">
+              Take Action →
+            </span>
+          </div>
+        </motion.div>
       )}
 
       {/* Recent Activity */}

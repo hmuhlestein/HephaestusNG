@@ -16,6 +16,7 @@ import Observability from '@/pages/Observability';
 import Results from '@/pages/Results';
 import Tickets from '@/pages/Tickets';
 import WorkflowExecutions from '@/pages/WorkflowExecutions';
+import Autopilot from '@/pages/Autopilot';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -45,6 +46,7 @@ function App() {
                 <Route path="observability" element={<Observability />} />
                 <Route path="results" element={<Results />} />
                 <Route path="tickets" element={<Tickets />} />
+                <Route path="autopilot" element={<Autopilot />} />
               </Route>
             </Routes>
           </BrowserRouter>
