@@ -123,12 +123,19 @@ else
     MISSING=1
 fi
 
-# Docker (optional)
+# Docker (only needed for qdrant)
 if [ "$SKIP_DOCKER" = false ]; then
-    if command -v docker >/dev/null 2>&1; then
-        ok "Docker: $(command -v docker)"
+    VECTOR_BACKEND="${VECTOR_STORE_BACKEND:-turbovec}"
+    if [ "$VECTOR_BACKEND" = "qdrant" ]; then
+        if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+            ok "Docker: running"
+        elif command -v docker >/dev/null 2>&1; then
+            warn "Docker: installed but daemon not running"
+        else
+            warn "Docker not found — Qdrant requires Docker (or set VECTOR_STORE_BACKEND=turbovec)"
+        fi
     else
-        warn "Docker not found — Qdrant will need manual setup"
+        ok "Vector store: turbovec (Docker not needed)"
     fi
 fi
 
@@ -273,14 +280,15 @@ header "Database"
 log "Initializing SQLite..."
 "$PYTHON" "$PREFIX/scripts/init_db.py" 2>/dev/null && ok "Database ready" || warn "Database init skipped (may already exist)"
 
-# ─── 8. Qdrant ────────────────────────────────────────────────────
+# ─── 8. Qdrant (only if configured as backend) ─────────────────
 
-if [ "$SKIP_DOCKER" = false ]; then
+VECTOR_BACKEND="${VECTOR_STORE_BACKEND:-turbovec}"
+if [ "$VECTOR_BACKEND" = "qdrant" ] && [ "$SKIP_DOCKER" = false ]; then
     header "Qdrant"
 
     if curl -s http://localhost:6333/ >/dev/null 2>&1; then
         ok "Qdrant already running"
-    elif command -v docker >/dev/null 2>&1; then
+    elif command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
         log "Starting Qdrant..."
         if docker ps -a --format '{{.Names}}' | grep -q '^qdrant$'; then
             docker start qdrant >/dev/null 2>&1
@@ -293,9 +301,13 @@ if [ "$SKIP_DOCKER" = false ]; then
         else
             warn "Qdrant may still be starting..."
         fi
+    else
+        warn "Qdrant configured but Docker not available — set VECTOR_STORE_BACKEND=turbovec or start Docker"
     fi
 
     "$PYTHON" "$PREFIX/scripts/init_qdrant.py" 2>/dev/null && ok "Collections initialized" || warn "Qdrant init skipped"
+else
+    ok "Vector store: turbovec (no Docker needed)"
 fi
 
 # ─── 9. Frontend ──────────────────────────────────────────────────

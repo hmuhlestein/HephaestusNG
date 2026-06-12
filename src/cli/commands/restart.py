@@ -13,6 +13,9 @@ def register(subparsers):
 
 
 def run(args):
+    # Ensure stop args are present
+    if not hasattr(args, "force"):
+        args.force = False
     print("Stopping...")
     stop_run(args)
     time.sleep(2)
