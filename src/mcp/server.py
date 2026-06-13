@@ -761,65 +761,55 @@ async def startup_event():
 
     logger.info("=== END PHASE LOADING DEBUG ===")
 
-    # Register autopilot workflow definition
+    # Register all workflow definitions
     try:
-        from src.autopilot.phases import AUTOPILOT_PHASES, AUTOPILOT_WORKFLOW_CONFIG, AUTOPILOT_LAUNCH_TEMPLATE
-        from src.sdk.models import WorkflowDefinition
-
-        autopilot_def = WorkflowDefinition(
-            id="autopilot",
-            name="Autopilot Pipeline",
-            phases=AUTOPILOT_PHASES,
-            config=AUTOPILOT_WORKFLOW_CONFIG,
-            description="9-phase automated pipeline: requirements, architecture, development, review, security, QA, validation, git, forensics",
-            launch_template=AUTOPILOT_LAUNCH_TEMPLATE,
-        )
-
-        # Convert phases to dicts for the registration API
-        phases_config = []
-        for phase in autopilot_def.phases:
-            phase_dict = {
-                "id": phase.id,
-                "name": phase.name,
-                "description": phase.description,
-                "done_definitions": phase.done_definitions,
-                "working_directory": phase.working_directory,
-            }
-            if phase.additional_notes:
-                phase_dict["additional_notes"] = phase.additional_notes
-            if phase.outputs:
-                phase_dict["outputs"] = phase.outputs
-            if phase.next_steps:
-                phase_dict["next_steps"] = phase.next_steps
-            phases_config.append(phase_dict)
-
-        # Register via the database directly
+        from src.workflow_registry import get_all_workflow_definitions
         from src.core.database import WorkflowDefinition as DBWorkflowDefinition
-        import json
+
+        all_definitions = get_all_workflow_definitions()
 
         with server_state.db_manager.get_session() as session:
-            existing = session.query(DBWorkflowDefinition).filter_by(id="autopilot").first()
-            if not existing:
-                db_def = DBWorkflowDefinition(
-                    id="autopilot",
-                    name="Autopilot Pipeline",
-                    description="9-phase automated pipeline: requirements, architecture, development, review, security, QA, validation, git, forensics",
-                    phases_config=phases_config,
-                    workflow_config={
-                        "has_result": autopilot_def.config.has_result,
-                        "result_criteria": autopilot_def.config.result_criteria,
-                        "on_result_found": autopilot_def.config.on_result_found,
-                        "enable_tickets": autopilot_def.config.enable_tickets,
-                        "board_config": autopilot_def.config.board_config,
-                    },
-                )
-                session.add(db_def)
-                session.commit()
-                logger.info("Registered autopilot workflow definition")
-            else:
-                logger.info("Autopilot workflow definition already registered")
+            for defn in all_definitions:
+                existing = session.query(DBWorkflowDefinition).filter_by(id=defn.id).first()
+                if not existing:
+                    phases_config = []
+                    for phase in defn.phases:
+                        phase_dict = {
+                            "id": phase.id,
+                            "name": phase.name,
+                            "description": phase.description,
+                            "done_definitions": phase.done_definitions,
+                            "working_directory": phase.working_directory,
+                        }
+                        if phase.additional_notes:
+                            phase_dict["additional_notes"] = phase.additional_notes
+                        if phase.outputs:
+                            phase_dict["outputs"] = phase.outputs
+                        if phase.next_steps:
+                            phase_dict["next_steps"] = phase.next_steps
+                        phases_config.append(phase_dict)
+
+                    db_def = DBWorkflowDefinition(
+                        id=defn.id,
+                        name=defn.name,
+                        description=defn.description,
+                        phases_config=phases_config,
+                        workflow_config={
+                            "has_result": defn.config.has_result,
+                            "result_criteria": defn.config.result_criteria,
+                            "on_result_found": defn.config.on_result_found,
+                            "enable_tickets": defn.config.enable_tickets,
+                            "board_config": defn.config.board_config,
+                        },
+                    )
+                    session.add(db_def)
+                    logger.info(f"Registered workflow: {defn.id}")
+                else:
+                    logger.debug(f"Workflow already registered: {defn.id}")
+            session.commit()
+        logger.info(f"Workflow registration complete: {len(all_definitions)} definitions")
     except Exception as e:
-        logger.error(f"Failed to register autopilot workflow: {e}")
+        logger.error(f"Failed to register workflows: {e}")
         import traceback
         logger.error(traceback.format_exc())
 
