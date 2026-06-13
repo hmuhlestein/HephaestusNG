@@ -44,6 +44,7 @@ Read:
 - requirements_analysis.md (from Docs Path) - What must it do?
 - architecture.md (from Docs Path) - How should it work?
 - review_report.md (from Docs Path) - What issues were found?
+- doc_review_report.md (from Docs Path) - Were docs updated to match implementation?
 - security_report.md (from Docs Path) - What security fixes were made?
 
 ═══════════════════════════════════════════════════════════════════════

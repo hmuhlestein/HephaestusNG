@@ -45,6 +45,7 @@ Read:
 - requirements_analysis.md (from Docs Path) - What security requirements exist?
 - architecture.md (from Docs Path) - How is security designed?
 - review_report.md (from Docs Path) - Any security concerns from adversarial review?
+- doc_review_report.md (from Docs Path) - Any documentation gaps about security controls?
 
 ═══════════════════════════════════════════════════════════════════════
 STEP 2: AUTHENTICATION & AUTHORIZATION

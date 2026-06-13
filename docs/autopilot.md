@@ -1,7 +1,7 @@
 # Autopilot Pipeline
 
 A fully automated multi-agent workflow engine that takes design documents and
-iterates through a 9-phase pipeline to produce validated, committed, shipped software.
+iterates through a 10-phase pipeline to produce validated, committed, shipped software.
 
 ## Overview
 
@@ -17,6 +17,7 @@ designs/                          project/
                                         │   │   ├── requirements_analysis.md
                                         │   │   ├── architecture.md
                                         │   │   ├── review_report.md
+                                        │   │   ├── doc_review_report.md
                                         │   │   ├── security_report.md
                                         │   │   ├── qa_report.md
                                         │   │   ├── product_validation.md
@@ -107,7 +108,23 @@ Reviews all code with a critical perspective:
 
 Produces: `review_report.md` documenting what was found and fixed.
 
-### Phase 5: Security Review
+### Phase 5: Documentation Review
+
+**Agent:** Documentation Reviewer (fixes docs, not just reports issues)
+
+Reviews all documentation against the actual implementation:
+- Requirements doc accuracy vs. actual code
+- Architecture doc accuracy vs. file structure
+- README/setup instructions correctness
+- API documentation vs. actual endpoints
+- Docstrings and inline comments accuracy
+- Cross-document consistency
+
+**Fixes** documentation inaccuracies, gaps, and stale content directly.
+
+Produces: `doc_review_report.md` with findings and fixes applied.
+
+### Phase 6: Security Review
 
 **Agent:** Security Reviewer (fixes vulnerabilities, not just reports them)
 
@@ -122,7 +139,7 @@ Focused security assessment:
 
 Produces: `security_report.md` with findings and fixes applied.
 
-### Phase 6: QA Validation
+### Phase 7: QA Validation
 
 **Agent:** QA Engineer
 
@@ -135,7 +152,7 @@ Comprehensive testing:
 
 Produces: `qa_report.md` with pass/fail status and recommendation.
 
-### Phase 7: Product Validation
+### Phase 8: Product Validation
 
 **Agent:** Product Validator
 
@@ -148,7 +165,7 @@ Final spec compliance check:
 
 Produces: `product_validation.md` with PASS/NEEDS_WORK verdict.
 
-### Phase 8: Git Commit & Push
+### Phase 9: Git Commit & Push
 
 **Agent:** Git Operator
 
@@ -162,7 +179,7 @@ Version control workflow:
 7. Checks out main and pulls
 8. Saves commit hash and PR URL to memory
 
-### Phase 9: Forensics Analysis
+### Phase 10: Forensics Analysis
 
 **Agent:** Forensics Analyst
 
@@ -180,10 +197,10 @@ Produces: `forensics_report.md` with evidence-based improvement recommendations.
 
 ## Iteration Loop
 
-If Phase 7 (Product Validation) does not pass, the pipeline iterates:
+If Phase 8 (Product Validation) does not pass, the pipeline iterates:
 
 ```
-Phase 1-9 → Validation FAIL → Phase 1-9 again → Validation PASS → Next design
+Phase 1-10 → Validation FAIL → Phase 1-10 again → Validation PASS → Next design
 ```
 
 - Maximum iterations configurable via `--max-iterations` (default: 3)
@@ -216,7 +233,7 @@ features/<timestamp>_<name>/feature_report.html
 The report includes:
 - Pipeline metrics (iterations, time, cost)
 - QA and product validation status
-- All phase summaries (requirements, architecture, review, security, QA, validation)
+- All phase summaries (requirements, architecture, review, doc review, security, QA, validation)
 - Cost tracking breakdown (if LiteLLM proxy configured)
 - Forensics analysis and improvement recommendations
 - List of files created
@@ -249,16 +266,17 @@ Costs appear in:
 
 The pipeline uses the Hephaestus vector database (Qdrant or TurboVec) for:
 
-### Writing (Phases 1-9)
+### Writing (Phases 1-10)
 - Requirements decisions saved by Phase 1
 - Architecture decisions saved by Phase 2
 - Implementation notes saved by Phase 3
 - Review findings saved by Phase 4
-- Security findings saved by Phase 5
-- QA results saved by Phase 6
-- Validation outcomes saved by Phase 7
-- Commit references saved by Phase 8
-- Improvement recommendations saved by Phase 9
+- Doc review findings saved by Phase 5
+- Security findings saved by Phase 6
+- QA results saved by Phase 7
+- Validation outcomes saved by Phase 8
+- Commit references saved by Phase 9
+- Improvement recommendations saved by Phase 10
 
 ### Reading (Phase 1)
 Phase 1 searches memory before extracting requirements:
@@ -352,8 +370,9 @@ Each phase is designed to maximize context sharing:
 | 2 | requirements_analysis.md | architecture.md, Kanban tickets |
 | 3 | architecture.md, AGENTS.md | Source code, tests |
 | 4 | architecture.md, requirements_analysis.md | review_report.md, code fixes |
-| 5 | requirements_analysis.md, architecture.md, review_report.md | security_report.md, code fixes |
-| 6 | requirements_analysis.md, architecture.md | qa_report.md |
-| 7 | Original design doc, AGENTS.md, all reports | product_validation.md |
-| 8 | All reports | Git history |
-| 9 | All artifacts, pipeline_metrics.json, phase_prompts/ | forensics_report.md, memory entries |
+| 5 | requirements_analysis.md, architecture.md, review_report.md | doc_review_report.md, doc fixes |
+| 6 | requirements_analysis.md, architecture.md, review_report.md, doc_review_report.md | security_report.md, code fixes |
+| 7 | requirements_analysis.md, architecture.md, review_report.md, doc_review_report.md, security_report.md | qa_report.md |
+| 8 | Original design doc, AGENTS.md, requirements_analysis.md, architecture.md, doc_review_report.md, qa_report.md | product_validation.md |
+| 9 | All reports | Git history |
+| 10 | All artifacts, pipeline_metrics.json, phase_prompts/ | forensics_report.md, memory entries |

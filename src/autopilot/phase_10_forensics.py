@@ -86,6 +86,7 @@ Read each artifact from the Docs Path:
 - requirements_analysis.md
 - architecture.md
 - review_report.md
+- doc_review_report.md
 - security_report.md
 - qa_report.md
 - product_validation.md
@@ -216,7 +217,7 @@ DO NOT:
 - Guess what prompts said — read the actual files
 - Write 200-line templates — fill sections proportionally to findings
 - Give generic advice ("be more specific")
-- Analyze yourself (Phase 9) — you can't objectively self-assess
+- Analyze yourself (Phase 10) — you can't objectively self-assess
 """,
     outputs=[
         "forensics_report.md with evidence-based analysis",

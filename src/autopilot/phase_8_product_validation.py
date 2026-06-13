@@ -46,6 +46,7 @@ Also read:
 - AGENTS.md - Repository guidelines, coding conventions, project structure
 - requirements_analysis.md (what was extracted)
 - architecture.md (how it was designed)
+- doc_review_report.md (documentation quality review)
 - qa_report.md (what was tested)
 
 ═══════════════════════════════════════════════════════════════════════

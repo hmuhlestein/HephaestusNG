@@ -47,7 +47,6 @@ Read:
 - requirements_analysis.md (from Docs Path)
 - architecture.md (from Docs Path)
 - review_report.md (from Docs Path) - What was changed during code review?
-- security_report.md (from Docs Path) - What security fixes were applied?
 - README or any top-level documentation in Project Path
 - All source code files in Project Path (to verify docs match)
 
