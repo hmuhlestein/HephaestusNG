@@ -27,7 +27,7 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
   const [isConnected, setIsConnected] = useState(false);
   const [lastMessage, setLastMessage] = useState<WebSocketMessage | null>(null);
   const [lastUpdate, setLastUpdate] = useState(new Date());
-  const [ws, setWs] = useState<WebSocket | null>(null);
+  const [_ws, setWs] = useState<WebSocket | null>(null);
   const subscribersRef = useRef<Map<string, Set<(data: any) => void>>>(new Map());
 
   const subscribe = useCallback((event: string, callback: (data: any) => void) => {

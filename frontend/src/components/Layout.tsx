@@ -4,6 +4,7 @@ import { Home, FileText, Bot, Database, GitBranch, Activity, Layers, Monitor, Co
 import { useWebSocket } from '@/context/WebSocketContext';
 import { format } from 'date-fns';
 import { motion, AnimatePresence } from 'framer-motion';
+import SidebarProjectSelector from '@/components/SidebarProjectSelector';
 
 const Layout: React.FC = () => {
   const { isConnected, lastUpdate } = useWebSocket();
@@ -78,7 +79,10 @@ const Layout: React.FC = () => {
             )}
           </div>
 
-          <nav className="mt-8 flex-1">
+          {/* Project Selector */}
+          <SidebarProjectSelector collapsed={sidebarCollapsed} />
+
+          <nav className="mt-2 flex-1">
             {navItems.map(({ to, icon: Icon, label }) => (
               <NavLink
                 key={to}

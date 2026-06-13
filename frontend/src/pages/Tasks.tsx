@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
-import { FileText, User, Bot, Clock, ChevronRight, Copy, Link2, Search, Ban, AlertTriangle } from 'lucide-react';
+import { FileText, User, Bot, Clock, ChevronRight, Copy, Link2, Search } from 'lucide-react';
 import { apiService } from '@/services/api';
 import { Task } from '@/types';
 import StatusBadge from '@/components/StatusBadge';

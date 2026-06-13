@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -117,9 +117,9 @@ export default function SteeringEventsCard({ events }: SteeringEventsCardProps) 
                     </div>
                     {event.was_successful !== undefined && (
                       event.was_successful ? (
-                        <CheckCircle className="w-4 h-4 text-green-600" title="Successful" />
+                        <span title="Successful"><CheckCircle className="w-4 h-4 text-green-600" /></span>
                       ) : (
-                        <XCircle className="w-4 h-4 text-red-600" title="Failed" />
+                        <span title="Failed"><XCircle className="w-4 h-4 text-red-600" /></span>
                       )
                     )}
                   </div>

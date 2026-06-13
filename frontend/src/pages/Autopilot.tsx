@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
@@ -16,7 +16,7 @@ import FeatureDetailModal from '@/components/autopilot/FeatureDetailModal';
 import MessageCenter from '@/components/autopilot/MessageCenter';
 import AddDesignModal from '@/components/autopilot/AddDesignModal';
 import HumanInputBanner from '@/components/autopilot/HumanInputBanner';
-import ProjectSelector from '@/components/autopilot/ProjectSelector';
+import { useProject } from '@/context/ProjectContext';
 
 type Tab = 'overview' | 'queue' | 'features' | 'messages' | 'logs';
 
@@ -24,12 +24,9 @@ const Autopilot: React.FC = () => {
   const [activeTab, setActiveTab] = useState<Tab>('overview');
   const [selectedFeatureId, setSelectedFeatureId] = useState<string | null>(null);
   const [showAddDesign, setShowAddDesign] = useState(false);
-  const [projectId, setProjectId] = useState<string | null>(null);
+  const { activeProject } = useProject();
+  const projectId = activeProject?.id || null;
   const queryClient = useQueryClient();
-
-  const handleProjectChange = useCallback((id: string) => {
-    setProjectId(id);
-  }, []);
 
   const { data: status, refetch: refetchStatus } = useQuery({
     queryKey: ['autopilot-status'],
@@ -78,7 +75,6 @@ const Autopilot: React.FC = () => {
           </div>
         </div>
         <div className="flex items-center gap-3">
-          <ProjectSelector projectId={projectId} onProjectChange={handleProjectChange} />
           <Button
             variant="outline"
             size="sm"

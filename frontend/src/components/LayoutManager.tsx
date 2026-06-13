@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Save, FolderOpen, Trash2, Star, Layout, Plus } from 'lucide-react';
+import { Save, FolderOpen, Trash2, Star, Layout } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 export interface SavedLayout {

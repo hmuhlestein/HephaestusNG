@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { TrendingUp, TrendingDown, Activity, Minus, Bot } from 'lucide-react';
@@ -107,7 +107,7 @@ export default function TrajectoryTimeline({ alignments }: TrajectoryTimelinePro
           <div className="space-y-1">
             <div className="text-xs text-gray-500 mb-2">Individual Agent Alignments</div>
             <div className="flex items-end justify-between space-x-1" style={{ height: `${maxBarHeight}px` }}>
-              {alignments.map((agent, idx) => {
+              {alignments.map((agent, _idx) => {
                 const score = (agent.alignment_score || 0) * 100;
                 const height = (score / 100) * maxBarHeight;
 

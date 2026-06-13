@@ -22,8 +22,6 @@ import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
 import { toast } from 'react-hot-toast';
 import { apiService } from '@/services/api';
-import { Task } from '@/types';
-import type { TicketDetail } from '@/types';
 import { cn } from '@/lib/utils';
 import GitDiffModal from './GitDiffModal';
 import AgentDetailModal from '../AgentDetailModal';

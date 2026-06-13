@@ -13,6 +13,7 @@ Commands:
     agent       Agent management (list, logs, terminate)
     task        Task management (list, create, inspect)
     autopilot   Autopilot pipeline (start, stop, status, queue)
+    project     Project management (list, create, activate, current, delete)
     memory      Knowledge base (search, save)
     exec        Execute commands and interact with services (run, ping, tool, endpoints, raw)
     config      Show and edit configuration
@@ -22,7 +23,7 @@ import sys
 import argparse
 
 from src.cli.commands import status, start, stop, restart, init
-from src.cli.commands import workflow, agent, task, autopilot
+from src.cli.commands import workflow, agent, task, autopilot, project
 from src.cli.commands import memory, exec_cmd, config
 
 
@@ -72,6 +73,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     # --- Autopilot ---
     autopilot.register(sub)
+
+    # --- Project ---
+    project.register(sub)
 
     # --- Knowledge ---
     memory.register(sub)

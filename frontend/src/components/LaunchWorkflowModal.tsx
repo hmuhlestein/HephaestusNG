@@ -5,7 +5,6 @@ import {
   ChevronRight,
   ChevronLeft,
   AlertCircle,
-  CheckCircle,
   Play,
   FileText,
 } from 'lucide-react';

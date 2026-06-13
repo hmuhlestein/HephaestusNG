@@ -3,7 +3,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, Area, AreaChart } from 'recharts';
 import { TrendingUp, Activity, Users, Filter } from 'lucide-react';
 import { formatDistanceToNow, format } from 'date-fns';
-import { Badge } from '@/components/ui/badge';
+
 
 interface MetricsDataPoint {
   timestamp: string;

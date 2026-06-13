@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { motion } from 'framer-motion';
-import { Bot, Terminal, Activity, AlertCircle, FileText, Clock, MessageCircle, XCircle } from 'lucide-react';
+import { Bot, Terminal, Activity, FileText, Clock, MessageCircle, XCircle } from 'lucide-react';
 import { apiService } from '@/services/api';
 import { Agent } from '@/types';
 import StatusBadge from '@/components/StatusBadge';

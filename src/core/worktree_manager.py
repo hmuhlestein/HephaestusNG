@@ -111,6 +111,27 @@ class WorktreeManager:
 
         logger.info(f"WorktreeManager initialized with base path: {self.base_path}")
 
+    def reload(self, new_path):
+        """Reinitialize with a new main repository path.
+
+        Args:
+            new_path: New project root path (Path or str)
+
+        Raises:
+            ValueError: If new_path is not a valid git repository
+        """
+        from pathlib import Path as PathlibPath
+        new_path = PathlibPath(new_path) if not isinstance(new_path, PathlibPath) else new_path
+
+        try:
+            self.main_repo = Repo(new_path)
+        except git.InvalidGitRepositoryError:
+            raise ValueError(f"Not a git repository: {new_path}")
+
+        self.config.main_repo_path = new_path
+        self.config.project_root = new_path
+        logger.info(f"WorktreeManager reloaded with repo: {new_path}")
+
     def _acquire_merge_lock(self, agent_id: str, timeout: int = 300) -> Any:
         """Acquire exclusive lock for merge operations.
 
