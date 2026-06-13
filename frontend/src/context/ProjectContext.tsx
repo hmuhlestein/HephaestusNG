@@ -57,6 +57,10 @@ export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ child
     mutationFn: (projectId: string) => apiService.activateProject(projectId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['projects'] });
+      queryClient.invalidateQueries({ queryKey: ['autopilot-projects'] });
+      queryClient.invalidateQueries({ queryKey: ['autopilot-status'] });
+      queryClient.invalidateQueries({ queryKey: ['autopilot-queue'] });
+      queryClient.invalidateQueries({ queryKey: ['autopilot-features'] });
       queryClient.invalidateQueries({ queryKey: ['workflow-definitions'] });
       queryClient.invalidateQueries({ queryKey: ['workflow-executions'] });
       queryClient.invalidateQueries({ queryKey: ['tasks'] });

@@ -38,8 +38,8 @@ const Autopilot: React.FC = () => {
     mutationFn: async () => {
       if (status?.running) {
         return apiService.stopAutopilot();
-      } else if (projectId) {
-        return apiService.startAutopilot(projectId);
+      } else if (activeProject) {
+        return apiService.startAutopilot(activeProject.base_dir);
       }
     },
     onSuccess: () => {

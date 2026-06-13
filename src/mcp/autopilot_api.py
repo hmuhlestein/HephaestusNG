@@ -718,11 +718,29 @@ async def update_project(project_id: str, req: ProjectUpdate):
 async def delete_project(project_id: str):
     from src.core.database import AutopilotProject, get_db
 
+    replacement_proj = None
+
     with get_db() as db:
         proj = db.query(AutopilotProject).get(project_id)
         if not proj:
             raise HTTPException(404, "Project not found")
+
+        was_active = getattr(proj, 'is_active', False)
         db.delete(proj)
+        db.flush()
+
+        if was_active:
+            next_proj = db.query(AutopilotProject).order_by(AutopilotProject.name).first()
+            if next_proj:
+                next_proj.is_active = True
+                replacement_proj = next_proj
+
+    if replacement_proj:
+        try:
+            from src.mcp.projects_api import _apply_active_project
+            _apply_active_project(replacement_proj)
+        except Exception as e:
+            logger.error(f"Failed to activate replacement project: {e}")
 
     _invalidate("queue", "status", f"project_designs:{project_id}")
     return {"deleted": project_id}
