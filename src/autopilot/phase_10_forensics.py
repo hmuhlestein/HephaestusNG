@@ -31,7 +31,7 @@ methodology refinements, and patterns that could reduce iterations.""",
         "Memory entries saved with feature-scoped tags",
         "Task marked as done",
     ],
-    working_directory=".",
+    working_directory=None,
     additional_notes="""═══════════════════════════════════════════════════════════════════════
 YOU ARE A FORENSICS ANALYST - IMPROVE THE PIPELINE
 ═══════════════════════════════════════════════════════════════════════

@@ -29,7 +29,7 @@ completed designs, and produces a comprehensive requirements document.""",
         "Memory saved with key decisions and project context",
         "Task marked as done",
     ],
-    working_directory=".",
+    working_directory=None,
     additional_notes="""═══════════════════════════════════════════════════════════════════════
 YOU ARE A PRODUCT REQUIREMENTS ANALYST - EXTRACT WHAT TO BUILD
 ═══════════════════════════════════════════════════════════════════════

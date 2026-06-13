@@ -28,7 +28,7 @@ implementation-ready specifications for each component.""",
         "Phase 3 development tasks created for each component",
         "Task marked as done",
     ],
-    working_directory=".",
+    working_directory=None,
     additional_notes="""═══════════════════════════════════════════════════════════════════════
 YOU ARE A SOFTWARE ARCHITECT - DESIGN THE SYSTEM
 ═══════════════════════════════════════════════════════════════════════

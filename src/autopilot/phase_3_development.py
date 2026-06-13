@@ -27,7 +27,7 @@ the task breakdown, writes tests, and creates working software.""",
         "Phase 4 review tasks created",
         "Task marked as done",
     ],
-    working_directory=".",
+    working_directory=None,
     additional_notes="""═══════════════════════════════════════════════════════════════════════
 YOU ARE A SOFTWARE DEVELOPER - IMPLEMENT THE SYSTEM
 ═══════════════════════════════════════════════════════════════════════
