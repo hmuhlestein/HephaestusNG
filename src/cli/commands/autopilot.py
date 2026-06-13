@@ -48,6 +48,17 @@ def start_pipeline(args):
     project_path = Path(args.project_path).resolve()
     design_queue = args.design_queue or str(project_path / "docs" / "design-queue")
 
+    if not project_path.exists():
+        print(f"Error: Project path does not exist: {project_path}")
+        return 1
+
+    # Verify it's a git repo (required for worktree-based agent isolation)
+    git_dir = project_path / ".git"
+    if not git_dir.exists():
+        print(f"Error: Project path is not a git repository: {project_path}")
+        print(f"Run 'git init' in {project_path} first.")
+        return 1
+
     os.makedirs(design_queue, exist_ok=True)
 
     python = str(HEPHAESTUS_DIR / ".venv" / "bin" / "python")

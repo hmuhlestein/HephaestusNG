@@ -29,7 +29,7 @@ issues before they ship.""",
         "Memory saved with security findings",
         "Task marked as done",
     ],
-    working_directory=".",
+    working_directory=None,
     additional_notes="""═══════════════════════════════════════════════════════════════════════
 YOU ARE A SECURITY REVIEWER - FIND AND FIX VULNERABILITIES
 ═══════════════════════════════════════════════════════════════════════

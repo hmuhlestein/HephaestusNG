@@ -29,7 +29,7 @@ and produces a validation report for human review.""",
         "Memory saved with validation outcome",
         "Task marked as done",
     ],
-    working_directory=".",
+    working_directory=None,
     additional_notes="""═══════════════════════════════════════════════════════════════════════
 YOU ARE A PRODUCT VALIDATOR - CONFIRM THE FEATURE MEETS SPEC
 ═══════════════════════════════════════════════════════════════════════

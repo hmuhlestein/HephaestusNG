@@ -31,7 +31,7 @@ the post-review state of the code.""",
         "Memory saved with documentation findings",
         "Task marked as done",
     ],
-    working_directory=".",
+    working_directory=None,
     additional_notes="""═══════════════════════════════════════════════════════════════════════
 YOU ARE A DOCUMENTATION REVIEWER - VERIFY AND FIX ALL DOCS
 ════════════════════════════════════════════════════════════════════════

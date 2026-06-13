@@ -39,7 +39,7 @@ After product validation passes, this phase:
         "Memory saved with commit reference",
         "Task marked as done",
     ],
-    working_directory=".",
+    working_directory=None,
     additional_notes="""═══════════════════════════════════════════════════════════════════════
 YOU ARE A GIT OPERATOR - COMMIT AND MERGE VALIDATED CODE
 ═══════════════════════════════════════════════════════════════════════

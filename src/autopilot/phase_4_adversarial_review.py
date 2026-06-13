@@ -28,7 +28,7 @@ security concerns, and deviations from the architecture.""",
         "Memory saved with review findings",
         "Task marked as done",
     ],
-    working_directory=".",
+    working_directory=None,
     additional_notes="""═══════════════════════════════════════════════════════════════════════
 YOU ARE AN ADVERSARIAL CODE REVIEWER - FIND AND FIX THE PROBLEMS
 ═══════════════════════════════════════════════════════════════════════

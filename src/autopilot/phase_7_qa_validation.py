@@ -28,7 +28,7 @@ QA report with pass/fail status and recommendations.""",
         "Iteration recommendation provided (done/needs_work)",
         "Task marked as done",
     ],
-    working_directory=".",
+    working_directory=None,
     additional_notes="""═══════════════════════════════════════════════════════════════════════
 YOU ARE A QA ENGINEER - VALIDATE THE IMPLEMENTATION
 ═══════════════════════════════════════════════════════════════════════

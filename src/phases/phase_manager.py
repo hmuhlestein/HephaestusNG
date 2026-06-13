@@ -807,6 +807,13 @@ class PhaseManager:
                         elif isinstance(phase_next_steps, str):
                             phase_next_steps = substitute_params(phase_next_steps, launch_params)
 
+                # Resolve working directory: substitute params, treat "." and "" as inherit
+                phase_wd = phase_config.get("working_directory")
+                if phase_wd and launch_params:
+                    phase_wd = substitute_params(phase_wd, launch_params)
+                if not phase_wd or phase_wd == ".":
+                    phase_wd = working_directory
+
                 phase = Phase(
                     id=phase_id,
                     workflow_id=workflow_id,
@@ -817,7 +824,7 @@ class PhaseManager:
                     additional_notes=serialize_for_text(phase_additional_notes),
                     outputs=serialize_for_text(phase_outputs),
                     next_steps=serialize_for_text(phase_next_steps),
-                    working_directory=phase_config.get("working_directory") or working_directory,
+                    working_directory=phase_wd,
                     validation=serialize_for_text(phase_config.get("validation")),
                     # Per-phase CLI configuration (optional - falls back to global defaults)
                     cli_tool=phase_config.get("cli_tool"),
