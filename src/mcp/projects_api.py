@@ -114,7 +114,7 @@ async def create_project(req: ProjectCreate):
         db.add(proj)
         db.flush()
 
-        return ProjectItem(
+        result = ProjectItem(
             id=proj.id,
             name=proj.name,
             base_dir=proj.base_dir,
@@ -124,6 +124,15 @@ async def create_project(req: ProjectCreate):
             created_at=proj.created_at.isoformat() if proj.created_at else "",
             updated_at=proj.updated_at.isoformat() if proj.updated_at else "",
         )
+
+    # Apply active project OUTSIDE the DB session
+    if is_first:
+        try:
+            _apply_active_project(proj)
+        except Exception as e:
+            logger.warning(f"Created project but failed to activate at runtime: {e}")
+
+    return result
 
 
 @router.put("/{project_id}", response_model=ProjectItem)
@@ -166,6 +175,8 @@ async def update_project(project_id: str, req: ProjectUpdate):
 async def delete_project(project_id: str):
     from src.core.database import AutopilotProject, get_db
 
+    replacement_proj = None
+
     with get_db() as db:
         proj = db.query(AutopilotProject).filter_by(id=project_id).first()
         if not proj:
@@ -175,12 +186,24 @@ async def delete_project(project_id: str):
         db.delete(proj)
         db.flush()
 
-        # If deleted project was active, activate another one
+        # If deleted project was active, find a replacement
         if was_active:
             next_proj = db.query(AutopilotProject).order_by(AutopilotProject.name).first()
             if next_proj:
                 next_proj.is_active = True
-                _apply_active_project(next_proj)
+                replacement_proj = {
+                    "id": next_proj.id,
+                    "name": next_proj.name,
+                    "base_dir": next_proj.base_dir,
+                }
+
+    # Apply replacement OUTSIDE the DB session
+    if replacement_proj:
+        try:
+            from types import SimpleNamespace
+            _apply_active_project(SimpleNamespace(**replacement_proj))
+        except Exception as e:
+            logger.error(f"Failed to activate replacement project: {e}")
 
         return {"status": "deleted", "id": project_id}
 
@@ -221,20 +244,25 @@ async def activate_project(project_id: str):
 
 
 def _apply_active_project(proj):
-    """Apply project path to runtime config and reinitialize WorktreeManager."""
+    """Apply project path to runtime config and reinitialize WorktreeManager.
+
+    Validates the path is a valid git repo BEFORE mutating config.
+    If reload fails, config is not mutated.
+    """
     from src.core.simple_config import get_config
     from src.mcp.server import server_state
 
     config = get_config()
     new_path = Path(proj.base_dir)
 
-    # Update config singleton
-    config.main_repo_path = new_path
-    config.project_root = new_path
-
-    # Reinitialize WorktreeManager if available
+    # Validate first — don't mutate config if path is invalid
     if server_state.worktree_manager:
         try:
             server_state.worktree_manager.reload(new_path)
         except Exception as e:
-            logger.error(f"Failed to reload WorktreeManager: {e}")
+            logger.error(f"Failed to reload WorktreeManager for {new_path}: {e}")
+            raise ValueError(f"Cannot activate project — not a valid git repository: {new_path}")
+
+    # Only mutate config after successful reload
+    config.main_repo_path = new_path
+    config.project_root = new_path
