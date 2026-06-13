@@ -1,23 +1,15 @@
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { ScrollArea } from '@/components/ui/scroll-area';
+
 import { Progress } from '@/components/ui/progress';
 import {
   Compass,
-  Target,
-  Activity,
   Bot,
-  AlertCircle,
-  CheckCircle,
-  TrendingUp,
-  TrendingDown,
   RefreshCw,
-  Clock,
-  Layers,
   MessageSquare
 } from 'lucide-react';
 import { apiService } from '@/services/api';

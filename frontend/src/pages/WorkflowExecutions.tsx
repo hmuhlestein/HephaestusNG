@@ -1,11 +1,11 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useWorkflow } from '@/context/WorkflowContext';
-import { useMutation, useQueryClient, useQuery } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { apiService } from '@/services/api';
 import { WorkflowExecution } from '@/types';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Workflow, Plus, ExternalLink, X, Layers, CheckCircle2, Clock, AlertCircle, ListTodo, Rocket } from 'lucide-react';
+import { Workflow, ExternalLink, X, Layers, ListTodo, Rocket } from 'lucide-react';
 import StatusBadge from '@/components/StatusBadge';
 import TaskDetailModal from '@/components/TaskDetailModal';
 import LaunchWorkflowModal from '@/components/LaunchWorkflowModal';

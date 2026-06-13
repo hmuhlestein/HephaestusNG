@@ -401,6 +401,7 @@ class ProjectItem(BaseModel):
     name: str
     base_dir: str
     is_default: bool
+    is_active: bool = False
     design_count: int
     created_at: str
     updated_at: str
@@ -604,6 +605,7 @@ async def list_projects():
                 name=p.name,
                 base_dir=p.base_dir,
                 is_default=p.is_default,
+                is_active=getattr(p, 'is_active', False),
                 design_count=count,
                 created_at=p.created_at.isoformat() if p.created_at else "",
                 updated_at=p.updated_at.isoformat() if p.updated_at else "",
@@ -644,6 +646,7 @@ async def create_project(req: ProjectCreate):
             name=proj.name,
             base_dir=proj.base_dir,
             is_default=proj.is_default,
+            is_active=getattr(proj, 'is_active', False),
             design_count=len(designs),
             created_at=proj.created_at.isoformat() if proj.created_at else "",
             updated_at=proj.updated_at.isoformat() if proj.updated_at else "",
@@ -664,6 +667,7 @@ async def get_project(project_id: str):
             name=proj.name,
             base_dir=proj.base_dir,
             is_default=proj.is_default,
+            is_active=getattr(proj, 'is_active', False),
             design_count=count,
             created_at=proj.created_at.isoformat() if proj.created_at else "",
             updated_at=proj.updated_at.isoformat() if proj.updated_at else "",
@@ -703,6 +707,7 @@ async def update_project(project_id: str, req: ProjectUpdate):
             name=proj.name,
             base_dir=proj.base_dir,
             is_default=proj.is_default,
+            is_active=getattr(proj, 'is_active', False),
             design_count=count,
             created_at=proj.created_at.isoformat() if proj.created_at else "",
             updated_at=proj.updated_at.isoformat() if proj.updated_at else "",

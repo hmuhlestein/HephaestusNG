@@ -1,9 +1,9 @@
-import React from 'react';
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Toaster } from 'react-hot-toast';
 import { WebSocketProvider } from '@/context/WebSocketContext';
 import { WorkflowProvider } from '@/context/WorkflowContext';
+import { ProjectProvider } from '@/context/ProjectContext';
 import Layout from '@/components/Layout';
 import Dashboard from '@/pages/Dashboard';
 import Overview from '@/pages/Overview';
@@ -30,8 +30,9 @@ const queryClient = new QueryClient({
 function App() {
   return (
     <QueryClientProvider client={queryClient}>
-      <WorkflowProvider>
-        <WebSocketProvider>
+      <ProjectProvider>
+        <WorkflowProvider>
+          <WebSocketProvider>
           <BrowserRouter>
             <Routes>
               <Route path="/" element={<Layout />}>
@@ -60,8 +61,9 @@ function App() {
               },
             }}
           />
-        </WebSocketProvider>
-      </WorkflowProvider>
+          </WebSocketProvider>
+        </WorkflowProvider>
+      </ProjectProvider>
     </QueryClientProvider>
   );
 }

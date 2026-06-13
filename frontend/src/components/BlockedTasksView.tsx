@@ -1,13 +1,12 @@
 import React, { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Lock, ExternalLink, AlertTriangle, Loader2, Ban, ChevronDown, ChevronUp } from 'lucide-react';
+import { Lock, ExternalLink, AlertTriangle, Loader2, ChevronDown, ChevronUp } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { apiService } from '@/services/api';
 import { useWorkflow } from '@/context/WorkflowContext';
 import { BlockedTask, BlockerTicket } from '@/types';
 import StatusBadge from '@/components/StatusBadge';
-import { formatDistanceToNow } from 'date-fns';
 
 interface BlockedTasksViewProps {
   onViewTicketDetails?: (ticketId: string) => void;
@@ -104,11 +103,10 @@ const BlockedTasksView: React.FC<BlockedTasksViewProps> = ({ onViewTicketDetails
             className="overflow-hidden"
           >
             <div className="divide-y divide-red-200">
-              {blockedTasks.map((task, index) => (
+              {blockedTasks.map((task) => (
                 <BlockedTaskCard
                   key={task.task_id}
                   task={task}
-                  index={index}
                   onViewTicket={handleViewTicket}
                 />
               ))}
@@ -122,11 +120,10 @@ const BlockedTasksView: React.FC<BlockedTasksViewProps> = ({ onViewTicketDetails
 
 interface BlockedTaskCardProps {
   task: BlockedTask;
-  index: number;
   onViewTicket: (ticketId: string) => void;
 }
 
-const BlockedTaskCard: React.FC<BlockedTaskCardProps> = ({ task, index, onViewTicket }) => {
+const BlockedTaskCard: React.FC<BlockedTaskCardProps> = ({ task, onViewTicket }) => {
   const [isExpanded, setIsExpanded] = React.useState(false);
   const [showFullDescription, setShowFullDescription] = React.useState(false);
 

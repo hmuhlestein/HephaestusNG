@@ -581,6 +581,12 @@ class ServerState:
         self.db_manager = DatabaseManager(str(config.database_path))
         self.db_manager.create_tables()
 
+        # Migrate: add is_active column to existing autopilot_projects table
+        self._migrate_is_active_column()
+
+        # Load active project from DB and apply to config BEFORE creating managers
+        self._load_active_project(config)
+
         # Initialize vector store
         self.vector_store = VectorStoreManager(
             qdrant_url=config.qdrant_url,
@@ -644,6 +650,45 @@ class ServerState:
 
         logger.info("Server state initialized successfully")
 
+    def _migrate_is_active_column(self):
+        """Add is_active column to autopilot_projects if missing."""
+        import sqlalchemy
+        try:
+            with self.db_manager.get_session() as session:
+                session.execute(sqlalchemy.text(
+                    "ALTER TABLE autopilot_projects ADD COLUMN is_active BOOLEAN DEFAULT 0"
+                ))
+                session.commit()
+                logger.info("Migrated: added is_active column to autopilot_projects")
+        except Exception:
+            pass  # Column already exists
+
+    def _load_active_project(self, config):
+        """Load active project from DB and apply to config before managers init."""
+        from src.core.database import AutopilotProject
+        try:
+            with self.db_manager.get_session() as session:
+                active = session.query(AutopilotProject).filter_by(is_active=True).first()
+                if active:
+                    from pathlib import Path
+                    config.main_repo_path = Path(active.base_dir)
+                    config.project_root = Path(active.base_dir)
+                    logger.info(f"Active project loaded: {active.name} ({active.base_dir})")
+                else:
+                    # Auto-activate the default or first project
+                    proj = session.query(AutopilotProject).filter_by(is_default=True).first()
+                    if not proj:
+                        proj = session.query(AutopilotProject).first()
+                    if proj:
+                        proj.is_active = True
+                        session.commit()
+                        from pathlib import Path
+                        config.main_repo_path = Path(proj.base_dir)
+                        config.project_root = Path(proj.base_dir)
+                        logger.info(f"Auto-activated project: {proj.name} ({proj.base_dir})")
+        except Exception as e:
+            logger.warning(f"Could not load active project: {e}")
+
     async def broadcast_update(self, message: Dict[str, Any]):
         """Broadcast update to all connected WebSocket and SSE clients."""
         disconnected = []
@@ -691,6 +736,10 @@ async def startup_event():
         features_dir=os.environ.get("FEATURES_DIR", ""),
     )
     app.include_router(autopilot_router)
+
+    # Add project management routes
+    from src.mcp.projects_api import router as projects_router
+    app.include_router(projects_router)
 
     # Load phases if folder is specified
     from pathlib import Path

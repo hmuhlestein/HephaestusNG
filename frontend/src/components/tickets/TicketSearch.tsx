@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useMutation } from '@tanstack/react-query';
 import { Search, Filter, X, Loader2, TrendingUp } from 'lucide-react';
 import { apiService } from '@/services/api';
-import { TicketSearchResult } from '@/types';
+import { TicketSearchResult, TicketType, TicketPriority } from '@/types';
 import TicketCard from './TicketCard';
 import TicketDetailModal from './TicketDetailModal';
 import { useDebounce } from '@/hooks/useDebounce';
@@ -339,15 +339,14 @@ const TicketSearch: React.FC<TicketSearchProps> = ({ workflowId, initialTag, onT
                     <TicketCard
                       ticket={{
                         id: result.ticket_id,
-                        ticket_id: result.ticket_id,
                         workflow_id: '',
                         title: result.title,
                         description: result.description,
-                        ticket_type: result.ticket_type,
-                        priority: result.priority,
+                        ticket_type: result.ticket_type as TicketType,
+                        priority: result.priority as TicketPriority,
                         status: result.status,
                         created_by_agent_id: '',
-                        assigned_agent_id: result.assigned_agent_id,
+                        assigned_agent_id: result.assigned_agent_id ?? null,
                         created_at: result.created_at,
                         updated_at: result.created_at,
                         started_at: null,
@@ -357,9 +356,15 @@ const TicketSearch: React.FC<TicketSearchProps> = ({ workflowId, initialTag, onT
                         related_ticket_ids: [],
                         tags: result.tags || [],
                         blocked_by_ticket_ids: [],
+                        blocks_ticket_ids: null,
                         is_blocked: false,
                         is_resolved: false,
                         resolved_at: null,
+                        approval_status: 'auto_approved' as const,
+                        approval_requested_at: null,
+                        approval_decided_at: null,
+                        approval_decided_by: null,
+                        rejection_reason: null,
                         comment_count: 0,
                         commit_count: 0,
                       }}

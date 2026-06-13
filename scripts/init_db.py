@@ -10,6 +10,23 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.core.database import DatabaseManager
 
 
+def migrate(db_manager):
+    """Run schema migrations for existing databases."""
+    import sqlalchemy
+    print("Running migrations...")
+    migrations = [
+        ("autopilot_projects.is_active", "ALTER TABLE autopilot_projects ADD COLUMN is_active BOOLEAN DEFAULT 0"),
+    ]
+    for name, sql in migrations:
+        try:
+            with db_manager.get_session() as session:
+                session.execute(sqlalchemy.text(sql))
+                session.commit()
+                print(f"  - {name} (migrated)")
+        except Exception:
+            pass  # Column already exists
+
+
 def main():
     """Initialize the database with all tables."""
     print("Initializing Hephaestus database...")
@@ -18,6 +35,9 @@ def main():
 
     # Create all tables
     db_manager.create_tables()
+
+    # Run migrations for existing databases
+    migrate(db_manager)
 
     print("Database initialized successfully!")
     print("Tables created:")

@@ -31,6 +31,8 @@ def show(args):
         try:
             import yaml
             parsed = yaml.safe_load(data)
+            # Overlay active project from DB
+            _overlay_active_project(parsed)
             import json
             print(json.dumps(parsed, indent=2))
         except ImportError:
@@ -40,7 +42,51 @@ def show(args):
             print(data)
     else:
         print(data)
+        # Show active project overlay
+        _print_active_project_overlay()
     return 0
+
+
+def _overlay_active_project(parsed: dict):
+    """Overlay active project paths onto parsed config dict."""
+    import sqlalchemy
+    from src.core.database import DatabaseManager
+    db_path = HEPHAESTUS_DIR / "hephaestus.db"
+    if not db_path.exists():
+        return
+    try:
+        db_manager = DatabaseManager(str(db_path))
+        with db_manager.get_session() as session:
+            active = session.execute(
+                sqlalchemy.text("SELECT name, base_dir FROM autopilot_projects WHERE is_active = 1 LIMIT 1")
+            ).fetchone()
+            if active:
+                parsed.setdefault("paths", {})["project_root"] = active[1]
+                parsed.setdefault("git", {})["main_repo_path"] = active[1]
+                parsed["_active_project"] = {"name": active[0], "path": active[1]}
+    except Exception:
+        pass
+
+
+def _print_active_project_overlay():
+    """Print active project info below the YAML dump."""
+    import sqlalchemy
+    from src.core.database import DatabaseManager
+    db_path = HEPHAESTUS_DIR / "hephaestus.db"
+    if not db_path.exists():
+        return
+    try:
+        db_manager = DatabaseManager(str(db_path))
+        with db_manager.get_session() as session:
+            active = session.execute(
+                sqlalchemy.text("SELECT name, base_dir FROM autopilot_projects WHERE is_active = 1 LIMIT 1")
+            ).fetchone()
+            if active:
+                print(f"\n# Active project (overrides paths.project_root and git.main_repo_path):")
+                print(f"#   name: {active[0]}")
+                print(f"#   path: {active[1]}")
+    except Exception:
+        pass
 
 
 def show_paths(args):

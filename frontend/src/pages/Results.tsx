@@ -267,8 +267,8 @@ const ResultContentDialog: React.FC<{
                         {children}
                       </pre>
                     ),
-                    code: ({ inline, className, children, ...props }) => (
-                      inline ? (
+                    code: ({ className, children, ...props }) => (
+                      !className ? (
                         <code className="bg-gray-100 px-1.5 py-0.5 rounded text-xs break-words" {...props}>
                           {children}
                         </code>
@@ -471,8 +471,8 @@ const ResultValidationDialog: React.FC<{
                               {children}
                             </pre>
                           ),
-                          code: ({ inline, className, children, ...props }) => (
-                            inline ? (
+                          code: ({ className, children, ...props }) => (
+                            !className ? (
                               <code className="bg-gray-100 px-1.5 py-0.5 rounded text-xs break-words" {...props}>
                                 {children}
                               </code>

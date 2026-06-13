@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -56,7 +56,7 @@ export default function Phases() {
   const [selectedDefinitionId, setSelectedDefinitionId] = useState<string | null>(null);
   const selectorRef = useRef<WorkflowSelectorRef>(null);
   const navigate = useNavigate();
-  const socket = useSocket();
+  const { subscribe } = useSocket();
   const { selectedExecutionId, definitions } = useWorkflow();
 
   // Get the selected definition
@@ -80,23 +80,19 @@ export default function Phases() {
 
   useEffect(() => {
     // Set up WebSocket listeners for real-time updates
-    if (socket) {
-      socket.on('phase_activity', (activity: PhaseActivity) => {
-        setActivities((prev) => [activity, ...prev].slice(0, 50)); // Keep last 50 activities
-      });
+    const unsubPhaseActivity = subscribe('phase_activity', (activity: PhaseActivity) => {
+      setActivities((prev) => [activity, ...prev].slice(0, 50));
+    });
 
-      socket.on('phase_update', () => {
-        refetch(); // Refresh phase data
-      });
-    }
+    const unsubPhaseUpdate = subscribe('phase_update', () => {
+      refetch();
+    });
 
     return () => {
-      if (socket) {
-        socket.off('phase_activity');
-        socket.off('phase_update');
-      }
+      unsubPhaseActivity();
+      unsubPhaseUpdate();
     };
-  }, [socket, refetch]);
+  }, [subscribe, refetch]);
 
   const getPhaseColor = (order: number, total: number) => {
     const opacity = 0.3 + (0.7 * ((order - 1) / Math.max(total - 1, 1)));
@@ -353,7 +349,6 @@ export default function Phases() {
           <div className="relative h-12 bg-muted rounded-lg overflow-hidden">
             <div className="absolute inset-0 flex">
               {workflow.phases.map((phase) => {
-                const _width = `${100 / workflow.total_phases}%`;
                 const isActive = phase.active_agents > 0;
                 return (
                   <div

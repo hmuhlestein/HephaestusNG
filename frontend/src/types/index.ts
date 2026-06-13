@@ -188,7 +188,10 @@ export interface WebSocketMessage {
     | 'status_changed'
     | 'comment_added'
     | 'commit_linked'
-    | 'ticket_resolved';
+    | 'ticket_resolved'
+    | 'ticket_approved'
+    | 'ticket_rejected'
+    | 'ticket_deleted';
   [key: string]: any;
 }
 
@@ -440,7 +443,7 @@ export interface BlockedTask {
 // Workflow Types for Multi-Workflow Support
 
 // Launch Template Types for UI-based workflow launching
-export type LaunchParameterType = 'text' | 'textarea' | 'number' | 'boolean' | 'dropdown';
+export type LaunchParameterType = 'text' | 'textarea' | 'number' | 'boolean' | 'dropdown' | 'select';
 
 export interface LaunchParameter {
   name: string;           // Parameter key, e.g., "bug_description"

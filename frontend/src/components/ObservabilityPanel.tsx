@@ -10,10 +10,8 @@ import {
   Bot,
   EyeOff,
   Clock,
-  FileText,
-  Search
+  FileText
 } from 'lucide-react';
-import PanelSearch, { HighlightedContent } from './PanelSearch';
 import { formatDistanceToNow } from 'date-fns';
 import { Agent } from '@/types';
 

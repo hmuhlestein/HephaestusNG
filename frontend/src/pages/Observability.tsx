@@ -72,12 +72,12 @@ const Observability: React.FC = () => {
   const { subscribe } = useWebSocket();
 
   // Layout persistence
-  const { saveLayout, loadLayout } = useLayoutPersistence();
+  useLayoutPersistence();
 
   // Multi-agent output management - only fetch output for agents with panels, and only when not in sidebar-only mode
   const panelAgentIds = useMemo(() => gridLayout.panels.map(panel => panel.agentId), [gridLayout.panels]);
   const shouldFetchOutput = panelAgentIds.length > 0 && visibleAgents.size > 0;
-  const { outputs: agentOutputs, stats, retryAgent } = useMultiAgentOutput(
+  const { outputs: agentOutputs, stats } = useMultiAgentOutput(
     panelAgentIds,
     {
       enabled: !globalPaused && shouldFetchOutput,
