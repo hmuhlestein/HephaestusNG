@@ -6,11 +6,12 @@ A fully automated pipeline that takes design documents and iterates through:
 2. Architecture & Design
 3. Development
 4. Adversarial Code Review
-5. Security Review
-6. QA Testing & Validation
-7. Product Validation (final spec check)
-8. Git Commit & Push
-9. Forensics Analysis (pipeline self-improvement)
+5. Documentation Review
+6. Security Review
+7. QA Testing & Validation
+8. Product Validation (final spec check)
+9. Git Commit & Push
+10. Forensics Analysis (pipeline self-improvement)
 
 The workflow loops until the original intent is satisfied or a hard stop
 condition is met (hard error, impasse, or major architectural issue).
@@ -23,11 +24,12 @@ from src.autopilot.phase_1_product_requirements import PHASE_1_PRODUCT_REQUIREME
 from src.autopilot.phase_2_architecture import PHASE_2_ARCHITECTURE
 from src.autopilot.phase_3_development import PHASE_3_DEVELOPMENT
 from src.autopilot.phase_4_adversarial_review import PHASE_4_ADVERSARIAL_REVIEW
-from src.autopilot.phase_5_security_review import PHASE_5_SECURITY_REVIEW
-from src.autopilot.phase_6_qa_validation import PHASE_6_QA_VALIDATION
-from src.autopilot.phase_7_product_validation import PHASE_7_PRODUCT_VALIDATION
-from src.autopilot.phase_8_git_commit_push import PHASE_8_GIT_COMMIT_PUSH
-from src.autopilot.phase_9_forensics import PHASE_9_FORENSICS
+from src.autopilot.phase_5_doc_review import PHASE_5_DOC_REVIEW
+from src.autopilot.phase_6_security_review import PHASE_6_SECURITY_REVIEW
+from src.autopilot.phase_7_qa_validation import PHASE_7_QA_VALIDATION
+from src.autopilot.phase_8_product_validation import PHASE_8_PRODUCT_VALIDATION
+from src.autopilot.phase_9_git_commit_push import PHASE_9_GIT_COMMIT_PUSH
+from src.autopilot.phase_10_forensics import PHASE_10_FORENSICS
 
 from src.sdk.models import WorkflowConfig, LaunchTemplate, LaunchParameter
 
@@ -36,11 +38,12 @@ AUTOPILOT_PHASES = [
     PHASE_2_ARCHITECTURE,
     PHASE_3_DEVELOPMENT,
     PHASE_4_ADVERSARIAL_REVIEW,
-    PHASE_5_SECURITY_REVIEW,
-    PHASE_6_QA_VALIDATION,
-    PHASE_7_PRODUCT_VALIDATION,
-    PHASE_8_GIT_COMMIT_PUSH,
-    PHASE_9_FORENSICS,
+    PHASE_5_DOC_REVIEW,
+    PHASE_6_SECURITY_REVIEW,
+    PHASE_7_QA_VALIDATION,
+    PHASE_8_PRODUCT_VALIDATION,
+    PHASE_9_GIT_COMMIT_PUSH,
+    PHASE_10_FORENSICS,
 ]
 
 AUTOPILOT_WORKFLOW_CONFIG = WorkflowConfig(
@@ -55,12 +58,13 @@ AUTOPILOT_WORKFLOW_CONFIG = WorkflowConfig(
             {"id": "architecture", "name": "Architecture", "order": 3, "color": "#8b5cf6"},
             {"id": "in-progress", "name": "In Progress", "order": 4, "color": "#f59e0b"},
             {"id": "review", "name": "In Review", "order": 5, "color": "#ec4899"},
-            {"id": "security", "name": "Security", "order": 6, "color": "#ef4444"},
-            {"id": "qa", "name": "QA", "order": 7, "color": "#14b8a6"},
-            {"id": "validated", "name": "Validated", "order": 8, "color": "#22c55e"},
-            {"id": "shipped", "name": "Shipped", "order": 9, "color": "#3b82f6"},
+            {"id": "doc-review", "name": "Doc Review", "order": 6, "color": "#06b6d4"},
+            {"id": "security", "name": "Security", "order": 7, "color": "#ef4444"},
+            {"id": "qa", "name": "QA", "order": 8, "color": "#14b8a6"},
+            {"id": "validated", "name": "Validated", "order": 9, "color": "#22c55e"},
+            {"id": "shipped", "name": "Shipped", "order": 10, "color": "#3b82f6"},
         ],
-        "ticket_types": ["infrastructure", "feature", "bug-fix", "security", "integration"],
+        "ticket_types": ["infrastructure", "feature", "bug-fix", "security", "integration", "documentation"],
         "default_ticket_type": "feature",
         "initial_status": "backlog",
         "auto_assign": True,

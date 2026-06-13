@@ -105,6 +105,7 @@ class FeatureReport:
     stop_reason: str
     requirements_summary: str = ""
     architecture_summary: str = ""
+    doc_review_summary: str = ""
     security_summary: str = ""
     qa_summary: str = ""
     product_validation_summary: str = ""
@@ -413,6 +414,7 @@ def collect_report_summaries(project_path: Path) -> Dict[str, str]:
         "requirements": "requirements_analysis.md",
         "architecture": "architecture.md",
         "review": "review_report.md",
+        "doc_review": "doc_review_report.md",
         "security": "security_report.md",
         "qa": "qa_report.md",
         "product_validation": "product_validation.md",
@@ -603,6 +605,15 @@ def generate_html_feature_report(
             </div>
             <div class="section-body">
                 <pre>{esc(summaries.get('review', 'No review report found.'))}</pre>
+            </div>
+        </div>
+
+        <div class="section">
+            <div class="section-header">
+                <h2>Documentation Review</h2>
+            </div>
+            <div class="section-body">
+                <pre>{esc(summaries.get('doc_review', 'No doc review report found.'))}</pre>
             </div>
         </div>
 
@@ -942,11 +953,12 @@ def run_single_design(
             {"id": 2, "name": "architecture_design", "output": "architecture.md"},
             {"id": 3, "name": "development", "output": "source code in project path"},
             {"id": 4, "name": "adversarial_review", "output": "review_report.md"},
-            {"id": 5, "name": "security_review", "output": "security_report.md"},
-            {"id": 6, "name": "qa_validation", "output": "qa_report.md"},
-            {"id": 7, "name": "product_validation", "output": "product_validation.md"},
-            {"id": 8, "name": "git_commit_push", "output": "git history"},
-            {"id": 9, "name": "forensics_analysis", "output": "forensics_report.md"},
+            {"id": 5, "name": "doc_review", "output": "doc_review_report.md"},
+            {"id": 6, "name": "security_review", "output": "security_report.md"},
+            {"id": 7, "name": "qa_validation", "output": "qa_report.md"},
+            {"id": 8, "name": "product_validation", "output": "product_validation.md"},
+            {"id": 9, "name": "git_commit_push", "output": "git history"},
+            {"id": 10, "name": "forensics_analysis", "output": "forensics_report.md"},
         ],
     }
     metrics_path = docs_dir / "pipeline_metrics.json"
@@ -1077,6 +1089,7 @@ def run_single_design(
     summaries = collect_report_summaries(docs_dir)
     report.requirements_summary = summaries.get("requirements", "")
     report.architecture_summary = summaries.get("architecture", "")
+    report.doc_review_summary = summaries.get("doc_review", "")
     report.security_summary = summaries.get("security", "")
     report.qa_summary = summaries.get("qa", "")
     report.product_validation_summary = summaries.get("product_validation", "")
@@ -1104,11 +1117,12 @@ def run_single_design(
             {"id": 2, "name": "architecture_design", "output": "architecture.md"},
             {"id": 3, "name": "development", "output": "source code in project path"},
             {"id": 4, "name": "adversarial_review", "output": "review_report.md"},
-            {"id": 5, "name": "security_review", "output": "security_report.md"},
-            {"id": 6, "name": "qa_validation", "output": "qa_report.md"},
-            {"id": 7, "name": "product_validation", "output": "product_validation.md"},
-            {"id": 8, "name": "git_commit_push", "output": "git history"},
-            {"id": 9, "name": "forensics_analysis", "output": "forensics_report.md"},
+            {"id": 5, "name": "doc_review", "output": "doc_review_report.md"},
+            {"id": 6, "name": "security_review", "output": "security_report.md"},
+            {"id": 7, "name": "qa_validation", "output": "qa_report.md"},
+            {"id": 8, "name": "product_validation", "output": "product_validation.md"},
+            {"id": 9, "name": "git_commit_push", "output": "git history"},
+            {"id": 10, "name": "forensics_analysis", "output": "forensics_report.md"},
         ],
     }
     metrics_path = docs_dir / "pipeline_metrics.json"

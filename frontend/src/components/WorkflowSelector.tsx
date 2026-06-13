@@ -1,14 +1,32 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, forwardRef, useImperativeHandle } from 'react';
 import { useWorkflow } from '@/context/WorkflowContext';
 import { ChevronDown, Workflow, Activity, Layers } from 'lucide-react';
 
 interface WorkflowSelectorProps {
   onDefinitionChange?: (definitionId: string | null) => void;
+  selectedDefinitionId?: string | null;
 }
 
-export const WorkflowSelector: React.FC<WorkflowSelectorProps> = ({ onDefinitionChange }) => {
+export interface WorkflowSelectorRef {
+  selectDefinition: (definitionId: string) => void;
+}
+
+export const WorkflowSelector = forwardRef<WorkflowSelectorRef, WorkflowSelectorProps>(({ onDefinitionChange, selectedDefinitionId: externalDefId }, ref) => {
   const { executions, definitions, selectedExecutionId, selectedExecution, selectExecution, loading } = useWorkflow();
-  const [selectedDefinitionId, setSelectedDefinitionId] = useState<string | null>(null);
+  const [selectedDefinitionId, setSelectedDefinitionId] = useState<string | null>(externalDefId || null);
+
+  // Sync with external state
+  useEffect(() => {
+    if (externalDefId !== undefined && externalDefId !== selectedDefinitionId) {
+      setSelectedDefinitionId(externalDefId);
+    }
+  }, [externalDefId]);
+
+  useImperativeHandle(ref, () => ({
+    selectDefinition: (defId: string) => {
+      handleDefinitionChange(defId);
+    },
+  }));
 
   // Group executions by definition_id
   const executionsByDefinition = useMemo(() => {
@@ -164,6 +182,6 @@ export const WorkflowSelector: React.FC<WorkflowSelectorProps> = ({ onDefinition
       </div>
     </div>
   );
-};
+});
 
 export default WorkflowSelector;

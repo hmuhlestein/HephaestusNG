@@ -1,5 +1,5 @@
 """
-Phase 5: Security Review
+Phase 6: Security Review
 
 Performs a focused security review of the implementation.
 Checks for vulnerabilities, authentication/authorization issues,
@@ -8,8 +8,8 @@ data handling problems, and compliance with security requirements.
 
 from src.sdk.models import Phase
 
-PHASE_5_SECURITY_REVIEW = Phase(
-    id=5,
+PHASE_6_SECURITY_REVIEW = Phase(
+    id=6,
     name="security_review",
     description="""Perform focused security review and fix vulnerabilities found.
 

@@ -1,5 +1,5 @@
 """
-Phase 9: Forensics Analysis
+Phase 10: Forensics Analysis
 
 After the feature is shipped, analyzes all agent outputs from the pipeline
 to identify patterns, improve prompts, and refine methodologies for future runs.
@@ -11,8 +11,8 @@ The orchestrator writes two key artifacts for this phase:
 
 from src.sdk.models import Phase
 
-PHASE_9_FORENSICS = Phase(
-    id=9,
+PHASE_10_FORENSICS = Phase(
+    id=10,
     name="forensics_analysis",
     description="""Analyze all agent outputs and identify improvements for future pipeline runs.
 

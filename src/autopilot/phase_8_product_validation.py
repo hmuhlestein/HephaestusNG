@@ -1,5 +1,5 @@
 """
-Phase 7: Product Validation
+Phase 8: Product Validation
 
 After QA passes, the product agent validates that the implementation
 meets the original design intent and spec. This is the final human-like
@@ -8,8 +8,8 @@ sign-off before marking a feature as complete.
 
 from src.sdk.models import Phase
 
-PHASE_7_PRODUCT_VALIDATION = Phase(
-    id=7,
+PHASE_8_PRODUCT_VALIDATION = Phase(
+    id=8,
     name="product_validation",
     description="""Validate that the implementation meets the original design intent.
 

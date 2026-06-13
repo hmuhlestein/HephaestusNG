@@ -1,5 +1,5 @@
 """
-Phase 8: Git Commit & Push
+Phase 9: Git Commit & Push
 
 After product validation passes, creates a feature branch, commits all changes,
 merges to main, and pulls from main to stay in sync.
@@ -7,8 +7,8 @@ merges to main, and pulls from main to stay in sync.
 
 from src.sdk.models import Phase
 
-PHASE_8_GIT_COMMIT_PUSH = Phase(
-    id=8,
+PHASE_9_GIT_COMMIT_PUSH = Phase(
+    id=9,
     name="git_commit_push",
     description="""Commit validated code to git on a feature branch, merge to main, and pull.
 
