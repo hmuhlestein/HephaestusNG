@@ -96,13 +96,16 @@ def drop_database(db_path: str):
 
 
 def get_project_path(specified_path: str = None) -> str:
-    """Get the project path from user input or argument."""
+    """Get the project path from user input or argument.
+
+    Default path is ~/hephaestus-projects/initial-repo (outside the Hephaestus repo).
+    """
     if specified_path:
         project_path = Path(specified_path)
         return str(project_path.absolute())
 
-    # Get current working directory as default
-    default_path = str(Path.cwd() / "hephaestus-example")
+    # Default: outside the Hephaestus repo
+    default_path = str(Path.home() / "hephaestus-projects" / "initial-repo")
 
     while True:
         user_input = input(f"[Setup] Enter project path (default: {default_path}): ").strip()
@@ -210,27 +213,53 @@ def setup_project(project_path: str):
     return str(prd_dest)
 
 
-def update_config_with_project_path(config_path: str, project_path: str):
-    """Update hephaestus_config.yaml with the selected project path."""
+def register_project(project_path: str):
+    """Register the project in the database as 'Initial Repo' and activate it."""
+    from src.core.database import DatabaseManager, AutopilotProject, get_db
+    import uuid
+
+    db_path = Path(__file__).parent / "hephaestus.db"
+    db_manager = DatabaseManager(str(db_path))
+    db_manager.create_tables()
+
+    # Run migration for is_active column
     try:
-        # Read existing config
-        with open(config_path, 'r') as f:
-            config = yaml.safe_load(f)
+        import sqlalchemy
+        with db_manager.get_session() as session:
+            session.execute(sqlalchemy.text(
+                "ALTER TABLE autopilot_projects ADD COLUMN is_active BOOLEAN DEFAULT 0"
+            ))
+            session.commit()
+    except Exception:
+        pass
 
-        # Update project paths
-        config['paths']['project_root'] = project_path
-        config['git']['main_repo_path'] = project_path
+    resolved = str(Path(project_path).resolve())
 
-        # Write back to config
-        with open(config_path, 'w') as f:
-            yaml.dump(config, f, default_flow_style=False, sort_keys=False)
+    with db_manager.get_session() as session:
+        existing = session.query(AutopilotProject).filter_by(base_dir=resolved).first()
+        if existing:
+            existing.is_active = True
+            existing.is_default = True
+            session.query(AutopilotProject).filter(AutopilotProject.id != existing.id).update({
+                "is_active": False, "is_default": False
+            })
+            session.commit()
+            print(f"[Project] Reactivated existing project: {existing.name}")
+            return
 
-        print(f"[Config] ✓ Updated project paths in {config_path}")
-        return True
+        # Clear other active/default
+        session.query(AutopilotProject).update({"is_active": False, "is_default": False})
 
-    except Exception as e:
-        print(f"[Error] Failed to update config file: {e}")
-        return False
+        proj = AutopilotProject(
+            id=f"proj-{uuid.uuid4().hex[:12]}",
+            name="Initial Repo",
+            base_dir=resolved,
+            is_default=True,
+            is_active=True,
+        )
+        session.add(proj)
+        session.commit()
+        print(f"[Project] ✓ Registered 'Initial Repo' at {resolved}")
 
 
 def check_and_setup_sub_agents():
@@ -334,10 +363,8 @@ def main():
     project_path = get_project_path(args.path)
     prd_file = setup_project(project_path)
 
-    # Step 2: Update config file with project path
-    config_path = Path(__file__).parent / "hephaestus_config.yaml"
-    if not update_config_with_project_path(str(config_path), project_path):
-        sys.exit(1)
+    # Step 2: Register project in database (instead of mutating YAML config)
+    register_project(project_path)
 
     # Step 3: Kill existing services
     kill_existing_services()
