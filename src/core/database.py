@@ -833,6 +833,7 @@ class AutopilotProject(Base):
     name = Column(String(200), nullable=False)
     base_dir = Column(Text, nullable=False, unique=True)
     is_default = Column(Boolean, default=False)
+    is_active = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
