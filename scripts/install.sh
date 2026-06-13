@@ -457,12 +457,13 @@ esac
 
 echo -e "${BOLD}Quick start:${NC}"
 echo ""
-echo "  heph status              # Check system health"
-echo "  heph start               # Start all services"
-echo "  heph exec test           # Test service connectivity"
-echo "  heph workflow list        # List workflow definitions"
-echo "  heph autopilot --help    # Autopilot pipeline"
-echo "  heph --help              # All commands"
+echo "  heph project setup <name> <path>  # Create and activate a project"
+echo "  heph status                       # Check system health"
+echo "  heph start                        # Start all services"
+echo "  heph exec test                    # Test service connectivity"
+echo "  heph workflow list                 # List workflow definitions"
+echo "  heph autopilot --help             # Autopilot pipeline"
+echo "  heph --help                       # All commands"
 echo ""
 
 if [ "$LOCAL_MODE" = false ]; then
