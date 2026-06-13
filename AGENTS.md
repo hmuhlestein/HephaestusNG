@@ -11,7 +11,7 @@
 ### Install
 ```bash
 # Remote install (no repo needed)
-curl -sSL https://raw.githubusercontent.com/hmuhlestein/Hephaestus/main/scripts/install.sh | bash
+curl -sSL https://raw.githubusercontent.com/hmuhlestein/HephaestusNG/main/scripts/install.sh | bash
 
 # Local install (from cloned repo)
 ./scripts/install.sh

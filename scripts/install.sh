@@ -8,8 +8,8 @@
 #     ./install.sh
 #
 #   Remote install (no repo needed):
-#     curl -sSL https://raw.githubusercontent.com/hmuhlestein/Hephaestus/main/scripts/install.sh | bash
-#     curl -sSL https://raw.githubusercontent.com/hmuhlestein/Hephaestus/main/scripts/install.sh | bash -s -- --dev
+#     curl -sSL https://raw.githubusercontent.com/hmuhlestein/HephaestusNG/main/scripts/install.sh | bash
+#     curl -sSL https://raw.githubusercontent.com/hmuhlestein/HephaestusNG/main/scripts/install.sh | bash -s -- --dev
 #
 # Flags:
 #   --prefix DIR        Install location (default: ~/.hephaestus)
@@ -36,8 +36,8 @@ err() { echo -e "${RED}[error]${NC} $1"; }
 header() { echo -e "\n${BOLD}${CYAN}── $1 ──${NC}\n"; }
 
 PYTHON_MIN_VERSION="311"
-REPO_URL="https://github.com/hmuhlestein/Hephaestus.git"
-RAW_URL="https://raw.githubusercontent.com/hmuhlestein/Hephaestus/main"
+REPO_URL="https://github.com/hmuhlestein/HephaestusNG.git"
+RAW_URL="https://raw.githubusercontent.com/hmuhlestein/HephaestusNG/main"
 
 # ─── Parse arguments ───────────────────────────────────────────────
 
