@@ -79,7 +79,7 @@ def get_all_workflow_definitions() -> list:
             name="Autopilot Pipeline",
             phases=AUTOPILOT_PHASES,
             config=AUTOPILOT_WORKFLOW_CONFIG,
-            description="9-phase automated pipeline: requirements, architecture, development, review, security, QA, validation, git, forensics",
+            description="10-phase automated pipeline: requirements, architecture, development, review, doc review, security, QA, validation, git, forensics",
             launch_template=AUTOPILOT_LAUNCH_TEMPLATE,
         ),
     ]

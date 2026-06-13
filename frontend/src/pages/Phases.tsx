@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -12,6 +12,7 @@ import { useSocket } from '@/hooks/useSocket';
 import { useWorkflow } from '@/context/WorkflowContext';
 import { apiService } from '@/services/api';
 import WorkflowSelector from '@/components/WorkflowSelector';
+import type { WorkflowSelectorRef } from '@/components/WorkflowSelector';
 
 interface Phase {
   id: string;
@@ -53,6 +54,7 @@ export default function Phases() {
   const [phaseData, setPhaseData] = useState<{[key: string]: any}>({});
   const [loadingPhase, setLoadingPhase] = useState<{[key: string]: boolean}>({});
   const [selectedDefinitionId, setSelectedDefinitionId] = useState<string | null>(null);
+  const selectorRef = useRef<WorkflowSelectorRef>(null);
   const navigate = useNavigate();
   const socket = useSocket();
   const { selectedExecutionId, definitions } = useWorkflow();
@@ -121,6 +123,10 @@ export default function Phases() {
     }
   };
 
+  const handleDefinitionCardClick = (defId: string) => {
+    selectorRef.current?.selectDefinition(defId);
+  };
+
   if (!selectedExecutionId) {
     // Show definition info if a definition is selected but no execution
     if (selectedDefinition) {
@@ -137,7 +143,7 @@ export default function Phases() {
               </p>
             </div>
             <div className="flex items-center gap-4">
-              <WorkflowSelector onDefinitionChange={setSelectedDefinitionId} />
+              <WorkflowSelector ref={selectorRef} selectedDefinitionId={selectedDefinitionId} onDefinitionChange={setSelectedDefinitionId} />
               <Button onClick={() => refetch()} variant="outline" size="sm">
                 <RefreshCw className="h-4 w-4 mr-2" />
                 Refresh
@@ -162,11 +168,12 @@ export default function Phases() {
                   {definitions.map((def) => (
                     <div
                       key={def.id}
+                      onClick={() => handleDefinitionCardClick(def.id)}
                       className={cn(
-                        "border rounded-lg p-3 transition-colors",
+                        "border rounded-lg p-3 transition-colors cursor-pointer hover:shadow-md",
                         selectedDefinitionId === def.id
                           ? "bg-purple-100 border-purple-300"
-                          : "bg-purple-50 border-purple-200"
+                          : "bg-purple-50 border-purple-200 hover:bg-purple-100"
                       )}
                     >
                       <div className="font-medium text-gray-800">{def.name}</div>
@@ -226,7 +233,7 @@ export default function Phases() {
             </h1>
             <p className="text-muted-foreground mt-1">View workflow phases</p>
           </div>
-          <WorkflowSelector onDefinitionChange={setSelectedDefinitionId} />
+          <WorkflowSelector ref={selectorRef} selectedDefinitionId={selectedDefinitionId} onDefinitionChange={setSelectedDefinitionId} />
         </div>
         <div className="bg-gray-50 border border-gray-200 rounded-lg p-12 text-center">
           <p className="text-gray-500 text-lg">Select a workflow type to view phases</p>
@@ -246,7 +253,7 @@ export default function Phases() {
             </h1>
             <p className="text-muted-foreground mt-1">View workflow phases</p>
           </div>
-          <WorkflowSelector onDefinitionChange={setSelectedDefinitionId} />
+          <WorkflowSelector ref={selectorRef} selectedDefinitionId={selectedDefinitionId} onDefinitionChange={setSelectedDefinitionId} />
         </div>
         <div className="flex items-center justify-center h-64">
           <div className="text-lg">Loading workflow...</div>
@@ -266,7 +273,7 @@ export default function Phases() {
             </h1>
             <p className="text-muted-foreground mt-1">View workflow phases</p>
           </div>
-          <WorkflowSelector onDefinitionChange={setSelectedDefinitionId} />
+          <WorkflowSelector ref={selectorRef} selectedDefinitionId={selectedDefinitionId} onDefinitionChange={setSelectedDefinitionId} />
         </div>
         <div className="flex flex-col items-center justify-center h-64 gap-4">
           <Layers className="h-12 w-12 text-muted-foreground" />
@@ -291,7 +298,7 @@ export default function Phases() {
           </p>
         </div>
         <div className="flex items-center gap-4">
-          <WorkflowSelector onDefinitionChange={setSelectedDefinitionId} />
+          <WorkflowSelector ref={selectorRef} selectedDefinitionId={selectedDefinitionId} onDefinitionChange={setSelectedDefinitionId} />
           <Button onClick={() => refetch()} variant="outline" size="sm">
             <RefreshCw className="h-4 w-4 mr-2" />
             Refresh
@@ -316,11 +323,12 @@ export default function Phases() {
               {definitions.map((def) => (
                 <div
                   key={def.id}
+                  onClick={() => handleDefinitionCardClick(def.id)}
                   className={cn(
-                    "border rounded-lg p-3 transition-colors",
+                    "border rounded-lg p-3 transition-colors cursor-pointer hover:shadow-md",
                     workflow?.id && workflowData?.definition_id === def.id
                       ? "bg-purple-100 border-purple-300"
-                      : "bg-purple-50 border-purple-200"
+                      : "bg-purple-50 border-purple-200 hover:bg-purple-100"
                   )}
                 >
                   <div className="font-medium text-gray-800">{def.name}</div>

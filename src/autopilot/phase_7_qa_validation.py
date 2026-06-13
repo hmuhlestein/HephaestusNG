@@ -1,5 +1,5 @@
 """
-Phase 6: QA Testing & Validation
+Phase 7: QA Testing & Validation
 
 Runs comprehensive tests to validate the implementation meets
 all requirements. Generates a final report with pass/fail status
@@ -8,8 +8,8 @@ and recommendations for iteration.
 
 from src.sdk.models import Phase
 
-PHASE_6_QA_VALIDATION = Phase(
-    id=6,
+PHASE_7_QA_VALIDATION = Phase(
+    id=7,
     name="qa_validation",
     description="""Run comprehensive QA tests and validate the implementation.
 
