@@ -922,7 +922,7 @@ def run_single_design(
     # Copy phase definitions BEFORE workflow so forensics agent can read them
     phases_dir = docs_dir / "phase_prompts"
     phases_dir.mkdir(exist_ok=True)
-    phase_files = list((HEPHAESTUS_DIR / "example_workflows" / "autopilot").glob("phase_*.py"))
+    phase_files = list((HEPHAESTUS_DIR / "src" / "autopilot").glob("phase_*.py"))
     for pf in sorted(phase_files):
         shutil.copy2(pf, phases_dir / pf.name)
     logger.log(f"Copied {len(phase_files)} phase prompts to {phases_dir}")
@@ -1194,7 +1194,7 @@ def run_continuous_pipeline(args) -> None:
     sys.path.insert(0, str(HEPHAESTUS_DIR))
     from src.sdk import HephaestusSDK
     from src.sdk.models import WorkflowDefinition
-    from example_workflows.autopilot.phases import AUTOPILOT_PHASES, AUTOPILOT_WORKFLOW_CONFIG, AUTOPILOT_LAUNCH_TEMPLATE
+    from src.autopilot.phases import AUTOPILOT_PHASES, AUTOPILOT_WORKFLOW_CONFIG, AUTOPILOT_LAUNCH_TEMPLATE
 
     cli_tool = os.getenv("HEPHAESTUS_CLI_TOOL", os.getenv("DEFAULT_CLI_TOOL", "opencode"))
 
