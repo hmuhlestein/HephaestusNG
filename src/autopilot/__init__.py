@@ -2,9 +2,9 @@
 Autopilot Multi-Agent Pipeline
 
 A continuous workflow engine that watches a design queue and processes
-designs through the full 9-phase pipeline: product requirements,
-architecture, development, adversarial review, security review, QA,
-product validation, git commit, and forensics analysis.
+designs through the full 10-phase pipeline: product requirements,
+architecture, development, adversarial review, doc review, security review,
+QA, product validation, git commit, and forensics analysis.
 """
 
 from src.autopilot.orchestrator import run_continuous_pipeline, PipelineState, StopReason, DesignStatus

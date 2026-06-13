@@ -718,12 +718,12 @@ def generate_product_validation_report(
 ) -> Tuple[bool, str]:
     validation_path = project_path / "product_validation.md"
 
-    # If Phase 7 already created a validation report, use it instead of overwriting
+    # If Phase 8 already created a validation report, use it instead of overwriting
     if validation_path.exists():
         try:
             existing = validation_path.read_text()
             meets_spec = qa_passed and ("PASS" in existing or "pass" in existing.lower())
-            logger.log(f"Using existing product validation from Phase 7")
+            logger.log(f"Using existing product validation from Phase 8")
             return meets_spec, existing
         except Exception:
             pass
