@@ -1209,6 +1209,90 @@ async def dismiss_human_input(request_id: str):
     return {"dismissed": request_id}
 
 
+# ── Pipeline Start/Stop ──────────────────────────────────────────
+
+@router.post("/start")
+async def start_pipeline(project_path: str, design_queue: str = "", max_iterations: int = 3):
+    """Start the autopilot pipeline."""
+    import subprocess
+    import signal
+
+    running = await _is_orchestrator_running()
+    if running:
+        raise HTTPException(409, "Pipeline is already running.")
+
+    project = Path(project_path).resolve()
+    if not project.exists():
+        raise HTTPException(400, f"Project path does not exist: {project}")
+
+    dq = design_queue or str(project / "docs" / "design-queue")
+    os.makedirs(dq, exist_ok=True)
+
+    # Find python
+    venv_python = Path(__file__).parent.parent.parent.parent / ".venv" / "bin" / "python"
+    python = str(venv_python) if venv_python.exists() else "python"
+
+    cmd = [
+        python, "-m", "src.autopilot.orchestrator",
+        "--project-path", str(project),
+        "--design-queue", dq,
+        "--max-iterations", str(max_iterations),
+    ]
+
+    proc = subprocess.Popen(
+        cmd,
+        cwd=str(Path(__file__).parent.parent.parent.parent),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+    pid_dir = Path.home() / ".hephaestus" / "pids"
+    pid_dir.mkdir(parents=True, exist_ok=True)
+    (pid_dir / "orchestrator.pid").write_text(str(proc.pid))
+
+    _invalidate("status")
+    return {"started": True, "pid": proc.pid}
+
+
+@router.post("/stop")
+async def stop_pipeline():
+    """Stop the autopilot pipeline."""
+    import signal
+
+    pid_file = Path(AUTOPILOT_STATE_DIR) / "orchestrator.pid"
+    if not pid_file.exists():
+        raise HTTPException(404, "No pipeline PID file found.")
+
+    try:
+        pid = int(pid_file.read_text().strip())
+    except (ValueError, OSError):
+        raise HTTPException(500, "Invalid PID file.")
+
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pid_file.unlink(missing_ok=True)
+        raise HTTPException(404, "Pipeline process not found.")
+
+    # Wait for graceful shutdown
+    for _ in range(50):
+        await asyncio.sleep(0.1)
+        try:
+            os.kill(pid, 0)
+        except OSError:
+            break
+    else:
+        # Force kill
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except OSError:
+            pass
+
+    pid_file.unlink(missing_ok=True)
+    _invalidate("status")
+    return {"stopped": True, "pid": pid}
+
+
 # ── Config ───────────────────────────────────────────────────────
 
 def configure_autopilot_api(
