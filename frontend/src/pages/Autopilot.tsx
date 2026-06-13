@@ -1,5 +1,5 @@
 import React, { useState, useCallback } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Rocket, ListOrdered, History, MessageSquare, Activity, ChevronRight,
@@ -25,6 +25,7 @@ const Autopilot: React.FC = () => {
   const [selectedFeatureId, setSelectedFeatureId] = useState<string | null>(null);
   const [showAddDesign, setShowAddDesign] = useState(false);
   const [projectId, setProjectId] = useState<string | null>(null);
+  const queryClient = useQueryClient();
 
   const handleProjectChange = useCallback((id: string) => {
     setProjectId(id);
@@ -36,6 +37,19 @@ const Autopilot: React.FC = () => {
     refetchInterval: 10000,
   });
 
+  const togglePipeline = useMutation({
+    mutationFn: async () => {
+      if (status?.running) {
+        return apiService.stopAutopilot();
+      } else if (projectId) {
+        return apiService.startAutopilot(projectId);
+      }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['autopilot-status'] });
+    },
+  });
+
   const { data: messages } = useQuery({
     queryKey: ['autopilot-messages'],
     queryFn: () => apiService.getAutopilotMessages(500),
@@ -45,7 +59,7 @@ const Autopilot: React.FC = () => {
   const tabs: { id: Tab; label: string; icon: React.ElementType; badge?: number }[] = [
     { id: 'overview', label: 'Overview', icon: Activity },
     { id: 'queue', label: 'Design Queue', icon: ListOrdered, badge: status?.queue_depth },
-    { id: 'features', label: 'Features', icon: History },
+    { id: 'features', label: 'Completed', icon: History },
     { id: 'messages', label: 'Messages', icon: MessageSquare, badge: messages?.length },
     { id: 'logs', label: 'Logs', icon: Terminal },
   ];
@@ -90,7 +104,11 @@ const Autopilot: React.FC = () => {
       <HumanInputBanner />
 
       {/* Pipeline Status Hero */}
-      <PipelineStatusCard status={status} />
+      <PipelineStatusCard
+        status={status}
+        onToggle={() => togglePipeline.mutate()}
+        loading={togglePipeline.isPending}
+      />
 
       {/* Tab Navigation */}
       <div className="border-b border-gray-200">
@@ -247,7 +265,7 @@ const OverviewTab: React.FC<{
       {/* Recent Features */}
       <div className="lg:col-span-3 bg-white rounded-xl shadow-sm border border-gray-100">
         <div className="px-5 py-4 border-b flex items-center justify-between">
-          <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wider">Recent Features</h3>
+          <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wider">Recent Completed</h3>
           <button
             onClick={onGoToFeatures}
             className="text-xs text-violet-600 hover:text-violet-700 font-medium"

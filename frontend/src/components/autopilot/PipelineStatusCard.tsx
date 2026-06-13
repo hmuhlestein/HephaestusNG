@@ -1,13 +1,15 @@
 import React from 'react';
 import { motion } from 'framer-motion';
-import { CheckCircle2, XCircle, Clock, Pause, Zap, Activity } from 'lucide-react';
+import { CheckCircle2, XCircle, Clock, Play, Pause, Zap, Activity } from 'lucide-react';
 import { formatTime } from '@/pages/Autopilot';
 
 interface PipelineStatusCardProps {
   status: any;
+  onToggle?: () => void;
+  loading?: boolean;
 }
 
-const PipelineStatusCard: React.FC<PipelineStatusCardProps> = ({ status }) => {
+const PipelineStatusCard: React.FC<PipelineStatusCardProps> = ({ status, onToggle, loading }) => {
   const running = status?.running ?? false;
   const currentDesign = status?.current_design;
 
@@ -41,7 +43,16 @@ const PipelineStatusCard: React.FC<PipelineStatusCardProps> = ({ status }) => {
         <div className="flex items-center justify-between">
           {/* Left: Status */}
           <div className="flex items-center gap-4">
-            <div className={`p-3 rounded-2xl ${running ? 'bg-white/20' : 'bg-white/10'}`}>
+            <button
+              onClick={onToggle}
+              disabled={loading}
+              className={`p-3 rounded-2xl transition-all ${
+                onToggle
+                  ? 'cursor-pointer hover:scale-110 active:scale-95'
+                  : 'cursor-default'
+              } ${running ? 'bg-white/20' : 'bg-white/10'}`}
+              title={running ? 'Pause pipeline' : 'Start pipeline'}
+            >
               {running ? (
                 <motion.div
                   animate={{ rotate: 360 }}
@@ -50,9 +61,9 @@ const PipelineStatusCard: React.FC<PipelineStatusCardProps> = ({ status }) => {
                   <Zap className="w-8 h-8 text-white" />
                 </motion.div>
               ) : (
-                <Pause className="w-8 h-8 text-white/70" />
+                <Play className="w-8 h-8 text-white/70" />
               )}
-            </div>
+            </button>
             <div>
               <h2 className="text-2xl font-bold text-white">
                 {running ? 'Pipeline Running' : 'Pipeline Idle'}

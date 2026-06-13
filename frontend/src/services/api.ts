@@ -545,6 +545,19 @@ export const apiService = {
     return data;
   },
 
+  startAutopilot: async (projectPath: string, designQueue: string = '', maxIterations: number = 3): Promise<any> => {
+    const params = new URLSearchParams({ project_path: projectPath });
+    if (designQueue) params.set('design_queue', designQueue);
+    params.set('max_iterations', String(maxIterations));
+    const { data } = await api.post(`/autopilot/start?${params.toString()}`);
+    return data;
+  },
+
+  stopAutopilot: async (): Promise<any> => {
+    const { data } = await api.post('/autopilot/stop');
+    return data;
+  },
+
   getAutopilotQueue: async (): Promise<any[]> => {
     const { data } = await api.get('/autopilot/queue');
     return data;
