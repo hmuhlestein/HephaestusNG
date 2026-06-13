@@ -7,7 +7,7 @@ Unified command-line interface for the Hephaestus multi-agent workflow engine.
 ### Remote install (no repo needed)
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/hmuhlestein/Hephaestus/main/scripts/install.sh | bash
+curl -sSL https://raw.githubusercontent.com/hmuhlestein/HephaestusNG/main/scripts/install.sh | bash
 ```
 
 Options:
@@ -25,7 +25,7 @@ curl -sSL .../install.sh | bash -s -- --skip-docker
 ### Local install (from cloned repo)
 
 ```bash
-git clone https://github.com/hmuhlestein/Hephaestus.git
+git clone https://github.com/hmuhlestein/HephaestusNG.git
 cd Hephaestus
 ./scripts/install.sh
 ```
