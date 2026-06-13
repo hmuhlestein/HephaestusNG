@@ -19,15 +19,15 @@ Designed to run continuously, picking designs from a queue and processing
 them through the full pipeline until complete.
 """
 
-from example_workflows.autopilot.phase_1_product_requirements import PHASE_1_PRODUCT_REQUIREMENTS
-from example_workflows.autopilot.phase_2_architecture import PHASE_2_ARCHITECTURE
-from example_workflows.autopilot.phase_3_development import PHASE_3_DEVELOPMENT
-from example_workflows.autopilot.phase_4_adversarial_review import PHASE_4_ADVERSARIAL_REVIEW
-from example_workflows.autopilot.phase_5_security_review import PHASE_5_SECURITY_REVIEW
-from example_workflows.autopilot.phase_6_qa_validation import PHASE_6_QA_VALIDATION
-from example_workflows.autopilot.phase_7_product_validation import PHASE_7_PRODUCT_VALIDATION
-from example_workflows.autopilot.phase_8_git_commit_push import PHASE_8_GIT_COMMIT_PUSH
-from example_workflows.autopilot.phase_9_forensics import PHASE_9_FORENSICS
+from src.autopilot.phase_1_product_requirements import PHASE_1_PRODUCT_REQUIREMENTS
+from src.autopilot.phase_2_architecture import PHASE_2_ARCHITECTURE
+from src.autopilot.phase_3_development import PHASE_3_DEVELOPMENT
+from src.autopilot.phase_4_adversarial_review import PHASE_4_ADVERSARIAL_REVIEW
+from src.autopilot.phase_5_security_review import PHASE_5_SECURITY_REVIEW
+from src.autopilot.phase_6_qa_validation import PHASE_6_QA_VALIDATION
+from src.autopilot.phase_7_product_validation import PHASE_7_PRODUCT_VALIDATION
+from src.autopilot.phase_8_git_commit_push import PHASE_8_GIT_COMMIT_PUSH
+from src.autopilot.phase_9_forensics import PHASE_9_FORENSICS
 
 from src.sdk.models import WorkflowConfig, LaunchTemplate, LaunchParameter
 

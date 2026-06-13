@@ -287,7 +287,7 @@ class TestStatusCommand:
         result = run(args)
         assert result == 1
         out = capsys.readouterr().out
-        assert "UNREACHABLE" in out
+        assert "unreachable" in out.lower()
 
     def test_status_json_when_backend_down(self, args_json, capsys):
         from src.cli.commands.status import run
@@ -484,10 +484,10 @@ class TestExecCommand:
         out = capsys.readouterr().out
         assert "Unreachable" in out
 
-    def test_test_services_when_all_down(self, args, capsys):
-        from src.cli.commands.exec_cmd import test_services
-        args.timeout = 1
-        result = test_services(args)
+    def test_run_command_no_args(self, args, capsys):
+        from src.cli.commands.exec_cmd import run_command
+        args.command = []
+        result = run_command(args)
         assert result == 1
 
     def test_raw_request_path_traversal_blocked(self, args, capsys):

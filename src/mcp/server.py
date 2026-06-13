@@ -761,6 +761,68 @@ async def startup_event():
 
     logger.info("=== END PHASE LOADING DEBUG ===")
 
+    # Register autopilot workflow definition
+    try:
+        from src.autopilot.phases import AUTOPILOT_PHASES, AUTOPILOT_WORKFLOW_CONFIG, AUTOPILOT_LAUNCH_TEMPLATE
+        from src.sdk.models import WorkflowDefinition
+
+        autopilot_def = WorkflowDefinition(
+            id="autopilot",
+            name="Autopilot Pipeline",
+            phases=AUTOPILOT_PHASES,
+            config=AUTOPILOT_WORKFLOW_CONFIG,
+            description="9-phase automated pipeline: requirements, architecture, development, review, security, QA, validation, git, forensics",
+            launch_template=AUTOPILOT_LAUNCH_TEMPLATE,
+        )
+
+        # Convert phases to dicts for the registration API
+        phases_config = []
+        for phase in autopilot_def.phases:
+            phase_dict = {
+                "id": phase.id,
+                "name": phase.name,
+                "description": phase.description,
+                "done_definitions": phase.done_definitions,
+                "working_directory": phase.working_directory,
+            }
+            if phase.additional_notes:
+                phase_dict["additional_notes"] = phase.additional_notes
+            if phase.outputs:
+                phase_dict["outputs"] = phase.outputs
+            if phase.next_steps:
+                phase_dict["next_steps"] = phase.next_steps
+            phases_config.append(phase_dict)
+
+        # Register via the database directly
+        from src.core.database import WorkflowDefinition as DBWorkflowDefinition
+        import json
+
+        with server_state.db_manager.get_session() as session:
+            existing = session.query(DBWorkflowDefinition).filter_by(id="autopilot").first()
+            if not existing:
+                db_def = DBWorkflowDefinition(
+                    id="autopilot",
+                    name="Autopilot Pipeline",
+                    description="9-phase automated pipeline: requirements, architecture, development, review, security, QA, validation, git, forensics",
+                    phases_config=phases_config,
+                    workflow_config={
+                        "has_result": autopilot_def.config.has_result,
+                        "result_criteria": autopilot_def.config.result_criteria,
+                        "on_result_found": autopilot_def.config.on_result_found,
+                        "enable_tickets": autopilot_def.config.enable_tickets,
+                        "board_config": autopilot_def.config.board_config,
+                    },
+                )
+                session.add(db_def)
+                session.commit()
+                logger.info("Registered autopilot workflow definition")
+            else:
+                logger.info("Autopilot workflow definition already registered")
+    except Exception as e:
+        logger.error(f"Failed to register autopilot workflow: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+
     # Start background queue processor
     logger.info("Starting background queue processor...")
     server_state.background_queue_processor_task = asyncio.create_task(background_queue_processor())
@@ -4550,21 +4612,37 @@ async def list_tools():
 @app.get("/api/workflow-definitions")
 async def list_workflow_definitions():
     """List all loaded workflow definitions."""
-    definitions = server_state.phase_manager.list_definitions()
-    return {
-        "definitions": [
-            {
+    try:
+        definitions = server_state.phase_manager.list_definitions()
+    except Exception as e:
+        logger.error(f"Failed to list workflow definitions: {e}")
+        return {"definitions": []}
+
+    result = []
+    for d in definitions:
+        try:
+            phases = d.phases_config
+            if isinstance(phases, str):
+                import json as _json
+                phases = _json.loads(phases)
+            config = d.workflow_config
+            if isinstance(config, str):
+                import json as _json
+                config = _json.loads(config)
+            result.append({
                 "id": d.id,
                 "name": d.name,
                 "description": d.description,
-                "phases_count": len(d.phases_config) if d.phases_config else 0,
-                "has_result": (d.workflow_config or {}).get("has_result", False),
+                "phases_count": len(phases) if phases else 0,
+                "has_result": (config or {}).get("has_result", False),
                 "created_at": d.created_at.isoformat() if d.created_at else None,
-                "launch_template": (d.workflow_config or {}).get("launch_template")
-            }
-            for d in definitions
-        ]
-    }
+                "launch_template": (config or {}).get("launch_template"),
+            })
+        except Exception as e:
+            logger.error(f"Error processing definition {d.id}: {e}")
+            result.append({"id": d.id, "name": d.name, "description": d.description, "error": str(e)})
+
+    return {"definitions": result}
 
 
 @app.post("/api/workflow-definitions")

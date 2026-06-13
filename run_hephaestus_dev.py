@@ -37,6 +37,7 @@ from example_workflows.feature_development.phases import FEATURE_DEV_PHASES, FEA
     FEATURE_DEV_LAUNCH_TEMPLATE
 from example_workflows.documentation_generation.phases import DOC_GEN_PHASES, DOC_GEN_CONFIG, DOC_GEN_LAUNCH_TEMPLATE
 from example_workflows.qa.phases import QA_PHASES, QA_WORKFLOW_CONFIG, QA_LAUNCH_TEMPLATE
+from src.autopilot.phases import AUTOPILOT_PHASES, AUTOPILOT_WORKFLOW_CONFIG, AUTOPILOT_LAUNCH_TEMPLATE
 
 from src.sdk import HephaestusSDK
 from src.sdk.models import WorkflowDefinition
@@ -420,9 +421,18 @@ def main():
             launch_template=QA_LAUNCH_TEMPLATE,
         )
 
+        autopilot_definition = WorkflowDefinition(
+            id="autopilot",
+            name="Autopilot Pipeline",
+            phases=AUTOPILOT_PHASES,
+            config=AUTOPILOT_WORKFLOW_CONFIG,
+            description="9-phase automated pipeline: requirements, architecture, development, review, security, QA, validation, git, forensics",
+            launch_template=AUTOPILOT_LAUNCH_TEMPLATE,
+        )
+
         sdk = HephaestusSDK(
             workflow_definitions=[index_repo_definition, bug_fix_definition, feature_dev_definition, doc_gen_definition,
-                                  prd_definition, qa_definition],  # Multi-workflow support
+                                  prd_definition, qa_definition, autopilot_definition],  # Multi-workflow support
             database_path=db_path,
             qdrant_url=qdrant_url,
             working_directory=project_path,
