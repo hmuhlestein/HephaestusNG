@@ -18,12 +18,18 @@ def register(subparsers):
     ls = sub.add_parser("list", help="List all projects")
     ls.set_defaults(func=list_projects)
 
-    # create
+    # create / setup
     cr = sub.add_parser("create", help="Create a project")
     cr.add_argument("name", help="Project name")
     cr.add_argument("path", help="Project directory path")
     cr.add_argument("--default", action="store_true", help="Set as default project")
     cr.set_defaults(func=create_project)
+
+    su = sub.add_parser("setup", help="Create and activate a project (alias for create)")
+    su.add_argument("name", help="Project name")
+    su.add_argument("path", help="Project directory path")
+    su.add_argument("--default", action="store_true", help="Set as default project")
+    su.set_defaults(func=create_project)
 
     # activate
     act = sub.add_parser("activate", help="Activate a project")
