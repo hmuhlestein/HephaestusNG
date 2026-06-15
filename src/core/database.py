@@ -216,7 +216,7 @@ class WorkflowDefinition(Base):
     name = Column(String, nullable=False)  # "PRD to Software Builder"
     description = Column(String)
     phases_config = Column(JSON)  # Serialized phase definitions
-    workflow_config = Column(JSON)  # has_result, result_criteria, on_result_found, etc.
+    workflow_config = Column(JSON)  # has_result, result_criteria, on_result_found, launch_template, etc.
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     # Relationships
