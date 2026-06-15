@@ -223,12 +223,16 @@ def check_api_credits() -> Tuple[bool, str]:
     return False, ""
 
 
-def detect_hard_error(agents: list, failed_tasks: list) -> Tuple[bool, str]:
+def detect_hard_error(agents: list, failed_tasks: list, workflow_id: str = None) -> Tuple[bool, str]:
     crashed_agents = [a for a in agents if a.get("status") == "error"]
     if crashed_agents:
         names = [a.get("agent_id", "unknown")[:20] for a in crashed_agents]
         return True, f"Crashed agents: {', '.join(names)}"
 
+    # Filter to only tasks from the current workflow if provided
+    if workflow_id:
+        failed_tasks = [t for t in failed_tasks if t.get("workflow_id") == workflow_id]
+    
     critical_failures = [
         t for t in failed_tasks
         if t.get("priority") == "critical" or "architectural" in (t.get("description", "") or "").lower()
@@ -952,7 +956,7 @@ def run_single_workflow(sdk, workflow_id: str, project_path: str, description: s
             else:
                 credit_stuck_count = 0
 
-            hard_error, error_reason = detect_hard_error(agents, failed)
+            hard_error, error_reason = detect_hard_error(agents, failed, workflow_id=exec_id)
             if hard_error:
                 logger.log(f"Hard error detected: {error_reason}", "ERROR")
                 return "hard_error"

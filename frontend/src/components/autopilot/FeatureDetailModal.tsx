@@ -159,13 +159,15 @@ const OverviewTab: React.FC<{
   detail: any;
   phaseIcons: Record<string, React.ElementType>;
   phaseLabels: Record<string, string>;
-}> = ({ detail, phaseIcons, phaseLabels }) => (
+}> = ({ detail, phaseIcons, phaseLabels }) => {
+  if (!detail) return null;
+  return (
   <div className="p-6 space-y-6">
     {/* Stats Row */}
     <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
       {[
-        { label: 'Iterations', value: detail.iterations, icon: Layers, color: 'text-blue-600 bg-blue-50' },
-        { label: 'Duration', value: formatTime(detail.total_time_seconds), icon: Clock, color: 'text-purple-600 bg-purple-50' },
+        { label: 'Iterations', value: detail.iterations ?? 0, icon: Layers, color: 'text-blue-600 bg-blue-50' },
+        { label: 'Duration', value: formatTime(detail.total_time_seconds ?? 0), icon: Clock, color: 'text-purple-600 bg-purple-50' },
         { label: 'QA Passed', value: detail.qa_passed ? 'Yes' : 'No', icon: detail.qa_passed ? CheckCircle2 : XCircle, color: detail.qa_passed ? 'text-emerald-600 bg-emerald-50' : 'text-red-600 bg-red-50' },
         { label: 'Cost', value: detail.cost_total > 0 ? `$${detail.cost_total.toFixed(2)}` : 'N/A', icon: DollarSign, color: 'text-amber-600 bg-amber-50' },
       ].map((s) => (
@@ -241,7 +243,8 @@ const OverviewTab: React.FC<{
       </div>
     )}
   </div>
-);
+  );
+};
 
 // ── Report Tab ──────────────────────────────────────────────
 
