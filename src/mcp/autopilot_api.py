@@ -34,9 +34,6 @@ def _get_effective_queue_dir() -> str:
     
     # Fall back to active project's base_dir/docs/design-queue
     try:
-        from src.mcp.projects_api import get_active_project
-        import asyncio
-        # Try to get active project synchronously if possible
         from src.core.database import AutopilotProject, get_db
         with get_db() as db:
             proj = db.query(AutopilotProject).filter_by(is_active=True).first()
@@ -44,6 +41,27 @@ def _get_effective_queue_dir() -> str:
                 queue_dir = str(Path(proj.base_dir) / "docs" / "design-queue")
                 DESIGN_QUEUE_DIR = queue_dir
                 return queue_dir
+    except Exception as e:
+        logger.debug(f"Could not get active project: {e}")
+    
+    return ""
+
+
+def _get_effective_features_dir() -> str:
+    """Get the effective features directory, falling back to active project."""
+    global FEATURES_DIR
+    if FEATURES_DIR:
+        return FEATURES_DIR
+    
+    # Fall back to active project's base_dir/features
+    try:
+        from src.core.database import AutopilotProject, get_db
+        with get_db() as db:
+            proj = db.query(AutopilotProject).filter_by(is_active=True).first()
+            if proj and proj.base_dir:
+                features_dir = str(Path(proj.base_dir) / "features")
+                FEATURES_DIR = features_dir
+                return features_dir
     except Exception as e:
         logger.debug(f"Could not get active project: {e}")
     
@@ -1094,7 +1112,10 @@ async def get_feature_detail(feature_id: str):
 
 @router.get("/features/{feature_id}/report")
 async def get_feature_report(feature_id: str):
-    report_path = _safe_path(FEATURES_DIR, feature_id, "feature_report.html")
+    effective_dir = _get_effective_features_dir()
+    if not effective_dir:
+        raise HTTPException(500, "FEATURES_DIR not configured and no active project")
+    report_path = _safe_path(effective_dir, feature_id, "feature_report.html")
     if not report_path.exists():
         raise HTTPException(404, "Report not found")
     return HTMLResponse(content=report_path.read_text(errors="replace"))
@@ -1107,7 +1128,10 @@ async def get_feature_doc(feature_id: str, doc_name: str):
     if cached is not None:
         return cached
 
-    doc_path = _safe_path(FEATURES_DIR, feature_id, "docs", doc_name)
+    effective_dir = _get_effective_features_dir()
+    if not effective_dir:
+        raise HTTPException(500, "FEATURES_DIR not configured and no active project")
+    doc_path = _safe_path(effective_dir, feature_id, "docs", doc_name)
     if not doc_path.exists():
         raise HTTPException(404, f"Document '{doc_name}' not found")
     return _store(cache_key, {"name": doc_name, "content": doc_path.read_text(errors="replace")})
@@ -1115,7 +1139,10 @@ async def get_feature_doc(feature_id: str, doc_name: str):
 
 @router.get("/features/{feature_id}/download")
 async def download_feature_report(feature_id: str):
-    report_path = _safe_path(FEATURES_DIR, feature_id, "feature_report.html")
+    effective_dir = _get_effective_features_dir()
+    if not effective_dir:
+        raise HTTPException(500, "FEATURES_DIR not configured and no active project")
+    report_path = _safe_path(effective_dir, feature_id, "feature_report.html")
     if not report_path.exists():
         raise HTTPException(404, "Report not found")
     return FileResponse(
