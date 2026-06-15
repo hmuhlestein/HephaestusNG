@@ -185,7 +185,7 @@ class FeatureDetail(BaseModel):
     cost_breakdown: Dict[str, float]
     cost_currency: str
     created_at: str
-    artifacts: List[Dict[str, Any]]
+    docs: List[Dict[str, Any]]
 
 
 class PipelineStatus(BaseModel):
@@ -938,7 +938,7 @@ def _scan_features() -> List[Dict[str, Any]]:
         if not feature_dir.is_dir():
             continue
 
-        metrics_path = feature_dir / "artifacts" / "pipeline_metrics.json"
+        metrics_path = feature_dir / "docs" / "pipeline_metrics.json"
         metrics = _read_json(metrics_path) or {}
 
         report_path = feature_dir / "feature_report.html"
@@ -985,15 +985,15 @@ async def get_feature_detail(feature_id: str):
         raise HTTPException(404, f"Feature '{feature_id}' not found")
 
     report_path = feature_dir / "feature_report.html"
-    metrics = _read_json(feature_dir / "artifacts" / "pipeline_metrics.json") or {}
+    metrics = _read_json(feature_dir / "docs" / "pipeline_metrics.json") or {}
 
-    artifacts_dir = feature_dir / "artifacts"
-    artifacts = []
-    if artifacts_dir.exists():
-        for f in sorted(artifacts_dir.iterdir()):
+    docs_dir = feature_dir / "docs"
+    docs = []
+    if docs_dir.exists():
+        for f in sorted(docs_dir.iterdir()):
             if f.is_file():
                 stat = f.stat()
-                artifacts.append({
+                docs.append({
                     "name": f.name,
                     "size_bytes": stat.st_size,
                     "modified": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
@@ -1013,7 +1013,7 @@ async def get_feature_detail(feature_id: str):
         "forensics_summary": "forensics_report.md",
     }
     for key, fname in summary_files.items():
-        fpath = artifacts_dir / fname
+        fpath = docs_dir / fname
         if fpath.exists():
             content = fpath.read_text(errors="replace")
             summaries[key] = content[:500] + ("..." if len(content) > 500 else "")
@@ -1051,7 +1051,7 @@ async def get_feature_detail(feature_id: str):
         cost_breakdown=metrics.get("cost_breakdown", {}),
         cost_currency=metrics.get("cost_currency", "USD"),
         created_at=created_at,
-        artifacts=artifacts,
+        docs=docs,
     )
     return _store(cache_key, result)
 
@@ -1064,17 +1064,17 @@ async def get_feature_report(feature_id: str):
     return HTMLResponse(content=report_path.read_text(errors="replace"))
 
 
-@router.get("/features/{feature_id}/artifacts/{artifact_name}")
-async def get_feature_artifact(feature_id: str, artifact_name: str):
-    cache_key = f"artifact:{feature_id}:{artifact_name}"
+@router.get("/features/{feature_id}/docs/{doc_name}")
+async def get_feature_doc(feature_id: str, doc_name: str):
+    cache_key = f"doc:{feature_id}:{doc_name}"
     cached = _cached(cache_key, ttl=60.0)
     if cached is not None:
         return cached
 
-    artifact_path = _safe_path(FEATURES_DIR, feature_id, "artifacts", artifact_name)
-    if not artifact_path.exists():
-        raise HTTPException(404, f"Artifact '{artifact_name}' not found")
-    return _store(cache_key, {"name": artifact_name, "content": artifact_path.read_text(errors="replace")})
+    doc_path = _safe_path(FEATURES_DIR, feature_id, "docs", doc_name)
+    if not doc_path.exists():
+        raise HTTPException(404, f"Document '{doc_name}' not found")
+    return _store(cache_key, {"name": doc_name, "content": doc_path.read_text(errors="replace")})
 
 
 @router.get("/features/{feature_id}/download")

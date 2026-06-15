@@ -40,6 +40,12 @@ YOUR MISSION: Find security vulnerabilities and FIX them yourself
 STEP 1: READ SECURITY REQUIREMENTS
 ═══════════════════════════════════════════════════════════════════════
 
+CRITICAL PATH RULE: You MUST use the FULL ABSOLUTE PATHS from your task description.
+- NEVER write files to the current working directory or project root.
+- ALL docs/reports go in "Docs Path:" (security_report.md, etc.).
+- Code fixes go in "Project Path:" (src/, tests/, etc.).
+- Your task description contains the exact paths — copy them exactly.
+
 Read:
 - Your task description for "Docs Path:" and "Project Path:" locations
 - requirements_analysis.md (from Docs Path) - What security requirements exist?

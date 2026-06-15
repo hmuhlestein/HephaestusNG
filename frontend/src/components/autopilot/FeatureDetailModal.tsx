@@ -13,11 +13,11 @@ interface FeatureDetailModalProps {
   onClose: () => void;
 }
 
-type DetailTab = 'overview' | 'report' | 'artifacts';
+type DetailTab = 'overview' | 'report' | 'docs';
 
 const FeatureDetailModal: React.FC<FeatureDetailModalProps> = ({ featureId, onClose }) => {
   const [activeTab, setActiveTab] = useState<DetailTab>('overview');
-  const [selectedArtifact, setSelectedArtifact] = useState<string | null>(null);
+  const [selectedDoc, setSelectedDoc] = useState<string | null>(null);
 
   const { data: detail, isLoading } = useQuery({
     queryKey: ['autopilot-feature', featureId],
@@ -31,10 +31,10 @@ const FeatureDetailModal: React.FC<FeatureDetailModalProps> = ({ featureId, onCl
     enabled: !!featureId && activeTab === 'report',
   });
 
-  const { data: artifact } = useQuery({
-    queryKey: ['autopilot-artifact', featureId, selectedArtifact],
-    queryFn: () => apiService.getAutopilotFeatureArtifact(featureId!, selectedArtifact!),
-    enabled: !!featureId && !!selectedArtifact,
+  const { data: doc } = useQuery({
+    queryKey: ['autopilot-doc', featureId, selectedDoc],
+    queryFn: () => apiService.getAutopilotFeatureDoc(featureId!, selectedDoc!),
+    enabled: !!featureId && !!selectedDoc,
   });
 
   if (!featureId) return null;
@@ -112,7 +112,7 @@ const FeatureDetailModal: React.FC<FeatureDetailModalProps> = ({ featureId, onCl
 
             {/* Tab Nav */}
             <div className="px-6 border-b flex gap-1">
-              {(['overview', 'report', 'artifacts'] as DetailTab[]).map((tab) => (
+              {(['overview', 'report', 'docs'] as DetailTab[]).map((tab) => (
                 <button
                   key={tab}
                   onClick={() => setActiveTab(tab)}
@@ -138,11 +138,11 @@ const FeatureDetailModal: React.FC<FeatureDetailModalProps> = ({ featureId, onCl
               ) : activeTab === 'report' ? (
                 <ReportTab html={reportHtml} featureId={featureId} />
               ) : (
-                <ArtifactsTab
+                <DocsTab
                   detail={detail}
-                  selectedArtifact={selectedArtifact}
-                  artifactContent={artifact}
-                  onSelectArtifact={setSelectedArtifact}
+                  selectedDoc={selectedDoc}
+                  docContent={doc}
+                  onSelectDoc={setSelectedDoc}
                 />
               )}
             </div>
@@ -272,31 +272,31 @@ const ReportTab: React.FC<{ html: string | undefined; featureId: string }> = ({ 
   </div>
 );
 
-// ── Artifacts Tab ───────────────────────────────────────────
+// ── Docs Tab ───────────────────────────────────────────
 
-const ArtifactsTab: React.FC<{
+const DocsTab: React.FC<{
   detail: any;
-  selectedArtifact: string | null;
-  artifactContent: any;
-  onSelectArtifact: (name: string) => void;
-}> = ({ detail, selectedArtifact, artifactContent, onSelectArtifact }) => (
+  selectedDoc: string | null;
+  docContent: any;
+  onSelectDoc: (name: string) => void;
+}> = ({ detail, selectedDoc, docContent, onSelectDoc }) => (
   <div className="flex h-[600px]">
     {/* File list */}
     <div className="w-64 border-r overflow-y-auto bg-gray-50">
       <div className="p-3">
-        <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Artifacts</h4>
-        {(detail?.artifacts || []).map((a: any) => (
+        <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Docs</h4>
+        {(detail?.docs || []).map((d: any) => (
           <button
-            key={a.name}
-            onClick={() => onSelectArtifact(a.name)}
+            key={d.name}
+            onClick={() => onSelectDoc(d.name)}
             className={`w-full text-left px-3 py-2 rounded-lg text-sm mb-1 transition-colors flex items-center gap-2 ${
-              selectedArtifact === a.name
+              selectedDoc === d.name
                 ? 'bg-violet-100 text-violet-700'
                 : 'text-gray-600 hover:bg-gray-100'
             }`}
           >
             <FileText className="w-3.5 h-3.5 flex-shrink-0" />
-            <span className="truncate">{a.name}</span>
+            <span className="truncate">{d.name}</span>
           </button>
         ))}
       </div>
@@ -304,24 +304,24 @@ const ArtifactsTab: React.FC<{
 
     {/* Content */}
     <div className="flex-1 overflow-y-auto p-5">
-      {selectedArtifact && artifactContent ? (
+      {selectedDoc && docContent ? (
         <div>
           <div className="flex items-center justify-between mb-3">
-            <h4 className="text-sm font-semibold text-gray-700">{artifactContent.name}</h4>
+            <h4 className="text-sm font-semibold text-gray-700">{docContent.name}</h4>
             <button
-              onClick={() => navigator.clipboard.writeText(artifactContent.content)}
+              onClick={() => navigator.clipboard.writeText(docContent.content)}
               className="text-xs text-gray-500 hover:text-gray-700 flex items-center gap-1"
             >
               <Copy className="w-3 h-3" /> Copy
             </button>
           </div>
           <pre className="text-sm text-gray-700 whitespace-pre-wrap font-mono leading-relaxed bg-gray-50 rounded-xl p-4 border">
-            {artifactContent.content}
+            {docContent.content}
           </pre>
         </div>
       ) : (
         <div className="flex items-center justify-center h-full text-gray-400 text-sm">
-          Select an artifact to view
+          Select a document to view
         </div>
       )}
     </div>

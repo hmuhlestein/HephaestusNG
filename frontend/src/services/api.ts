@@ -598,8 +598,8 @@ export const apiService = {
     return data;
   },
 
-  getAutopilotFeatureArtifact: async (featureId: string, artifactName: string): Promise<{ name: string; content: string }> => {
-    const { data } = await api.get(`/autopilot/features/${encodeURIComponent(featureId)}/artifacts/${encodeURIComponent(artifactName)}`);
+  getAutopilotFeatureDoc: async (featureId: string, docName: string): Promise<{ name: string; content: string }> => {
+    const { data } = await api.get(`/autopilot/features/${encodeURIComponent(featureId)}/docs/${encodeURIComponent(docName)}`);
     return data;
   },
 

@@ -328,8 +328,8 @@ ${BOLD}PIPELINE PHASES:${NC}
 
 ${BOLD}OUTPUT:${NC}
     Each design produces:
-    - features/<name>/              - Reports, artifacts, HTML report
-    - features/<name>/artifacts/    - Requirements, architecture, review docs
+    - features/<name>/              - Reports, docs, HTML report
+    - features/<name>/docs/         - Requirements, architecture, review docs
     - features/<name>/feature_report.html - Human review report
     - <project-path>/               - Implementation code (src/, tests/, etc.)
 

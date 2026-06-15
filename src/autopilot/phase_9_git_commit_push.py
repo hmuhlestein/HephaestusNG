@@ -49,6 +49,11 @@ YOUR MISSION: Create feature branch, commit, merge to main, and pull
 CRITICAL: Read your task description for the "Project Path:" location.
 All git operations must be performed in that directory, NOT in the current directory.
 
+CRITICAL PATH RULE: You MUST use the FULL ABSOLUTE PATHS from your task description.
+- NEVER commit files from the current working directory or project root.
+- Use "Project Path:" for all git operations.
+- Do NOT commit docs/reports from "Docs Path:" — those stay in the feature folder.
+
 ```bash
 cd <Project Path from task description>
 git status

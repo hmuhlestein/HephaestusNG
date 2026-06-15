@@ -40,6 +40,12 @@ YOUR MISSION: Verify the implementation matches the original design intent
 STEP 1: RE-READ THE ORIGINAL DESIGN DOCUMENT
 ═══════════════════════════════════════════════════════════════════════
 
+CRITICAL PATH RULE: You MUST use the FULL ABSOLUTE PATHS from your task description.
+- NEVER write files to the current working directory or project root.
+- ALL docs/reports go in "Docs Path:" (product_validation.md, etc.).
+- Code goes in "Project Path:" (src/, tests/, etc.).
+- Your task description contains the exact paths — copy them exactly.
+
 Read the original design document again. This is your SOURCE OF TRUTH.
 
 Also read:

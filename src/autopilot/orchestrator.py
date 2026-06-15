@@ -396,16 +396,104 @@ def create_feature_folder(project_path: Path, design_name: str, logger: Orchestr
     safe_name = design_name.lower().replace(" ", "_")[:40]
     feature_folder = project_path / "features" / f"{timestamp}_{safe_name}"
     feature_folder.mkdir(parents=True, exist_ok=True)
-    (feature_folder / "reports").mkdir(exist_ok=True)
-    (feature_folder / "artifacts").mkdir(exist_ok=True)
+    (feature_folder / "docs").mkdir(exist_ok=True)
     logger.log(f"Feature folder: {feature_folder}")
     return feature_folder
 
 
 def copy_design_document(design_entry: DesignEntry, feature_folder: Path) -> Path:
-    dest = feature_folder / "artifacts" / design_entry.path.name
+    dest = feature_folder / "docs" / design_entry.path.name
     shutil.copy2(design_entry.path, dest)
     return dest
+
+
+# ── Stray-file sweep ────────────────────────────────────────────────
+# Agents may accidentally write docs, reports, scripts, or diagnostic
+# files to the project root instead of the feature docs dir.  This
+# function copies (not moves — the iteration loop may still need them
+# in the root) every stray artifact into docs_dir so that nothing is
+# lost and the project root stays clean.
+
+_DOC_EXTENSIONS = {".md", ".json", ".txt", ".log", ".csv"}
+_SKIP_ROOT_FILES = {
+    "README.md", "AGENTS.md", "CHANGELOG.md", "LICENSE",
+    "package.json", "tsconfig.json", "pyproject.toml", "poetry.lock",
+    "requirements.txt", "setup.py", "setup.cfg",
+}
+_STRAY_DIRS = {"evidence", "plans", "scripts"}
+
+
+def _sweep_stray_files(
+    project_path: Path,
+    feature_folder: Path,
+    docs_dir: Path,
+    logger: OrchestratorLogger,
+) -> None:
+    """Move stray docs/reports/scripts from project root into feature docs."""
+    docs_dir.mkdir(parents=True, exist_ok=True)
+
+    # ── files in project root ──────────────────────────────────────
+    for f in project_path.iterdir():
+        if not f.is_file():
+            continue
+        if f.name in _SKIP_ROOT_FILES:
+            continue
+        if f.suffix not in _DOC_EXTENSIONS:
+            continue
+        dest = docs_dir / f.name
+        if not dest.exists():
+            shutil.move(str(f), str(dest))
+            logger.log(f"Moved root file: {f.name} -> features/.../docs/")
+
+    # ── files in feature_folder root (above docs/) ─────────────────
+    for f in feature_folder.iterdir():
+        if not f.is_file():
+            continue
+        if f.suffix not in _DOC_EXTENSIONS:
+            continue
+        dest = docs_dir / f.name
+        if not dest.exists():
+            shutil.move(str(f), str(dest))
+            logger.log(f"Moved feature file: {f.name} -> features/.../docs/")
+
+    # ── stray directories in project root ──────────────────────────
+    for d_name in _STRAY_DIRS:
+        src_dir = project_path / d_name
+        if src_dir.is_dir():
+            dest_dir = docs_dir / d_name
+            if not dest_dir.exists():
+                shutil.move(str(src_dir), str(dest_dir))
+                logger.log(f"Moved stray dir: {d_name}/ -> features/.../docs/")
+            else:
+                # merge contents then remove source
+                for item in src_dir.rglob("*"):
+                    if item.is_file():
+                        rel = item.relative_to(src_dir)
+                        target = dest_dir / rel
+                        if not target.exists():
+                            target.parent.mkdir(parents=True, exist_ok=True)
+                            shutil.move(str(item), str(target))
+                            logger.log(f"Moved file from {d_name}/: {rel} -> features/.../docs/{d_name}/")
+                shutil.rmtree(src_dir)
+
+    # ── stray directories in feature_folder root ───────────────────
+    for d_name in _STRAY_DIRS:
+        src_dir = feature_folder / d_name
+        if src_dir.is_dir() and src_dir != docs_dir:
+            dest_dir = docs_dir / d_name
+            if not dest_dir.exists():
+                shutil.move(str(src_dir), str(dest_dir))
+                logger.log(f"Moved feature dir: {d_name}/ -> features/.../docs/")
+            else:
+                for item in src_dir.rglob("*"):
+                    if item.is_file():
+                        rel = item.relative_to(src_dir)
+                        target = dest_dir / rel
+                        if not target.exists():
+                            target.parent.mkdir(parents=True, exist_ok=True)
+                            shutil.move(str(item), str(target))
+                            logger.log(f"Moved file from {d_name}/: {rel} -> features/.../docs/{d_name}/")
+                shutil.rmtree(src_dir)
 
 
 def collect_report_summaries(project_path: Path) -> Dict[str, str]:
@@ -927,7 +1015,7 @@ def run_single_design(
     stop_reason = StopReason.COMPLETED
 
     # docs_dir: where generated docs (requirements, architecture, reports) go
-    docs_dir = feature_folder / "artifacts"
+    docs_dir = feature_folder / "docs"
     docs_dir.mkdir(exist_ok=True)
 
     # Copy phase definitions BEFORE workflow so forensics agent can read them
@@ -1071,19 +1159,8 @@ def run_single_design(
         stop_reason = StopReason.USER_INTERRUPT
         logger.log("Design processing interrupted")
 
-    # Organize: copy stray docs from project root into feature artifacts (don't move — iteration loop needs them)
-    for md_file in project_path.glob("*.md"):
-        dest = docs_dir / md_file.name
-        if not dest.exists():
-            shutil.copy2(str(md_file), str(dest))
-            logger.log(f"Copied doc: {md_file.name} -> features/.../artifacts/")
-
-    # Also check feature_folder root for misplaced docs
-    for md_file in feature_folder.glob("*.md"):
-        dest = docs_dir / md_file.name
-        if not dest.exists():
-            shutil.copy2(str(md_file), str(dest))
-            logger.log(f"Copied doc: {md_file.name} -> features/.../artifacts/")
+    # Organize: copy stray docs from project root into feature docs (don't move — iteration loop needs them)
+    _sweep_stray_files(project_path, feature_folder, docs_dir, logger)
 
     # Collect summaries from the correct locations (docs in features, code in builds)
     summaries = collect_report_summaries(docs_dir)

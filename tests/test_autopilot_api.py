@@ -207,9 +207,9 @@ class TestFeatures:
     def test_list_features(self, client, autopilot_dirs):
         feature_dir = autopilot_dirs["features"] / "20260101-120000_my_feature"
         feature_dir.mkdir()
-        artifacts = feature_dir / "artifacts"
-        artifacts.mkdir()
-        (artifacts / "pipeline_metrics.json").write_text(json.dumps({
+        docs = feature_dir / "docs"
+        docs.mkdir()
+        (docs / "pipeline_metrics.json").write_text(json.dumps({
             "product_validated": True,
             "iterations": 2,
             "total_time_seconds": 300,
@@ -225,14 +225,14 @@ class TestFeatures:
     def test_feature_detail(self, client, autopilot_dirs):
         feature_dir = autopilot_dirs["features"] / "20260101-120000_detail_test"
         feature_dir.mkdir()
-        artifacts = feature_dir / "artifacts"
-        artifacts.mkdir()
-        (artifacts / "pipeline_metrics.json").write_text(json.dumps({
+        docs = feature_dir / "docs"
+        docs.mkdir()
+        (docs / "pipeline_metrics.json").write_text(json.dumps({
             "product_validated": False,
             "stop_reason": "max_iterations",
             "qa_passed": False,
         }))
-        (artifacts / "qa_report.md").write_text("# QA Report\nSome content here")
+        (docs / "qa_report.md").write_text("# QA Report\nSome content here")
 
         resp = client.get("/api/autopilot/features/20260101-120000_detail_test")
         assert resp.status_code == 200
@@ -245,16 +245,16 @@ class TestFeatures:
         resp = client.get("/api/autopilot/features/nonexistent")
         assert resp.status_code == 404
 
-    def test_feature_artifact(self, client, autopilot_dirs):
+    def test_feature_doc(self, client, autopilot_dirs):
         feature_dir = autopilot_dirs["features"] / "20260101-000000_art"
         feature_dir.mkdir()
-        artifacts = feature_dir / "artifacts"
-        artifacts.mkdir()
-        (artifacts / "test.md").write_text("# Test artifact")
+        docs = feature_dir / "docs"
+        docs.mkdir()
+        (docs / "test.md").write_text("# Test document")
 
-        resp = client.get("/api/autopilot/features/20260101-000000_art/artifacts/test.md")
+        resp = client.get("/api/autopilot/features/20260101-000000_art/docs/test.md")
         assert resp.status_code == 200
-        assert resp.json()["content"] == "# Test artifact"
+        assert resp.json()["content"] == "# Test document"
 
 
 # ── Human Input ──────────────────────────────────────────────────
