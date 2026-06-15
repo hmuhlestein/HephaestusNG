@@ -25,6 +25,31 @@ FEATURES_DIR = ""
 
 ALLOWED_EXTENSIONS = {".md", ".txt"}
 
+
+def _get_effective_queue_dir() -> str:
+    """Get the effective design queue directory, falling back to active project."""
+    global DESIGN_QUEUE_DIR
+    if DESIGN_QUEUE_DIR:
+        return DESIGN_QUEUE_DIR
+    
+    # Fall back to active project's base_dir/docs/design-queue
+    try:
+        from src.mcp.projects_api import get_active_project
+        import asyncio
+        # Try to get active project synchronously if possible
+        from src.core.database import AutopilotProject, get_db
+        with get_db() as db:
+            proj = db.query(AutopilotProject).filter_by(is_active=True).first()
+            if proj and proj.base_dir:
+                queue_dir = str(Path(proj.base_dir) / "docs" / "design-queue")
+                DESIGN_QUEUE_DIR = queue_dir
+                return queue_dir
+    except Exception as e:
+        logger.debug(f"Could not get active project: {e}")
+    
+    return ""
+
+
 # ── TTL cache ────────────────────────────────────────────────────
 
 T = TypeVar("T")
@@ -224,9 +249,10 @@ async def get_pipeline_status():
             state = _store("state", {})
 
     queue_depth = 0
-    if DESIGN_QUEUE_DIR and Path(DESIGN_QUEUE_DIR).exists():
+    effective_dir = _get_effective_queue_dir()
+    if effective_dir and Path(effective_dir).exists():
         for ext in ALLOWED_EXTENSIONS:
-            queue_depth += len(list(Path(DESIGN_QUEUE_DIR).glob(f"*{ext}")))
+            queue_depth += len(list(Path(effective_dir).glob(f"*{ext}")))
 
     last_event = _cached("last_event", ttl=5.0)
     if last_event is None:
@@ -252,9 +278,10 @@ async def get_pipeline_status():
 # ── Design Queue ─────────────────────────────────────────────────
 
 def _get_queue_order_path() -> Optional[Path]:
-    if not DESIGN_QUEUE_DIR:
+    effective_dir = _get_effective_queue_dir()
+    if not effective_dir:
         return None
-    return Path(DESIGN_QUEUE_DIR) / ".queue_order.json"
+    return Path(effective_dir) / ".queue_order.json"
 
 
 def _load_queue_order() -> List[str]:
@@ -280,10 +307,11 @@ async def list_design_queue():
     if cached is not None:
         return cached
 
-    if not DESIGN_QUEUE_DIR or not Path(DESIGN_QUEUE_DIR).exists():
+    effective_dir = _get_effective_queue_dir()
+    if not effective_dir or not Path(effective_dir).exists():
         return _store("queue", [])
 
-    queue_path = Path(DESIGN_QUEUE_DIR)
+    queue_path = Path(effective_dir)
     saved_order = _load_queue_order()
 
     files_by_name: Dict[str, Path] = {}
@@ -317,10 +345,11 @@ class QueueReorderRequest(BaseModel):
 
 @router.post("/queue/reorder")
 async def reorder_queue(req: QueueReorderRequest):
-    if not DESIGN_QUEUE_DIR or not Path(DESIGN_QUEUE_DIR).exists():
-        raise HTTPException(500, "DESIGN_QUEUE_DIR not configured")
+    effective_dir = _get_effective_queue_dir()
+    if not effective_dir or not Path(effective_dir).exists():
+        raise HTTPException(500, "DESIGN_QUEUE_DIR not configured and no active project")
 
-    queue_path = Path(DESIGN_QUEUE_DIR)
+    queue_path = Path(effective_dir)
     existing = set()
     for ext in ALLOWED_EXTENSIONS:
         for f in queue_path.glob(f"*{ext}"):
@@ -337,10 +366,11 @@ async def reorder_queue(req: QueueReorderRequest):
 
 @router.post("/queue", response_model=DesignQueueItem)
 async def add_to_queue(item: DesignQueueAdd):
-    if not DESIGN_QUEUE_DIR:
-        raise HTTPException(500, "DESIGN_QUEUE_DIR not configured")
+    effective_dir = _get_effective_queue_dir()
+    if not effective_dir:
+        raise HTTPException(500, "DESIGN_QUEUE_DIR not configured and no active project")
 
-    queue_path = Path(DESIGN_QUEUE_DIR)
+    queue_path = Path(effective_dir)
     queue_path.mkdir(parents=True, exist_ok=True)
 
     ext = item.extension if item.extension in ALLOWED_EXTENSIONS else ".md"
@@ -370,7 +400,10 @@ async def add_to_queue(item: DesignQueueAdd):
 
 @router.delete("/queue/{filename}")
 async def remove_from_queue(filename: str):
-    filepath = _safe_path(DESIGN_QUEUE_DIR, filename)
+    effective_dir = _get_effective_queue_dir()
+    if not effective_dir:
+        raise HTTPException(500, "DESIGN_QUEUE_DIR not configured and no active project")
+    filepath = _safe_path(effective_dir, filename)
     if not filepath.exists():
         raise HTTPException(404, f"Design '{filename}' not found")
     filepath.unlink()
@@ -380,7 +413,10 @@ async def remove_from_queue(filename: str):
 
 @router.get("/queue/{filename}/content")
 async def get_queue_item_content(filename: str):
-    filepath = _safe_path(DESIGN_QUEUE_DIR, filename)
+    effective_dir = _get_effective_queue_dir()
+    if not effective_dir:
+        raise HTTPException(500, "DESIGN_QUEUE_DIR not configured and no active project")
+    filepath = _safe_path(effective_dir, filename)
     if not filepath.exists():
         raise HTTPException(404, f"Design '{filename}' not found")
     return {"filename": filename, "content": filepath.read_text(errors="replace")}
