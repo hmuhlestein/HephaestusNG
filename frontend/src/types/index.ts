@@ -486,3 +486,88 @@ export interface WorkflowExecution {
     active_agents: number;
   };
 }
+
+// ── Prompt Editor Types ──────────────────────────────────────────────────
+
+export interface PhasePromptVersion {
+  version: number;
+  status: 'active' | 'draft' | 'archived';
+  created_by: string;
+  created_at: string | null;
+  change_summary: string | null;
+  parent_version: number | null;
+  changed_fields: string[];
+}
+
+export interface PhasePromptVersionDetail {
+  version: number;
+  status: string;
+  description: string;
+  done_definitions: string[];
+  additional_notes: string | null;
+  outputs: string | null;
+  next_steps: string | null;
+  change_summary: string | null;
+  created_by: string;
+  created_at: string | null;
+  parent_version: number | null;
+}
+
+export interface PhasePromptPreview {
+  system_prompt: string;
+  user_prompt: string;
+  variables_used: string[];
+  variables_missing: string[];
+  warnings: string[];
+}
+
+export interface PhasePromptDiff {
+  from_version: number;
+  to_version: number;
+  field_changes: Record<string, { from: string; to: string }>;
+  added_lines: number;
+  removed_lines: number;
+  changed_fields: string[];
+}
+
+export interface TaskPromptOverrides {
+  system_prompt: string | null;
+  user_prompt: string | null;
+  updated_at: string | null;
+  updated_by: string | null;
+}
+
+export interface TaskPrompt {
+  system_prompt: string;
+  user_prompt: string;
+}
+
+export interface PromptSavePayload {
+  description: string;
+  done_definitions: string[];
+  additional_notes: string | null;
+  outputs: string | null;
+  next_steps: string | null;
+  change_summary: string;
+  publish: boolean;
+  created_by?: string;
+}
+
+export interface PromptSaveResponse {
+  success: boolean;
+  version: number;
+  status: string;
+  created_at: string | null;
+  created_by: string;
+  diff: Record<string, any>;
+}
+
+export interface PhaseResetResponse {
+  success: boolean;
+  terminated_agents?: number;
+  reset_tasks?: number;
+  message: string;
+  requires_confirmation?: boolean;
+  active_agents?: number;
+}
+

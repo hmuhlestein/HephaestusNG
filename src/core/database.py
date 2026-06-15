@@ -19,7 +19,7 @@ from sqlalchemy import (
     Boolean,
 )
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import relationship, sessionmaker
+from sqlalchemy.orm import relationship, sessionmaker, backref
 from sqlalchemy.pool import StaticPool
 
 Base = declarative_base()
@@ -860,6 +860,83 @@ class AutopilotDesign(Base):
     __table_args__ = (
         UniqueConstraint("project_id", "filename", name="uq_design_project_filename"),
     )
+
+
+class PhasePromptVersion(Base):
+    """Versioned prompt content for a phase.
+
+    Every save creates a new row. Exactly one row per phase is marked
+    ``active``; the rest are ``draft`` or ``archived`` (replaced).
+    """
+
+    __tablename__ = "phase_prompt_versions"
+
+    id = Column(String, primary_key=True)
+    phase_id = Column(String, ForeignKey("phases.id"), nullable=False, index=True)
+    version = Column(Integer, nullable=False)
+    status = Column(
+        String,
+        CheckConstraint("status IN ('active', 'draft', 'archived')"),
+        default="draft",
+        nullable=False,
+    )
+
+    # Snapshot of editable fields
+    description = Column(Text, nullable=False, default="")
+    done_definitions = Column(JSON, nullable=False, default=list)
+    additional_notes = Column(Text)
+    outputs = Column(Text)
+    next_steps = Column(Text)
+
+    # Metadata
+    change_summary = Column(Text)  # Human-readable change note from editor
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_by = Column(String, nullable=False, default="ui-user")
+    parent_version = Column(Integer, nullable=True)  # Version this was edited from
+
+    # Relationships
+    phase = relationship("Phase", backref="prompt_versions")
+
+    __table_args__ = (
+        UniqueConstraint("phase_id", "version", name="uq_phase_version"),
+    )
+
+
+class TaskPromptOverride(Base):
+    """Per-task prompt overrides.
+
+    Empty / NULL values fall back to the phase default. Non-empty values
+    replace the corresponding section in the assembled prompt.
+    """
+
+    __tablename__ = "task_prompt_overrides"
+
+    task_id = Column(String, ForeignKey("tasks.id"), primary_key=True)
+    system_prompt = Column(Text)  # NULL = use phase default
+    user_prompt = Column(Text)    # NULL = use phase default
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    updated_by = Column(String, nullable=False, default="ui-user")
+
+    # Relationships
+    task = relationship("Task", backref=backref("prompt_override", uselist=False))
+
+
+class PhasePromptTemplate(Base):
+    """Available template variables for phase prompts.
+
+    Documents which ``{var_name}`` tokens the assembler recognizes and
+    how to resolve them.
+    """
+
+    __tablename__ = "phase_prompt_templates"
+
+    id = Column(String, primary_key=True)
+    name = Column(String, nullable=False, unique=True)  # e.g. "project_name"
+    description = Column(Text, nullable=False)
+    example_value = Column(Text)  # e.g. "hephaestus"
+    resolver = Column(String, nullable=False)  # Python path, e.g. "src.prompts.resolvers.project_name"
+    category = Column(String, default="general")  # general, workflow, phase, task
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 
 class DatabaseManager:

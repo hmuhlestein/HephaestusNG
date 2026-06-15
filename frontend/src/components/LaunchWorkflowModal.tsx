@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   Rocket,
@@ -30,6 +30,7 @@ interface LaunchWorkflowModalProps {
   open: boolean;
   onClose: () => void;
   onLaunch: (workflowId: string) => void;
+  initialDefinitionId?: string;
 }
 
 type Step = 'select' | 'form' | 'preview';
@@ -38,6 +39,7 @@ const LaunchWorkflowModal: React.FC<LaunchWorkflowModalProps> = ({
   open,
   onClose,
   onLaunch,
+  initialDefinitionId,
 }) => {
   const [step, setStep] = useState<Step>('select');
   const [selectedDefinition, setSelectedDefinition] = useState<WorkflowDefinition | null>(null);
@@ -52,6 +54,25 @@ const LaunchWorkflowModal: React.FC<LaunchWorkflowModalProps> = ({
     queryFn: apiService.listWorkflowDefinitions,
     enabled: open,
   });
+
+  // Pre-select definition when modal opens with initialDefinitionId
+  useEffect(() => {
+    if (open && initialDefinitionId && definitions.length > 0 && !selectedDefinition) {
+      const def = definitions.find((d) => d.id === initialDefinitionId);
+      if (def) {
+        setSelectedDefinition(def);
+        setStep('form');
+        initializeFormValues(def.launch_template);
+      }
+    }
+    if (!open) {
+      // Reset when closing
+      setSelectedDefinition(null);
+      setStep('select');
+      setFormValues({});
+      setError(null);
+    }
+  }, [open, initialDefinitionId, definitions]);
 
   // Initialize form values when a definition is selected
   const initializeFormValues = (template: LaunchTemplate | null | undefined) => {

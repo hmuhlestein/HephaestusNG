@@ -29,6 +29,8 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
   const [lastUpdate, setLastUpdate] = useState(new Date());
   const [_ws, setWs] = useState<WebSocket | null>(null);
   const subscribersRef = useRef<Map<string, Set<(data: any) => void>>>(new Map());
+  const retryCountRef = useRef(0);
+  const mountedRef = useRef(true);
 
   const subscribe = useCallback((event: string, callback: (data: any) => void) => {
     if (!subscribersRef.current.has(event)) {
@@ -43,10 +45,16 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
   }, []);
 
   useEffect(() => {
+    mountedRef.current = true;
+
     const connectWebSocket = () => {
+      if (!mountedRef.current) return null;
+
       const websocket = new WebSocket('ws://localhost:8300/ws');
 
       websocket.onopen = () => {
+        if (!mountedRef.current) return;
+        retryCountRef.current = 0;
         setIsConnected(true);
         toast.success('Connected to server', { duration: 2000 });
       };
@@ -125,17 +133,31 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
         }
       };
 
-      websocket.onerror = (error) => {
-        console.error('WebSocket error:', error);
-        toast.error('Connection error');
+      websocket.onerror = () => {
+        // Suppress error toasts during initial retry backoff —
+        // the backend is often not ready on first page load.
+        // Only show error after several failed attempts.
+        if (!mountedRef.current) return;
+        retryCountRef.current += 1;
+        if (retryCountRef.current > 3) {
+          toast.error('Connection error');
+        }
       };
 
       websocket.onclose = () => {
+        if (!mountedRef.current) return;
         setIsConnected(false);
-        toast.error('Disconnected from server', { duration: 2000 });
 
-        // Reconnect after 3 seconds
-        setTimeout(connectWebSocket, 3000);
+        if (retryCountRef.current <= 3) {
+          // Silent retry with increasing backoff (1s, 2s, 4s)
+          const delay = Math.min(1000 * Math.pow(2, retryCountRef.current), 8000);
+          retryCountRef.current += 1;
+          setTimeout(connectWebSocket, delay);
+        } else {
+          toast.error('Disconnected from server', { duration: 2000 });
+          // Continue retrying with longer interval
+          setTimeout(connectWebSocket, 5000);
+        }
       };
 
       setWs(websocket);
@@ -146,7 +168,8 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
     const websocket = connectWebSocket();
 
     return () => {
-      websocket.close();
+      mountedRef.current = false;
+      websocket?.close();
     };
   }, []);
 

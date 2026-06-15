@@ -186,10 +186,32 @@ def _start_monitor(python: str) -> bool:
         return False
 
 
+def _kill_port(port: int) -> None:
+    """Kill any process using the given port."""
+    import signal
+    try:
+        result = subprocess.run(
+            ["lsof", "-ti", f":{port}"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.stdout.strip():
+            for pid_str in result.stdout.strip().split("\n"):
+                try:
+                    pid = int(pid_str)
+                    os.kill(pid, signal.SIGKILL)
+                except (ValueError, OSError):
+                    pass
+            time.sleep(1)  # Wait for port to free
+    except Exception:
+        pass
+
+
 def _start_frontend() -> bool:
     frontend_dir = HEPHAESTUS_DIR / "frontend"
     if not (frontend_dir / "package.json").exists():
         return False
+    # Ensure port 5173 is free
+    _kill_port(5173)
     log_dir = Path.home() / ".hephaestus" / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
     log_file = open(log_dir / "frontend.log", "a")

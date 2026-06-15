@@ -188,6 +188,42 @@ project/
 ...
 
 ═══════════════════════════════════════════════════════════════════════
+STEP 8: OBJECT-ORIENTED DESIGN PASS
+═══════════════════════════════════════════════════════════════════════
+
+Before finalizing the architecture, perform an OO design pass:
+
+### Inheritance & Composition
+- Can related components share a base class or interface?
+- Should behavior be composed via containment vs inheritance?
+- Are there Strategy / Template patterns that simplify variants?
+
+### Single Responsibility
+- Does each class/module do ONE thing well?
+- Can any class be split into smaller, focused units?
+- Are there God objects that need refactoring?
+
+### Dependency Inversion
+- Do high-level modules depend on abstractions, not concretions?
+- Can we define interfaces/protocols for key boundaries?
+- Are dependencies injected, not hard-coded?
+
+### Refactoring Opportunities
+- What code is likely to be duplicated? Extract shared utilities.
+- What patterns emerge across components? Create shared abstractions.
+- Where can push-down details (implementation specifics) into subclasses
+  while keeping base interfaces clean?
+
+### Questions to Answer
+1. What are the core abstractions in this system?
+2. Which classes can be refactored to use composition over inheritance?
+3. What interfaces should exist at component boundaries?
+4. What details should be pushed down from base to derived classes?
+5. What shared behavior can be extracted into mixins or utility classes?
+
+Document OO decisions in architecture.md under "Object-Oriented Design".
+
+═══════════════════════════════════════════════════════════════════════
 CRITICAL RULES
 ═══════════════════════════════════════════════════════════════════════
 
@@ -197,12 +233,17 @@ DO:
 - Create tasks with proper blocking relationships
 - Include detailed acceptance criteria
 - Respect technology choices from Phase 1
+- Perform an OO design pass before finalizing
+- Identify refactoring opportunities and shared abstractions
+- Push down details while keeping base interfaces clean
 
 DO NOT:
 - Skip component interface design
 - Create tasks without blocking relationships
 - Forget edge cases in acceptance criteria
 - Ignore non-functional requirements
+- Skip the OO design pass
+- Create tightly coupled components without abstractions
 """,
     outputs=[
         "architecture.md with complete technical design",
