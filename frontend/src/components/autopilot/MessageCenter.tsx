@@ -5,7 +5,7 @@ import {
   Rocket, CheckCircle2, XCircle, AlertTriangle, FileText,
   Layers, Play, Pause, Zap, ArrowRight, MessageSquare,
   ExternalLink, RotateCcw, Eye, ChevronRight, Reply,
-  FolderOpen, AlertCircle, SkipForward
+  FolderOpen, AlertCircle, SkipForward, Send
 } from 'lucide-react';
 import { apiService } from '@/services/api';
 import { formatDistanceToNow } from 'date-fns';
@@ -48,6 +48,7 @@ const MessageCenter: React.FC = () => {
   const [selectedFeature, setSelectedFeature] = useState<string | null>(null);
   const [showInputModal, setShowInputModal] = useState(false);
   const [currentRequestId, setCurrentRequestId] = useState<string | null>(null);
+  const [messageText, setMessageText] = useState('');
   
   const { data: messages, isLoading } = useQuery({
     queryKey: ['autopilot-messages'],
@@ -62,8 +63,8 @@ const MessageCenter: React.FC = () => {
   });
 
   const submitMutation = useMutation({
-    mutationFn: ({ choice }: { choice: string }) =>
-      apiService.submitAutopilotInput(currentRequestId!, choice),
+    mutationFn: ({ choice, message }: { choice: string; message?: string }) =>
+      apiService.submitAutopilotInput(currentRequestId!, choice, message),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['autopilot-input'] });
       queryClient.invalidateQueries({ queryKey: ['autopilot-status'] });
@@ -402,6 +403,38 @@ const MessageCenter: React.FC = () => {
                     <XCircle className="w-4 h-4" />
                     Stop Pipeline
                   </button>
+                </div>
+
+                {/* Message Input */}
+                <div className="mt-4">
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Or send a message:</label>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={messageText}
+                      onChange={(e) => setMessageText(e.target.value)}
+                      placeholder="Type a message to the pipeline..."
+                      className="flex-1 px-4 py-2 border border-gray-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-violet-500"
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && messageText.trim()) {
+                          submitMutation.mutate({ choice: 'm', message: messageText.trim() });
+                          setMessageText('');
+                        }
+                      }}
+                    />
+                    <button
+                      onClick={() => {
+                        if (messageText.trim()) {
+                          submitMutation.mutate({ choice: 'm', message: messageText.trim() });
+                          setMessageText('');
+                        }
+                      }}
+                      disabled={!messageText.trim() || submitMutation.isPending}
+                      className="px-4 py-2 bg-violet-600 text-white rounded-xl hover:bg-violet-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                    >
+                      <Send className="w-4 h-4" />
+                    </button>
+                  </div>
                 </div>
 
                 <div className="mt-4 flex justify-end">

@@ -226,7 +226,7 @@ def check_api_credits() -> Tuple[bool, str]:
 def detect_hard_error(agents: list, failed_tasks: list, workflow_id: str = None) -> Tuple[bool, str]:
     crashed_agents = [a for a in agents if a.get("status") == "error"]
     if crashed_agents:
-        names = [a.get("agent_id", "unknown")[:20] for a in crashed_agents]
+        names = [a.get("id", "unknown")[:20] for a in crashed_agents]
         return True, f"Crashed agents: {', '.join(names)}"
 
     # Filter to only tasks from the current workflow if provided
@@ -247,7 +247,7 @@ def detect_hard_error(agents: list, failed_tasks: list, workflow_id: str = None)
 def detect_impasse(stuck_count: int, agents: list, pending_tasks: list, in_progress_tasks: list) -> Tuple[bool, str]:
     stuck_agents = [a for a in agents if a.get("health_check_failures", 0) >= STUCK_THRESHOLD]
     if stuck_agents:
-        names = [a.get("agent_id", "unknown")[:20] for a in stuck_agents]
+        names = [a.get("id", "unknown")[:20] for a in stuck_agents]
         return True, f"Stuck agents: {', '.join(names)}"
 
     active_agents = [a for a in agents if a.get("status") == "working"]

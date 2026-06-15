@@ -1215,6 +1215,7 @@ class HumanInputRequest(BaseModel):
 class HumanInputResponse(BaseModel):
     request_id: str
     choice: str
+    message: Optional[str] = None
 
 
 def _find_pending_input() -> Optional[Path]:
@@ -1258,8 +1259,8 @@ async def get_human_input_request():
 @router.post("/input")
 async def submit_human_input(resp: HumanInputResponse):
     """Submit a human input response to the orchestrator."""
-    if resp.choice not in ("c", "s", "q"):
-        raise HTTPException(400, "Invalid choice. Must be 'c', 's', or 'q'.")
+    if resp.choice not in ("c", "s", "q", "m"):
+        raise HTTPException(400, "Invalid choice. Must be 'c', 's', 'q', or 'm'.")
 
     # Verify the request still exists
     request_file = Path(AUTOPILOT_STATE_DIR) / f"input_request_{resp.request_id}.json"
@@ -1270,11 +1271,14 @@ async def submit_human_input(resp: HumanInputResponse):
     response_file.parent.mkdir(parents=True, exist_ok=True)
 
     # Atomic write via temp+rename
-    payload = json.dumps({
+    payload = {
         "request_id": resp.request_id,
         "choice": resp.choice,
         "timestamp": datetime.now(timezone.utc).isoformat(),
-    })
+    }
+    if resp.message:
+        payload["message"] = resp.message
+    payload = json.dumps(payload)
     tmp = response_file.with_suffix(".tmp")
     tmp.write_text(payload)
     os.rename(tmp, response_file)
