@@ -1,15 +1,16 @@
 import React, { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { motion } from 'framer-motion';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { motion, AnimatePresence } from 'framer-motion';
 import {
   Rocket, CheckCircle2, XCircle, AlertTriangle, FileText,
   Layers, Play, Pause, Zap, ArrowRight, MessageSquare,
   ExternalLink, RotateCcw, Eye, ChevronRight, Reply,
-  FolderOpen, AlertCircle
+  FolderOpen, AlertCircle, SkipForward
 } from 'lucide-react';
 import { apiService } from '@/services/api';
 import { formatDistanceToNow } from 'date-fns';
 import FeatureDetailModal from './FeatureDetailModal';
+import toast from 'react-hot-toast';
 
 const eventTypeConfig: Record<string, { icon: React.ElementType; color: string; bg: string; label?: string }> = {
   design_queued: { icon: FileText, color: 'text-blue-600', bg: 'bg-blue-100' },
@@ -43,12 +44,37 @@ const designStatusConfig: Record<string, { icon: React.ElementType; color: strin
 };
 
 const MessageCenter: React.FC = () => {
+  const queryClient = useQueryClient();
   const [selectedFeature, setSelectedFeature] = useState<string | null>(null);
+  const [showInputModal, setShowInputModal] = useState(false);
+  const [currentRequestId, setCurrentRequestId] = useState<string | null>(null);
+  
   const { data: messages, isLoading } = useQuery({
     queryKey: ['autopilot-messages'],
     queryFn: () => apiService.getAutopilotMessages(100),
     refetchInterval: 15000,
   });
+
+  const { data: inputRequest } = useQuery({
+    queryKey: ['autopilot-input'],
+    queryFn: () => apiService.getAutopilotInput(),
+    refetchInterval: 5000,
+  });
+
+  const submitMutation = useMutation({
+    mutationFn: ({ choice }: { choice: string }) =>
+      apiService.submitAutopilotInput(currentRequestId!, choice),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['autopilot-input'] });
+      queryClient.invalidateQueries({ queryKey: ['autopilot-status'] });
+      queryClient.invalidateQueries({ queryKey: ['autopilot-messages'] });
+      toast.success('Response sent to pipeline');
+      setShowInputModal(false);
+    },
+    onError: () => toast.error('Failed to submit response'),
+  });
+
+
 
   if (isLoading) {
     return (
@@ -123,9 +149,9 @@ const MessageCenter: React.FC = () => {
       actions.push({
         label: 'Respond',
         icon: Reply,
-        onClick: async () => {
-          // TODO: Open human input modal
-          console.log('Respond to input request:', data.request_id);
+        onClick: () => {
+          setCurrentRequestId(data.request_id);
+          setShowInputModal(true);
         },
         color: 'violet',
       });
@@ -317,6 +343,80 @@ const MessageCenter: React.FC = () => {
           onClose={() => setSelectedFeature(null)}
         />
       )}
+
+      {/* Human Input Modal */}
+      <AnimatePresence>
+        {showInputModal && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm"
+            onClick={(e) => { if (e.target === e.currentTarget) setShowInputModal(false); }}
+          >
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden"
+            >
+              <div className="p-6">
+                <div className="flex items-center gap-3 mb-4">
+                  <div className="p-3 bg-amber-100 rounded-xl">
+                    <AlertCircle className="w-6 h-6 text-amber-600" />
+                  </div>
+                  <div>
+                    <h2 className="text-lg font-bold text-gray-800">Human Input Required</h2>
+                    <p className="text-xs text-gray-500">The pipeline needs your decision</p>
+                  </div>
+                </div>
+
+                {inputRequest && (
+                  <div className="mb-6 p-4 bg-amber-50 border border-amber-200 rounded-xl">
+                    <p className="text-sm text-amber-800">{inputRequest.reason}</p>
+                  </div>
+                )}
+
+                <div className="space-y-3">
+                  <button
+                    onClick={() => submitMutation.mutate({ choice: 'c' })}
+                    disabled={submitMutation.isPending}
+                    className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-emerald-600 text-white rounded-xl font-semibold hover:bg-emerald-700 disabled:opacity-50 transition-colors"
+                  >
+                    <Zap className="w-4 h-4" />
+                    Continue Processing
+                  </button>
+                  <button
+                    onClick={() => submitMutation.mutate({ choice: 's' })}
+                    disabled={submitMutation.isPending}
+                    className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-amber-600 text-white rounded-xl font-semibold hover:bg-amber-700 disabled:opacity-50 transition-colors"
+                  >
+                    <SkipForward className="w-4 h-4" />
+                    Skip This Design
+                  </button>
+                  <button
+                    onClick={() => submitMutation.mutate({ choice: 'q' })}
+                    disabled={submitMutation.isPending}
+                    className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-red-600 text-white rounded-xl font-semibold hover:bg-red-700 disabled:opacity-50 transition-colors"
+                  >
+                    <XCircle className="w-4 h-4" />
+                    Stop Pipeline
+                  </button>
+                </div>
+
+                <div className="mt-4 flex justify-end">
+                  <button
+                    onClick={() => setShowInputModal(false)}
+                    className="text-sm text-gray-500 hover:text-gray-700"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </>
   );
 };
