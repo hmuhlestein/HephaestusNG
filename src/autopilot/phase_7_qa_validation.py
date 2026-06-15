@@ -17,7 +17,11 @@ Executes unit tests, integration tests, and end-to-end validation.
 Compares implementation against requirements and generates a final
 QA report with pass/fail status and recommendations.""",
     done_definitions=[
-        "Test environment validated (services running)",
+        "TESTING.md checked (exists or noted as missing)",
+        "TESTING.md read thoroughly (if exists)",
+        "App startup instructions followed (or default approach used)",
+        "Test commands executed (from TESTING.md or default discovery)",
+        "Log locations documented",
         "Unit tests executed and results captured",
         "Integration tests executed and results captured",
         "End-to-end validation performed",
@@ -36,6 +40,30 @@ YOU ARE A QA ENGINEER - VALIDATE THE IMPLEMENTATION
 YOUR MISSION: Run comprehensive tests and validate against requirements
 
 ═══════════════════════════════════════════════════════════════════════
+STEP 0: CHECK FOR TESTING.md
+═══════════════════════════════════════════════════════════════════════
+
+Look for TESTING.md in the project root (Project Path from your task).
+
+If TESTING.md DOES NOT EXIST:
+- Note this in your report: "TESTING.md not found - using default test approach"
+- Continue to Step 1 using standard test discovery
+- Create basic smoke tests if none exist
+
+If TESTING.md EXISTS:
+1. Read it thoroughly — it contains:
+   - How to start/run the application
+   - How to run existing tests (exact commands)
+   - Where to find application logs
+   - Known issues and workarounds
+   - Test priorities and focus areas
+   - Environment setup instructions
+2. Follow its instructions to start the application
+3. Verify the app is running before proceeding
+4. Document all log locations mentioned
+5. Use the exact test commands from TESTING.md
+
+═══════════════════════════════════════════════════════════════════════
 STEP 1: READ REQUIREMENTS AND CONTEXT
 ═══════════════════════════════════════════════════════════════════════
 
@@ -47,6 +75,7 @@ CRITICAL PATH RULE: You MUST use the FULL ABSOLUTE PATHS from your task descript
 
 Read:
 - Your task description for "Docs Path:" and "Project Path:" locations
+- TESTING.md — How to run the app and tests
 - requirements_analysis.md (from Docs Path) - What must it do?
 - architecture.md (from Docs Path) - How should it work?
 - review_report.md (from Docs Path) - What issues were found?
@@ -54,12 +83,17 @@ Read:
 - security_report.md (from Docs Path) - What security fixes were made?
 
 ═══════════════════════════════════════════════════════════════════════
-STEP 2: VALIDATE TEST ENVIRONMENT
+STEP 2: START APPLICATION AND VALIDATE ENVIRONMENT
 ═══════════════════════════════════════════════════════════════════════
 
-Check:
+Follow TESTING.md instructions EXACTLY to start the application:
+
 ```bash
-# Check services are running
+# Use the startup command from TESTING.md
+# Example: python run_server.py or npm start
+# Follow the exact command documented in TESTING.md
+
+# After starting, verify it's running:
 curl -s http://localhost:8300/health || echo "Backend not running"
 
 # Check test dependencies
@@ -68,6 +102,12 @@ python -m pytest --version || echo "pytest not installed"
 # Check test files exist
 find . -name "test_*.py" -o -name "*_test.py" | head -20
 ```
+
+Document:
+- Application startup command used
+- Service URLs and ports
+- Log file locations (from TESTING.md)
+- Any startup issues encountered
 
 ═══════════════════════════════════════════════════════════════════════
 STEP 3: DISCOVER AND RUN TESTS
