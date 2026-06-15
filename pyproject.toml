@@ -1,5 +1,6 @@
 [tool.poetry]
 name = "hephaestus"
+packages = [{include = "src"}]
 version = "0.1.0"
 description = "Autonomous AI Agent Orchestration System"
 authors = ["Hephaestus Team"]
@@ -10,7 +11,7 @@ heph = "src.cli.main:main"
 
 [tool.poetry.dependencies]
 python = "^3.11"
-fastapi = "^0.104.0"
+fastapi = ">=0.115.0"
 uvicorn = {extras = ["standard"], version = "^0.24.0"}
 sqlalchemy = "^2.0.0"
 qdrant-client = "^1.7.4"

@@ -245,9 +245,9 @@ const Dashboard: React.FC = () => {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold text-gray-800">Dashboard</h1>
-          <p className="text-gray-600 mt-1">
+          <p className="text-gray-600 mt-1 line-clamp-2">
             {selectedExecution ? (
-              <>Workflow: {selectedExecution.description || selectedExecution.definition_name}</>
+              <>Workflow: {selectedExecution.definition_name || selectedExecution.description?.substring(0, 120)}</>
             ) : (
               'Real-time system overview'
             )}

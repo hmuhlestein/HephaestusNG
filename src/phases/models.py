@@ -67,7 +67,7 @@ class PhaseDefinition(BaseModel):
     # Per-phase CLI configuration (optional - falls back to global defaults)
     cli_tool: Optional[str] = Field(
         None,
-        description="CLI tool to use for this phase (claude, opencode, droid, codex, swarm)"
+        description="CLI tool to use for this phase (claude, opencode, droid, codex, pi, swarm)"
     )
     cli_model: Optional[str] = Field(
         None,

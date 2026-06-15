@@ -719,10 +719,11 @@ REMEMBER:
         is_opencode = cli_type == "opencode"
 
         # Check which agents need chunking
-        from src.interfaces.cli_interface import ClaudeCodeAgent, DroidAgent, CodexAgent
+        from src.interfaces.cli_interface import ClaudeCodeAgent, DroidAgent, CodexAgent, PiAgent
         is_claude = isinstance(cli_agent, ClaudeCodeAgent)
         is_droid = isinstance(cli_agent, DroidAgent)
         is_codex = isinstance(cli_agent, CodexAgent)
+        is_pi = isinstance(cli_agent, PiAgent)
 
         # If verification is disabled, just send once and return
         if not verify_delivery:
@@ -732,14 +733,16 @@ REMEMBER:
                 await asyncio.sleep(5)
                 pane.send_keys('', enter=True)  # Send Enter to submit the prompt
                 logger.info(f"OpenCode: Enter sent to agent {agent_id}")
-            elif is_claude or is_droid or is_codex:
-                # Claude/Droid/Codex: Send in chunks to avoid tmux buffer issues with large prompts
+            elif is_claude or is_droid or is_codex or is_pi:
+                # Claude/Droid/Codex/Pi: Send in chunks to avoid tmux buffer issues with large prompts
                 if is_claude:
                     agent_name = "Claude"
                 elif is_droid:
                     agent_name = "Droid"
-                else:
+                elif is_codex:
                     agent_name = "Codex"
+                else:
+                    agent_name = "Pi"
                 logger.info(f"Sending initial prompt to {agent_name} agent {agent_id} (verification disabled)")
                 formatted_message = cli_agent.format_message(initial_message)
 
@@ -776,14 +779,16 @@ REMEMBER:
                 logger.info(f"OpenCode agent: Prompt loaded via -p flag, waiting 5 seconds then sending Enter")
                 await asyncio.sleep(5)
                 pane.send_keys('', enter=True)  # Send Enter to submit the prompt
-            elif is_claude or is_droid or is_codex:
-                # Claude/Droid/Codex: Send in chunks to avoid tmux buffer issues with large prompts
+            elif is_claude or is_droid or is_codex or is_pi:
+                # Claude/Droid/Codex/Pi: Send in chunks to avoid tmux buffer issues with large prompts
                 if is_claude:
                     agent_name = "Claude"
                 elif is_droid:
                     agent_name = "Droid"
-                else:
+                elif is_codex:
                     agent_name = "Codex"
+                else:
+                    agent_name = "Pi"
                 formatted_message = cli_agent.format_message(initial_message)
                 chunk_size = 2000  # characters per chunk
                 num_chunks = (len(formatted_message) + chunk_size - 1) // chunk_size
@@ -835,53 +840,41 @@ REMEMBER:
                 logger.warning(f"Agent {agent_id} not found")
                 return
 
-            # Capture final output before killing tmux session
-            final_output = ""
+            # Kill tmux session using subprocess (more reliable than libtmux)
             if agent.tmux_session_name:
                 try:
-                    if self.tmux_server.has_session(agent.tmux_session_name):
-                        # Find session by iteration (avoid deprecated get_by_id)
-                        tmux_session = None
-                        for tmux_sess in self.tmux_server.sessions:
-                            if tmux_sess.name == agent.tmux_session_name:
-                                tmux_session = tmux_sess
-                                break
-
-                        if tmux_session:
-                            # Capture the final output before killing the session
-                            try:
-                                pane = tmux_session.attached_window.attached_pane
-                                # Capture all available output (up to 10000 lines)
-                                output_lines = pane.cmd("capture-pane", "-p", "-S", "-10000").stdout
-                                final_output = "\n".join(output_lines) if output_lines else ""
-                                logger.info(f"Captured {len(output_lines)} lines of final output for agent {agent_id}")
-                            except Exception as e:
-                                logger.error(f"Failed to capture final output: {e}")
-
-                            # Now kill the session
-                            tmux_session.kill_session()
-                            logger.debug(f"Killed tmux session: {agent.tmux_session_name}")
+                    import subprocess
+                    result = subprocess.run(
+                        ["tmux", "kill-session", "-t", agent.tmux_session_name],
+                        capture_output=True, timeout=5
+                    )
+                    if result.returncode == 0:
+                        logger.debug(f"Killed tmux session: {agent.tmux_session_name}")
+                    else:
+                        logger.debug(f"Tmux session {agent.tmux_session_name} not found or already killed")
+                except subprocess.TimeoutExpired:
+                    logger.warning(f"Timeout killing tmux session {agent.tmux_session_name}")
+                except FileNotFoundError:
+                    logger.debug("tmux not available, skipping session cleanup")
                 except Exception as e:
                     logger.error(f"Failed to kill tmux session: {e}")
 
             # Update agent status
             agent.status = "terminated"
 
-            # Log termination with final output
+            # Log termination
             log_entry = AgentLog(
                 agent_id=agent_id,
                 log_type="terminated",
-                message="Agent terminated after task completion",
+                message="Agent terminated",
                 details={
-                    "final_output": final_output,
-                    "output_lines": len(final_output.split('\n')) if final_output else 0,
-                    "captured_at": datetime.utcnow().isoformat()
+                    "terminated_at": datetime.utcnow().isoformat()
                 }
             )
             session.add(log_entry)
 
             session.commit()
-            logger.info(f"Agent {agent_id} terminated successfully with output captured")
+            logger.info(f"Agent {agent_id} terminated successfully")
 
         except Exception as e:
             logger.error(f"Failed to terminate agent {agent_id}: {e}")

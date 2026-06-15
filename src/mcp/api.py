@@ -1675,4 +1675,67 @@ def create_frontend_routes(db_manager: DatabaseManager, agent_manager: AgentMana
         """Manually trigger sync of task blocking status."""
         return await frontend_api.sync_blocking_status()
 
+    @router.post("/workflows/{workflow_id}/stop")
+    async def stop_workflow(workflow_id: str):
+        """Stop a running workflow and terminate its agents."""
+        from src.core.database import Workflow, Agent, Task
+        from datetime import datetime
+
+        session = frontend_api.db_manager.get_session()
+        try:
+            workflow = session.query(Workflow).filter_by(id=workflow_id).first()
+            if not workflow:
+                raise HTTPException(status_code=404, detail=f"Workflow {workflow_id} not found")
+
+            if workflow.status != 'active':
+                raise HTTPException(status_code=400, detail=f"Workflow is {workflow.status}, not active")
+
+            # Terminate all active agents for this workflow (agents link via tasks)
+            agents = session.query(Agent).join(Task, Agent.current_task_id == Task.id).filter(
+                Task.workflow_id == workflow_id,
+                Agent.status == 'working'
+            ).all()
+
+            terminated_count = 0
+            for agent in agents:
+                agent.status = 'terminated'
+                terminated_count += 1
+                # Kill tmux session
+                if agent.tmux_session_name:
+                    try:
+                        import subprocess
+                        subprocess.run(
+                            ["tmux", "kill-session", "-t", agent.tmux_session_name],
+                            capture_output=True, timeout=5
+                        )
+                    except Exception:
+                        pass
+
+            # Mark assigned tasks as failed
+            tasks = session.query(Task).filter_by(
+                workflow_id=workflow_id
+            ).filter(Task.status.in_(['assigned', 'in_progress', 'queued', 'pending'])).all()
+
+            for task in tasks:
+                task.status = 'failed'
+                task.failure_reason = 'Workflow stopped by user'
+                task.completed_at = datetime.utcnow()
+
+            # Update workflow status
+            workflow.status = 'failed'
+
+            session.commit()
+
+            return {
+                "success": True,
+                "message": f"Workflow stopped. Terminated {terminated_count} agents, failed {len(tasks)} tasks."
+            }
+        except HTTPException:
+            raise
+        except Exception as e:
+            session.rollback()
+            raise HTTPException(status_code=500, detail=str(e))
+        finally:
+            session.close()
+
     return router

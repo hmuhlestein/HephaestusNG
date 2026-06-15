@@ -60,7 +60,7 @@ heph status
 heph start
 
 # Test service connectivity
-heph exec test
+heph status
 
 # Run the autopilot pipeline
 heph autopilot start --project-path ~/my-project
@@ -163,7 +163,7 @@ heph exec run python scripts/smoke_test.py --cwd ~/my-project --timeout 60
 heph exec run ls -la --log /tmp/my-test.log
 
 # Ping the backend
-heph exec ping
+heph status
 
 # List available MCP tools
 heph exec endpoints
@@ -206,7 +206,7 @@ All commands support `--json` for machine-readable output:
 ```bash
 heph --json status | jq '.agents.total'
 heph --json task list --status failed | jq '.[].description'
-heph --json exec test
+heph --json status
 ```
 
 ---

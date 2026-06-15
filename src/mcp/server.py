@@ -3655,8 +3655,8 @@ async def terminate_agent_endpoint(
         finally:
             session.close()
 
-        # Process queue after termination
-        await process_queue()
+        # Process queue after termination (don't block the response)
+        asyncio.create_task(process_queue())
 
         # Broadcast update
         await server_state.broadcast_update({

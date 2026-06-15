@@ -27,7 +27,6 @@ heph stop                        # Stop all services
 heph restart                     # Restart all services
 heph status                      # Health check
 heph init                        # Initialize database and Qdrant
-heph exec test                   # Test service connectivity
 ```
 
 ### Workflow & Agents

@@ -254,20 +254,20 @@ PYTHON="$VENV_DIR/bin/python"
 
 header "Dependencies"
 
-# Check if core deps are already installed
-if "$PYTHON" -c "import fastapi, uvicorn, sqlalchemy" 2>/dev/null; then
-    ok "Backend dependencies already installed"
+# Install package in editable mode (creates heph entry point)
+if "$PYTHON" -c "from src.cli.main import main" 2>/dev/null; then
+    ok "Package already installed"
 else
-    log "Installing requirements..."
+    log "Installing package in editable mode..."
     if [ "$PKG_MGR" = "uv" ]; then
-        uv pip install -r "$PREFIX/requirements.txt" --quiet --python "$PYTHON"
+        uv pip install -e "$PREFIX" --quiet --python "$PYTHON" 2>&1 | tail -3
     elif [ "$PKG_MGR" = "poetry" ]; then
         cd "$PREFIX" && poetry install --no-interaction --quiet 2>&1 | tail -3
     else
         "$VENV_DIR/bin/pip" install --upgrade pip --quiet 2>/dev/null
-        "$VENV_DIR/bin/pip" install -r "$PREFIX/requirements.txt" --quiet 2>&1 | tail -1
+        "$VENV_DIR/bin/pip" install -e "$PREFIX" --quiet 2>&1 | tail -1
     fi
-    ok "Backend dependencies installed"
+    ok "Package installed (heph entry point created)"
 fi
 
 if [ "$DEV_MODE" = true ]; then
@@ -276,7 +276,7 @@ if [ "$DEV_MODE" = true ]; then
     else
         log "Installing dev dependencies..."
         if [ "$PKG_MGR" = "uv" ]; then
-            uv pip install pytest pytest-asyncio pytest-cov black flake8 mypy ipython --quiet --python "$PYTHON"
+            uv pip install "pytest,pytest-asyncio,pytest-cov,black,flake8,mypy,ipython" --quiet --python "$PYTHON"
         elif [ "$PKG_MGR" = "poetry" ]; then
             cd "$PREFIX" && poetry install --with dev --no-interaction --quiet 2>&1 | tail -3
         else
@@ -295,17 +295,7 @@ HEPH_BIN="$VENV_DIR/bin/heph"
 if [ -x "$HEPH_BIN" ] && "$HEPH_BIN" --version >/dev/null 2>&1; then
     ok "heph already installed: $("$HEPH_BIN" --version 2>&1)"
 else
-    cat > "$HEPH_BIN" << WRAPPER
-#!/bin/bash
-export PYTHONPATH="$PREFIX\${PYTHONPATH:+:\$PYTHONPATH}"
-exec "$PYTHON" -m src.cli.main "\$@"
-WRAPPER
-    chmod +x "$HEPH_BIN"
-    if "$HEPH_BIN" --version >/dev/null 2>&1; then
-        ok "heph installed: $("$HEPH_BIN" --version 2>&1)"
-    else
-        warn "heph CLI created but version check failed"
-    fi
+    warn "heph CLI not found after install — try: uv pip install -e ."
 fi
 
 # ─── 6. Environment file ──────────────────────────────────────────
@@ -460,7 +450,7 @@ echo ""
 echo "  heph project setup <name> <path>  # Create and activate a project"
 echo "  heph status                       # Check system health"
 echo "  heph start                        # Start all services"
-echo "  heph exec test                    # Test service connectivity"
+
 echo "  heph workflow list                 # List workflow definitions"
 echo "  heph autopilot --help             # Autopilot pipeline"
 echo "  heph --help                       # All commands"
