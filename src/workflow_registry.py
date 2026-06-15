@@ -17,8 +17,7 @@ from example_workflows.bug_fix.phases import BUG_FIX_PHASES, BUG_FIX_WORKFLOW_CO
 from example_workflows.index_repo.phases import INDEX_REPO_PHASES, INDEX_REPO_CONFIG, INDEX_REPO_LAUNCH_TEMPLATE
 from example_workflows.feature_development.phases import FEATURE_DEV_PHASES, FEATURE_DEV_CONFIG, FEATURE_DEV_LAUNCH_TEMPLATE
 from example_workflows.documentation_generation.phases import DOC_GEN_PHASES, DOC_GEN_CONFIG, DOC_GEN_LAUNCH_TEMPLATE
-# QA workflow temporarily excluded due to Python 3.12 syntax issue
-# from example_workflows.qa.phases import QA_PHASES, QA_WORKFLOW_CONFIG, QA_LAUNCH_TEMPLATE
+from example_workflows.qa.phases import QA_PHASES, QA_WORKFLOW_CONFIG, QA_LAUNCH_TEMPLATE
 
 # Core workflows
 from src.autopilot.phases import AUTOPILOT_PHASES, AUTOPILOT_WORKFLOW_CONFIG, AUTOPILOT_LAUNCH_TEMPLATE
@@ -67,15 +66,14 @@ def get_all_workflow_definitions() -> list:
             description="Build working software from a Product Requirements Document",
             launch_template=PRD_LAUNCH_TEMPLATE,
         ),
-        # QA workflow temporarily excluded due to Python 3.12 syntax issue
-        # WorkflowDefinition(
-        #     id="qa",
-        #     name="QA Testing",
-        #     phases=QA_PHASES,
-        #     config=QA_WORKFLOW_CONFIG,
-        #     description="Comprehensive QA with browser automation and log analysis",
-        #     launch_template=QA_LAUNCH_TEMPLATE,
-        # ),
+        WorkflowDefinition(
+            id="qa",
+            name="QA Testing",
+            phases=QA_PHASES,
+            config=QA_WORKFLOW_CONFIG,
+            description="Comprehensive QA with browser automation and log analysis",
+            launch_template=QA_LAUNCH_TEMPLATE,
+        ),
         WorkflowDefinition(
             id="autopilot",
             name="Autopilot Pipeline",
