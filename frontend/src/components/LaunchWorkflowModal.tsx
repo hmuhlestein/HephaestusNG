@@ -20,6 +20,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { apiService } from '@/services/api';
+import { useProject } from '@/context/ProjectContext';
 import {
   WorkflowDefinition,
   LaunchTemplate,
@@ -48,6 +49,8 @@ const LaunchWorkflowModal: React.FC<LaunchWorkflowModalProps> = ({
   const [isLaunching, setIsLaunching] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const { activeProject } = useProject();
+
   // Fetch workflow definitions
   const { data: definitions = [], isLoading } = useQuery<WorkflowDefinition[]>({
     queryKey: ['workflow-definitions'],
@@ -74,7 +77,11 @@ const LaunchWorkflowModal: React.FC<LaunchWorkflowModalProps> = ({
     }
   }, [open, initialDefinitionId, definitions]);
 
-  // Initialize form values when a definition is selected
+  // Initialize form values when definition is selected
+  useEffect(() => {
+    initializeFormValues(selectedDefinition?.launch_template);
+  }, [selectedDefinition, activeProject]);
+
   const initializeFormValues = (template: LaunchTemplate | null | undefined) => {
     if (!template) {
       setFormValues({});
@@ -82,7 +89,12 @@ const LaunchWorkflowModal: React.FC<LaunchWorkflowModalProps> = ({
     }
     const initial: Record<string, any> = {};
     template.parameters.forEach((param) => {
-      initial[param.name] = param.default ?? (param.type === 'boolean' ? false : '');
+      // Auto-populate project_path from active project
+      if (param.name === 'project_path' && activeProject?.base_dir) {
+        initial[param.name] = activeProject.base_dir;
+      } else {
+        initial[param.name] = param.default ?? (param.type === 'boolean' ? false : '');
+      }
     });
     setFormValues(initial);
   };
@@ -90,15 +102,9 @@ const LaunchWorkflowModal: React.FC<LaunchWorkflowModalProps> = ({
   const handleSelectDefinition = (def: WorkflowDefinition) => {
     setSelectedDefinition(def);
     setExecutionName('');
-    initializeFormValues(def.launch_template);
+    // initializeFormValues will be called via useEffect when selectedDefinition changes
     setError(null);
-
-    // If no launch template, go directly to preview with just execution name
-    if (!def.launch_template || def.launch_template.parameters.length === 0) {
-      setStep('form'); // Still need form for execution name
-    } else {
-      setStep('form');
-    }
+    setStep('form');
   };
 
   const handleFormValueChange = (name: string, value: any) => {
@@ -152,11 +158,14 @@ const LaunchWorkflowModal: React.FC<LaunchWorkflowModalProps> = ({
     setIsLaunching(true);
     setError(null);
 
+    // Extract working_directory from formValues if present
+    const workingDir = formValues.project_path || undefined;
+
     try {
       const result = await apiService.startWorkflowExecution(
         selectedDefinition.id,
         executionName,
-        undefined, // working_directory - using default
+        workingDir,
         Object.keys(formValues).length > 0 ? formValues : undefined
       );
 

@@ -845,6 +845,11 @@ async def startup_event():
                     "board_config": defn.config.board_config,
                 }
 
+                # Include launch_template in workflow_config if present
+                if defn.launch_template:
+                    from dataclasses import asdict
+                    workflow_config["launch_template"] = asdict(defn.launch_template)
+
                 existing = session.query(DBWorkflowDefinition).filter_by(id=defn.id).first()
                 if existing:
                     # Update from source files (source of truth)
