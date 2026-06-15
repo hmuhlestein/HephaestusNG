@@ -3,7 +3,7 @@ Phase 1: Product Requirements Extraction
 
 Reads design documents and extracts structured requirements.
 Context-aware: understands the larger project vision by reading
-existing artifacts from previously completed features.
+existing docs from previously completed features.
 """
 
 from src.sdk.models import Phase
@@ -14,7 +14,7 @@ PHASE_1_PRODUCT_REQUIREMENTS = Phase(
     description="""Extract structured requirements from design documents with full project context.
 
 Reads the design document, understands the larger project vision by examining
-existing artifacts (requirements, architecture, features) from previously
+existing docs (requirements, architecture, features) from previously
 completed designs, and produces a comprehensive requirements document.""",
     done_definitions=[
         "Design document located and thoroughly analyzed",
@@ -50,16 +50,15 @@ Before reading the design document, understand the LARGER PROJECT:
    - Commit and PR conventions
    - Security and configuration tips
 
-2. Check for existing project artifacts:
-   - requirements_analysis.md (from previous features)
-   - architecture.md (existing system design)
-   - features/ directory (previously completed features)
-   - README.md (project overview)
-   - Any existing source code
+2. Check for existing project docs:
+    - requirements_analysis.md (from previous features)
+    - architecture.md (existing system design)
+    - features/ directory (previously completed features)
+    - README.md (project overview)
+    - Any existing source code
 
-3. If previous features exist, read their reports:
-   - features/*/feature_report.html (summary of what's built)
-   - features/*/artifacts/ (design docs for previous features)
+3. If previous features exist, read their docs:
+    - features/*/docs/ (design docs for previous features)
 
 3. Search the vector database for existing knowledge using search_memory():
    ```python
@@ -166,7 +165,13 @@ and flag it for the architect to resolve.
 STEP 4: CREATE REQUIREMENTS DOCUMENT
 ═══════════════════════════════════════════════════════════════════════
 
-IMPORTANT: Read your task description for the correct paths:
+CRITICAL PATH RULE: You MUST use the FULL ABSOLUTE PATHS from your task description.
+- NEVER write files to the current working directory or project root.
+- ALWAYS use the "Docs Path:" value for ALL generated docs (.md, .json, .txt).
+- ALWAYS use the "Project Path:" value for ALL implementation code.
+- Your task description contains the exact paths — copy them exactly.
+
+Read your task description for the correct paths:
 - "Design Document:" tells you where the design doc is
 - "Docs Path:" tells you where to write requirements_analysis.md
 - "Project Path:" tells you where implementation code goes
@@ -259,7 +264,7 @@ CRITICAL RULES
 ═══════════════════════════════════════════════════════════════════════
 
 DO:
-- Read existing project artifacts before starting
+- Read existing project docs before starting
 - Understand the larger vision
 - Respect existing technology choices
 - Document integration points

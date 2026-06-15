@@ -18,6 +18,7 @@ fills gaps, ensures consistency, and produces a documentation quality report.
 This phase runs after adversarial code review so it reviews docs that reflect
 the post-review state of the code.""",
     done_definitions=[
+        "Stray files organized into Docs Path (mandatory first step)",
         "All documentation files identified and read",
         "Requirements doc compared against implementation",
         "Architecture doc compared against actual code structure",
@@ -39,8 +40,103 @@ YOU ARE A DOCUMENTATION REVIEWER - VERIFY AND FIX ALL DOCS
 YOUR MISSION: Review every doc against the implementation and FIX issues
 
 ═══════════════════════════════════════════════════════════════════════
-STEP 1: READ ALL DOCUMENTATION AND CODE
+STEP 1: ORGANIZE STRAY FILES INTO DOCS PATH (MANDATORY FIRST STEP)
 ═══════════════════════════════════════════════════════════════════════
+
+BEFORE reviewing anything, you MUST move misplaced files to the correct location.
+
+Read your task description for "Docs Path:" and "Project Path:" locations.
+The "Docs Path" is the ONLY location where generated docs, reports, and
+pipeline artifacts belong. Everything else must be code in "Project Path".
+
+Agents before you may have written docs, scripts, reports, or other artifacts
+to the WRONG location (project root, relative paths, etc.). Your job is to
+sweep them into the correct folder before reviewing.
+
+Run these commands to find and move stray files:
+```bash
+DOCS="<paste Docs Path from your task description>"
+PROJECT="<paste Project Path from your task description>"
+
+# Move misplaced .md files from project root to Docs Path
+for f in "$PROJECT"/*.md; do
+  [ -f "$f" ] || continue
+  BASENAME=$(basename "$f")
+  # Skip well-known project files
+  case "$BASENAME" in
+    README.md|AGENTS.md|CHANGELOG.md|LICENSE*) continue ;;
+  esac
+  if [ ! -f "$DOCS/$BASENAME" ]; then
+    mv "$f" "$DOCS/$BASENAME"
+    echo "Moved $BASENAME -> docs/"
+  fi
+done
+
+# Move misplaced .json files from project root to Docs Path (skip project config)
+for f in "$PROJECT"/*.json; do
+  [ -f "$f" ] || continue
+  BASENAME=$(basename "$f")
+  case "$BASENAME" in
+    package.json|tsconfig.json|pyproject.json|poetry.lock) continue ;;
+  esac
+  if [ ! -f "$DOCS/$BASENAME" ]; then
+    mv "$f" "$DOCS/$BASENAME"
+    echo "Moved $BASENAME -> docs/"
+  fi
+done
+
+# Move misplaced .txt and .log files from project root to Docs Path
+for f in "$PROJECT"/*.txt "$PROJECT"/*.log; do
+  [ -f "$f" ] || continue
+  BASENAME=$(basename "$f")
+  if [ ! -f "$DOCS/$BASENAME" ]; then
+    mv "$f" "$DOCS/$BASENAME"
+    echo "Moved $BASENAME -> docs/"
+  fi
+done
+
+# Move misplaced diagnostic .py scripts from project root to Docs Path
+for f in "$PROJECT"/*.py; do
+  [ -f "$f" ] || continue
+  BASENAME=$(basename "$f")
+  case "$BASENAME" in
+    run_server.py|run_monitor.py|setup.py|conftest.py|__init__.py) continue ;;
+  esac
+  if [ ! -f "$DOCS/$BASENAME" ]; then
+    mv "$f" "$DOCS/$BASENAME"
+    echo "Moved $BASENAME -> docs/"
+  fi
+done
+
+# Move stray directories that look like diagnostic/agent output
+for d in evidence plans scripts; do
+  if [ -d "$PROJECT/$d" ]; then
+    cp -r "$PROJECT/$d" "$DOCS/" 2>/dev/null
+    rm -rf "$PROJECT/$d"
+    echo "Moved $d/ -> docs/"
+  fi
+done
+
+echo "Organization complete. Project root should now be clean."
+```
+
+After the sweep, verify the project root is clean:
+```bash
+ls "$PROJECT"/*.md 2>/dev/null
+ls "$PROJECT"/*.txt 2>/dev/null
+```
+
+Only legitimate project files (README.md, AGENTS.md, etc.) should remain.
+
+═══════════════════════════════════════════════════════════════════════
+STEP 2: READ ALL DOCUMENTATION AND CODE
+═══════════════════════════════════════════════════════════════════════
+
+CRITICAL PATH RULE: You MUST use the FULL ABSOLUTE PATHS from your task description.
+- NEVER write files to the current working directory or project root.
+- ALL docs/reports go in "Docs Path:" — not the project root.
+- Code fixes go in "Project Path:" (src/, tests/, etc.).
+- Your task description contains the exact paths — copy them exactly.
 
 Read:
 - Your task description for "Docs Path:" and "Project Path:" locations

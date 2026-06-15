@@ -12,7 +12,7 @@ designs/                          project/
   └── api-v2.md                     └── features/
                                         ├── 20260612_auth_system/
                                         │   ├── feature_report.html
-                                        │   ├── artifacts/
+                                        │   ├── docs/
                                         │   │   ├── auth-system.md (copy)
                                         │   │   ├── requirements_analysis.md
                                         │   │   ├── architecture.md
@@ -375,4 +375,4 @@ Each phase is designed to maximize context sharing:
 | 7 | requirements_analysis.md, architecture.md, review_report.md, doc_review_report.md, security_report.md | qa_report.md |
 | 8 | Original design doc, AGENTS.md, requirements_analysis.md, architecture.md, doc_review_report.md, qa_report.md | product_validation.md |
 | 9 | All reports | Git history |
-| 10 | All artifacts, pipeline_metrics.json, phase_prompts/ | forensics_report.md, memory entries |
+| 10 | All docs, pipeline_metrics.json, phase_prompts/ | forensics_report.md, memory entries |

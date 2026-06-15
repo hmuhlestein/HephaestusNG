@@ -39,6 +39,12 @@ YOUR MISSION: Find bugs, flaws, and issues - then FIX them yourself
 STEP 1: READ ARCHITECTURE AND REQUIREMENTS
 ═══════════════════════════════════════════════════════════════════════
 
+CRITICAL PATH RULE: You MUST use the FULL ABSOLUTE PATHS from your task description.
+- NEVER write files to the current working directory or project root.
+- ALL docs/reports go in "Docs Path:" (review_report.md, etc.).
+- Code fixes go in "Project Path:" (src/, tests/, etc.).
+- Your task description contains the exact paths — copy them exactly.
+
 Read:
 - Your task description for "Docs Path:" and "Project Path:" locations
 - architecture.md (from Docs Path) - What was the design?

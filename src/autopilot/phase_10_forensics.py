@@ -42,12 +42,17 @@ YOUR MISSION: Read real data, compare prompts to outcomes, propose fixes
 STEP 0: READ YOUR TASK DESCRIPTION FOR PATHS
 ═══════════════════════════════════════════════════════════════════════
 
+CRITICAL PATH RULE: You MUST use the FULL ABSOLUTE PATHS from your task description.
+- NEVER write files to the current working directory or project root.
+- ALL generated docs/reports go in "Docs Path:" (forensics_report.md, etc.).
+- Your task description contains the exact paths — copy them exactly.
+
 Your task description contains:
 - "Docs Path:" — where all generated reports and metrics are stored
 - "Project Path:" — where the implementation code lives
 - "Feature Folder:" — the feature-level directory
 
-All your reads come from the "Docs Path" location.
+All your reads and writes come from/to the "Docs Path" location.
 
 ═══════════════════════════════════════════════════════════════════════
 STEP 1: READ PIPELINE METRICS (REAL DATA)
@@ -91,7 +96,7 @@ Read each artifact from the Docs Path:
 - qa_report.md
 - product_validation.md
 
-Also read the original design document (copied to artifacts/).
+Also read the original design document (copied to docs/).
 
 For each output, compare what was produced against:
 1. The prompt that was given (from Step 2)
@@ -159,7 +164,7 @@ Use this structure but fill sections proportionally to findings:
 
 ## Findings
 (One section per finding. Each finding has:)
-- **What happened:** [evidence from artifacts]
+- **What happened:** [evidence from docs]
 - **Root cause:** [which phase, which prompt gap]
 - **Recommendation:** [specific change]
 

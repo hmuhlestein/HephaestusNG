@@ -38,6 +38,12 @@ YOUR MISSION: Implement components according to the architecture
 STEP 1: READ ARCHITECTURE AND GUIDELINES
 ═══════════════════════════════════════════════════════════════════════
 
+CRITICAL PATH RULE: You MUST use the FULL ABSOLUTE PATHS from your task description.
+- NEVER write files to the current working directory or project root.
+- ALL implementation code goes in "Project Path:" (src/, tests/, etc.).
+- ALL docs/reports go in "Docs Path:" — not the project root.
+- Your task description contains the exact paths — copy them exactly.
+
 Read:
 - Your task description for "Docs Path:" and "Project Path:" locations
 - AGENTS.md - Coding style, naming conventions, test commands, commit format

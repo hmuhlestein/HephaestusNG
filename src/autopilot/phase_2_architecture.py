@@ -135,7 +135,13 @@ Save architectural decisions to memory:
 STEP 7: CREATE ARCHITECTURE DOCUMENT
 ═══════════════════════════════════════════════════════════════════════
 
-IMPORTANT: Read your task description for the correct paths:
+CRITICAL PATH RULE: You MUST use the FULL ABSOLUTE PATHS from your task description.
+- NEVER write files to the current working directory or project root.
+- ALWAYS use the "Docs Path:" value for ALL generated docs (.md, .json, .txt).
+- ALWAYS use the "Project Path:" value for ALL implementation code.
+- Your task description contains the exact paths — copy them exactly.
+
+Read your task description for the correct paths:
 - "Docs Path:" tells you where to write architecture.md
 - "Project Path:" tells you where implementation code goes
 
