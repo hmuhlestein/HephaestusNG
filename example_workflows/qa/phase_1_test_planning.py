@@ -16,10 +16,10 @@ Reads TESTING.md for project-specific test instructions, scans the codebase
 for testable components, and produces a prioritized test plan covering
 unit tests, integration tests, API tests, and browser automation tests.""",
     done_definitions=[
-        "TESTING.md exists in project root (REQUIRED - abort if missing)",
-        "TESTING.md read thoroughly and understood",
-        "App startup instructions from TESTING.md followed",
-        "Log locations from TESTING.md documented",
+        "TESTING.md checked (exists or noted as missing)",
+        "TESTING.md read thoroughly (if exists)",
+        "App startup instructions followed (or default approach used)",
+        "Log locations documented",
         "Project structure analyzed (languages, frameworks, entry points)",
         "Testable components identified and categorized",
         "Test plan created with prioritized test cases",
@@ -37,17 +37,17 @@ YOU ARE A QA TEST PLANNER - CREATE A COMPREHENSIVE TEST PLAN
 🎯 YOUR MISSION: Read TESTING.md, analyze the codebase, create a test plan
 
 ═══════════════════════════════════════════════════════════════════════
-STEP 1: VERIFY TESTING.md EXISTS (REQUIRED)
+STEP 1: CHECK FOR TESTING.md
 ═══════════════════════════════════════════════════════════════════════
 
-🚨 TESTING.md IS REQUIRED TO PROCEED 🚨
+Look for TESTING.md in the project root.
 
-Look for TESTING.md in the project root. If it does NOT exist:
-1. Mark your task as FAILED with reason: "TESTING.md not found in project root"
-2. Create a memory noting this requirement
-3. DO NOT proceed with test planning without it
+If TESTING.md DOES NOT EXIST:
+- Note this in your plan: "TESTING.md not found - using standard test discovery"
+- Continue to Step 2 using default test approach
+- Create basic smoke tests if none exist
 
-If TESTING.md exists:
+If TESTING.md EXISTS:
 1. Read it thoroughly - it contains:
    - How to start/run the application
    - How to run existing tests
@@ -58,8 +58,7 @@ If TESTING.md exists:
 2. Follow its instructions to verify the app runs
 3. Document all log locations mentioned
 4. Note any specific test commands provided
-
-TESTING.md is the source of truth for how to test this project.
+5. Use the exact commands from TESTING.md for running tests
 
 ═══════════════════════════════════════════════════════════════════════
 STEP 2: ANALYZE PROJECT STRUCTURE
