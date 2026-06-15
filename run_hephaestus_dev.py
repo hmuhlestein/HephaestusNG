@@ -401,7 +401,7 @@ def main():
             llm_model="xiaomi/mimo-v2.5",
 
             # Agent Configuration
-            default_cli_tool=cli_tool,  # Options: "claude", "opencode", "codex", "droid"
+            default_cli_tool=cli_tool,  # Options: "claude", "opencode", "codex", "droid", "pi"
 
             # Git Configuration
             main_repo_path=project_path,

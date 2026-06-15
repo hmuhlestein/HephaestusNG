@@ -411,6 +411,103 @@ class CodexAgent(CLIAgentInterface):
         }
 
 
+class PiAgent(CLIAgentInterface):
+    """Implementation for pi coding agent CLI.
+
+    Pi is an AI coding assistant with read, bash, edit, write tools.
+    It supports --append-system-prompt to load system prompts from files,
+    and -p/--print for non-interactive mode.
+
+    For Hephaestus, we launch pi interactively with --append-system-prompt
+    pointing to a file, then send the initial message via tmux.
+    """
+
+    def get_launch_command(self, system_prompt: str, **kwargs) -> str:
+        """Generate launch command for pi.
+
+        Pi's --append-system-prompt flag appends text or file contents to the system prompt.
+        We save the prompt to a temp file and use --append-system-prompt @file to load it.
+        """
+        import os
+        from src.core.simple_config import get_config
+
+        config = get_config()
+
+        # Save prompt to a temp file
+        task_id = kwargs.get('task_id', 'default')
+        prompt_file = f"/tmp/pi_prompt_{task_id}.txt"
+
+        # Write the system prompt to file
+        with open(prompt_file, 'w') as f:
+            f.write(system_prompt)
+
+        # Make sure the file is readable
+        os.chmod(prompt_file, 0o644)
+
+        # Get configured model (pi uses --model flag)
+        model = kwargs.get('model') or getattr(config, 'cli_model', 'anthropic/claude-sonnet-4')
+
+        # Pi command with --append-system-prompt to load the system prompt from file
+        # Note: @file syntax is NOT supported for --append-system-prompt, must use shell expansion
+        command = f'pi --append-system-prompt "$(cat {prompt_file})" --model {model} --approve'
+
+        return command
+
+    def get_health_check_pattern(self) -> str:
+        """Return health check pattern for pi.
+
+        Pi uses a prompt indicator in its TUI.
+        """
+        return r"(›|>|pi>)"
+
+    def format_message(self, message: str) -> str:
+        """Format message for pi.
+
+        Pi accepts plain text messages in its TUI.
+        """
+        return message
+
+    def get_stuck_patterns(self) -> List[str]:
+        """Return stuck patterns for pi."""
+        return [
+            r"rate limit exceeded",
+            r"rate limit",
+            r"API error",
+            r"connection timeout",
+            r"Error:.*API",
+            r"Failed to connect",
+            r"Maximum retries exceeded",
+            r"authentication failed",
+            r"invalid API key",
+        ]
+
+    def parse_output(self, output: str) -> Dict[str, Any]:
+        """Parse pi output."""
+        lines = output.strip().split('\n')
+        last_message = ""
+        is_waiting = False
+
+        # Look for the last response before a prompt indicator
+        for i in range(len(lines) - 1, -1, -1):
+            line = lines[i]
+            if "›" in line or ">" in line or "pi>" in line:
+                is_waiting = True
+                # Get all lines after the previous prompt as the response
+                message_lines = []
+                for j in range(i - 1, -1, -1):
+                    if "›" in lines[j] or ">" in lines[j] or "pi>" in lines[j]:
+                        break
+                    message_lines.insert(0, lines[j])
+                last_message = "\n".join(message_lines).strip()
+                break
+
+        return {
+            "last_message": last_message,
+            "is_waiting": is_waiting,
+            "total_lines": len(lines),
+        }
+
+
 class SwarmCodeAgent(CLIAgentInterface):
     """Implementation for SwarmCode CLI (hypothetical advanced agent)."""
 
@@ -456,6 +553,7 @@ CLI_AGENTS = {
     "opencode": OpenCodeAgent,
     "droid": DroidAgent,
     "codex": CodexAgent,
+    "pi": PiAgent,
     "swarm": SwarmCodeAgent,
 }
 

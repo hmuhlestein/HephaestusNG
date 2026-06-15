@@ -172,7 +172,7 @@ sdk = HephaestusSDK(
     working_directory=working_directory,
 
     # Agent CLI Tool (optional - overrides config file)
-    default_cli_tool="claude",  # Options: "claude" (default), "opencode", "codex"
+    default_cli_tool="claude",  # Options: "claude" (default), "opencode", "droid", "codex", "pi", "swarm"
 
     # Server
     mcp_port=mcp_port,

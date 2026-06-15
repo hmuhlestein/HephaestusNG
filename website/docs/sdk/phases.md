@@ -221,7 +221,7 @@ agents:
   cli_model: sonnet
 ```
 
-**Available CLI tools:** claude, opencode, droid, codex, swarm
+**Available CLI tools:** claude, opencode, droid, codex, pi, swarm
 
 See the [SDK Examples](examples.md#configuring-cli-tools-and-models-per-phase) for complete code examples.
 

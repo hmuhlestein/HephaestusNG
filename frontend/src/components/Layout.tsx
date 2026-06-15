@@ -73,7 +73,7 @@ const Layout: React.FC = () => {
               <h1 className="text-xl font-bold text-gray-800 text-center">H</h1>
             ) : (
               <>
-                <h1 className="text-2xl font-bold text-gray-800">Hephaestus</h1>
+                <h1 className="text-2xl font-bold text-gray-800">HephaestusNG</h1>
                 <p className="text-sm text-gray-600 mt-1">AI Agent Orchestration</p>
               </>
             )}

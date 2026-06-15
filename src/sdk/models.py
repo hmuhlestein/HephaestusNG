@@ -32,7 +32,7 @@ class Phase:
     validation: Optional[ValidationCriteria] = None
 
     # Per-phase CLI configuration (optional - falls back to global defaults)
-    cli_tool: Optional[str] = None           # "claude", "opencode", "droid", "codex", "swarm"
+    cli_tool: Optional[str] = None           # "claude", "opencode", "droid", "codex", "pi", "swarm"
     cli_model: Optional[str] = None          # "sonnet", "opus", "haiku", "GLM-4.6", etc.
     glm_api_token_env: Optional[str] = None  # Environment variable name for GLM token
 

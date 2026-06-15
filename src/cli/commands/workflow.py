@@ -28,6 +28,12 @@ def register(subparsers):
     st.add_argument("workflow_id", help="Workflow execution ID")
     st.set_defaults(func=get_status)
 
+    # stop
+    sp = sub.add_parser("stop", help="Stop a running workflow")
+    sp.add_argument("workflow_id", nargs="?", help="Workflow execution ID (omit with --all)")
+    sp.add_argument("--all", action="store_true", help="Stop all active workflows")
+    sp.set_defaults(func=stop_workflow)
+
     p.set_defaults(func=lambda a: p.print_help() or 0)
 
 
@@ -109,3 +115,43 @@ def _print_single_execution(e):
     print(f"Status:      {e.get('status', '')}")
     print(f"Description: {e.get('description', '')}")
     print(f"Created:     {time_ago(e.get('created_at', ''))}")
+
+
+def stop_workflow(args):
+    if not require_backend(args):
+        return 1
+
+    if args.all:
+        data = api_get(args, "/api/workflow-executions?status=active")
+        execs = data if isinstance(data, list) else data.get("executions", []) if data else []
+        if not execs:
+            print("No active workflows.")
+            return 0
+        print(f"Stopping {len(execs)} workflows...")
+        for e in execs:
+            eid = e.get("id", "")
+            if not eid:
+                continue
+            result = api_post(args, f"/api/workflows/{eid}/stop", timeout=15)
+            if result is None:
+                print(f"  {eid[:12]}... connection error")
+            elif isinstance(result, dict) and "error" in result:
+                print(f"  {eid[:12]}... {result.get('detail', result['error'])}")
+            else:
+                msg = result.get("message", "stopped") if isinstance(result, dict) else "stopped"
+                print(f"  {eid[:12]}... {msg}")
+        return 0
+
+    if not args.workflow_id:
+        print("Error: provide a workflow_id or use --all")
+        return 1
+
+    data = api_post(args, f"/api/workflows/{args.workflow_id}/stop", timeout=15)
+    if data is None:
+        print("Connection error")
+        return 1
+    if isinstance(data, dict) and "error" in data:
+        print(f"Error: {data.get('detail', data['error'])}")
+        return 1
+    print(data.get("message", "Workflow stopped"))
+    return 0

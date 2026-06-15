@@ -197,6 +197,7 @@ def _start_frontend() -> bool:
         proc = subprocess.Popen(
             ["npm", "run", "dev"],
             cwd=str(frontend_dir),
+            stdin=subprocess.DEVNULL,
             stdout=log_file,
             stderr=subprocess.STDOUT,
         )
