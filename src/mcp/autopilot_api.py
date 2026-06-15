@@ -1305,7 +1305,7 @@ async def start_pipeline(project_path: str, design_queue: str = "", max_iteratio
         stderr=subprocess.DEVNULL,
     )
 
-    pid_dir = Path.home() / ".hephaestus" / "pids"
+    pid_dir = Path(AUTOPILOT_STATE_DIR)
     pid_dir.mkdir(parents=True, exist_ok=True)
     (pid_dir / "orchestrator.pid").write_text(str(proc.pid))
 
