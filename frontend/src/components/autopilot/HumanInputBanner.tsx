@@ -1,12 +1,13 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
-import { AlertTriangle, Zap, SkipForward, XCircle } from 'lucide-react';
+import { AlertTriangle, Zap, SkipForward, XCircle, Send } from 'lucide-react';
 import { apiService } from '@/services/api';
 import toast from 'react-hot-toast';
 
 const HumanInputBanner: React.FC = () => {
   const queryClient = useQueryClient();
+  const [messageText, setMessageText] = useState('');
 
   const { data: inputRequest } = useQuery({
     queryKey: ['autopilot-input'],
@@ -15,8 +16,8 @@ const HumanInputBanner: React.FC = () => {
   });
 
   const submitMutation = useMutation({
-    mutationFn: ({ choice }: { choice: string }) =>
-      apiService.submitAutopilotInput(inputRequest!.id, choice),
+    mutationFn: ({ choice, message }: { choice: string; message?: string }) =>
+      apiService.submitAutopilotInput(inputRequest!.id, choice, message),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['autopilot-input'] });
       queryClient.invalidateQueries({ queryKey: ['autopilot-status'] });
@@ -94,6 +95,35 @@ const HumanInputBanner: React.FC = () => {
                       Dismiss
                     </button>
                   </div>
+                </div>
+
+                {/* Message Input */}
+                <div className="mt-4 flex gap-2">
+                  <input
+                    type="text"
+                    value={messageText}
+                    onChange={(e) => setMessageText(e.target.value)}
+                    placeholder="Or type a message to the pipeline..."
+                    className="flex-1 px-4 py-2.5 border border-amber-300 rounded-xl text-sm bg-white focus:outline-none focus:ring-2 focus:ring-amber-500"
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && messageText.trim()) {
+                        submitMutation.mutate({ choice: 'm', message: messageText.trim() });
+                        setMessageText('');
+                      }
+                    }}
+                  />
+                  <button
+                    onClick={() => {
+                      if (messageText.trim()) {
+                        submitMutation.mutate({ choice: 'm', message: messageText.trim() });
+                        setMessageText('');
+                      }
+                    }}
+                    disabled={!messageText.trim() || submitMutation.isPending}
+                    className="px-4 py-2.5 bg-amber-600 text-white rounded-xl hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  >
+                    <Send className="w-4 h-4" />
+                  </button>
                 </div>
               </div>
             </div>
