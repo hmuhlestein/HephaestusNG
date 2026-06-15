@@ -37,13 +37,29 @@ YOU ARE A QA EXECUTION AGENT - RUN TESTS AND GENERATE REPORT
 🎯 YOUR MISSION: Execute all tests, capture logs, produce QA report
 
 ═══════════════════════════════════════════════════════════════════════
+STEP 0: READ TESTING.md (REQUIRED)
+═══════════════════════════════════════════════════════════════════════
+
+🚨 TESTING.md IS THE SOURCE OF TRUTH 🚨
+
+Before doing ANYTHING, read TESTING.md in the project root:
+1. How to start the application (commands, environment variables)
+2. How to run existing tests (exact commands)
+3. Where to find application logs
+4. Known issues and workarounds
+5. Service URLs and ports
+
+Follow TESTING.md instructions EXACTLY for starting services and running tests.
+If TESTING.md specifies different commands than below, use TESTING.md's commands.
+
+═══════════════════════════════════════════════════════════════════════
 STEP 1: VALIDATE TEST ENVIRONMENT
 ═══════════════════════════════════════════════════════════════════════
 
-Before running tests, verify:
+Before running tests, verify (using TESTING.md instructions):
 
 ```bash
-# Check services are running
+# Check services are running (use URLs from TESTING.md)
 curl -s http://localhost:8300/health || echo "Backend not running"
 curl -s http://localhost:6333/ || echo "Qdrant not running"
 
@@ -134,19 +150,24 @@ Capture:
 STEP 6: CAPTURE POST-TEST LOGS
 ═══════════════════════════════════════════════════════════════════════
 
+Use log locations from TESTING.md. Common locations:
+
 ```bash
-# Capture backend logs after testing
+# Backend/application logs (check TESTING.md for exact path)
 cat $HOME/.hephaestus/logs/*/backend.log > /tmp/backend_after.log 2>/dev/null
+# Or from project-specific location:
+# cat /path/from/TESTING.md/*.log > /tmp/backend_after.log
+
 BACKEND_LOG_AFTER=$(wc -l < /tmp/backend_after.log)
 
-# Capture new Docker logs
+# Docker logs (if applicable)
 docker logs --tail 50 qdrant > /tmp/qdrant_after.log 2>&1
 
-# Check for new errors in backend log
-grep -i "ERROR\|CRITICAL\|Exception" /tmp/backend_after.log > /tmp/backend_errors.txt 2>/dev/null
+# Application-specific logs (from TESTING.md)
+# Use the exact log paths documented in TESTING.md
 
-# Check for new Qdrant errors
-grep -i "ERROR\|error" /tmp/qdrant_after.log > /tmp/qdrant_errors.txt 2>/dev/null
+# Check for errors
+grep -i "ERROR\|CRITICAL\|Exception" /tmp/backend_after.log > /tmp/backend_errors.txt 2>/dev/null
 ```
 
 ═══════════════════════════════════════════════════════════════════════

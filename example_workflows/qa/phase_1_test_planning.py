@@ -16,7 +16,10 @@ Reads TESTING.md for project-specific test instructions, scans the codebase
 for testable components, and produces a prioritized test plan covering
 unit tests, integration tests, API tests, and browser automation tests.""",
     done_definitions=[
-        "TESTING.md read and understood (if exists)",
+        "TESTING.md exists in project root (REQUIRED - abort if missing)",
+        "TESTING.md read thoroughly and understood",
+        "App startup instructions from TESTING.md followed",
+        "Log locations from TESTING.md documented",
         "Project structure analyzed (languages, frameworks, entry points)",
         "Testable components identified and categorized",
         "Test plan created with prioritized test cases",
@@ -34,14 +37,29 @@ YOU ARE A QA TEST PLANNER - CREATE A COMPREHENSIVE TEST PLAN
 🎯 YOUR MISSION: Read TESTING.md, analyze the codebase, create a test plan
 
 ═══════════════════════════════════════════════════════════════════════
-STEP 1: READ TESTING.md
+STEP 1: VERIFY TESTING.md EXISTS (REQUIRED)
 ═══════════════════════════════════════════════════════════════════════
 
-Look for TESTING.md in the project root. If it exists, read it thoroughly.
-It contains project-specific test instructions, known issues, and priorities.
+🚨 TESTING.md IS REQUIRED TO PROCEED 🚨
 
-If TESTING.md does not exist, note this and create a default test plan
-based on the codebase analysis.
+Look for TESTING.md in the project root. If it does NOT exist:
+1. Mark your task as FAILED with reason: "TESTING.md not found in project root"
+2. Create a memory noting this requirement
+3. DO NOT proceed with test planning without it
+
+If TESTING.md exists:
+1. Read it thoroughly - it contains:
+   - How to start/run the application
+   - How to run existing tests
+   - Where to find logs
+   - Known issues and workarounds
+   - Test priorities and focus areas
+   - Environment setup instructions
+2. Follow its instructions to verify the app runs
+3. Document all log locations mentioned
+4. Note any specific test commands provided
+
+TESTING.md is the source of truth for how to test this project.
 
 ═══════════════════════════════════════════════════════════════════════
 STEP 2: ANALYZE PROJECT STRUCTURE
