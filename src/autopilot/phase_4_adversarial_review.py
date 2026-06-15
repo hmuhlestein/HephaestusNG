@@ -69,6 +69,16 @@ For each implemented component, check:
 - Is the module too large or doing too much?
 - Are there unnecessary dependencies?
 
+### Object-Oriented Quality
+- Are abstractions clean or leaky?
+- Is there a base class / interface hierarchy, or flat inheritance?
+- Can any classes be refactored to use composition over inheritance?
+- Are details pushed down from base to derived classes appropriately?
+- Are there God objects that need splitting?
+- Is dependency inversion followed (depend on abstractions, not concretions)?
+- Can shared behavior be extracted into mixins, protocols, or utilities?
+- Do class responsibilities follow Single Responsibility Principle?
+
 ### Error Handling
 - Are errors caught and handled properly?
 - Are error messages descriptive?
@@ -172,6 +182,9 @@ DO:
 - Provide specific file/line references
 - Suggest concrete fixes
 - Acknowledge good code too
+- Review OO design: abstractions, inheritance hierarchies, composition
+- Check if details are properly pushed down from base to derived classes
+- Identify refactoring opportunities for shared abstractions
 
 DO NOT:
 - Be vague ("this code is bad")

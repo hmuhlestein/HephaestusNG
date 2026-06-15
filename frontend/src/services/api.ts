@@ -47,6 +47,11 @@ export const apiService = {
     return data.definitions || [];
   },
 
+  getWorkflowDefinitionPhases: async (definitionId: string): Promise<any[]> => {
+    const { data } = await api.get(`/workflow-definitions/${definitionId}/phases`);
+    return data.phases || [];
+  },
+
   listWorkflowExecutions: async (status: string = 'all'): Promise<WorkflowExecution[]> => {
     const { data } = await api.get(`/workflow-executions?status=${status}`);
     return data.executions || [];
@@ -697,5 +702,159 @@ export const apiService = {
 
   deleteProject: async (projectId: string): Promise<void> => {
     await api.delete(`/projects/${encodeURIComponent(projectId)}`);
+  },
+
+  // ── Phase Prompt Editor ──────────────────────────────────────────────
+
+  updatePhase: async (
+    phaseId: string,
+    updates: {
+      description?: string;
+      done_definitions?: string[];
+      additional_notes?: string | null;
+      outputs?: string | null;
+      next_steps?: string | null;
+      working_directory?: string | null;
+      cli_tool?: string | null;
+      cli_model?: string | null;
+    }
+  ): Promise<{ success: boolean; phase: any }> => {
+    const { data } = await api.patch(`/phases/${phaseId}`, updates);
+    return data;
+  },
+
+  resetPhase: async (
+    phaseId: string,
+    targetStatus: string,
+    force: boolean = false
+  ): Promise<{
+    success: boolean;
+    terminated_agents?: number;
+    reset_tasks?: number;
+    message: string;
+    requires_confirmation?: boolean;
+    active_agents?: number;
+  }> => {
+    const { data } = await api.post(`/phases/${phaseId}/reset`, {
+      target_status: targetStatus,
+      force,
+    });
+    return data;
+  },
+
+  getPhaseAgents: async (phaseId: string): Promise<{ agents: any[] }> => {
+    const { data } = await api.get(`/phases/${phaseId}/agents`);
+    return data;
+  },
+
+  // ── Phase Prompt Versions ────────────────────────────────────────────
+
+  getPhaseYaml: async (phaseId: string): Promise<any> => {
+    const { data } = await api.get(`/phases/${phaseId}/yaml`);
+    return data;
+  },
+
+  getPhasePromptVersions: async (
+    phaseId: string
+  ): Promise<{ versions: import('@/types').PhasePromptVersion[] }> => {
+    const { data } = await api.get(`/phases/${phaseId}/prompt/versions`);
+    return data;
+  },
+
+  getPhasePromptVersion: async (
+    phaseId: string,
+    version: number
+  ): Promise<import('@/types').PhasePromptVersionDetail> => {
+    const { data } = await api.get(`/phases/${phaseId}/prompt/versions/${version}`);
+    return data;
+  },
+
+  createPhasePromptVersion: async (
+    phaseId: string,
+    payload: import('@/types').PromptSavePayload
+  ): Promise<import('@/types').PromptSaveResponse> => {
+    const { data } = await api.post(`/phases/${phaseId}/prompt/versions`, payload);
+    return data;
+  },
+
+  publishPhasePromptVersion: async (
+    phaseId: string,
+    version: number
+  ): Promise<{ success: boolean; version: number; status: string }> => {
+    const { data } = await api.post(
+      `/phases/${phaseId}/prompt/versions/${version}/publish`
+    );
+    return data;
+  },
+
+  restorePhasePromptVersion: async (
+    phaseId: string,
+    version: number
+  ): Promise<{ success: boolean; version: number; restored_from: number }> => {
+    const { data } = await api.post(
+      `/phases/${phaseId}/prompt/versions/${version}/restore`
+    );
+    return data;
+  },
+
+  getPhasePromptPreview: async (
+    phaseId: string,
+    variables?: Record<string, string>
+  ): Promise<import('@/types').PhasePromptPreview> => {
+    const params = variables ? `?variables=${encodeURIComponent(JSON.stringify(variables))}` : '';
+    const { data } = await api.get(`/phases/${phaseId}/prompt/preview${params}`);
+    return data;
+  },
+
+  getPhasePromptPreviewDraft: async (
+    phaseId: string,
+    draft: {
+      description?: string;
+      done_definitions?: string[];
+      additional_notes?: string | null;
+      outputs?: string | null;
+      next_steps?: string | null;
+      variables?: Record<string, string>;
+    }
+  ): Promise<import('@/types').PhasePromptPreview> => {
+    const { data } = await api.post(`/phases/${phaseId}/prompt/preview`, draft);
+    return data;
+  },
+
+  getPhasePromptDiff: async (
+    phaseId: string,
+    v1: number,
+    v2: number
+  ): Promise<import('@/types').PhasePromptDiff> => {
+    const { data } = await api.get(
+      `/phases/${phaseId}/prompt/diff?v1=${v1}&v2=${v2}`
+    );
+    return data;
+  },
+
+  // ── Task Prompt Overrides ────────────────────────────────────────────
+
+  getTaskPromptOverrides: async (
+    taskId: string
+  ): Promise<import('@/types').TaskPromptOverrides> => {
+    const { data } = await api.get(`/tasks/${taskId}/prompt/overrides`);
+    return data;
+  },
+
+  setTaskPromptOverrides: async (
+    taskId: string,
+    overrides: { system_prompt?: string; user_prompt?: string }
+  ): Promise<{
+    success: boolean;
+    overrides: import('@/types').TaskPromptOverrides;
+    effective_prompt: import('@/types').TaskPrompt;
+  }> => {
+    const { data } = await api.put(`/tasks/${taskId}/prompt/overrides`, overrides);
+    return data;
+  },
+
+  clearTaskPromptOverrides: async (taskId: string): Promise<{ success: boolean }> => {
+    const { data } = await api.delete(`/tasks/${taskId}/prompt/overrides`);
+    return data;
   },
 };
