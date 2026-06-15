@@ -325,13 +325,16 @@ class HephaestusSDK:
 
     def _start_headless(self, timeout: int):
         """Start in headless mode with console output."""
-        # Check Qdrant first
-        print(f"[Hephaestus] Checking Qdrant connectivity...")
-        if not self._check_qdrant_health():
-            raise QdrantConnectionError(
-                f"Qdrant is not accessible at {self.config.qdrant_url}. "
-                "Please ensure Qdrant is running (e.g., docker run -p 6333:6333 qdrant/qdrant)"
-            )
+        # Check Qdrant only if using qdrant backend
+        if self.config.vector_store_backend == "qdrant":
+            print(f"[Hephaestus] Checking Qdrant connectivity...")
+            if not self._check_qdrant_health():
+                raise QdrantConnectionError(
+                    f"Qdrant is not accessible at {self.config.qdrant_url}. "
+                    "Please ensure Qdrant is running (e.g., docker run -p 6333:6333 qdrant/qdrant)"
+                )
+        else:
+            print(f"[Hephaestus] Using {self.config.vector_store_backend} vector store (skipping Qdrant check)")
 
         # Create process manager
         self.process_manager = ProcessManager(self.config, self.log_dir)
@@ -952,7 +955,12 @@ class HephaestusSDK:
         backend_process = self.process_manager.is_process_alive("backend")
         monitor_process = self.process_manager.is_process_alive("monitor")
         backend_api = self._check_backend_health()
-        qdrant = self._check_qdrant_health()
+        
+        # Only check Qdrant if using qdrant backend
+        if self.config.vector_store_backend == "qdrant":
+            qdrant = self._check_qdrant_health()
+        else:
+            qdrant = True  # Not applicable for turbovec
 
         return {
             "backend_process": backend_process,
