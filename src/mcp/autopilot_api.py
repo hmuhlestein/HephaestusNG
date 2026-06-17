@@ -99,10 +99,16 @@ def _invalidate(*keys: str):
 # ── Path safety ──────────────────────────────────────────────────
 
 def _safe_path(base: str, *parts: str) -> Path:
+    """Validate that the resulting path is within the base directory.
+    
+    Security: Uses resolved (realpath) path to prevent symlink traversal attacks.
+    Requires exact match or trailing separator to prevent prefix-based traversal
+    (e.g., /app/design-evil passing when base is /app/design).
+    """
     if not base:
         raise HTTPException(500, "Directory not configured")
-    resolved = (Path(base) / Path(*parts)).resolve()
     base_resolved = Path(base).resolve()
+    resolved = (Path(base) / Path(*parts)).resolve()
     if not (resolved == base_resolved or str(resolved).startswith(str(base_resolved) + os.sep)):
         raise HTTPException(400, "Invalid path")
     return resolved
@@ -240,6 +246,7 @@ class PipelineStatus(BaseModel):
     total_elapsed: int = 0
     queue_depth: int = 0
     last_event: Optional[Dict[str, Any]] = None
+    active_agents: int = 0
 
 
 class MessageItem(BaseModel):
@@ -280,6 +287,16 @@ async def get_pipeline_status():
         else:
             last_event = _store("last_event", None)
 
+    # Count active agents
+    from src.core.database import Agent, get_db as _get_db
+    try:
+        with _get_db() as _db:
+            active_agents = _db.query(Agent).filter(
+                Agent.status.in_(["working", "starting", "idle"])
+            ).count()
+    except Exception:
+        active_agents = 0
+
     result = PipelineStatus(
         running=running,
         current_design=state.get("current_design"),
@@ -289,6 +306,7 @@ async def get_pipeline_status():
         total_elapsed=state.get("total_elapsed", 0),
         queue_depth=queue_depth,
         last_event=last_event,
+        active_agents=active_agents,
     )
     return _store("status", result)
 
@@ -397,7 +415,7 @@ async def add_to_queue(item: DesignQueueAdd):
     if not safe_name:
         raise HTTPException(400, "Invalid design name")
     filename = f"{safe_name}{ext}"
-    filepath = _safe_path(DESIGN_QUEUE_DIR, filename)
+    filepath = _safe_path(effective_dir, filename)
 
     if filepath.exists():
         raise HTTPException(409, f"Design '{filename}' already exists in queue")
@@ -567,7 +585,7 @@ def _sync_project_designs(project_id: str, project_base: str, db) -> List[Dict[s
             d = existing[fname]
             d.size_bytes = stat.st_size
             d.modified_at = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc)
-            d.ordinal = ordinal
+            # Don't overwrite ordinal - preserve manual reorders
         else:
             d = AutopilotDesign(
                 id=f"des-{uuid.uuid4().hex[:12]}",
@@ -819,6 +837,21 @@ async def sync_project_designs(project_id: str):
         return [DesignItem(**d) for d in designs]
 
 
+@router.post("/projects/{project_id}/designs/reload", response_model=List[DesignItem])
+async def reload_project_designs(project_id: str):
+    """Force resync designs from filesystem."""
+    from src.core.database import AutopilotProject, get_db
+    cache_key = f"project_designs:{project_id}"
+    _invalidate(cache_key)
+    with get_db() as db:
+        proj = db.query(AutopilotProject).get(project_id)
+        if not proj:
+            raise HTTPException(404, "Project not found")
+        _sync_project_designs(project_id, proj.base_dir, db)
+    # Now fetch fresh
+    return await list_project_designs(project_id)
+
+
 @router.get("/projects/{project_id}/designs", response_model=List[DesignItem])
 async def list_project_designs(project_id: str):
     from src.core.database import AutopilotProject, AutopilotDesign, get_db
@@ -911,7 +944,7 @@ async def add_project_design(project_id: str, req: DesignAddRequest):
 
 @router.put("/projects/{project_id}/designs/reorder")
 async def reorder_project_designs(project_id: str, req: DesignReorderRequest):
-    from src.core.database import AutopilotDesign, get_db
+    from src.core.database import AutopilotDesign, AutopilotProject, get_db
 
     with get_db() as db:
         designs = db.query(AutopilotDesign).filter_by(project_id=project_id).all()
@@ -921,6 +954,15 @@ async def reorder_project_designs(project_id: str, req: DesignReorderRequest):
             if design_id not in by_id:
                 raise HTTPException(400, f"Unknown design id: {design_id}")
             by_id[design_id].ordinal = i + 1
+
+        # Also save order to file for orchestrator to read
+        project = db.query(AutopilotProject).get(project_id)
+        if project:
+            design_dir = _get_design_queue_dir(project.base_dir)
+            order_file = design_dir / ".queue_order.json"
+            # Map design_ids back to filenames
+            ordered_filenames = [by_id[did].filename for did in req.design_ids]
+            order_file.write_text(json.dumps(ordered_filenames))
 
     _invalidate("queue", f"project_designs:{project_id}")
     return {"order": req.design_ids}
@@ -1306,6 +1348,7 @@ async def start_pipeline(project_path: str, design_queue: str = "", max_iteratio
     """Start the autopilot pipeline."""
     import subprocess
     import signal
+    from dotenv import load_dotenv
 
     running = await _is_orchestrator_running()
     if running:
@@ -1322,6 +1365,14 @@ async def start_pipeline(project_path: str, design_queue: str = "", max_iteratio
     venv_python = Path(__file__).parent.parent.parent.parent / ".venv" / "bin" / "python"
     python = str(venv_python) if venv_python.exists() else "python"
 
+    # Load .env file for API keys
+    env_file = Path(__file__).parent.parent.parent.parent / ".env"
+    if env_file.exists():
+        load_dotenv(env_file, override=False)
+
+    # Build environment with loaded vars
+    env = os.environ.copy()
+
     cmd = [
         python, "-m", "src.autopilot.orchestrator",
         "--project-path", str(project),
@@ -1332,6 +1383,7 @@ async def start_pipeline(project_path: str, design_queue: str = "", max_iteratio
     proc = subprocess.Popen(
         cmd,
         cwd=str(Path(__file__).parent.parent.parent.parent),
+        env=env,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
@@ -1346,41 +1398,66 @@ async def start_pipeline(project_path: str, design_queue: str = "", max_iteratio
 
 @router.post("/stop")
 async def stop_pipeline():
-    """Stop the autopilot pipeline."""
+    """Stop the autopilot pipeline and all its agents."""
     import signal
+    from src.core.database import Agent, Task, get_db
 
+    # Kill orchestrator process
     pid_file = Path(AUTOPILOT_STATE_DIR) / "orchestrator.pid"
-    if not pid_file.exists():
-        raise HTTPException(404, "No pipeline PID file found.")
-
-    try:
-        pid = int(pid_file.read_text().strip())
-    except (ValueError, OSError):
-        raise HTTPException(500, "Invalid PID file.")
-
-    try:
-        os.kill(pid, signal.SIGTERM)
-    except ProcessLookupError:
+    orchestrator_pid = None
+    if pid_file.exists():
+        try:
+            orchestrator_pid = int(pid_file.read_text().strip())
+            os.kill(orchestrator_pid, signal.SIGTERM)
+        except (ProcessLookupError, ValueError):
+            pass
         pid_file.unlink(missing_ok=True)
-        raise HTTPException(404, "Pipeline process not found.")
+
+    # Terminate all active autopilot agents
+    terminated_count = 0
+    try:
+        with get_db() as db:
+            # Find autopilot workflows
+            from src.core.database import Workflow
+            autopilot_wf_ids = [wf.id for wf in db.query(Workflow).filter_by(definition_id='autopilot').filter(Workflow.status.in_(['active', 'running'])).all()]
+            
+            if autopilot_wf_ids:
+                # Find tasks in those workflows
+                task_ids = [t.id for t in db.query(Task).filter(Task.workflow_id.in_(autopilot_wf_ids)).filter(Task.status.in_(['pending', 'queued', 'assigned', 'in_progress'])).all()]
+                
+                # Find and terminate agents working on those tasks
+                if task_ids:
+                    agents = db.query(Agent).filter(Agent.current_task_id.in_(task_ids)).filter(Agent.status.in_(['working', 'starting', 'idle'])).all()
+                    for agent in agents:
+                        try:
+                            agent.status = 'terminated'
+                            terminated_count += 1
+                        except Exception:
+                            pass
+                
+                # Mark all autopilot workflows as paused (user stopped them)
+                db.query(Workflow).filter(Workflow.id.in_(autopilot_wf_ids)).update({Workflow.status: 'paused'})
+                
+                db.commit()
+    except Exception as e:
+        logger.error(f"Error cleaning up autopilot agents: {e}")
 
     # Wait for graceful shutdown
-    for _ in range(50):
-        await asyncio.sleep(0.1)
-        try:
-            os.kill(pid, 0)
-        except OSError:
-            break
-    else:
-        # Force kill
-        try:
-            os.kill(pid, signal.SIGKILL)
-        except OSError:
-            pass
+    if orchestrator_pid:
+        for _ in range(50):
+            await asyncio.sleep(0.1)
+            try:
+                os.kill(orchestrator_pid, 0)
+            except OSError:
+                break
+        else:
+            try:
+                os.kill(orchestrator_pid, signal.SIGKILL)
+            except OSError:
+                pass
 
-    pid_file.unlink(missing_ok=True)
     _invalidate("status")
-    return {"stopped": True, "pid": pid}
+    return {"stopped": True, "pid": orchestrator_pid, "agents_terminated": terminated_count}
 
 
 # ── Config ───────────────────────────────────────────────────────

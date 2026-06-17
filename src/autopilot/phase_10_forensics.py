@@ -24,7 +24,10 @@ methodology refinements, and patterns that could reduce iterations.""",
         "pipeline_metrics.json read for timing and iteration data",
         "All phase prompts read from phase_prompts/ directory",
         "All phase artifacts read and compared against prompts",
+        "Agent logs fetched via API (/api/agents/{id}/logs)",
+        "Guardian analysis reviewed for trajectory alignment",
         "Agent performance assessed per phase",
+        "Stuck/crashed agents identified with timestamps",
         "Common issue patterns cataloged",
         "Specific prompt rewrites proposed (with before/after text)",
         "forensics_report.md created in Docs Path",
@@ -101,6 +104,36 @@ Also read the original design document (copied to docs/).
 For each output, compare what was produced against:
 1. The prompt that was given (from Step 2)
 2. The original design document (the source of truth)
+
+═══════════════════════════════════════════════════════════════════════
+STEP 3b: READ AGENT LOGS (GUARDIAN ANALYSIS + TMUX OUTPUT)
+═══════════════════════════════════════════════════════════════════════
+
+Fetch agent logs from the API to understand what happened during execution:
+
+```python
+# Get all agents from the workflow
+import json
+agents_data = json.loads(mcp__hephaestus__http_get({"url": "/api/agents"}))
+
+# For each agent, get its logs
+for agent in agents_data:
+    agent_id = agent["id"]
+    logs = json.loads(mcp__hephaestus__http_get({
+        "url": f"/api/agents/{agent_id}/logs?limit=30"
+    }))
+    # Look for:
+    # - guardian_analysis: trajectory alignment scores
+    # - guardian_steering: messages sent to agent
+    # - agent errors or crashes
+```
+
+Analyze the logs for:
+- Which agents had low alignment scores (off-track)
+- Which agents received steering messages (interventions)
+- Which agents crashed or timed out
+- How long each agent took per task
+- Any repeated patterns (same error, same blocker)
 
 ═══════════════════════════════════════════════════════════════════════
 STEP 4: COMPARE PROMPTS TO OUTCOMES
@@ -223,15 +256,27 @@ DO NOT:
 - Write 200-line templates — fill sections proportionally to findings
 - Give generic advice ("be more specific")
 - Analyze yourself (Phase 10) — you can't objectively self-assess
+
+
+═══════════════════════════════════════════════════════════════════════
+WHEN YOU ARE DONE - MARK YOUR TASK AS COMPLETE (DO NOT SKIP THIS)
+═══════════════════════════════════════════════════════════════════════
+
+CRITICAL: Do NOT just print a summary and stop. Do NOT exit to the command line.
+You MUST call the update_task_status tool. The system CANNOT detect you finished
+without this call. The pipeline WILL get stuck.
+
+After writing all your output files, call:
+
+mcp__hephaestus__update_task_status({
+  "task_id": "<your task id>",
+  "status": "done",
+  "summary": "<brief summary of what was accomplished>",
+  "key_learnings": ["<key findings or decisions>"]
+})
+
+Then wait for confirmation. Do NOT exit until you see the task marked as done.
 """,
-    outputs=[
-        "forensics_report.md with evidence-based analysis",
-        "Specific prompt rewrites with before/after text",
-        "Feature-scoped memory entries for future improvement",
-    ],
-    next_steps=[
-        "Human reviews forensics report",
-        "Prompt improvements applied to phase definitions",
-        "Next pipeline run benefits from saved learnings",
-    ],
+    outputs=[],
+    next_steps=[],
 )

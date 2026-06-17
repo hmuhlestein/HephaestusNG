@@ -1,10 +1,11 @@
 import React, { useState } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useMutation } from '@tanstack/react-query';
+import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Rocket, ListOrdered, History, MessageSquare, Activity, ChevronRight,
   Plus, RefreshCw, FileText, Clock, CheckCircle2, XCircle, AlertTriangle,
-  Terminal
+  Terminal, Users
 } from 'lucide-react';
 import { apiService } from '@/services/api';
 import { Button } from '@/components/ui/button';
@@ -26,12 +27,11 @@ const Autopilot: React.FC = () => {
   const [showAddDesign, setShowAddDesign] = useState(false);
   const { activeProject } = useProject();
   const projectId = activeProject?.id || null;
-  const queryClient = useQueryClient();
 
   const { data: status, refetch: refetchStatus } = useQuery({
     queryKey: ['autopilot-status'],
     queryFn: () => apiService.getAutopilotStatus(),
-    refetchInterval: 10000,
+    refetchInterval: 3000,  // Poll every 3 seconds
   });
 
   const togglePipeline = useMutation({
@@ -42,8 +42,9 @@ const Autopilot: React.FC = () => {
         return apiService.startAutopilot(activeProject.base_dir);
       }
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['autopilot-status'] });
+    onSuccess: async () => {
+      // Immediately refetch to get real status
+      await refetchStatus();
     },
   });
 
@@ -52,6 +53,19 @@ const Autopilot: React.FC = () => {
     queryFn: () => apiService.getAutopilotMessages(500),
     refetchInterval: 15000,
   });
+
+  const { data: agents } = useQuery({
+    queryKey: ['agents'],
+    queryFn: () => fetch('/api/agents').then(r => r.json()),
+    refetchInterval: 5000,
+  });
+
+  const activeAgents = (agents || []).filter((a: any) => 
+    ['working', 'starting', 'idle'].includes(a.status)
+  );
+  const stuckAgents = activeAgents.filter((a: any) => 
+    (a.health_check_failures || 0) >= 3
+  );
 
   const tabs: { id: Tab; label: string; icon: React.ElementType; badge?: number }[] = [
     { id: 'overview', label: 'Overview', icon: Activity },
@@ -97,7 +111,7 @@ const Autopilot: React.FC = () => {
       </div>
 
       {/* Human Input Banner (shows when pipeline needs input) */}
-      <HumanInputBanner />
+      <HumanInputBanner onOpenMessages={() => setActiveTab('messages')} />
 
       {/* Pipeline Status Hero */}
       <PipelineStatusCard
@@ -144,12 +158,18 @@ const Autopilot: React.FC = () => {
           {activeTab === 'overview' && (
             <OverviewTab
               status={status}
+              activeAgents={activeAgents}
+              stuckAgents={stuckAgents}
               onGoToQueue={() => setActiveTab('queue')}
               onGoToFeatures={() => setActiveTab('features')}
             />
           )}
           {activeTab === 'queue' && (
-            <DesignQueuePanel projectId={projectId} onAddDesign={() => setShowAddDesign(true)} />
+            <DesignQueuePanel 
+              projectId={projectId} 
+              onAddDesign={() => setShowAddDesign(true)}
+              currentDesign={status?.current_design}
+            />
           )}
           {activeTab === 'features' && (
             <FeatureGallery onSelectFeature={setSelectedFeatureId} />
@@ -173,13 +193,67 @@ const Autopilot: React.FC = () => {
   );
 };
 
+// ── Agents Overview Card ──────────────────────────────────────
+
+const OverviewAgentsCard: React.FC<{
+  activeAgents: any[];
+  stuckAgents: any[];
+}> = ({ activeAgents, stuckAgents }) => {
+  const navigate = useNavigate();
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, scale: 0.95 }}
+      animate={{ opacity: 1, scale: 1 }}
+      onClick={() => navigate('/agents')}
+      className="bg-white rounded-xl shadow-sm border border-gray-100 p-5 cursor-pointer hover:shadow-md transition-shadow"
+    >
+      <div className="flex items-center justify-between mb-4">
+        <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wider">Agents</h3>
+        <ChevronRight className="w-4 h-4 text-gray-400" />
+      </div>
+      <div className="flex items-center gap-6">
+        <div className="flex items-center gap-3">
+          <div className="p-3 rounded-xl bg-violet-50">
+            <Users className="w-6 h-6 text-violet-600" />
+          </div>
+          <div>
+            <p className="text-2xl font-bold text-gray-800">{activeAgents.length}</p>
+            <p className="text-xs text-gray-500">Active</p>
+          </div>
+        </div>
+        {stuckAgents.length > 0 && (
+          <div className="flex items-center gap-3">
+            <div className="p-3 rounded-xl bg-amber-50">
+              <AlertTriangle className="w-6 h-6 text-amber-600" />
+            </div>
+            <div>
+              <p className="text-2xl font-bold text-amber-600">{stuckAgents.length}</p>
+              <p className="text-xs text-gray-500">Stuck</p>
+            </div>
+          </div>
+        )}
+      </div>
+      {stuckAgents.length > 0 && (
+        <div className="mt-3 pt-3 border-t">
+          <p className="text-xs text-amber-600">
+            {stuckAgents.length} agent{stuckAgents.length > 1 ? 's' : ''} may need attention
+          </p>
+        </div>
+      )}
+    </motion.div>
+  );
+};
+
 // ── Overview Tab ─────────────────────────────────────────────
 
 const OverviewTab: React.FC<{
   status: any;
+  activeAgents: any[];
+  stuckAgents: any[];
   onGoToQueue: () => void;
   onGoToFeatures: () => void;
-}> = ({ status, onGoToQueue, onGoToFeatures }) => {
+}> = ({ status, activeAgents, stuckAgents, onGoToQueue, onGoToFeatures }) => {
   const { data: features } = useQuery({
     queryKey: ['autopilot-features'],
     queryFn: () => apiService.getAutopilotFeatures(),
@@ -257,6 +331,12 @@ const OverviewTab: React.FC<{
           </button>
         </div>
       </div>
+
+      {/* Agents Card */}
+      <OverviewAgentsCard
+        activeAgents={activeAgents}
+        stuckAgents={stuckAgents}
+      />
 
       {/* Recent Features */}
       <div className="lg:col-span-3 bg-white rounded-xl shadow-sm border border-gray-100">

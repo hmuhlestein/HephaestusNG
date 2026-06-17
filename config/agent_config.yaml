@@ -22,7 +22,7 @@ cli_tools:
 
 # Agent Defaults
 agent_defaults:
-  default_cli_tool: "claude"
+  default_cli_tool: "pi"
   max_retries: 3
   health_check_interval: 300  # seconds
   startup_timeout: 30  # seconds to wait for agent to start

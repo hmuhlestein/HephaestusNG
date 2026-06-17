@@ -9,6 +9,9 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
+# Defaults
+DEFAULT_CLI_TOOL = os.getenv("DEFAULT_CLI_TOOL", "pi")
+
 
 class Config:
     """Simple configuration class with YAML and environment variable support."""
@@ -68,7 +71,7 @@ class Config:
 
         # Agent settings
         agents = config.get('agents', {})
-        self.default_cli_tool = agents.get('default_cli_tool', 'claude')
+        self.default_cli_tool = agents.get('default_cli_tool', DEFAULT_CLI_TOOL)
         self.cli_model = agents.get('cli_model', 'sonnet')
         self.glm_api_token_env = agents.get('glm_api_token_env', 'GLM_API_TOKEN')
         self.tmux_session_prefix = agents.get('tmux_session_prefix', 'agent')

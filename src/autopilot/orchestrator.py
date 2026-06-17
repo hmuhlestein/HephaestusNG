@@ -37,6 +37,9 @@ STUCK_THRESHOLD = 3
 DESIGN_QUEUE_SCAN_INTERVAL = 60
 HEARTBEAT_INTERVAL = 300
 MAX_WORKFLOW_TIME = 7200  # 2 hours per workflow execution
+ACTIVE_AGENT_STATUSES = {"working", "starting", "idle"}  # Excludes 'created' (not yet started)
+PARENT_PEEK_INTERVAL = int(os.environ.get("HEPH_PEEK_INTERVAL", "60"))  # seconds between parent peeks
+PARENT_STUCK_THRESHOLD = int(os.environ.get("HEPH_STUCK_THRESHOLD", "300"))  # seconds before parent warns about no progress
 
 
 def get_litellm_config() -> Dict[str, str]:
@@ -57,6 +60,7 @@ class StopReason(Enum):
     MAX_ITERATIONS = "max_iterations"
     CREDIT_EXHAUSTED = "credit_exhausted"
     USER_INTERRUPT = "user_interrupt"
+    USER_SKIP = "user_skip"
     QUEUE_EMPTY = "queue_empty"
 
 
@@ -65,6 +69,7 @@ class DesignStatus(Enum):
     IN_PROGRESS = "in_progress"
     COMPLETED = "completed"
     FAILED = "failed"
+    SKIPPED = "skipped"
 
 
 @dataclass
@@ -181,6 +186,18 @@ def api_get(endpoint: str, timeout: int = 5) -> Optional[dict]:
     return None
 
 
+def api_post(endpoint: str, data: dict = None, timeout: int = 5) -> Optional[dict]:
+    try:
+        r = requests.post(f"{API_BASE}{endpoint}", json=data, timeout=timeout)
+        if r.status_code == 200:
+            return r.json()
+        else:
+            print(f"[api_post] {endpoint} returned {r.status_code}")
+    except Exception as e:
+        print(f"[api_post] {endpoint} failed: {e}")
+    return None
+
+
 def get_tasks(status: str = None) -> list:
     params = f"?status={status}" if status else ""
     data = api_get(f"/api/tasks{params}")
@@ -196,8 +213,33 @@ def get_agents() -> list:
     return data if isinstance(data, list) else data.get("agents", [])
 
 
+def peek_agent_output(agent_id: str, lines: int = 30) -> str:
+    """Peek at the last N lines of an agent's tmux output."""
+    data = api_get(f"/api/agents/{agent_id}/output?lines={lines}")
+    if data is None:
+        return ""
+    return data.get("output", "") if isinstance(data, dict) else str(data)
+
+
+def get_task_progress(agent_id: str) -> dict:
+    """Check an agent's task progress."""
+    tasks = get_tasks(status="done")
+    agent_done = [t for t in tasks if t.get("assigned_agent_id") == agent_id]
+    tasks_in_progress = get_tasks(status="in_progress")
+    agent_active = [t for t in tasks_in_progress if t.get("assigned_agent_id") == agent_id]
+    return {"done": len(agent_done), "in_progress": len(agent_active)}
+
+
 def get_workflow_status(workflow_id: str) -> dict:
     return api_get(f"/api/workflow-executions/{workflow_id}") or {}
+
+
+def get_active_workflows() -> list:
+    """Get list of active workflows (excluding the one we're about to start)."""
+    data = api_get("/api/workflow-executions") or []
+    if isinstance(data, dict):
+        data = data.get("executions", [])
+    return [w for w in data if w.get("status") == "active"]
 
 
 def check_api_credits() -> Tuple[bool, str]:
@@ -224,14 +266,19 @@ def check_api_credits() -> Tuple[bool, str]:
 
 
 def detect_hard_error(agents: list, failed_tasks: list, workflow_id: str = None) -> Tuple[bool, str]:
-    crashed_agents = [a for a in agents if a.get("status") == "error"]
-    if crashed_agents:
-        names = [a.get("id", "unknown")[:20] for a in crashed_agents]
-        return True, f"Crashed agents: {', '.join(names)}"
-
     # Filter to only tasks from the current workflow if provided
     if workflow_id:
         failed_tasks = [t for t in failed_tasks if t.get("workflow_id") == workflow_id]
+    
+    # Check for crashed/errored agents in this workflow
+    crashed_agents = [
+        a for a in agents
+        if a.get("status") == "error"
+        and (not workflow_id or a.get("workflow_id") == workflow_id)
+    ]
+    if crashed_agents:
+        names = [a.get("id", "unknown")[:20] for a in crashed_agents[:3]]
+        return True, f"Crashed agents: {', '.join(names)}"
     
     critical_failures = [
         t for t in failed_tasks
@@ -244,16 +291,36 @@ def detect_hard_error(agents: list, failed_tasks: list, workflow_id: str = None)
     return False, ""
 
 
-def detect_impasse(stuck_count: int, agents: list, pending_tasks: list, in_progress_tasks: list) -> Tuple[bool, str]:
-    stuck_agents = [a for a in agents if a.get("health_check_failures", 0) >= STUCK_THRESHOLD]
-    if stuck_agents:
-        names = [a.get("id", "unknown")[:20] for a in stuck_agents]
-        return True, f"Stuck agents: {', '.join(names)}"
-
-    active_agents = [a for a in agents if a.get("status") == "working"]
-    if not active_agents and not in_progress_tasks and pending_tasks:
-        return True, "No active agents but tasks are pending"
-
+def detect_impasse(stuck_count: int, agents: list, pending_tasks: list, in_progress_tasks: list, elapsed_seconds: int = 0) -> Tuple[bool, str]:
+    """Detect if the workflow is stuck.
+    
+    Parent-child model: check if tasks are progressing, not health_check_failures.
+    """
+    active_agents = [a for a in agents if a.get("status") in ACTIVE_AGENT_STATUSES]
+    
+    # If there are pending tasks but no active agents, something is wrong
+    # But give a 60 second grace period for agents to start
+    if not active_agents and pending_tasks and elapsed_seconds > 60:
+        return True, f"No active agents but {len(pending_tasks)} tasks pending"
+    
+    # Check for agents that have been working too long without progress
+    # (assigned tasks that never move to done)
+    if in_progress_tasks and not pending_tasks:
+        # Tasks are in progress — check if they've been stuck
+        for task in in_progress_tasks:
+            started = task.get('started_at')
+            if started:
+                from datetime import datetime, timezone
+                try:
+                    started_dt = datetime.fromisoformat(started)
+                    if started_dt.tzinfo is None:
+                        started_dt = started_dt.replace(tzinfo=timezone.utc)
+                    elapsed = (datetime.now(timezone.utc) - started_dt).total_seconds()
+                    if elapsed > 1800:  # 30 minutes
+                        return True, f"Task {task.get('id', '?')[:8]} stuck for {int(elapsed)}s"
+                except Exception:
+                    pass
+    
     return False, ""
 
 
@@ -280,7 +347,7 @@ def detect_architectural_issue(report_paths: List[str]) -> Tuple[bool, str]:
     return False, ""
 
 
-def prompt_human(reason: str, logger: OrchestratorLogger, timeout: int = 300) -> str:
+def prompt_human(reason: str, logger: OrchestratorLogger, timeout: int = 600) -> str:
     """Prompt for human input. Auto-continues after timeout seconds."""
     import sys
     import uuid
@@ -320,11 +387,26 @@ def prompt_human(reason: str, logger: OrchestratorLogger, timeout: int = 300) ->
 
     start = time.time()
     while time.time() - start < timeout:
+        # Check if request file was dismissed (deleted by API)
+        if not request_file.exists():
+            logger.log("Input request was dismissed (auto-continuing)", "WARN")
+            response_file.unlink(missing_ok=True)
+            return "c"  # Auto-continue when dismissed
+        
         # Check file response
         if response_file.exists():
             try:
                 data = json.loads(response_file.read_text())
                 choice = data.get("choice", "").strip().lower()
+                message = data.get("message", "")
+                
+                if choice == "m" and message:
+                    # Log the message and continue waiting for actual decision
+                    logger.log(f"Human message: {message}", "INFO")
+                    logger.event("human_input", {"choice": "m", "message": message, "reason": reason, "source": "web", "request_id": request_id})
+                    response_file.unlink(missing_ok=True)  # Delete response, keep waiting
+                    continue
+                
                 if choice in ("c", "s", "q"):
                     logger.event("human_input", {"choice": choice, "reason": reason, "source": "web", "request_id": request_id})
                     request_file.unlink(missing_ok=True)
@@ -376,7 +458,26 @@ def scan_design_queue(queue_dir: Path, processed_hashes: Set[str]) -> List[Desig
                 content_hash=content_hash,
             ))
 
-    designs.sort(key=lambda d: d.path.stat().st_mtime)
+    # Check for manual reorder file
+    order_file = queue_dir / ".queue_order.json"
+    if order_file.exists():
+        try:
+            import json
+            saved_order = json.loads(order_file.read_text())
+            # Create lookup by filename
+            by_filename = {d.path.name: d for d in designs}
+            # Order by saved order, then append any new files not in saved order
+            ordered = []
+            for fname in saved_order:
+                if fname in by_filename:
+                    ordered.append(by_filename.pop(fname))
+            # Add remaining files (not in saved order) sorted by name
+            ordered.extend(sorted(by_filename.values(), key=lambda d: d.path.name.lower()))
+            return ordered
+        except (json.JSONDecodeError, KeyError):
+            pass  # Fall back to default sort
+
+    designs.sort(key=lambda d: d.path.name.lower())
     return designs
 
 
@@ -894,6 +995,34 @@ def generate_product_validation_report(
 def run_single_workflow(sdk, workflow_id: str, project_path: str, description: str,
                         logger: OrchestratorLogger,
                         launch_params: Dict[str, Any] = None) -> str:
+    # Check for existing active workflows and wait for them
+    existing_workflows = get_active_workflows()
+    if existing_workflows:
+        logger.log(f"Found {len(existing_workflows)} active workflow(s), waiting for them to complete (max 300s total)...")
+        wait_start = time.time()
+        for wf in existing_workflows:
+            # Check total timeout
+            elapsed = time.time() - wait_start
+            if elapsed >= 300:
+                logger.log(f"  Total wait timeout reached ({elapsed:.0f}s), proceeding anyway")
+                break
+            
+            wf_id = wf.get('id', '')
+            remaining = 300 - elapsed
+            logger.log(f"  Waiting for workflow {wf_id[:8]}... ({remaining:.0f}s remaining)")
+            
+            # Wait for this workflow to complete
+            wf_wait_start = time.time()
+            while time.time() - wait_start < 300:  # Check total timeout
+                wf_status = get_workflow_status(wf_id)
+                status = wf_status.get('status', '')
+                if status in ('completed', 'failed', 'cancelled'):
+                    logger.log(f"  Workflow {wf_id[:8]} finished with status: {status}")
+                    break
+                time.sleep(10)
+            else:
+                logger.log(f"  Workflow {wf_id[:8]} timed out, proceeding anyway")
+    
     logger.log(f"Launching workflow: {workflow_id}")
     logger.event("workflow_launch", {"workflow": workflow_id, "path": project_path})
 
@@ -912,6 +1041,8 @@ def run_single_workflow(sdk, workflow_id: str, project_path: str, description: s
     stuck_count = 0
     credit_stuck_count = 0
     start_time = time.time()
+    last_done_count = 0
+    last_progress_time = time.time()
 
     try:
         while True:
@@ -925,7 +1056,7 @@ def run_single_workflow(sdk, workflow_id: str, project_path: str, description: s
 
             wf_status = get_workflow_status(exec_id)
             agents = get_agents()
-            active_agents = [a for a in agents if a.get("status") == "working"]
+            active_agents = [a for a in agents if a.get("status") in ACTIVE_AGENT_STATUSES]
             pending = get_tasks(status="pending")
             in_progress = get_tasks(status="in_progress")
             done = get_tasks(status="done")
@@ -936,6 +1067,73 @@ def run_single_workflow(sdk, workflow_id: str, project_path: str, description: s
                 f"Tasks: {len(pending)} pending, {len(in_progress)} active, "
                 f"{len(done)} done, {len(failed)} failed"
             )
+
+            # Parent peeks at children's output periodically for observability
+            if elapsed > 0 and elapsed % PARENT_PEEK_INTERVAL < POLL_INTERVAL:
+                for agent in active_agents:
+                    aid = agent.get('id', '')
+                    output = peek_agent_output(aid, lines=15)
+                    if output:
+                        # Show last meaningful lines (skip blank)
+                        lines = [l.strip() for l in output.strip().split('\n') if l.strip()][-8:]
+                        if lines:
+                            preview = ' | '.join(lines[-3:])  # last 3 lines
+                            logger.log(f"  [{aid[:8]}] {preview}")
+
+            # Track progress — detect if agents are stuck
+            current_done = len(done)
+            if current_done > last_done_count:
+                last_done_count = current_done
+                last_progress_time = time.time()
+            
+            no_progress_seconds = time.time() - last_progress_time
+            if no_progress_seconds > PARENT_STUCK_THRESHOLD and active_agents and not pending:
+                # No progress for threshold time — nudge each agent
+                logger.log(f"[WARN] No task progress for {int(no_progress_seconds)}s — nudging agents:")
+                for agent in active_agents:
+                    aid = agent.get('id', '')
+                    # Peek at output to include in nudge context
+                    output = peek_agent_output(aid, lines=20)
+                    last_lines = []
+                    if output:
+                        last_lines = [l.strip() for l in output.strip().split('\n') if l.strip()][-3:]
+                    
+                    # Send nudge message via API
+                    nudge_msg = (
+                        f"[PARENT NUDGE] No task progress for {int(no_progress_seconds)}s. "
+                        f"If you're done writing files, call update_task_status NOW to mark your task complete. "
+                        f"Do NOT exit to the command line. Do NOT print a summary and stop. "
+                        f"If stuck, create a sub-task or ask for help."
+                    )
+                    
+                    try:
+                        api_post(f"/api/agents/{aid}/message", {"message": nudge_msg})
+                        logger.log(f"  Nudged {aid[:8]}")
+                    except Exception as e:
+                        logger.log(f"  Failed to nudge {aid[:8]}: {e}")
+                
+                # Auto-kill agents stuck for 2x the threshold
+                # Only kill agents that show no activity (not actively streaming)
+                if no_progress_seconds > PARENT_STUCK_THRESHOLD * 2:
+                    logger.log(f"[AUTO-KILL] Stuck for {int(no_progress_seconds)}s — checking agents:")
+                    killed_any = False
+                    for agent in active_agents:
+                        aid = agent.get('id', '')
+                        # Peek at output — if agent is actively streaming, don't kill
+                        output = peek_agent_output(aid, lines=5)
+                        if output and any(kw in output.lower() for kw in ['→', '←', 'edit', 'write', 'create', 'reading']):
+                            logger.log(f"  {aid[:8]}: actively working — skipping")
+                            continue
+                        try:
+                            api_post(f"/api/agents/{aid}/terminate")
+                            logger.log(f"  {aid[:8]}: terminated (no active output)")
+                            killed_any = True
+                        except Exception as e:
+                            logger.log(f"  {aid[:8]}: failed to terminate: {e}")
+                    if killed_any:
+                        return "timeout"
+                
+                last_progress_time = time.time()  # Reset so we don't spam
 
             wf_state = wf_status.get("status", "")
             if wf_state in ("completed", "failed"):
@@ -961,7 +1159,7 @@ def run_single_workflow(sdk, workflow_id: str, project_path: str, description: s
                 logger.log(f"Hard error detected: {error_reason}", "ERROR")
                 return "hard_error"
 
-            impasse, impasse_reason = detect_impasse(stuck_count, agents, pending, in_progress)
+            impasse, impasse_reason = detect_impasse(stuck_count, agents, pending, in_progress, elapsed)
             if impasse:
                 stuck_count += 1
                 if stuck_count >= STUCK_THRESHOLD:
@@ -970,12 +1168,32 @@ def run_single_workflow(sdk, workflow_id: str, project_path: str, description: s
                         return "interrupted"
                     elif choice == "s":
                         stuck_count = 0
+                        # Skip this design — terminate all active agents for this workflow
+                        for a in agents:
+                            if a.get("status") in ACTIVE_AGENT_STATUSES:
+                                try:
+                                    api_post(f"/api/agents/{a['id']}/terminate")
+                                    logger.log(f"Terminated agent {a['id'][:8]} (skip)")
+                                except Exception:
+                                    pass
+                        return "skipped"
             else:
                 stuck_count = 0
 
     except KeyboardInterrupt:
         logger.log("Interrupted by user")
         return "interrupted"
+    finally:
+        # Clean up: mark workflow as completed in DB so it doesn't block future runs
+        # Only clean up if we have an exec_id and the workflow is still active
+        if exec_id:
+            try:
+                wf_status = get_workflow_status(exec_id)
+                if wf_status.get('status') == 'active':
+                    api_post(f"/api/workflow-executions/{exec_id}/complete")
+                    logger.log(f"Cleaned up workflow {exec_id[:8]}")
+            except Exception as e:
+                logger.log(f"Workflow cleanup failed: {e}", "WARN")
 
 
 def run_single_design(
@@ -1099,6 +1317,11 @@ def run_single_design(
 
             if wf_status == "hard_error":
                 stop_reason = StopReason.HARD_ERROR
+                break
+
+            if wf_status == "skipped":
+                logger.log(f"Design skipped by user")
+                stop_reason = StopReason.USER_SKIP
                 break
 
             logger.log("")
@@ -1255,7 +1478,12 @@ def run_single_design(
 
     design_entry.completed_at = datetime.now().isoformat()
 
-    status = DesignStatus.COMPLETED if report.product_validated else DesignStatus.FAILED
+    if stop_reason == StopReason.USER_SKIP:
+        status = DesignStatus.SKIPPED
+    elif report.product_validated:
+        status = DesignStatus.COMPLETED
+    else:
+        status = DesignStatus.FAILED
     return status, report
 
 

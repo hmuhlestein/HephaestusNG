@@ -463,4 +463,43 @@ if [ "$LOCAL_MODE" = false ]; then
     echo ""
 fi
 
+# ─── OpenCode MCP Setup ──────────────────────────────────────────
+
+header "OpenCode MCP Configuration"
+
+OPENCODE_CONFIG="$HOME/.config/opencode/opencode.jsonc"
+mkdir -p "$(dirname "$OPENCODE_CONFIG")"
+
+# Determine python path
+if [ -n "$VENV_DIR" ]; then
+    PYTHON_PATH="$VENV_DIR/bin/python"
+else
+    PYTHON_PATH="$(which python3)"
+fi
+
+# Determine script path
+if [ "$LOCAL_MODE" = true ]; then
+    MCP_SCRIPT="$REPO_DIR/claude_mcp_client.py"
+else
+    MCP_SCRIPT="$PREFIX/claude_mcp_client.py"
+fi
+
+# Write opencode config if it doesn't exist or is outdated
+if [ ! -f "$OPENCODE_CONFIG" ] || ! grep -q "hephaestusNG" "$OPENCODE_CONFIG" 2>/dev/null; then
+    cat > "$OPENCODE_CONFIG" << OPEOF
+{
+  "\$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "hephaestus": {
+      "type": "local",
+      "command": ["$PYTHON_PATH", "$MCP_SCRIPT"]
+    }
+  }
+}
+OPEOF
+    ok "Wrote $OPENCODE_CONFIG"
+else
+    ok "OpenCode config already up to date"
+fi
+
 header "Done"

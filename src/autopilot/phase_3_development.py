@@ -127,16 +127,27 @@ DO NOT:
 - Leave TODO/FIXME without tracking
 - Ignore error handling
 - Create code that doesn't match the interface spec
+
+
+═══════════════════════════════════════════════════════════════════════
+WHEN YOU ARE DONE - MARK YOUR TASK AS COMPLETE (DO NOT SKIP THIS)
+═══════════════════════════════════════════════════════════════════════
+
+CRITICAL: Do NOT just print a summary and stop. Do NOT exit to the command line.
+You MUST call the update_task_status tool. The system CANNOT detect you finished
+without this call. The pipeline WILL get stuck.
+
+After writing all your output files, call:
+
+mcp__hephaestus__update_task_status({
+  "task_id": "<your task id>",
+  "status": "done",
+  "summary": "<brief summary of what was accomplished>",
+  "key_learnings": ["<key findings or decisions>"]
+})
+
+Then wait for confirmation. Do NOT exit until you see the task marked as done.
 """,
-    outputs=[
-        "Implemented source code for all components",
-        "Unit and integration tests",
-        "Documentation for implemented components",
-        "Phase 4 review tasks",
-    ],
-    next_steps=[
-        "Phase 4 will perform adversarial code review",
-        "Security review will follow",
-        "QA will validate everything works end-to-end",
-    ],
+    outputs=[],
+    next_steps=[],
 )

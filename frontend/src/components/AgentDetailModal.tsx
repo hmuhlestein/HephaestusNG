@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   X,
@@ -11,8 +11,10 @@ import {
   Send,
   ChevronDown,
   ChevronUp,
-  Activity
+  Activity,
+  XCircle
 } from 'lucide-react';
+import toast from 'react-hot-toast';
 import { formatDistanceToNow } from 'date-fns';
 import { apiService } from '@/services/api';
 import { Agent } from '@/types';
@@ -34,10 +36,21 @@ const AgentDetailModal: React.FC<AgentDetailModalProps> = ({
 }) => {
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [messageText, setMessageText] = useState('');
+  const queryClient = useQueryClient();
   const [expandedSections, setExpandedSections] = useState({
     task: true,
     details: false,
     message: false,
+  });
+
+  const terminateMutation = useMutation({
+    mutationFn: () => apiService.terminateAgent(agentId!, 'Manual termination from UI'),
+    onSuccess: () => {
+      toast.success('Agent terminated');
+      queryClient.invalidateQueries({ queryKey: ['agents'] });
+      onClose();
+    },
+    onError: (err: any) => toast.error(err?.response?.data?.detail || 'Failed to terminate'),
   });
 
   const { data: agent, isLoading } = useQuery<Agent>({
@@ -136,6 +149,22 @@ const AgentDetailModal: React.FC<AgentDetailModalProps> = ({
                   >
                     <Eye className="w-4 h-4 mr-1" />
                     Live Output
+                  </button>
+                )}
+
+                {agent && agent.status !== 'terminated' && (
+                  <button
+                    onClick={() => {
+                      if (confirm('Terminate this agent?')) {
+                        terminateMutation.mutate();
+                      }
+                    }}
+                    disabled={terminateMutation.isPending}
+                    className="flex items-center px-3 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors text-sm"
+                    title="Terminate agent"
+                  >
+                    <XCircle className="w-4 h-4 mr-1" />
+                    Terminate
                   </button>
                 )}
 

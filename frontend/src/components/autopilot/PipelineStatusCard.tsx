@@ -1,6 +1,6 @@
 import React from 'react';
 import { motion } from 'framer-motion';
-import { CheckCircle2, XCircle, Clock, Play, Zap, Activity } from 'lucide-react';
+import { CheckCircle2, XCircle, Clock, Play, Pause, Activity, Users } from 'lucide-react';
 import { formatTime } from '@/pages/Autopilot';
 
 interface PipelineStatusCardProps {
@@ -12,6 +12,12 @@ interface PipelineStatusCardProps {
 const PipelineStatusCard: React.FC<PipelineStatusCardProps> = ({ status, onToggle, loading }) => {
   const running = status?.running ?? false;
   const currentDesign = status?.current_design;
+  const designsProcessed = status?.designs_processed ?? 0;
+  const queueDepth = status?.queue_depth ?? 0;
+  const totalDesigns = designsProcessed + queueDepth;
+  // Add minimum progress of 2% when running so bar shows activity
+  const baseProgress = totalDesigns > 0 ? (designsProcessed / totalDesigns) * 100 : 0;
+  const progressPercent = running && baseProgress < 2 ? 2 : baseProgress;
 
   return (
     <motion.div
@@ -54,12 +60,7 @@ const PipelineStatusCard: React.FC<PipelineStatusCardProps> = ({ status, onToggl
               title={running ? 'Pause pipeline' : 'Start pipeline'}
             >
               {running ? (
-                <motion.div
-                  animate={{ rotate: 360 }}
-                  transition={{ duration: 2, repeat: Infinity, ease: 'linear' }}
-                >
-                  <Zap className="w-8 h-8 text-white" />
-                </motion.div>
+                <Pause className="w-8 h-8 text-white" />
               ) : (
                 <Play className="w-8 h-8 text-white/70" />
               )}
@@ -83,6 +84,7 @@ const PipelineStatusCard: React.FC<PipelineStatusCardProps> = ({ status, onToggl
           {/* Right: Metrics */}
           <div className="flex items-center gap-6">
             {[
+              { label: 'Agents', value: status?.active_agents || 0, icon: Users },
               { label: 'Processed', value: status?.designs_processed || 0, icon: Activity },
               { label: 'Succeeded', value: status?.designs_succeeded || 0, icon: CheckCircle2 },
               { label: 'Failed', value: status?.designs_failed || 0, icon: XCircle },
@@ -111,14 +113,31 @@ const PipelineStatusCard: React.FC<PipelineStatusCardProps> = ({ status, onToggl
         {/* Progress bar (if running) */}
         {running && (
           <div className="mt-4">
-            <div className="h-1.5 bg-white/20 rounded-full overflow-hidden">
-              <motion.div
-                className="h-full bg-white/60 rounded-full"
-                initial={{ width: '0%' }}
-                animate={{ width: '100%' }}
-                transition={{ duration: 3, repeat: Infinity, ease: 'linear' }}
-              />
+            <div className="flex items-center justify-between text-xs text-white/60 mb-1.5">
+              <span>{Math.min(designsProcessed + 1, totalDesigns)} of {totalDesigns} designs processing</span>
+              <span>{progressPercent.toFixed(1)}%</span>
             </div>
+            <motion.div 
+              className="h-2 bg-white/20 rounded-full overflow-hidden relative"
+              animate={{ opacity: [0.8, 1, 0.8] }}
+              transition={{ duration: 2, repeat: Infinity, ease: 'easeInOut' }}
+            >
+              <motion.div
+                className="h-full bg-white/80 rounded-full"
+                initial={{ width: '0%' }}
+                animate={{ width: `${progressPercent}%` }}
+                transition={{ duration: 0.5, ease: 'easeOut' }}
+              />
+              {/* Pulse effect at the end of progress bar */}
+              {progressPercent > 0 && progressPercent < 100 && (
+                <motion.div
+                  className="absolute top-0 h-2 w-4 bg-white rounded-full"
+                  style={{ left: `calc(${progressPercent}% - 8px)` }}
+                  animate={{ opacity: [0.4, 1, 0.4] }}
+                  transition={{ duration: 1.5, repeat: Infinity, ease: 'easeInOut' }}
+                />
+              )}
+            </motion.div>
           </div>
         )}
       </div>

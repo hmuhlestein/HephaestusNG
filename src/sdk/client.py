@@ -936,6 +936,105 @@ class HephaestusSDK:
         except Exception as e:
             raise TaskCreationError(f"Failed to create task: {e}")
 
+    # ── Parent-Child Agent Communication ──────────────────────────────────
+
+    def get_children(self, agent_id: str) -> List[Dict[str, Any]]:
+        """
+        Get all child agents for a parent agent.
+
+        Args:
+            agent_id: Parent agent ID
+
+        Returns:
+            List of child agent info dictionaries
+        """
+        url = f"http://{self.config.mcp_host}:{self.config.mcp_port}/api/agents/{agent_id}/children"
+        response = requests.get(url)
+        response.raise_for_status()
+        return response.json().get("children", [])
+
+    def get_children_status(self, agent_id: str) -> Dict[str, Any]:
+        """
+        Get summary of all children's status.
+
+        Args:
+            agent_id: Parent agent ID
+
+        Returns:
+            Dictionary with status summary
+        """
+        url = f"http://{self.config.mcp_host}:{self.config.mcp_port}/api/agents/{agent_id}/children/status"
+        response = requests.get(url)
+        response.raise_for_status()
+        return response.json()
+
+    def get_child_logs(self, agent_id: str, child_id: str, lines: int = 50) -> str:
+        """
+        Read logs from a child agent.
+
+        Args:
+            agent_id: Parent agent ID
+            child_id: Child agent ID
+            lines: Number of lines to read
+
+        Returns:
+            Child agent's log output
+        """
+        url = f"http://{self.config.mcp_host}:{self.config.mcp_port}/api/agents/{agent_id}/children/{child_id}/logs"
+        response = requests.get(url, params={"lines": lines})
+        response.raise_for_status()
+        return response.json().get("logs", "")
+
+    def send_message_to_child(self, agent_id: str, child_id: str, message: str) -> bool:
+        """
+        Send a message from parent to child agent.
+
+        Args:
+            agent_id: Parent agent ID
+            child_id: Child agent ID
+            message: Message to send
+
+        Returns:
+            True if message sent successfully
+        """
+        url = f"http://{self.config.mcp_host}:{self.config.mcp_port}/api/agents/{agent_id}/children/{child_id}/message"
+        response = requests.post(url, json={"message": message})
+        response.raise_for_status()
+        return response.json().get("sent", False)
+
+    def nudge_child(self, agent_id: str, child_id: str, reason: str = "No progress detected") -> bool:
+        """
+        Nudge a child agent that appears stuck.
+
+        Args:
+            agent_id: Parent agent ID
+            child_id: Child agent ID
+            reason: Reason for nudging
+
+        Returns:
+            True if nudge sent successfully
+        """
+        url = f"http://{self.config.mcp_host}:{self.config.mcp_port}/api/agents/{agent_id}/children/{child_id}/nudge"
+        response = requests.post(url, json={"reason": reason})
+        response.raise_for_status()
+        return response.json().get("nudged", False)
+
+    def monitor_children(self, agent_id: str, stuck_threshold_seconds: int = 300) -> List[str]:
+        """
+        Monitor all children and nudge any that appear stuck.
+
+        Args:
+            agent_id: Parent agent ID
+            stuck_threshold_seconds: Seconds before considering a child stuck
+
+        Returns:
+            List of nudged child agent IDs
+        """
+        url = f"http://{self.config.mcp_host}:{self.config.mcp_port}/api/agents/{agent_id}/children/monitor"
+        response = requests.post(url, json={"stuck_threshold_seconds": stuck_threshold_seconds})
+        response.raise_for_status()
+        return response.json().get("nudged_agents", [])
+
     def is_healthy(self) -> Dict[str, bool]:
         """
         Check health of all services.

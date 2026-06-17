@@ -256,6 +256,7 @@ class WorkflowDefinition:
     config: Optional[WorkflowConfig] = None  # Workflow configuration
     description: str = ""  # Description of what this workflow does
     launch_template: Optional[LaunchTemplate] = None  # Template for UI-based workflow launching
+    orchestrator_config: Optional[Dict[str, Any]] = None  # Orchestrator config for phase evaluation and flow control
 
 
 @dataclass

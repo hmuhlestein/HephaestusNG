@@ -316,17 +316,27 @@ DO NOT:
 - Leave broken cross-references unfixed
 - Add documentation for features not yet implemented
 - Remove documentation for features that ARE implemented but undocumented
+
+
+═══════════════════════════════════════════════════════════════════════
+WHEN YOU ARE DONE - MARK YOUR TASK AS COMPLETE (DO NOT SKIP THIS)
+═══════════════════════════════════════════════════════════════════════
+
+CRITICAL: Do NOT just print a summary and stop. Do NOT exit to the command line.
+You MUST call the update_task_status tool. The system CANNOT detect you finished
+without this call. The pipeline WILL get stuck.
+
+After writing all your output files, call:
+
+mcp__hephaestus__update_task_status({
+  "task_id": "<your task id>",
+  "status": "done",
+  "summary": "<brief summary of what was accomplished>",
+  "key_learnings": ["<key findings or decisions>"]
+})
+
+Then wait for confirmation. Do NOT exit until you see the task marked as done.
 """,
-    outputs=[
-        "doc_review_report.md with findings and fixes",
-        "Updated requirements_analysis.md (if inaccuracies found)",
-        "Updated architecture.md (if inaccuracies found)",
-        "Fixed docstrings and inline comments in source code",
-        "Fixed README/setup documentation",
-    ],
-    next_steps=[
-        "Security review will verify documentation of security controls",
-        "QA will validate that documented setup steps actually work",
-        "Product validation will check docs match the final product",
-    ],
+    outputs=[],
+    next_steps=[],
 )

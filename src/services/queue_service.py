@@ -33,7 +33,7 @@ class QueueService:
         session = self.db_manager.get_session()
         try:
             count = session.query(Agent).filter(
-                Agent.status != "terminated"
+                Agent.status.in_(["working", "starting", "idle"])
             ).count()
             logger.debug(f"Active agent count: {count}")
             return count

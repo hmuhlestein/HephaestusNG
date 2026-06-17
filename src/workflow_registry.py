@@ -20,7 +20,7 @@ from example_workflows.documentation_generation.phases import DOC_GEN_PHASES, DO
 from example_workflows.qa.phases import QA_PHASES, QA_WORKFLOW_CONFIG, QA_LAUNCH_TEMPLATE
 
 # Core workflows
-from src.autopilot.phases import AUTOPILOT_PHASES, AUTOPILOT_WORKFLOW_CONFIG, AUTOPILOT_LAUNCH_TEMPLATE
+from src.autopilot.phases import AUTOPILOT_PHASES, AUTOPILOT_WORKFLOW_CONFIG, AUTOPILOT_LAUNCH_TEMPLATE, AUTOPILOT_ORCHESTRATOR_CONFIG
 
 
 def get_all_workflow_definitions() -> list:
@@ -78,6 +78,7 @@ def get_all_workflow_definitions() -> list:
             id="autopilot",
             name="Autopilot Pipeline",
             phases=AUTOPILOT_PHASES,
+            orchestrator_config=AUTOPILOT_ORCHESTRATOR_CONFIG,
             config=AUTOPILOT_WORKFLOW_CONFIG,
             description="10-phase automated pipeline: requirements, architecture, development, review, doc review, security, QA, validation, git, forensics",
             launch_template=AUTOPILOT_LAUNCH_TEMPLATE,

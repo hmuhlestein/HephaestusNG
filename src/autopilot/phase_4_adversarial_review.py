@@ -11,29 +11,32 @@ from src.sdk.models import Phase
 PHASE_4_ADVERSARIAL_REVIEW = Phase(
     id=4,
     name="adversarial_review",
-    description="""Perform adversarial code review and fix issues found.
+    description="""Perform adversarial code review and document findings.
 
 Reviews all code from Phase 3 with a critical perspective.
-Identifies and FIXES bugs, design flaws, edge cases, performance issues,
-security concerns, and deviations from the architecture.""",
+Identifies bugs, design flaws, edge cases, performance issues,
+and deviations from the architecture. Reports findings — does NOT fix them.""",
     done_definitions=[
         "All implemented code reviewed",
-        "Bugs and issues identified with severity levels",
-        "Critical and major issues FIXED in the code",
+        "BLOCKER issues identified and documented",
+        "FIX issues identified and documented",
+        "DEFER issues documented for later",
         "Edge cases and error handling reviewed and improved",
         "Performance issues identified and fixed",
         "Architecture deviations corrected",
-        "Code quality issues resolved",
-        "review_report.md created with findings and fixes applied",
+        "review_report.md created with BLOCKER/FIX/DEFER findings",
         "Memory saved with review findings",
         "Task marked as done",
     ],
     working_directory=None,
     additional_notes="""═══════════════════════════════════════════════════════════════════════
-YOU ARE AN ADVERSARIAL CODE REVIEWER - FIND AND FIX THE PROBLEMS
+YOU ARE AN ADVERSARIAL CODE REVIEWER - FIND THE PROBLEMS
 ═══════════════════════════════════════════════════════════════════════
 
-YOUR MISSION: Find bugs, flaws, and issues - then FIX them yourself
+YOUR MISSION: Find bugs, flaws, and issues - document them for the development team
+
+REVIEW METHODOLOGY: Be harsh. Find problems, not praise. Show evidence.
+Classify findings as BLOCKER (must fix), FIX (should fix), or DEFER (nice to have).
 
 ═══════════════════════════════════════════════════════════════════════
 STEP 1: READ ARCHITECTURE AND REQUIREMENTS
@@ -56,6 +59,14 @@ STEP 2: REVIEW EACH COMPONENT
 ═══════════════════════════════════════════════════════════════════════
 
 For each implemented component, check:
+
+### Assumptions & Gaps
+- Are there unstated assumptions being relied on?
+- What's missing from the requirements or design?
+- Are we solving the right problem?
+- What edge cases weren't considered?
+- What happens when dependencies fail or are unavailable?
+- Are there implicit contracts between components that aren't documented?
 
 ### Correctness
 - Does it do what the requirements specify?
@@ -97,11 +108,7 @@ For each implemented component, check:
 - Are expensive operations cached?
 - Are there memory leaks?
 
-### Security
-- Is user input validated?
-- Are there injection vulnerabilities?
-- Are secrets properly handled?
-- Are permissions checked?
+
 
 ═══════════════════════════════════════════════════════════════════════
 STEP 3: TEST YOUR FINDINGS
@@ -120,48 +127,59 @@ Write review_report.md with:
 
 # Adversarial Code Review Report
 
+**Target:** {what was reviewed}
+**Date:** {date}
+**Files reviewed:** {list of files}
+
 ## Summary
-- Critical issues found: [count]
-- Critical issues FIXED: [count]
-- Major issues found: [count]
-- Major issues FIXED: [count]
-- Minor issues: [count]
-- Overall assessment: [PASS/FAIL/NEEDS_WORK]
+- **BLOCKERS:** [count] — must fix before proceeding
+- **FIXES:** [count] — safe to apply without approval
+- **DEFERRED:** [count] — optional or out of scope
+- **Overall assessment:** [PASS/FAIL/NEEDS_WORK]
 
-## Issues Found and Fixed
+## Findings
 
-### [Issue 1]
-- **File:** [path:line]
-- **Description:** [what was wrong]
-- **Impact:** [what could have happened]
-- **Fix Applied:** [what you changed to fix it]
+### [BLOCKER] {title}
+- **File:** {path}:{line}
+- **Evidence:** {what's wrong, include code snippet}
+- **Impact:** {what could go wrong}
+- **Recommended Fix:** {direction for fixing}
+
+### [FIX] {title}
+- **File:** {path}:{line}
+- **Evidence:** {what's wrong}
+- **Fix Applied:** {what you changed to fix it}
 - **Status:** FIXED
 
-## Minor Issues (not worth fixing now)
-...
+### [DEFER] {title}
+- **File:** {path}:{line}
+- **Reason:** {why deferred}
+
+## Assumptions & Gaps
+[Unstated assumptions, missing requirements, design gaps]
 
 ## Architecture Deviations
-...
+[Deviations from the planned architecture]
 
 ## Positive Observations
 [What was done well - important for morale]
 
 ═══════════════════════════════════════════════════════════════════════
-STEP 5: FIX CRITICAL AND MAJOR ISSUES (MANDATORY)
+STEP 5: FIX BLOCKER AND FIX ISSUES (MANDATORY)
 ═══════════════════════════════════════════════════════════════════════
 
-For EVERY critical and major issue you find, you MUST fix it:
+For EVERY BLOCKER and FIX issue you find, you MUST fix it:
 
 1. Read the affected file
 2. Understand the issue
 3. Write the fix directly in the code
-4. Verify the fix is correct
+4. Run existing tests to verify no regressions
 5. Document what you changed in the review report
 
 DO NOT just report issues - FIX THEM. You have write access to the code.
 
 If an issue requires a major refactor that would break other components,
-document it in the report but do not attempt the fix.
+document it in the report as DEFER but do not attempt the fix.
 
 ═══════════════════════════════════════════════════════════════════════
 STEP 6: SAVE TO MEMORY
@@ -173,35 +191,56 @@ Save review findings to memory:
 - Positive patterns to maintain
 
 ═══════════════════════════════════════════════════════════════════════
+CLASSIFICATION CRITERIA
+═══════════════════════════════════════════════════════════════════════
+
+BLOCKER (critical) = data loss, crash, incorrect results, API contract violation
+FIX (major) = poor error handling, missing edge case, code smell, performance issue
+DEFER (minor) = style, documentation gap, optimization opportunity
+
+═══════════════════════════════════════════════════════════════════════
 CRITICAL RULES
 ═══════════════════════════════════════════════════════════════════════
 
 DO:
-- Be thorough and systematic
-- Test your findings when possible
-- Provide specific file/line references
-- Suggest concrete fixes
-- Acknowledge good code too
+- Be harsh. Find problems, not praise.
+- Show evidence. File path + line number.
+- Classify honestly: BLOCKER, FIX, or DEFER.
+- Check test adequacy: do tests exist? do they test meaningful behavior?
 - Review OO design: abstractions, inheritance hierarchies, composition
-- Check if details are properly pushed down from base to derived classes
-- Identify refactoring opportunities for shared abstractions
+- Don't trust the worker — inspect actual code
 
 DO NOT:
 - Be vague ("this code is bad")
 - Skip edge cases
 - Ignore error handling
-- Forget security review
 - Review without reading the code
+- Inflate severity — classify honestly
+- Fix security issues — that's Phase 6's responsibility
+
+
+═══════════════════════════════════════════════════════════════════════
+WHEN YOU ARE DONE - MARK YOUR TASK AS COMPLETE (DO NOT SKIP THIS)
+═══════════════════════════════════════════════════════════════════════
+
+CRITICAL: Do NOT just print a summary and stop. Do NOT exit to the command line.
+You MUST call the update_task_status tool. The system CANNOT detect you finished
+without this call. The pipeline WILL get stuck.
+
+After writing all your output files, call:
+
+mcp__hephaestus__update_task_status({
+  "task_id": "<your task id>",
+  "status": "done",
+  "summary": "<brief summary of what was accomplished>",
+  "key_learnings": ["<key findings or decisions>"]
+})
+
+Then wait for confirmation. Do NOT exit until you see the task marked as done.
 """,
-    outputs=[
-        "review_report.md with detailed findings",
-        "Fix tasks for critical and major issues",
-        "Architecture deviation report",
-        "Performance and security assessment",
-    ],
+    outputs=["review_report.md"],  # Contains BLOCKER/FIX/DEFER findings
     next_steps=[
-        "Fix tasks will be addressed before security review",
-        "Security review will focus on security-specific concerns",
-        "QA will validate all fixes are working",
+        "Phase 5 doc review reads review_report.md",
+        "Phase 6 security review reads review_report.md for security concerns",
     ],
 )

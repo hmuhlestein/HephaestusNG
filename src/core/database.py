@@ -217,6 +217,7 @@ class WorkflowDefinition(Base):
     description = Column(String)
     phases_config = Column(JSON)  # Serialized phase definitions
     workflow_config = Column(JSON)  # has_result, result_criteria, on_result_found, launch_template, etc.
+    orchestrator_config = Column(JSON)  # Orchestrator config for phase evaluation and flow control
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     # Relationships

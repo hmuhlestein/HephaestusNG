@@ -289,7 +289,14 @@ class FrontendAPI:
                         # Add phase information if available
                         if task.phase_id:
                             if task.phase_id.isdigit():
-                                phase = session.query(Phase).filter_by(order=int(task.phase_id)).first()
+                                # Query by order AND workflow_id to avoid picking phases from other workflows
+                                phase = session.query(Phase).filter_by(
+                                    order=int(task.phase_id),
+                                    workflow_id=task.workflow_id
+                                ).first()
+                                # Fallback: try without workflow_id filter
+                                if not phase:
+                                    phase = session.query(Phase).filter_by(order=int(task.phase_id)).first()
                             else:
                                 phase = session.query(Phase).filter_by(id=task.phase_id).first()
 

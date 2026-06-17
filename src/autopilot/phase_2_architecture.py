@@ -244,16 +244,27 @@ DO NOT:
 - Ignore non-functional requirements
 - Skip the OO design pass
 - Create tightly coupled components without abstractions
+
+
+═══════════════════════════════════════════════════════════════════════
+WHEN YOU ARE DONE - MARK YOUR TASK AS COMPLETE (DO NOT SKIP THIS)
+═══════════════════════════════════════════════════════════════════════
+
+CRITICAL: Do NOT just print a summary and stop. Do NOT exit to the command line.
+You MUST call the update_task_status tool. The system CANNOT detect you finished
+without this call. The pipeline WILL get stuck.
+
+After writing all your output files, call:
+
+mcp__hephaestus__update_task_status({
+  "task_id": "<your task id>",
+  "status": "done",
+  "summary": "<brief summary of what was accomplished>",
+  "key_learnings": ["<key findings or decisions>"]
+})
+
+Then wait for confirmation. Do NOT exit until you see the task marked as done.
 """,
-    outputs=[
-        "architecture.md with complete technical design",
-        "Component interfaces and data models",
-        "Task breakdown with blocking relationships",
-        "Phase 3 development tasks created",
-    ],
-    next_steps=[
-        "Phase 3 will implement each component",
-        "Development follows the architecture document",
-        "Tasks execute in dependency order",
-    ],
+    outputs=[],
+    next_steps=[],
 )

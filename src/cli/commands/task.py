@@ -22,6 +22,16 @@ def register(subparsers):
     create.add_argument("--phase", help="Phase ID")
     create.set_defaults(func=create_task)
 
+    cancel = sub.add_parser("cancel", help="Cancel a task")
+    cancel.add_argument("task_id", help="Task ID (full or prefix)")
+    cancel.set_defaults(func=cancel_task)
+
+    done = sub.add_parser("complete", help="Mark task as done")
+    done.add_argument("task_id", help="Task ID (full or prefix)")
+    done.add_argument("--summary", default="Task completed", help="Completion summary")
+    done.add_argument("--learnings", nargs="*", default=[], help="Key learnings")
+    done.set_defaults(func=complete_task)
+
     p.set_defaults(func=lambda a: p.print_help() or 0)
 
 
@@ -89,3 +99,31 @@ def create_task(args):
     data = api_post(args, "/create_task", payload)
     output(args, data, lambda d: print(f"Created task: {d.get('task_id', d)}"))
     return 0
+
+
+def cancel_task(args):
+    if not require_backend(args):
+        return 1
+    data = api_post(args, f"/api/tasks/{args.task_id}/cancel", {})
+    if data:
+        print(f"Cancelled task {args.task_id[:8]}...")
+    else:
+        print(f"Failed to cancel task {args.task_id[:8]}...")
+    return 0
+
+
+def complete_task(args):
+    if not require_backend(args):
+        return 1
+    payload = {
+        "status": "done",
+        "summary": args.summary,
+        "key_learnings": args.learnings,
+        "code_changes": [],
+    }
+    data = api_post(args, f"/api/tasks/{args.task_id}/status", payload)
+    if data:
+        print(f"Task {args.task_id[:8]} marked as done")
+        return 0
+    print(f"Failed to complete task {args.task_id[:8]}")
+    return 1

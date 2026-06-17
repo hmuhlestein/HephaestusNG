@@ -19,7 +19,7 @@ import {
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import {
-  Plus, Trash2, Eye, FileText, Clock, GripVertical, Search, ListOrdered
+  Plus, Trash2, FileText, Clock, GripVertical, Search, ListOrdered, RefreshCw
 } from 'lucide-react';
 import { apiService } from '@/services/api';
 import { Button } from '@/components/ui/button';
@@ -29,9 +29,10 @@ import toast from 'react-hot-toast';
 interface DesignQueuePanelProps {
   projectId: string | null;
   onAddDesign: () => void;
+  currentDesign?: string | null;
 }
 
-const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDesign }) => {
+const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDesign, currentDesign }) => {
   const queryClient = useQueryClient();
   const [previewFile, setPreviewFile] = useState<string | null>(null);
   const [previewContent, setPreviewContent] = useState<string>('');
@@ -54,6 +55,19 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
   useEffect(() => {
     setLocalOrder(null);
   }, [projectId]);
+
+  const reloadMutation = useMutation({
+    mutationFn: () => {
+      if (!projectId) throw new Error('No project selected');
+      return apiService.reloadAutopilotProjectDesigns(projectId);
+    },
+    onSuccess: (data) => {
+      setLocalOrder(data);
+      queryClient.setQueryData(['autopilot-project-designs', projectId], data);
+      toast.success('Designs reloaded from disk');
+    },
+    onError: () => toast.error('Failed to reload designs'),
+  });
 
   const removeMutation = useMutation({
     mutationFn: (filename: string) => {
@@ -139,11 +153,23 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
             className="w-full pl-10 pr-4 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-violet-500 focus:border-transparent bg-white"
           />
         </div>
+        <Button 
+          onClick={() => reloadMutation.mutate()}
+          disabled={reloadMutation.isPending}
+          variant="outline"
+          className="text-gray-600"
+        >
+          <RefreshCw className={`w-4 h-4 mr-1 ${reloadMutation.isPending ? 'animate-spin' : ''}`} />
+          Reload
+        </Button>
         <Button onClick={onAddDesign} className="bg-violet-600 hover:bg-violet-700 text-white">
           <Plus className="w-4 h-4 mr-1" />
           Add Design
         </Button>
       </div>
+      <p className="text-xs text-gray-400">
+        Sorted by filename by default. Drag to reorder manually.
+      </p>
 
       {isLoading ? (
         <div className="flex items-center justify-center h-64">
@@ -162,6 +188,7 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
                   key={item.id}
                   item={item}
                   index={index}
+                  isActive={item.name === currentDesign}
                   onPreview={handlePreview}
                   onRemove={(filename) => {
                     if (confirm(`Remove "${item.name}" from queue?`)) {
@@ -224,11 +251,12 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
 interface SortableDesignItemProps {
   item: any;
   index: number;
+  isActive?: boolean;
   onPreview: (filename: string) => void;
   onRemove: (filename: string) => void;
 }
 
-const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, onPreview, onRemove }) => {
+const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, isActive, onPreview, onRemove }) => {
   const {
     attributes,
     listeners,
@@ -251,8 +279,11 @@ const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, on
         initial={{ opacity: 0, x: -20 }}
         animate={{ opacity: 1, x: 0 }}
         transition={{ delay: index * 0.03 }}
-        className={`bg-white rounded-xl border shadow-sm hover:shadow-md transition-shadow ${
-          isDragging ? 'shadow-lg border-violet-300 ring-2 ring-violet-200' : 'border-gray-100'
+        onClick={() => onPreview(item.filename)}
+        className={`rounded-xl border shadow-sm transition-all cursor-pointer ${
+          isDragging ? 'shadow-lg border-violet-300 ring-2 ring-violet-200' :
+          isActive ? 'bg-gradient-to-r from-violet-50 to-purple-50 border-violet-300 shadow-md ring-1 ring-violet-200' :
+          'bg-white border-gray-100 hover:shadow-md'
         }`}
       >
         <div className="flex items-center gap-4 px-5 py-4">
@@ -265,11 +296,17 @@ const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, on
             <span className="text-xs font-mono text-gray-400">#{item.ordinal ?? index + 1}</span>
           </button>
 
-          <div className="p-2.5 bg-violet-50 rounded-lg">
-            <FileText className="w-5 h-5 text-violet-600" />
+          <div 
+            className={`p-2.5 rounded-lg cursor-pointer ${isActive ? 'bg-violet-200' : 'bg-violet-50'}`}
+            onClick={() => onPreview(item.filename)}
+          >
+            <FileText className={`w-5 h-5 ${isActive ? 'text-violet-700' : 'text-violet-600'}`} />
           </div>
 
-          <div className="flex-1 min-w-0">
+          <div 
+            className="flex-1 min-w-0 cursor-pointer"
+            onClick={() => onPreview(item.filename)}
+          >
             <h4 className="text-sm font-semibold text-gray-800 truncate">{item.name}</h4>
             <div className="flex items-center gap-3 mt-1">
               <span className="text-xs text-gray-500 font-mono">{item.filename}</span>
@@ -284,15 +321,13 @@ const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, on
           </div>
 
           <div className="flex items-center gap-2">
+            {isActive && (
+              <span className="px-2 py-1 text-xs font-semibold bg-violet-600 text-white rounded-full animate-pulse">
+                Active
+              </span>
+            )}
             <button
-              onClick={() => onPreview(item.filename)}
-              className="p-2 rounded-lg hover:bg-gray-100 transition-colors text-gray-500 hover:text-gray-700"
-              title="Preview"
-            >
-              <Eye className="w-4 h-4" />
-            </button>
-            <button
-              onClick={() => onRemove(item.filename)}
+              onClick={(e) => { e.stopPropagation(); onRemove(item.filename); }}
               className="p-2 rounded-lg hover:bg-red-50 transition-colors text-gray-400 hover:text-red-600"
               title="Remove"
             >
