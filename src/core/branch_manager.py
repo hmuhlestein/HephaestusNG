@@ -283,7 +283,33 @@ class BranchManager:
     def commit_for_validation(self, agent_id: str, iteration: int, message: Optional[str] = None) -> Dict[str, Any]:
         """Create checkpoint commit for validation."""
         msg = message or f"Iteration {iteration} - Ready for validation"
-        return self.commit_changes(agent_id, msg)
+        self.main_repo.git.add("-A")
+
+        if not self.main_repo.is_dirty() and not self.main_repo.untracked_files:
+            return {"commit_sha": self.main_repo.head.commit.hexsha, "files_changed": 0, "message": "No changes"}
+
+        self.main_repo.git.commit("-m", f"[Agent {agent_id}] {msg}", "--no-verify")
+        commit = self.main_repo.head.commit
+        stats = commit.stats.total
+
+        session = self.db_manager.get_session()
+        try:
+            record = WorktreeCommit(
+                id=str(uuid.uuid4()),
+                agent_id=agent_id,
+                commit_sha=commit.hexsha,
+                commit_type="validation_ready",
+                commit_message=msg,
+                files_changed=stats.get("files", 0),
+                insertions=stats.get("insertions", 0),
+                deletions=stats.get("deletions", 0),
+            )
+            session.add(record)
+            session.commit()
+        finally:
+            session.close()
+
+        return {"commit_sha": commit.hexsha, "files_changed": stats.get("files", 0), "message": msg}
 
     # ── Merge operations ─────────────────────────────────────────
 
@@ -411,7 +437,9 @@ class BranchManager:
         logger.info(f"[BRANCH:{agent_id}] Merging main into {branch_name}")
 
         session = self.db_manager.get_session()
+        lock_file = None
         try:
+            lock_file = self._acquire_merge_lock(agent_id)
             base_ref = self.config.base_branch
             base_commit = self.main_repo.heads[base_ref].commit.hexsha
 
@@ -420,6 +448,7 @@ class BranchManager:
 
             # Check if already up-to-date
             if self.main_repo.head.commit.hexsha == base_commit:
+                self.main_repo.heads[base_ref].checkout()
                 return {"status": "up_to_date", "total_conflicts": 0}
 
             conflicts_resolved = []
@@ -440,7 +469,7 @@ class BranchManager:
                 else:
                     raise
 
-            # Switch back to main
+            # Always switch back to main
             self.main_repo.heads[base_ref].checkout()
 
             return {
@@ -448,7 +477,16 @@ class BranchManager:
                 "total_conflicts": len(conflicts_resolved),
                 "conflicts_resolved": conflicts_resolved,
             }
+        except Exception as e:
+            # Ensure we're back on main even on failure
+            try:
+                self.main_repo.heads[self.config.base_branch].checkout()
+            except Exception:
+                pass
+            raise
         finally:
+            if lock_file:
+                self._release_merge_lock(lock_file, agent_id)
             session.close()
 
     # ── Conflict resolution ──────────────────────────────────────
@@ -536,12 +574,17 @@ class BranchManager:
         return None
 
     def _get_file_content(self, repo: Repo, file_path: str, ref: str = "HEAD") -> str:
+        """Get content of a file from a specific git ref (never from working dir)."""
         try:
-            full_path = Path(repo.working_dir) / file_path
-            if full_path.exists():
-                return full_path.read_text()
             return repo.git.show(f"{ref}:{file_path}")
         except Exception:
+            # Fallback: try working dir only if ref read fails
+            try:
+                full_path = Path(repo.working_dir) / file_path
+                if full_path.exists():
+                    return full_path.read_text()
+            except Exception:
+                pass
             return ""
 
     def _write_file_content(self, repo_dir: str, file_path: str, content: str):
@@ -593,6 +636,14 @@ class BranchManager:
             }
         finally:
             session.close()
+
+    def get_agent_worktree_path(self, agent_id: str) -> Optional[str]:
+        """Get the working directory for an agent (always the project root)."""
+        return str(self.config.project_root)
+
+    def merge_to_parent(self, agent_id: str) -> Dict[str, Any]:
+        """Alias for merge_to_main — merges agent branch into main."""
+        return self.merge_to_main(agent_id)
 
     def cleanup_branch(self, agent_id: str) -> Dict[str, Any]:
         """Delete agent branch after merge.

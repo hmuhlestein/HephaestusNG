@@ -84,6 +84,9 @@ class AgentManager:
             worktree_path = branch_info["working_directory"]
             logger.info(f"Created branch {branch_info['branch_name']} for agent {agent_id}")
 
+            # Checkout the agent's branch so commits go to the right place
+            self.branch_manager.switch_to_branch(branch_info["branch_name"])
+
             # 2. Generate system prompt
             system_prompt = await self.llm_provider.generate_agent_prompt(
                 task={
