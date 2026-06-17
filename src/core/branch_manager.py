@@ -669,6 +669,3 @@ class BranchManager:
         finally:
             session.close()
 
-
-# ── Alias for backward compatibility ────────────────────────────
-WorktreeManager = BranchManager
