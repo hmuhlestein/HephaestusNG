@@ -96,6 +96,12 @@ For each implemented component, check:
 - Are there empty catch blocks?
 - Are resources properly cleaned up?
 
+### Fallbacks & Silent Failures
+- Are there fallbacks that silently hide configuration errors?
+- Do functions return empty/None instead of raising exceptions for missing required config?
+- Are fallback values masking real problems that should fail fast?
+- Legitimate exceptions: retry logic, graceful degradation with logging, user-facing defaults
+
 ### Edge Cases
 - What happens with empty input?
 - What happens with very large input?
@@ -108,11 +114,20 @@ For each implemented component, check:
 - Are expensive operations cached?
 - Are there memory leaks?
 
+### Code Quality
+- Run `ruff check` on changed files — fix lint errors
+- Check for unused imports, variables, or dead code
+- Verify type hints are present and correct
+
 
 
 ═══════════════════════════════════════════════════════════════════════
-STEP 3: TEST YOUR FINDINGS
+STEP 3: RUN LINT AND TEST YOUR FINDINGS
 ═══════════════════════════════════════════════════════════════════════
+
+First, run lint checks on changed files:
+- `ruff check <file>` — fix any lint errors
+- `ruff check --fix <file>` — auto-fix simple issues
 
 If you find a potential issue, try to reproduce it:
 - Write a small test case
@@ -208,6 +223,7 @@ DO:
 - Classify honestly: BLOCKER, FIX, or DEFER.
 - Check test adequacy: do tests exist? do they test meaningful behavior?
 - Review OO design: abstractions, inheritance hierarchies, composition
+- Check for silent fallbacks that hide configuration errors (prefer clear exceptions)
 - Don't trust the worker — inspect actual code
 
 DO NOT:

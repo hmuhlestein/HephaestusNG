@@ -120,6 +120,36 @@ Create ONE Phase 3 task per ticket (1:1 relationship):
 - Include detailed implementation instructions
 - Specify files to create/modify
 - Include test requirements
+- Include code snippets showing key interfaces, function signatures, or data structures
+- Specify logging requirements: what to log, at what level, with what context
+
+Example task structure:
+```
+Task: Implement [Component]
+Ticket: TICKET-001
+
+Files to create/modify:
+- src/component.py (new)
+- src/tests/test_component.py (new)
+
+Implementation:
+- Create class with method signatures:
+  def process(self, data: Dict[str, Any]) -> Result:
+      ...
+
+Logging:
+- DEBUG: Input data summary on entry
+- INFO: Processing milestones
+- WARNING: Retry attempts, fallback usage
+- ERROR: Failures with context
+- Use structured logging: logger.info("processing", extra={"id": item_id})
+
+Acceptance Criteria:
+- [ ] All methods have type hints
+- [ ] All public methods have docstrings
+- [ ] Logging at appropriate levels
+- [ ] Tests cover happy path and error cases
+```
 
 ═══════════════════════════════════════════════════════════════════════
 STEP 6: SAVE TO MEMORY
@@ -232,6 +262,8 @@ DO:
 - Design clear component interfaces
 - Create tasks with proper blocking relationships
 - Include detailed acceptance criteria
+- Include code snippets showing key interfaces and data structures
+- Specify logging requirements (levels, context, structured logging)
 - Respect technology choices from Phase 1
 - Perform an OO design pass before finalizing
 - Identify refactoring opportunities and shared abstractions
@@ -244,6 +276,8 @@ DO NOT:
 - Ignore non-functional requirements
 - Skip the OO design pass
 - Create tightly coupled components without abstractions
+- Use silent fallbacks that hide configuration errors — throw clear exceptions instead
+  (Exception: retry logic, graceful degradation with explicit logging, and user-facing defaults are acceptable)
 
 
 ═══════════════════════════════════════════════════════════════════════

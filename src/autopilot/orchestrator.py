@@ -19,6 +19,7 @@ import glob
 import signal
 import shutil
 import hashlib
+import logging
 import html as html_mod
 import requests
 from pathlib import Path
@@ -26,6 +27,9 @@ from datetime import datetime
 from typing import Optional, Tuple, List, Dict, Any, Set
 from dataclasses import dataclass, field
 from enum import Enum
+
+# Module-level logger for persistent state operations
+logger = logging.getLogger(__name__)
 
 HEPHAESTUS_DIR = Path(__file__).parent.parent.parent
 API_BASE = os.environ.get("HEPHAESTUS_API_BASE", "http://127.0.0.1:8300")
@@ -37,7 +41,7 @@ STUCK_THRESHOLD = 3
 DESIGN_QUEUE_SCAN_INTERVAL = 60
 HEARTBEAT_INTERVAL = 300
 MAX_WORKFLOW_TIME = 7200  # 2 hours per workflow execution
-ACTIVE_AGENT_STATUSES = {"working", "starting", "idle"}  # Excludes 'created' (not yet started)
+ACTIVE_AGENT_STATUSES = {"working", "idle"}  # Excludes 'created' (not yet started), 'stuck', 'terminated'
 PARENT_PEEK_INTERVAL = int(os.environ.get("HEPH_PEEK_INTERVAL", "60"))  # seconds between parent peeks
 PARENT_STUCK_THRESHOLD = int(os.environ.get("HEPH_STUCK_THRESHOLD", "300"))  # seconds before parent warns about no progress
 
@@ -130,8 +134,124 @@ class PipelineState:
     designs_failed: int = 0
     total_elapsed: int = 0
     current_design: Optional[str] = None
+    current_feature_folder: Optional[str] = None
+    current_iteration: int = 0
     queue_status: Dict[str, str] = field(default_factory=dict)
     start_time: float = field(default_factory=time.time)
+    run_id: Optional[str] = None
+    
+    def to_dict(self) -> dict:
+        return {
+            "designs_processed": self.designs_processed,
+            "designs_succeeded": self.designs_succeeded,
+            "designs_failed": self.designs_failed,
+            "total_elapsed": self.total_elapsed,
+            "current_design": self.current_design,
+            "current_feature_folder": self.current_feature_folder,
+            "current_iteration": self.current_iteration,
+            "queue_status": self.queue_status,
+            "run_id": self.run_id,
+        }
+    
+    @classmethod
+    def from_dict(cls, data: dict) -> "PipelineState":
+        state = cls()
+        state.designs_processed = data.get("designs_processed", 0)
+        state.designs_succeeded = data.get("designs_succeeded", 0)
+        state.designs_failed = data.get("designs_failed", 0)
+        state.total_elapsed = data.get("total_elapsed", 0)
+        state.current_design = data.get("current_design")
+        state.current_feature_folder = data.get("current_feature_folder")
+        state.current_iteration = data.get("current_iteration", 0)
+        state.queue_status = data.get("queue_status", {})
+        state.run_id = data.get("run_id")
+        return state
+
+
+class PersistentPipelineState:
+    """Manages pipeline state that survives restarts."""
+    
+    def __init__(self):
+        self.state_dir = Path(AUTOPILOT_STATE_DIR)
+        self.state_dir.mkdir(parents=True, exist_ok=True)
+        self.state_file = self.state_dir / "pipeline_state.json"
+        self.processed_file = self.state_dir / "processed_designs.json"
+    
+    def save(self, state: PipelineState, processed_hashes: Set[str]):
+        """Save pipeline state and processed designs to disk.
+        
+        Write order: processed_designs first, then state.
+        If crash occurs between them, design is safely skipped (in processed)
+        but state undercounts by 1 - safer than double-processing.
+        """
+        # Write processed_designs first (safer on crash)
+        with open(self.processed_file, "w") as f:
+            json.dump(list(processed_hashes), f)
+        
+        # Then write state
+        state_data = state.to_dict()
+        state_data["saved_at"] = datetime.now().isoformat()
+        with open(self.state_file, "w") as f:
+            json.dump(state_data, f, indent=2)
+    
+    def load(self) -> Tuple[PipelineState, Set[str]]:
+        """Load pipeline state and processed designs from disk."""
+        state = PipelineState()
+        processed_hashes: Set[str] = set()
+        
+        if self.state_file.exists():
+            try:
+                with open(self.state_file) as f:
+                    state_data = json.load(f)
+                state = PipelineState.from_dict(state_data)
+                logger.info(f"Loaded pipeline state: {state.designs_processed} designs processed")
+            except Exception as e:
+                logger.warning(f"Failed to load pipeline state: {e}")
+        
+        if self.processed_file.exists():
+            try:
+                with open(self.processed_file) as f:
+                    processed_hashes = set(json.load(f))
+                logger.info(f"Loaded {len(processed_hashes)} processed designs")
+            except Exception as e:
+                logger.warning(f"Failed to load processed designs: {e}")
+        
+        return state, processed_hashes
+    
+    def clear(self):
+        """Clear persisted state (for fresh start)."""
+        if self.state_file.exists():
+            self.state_file.unlink()
+        if self.processed_file.exists():
+            self.processed_file.unlink()
+    
+    def has_incomplete_work(self) -> bool:
+        """Check if there's incomplete work from a previous run."""
+        if not self.state_file.exists():
+            return False
+        
+        try:
+            with open(self.state_file) as f:
+                state_data = json.load(f)
+            
+            # Check if there was a design in progress
+            current_design = state_data.get("current_design")
+            queue_status = state_data.get("queue_status", {})
+            
+            return current_design is not None or queue_status.get("status") == "processing"
+        except Exception:
+            return False
+    
+    def get_last_run_id(self) -> Optional[str]:
+        """Get the run ID from the last persisted state."""
+        if not self.state_file.exists():
+            return None
+        try:
+            with open(self.state_file) as f:
+                state_data = json.load(f)
+            return state_data.get("run_id")
+        except Exception:
+            return None
 
 
 class OrchestratorLogger:
@@ -198,19 +318,40 @@ def api_post(endpoint: str, data: dict = None, timeout: int = 5) -> Optional[dic
     return None
 
 
-def get_tasks(status: str = None) -> list:
-    params = f"?status={status}" if status else ""
-    data = api_get(f"/api/tasks{params}")
+def get_tasks(status: str = None, workflow_id: str = None) -> list:
+    params = []
+    if status:
+        params.append(f"status={status}")
+    if workflow_id:
+        params.append(f"workflow_id={workflow_id}")
+    query = f"?{'&'.join(params)}" if params else ""
+    data = api_get(f"/api/tasks{query}")
     if data is None:
         return []
     return data if isinstance(data, list) else data.get("tasks", [])
 
 
-def get_agents() -> list:
+def get_agents(workflow_id: str = None) -> list:
+    """Get agents, optionally filtered by workflow_id via their assigned tasks."""
     data = api_get("/api/agents")
     if data is None:
         return []
-    return data if isinstance(data, list) else data.get("agents", [])
+    agents = data if isinstance(data, list) else data.get("agents", [])
+    
+    if not workflow_id:
+        return agents
+    
+    # Filter agents to only those working on tasks in this workflow
+    # Get all tasks for this workflow
+    tasks = get_tasks(workflow_id=workflow_id)
+    agent_ids = set()
+    for t in tasks:
+        if t.get('assigned_agent_id'):
+            agent_ids.add(t['assigned_agent_id'])
+        if t.get('created_by_agent_id'):
+            agent_ids.add(t['created_by_agent_id'])
+    
+    return [a for a in agents if a.get('id') in agent_ids]
 
 
 def peek_agent_output(agent_id: str, lines: int = 30) -> str:
@@ -270,11 +411,10 @@ def detect_hard_error(agents: list, failed_tasks: list, workflow_id: str = None)
     if workflow_id:
         failed_tasks = [t for t in failed_tasks if t.get("workflow_id") == workflow_id]
     
-    # Check for crashed/errored agents in this workflow
+    # Check for crashed/errored agents (agents list is already scoped by get_agents)
     crashed_agents = [
         a for a in agents
         if a.get("status") == "error"
-        and (not workflow_id or a.get("workflow_id") == workflow_id)
     ]
     if crashed_agents:
         names = [a.get("id", "unknown")[:20] for a in crashed_agents[:3]]
@@ -291,7 +431,7 @@ def detect_hard_error(agents: list, failed_tasks: list, workflow_id: str = None)
     return False, ""
 
 
-def detect_impasse(stuck_count: int, agents: list, pending_tasks: list, in_progress_tasks: list, elapsed_seconds: int = 0) -> Tuple[bool, str]:
+def detect_impasse(agents: list, pending_tasks: list, in_progress_tasks: list, elapsed_seconds: int = 0) -> Tuple[bool, str]:
     """Detect if the workflow is stuck.
     
     Parent-child model: check if tasks are progressing, not health_check_failures.
@@ -462,7 +602,6 @@ def scan_design_queue(queue_dir: Path, processed_hashes: Set[str]) -> List[Desig
     order_file = queue_dir / ".queue_order.json"
     if order_file.exists():
         try:
-            import json
             saved_order = json.loads(order_file.read_text())
             # Create lookup by filename
             by_filename = {d.path.name: d for d in designs}
@@ -499,9 +638,28 @@ def pick_next_design(queue_dir: Path, processed_hashes: Set[str], logger: Orches
 def create_feature_folder(project_path: Path, design_name: str, logger: OrchestratorLogger) -> Path:
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     safe_name = design_name.lower().replace(" ", "_")[:40]
-    feature_folder = project_path / "features" / f"{timestamp}_{safe_name}"
+    # Features go in .hephaestus/features/ to keep project root clean
+    feature_folder = project_path / ".hephaestus" / "features" / f"{timestamp}_{safe_name}"
     feature_folder.mkdir(parents=True, exist_ok=True)
     (feature_folder / "docs").mkdir(exist_ok=True)
+    
+    # Ensure .hephaestus/ is in .gitignore
+    gitignore = project_path / ".gitignore"
+    hephaestus_entry = ".hephaestus/"
+    try:
+        if gitignore.exists():
+            content = gitignore.read_text()
+            if hephaestus_entry not in content:
+                with open(gitignore, "a") as f:
+                    f.write(f"\n# Hephaestus local data\n{hephaestus_entry}\n")
+                logger.log(f"Added {hephaestus_entry} to .gitignore")
+        else:
+            with open(gitignore, "w") as f:
+                f.write(f"# Hephaestus local data\n{hephaestus_entry}\n")
+            logger.log(f"Created .gitignore with {hephaestus_entry}")
+    except Exception as e:
+        logger.log(f"Warning: Could not update .gitignore: {e}", "WARN")
+    
     logger.log(f"Feature folder: {feature_folder}")
     return feature_folder
 
@@ -1055,12 +1213,14 @@ def run_single_workflow(sdk, workflow_id: str, project_path: str, description: s
                 return "timeout"
 
             wf_status = get_workflow_status(exec_id)
-            agents = get_agents()
+            # Get agents for this workflow only
+            agents = get_agents(workflow_id=exec_id)
             active_agents = [a for a in agents if a.get("status") in ACTIVE_AGENT_STATUSES]
-            pending = get_tasks(status="pending")
-            in_progress = get_tasks(status="in_progress")
-            done = get_tasks(status="done")
-            failed = get_tasks(status="failed")
+            # Filter tasks by workflow_id to avoid counting tasks from other workflows
+            pending = get_tasks(status="pending", workflow_id=exec_id)
+            in_progress = get_tasks(status="in_progress", workflow_id=exec_id)
+            done = get_tasks(status="done", workflow_id=exec_id)
+            failed = get_tasks(status="failed", workflow_id=exec_id)
 
             logger.log(
                 f"[{workflow_id}] [{elapsed}s] Agents: {len(active_agents)} active | "
@@ -1159,7 +1319,7 @@ def run_single_workflow(sdk, workflow_id: str, project_path: str, description: s
                 logger.log(f"Hard error detected: {error_reason}", "ERROR")
                 return "hard_error"
 
-            impasse, impasse_reason = detect_impasse(stuck_count, agents, pending, in_progress, elapsed)
+            impasse, impasse_reason = detect_impasse(agents, pending, in_progress, elapsed)
             if impasse:
                 stuck_count += 1
                 if stuck_count >= STUCK_THRESHOLD:
@@ -1202,6 +1362,7 @@ def run_single_design(
     project_path: Path,
     max_iterations: int,
     logger: OrchestratorLogger,
+    state: Optional[PipelineState] = None,
 ) -> Tuple[DesignStatus, FeatureReport]:
     # project_path: where implementation code lives (the actual project)
     # docs_dir: where generated docs/reports go (inside feature folder)
@@ -1278,6 +1439,10 @@ def run_single_design(
     try:
         for iteration in range(1, max_iterations + 1):
             iter_start = time.time()
+            
+            # Update state with current iteration
+            if state:
+                state.current_iteration = iteration
 
             logger.log("")
             logger.log("-" * 60)
@@ -1491,6 +1656,23 @@ def run_continuous_pipeline(args) -> None:
     log_dir = Path.home() / ".hephaestus" / "autopilot" / datetime.now().strftime("run-%Y%m%d-%H%M%S")
     logger = OrchestratorLogger(log_dir)
 
+    # Load persistent state from previous runs
+    persistent_state = PersistentPipelineState()
+    state, processed_hashes = persistent_state.load()
+    
+    # Check for incomplete work from previous run
+    if persistent_state.has_incomplete_work():
+        last_design = state.current_design
+        logger.log(f"Resuming from previous run - last design: {last_design}")
+        # Clear current design since we're starting fresh
+        state.current_design = None
+        state.current_feature_folder = None
+        state.current_iteration = 0
+    
+    # Generate new run ID
+    state.run_id = datetime.now().strftime("run-%Y%m%d-%H%M%S")
+    state.start_time = time.time()
+    
     logger.log("=" * 70)
     logger.log("AUTOPILOT CONTINUOUS PIPELINE")
     logger.log("=" * 70)
@@ -1498,21 +1680,20 @@ def run_continuous_pipeline(args) -> None:
     logger.log(f"Project Root: {args.project_path}")
     logger.log(f"Max Iterations per Design: {args.max_iterations}")
     logger.log(f"Poll Interval: {DESIGN_QUEUE_SCAN_INTERVAL}s")
+    logger.log(f"Run ID: {state.run_id}")
     logger.log(f"Logs: {log_dir}")
+    
+    if processed_hashes:
+        logger.log(f"Loaded {len(processed_hashes)} previously processed designs")
+    
+    logger.log("=" * 70)
 
     queue_dir = Path(args.design_queue)
     project_path = Path(args.project_path)
     project_path.mkdir(parents=True, exist_ok=True)
     queue_dir.mkdir(parents=True, exist_ok=True)
 
-    state = PipelineState()
-    processed_hashes: Set[str] = set()
     processed_file = log_dir / "processed.json"
-    if processed_file.exists():
-        try:
-            processed_hashes = set(json.loads(processed_file.read_text()))
-        except Exception:
-            pass
 
     sys.path.insert(0, str(HEPHAESTUS_DIR))
     from src.sdk import HephaestusSDK
@@ -1577,20 +1758,23 @@ def run_continuous_pipeline(args) -> None:
                     logger.log(f"Queue empty. Scanning again in {DESIGN_QUEUE_SCAN_INTERVAL}s...")
                     state.queue_status = {"status": "empty", "processed": len(processed_hashes)}
                     logger.save_state(state)
+                    persistent_state.save(state, processed_hashes)
                     time.sleep(DESIGN_QUEUE_SCAN_INTERVAL)
                     continue
 
                 next_design.status = DesignStatus.IN_PROGRESS
                 state.current_design = next_design.name
+                state.current_feature_folder = str(next_design.feature_folder) if next_design.feature_folder else None
                 state.queue_status = {
                     "status": "processing",
                     "current": next_design.name,
                     "processed": len(processed_hashes),
                 }
                 logger.save_state(state)
+                persistent_state.save(state, processed_hashes)
 
                 status, feature_report = run_single_design(
-                    sdk, next_design, project_path, args.max_iterations, logger
+                    sdk, next_design, project_path, args.max_iterations, logger, state
                 )
 
                 next_design.status = status
@@ -1604,6 +1788,8 @@ def run_continuous_pipeline(args) -> None:
                     state.designs_failed += 1
 
                 state.current_design = None
+                state.current_feature_folder = None
+                state.current_iteration = 0
                 state.total_elapsed = int(time.time() - state.start_time)
                 state.queue_status = {
                     "status": "idle",
@@ -1612,6 +1798,7 @@ def run_continuous_pipeline(args) -> None:
                     "failed": state.designs_failed,
                 }
                 logger.save_state(state)
+                persistent_state.save(state, processed_hashes)
 
                 logger.event("design_complete", {
                     "design": next_design.name,
@@ -1651,6 +1838,7 @@ def run_continuous_pipeline(args) -> None:
         logger.log("=" * 70)
 
         logger.save_state(state)
+        persistent_state.save(state, processed_hashes)
         logger.event("pipeline_stop", {
             "total_designs": state.designs_processed,
             "succeeded": state.designs_succeeded,

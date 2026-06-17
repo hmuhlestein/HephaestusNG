@@ -637,6 +637,7 @@ class HephaestusSDK:
         self,
         status: Optional[str] = None,
         phase_id: Optional[int] = None,
+        workflow_id: Optional[str] = None,
     ) -> List[TaskStatus]:
         """
         Get list of tasks with optional filtering.
@@ -644,6 +645,7 @@ class HephaestusSDK:
         Args:
             status: Filter by status ("pending", "in_progress", "done", "failed")
             phase_id: Filter by phase ID
+            workflow_id: Filter by workflow ID
 
         Returns:
             List of TaskStatus objects
@@ -658,6 +660,8 @@ class HephaestusSDK:
             params["status"] = status
         if phase_id:
             params["phase_id"] = phase_id
+        if workflow_id:
+            params["workflow_id"] = workflow_id
 
         try:
             response = requests.get(url, params=params, timeout=10)
