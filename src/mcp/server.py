@@ -1360,13 +1360,20 @@ async def create_task(
         # Generate task ID immediately
         task_id = str(uuid.uuid4())
 
-        # Validate phase_id is required for workflow tasks
-        if request.workflow_id and not request.phase_id and not request.phase_order:
-            raise HTTPException(
-                status_code=400,
-                detail=f"phase_id or phase_order is required for workflow tasks. "
-                       f"Agent {agent_id} must provide phase_id when workflow_id is set."
-            )
+        # Validate phase_id is REQUIRED for workflow tasks
+        if request.workflow_id:
+            if not request.phase_id and not request.phase_order:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"phase_id or phase_order is REQUIRED for workflow tasks. "
+                           f"Agent {agent_id} must provide phase_id when workflow_id is set."
+                )
+            if request.phase_id in ("None", "none", "null", ""):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"phase_id cannot be None/null/empty string. "
+                           f"Agent {agent_id} must provide a valid phase_id."
+                )
 
         # Create initial task in database with pending status
         session = server_state.db_manager.get_session()
