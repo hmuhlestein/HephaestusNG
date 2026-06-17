@@ -196,6 +196,7 @@ class FrontendAPI:
         skip: int = 0,
         limit: int = 50,
         status: Optional[str] = None,
+        workflow_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """Get all tasks with pagination."""
         session = self.db_manager.get_session()
@@ -204,6 +205,8 @@ class FrontendAPI:
 
             if status:
                 query = query.filter(Task.status == status)
+            if workflow_id:
+                query = query.filter(Task.workflow_id == workflow_id)
 
             tasks = query.order_by(desc(Task.created_at)).offset(skip).limit(limit).all()
 
@@ -2177,9 +2180,10 @@ def create_frontend_routes(db_manager: DatabaseManager, agent_manager: AgentMana
         skip: int = Query(0, ge=0),
         limit: int = Query(50, ge=1, le=10000),
         status: Optional[str] = None,
+        workflow_id: Optional[str] = None,
     ):
         """Get tasks with pagination."""
-        return await frontend_api.get_tasks(skip, limit, status)
+        return await frontend_api.get_tasks(skip, limit, status, workflow_id)
 
     @router.get("/agents")
     async def get_agents():

@@ -74,3 +74,6 @@ lib/
 frontend/node_modules/
 # Tmux
 .tmux/
+
+# Hephaestus local data
+.hephaestus/

@@ -27,45 +27,59 @@ ALLOWED_EXTENSIONS = {".md", ".txt"}
 
 
 def _get_effective_queue_dir() -> str:
-    """Get the effective design queue directory, falling back to active project."""
+    """Get the effective design queue directory.
+    
+    Raises:
+        FileNotFoundError: If queue directory doesn't exist
+        RuntimeError: If no active project configured
+    """
     global DESIGN_QUEUE_DIR
     if DESIGN_QUEUE_DIR:
+        if not Path(DESIGN_QUEUE_DIR).exists():
+            raise FileNotFoundError(f"Design queue directory does not exist: {DESIGN_QUEUE_DIR}")
         return DESIGN_QUEUE_DIR
     
-    # Fall back to active project's base_dir/docs/design-queue
-    try:
-        from src.core.database import AutopilotProject, get_db
-        with get_db() as db:
-            proj = db.query(AutopilotProject).filter_by(is_active=True).first()
-            if proj and proj.base_dir:
-                queue_dir = str(Path(proj.base_dir) / "docs" / "design-queue")
-                DESIGN_QUEUE_DIR = queue_dir
-                return queue_dir
-    except Exception as e:
-        logger.debug(f"Could not get active project: {e}")
-    
-    return ""
+    # Get from active project
+    from src.core.database import AutopilotProject, get_db
+    with get_db() as db:
+        proj = db.query(AutopilotProject).filter_by(is_active=True).first()
+        if not proj or not proj.base_dir:
+            raise RuntimeError("No active project configured. Set DESIGN_QUEUE_DIR or activate a project.")
+        
+        queue_dir = Path(proj.base_dir) / "docs" / "design-queue"
+        if not queue_dir.exists():
+            raise FileNotFoundError(f"Design queue directory does not exist: {queue_dir}. Create it and add design documents.")
+        
+        DESIGN_QUEUE_DIR = str(queue_dir)
+        return DESIGN_QUEUE_DIR
 
 
 def _get_effective_features_dir() -> str:
-    """Get the effective features directory, falling back to active project."""
+    """Get the effective features directory.
+    
+    Raises:
+        FileNotFoundError: If features directory doesn't exist
+        RuntimeError: If no active project configured
+    """
     global FEATURES_DIR
     if FEATURES_DIR:
+        if not Path(FEATURES_DIR).exists():
+            raise FileNotFoundError(f"Features directory does not exist: {FEATURES_DIR}")
         return FEATURES_DIR
     
-    # Fall back to active project's base_dir/features
-    try:
-        from src.core.database import AutopilotProject, get_db
-        with get_db() as db:
-            proj = db.query(AutopilotProject).filter_by(is_active=True).first()
-            if proj and proj.base_dir:
-                features_dir = str(Path(proj.base_dir) / "features")
-                FEATURES_DIR = features_dir
-                return features_dir
-    except Exception as e:
-        logger.debug(f"Could not get active project: {e}")
-    
-    return ""
+    # Get from active project
+    from src.core.database import AutopilotProject, get_db
+    with get_db() as db:
+        proj = db.query(AutopilotProject).filter_by(is_active=True).first()
+        if not proj or not proj.base_dir:
+            raise RuntimeError("No active project configured. Set FEATURES_DIR or activate a project.")
+        
+        features_dir = Path(proj.base_dir) / ".hephaestus" / "features"
+        if not features_dir.exists():
+            raise FileNotFoundError(f"Features directory does not exist: {features_dir}. Run the autopilot pipeline first.")
+        
+        FEATURES_DIR = str(features_dir)
+        return FEATURES_DIR
 
 
 # ── TTL cache ────────────────────────────────────────────────────
@@ -268,16 +282,28 @@ async def get_pipeline_status():
 
     state = _cached("state", ttl=5.0)
     if state is None:
+        # Try run-specific state first, then persistent state
         if run_dir:
-            state = _store("state", _read_json(run_dir / "state.json") or {})
-        else:
-            state = _store("state", {})
+            state = _read_json(run_dir / "state.json") or {}
+        
+        # Fall back to persistent state if run-specific state is empty
+        if not state:
+            persistent_state_file = Path(AUTOPILOT_STATE_DIR) / "pipeline_state.json"
+            if persistent_state_file.exists():
+                try:
+                    state = json.loads(persistent_state_file.read_text())
+                except Exception:
+                    state = {}
+        
+        state = _store("state", state)
 
     queue_depth = 0
-    effective_dir = _get_effective_queue_dir()
-    if effective_dir and Path(effective_dir).exists():
+    try:
+        effective_dir = _get_effective_queue_dir()
         for ext in ALLOWED_EXTENSIONS:
             queue_depth += len(list(Path(effective_dir).glob(f"*{ext}")))
+    except (FileNotFoundError, RuntimeError):
+        pass  # Queue dir not configured or missing — return queue_depth=0
 
     last_event = _cached("last_event", ttl=5.0)
     if last_event is None:
@@ -314,10 +340,11 @@ async def get_pipeline_status():
 # ── Design Queue ─────────────────────────────────────────────────
 
 def _get_queue_order_path() -> Optional[Path]:
-    effective_dir = _get_effective_queue_dir()
-    if not effective_dir:
+    try:
+        effective_dir = _get_effective_queue_dir()
+        return Path(effective_dir) / ".queue_order.json"
+    except (FileNotFoundError, RuntimeError):
         return None
-    return Path(effective_dir) / ".queue_order.json"
 
 
 def _load_queue_order() -> List[str]:
@@ -343,9 +370,10 @@ async def list_design_queue():
     if cached is not None:
         return cached
 
-    effective_dir = _get_effective_queue_dir()
-    if not effective_dir or not Path(effective_dir).exists():
-        return _store("queue", [])
+    try:
+        effective_dir = _get_effective_queue_dir()
+    except (FileNotFoundError, RuntimeError) as e:
+        raise HTTPException(404, str(e))
 
     queue_path = Path(effective_dir)
     saved_order = _load_queue_order()
@@ -381,9 +409,10 @@ class QueueReorderRequest(BaseModel):
 
 @router.post("/queue/reorder")
 async def reorder_queue(req: QueueReorderRequest):
-    effective_dir = _get_effective_queue_dir()
-    if not effective_dir or not Path(effective_dir).exists():
-        raise HTTPException(500, "DESIGN_QUEUE_DIR not configured and no active project")
+    try:
+        effective_dir = _get_effective_queue_dir()
+    except (FileNotFoundError, RuntimeError) as e:
+        raise HTTPException(404, str(e))
 
     queue_path = Path(effective_dir)
     existing = set()
@@ -402,9 +431,10 @@ async def reorder_queue(req: QueueReorderRequest):
 
 @router.post("/queue", response_model=DesignQueueItem)
 async def add_to_queue(item: DesignQueueAdd):
-    effective_dir = _get_effective_queue_dir()
-    if not effective_dir:
-        raise HTTPException(500, "DESIGN_QUEUE_DIR not configured and no active project")
+    try:
+        effective_dir = _get_effective_queue_dir()
+    except (FileNotFoundError, RuntimeError) as e:
+        raise HTTPException(404, str(e))
 
     queue_path = Path(effective_dir)
     queue_path.mkdir(parents=True, exist_ok=True)
@@ -436,9 +466,10 @@ async def add_to_queue(item: DesignQueueAdd):
 
 @router.delete("/queue/{filename}")
 async def remove_from_queue(filename: str):
-    effective_dir = _get_effective_queue_dir()
-    if not effective_dir:
-        raise HTTPException(500, "DESIGN_QUEUE_DIR not configured and no active project")
+    try:
+        effective_dir = _get_effective_queue_dir()
+    except (FileNotFoundError, RuntimeError) as e:
+        raise HTTPException(404, str(e))
     filepath = _safe_path(effective_dir, filename)
     if not filepath.exists():
         raise HTTPException(404, f"Design '{filename}' not found")
@@ -449,9 +480,10 @@ async def remove_from_queue(filename: str):
 
 @router.get("/queue/{filename}/content")
 async def get_queue_item_content(filename: str):
-    effective_dir = _get_effective_queue_dir()
-    if not effective_dir:
-        raise HTTPException(500, "DESIGN_QUEUE_DIR not configured and no active project")
+    try:
+        effective_dir = _get_effective_queue_dir()
+    except (FileNotFoundError, RuntimeError) as e:
+        raise HTTPException(404, str(e))
     filepath = _safe_path(effective_dir, filename)
     if not filepath.exists():
         raise HTTPException(404, f"Design '{filename}' not found")
@@ -1154,9 +1186,10 @@ async def get_feature_detail(feature_id: str):
 
 @router.get("/features/{feature_id}/report")
 async def get_feature_report(feature_id: str):
-    effective_dir = _get_effective_features_dir()
-    if not effective_dir:
-        raise HTTPException(500, "FEATURES_DIR not configured and no active project")
+    try:
+        effective_dir = _get_effective_features_dir()
+    except (FileNotFoundError, RuntimeError) as e:
+        raise HTTPException(404, str(e))
     report_path = _safe_path(effective_dir, feature_id, "feature_report.html")
     if not report_path.exists():
         raise HTTPException(404, "Report not found")
@@ -1170,9 +1203,10 @@ async def get_feature_doc(feature_id: str, doc_name: str):
     if cached is not None:
         return cached
 
-    effective_dir = _get_effective_features_dir()
-    if not effective_dir:
-        raise HTTPException(500, "FEATURES_DIR not configured and no active project")
+    try:
+        effective_dir = _get_effective_features_dir()
+    except (FileNotFoundError, RuntimeError) as e:
+        raise HTTPException(404, str(e))
     doc_path = _safe_path(effective_dir, feature_id, "docs", doc_name)
     if not doc_path.exists():
         raise HTTPException(404, f"Document '{doc_name}' not found")
@@ -1181,9 +1215,10 @@ async def get_feature_doc(feature_id: str, doc_name: str):
 
 @router.get("/features/{feature_id}/download")
 async def download_feature_report(feature_id: str):
-    effective_dir = _get_effective_features_dir()
-    if not effective_dir:
-        raise HTTPException(500, "FEATURES_DIR not configured and no active project")
+    try:
+        effective_dir = _get_effective_features_dir()
+    except (FileNotFoundError, RuntimeError) as e:
+        raise HTTPException(404, str(e))
     report_path = _safe_path(effective_dir, feature_id, "feature_report.html")
     if not report_path.exists():
         raise HTTPException(404, "Report not found")
@@ -1397,23 +1432,16 @@ async def start_pipeline(project_path: str, design_queue: str = "", max_iteratio
 
 
 @router.post("/stop")
-async def stop_pipeline():
-    """Stop the autopilot pipeline and all its agents."""
+async def stop_pipeline(clear_state: bool = False):
+    """Stop the autopilot pipeline and all its agents.
+    
+    Args:
+        clear_state: If True, clear persistent pipeline state (fresh start next time)
+    """
     import signal
     from src.core.database import Agent, Task, get_db
 
-    # Kill orchestrator process
-    pid_file = Path(AUTOPILOT_STATE_DIR) / "orchestrator.pid"
-    orchestrator_pid = None
-    if pid_file.exists():
-        try:
-            orchestrator_pid = int(pid_file.read_text().strip())
-            os.kill(orchestrator_pid, signal.SIGTERM)
-        except (ProcessLookupError, ValueError):
-            pass
-        pid_file.unlink(missing_ok=True)
-
-    # Terminate all active autopilot agents
+    # First: terminate all active autopilot agents and pause workflows (before killing orchestrator)
     terminated_count = 0
     try:
         with get_db() as db:
@@ -1442,6 +1470,17 @@ async def stop_pipeline():
     except Exception as e:
         logger.error(f"Error cleaning up autopilot agents: {e}")
 
+    # Second: kill orchestrator process
+    pid_file = Path(AUTOPILOT_STATE_DIR) / "orchestrator.pid"
+    orchestrator_pid = None
+    if pid_file.exists():
+        try:
+            orchestrator_pid = int(pid_file.read_text().strip())
+            os.kill(orchestrator_pid, signal.SIGTERM)
+        except (ProcessLookupError, ValueError):
+            pass
+        pid_file.unlink(missing_ok=True)
+
     # Wait for graceful shutdown
     if orchestrator_pid:
         for _ in range(50):
@@ -1456,8 +1495,14 @@ async def stop_pipeline():
             except OSError:
                 pass
 
+    # Clear persistent state if requested
+    if clear_state:
+        from src.autopilot.orchestrator import PersistentPipelineState
+        PersistentPipelineState().clear()
+        logger.info("Cleared persistent pipeline state")
+
     _invalidate("status")
-    return {"stopped": True, "pid": orchestrator_pid, "agents_terminated": terminated_count}
+    return {"stopped": True, "pid": orchestrator_pid, "agents_terminated": terminated_count, "state_cleared": clear_state}
 
 
 # ── Config ───────────────────────────────────────────────────────

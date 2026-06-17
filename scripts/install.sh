@@ -276,11 +276,11 @@ if [ "$DEV_MODE" = true ]; then
     else
         log "Installing dev dependencies..."
         if [ "$PKG_MGR" = "uv" ]; then
-            uv pip install "pytest,pytest-asyncio,pytest-cov,black,flake8,mypy,ipython" --quiet --python "$PYTHON"
+            uv pip install "pytest,pytest-asyncio,pytest-cov,black,flake8,mypy,ruff,ipython" --quiet --python "$PYTHON"
         elif [ "$PKG_MGR" = "poetry" ]; then
             cd "$PREFIX" && poetry install --with dev --no-interaction --quiet 2>&1 | tail -3
         else
-            "$VENV_DIR/bin/pip" install pytest pytest-asyncio pytest-cov black flake8 mypy ipython --quiet
+            "$VENV_DIR/bin/pip" install pytest pytest-asyncio pytest-cov black flake8 mypy ruff ipython --quiet
         fi
         ok "Dev dependencies installed"
     fi
