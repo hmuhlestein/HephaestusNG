@@ -2,6 +2,7 @@
 
 import os
 import signal
+import subprocess
 import time
 
 from src.cli.utils import output, read_pid, remove_pid, is_process_running, PID_DIR
@@ -16,6 +17,32 @@ def register(subparsers):
 def run(args):
     stopped = {}
 
+    # Read port from config
+    try:
+        from src.core.simple_config import Config
+        config = Config()
+        port = config.mcp_port or 8300
+    except Exception:
+        port = 8300
+
+    # First, kill ALL processes on the backend port to prevent stale processes
+    try:
+        result = subprocess.run(["lsof", "-ti", f":{port}"], capture_output=True, text=True)
+        if result.stdout.strip():
+            pids = result.stdout.strip().split("\n")
+            for pid_str in pids:
+                try:
+                    pid = int(pid_str)
+                    sig = signal.SIGKILL if args.force else signal.SIGTERM
+                    os.kill(pid, sig)
+                    stopped[f"port-{port}-pid-{pid}"] = "killed"
+                except (OSError, ValueError):
+                    pass
+            time.sleep(1)
+    except Exception:
+        pass
+
+    # Then kill by PID file
     for name in ("backend", "monitor", "frontend", "orchestrator"):
         pid = read_pid(name)
         if pid and is_process_running(pid):
