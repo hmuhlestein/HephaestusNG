@@ -10,7 +10,7 @@ import libtmux
 from src.core.database import DatabaseManager, Agent, Task, AgentLog, BoardConfig, get_db
 from src.interfaces import get_cli_agent, LLMProviderInterface
 from src.core.simple_config import get_config
-from src.core.worktree_manager import WorktreeManager
+from src.core.branch_manager import BranchManager
 
 logger = logging.getLogger(__name__)
 
@@ -32,8 +32,8 @@ class AgentManager:
         self.config = get_config()
         self.tmux_server = libtmux.Server()
 
-        # Initialize worktree manager for agent isolation
-        self.worktree_manager = WorktreeManager(db_manager)
+        # Branch manager for agent isolation
+        self.branch_manager = BranchManager(db_manager)
 
     async def create_agent_for_task(
         self,
@@ -76,51 +76,13 @@ class AgentManager:
         logger.info(f"Creating {cli_type} agent {agent_id} for task {task.id}")
 
         try:
-            # 1. Handle worktree based on agent type
-            if use_existing_worktree and working_directory:
-                # For validators: use existing worktree (read-only access)
-                worktree_path = working_directory
-                logger.info(f"Using existing worktree for {agent_type} agent {agent_id} at {worktree_path}")
-            elif commit_sha and agent_type in ["validator", "result_validator"]:
-                # For validators with commit: create worktree from specific commit
-                worktree_info = self.worktree_manager.create_agent_worktree(
-                    agent_id=agent_id,
-                    parent_agent_id=None,
-                    base_commit_sha=commit_sha
-                )
-                worktree_path = worktree_info["working_directory"]
-                logger.info(f"Created worktree from commit {commit_sha} for {agent_type} agent {agent_id} at {worktree_path}")
-            else:
-                # Normal agents: create new worktree with parent inheritance
-                parent_agent_id = getattr(task, 'created_by_agent_id', None)
-                logger.info(f"[AGENT_MANAGER] Creating worktree for normal agent")
-                logger.info(f"[AGENT_MANAGER] Task ID: {task.id}")
-                logger.info(f"[AGENT_MANAGER] Task created_by_agent_id: {parent_agent_id}")
-                logger.info(f"[AGENT_MANAGER] Will create worktree with parent_agent_id={parent_agent_id}")
-
-                worktree_info = self.worktree_manager.create_agent_worktree(
-                    agent_id=agent_id,
-                    parent_agent_id=parent_agent_id
-                )
-                worktree_path = worktree_info["working_directory"]
-                logger.info(f"[AGENT_MANAGER] Created worktree for agent {agent_id} at {worktree_path}")
-
-                # Merge main into the agent's branch to ensure it has latest changes
-                logger.info(f"[AGENT_MANAGER] Merging main branch into agent's branch")
-                try:
-                    merge_result = self.worktree_manager.merge_main_into_branch(
-                        agent_id=agent_id,
-                        worktree_path=worktree_path,
-                        branch_name=worktree_info["branch_name"]
-                    )
-                    logger.info(
-                        f"[AGENT_MANAGER] Main merge completed: {merge_result['status']}, "
-                        f"{merge_result['total_conflicts']} conflicts resolved"
-                    )
-                except Exception as e:
-                    logger.error(f"[AGENT_MANAGER] Failed to merge main into agent branch: {e}")
-                    # Continue anyway - agent will work from parent commit
-                    # This shouldn't fail agent creation
+            # Create branch for agent
+            branch_info = self.branch_manager.create_agent_branch(
+                agent_id=agent_id,
+                parent_agent_id=getattr(task, 'created_by_agent_id', None),
+            )
+            worktree_path = branch_info["working_directory"]
+            logger.info(f"Created branch {branch_info['branch_name']} for agent {agent_id}")
 
             # 2. Generate system prompt
             system_prompt = await self.llm_provider.generate_agent_prompt(
