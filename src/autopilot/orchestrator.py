@@ -384,14 +384,14 @@ def get_active_workflows() -> list:
 
 
 def check_api_credits() -> Tuple[bool, str]:
+    credit_errors = [
+        "insufficient funds", "credit", "quota exceeded",
+        "rate limit", "billing", "payment required",
+        "402", "429", "exceeded", "out of credits",
+    ]
     agents = get_agents()
     for agent in agents:
         output = (agent.get("output_log", "") or "").lower()
-        credit_errors = [
-            "insufficient funds", "credit", "quota exceeded",
-            "rate limit", "billing", "payment required",
-            "402", "429", "exceeded", "out of credits",
-        ]
         for err in credit_errors:
             if err in output:
                 return True, f"API credit issue: {err}"
@@ -1737,6 +1737,22 @@ def run_continuous_pipeline(args) -> None:
         sys.exit(1)
 
     logger.log("Services started.")
+
+    # Clean up stale active workflows from previous runs
+    try:
+        active_workflows = get_active_workflows()
+        if active_workflows:
+            logger.log(f"Found {len(active_workflows)} stale active workflow(s) from previous runs — cleaning up...")
+            for wf in active_workflows:
+                wf_id = wf.get('id', '')
+                try:
+                    api_post(f"/api/workflow-executions/{wf_id}/complete")
+                    logger.log(f"  Cleaned up stale workflow {wf_id[:8]}")
+                except Exception as e:
+                    logger.log(f"  Failed to clean up {wf_id[:8]}: {e}", "WARN")
+    except Exception as e:
+        logger.log(f"Warning: Could not check for stale workflows: {e}", "WARN")
+
     logger.log("")
     logger.log(f"Watching design queue: {queue_dir}")
     logger.log("Drop .md or .txt files into the queue directory to add designs.")

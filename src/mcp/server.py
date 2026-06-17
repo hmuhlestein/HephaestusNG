@@ -1360,6 +1360,14 @@ async def create_task(
         # Generate task ID immediately
         task_id = str(uuid.uuid4())
 
+        # Validate phase_id is required for workflow tasks
+        if request.workflow_id and not request.phase_id and not request.phase_order:
+            raise HTTPException(
+                status_code=400,
+                detail=f"phase_id or phase_order is required for workflow tasks. "
+                       f"Agent {agent_id} must provide phase_id when workflow_id is set."
+            )
+
         # Create initial task in database with pending status
         session = server_state.db_manager.get_session()
         task = Task(
@@ -4164,6 +4172,8 @@ async def list_agents(request: Request):
                                 "name": phase.name,
                                 "order": phase.order,
                             }
+                    elif task.workflow_id:
+                        logger.warning(f"Task {task.id} has workflow_id but no phase_id — this is a bug")
                     agent_data["current_task"] = task_data
             if not skip_agent and a.status != 'terminated':
                 result.append(agent_data)
@@ -4701,11 +4711,11 @@ async def list_tools():
                         "task_description": {"type": "string", "description": "Description of the task"},
                         "done_definition": {"type": "string", "description": "What constitutes completion"},
                         "workflow_id": {"type": "string", "description": "ID of the workflow execution this task belongs to (REQUIRED)"},
-                        "phase_id": {"type": "string", "description": "Phase ID for workflow-based tasks"},
+                        "phase_id": {"type": "string", "description": "Phase ID for workflow-based tasks (REQUIRED)"},
                         "priority": {"type": "string", "enum": ["low", "medium", "high"]},
                         "ticket_id": {"type": "string", "description": "Associated ticket ID"}
                     },
-                    "required": ["task_description", "done_definition", "workflow_id"]
+                    "required": ["task_description", "done_definition", "workflow_id", "phase_id"]
                 }
             },
             {
