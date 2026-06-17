@@ -850,6 +850,9 @@ async def startup_event():
                     from dataclasses import asdict
                     workflow_config["launch_template"] = asdict(defn.launch_template)
 
+                # Get orchestrator_config if present
+                orchestrator_config = getattr(defn, 'orchestrator_config', None)
+
                 existing = session.query(DBWorkflowDefinition).filter_by(id=defn.id).first()
                 if existing:
                     # Update from source files (source of truth)
@@ -857,6 +860,7 @@ async def startup_event():
                     existing.description = defn.description
                     existing.phases_config = phases_config
                     existing.workflow_config = workflow_config
+                    existing.orchestrator_config = orchestrator_config
                     logger.info(f"Updated workflow from source: {defn.id}")
                 else:
                     db_def = DBWorkflowDefinition(
@@ -865,6 +869,7 @@ async def startup_event():
                         description=defn.description,
                         phases_config=phases_config,
                         workflow_config=workflow_config,
+                        orchestrator_config=orchestrator_config,
                     )
                     session.add(db_def)
                     logger.info(f"Registered workflow: {defn.id}")
@@ -3812,6 +3817,57 @@ async def bump_task_priority_endpoint(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/api/tasks/{task_id}/cancel")
+async def cancel_task_endpoint(task_id: str):
+    """Cancel a task by ID."""
+    logger.info(f"Cancel request for task {task_id}")
+
+    try:
+        session = server_state.db_manager.get_session()
+        cancelled_task_id = None
+        try:
+            task = session.query(Task).filter_by(id=task_id).first()
+            if not task:
+                # Try prefix match with escaped LIKE wildcards
+                escaped = task_id.replace('%', '\\%').replace('_', '\\_')
+                task = session.query(Task).filter(Task.id.like(f"{escaped}%", escape='\\')).first()
+            if not task:
+                raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+
+            # Only allow cancelling pending or queued tasks
+            if task.status not in ('pending', 'queued'):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Cannot cancel task in '{task.status}' status. Terminate the assigned agent first."
+                )
+
+            task.status = "failed"
+            task.failure_reason = "Cancelled by user"
+            task.completed_at = datetime.utcnow()
+            cancelled_task_id = task.id
+            session.commit()
+
+        finally:
+            session.close()
+
+        if cancelled_task_id:
+            await server_state.broadcast_update({
+                "type": "task_cancelled",
+                "task_id": cancelled_task_id,
+            })
+
+            logger.info(f"Task {cancelled_task_id} cancelled")
+            return {"success": True, "task_id": cancelled_task_id}
+        else:
+            raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to cancel task: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/api/cancel_queued_task")
 async def cancel_queued_task_endpoint(
     task_id: str = Body(..., embed=True),
@@ -4044,6 +4100,258 @@ async def get_queue_status_endpoint():
     except Exception as e:
         logger.error(f"Failed to get queue status: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+def _require_localhost(request: Request):
+    """Guard that only localhost can access the endpoint."""
+    client_host = request.client.host if request.client else None
+    if client_host not in ('127.0.0.1', '::1', 'localhost'):
+        from fastapi import HTTPException as HE
+        raise HE(status_code=403, detail="Localhost only")
+
+
+@app.get("/api/agents")
+async def list_agents(request: Request):
+    """List all agents."""
+    _require_localhost(request)
+    from src.core.database import Workflow
+    session = server_state.db_manager.get_session()
+    try:
+        agents = session.query(Agent).all()
+        result = []
+        for a in agents:
+            # Skip agents from completed workflows (orphaned agents)
+            skip_agent = False
+            agent_data = {
+                "id": a.id,
+                "status": a.status,
+                "current_task_id": a.current_task_id,
+                "health_check_failures": a.health_check_failures,
+                "last_activity": a.last_activity.isoformat() if a.last_activity else None,
+                "tmux_session_name": a.tmux_session_name,
+                "cli_type": getattr(a, 'cli_type', None),
+                "current_task": None,
+            }
+            # Add full task info with phase_info
+            if a.current_task_id:
+                from src.core.database import Task
+                task = session.query(Task).filter_by(id=a.current_task_id).first()
+                if task:
+                    # Check if workflow is completed
+                    wf = session.query(Workflow).filter_by(id=task.workflow_id).first()
+                    if wf and wf.status in ('completed', 'failed'):
+                        skip_agent = True
+                    
+                    task_data = {
+                        "id": task.id,
+                        "description": (task.enriched_description or task.raw_description or '')[:200],
+                        "status": task.status,
+                        "priority": task.priority,
+                        "runtime_seconds": int((datetime.utcnow() - task.started_at).total_seconds()) if task.started_at else 0,
+                        "phase_info": None,
+                    }
+                    if task.phase_id:
+                        from src.core.database import Phase
+                        if task.phase_id.isdigit():
+                            phase = session.query(Phase).filter_by(order=int(task.phase_id), workflow_id=task.workflow_id).first()
+                            if not phase:
+                                phase = session.query(Phase).filter_by(order=int(task.phase_id)).first()
+                        else:
+                            phase = session.query(Phase).filter_by(id=task.phase_id).first()
+                        if phase:
+                            task_data["phase_info"] = {
+                                "id": phase.id,
+                                "name": phase.name,
+                                "order": phase.order,
+                            }
+                    agent_data["current_task"] = task_data
+            if not skip_agent and a.status != 'terminated':
+                result.append(agent_data)
+        return result
+    finally:
+        session.close()
+
+
+@app.post("/api/agents/{agent_id}/message")
+async def send_agent_message(agent_id: str, request: Request):
+    """Send a message to an agent's tmux session (parent nudge)."""
+    _require_localhost(request)
+    body = await request.json()
+    message = body.get("message", "")
+    if not message:
+        raise HTTPException(status_code=400, detail="Message required")
+    
+    session = server_state.db_manager.get_session()
+    try:
+        agent = session.query(Agent).filter_by(id=agent_id).first()
+        if not agent or not agent.tmux_session_name:
+            raise HTTPException(status_code=404, detail="Agent not found")
+        
+        # Send via agent manager
+        await server_state.agent_manager.send_message_to_agent(agent_id, message)
+        return {"sent": True, "agent_id": agent_id}
+    finally:
+        session.close()
+
+
+@app.get("/api/agents/{agent_id}/logs")
+async def get_agent_logs(agent_id: str, limit: int = 50, request: Request = None):
+    """Get logs for a specific agent."""
+    if request: _require_localhost(request)
+    session = server_state.db_manager.get_session()
+    try:
+        from src.core.database import AgentLog
+        logs = session.query(AgentLog).filter_by(agent_id=agent_id).order_by(
+            AgentLog.created_at.desc()
+        ).limit(limit).all()
+        return [
+            {
+                "id": l.id,
+                "log_type": l.log_type,
+                "message": l.message,
+                "details": l.details,
+                "created_at": l.created_at.isoformat() if l.created_at else None,
+            }
+            for l in logs
+        ]
+    finally:
+        session.close()
+
+
+@app.get("/api/agents/{agent_id}/output")
+async def get_agent_output(agent_id: str, lines: int = 30, request: Request = None):
+    """Peek at the last N lines of an agent's tmux output."""
+    if request: _require_localhost(request)
+    lines = min(lines, 2000)  # Cap to prevent abuse
+    session = server_state.db_manager.get_session()
+    try:
+        agent = session.query(Agent).filter_by(id=agent_id).first()
+        if not agent or not agent.tmux_session_name:
+            return {"output": ""}
+        
+        # Get output from tmux
+        try:
+            output = server_state.agent_manager.get_agent_output(agent_id, lines=lines)
+            return {"output": output or ""}
+        except Exception:
+            return {"output": ""}
+    finally:
+        session.close()
+
+
+# ── Parent-Child Agent Communication ──────────────────────────────────
+# These endpoints require X-Agent-ID header to verify caller identity
+
+@app.get("/api/agents/{agent_id}/children")
+async def get_agent_children(
+    agent_id: str,
+    requesting_agent_id: str = Header(..., alias="X-Agent-ID")
+):
+    """Get all child agents for a parent agent."""
+    # Allow if: caller is the parent, or caller is system/root
+    if requesting_agent_id != agent_id and "main" not in requesting_agent_id.lower():
+        raise HTTPException(403, "Can only view your own children")
+    from src.services.agent_communication import AgentCommunicationService
+    comm = AgentCommunicationService(server_state.db_manager)
+    children = comm.get_children(agent_id)
+    return {"children": children, "count": len(children)}
+
+
+@app.get("/api/agents/{agent_id}/children/status")
+async def get_children_status(
+    agent_id: str,
+    requesting_agent_id: str = Header(..., alias="X-Agent-ID")
+):
+    """Get summary of all children's status."""
+    if requesting_agent_id != agent_id and "main" not in requesting_agent_id.lower():
+        raise HTTPException(403, "Can only view your own children")
+    from src.services.agent_communication import AgentCommunicationService
+    comm = AgentCommunicationService(server_state.db_manager)
+    summary = comm.get_children_status_summary(agent_id)
+    return summary
+
+
+@app.get("/api/agents/{agent_id}/children/{child_id}/logs")
+async def get_child_logs(
+    agent_id: str,
+    child_id: str,
+    lines: int = Query(default=50, ge=1, le=2000),
+    requesting_agent_id: str = Header(..., alias="X-Agent-ID")
+):
+    """Read logs from a child agent."""
+    if requesting_agent_id != agent_id and "main" not in requesting_agent_id.lower():
+        raise HTTPException(403, "Can only view your own children's logs")
+    from src.services.agent_communication import AgentCommunicationService
+    comm = AgentCommunicationService(server_state.db_manager)
+    logs = comm.get_child_logs(agent_id, child_id, lines=lines)
+    if logs is None:
+        raise HTTPException(404, "Child not found or access denied")
+    return {"logs": logs}
+
+
+@app.post("/api/agents/{agent_id}/children/{child_id}/message")
+async def send_message_to_child(
+    agent_id: str,
+    child_id: str,
+    request: Request,
+    requesting_agent_id: str = Header(..., alias="X-Agent-ID")
+):
+    """Send a message from parent to child agent."""
+    if requesting_agent_id != agent_id and "main" not in requesting_agent_id.lower():
+        raise HTTPException(403, "Can only message your own children")
+    from src.services.agent_communication import AgentCommunicationService
+    comm = AgentCommunicationService(server_state.db_manager)
+    
+    body = await request.json()
+    message = body.get("message", "")
+    if not message:
+        raise HTTPException(400, "Message is required")
+    
+    success = comm.send_message_to_child(agent_id, child_id, message)
+    if not success:
+        raise HTTPException(400, "Failed to send message - child not found or access denied")
+    return {"sent": True}
+
+
+@app.post("/api/agents/{agent_id}/children/{child_id}/nudge")
+async def nudge_child_agent(
+    agent_id: str,
+    child_id: str,
+    request: Request,
+    requesting_agent_id: str = Header(..., alias="X-Agent-ID")
+):
+    """Nudge a child agent that appears stuck."""
+    if requesting_agent_id != agent_id and "main" not in requesting_agent_id.lower():
+        raise HTTPException(403, "Can only nudge your own children")
+    from src.services.agent_communication import AgentCommunicationService
+    comm = AgentCommunicationService(server_state.db_manager)
+    
+    body = await request.json() if request.headers.get("content-type") == "application/json" else {}
+    reason = body.get("reason", "No progress detected")
+    
+    success = comm.nudge_child(agent_id, child_id, reason)
+    if not success:
+        raise HTTPException(400, "Failed to nudge - child not found or access denied")
+    return {"nudged": True}
+
+
+@app.post("/api/agents/{agent_id}/children/monitor")
+async def monitor_and_nudge_stuck_children(
+    agent_id: str,
+    request: Request,
+    requesting_agent_id: str = Header(..., alias="X-Agent-ID")
+):
+    """Monitor all children and nudge any that appear stuck."""
+    if requesting_agent_id != agent_id and "main" not in requesting_agent_id.lower():
+        raise HTTPException(403, "Can only monitor your own children")
+    from src.services.agent_communication import AgentCommunicationService
+    comm = AgentCommunicationService(server_state.db_manager)
+    
+    body = await request.json() if request.headers.get("content-type") == "application/json" else {}
+    threshold = body.get("stuck_threshold_seconds", 300)
+    
+    nudged = comm.monitor_and_nudge_stuck_children(agent_id, threshold)
+    return {"nudged_count": len(nudged), "nudged_agents": nudged}
 
 
 @app.get("/agent_status")
@@ -4865,6 +5173,128 @@ async def get_workflow_execution(workflow_id: str):
         "stats": stats,
         "phases": phases_data
     }
+
+
+@app.post("/api/workflow-executions/{workflow_id}/complete")
+async def complete_workflow_execution(workflow_id: str, request: Request):
+    """Mark a workflow execution as completed (cleanup for orchestrator).
+    Only allows localhost access for security."""
+    # Security: only allow localhost calls for this destructive operation
+    client_host = request.client.host if request.client else None
+    if client_host not in ('127.0.0.1', '::1', 'localhost'):
+        raise HTTPException(status_code=403, detail="Only localhost can force-complete workflows")
+    
+    session = server_state.db_manager.get_session()
+    try:
+        from src.core.database import Workflow
+        workflow = session.query(Workflow).filter_by(id=workflow_id).first()
+        if not workflow:
+            raise HTTPException(status_code=404, detail=f"Workflow {workflow_id} not found")
+        if workflow.status in ('completed', 'failed', 'cancelled'):
+            return {"status": workflow.status, "message": "Already terminal"}
+        workflow.status = 'completed'
+        session.commit()
+        return {"status": "completed", "workflow_id": workflow_id}
+    finally:
+        session.close()
+
+
+@app.post("/api/workflow-executions/{workflow_id}/stop")
+async def stop_workflow(workflow_id: str, request: Request):
+    """Stop a workflow and terminate all its agents."""
+    import subprocess
+    session = server_state.db_manager.get_session()
+    try:
+        from src.core.database import Workflow, Task, Agent
+        workflow = session.query(Workflow).filter_by(id=workflow_id).first()
+        if not workflow:
+            raise HTTPException(status_code=404, detail=f"Workflow {workflow_id} not found")
+        if workflow.status in ('completed', 'failed', 'paused'):
+            return {"status": workflow.status, "message": "Already stopped"}
+        
+        # Find all tasks in this workflow
+        tasks = session.query(Task).filter_by(workflow_id=workflow_id).all()
+        task_ids = [t.id for t in tasks]
+        
+        # Find and terminate all agents working on these tasks
+        terminated_count = 0
+        if task_ids:
+            agents = session.query(Agent).filter(Agent.current_task_id.in_(task_ids)).filter(
+                Agent.status.in_(['working', 'starting', 'idle'])
+            ).all()
+            for agent in agents:
+                try:
+                    subprocess.run(['tmux', 'kill-session', '-t', agent.tmux_session_name],
+                                 capture_output=True, timeout=5)
+                except:
+                    pass
+                agent.status = 'terminated'
+                terminated_count += 1
+        
+        workflow.status = 'paused'
+        session.commit()
+        
+        return {"status": "paused", "workflow_id": workflow_id, "agents_terminated": terminated_count}
+    finally:
+        session.close()
+
+
+@app.post("/api/workflow-executions/{workflow_id}/resume")
+async def resume_workflow(workflow_id: str, request: Request):
+    """Resume a paused workflow."""
+    session = server_state.db_manager.get_session()
+    try:
+        from src.core.database import Workflow
+        workflow = session.query(Workflow).filter_by(id=workflow_id).first()
+        if not workflow:
+            raise HTTPException(status_code=404, detail=f"Workflow {workflow_id} not found")
+        if workflow.status != 'paused':
+            return {"status": workflow.status, "message": "Not paused"}
+        
+        workflow.status = 'active'
+        session.commit()
+        return {"status": "active", "workflow_id": workflow_id}
+    finally:
+        session.close()
+
+
+@app.post("/api/workflow-executions/{workflow_id}/cancel")
+async def cancel_workflow(workflow_id: str, request: Request):
+    """Terminate agents and mark workflow as cancelled."""
+    import subprocess
+    session = server_state.db_manager.get_session()
+    try:
+        from src.core.database import Workflow, Task, Agent
+        workflow = session.query(Workflow).filter_by(id=workflow_id).first()
+        if not workflow:
+            raise HTTPException(status_code=404, detail=f"Workflow {workflow_id} not found")
+        
+        # Terminate agents
+        tasks = session.query(Task).filter_by(workflow_id=workflow_id).all()
+        task_ids = [t.id for t in tasks]
+        terminated_count = 0
+        if task_ids:
+            agents = session.query(Agent).filter(Agent.current_task_id.in_(task_ids)).filter(
+                Agent.status.in_(['working', 'starting', 'idle'])
+            ).all()
+            for agent in agents:
+                try:
+                    subprocess.run(['tmux', 'kill-session', '-t', agent.tmux_session_name],
+                                 capture_output=True, timeout=5)
+                except:
+                    pass
+                agent.status = 'terminated'
+                terminated_count += 1
+        
+        # Mark as failed (can't delete due to FK constraints, using failed to indicate user cancellation)
+        workflow.status = 'failed'
+        session.commit()
+        return {"cancelled": workflow_id, "agents_terminated": terminated_count}
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        session.close()
 
 
 @app.post("/tools/execute")

@@ -14,6 +14,9 @@ from src.core.database import (
 from src.phases.models import WorkflowDefinition, PhaseDefinition, PhaseContext, PhasesConfig
 from src.phases.phase_loader import PhaseLoader
 from src.core.simple_config import get_config
+from src.workflow_engine.orchestrator import (
+    WorkflowOrchestrator, OrchestratorConfig, OrchestrationAction, EvaluationResult
+)
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +75,9 @@ class PhaseManager:
         # Multi-workflow support
         self.definitions: Dict[str, DBWorkflowDefinition] = {}  # definition_id -> definition
         self.active_executions: Dict[str, str] = {}  # workflow_id -> definition_id
+
+        # Orchestrator instances cache (per workflow_id) to persist state
+        self._orchestrators: Dict[str, 'WorkflowOrchestrator'] = {}
 
         self.phases_config_cache: Dict[str, PhasesConfig] = {}  # Cache for workflow configs
 
@@ -463,38 +469,214 @@ class PhaseManager:
         finally:
             session.close()
 
-    def mark_phase_complete(self, phase_id: str, summary: str = "") -> None:
-        """Mark a phase as complete.
+    def mark_phase_complete(self, phase_id: str, summary: str = "", phase_output: Dict[str, Any] = None) -> bool:
+        """Mark a phase as complete and optionally evaluate with orchestrator.
 
         Args:
             phase_id: Phase ID to mark complete
             summary: Completion summary
+            phase_output: Output from the phase for orchestrator evaluation
+
+        Returns:
+            True if workflow should continue, False if it should stop/retry
         """
         session = self.db_manager.get_session()
         try:
+            phase = session.query(Phase).filter_by(id=phase_id).first()
+            if not phase:
+                return True
+
             execution = session.query(PhaseExecution).filter_by(
                 phase_id=phase_id
             ).first()
 
-            if execution:
+            if not execution:
+                return True
+
+            # Get orchestrator config
+            orchestrator = self._get_orchestrator(session, phase.workflow_id)
+
+            # If no orchestrator config or sequential mode, use simple flow
+            if not orchestrator or orchestrator.config.type == "sequential":
                 execution.status = "completed"
                 execution.completed_at = datetime.utcnow()
                 execution.completion_summary = summary
                 session.commit()
 
-                logger.info(f"Marked phase {phase_id} as complete")
+                logger.info(f"Marked phase {phase.name} as complete (sequential mode)")
 
-                # Start next phase if exists, or complete the workflow
+                # Start next phase
                 next_started = self._start_next_phase(session, phase_id)
                 if not next_started:
-                    # This was the last phase — complete the workflow
                     self._complete_workflow(session)
+                return True
+
+            # Evaluating mode - use orchestrator to decide flow
+            phase_history = self._get_phase_history(session, phase.workflow_id)
+            evaluation = orchestrator.evaluate(
+                phase_name=phase.name,
+                phase_output=phase_output or {},
+                phase_history=phase_history
+            )
+
+            logger.info(
+                f"Orchestrator evaluated {phase.name}: "
+                f"action={evaluation.action.value}, reason={evaluation.reason}"
+            )
+
+            if evaluation.action == OrchestrationAction.CONTINUE:
+                execution.status = "completed"
+                execution.completed_at = datetime.utcnow()
+                execution.completion_summary = summary
+                session.commit()
+
+                next_started = self._start_next_phase(session, phase_id)
+                if not next_started:
+                    self._complete_workflow(session)
+                return True
+
+            elif evaluation.action == OrchestrationAction.RETRY:
+                execution.status = "pending"
+                execution.started_at = None
+                session.commit()
+
+                logger.info(
+                    f"Retrying phase {phase.name} "
+                    f"({evaluation.metadata.get('retry_count', 0)}/"
+                    f"{evaluation.metadata.get('max_retries', '?')})"
+                )
+                return True
+
+            elif evaluation.action == OrchestrationAction.GOTO:
+                execution.status = "completed"
+                execution.completed_at = datetime.utcnow()
+                execution.completion_summary = summary
+                session.commit()
+
+                # Find target phase and start it
+                target_phase = self._find_phase_by_name_or_order(
+                    session, phase.workflow_id, evaluation.target_phase
+                )
+                if target_phase:
+                    self._start_phase(session, target_phase.id)
+                    logger.info(f"Goto phase {target_phase.name} from {phase.name}")
+                else:
+                    logger.warning(f"Target phase not found: {evaluation.target_phase}")
+                    next_started = self._start_next_phase(session, phase_id)
+                    if not next_started:
+                        self._complete_workflow(session)
+                return True
+
+            elif evaluation.action == OrchestrationAction.FAIL:
+                execution.status = "failed"
+                execution.completed_at = datetime.utcnow()
+                execution.completion_summary = f"Failed: {evaluation.reason}"
+                session.commit()
+
+                logger.error(f"Phase {phase.name} failed: {evaluation.reason}")
+                self._fail_workflow(session, evaluation.reason)
+                return False
+
+            return True
 
         except Exception as e:
             logger.error(f"Failed to mark phase complete: {e}")
             session.rollback()
+            return True
         finally:
             session.close()
+
+    def _get_orchestrator(self, session, workflow_id: str) -> Optional[WorkflowOrchestrator]:
+        """Get orchestrator for a workflow (cached to persist state)."""
+        try:
+            # Return cached orchestrator if exists
+            if workflow_id in self._orchestrators:
+                return self._orchestrators[workflow_id]
+
+            workflow = session.query(Workflow).filter_by(id=workflow_id).first()
+            if not workflow or not workflow.definition_id:
+                return None
+
+            definition = session.query(DBWorkflowDefinition).filter_by(
+                id=workflow.definition_id
+            ).first()
+            if not definition or not definition.orchestrator_config:
+                return None
+
+            config = OrchestratorConfig.from_dict(definition.orchestrator_config)
+            if config.type == "sequential":
+                return None
+
+            # Create and cache orchestrator
+            orchestrator = WorkflowOrchestrator(config)
+            self._orchestrators[workflow_id] = orchestrator
+            return orchestrator
+        except Exception as e:
+            logger.error(f"Failed to get orchestrator: {e}")
+            return None
+
+    def _get_phase_history(self, session, workflow_id: str) -> List[Dict[str, Any]]:
+        """Get history of completed phases."""
+        executions = session.query(PhaseExecution).join(Phase).filter(
+            Phase.workflow_id == workflow_id
+        ).all()
+
+        return [
+            {
+                "phase": ex.phase.name if ex.phase else "unknown",
+                "status": ex.status,
+                "summary": ex.completion_summary,
+                "completed_at": ex.completed_at.isoformat() if ex.completed_at else None,
+            }
+            for ex in executions
+            if ex.status in ("completed", "failed")
+        ]
+
+    def _find_phase_by_name_or_order(
+        self, session, workflow_id: str, name_or_order
+    ) -> Optional[Phase]:
+        """Find phase by name or order number."""
+        # Try by name first
+        phase = session.query(Phase).filter_by(
+            workflow_id=workflow_id
+        ).filter(
+            Phase.name == name_or_order
+        ).first()
+
+        if phase:
+            return phase
+
+        # Try by order
+        try:
+            order = int(name_or_order)
+            phase = session.query(Phase).filter_by(
+                workflow_id=workflow_id,
+                order=order
+            ).first()
+            return phase
+        except (ValueError, TypeError):
+            return None
+
+    def _start_phase(self, session, phase_id: str) -> None:
+        """Start a specific phase."""
+        execution = session.query(PhaseExecution).filter_by(
+            phase_id=phase_id
+        ).first()
+
+        if execution and execution.status == "pending":
+            execution.status = "in_progress"
+            execution.started_at = datetime.utcnow()
+            session.commit()
+            logger.info(f"Started phase {phase_id}")
+
+    def _fail_workflow(self, session, reason: str) -> None:
+        """Mark workflow as failed."""
+        if self.workflow_id:
+            workflow = session.query(Workflow).filter_by(id=self.workflow_id).first()
+            if workflow:
+                workflow.status = "failed"
+                session.commit()
+                logger.error(f"Workflow {self.workflow_id} failed: {reason}")
 
     def _start_next_phase(self, session, current_phase_id: str) -> bool:
         """Start the next phase after current one completes.
@@ -988,12 +1170,6 @@ class PhaseManager:
         session = self.db_manager.get_session()
         try:
             query = session.query(Workflow).options(joinedload(Workflow.definition))
-            if status != "all":
-                query = query.filter_by(status=status)
-            else:
-                # Default to showing active workflows
-                query = query.filter(Workflow.status.in_(["active", "paused"]))
-
             workflows = query.order_by(Workflow.created_at.desc()).all()
             # Expunge from session to allow access after session closes
             for w in workflows:

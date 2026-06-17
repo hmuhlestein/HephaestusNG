@@ -61,7 +61,9 @@ const AgentCard: React.FC<{
         <div className="flex items-center">
           <Bot className="w-6 h-6 text-gray-600 mr-2" />
           <div>
-            <p className="font-semibold text-gray-800">Agent {agent.id.substring(0, 8)}</p>
+            <p className="font-semibold text-gray-800">
+              {agent.id.substring(0, 8)}{agent.current_task?.phase_info?.name ? ` — ${agent.current_task.phase_info.name.replace(/_/g, ' ')}` : ''}
+            </p>
             <p className="text-xs text-gray-500">{agent.cli_type}</p>
           </div>
         </div>
@@ -75,7 +77,9 @@ const AgentCard: React.FC<{
             <div className="flex-1">
               <div className="flex items-center space-x-2 mb-1">
                 <FileText className="w-4 h-4 text-blue-600" />
-                <span className="text-sm font-medium text-blue-800">Working on Task</span>
+                <span className="text-sm font-medium text-blue-800">
+                  {agent.current_task.phase_info?.name || 'Working on Task'}
+                </span>
                 {agent.current_task.phase_info && (
                   <span className="text-xs px-2 py-1 bg-blue-100 text-blue-700 rounded">
                     Phase {agent.current_task.phase_info.order}

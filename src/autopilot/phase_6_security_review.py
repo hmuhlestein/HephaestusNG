@@ -218,15 +218,27 @@ DO NOT:
 - Forget about dependency vulnerabilities
 - Leave critical issues unfixed
 - Assume authentication is correct without reading code
+
+
+═══════════════════════════════════════════════════════════════════════
+WHEN YOU ARE DONE - MARK YOUR TASK AS COMPLETE (DO NOT SKIP THIS)
+═══════════════════════════════════════════════════════════════════════
+
+CRITICAL: Do NOT just print a summary and stop. Do NOT exit to the command line.
+You MUST call the update_task_status tool. The system CANNOT detect you finished
+without this call. The pipeline WILL get stuck.
+
+After writing all your output files, call:
+
+mcp__hephaestus__update_task_status({
+  "task_id": "<your task id>",
+  "status": "done",
+  "summary": "<brief summary of what was accomplished>",
+  "key_learnings": ["<key findings or decisions>"]
+})
+
+Then wait for confirmation. Do NOT exit until you see the task marked as done.
 """,
-    outputs=[
-        "security_report.md with vulnerability findings",
-        "Fixed critical security issues",
-        "Dependency audit results",
-        "Security best practices documentation",
-    ],
-    next_steps=[
-        "QA will validate security fixes work correctly",
-        "All critical vulnerabilities must be fixed before deployment",
-    ],
+    outputs=[],
+    next_steps=[],
 )

@@ -16,7 +16,9 @@ export default function WorkflowExecutions() {
 
   const [showLaunchModal, setShowLaunchModal] = useState(false);
   const [launchDefinitionId, setLaunchDefinitionId] = useState<string | null>(null);
-  const [filter, setFilter] = useState<'all' | 'active'>('all');
+  const [filter, setFilter] = useState<'all' | 'active'>('active');
+  const [page, setPage] = useState(1);
+  const PAGE_SIZE = 12;
 
   // Mutual exclusion state
   const [expandedWorkflowId, setExpandedWorkflowId] = useState<string | null>(null);
@@ -34,7 +36,15 @@ export default function WorkflowExecutions() {
 
 
   const activeExecutions = executions.filter((e) => e.status === 'active');
-  const inactiveExecutions = executions.filter((e) => e.status !== 'active');
+  const filteredExecutions = filter === 'active' ? activeExecutions : executions;
+  const totalPages = Math.ceil(filteredExecutions.length / PAGE_SIZE);
+  const paginatedExecutions = filteredExecutions.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+
+  // Reset page when filter changes
+  const handleFilterChange = (newFilter: 'all' | 'active') => {
+    setFilter(newFilter);
+    setPage(1);
+  };
 
   if (loading) {
     return (
@@ -94,17 +104,7 @@ export default function WorkflowExecutions() {
       {/* Filters */}
       <div className="flex gap-2">
         <button
-          onClick={() => setFilter('all')}
-          className={`px-4 py-2 rounded-lg transition-colors ${
-            filter === 'all'
-              ? 'bg-blue-600 text-white'
-              : 'bg-white text-gray-700 hover:bg-gray-100 border border-gray-200'
-          }`}
-        >
-          All ({executions.length})
-        </button>
-        <button
-          onClick={() => setFilter('active')}
+          onClick={() => handleFilterChange('active')}
           className={`px-4 py-2 rounded-lg transition-colors ${
             filter === 'active'
               ? 'bg-blue-600 text-white'
@@ -113,17 +113,23 @@ export default function WorkflowExecutions() {
         >
           Active ({activeExecutions.length})
         </button>
+        <button
+          onClick={() => handleFilterChange('all')}
+          className={`px-4 py-2 rounded-lg transition-colors ${
+            filter === 'all'
+              ? 'bg-blue-600 text-white'
+              : 'bg-white text-gray-700 hover:bg-gray-100 border border-gray-200'
+          }`}
+        >
+          All ({executions.length})
+        </button>
       </div>
 
-      {/* Active Section */}
-      {activeExecutions.length > 0 && (filter === 'all' || filter === 'active') && (
+      {/* Workflow Grid */}
+      {paginatedExecutions.length > 0 ? (
         <div>
-          <h2 className="text-lg font-semibold text-gray-800 mb-4 flex items-center gap-2">
-            <span className="w-2 h-2 bg-green-500 rounded-full" />
-            Active ({activeExecutions.length})
-          </h2>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {activeExecutions.map((execution) => (
+            {paginatedExecutions.map((execution) => (
               <WorkflowCard
                 key={execution.id}
                 execution={execution}
@@ -135,28 +141,32 @@ export default function WorkflowExecutions() {
               />
             ))}
           </div>
+          {/* Pagination */}
+          {totalPages > 1 && (
+            <div className="flex justify-center items-center gap-2 mt-6">
+              <button
+                onClick={() => setPage(p => Math.max(1, p - 1))}
+                disabled={page === 1}
+                className="px-3 py-1 rounded border border-gray-300 hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                ← Prev
+              </button>
+              <span className="text-sm text-gray-600">
+                Page {page} of {totalPages}
+              </span>
+              <button
+                onClick={() => setPage(p => Math.min(totalPages, p + 1))}
+                disabled={page === totalPages}
+                className="px-3 py-1 rounded border border-gray-300 hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Next →
+              </button>
+            </div>
+          )}
         </div>
-      )}
-
-      {/* Inactive Section */}
-      {inactiveExecutions.length > 0 && filter === 'all' && (
-        <div>
-          <h2 className="text-lg font-semibold text-gray-500 mb-4">
-            Completed/Failed ({inactiveExecutions.length})
-          </h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {inactiveExecutions.map((execution) => (
-              <WorkflowCard
-                key={execution.id}
-                execution={execution}
-                isExpanded={expandedWorkflowId === execution.id}
-                onToggle={() => handleWorkflowClick(execution.id)}
-                expandedPhaseId={expandedPhaseId}
-                onTogglePhase={handlePhaseClick}
-                isSelected={selectedExecutionId === execution.id}
-              />
-            ))}
-          </div>
+      ) : (
+        <div className="text-center text-gray-500 py-8">
+          {filter === 'active' ? 'No active workflows' : 'No workflows found'}
         </div>
       )}
 

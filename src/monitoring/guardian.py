@@ -271,37 +271,46 @@ class Guardian:
         message: str,
     ):
         """
-        Send steering message to agent via tmux.
-
-        Messages are targeted and helpful, not generic nudges.
-
-        Checks for queued messages to avoid spamming agent with unread messages.
+        PARENT-CHILD MODEL: Guardian acts as last resort.
+        
+        By default, the parent workflow monitors its children via tmux peek
+        and task progress. If the parent detects a problem and prompts the
+        human, the human can dismiss — and the Guardian gets ONE chance to
+        steer the agent before the parent terminates it.
+        
+        The Guardian only steers if:
+        1. The agent has been flagged multiple times (trajectory analysis)
+        2. The parent has already detected impasse and prompted human
+        3. The cooldown has elapsed (no spam)
         """
-        logger.info(f"Steering agent {agent.id}: {steering_type}")
+        logger.info(
+            f"[GUARDIAN] Agent {agent.id[:8]} flagged: {steering_type} — "
+            f"last resort steering (parent already detected impasse)"
+        )
 
-        # Check if there's already a queued message (not yet read by Claude)
-        tmux_output = self.agent_manager.get_agent_output(agent.id, lines=50)
-        if "Press up to edit queued messages" in tmux_output:
+        # Check cooldown - max 1 steering per 10 minutes (longer than before)
+        if not self._should_steer_agent(agent.id):
             logger.info(
-                f"💬 Discarding steering message for agent {agent.id} - "
-                f"previous message still queued (not yet read by Claude). "
-                f"Type: {steering_type}, Message preview: {message[:100]}..."
-            )
-            # Record that we attempted to steer but held back
-            self._record_steering(
-                agent.id,
-                f"{steering_type}_DISCARDED",
-                f"Message held (queued message detected): {message[:200]}..."
+                f"[GUARDIAN] Discarding — cooldown active for agent {agent.id[:8]}"
             )
             return
 
-        # Format message with Guardian identifier
-        formatted_message = f"\n[GUARDIAN GUIDANCE - {steering_type.upper()}]: {message}\n"
+        # Check if there's already a queued message
+        tmux_output = self.agent_manager.get_agent_output(agent.id, lines=50)
+        if "Press up to edit queued messages" in tmux_output:
+            logger.info(
+                f"[GUARDIAN] Discarding — previous message still queued for agent {agent.id[:8]}"
+            )
+            self._record_steering(
+                agent.id,
+                f"{steering_type}_DISCARDED",
+                f"Queued message detected: {message[:200]}..."
+            )
+            return
 
-        # Send via tmux
+        # Format and send
+        formatted_message = f"\n[GUARDIAN - LAST RESORT]: {message}\n"
         await self.agent_manager.send_message_to_agent(agent.id, formatted_message)
-
-        # Log the steering
         self._record_steering(agent.id, steering_type, message)
 
         # Save to database
@@ -309,12 +318,13 @@ class Guardian:
         try:
             log_entry = AgentLog(
                 agent_id=agent.id,
-                log_type="steering",
-                message=f"Guardian steering: {steering_type}",
+                log_type="guardian_steering",
+                message=f"Guardian last-resort steering: {steering_type}",
                 details={
                     "type": steering_type,
                     "message": message,
                     "timestamp": datetime.utcnow().isoformat(),
+                    "model": "parent_child_last_resort",
                 }
             )
             session.add(log_entry)
@@ -323,7 +333,10 @@ class Guardian:
             session.close()
 
     def _should_steer_agent(self, agent_id: str) -> bool:
-        """Check if we should steer agent (avoid over-messaging)."""
+        """Check if we should steer agent (avoid over-messaging).
+        
+        Last-resort model: max 1 steering per 10 minutes.
+        """
         if agent_id not in self.steering_history:
             self.steering_history[agent_id] = []
             return True
@@ -331,11 +344,32 @@ class Guardian:
         # Check recent steering
         recent_steerings = [
             s for s in self.steering_history[agent_id]
-            if datetime.fromisoformat(s["timestamp"]) > datetime.utcnow() - timedelta(minutes=5)
+            if datetime.fromisoformat(s["timestamp"]) > datetime.utcnow() - timedelta(minutes=10)
         ]
 
-        # Max 1 steering per 5 minutes
         return len(recent_steerings) == 0
+
+    def detect_agent_exited(self, tmux_output: str) -> bool:
+        """Detect if agent has exited to the command line.
+        
+        Looks for shell prompts like '$', '%', '>>>', 'bquote>' which indicate
+        the agent session ended and we're at a shell.
+        """
+        if not tmux_output:
+            return False
+        lines = tmux_output.strip().split('\n')[-5:]  # Check last 5 lines
+        for line in lines:
+            line = line.strip()
+            # Shell prompts at start of line
+            if line.startswith(('$ ', '% ', '>>> ', 'bquote> ')):
+                return True
+            # Python REPL
+            if line.startswith('>>> '):
+                return True
+            # zsh/bash prompt patterns
+            if line.endswith(' %') or line.endswith(' $'):
+                return True
+        return False
 
     def _record_steering(self, agent_id: str, steering_type: str, message: str):
         """Record steering in history."""

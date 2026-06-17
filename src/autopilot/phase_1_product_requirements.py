@@ -275,15 +275,30 @@ DO NOT:
 - Substitute technologies without justification
 - Create requirements that conflict with existing system
 - Skip context gathering
+
+═══════════════════════════════════════════════════════════════════════
+WHEN YOU ARE DONE - MARK YOUR TASK AS COMPLETE (DO NOT SKIP THIS)
+═══════════════════════════════════════════════════════════════════════
+
+CRITICAL: Do NOT just print a summary and stop. Do NOT exit to the command line.
+You MUST call the update_task_status tool. The system CANNOT detect you finished
+without this call. The pipeline WILL get stuck.
+
+After writing all your output files, call:
+
+mcp__hephaestus__update_task_status({
+  "task_id": "<your task id>",
+  "status": "done",
+  "summary": "<brief summary of what was accomplished>",
+  "key_learnings": ["<key findings or decisions>"]
+})
+
+Then wait for confirmation. Do NOT exit until you see the task marked as done.
 """,
     outputs=[
-        "requirements_analysis.md with structured requirements and project context",
-        "Integration point documentation",
-        "Technology constraint analysis",
-        "Phase 2 architecture task with full context",
+        "requirements.md in Docs Path",
     ],
     next_steps=[
-        "Phase 2 will create detailed architecture respecting existing system",
-        "Architecture will plan integration with existing components",
+        "Requirements extracted and saved",
     ],
 )

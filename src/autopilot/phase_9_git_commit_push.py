@@ -37,6 +37,7 @@ After product validation passes, this phase:
         "Working directory clean on main",
         "Commit hash and PR URL recorded",
         "Memory saved with commit reference",
+        "Feature report generated",
         "Task marked as done",
     ],
     working_directory=None,
@@ -78,25 +79,18 @@ Check the current git state:
 ```bash
 git status
 git branch
-git log --oneline -3
 ```
 
-Note the current branch and any uncommitted changes.
+If there are uncommitted changes, stash or commit them first.
 
 ═══════════════════════════════════════════════════════════════════════
-STEP 2: SWITCH TO MAIN AND PULL LATEST
+STEP 2: PULL LATEST FROM MAIN
 ═══════════════════════════════════════════════════════════════════════
 
-Ensure main is up to date:
+Ensure you have the latest code:
 ```bash
 git checkout main
-git pull origin main
-```
-
-If there are uncommitted changes on main, stash them first:
-```bash
-git stash
-git pull origin main
+git pull $REMOTE main
 ```
 
 ═══════════════════════════════════════════════════════════════════════
@@ -105,108 +99,62 @@ STEP 3: CREATE FEATURE BRANCH
 
 Create a descriptive feature branch name:
 ```bash
-# Format: feature/<short-description>
-git checkout -b feature/<feature-name-slug>
+# Slug from feature name (lowercase, hyphens, no special chars)
+FEATURE_SLUG="<feature-name-slug>"
+git checkout -b feature/$FEATURE_SLUG
 ```
 
-Example branch names:
-- feature/user-authentication
-- feature/dashboard-api
-- feature/payment-integration
-
 ═══════════════════════════════════════════════════════════════════════
-STEP 4: STAGE ALL CHANGES
+STEP 4: STAGE AND COMMIT
 ═══════════════════════════════════════════════════════════════════════
 
-Stage all relevant files:
+Stage all relevant changes:
 ```bash
 git add -A
-```
-
-Review what will be committed:
-```bash
-git status
-git diff --cached --stat
-```
-
-Ensure:
-- No secrets, API keys, or credentials are staged
-- No .env files with secrets
-- No large binary files or generated assets
-- No temporary or debug files
-
-═══════════════════════════════════════════════════════════════════════
-STEP 5: CREATE COMMIT
-═══════════════════════════════════════════════════════════════════════
-
-Create a descriptive commit message following conventional commits:
-
-Format:
-```
-feat: <Short description>
-
-- <What was built>
-- <Key components added>
-- <Integration points>
-
-Autopilot validated: <date>
-```
-
-Example:
-```
-feat: Add user authentication system
-
-- JWT-based authentication with login/register endpoints
-- Password hashing with bcrypt cost 12
-- Session management with refresh tokens
-- Integration with existing user database schema
-
-Autopilot validated: 2026-06-06
+git status  # Verify what will be committed
 ```
 
 Commit following project conventions (see AGENTS.md):
 ```bash
-git commit -m "feat: <your message>"
+git commit --no-verify -m "feat: <descriptive commit message>
+
+- Key change 1
+- Key change 2
+- Key change 3
+
+Autopilot validated: <date>"
 ```
 
 ═══════════════════════════════════════════════════════════════════════
-STEP 6: PUSH FEATURE BRANCH
+STEP 5: PUSH FEATURE BRANCH
 ═══════════════════════════════════════════════════════════════════════
 
-Push the feature branch to remote:
+Push the feature branch:
 ```bash
-git push -u origin feature/<feature-name-slug>
+git push $REMOTE feature/$FEATURE_SLUG
 ```
 
 ═══════════════════════════════════════════════════════════════════════
-STEP 7: CREATE PULL REQUEST
+STEP 6: CREATE PULL REQUEST
 ═══════════════════════════════════════════════════════════════════════
 
-Create a pull request using the GitHub CLI:
+Create a PR using GitHub CLI:
 ```bash
-gh pr create --title "feat: <feature name>" --body "$(cat <<'EOF'
-## Summary
-- <bullet point 1: what was built>
-- <bullet point 2: key components>
-- <bullet point 3: integration points>
+gh pr create --title "feat: <feature name>" --body "## Summary
+- Change 1
+- Change 2
 
-## Pipeline Results
-- QA: PASSED
-- Security: PASSED
-- Product Validation: PASSED
+## Test Plan
+- [ ] All tests pass
+- [ ] Manual verification completed
 
-## Files Changed
-<list key files changed>
-
-Autopilot validated: <date>
-EOF
-)"
+Autopilot validated: <date>"
 ```
 
 Record the PR URL returned by the command.
 
 ═══════════════════════════════════════════════════════════════════════
-STEP 8: MERGE PULL REQUEST
+STEP 7: MERGE PULL REQUEST
 ═══════════════════════════════════════════════════════════════════════
 
 Merge the PR using the GitHub CLI:
@@ -220,19 +168,19 @@ If `gh` is not available or the PR can't be merged via CLI,
 fall back to local merge:
 ```bash
 git checkout main
-git merge feature/<feature-name-slug> --no-ff -m "Merge feature/<feature-name-slug> into main"
-git push origin main
-git push origin --delete feature/<feature-name-slug>
+git merge feature/$FEATURE_SLUG --no-ff -m "Merge feature/$FEATURE_SLUG into main"
+git push $REMOTE main
+git push $REMOTE --delete feature/$FEATURE_SLUG
 ```
 
 ═══════════════════════════════════════════════════════════════════════
-STEP 9: CHECKOUT MAIN AND PULL (FINAL STEP)
+STEP 8: CHECKOUT MAIN AND PULL (FINAL STEP)
 ═══════════════════════════════════════════════════════════════════════
 
 Ensure we are on main and fully synced:
 ```bash
 git checkout main
-git pull origin main
+git pull $REMOTE main
 ```
 
 Verify clean state:
@@ -246,13 +194,26 @@ The working directory should now be on main with no uncommitted changes.
 Record the merge commit hash and PR URL for the feature report.
 
 ═══════════════════════════════════════════════════════════════════════
+STEP 9: GENERATE FEATURE REPORT (HTML)
+═══════════════════════════════════════════════════════════════════════
+
+After all git operations are complete, generate a final HTML report:
+
+```python
+from src.autopilot.report_generator import generate_feature_report
+
+report_path = generate_feature_report("<Docs Path>")
+print(f"Feature report generated: {report_path}")
+```
+
+═══════════════════════════════════════════════════════════════════════
 STEP 10: SAVE TO MEMORY
 ═══════════════════════════════════════════════════════════════════════
 
 Save the commit and PR reference to memory:
 ```python
 mcp__hephaestus__save_memory({
-    "content": f"Committed feature '{feature_name}': branch feature/{slug} merged to main at {commit_hash}. PR: {pr_url}",
+    "content": f"Committed feature \'{feature_name}\': branch feature/{slug} merged to main at {commit_hash}. PR: {pr_url}",
     "memory_type": "decision",
     "tags": ["git", "commit", "deployment", "pr"]
 })
@@ -269,6 +230,7 @@ DO:
 - Use --no-verify for automated pipeline commits
 - Verify merge and push succeeded
 - Record commit hash for traceability
+- Generate feature_report.html after git operations
 
 DO NOT:
 - Commit directly to main
@@ -276,17 +238,36 @@ DO NOT:
 - Force push without explicit instructions
 - Skip merge verification
 - Leave stale feature branches
+- Skip report generation
+
+
+═══════════════════════════════════════════════════════════════════════
+WHEN YOU ARE DONE - MARK YOUR TASK AS COMPLETE (DO NOT SKIP THIS)
+═══════════════════════════════════════════════════════════════════════
+
+CRITICAL: Do NOT just print a summary and stop. Do NOT exit to the command line.
+You MUST call the update_task_status tool. The system CANNOT detect you finished
+without this call. The pipeline WILL get stuck.
+
+After writing all your output files, call:
+
+mcp__hephaestus__update_task_status({
+  "task_id": "<your task id>",
+  "status": "done",
+  "summary": "<brief summary of what was accomplished>",
+  "key_learnings": ["<key findings or decisions>"]
+})
+
+Then wait for confirmation. Do NOT exit until you see the task marked as done.
 """,
     outputs=[
-        "Feature branch created and pushed",
-        "Merge commit on main",
-        "Main branch up to date with remote",
-        "Feature branch cleaned up",
-        "Commit hash recorded",
-        "Memory saved with commit reference",
+        "git commit on feature branch",
+        "pull request created and merged",
+        "feature_report.html in Docs Path",
+        "commit hash and PR URL recorded",
     ],
     next_steps=[
-        "Feature is now on main and ready for deployment",
-        "Human can review the feature report and merged code",
+        "Feature is now part of main branch",
+        "Forensics analysis available in forensics_report.md",
     ],
 )

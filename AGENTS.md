@@ -1,5 +1,8 @@
 # Repository Guidelines
 
+## Rules for AI Assistants
+- **Do NOT commit or push code without explicit user approval.** Always ask before running `git commit` or `git push`.
+
 ## Project Structure & Module Organization
 - `src/` holds the orchestration stack: `agents/` (lifecycle), `memory/` (vector store + RAG), `mcp/` (FastAPI MCP server), `monitoring/` (Guardian & Conductor loops), and shared utilities in `core/`.
 - `frontend/` is the Vite + React dashboard; run UI tooling from that directory.

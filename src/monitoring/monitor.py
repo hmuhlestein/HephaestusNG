@@ -593,6 +593,14 @@ class MonitoringLoop:
                 logger.warning(f"No output from agent {agent.id}")
                 return None
 
+            # DETECT: Agent exited to command line (shows $, %, >>>, bquote>)
+            if self.guardian.detect_agent_exited(tmux_output):
+                logger.warning(
+                    f"Agent {agent.id[:8]} exited to command line — restarting"
+                )
+                await self._handle_missing_tmux_session(agent)
+                return None
+
             # Get past summaries for this agent
             past_summaries = self._get_past_summaries_for_agent(agent.id)
 
@@ -711,9 +719,10 @@ class MonitoringLoop:
     async def _update_agent_health_from_trajectory(self, agent: Agent, analysis: Dict[str, Any]):
         """Update agent health based on trajectory analysis.
 
-        Args:
-            agent: Agent to update
-            analysis: Guardian analysis result
+        PARENT-CHILD MODEL: Parent monitors via tmux peek and task progress.
+        Guardian trajectory analysis is a signal for last-resort steering.
+        health_check_failures is incremented when trajectory is off-track,
+        so the Guardian can decide whether to intervene.
         """
         session = self.db_manager.get_session()
         try:
@@ -721,19 +730,16 @@ class MonitoringLoop:
             if not db_agent:
                 return
 
-            # Update health based on trajectory alignment
+            db_agent.last_activity = datetime.utcnow()
+
+            # Track health_check_failures for Guardian last-resort steering
             if analysis.get('trajectory_aligned', True):
-                # Agent is on track - reset failures
+                # Agent is on track — reset failures so it recovers
                 db_agent.health_check_failures = 0
-                db_agent.last_activity = datetime.utcnow()
             else:
-                # Agent is off track - increment failures
                 alignment_score = analysis.get('alignment_score', 0.5)
                 if alignment_score < 0.3:
-                    db_agent.health_check_failures = max(
-                        db_agent.health_check_failures + 2,
-                        self.config.max_health_check_failures
-                    )
+                    db_agent.health_check_failures += 2
                 elif alignment_score < 0.5:
                     db_agent.health_check_failures += 1
 
@@ -918,22 +924,24 @@ class MonitoringLoop:
         )
 
         # Check for specific issues in trajectory
+        # Guardian only steers as last resort (health_check_failures >= 3)
         blockers = accumulated_context.get('discovered_blockers', [])
-        if blockers:
-            logger.info(f"Agent {agent.id} has blockers: {blockers}")
+        if blockers and agent.health_check_failures >= 3:
+            logger.info(f"Agent {agent.id} has blockers ({agent.health_check_failures} failures): {blockers}")
 
-            # Try to provide targeted help for blockers
-            for blocker in blockers[:3]:  # Address top 3 blockers
+            # Last resort: try to help with top 3 blockers
+            for blocker in blockers[:3]:
                 message = f"I see you're blocked on: {blocker}. Try a different approach or create a sub-task if it's complex."
                 await self.guardian.steer_agent(
                     agent=agent,
-                    steering_type='stuck',
+                    steering_type='last_resort_stuck',
                     message=message,
                 )
-
-        # If no specific blockers, use general intervention
+        elif blockers:
+            # Not enough failures yet — just log for observability
+            logger.info(f"Agent {agent.id} has blockers (will steer after 3+ failures): {blockers[:2]}")
         else:
-            # Fallback to old intelligent monitor
+            # No blockers — just do trajectory analysis
             analysis = await self.intelligent_monitor.analyze_agent_state(agent)
             await self.intelligent_monitor.execute_intervention(agent, analysis)
 

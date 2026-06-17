@@ -277,16 +277,27 @@ DO NOT:
 - Ignore failed tests
 - Forget to validate security fixes
 - Give vague recommendations
+
+
+═══════════════════════════════════════════════════════════════════════
+WHEN YOU ARE DONE - MARK YOUR TASK AS COMPLETE (DO NOT SKIP THIS)
+═══════════════════════════════════════════════════════════════════════
+
+CRITICAL: Do NOT just print a summary and stop. Do NOT exit to the command line.
+You MUST call the update_task_status tool. The system CANNOT detect you finished
+without this call. The pipeline WILL get stuck.
+
+After writing all your output files, call:
+
+mcp__hephaestus__update_task_status({
+  "task_id": "<your task id>",
+  "status": "done",
+  "summary": "<brief summary of what was accomplished>",
+  "key_learnings": ["<key findings or decisions>"]
+})
+
+Then wait for confirmation. Do NOT exit until you see the task marked as done.
 """,
-    outputs=[
-        "qa_report.md with comprehensive test results",
-        "Requirements compliance matrix",
-        "Security validation results",
-        "Iteration recommendation",
-    ],
-    next_steps=[
-        "If PASS: Implementation is complete",
-        "If NEEDS_WORK: Return to Phase 3 with specific fixes",
-        "If FAIL: Return to Phase 2 for architecture review",
-    ],
+    outputs=[],
+    next_steps=[],
 )

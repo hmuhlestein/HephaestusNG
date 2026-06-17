@@ -1,13 +1,16 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
-import { AlertTriangle, Zap, SkipForward, XCircle, Send } from 'lucide-react';
+import { AlertTriangle, Zap, SkipForward, XCircle, MessageSquare } from 'lucide-react';
 import { apiService } from '@/services/api';
 import toast from 'react-hot-toast';
 
-const HumanInputBanner: React.FC = () => {
+interface HumanInputBannerProps {
+  onOpenMessages?: () => void;
+}
+
+const HumanInputBanner: React.FC<HumanInputBannerProps> = ({ onOpenMessages }) => {
   const queryClient = useQueryClient();
-  const [messageText, setMessageText] = useState('');
 
   const { data: inputRequest } = useQuery({
     queryKey: ['autopilot-input'],
@@ -16,8 +19,8 @@ const HumanInputBanner: React.FC = () => {
   });
 
   const submitMutation = useMutation({
-    mutationFn: ({ choice, message }: { choice: string; message?: string }) =>
-      apiService.submitAutopilotInput(inputRequest!.id, choice, message),
+    mutationFn: ({ choice }: { choice: string }) =>
+      apiService.submitAutopilotInput(inputRequest!.id, choice),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['autopilot-input'] });
       queryClient.invalidateQueries({ queryKey: ['autopilot-status'] });
@@ -87,7 +90,16 @@ const HumanInputBanner: React.FC = () => {
                     </button>
                   ))}
 
-                  <div className="ml-auto">
+                  <div className="ml-auto flex items-center gap-3">
+                    {onOpenMessages && (
+                      <button
+                        onClick={onOpenMessages}
+                        className="flex items-center gap-1.5 px-3 py-2 text-sm text-amber-700 hover:text-amber-900 hover:bg-amber-100 rounded-lg transition-colors"
+                      >
+                        <MessageSquare className="w-4 h-4" />
+                        Send a message
+                      </button>
+                    )}
                     <button
                       onClick={() => dismissMutation.mutate()}
                       className="text-xs text-amber-600 hover:text-amber-800 underline"
@@ -95,35 +107,6 @@ const HumanInputBanner: React.FC = () => {
                       Dismiss
                     </button>
                   </div>
-                </div>
-
-                {/* Message Input */}
-                <div className="mt-4 flex gap-2">
-                  <input
-                    type="text"
-                    value={messageText}
-                    onChange={(e) => setMessageText(e.target.value)}
-                    placeholder="Or type a message to the pipeline..."
-                    className="flex-1 px-4 py-2.5 border border-amber-300 rounded-xl text-sm bg-white focus:outline-none focus:ring-2 focus:ring-amber-500"
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' && messageText.trim()) {
-                        submitMutation.mutate({ choice: 'm', message: messageText.trim() });
-                        setMessageText('');
-                      }
-                    }}
-                  />
-                  <button
-                    onClick={() => {
-                      if (messageText.trim()) {
-                        submitMutation.mutate({ choice: 'm', message: messageText.trim() });
-                        setMessageText('');
-                      }
-                    }}
-                    disabled={!messageText.trim() || submitMutation.isPending}
-                    className="px-4 py-2.5 bg-amber-600 text-white rounded-xl hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                  >
-                    <Send className="w-4 h-4" />
-                  </button>
                 </div>
               </div>
             </div>

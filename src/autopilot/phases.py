@@ -46,6 +46,92 @@ AUTOPILOT_PHASES = [
     PHASE_10_FORENSICS,
 ]
 
+# Orchestrator config for the autopilot workflow
+# Defines evaluation points and flow control logic
+AUTOPILOT_ORCHESTRATOR_CONFIG = {
+    "type": "evaluating",  # Use evaluation-based flow control
+    "max_phase_retries": 2,
+    "max_total_gotos": 10,  # Safety limit: max 10 GOTO operations per design
+    "evaluation_points": [
+        # After architecture design - check quality, can retry or continue
+        {
+            "after_phase": "architecture_design",
+            "evaluator": "heuristic",
+            "conditions": [
+                {"if": "score < 0.4", "action": "goto", "target": "product_requirements", "reason": "Architecture fundamentally flawed, re-examine requirements"},
+                {"if": "score < 0.6", "action": "retry", "reason": "Architecture needs improvement"},
+                {"if": "score >= 0.6", "action": "continue", "reason": "Architecture approved"},
+            ],
+            "max_retries": 2,
+        },
+        # After development - always continue to reviews
+        # (reviews will loop back if issues found)
+        {
+            "after_phase": "development",
+            "evaluator": "heuristic",
+            "conditions": [
+                {"if": "score >= 0.0", "action": "continue", "reason": "Development complete, proceeding to review"},
+            ],
+            "max_retries": 0,
+        },
+        # After adversarial review - can jump to architecture or development
+        {
+            "after_phase": "adversarial_review",
+            "evaluator": "heuristic",
+            "conditions": [
+                {"if": "score < 0.3", "action": "goto", "target": "architecture_design", "reason": "Major architectural issues found, returning to architecture"},
+                {"if": "score < 0.6", "action": "goto", "target": "development", "reason": "Code issues found, returning to development"},
+                {"if": "score >= 0.6", "action": "continue", "reason": "Adversarial review passed"},
+            ],
+            "max_retries": 2,
+        },
+        # After doc review - can jump to architecture or development
+        {
+            "after_phase": "doc_review",
+            "evaluator": "heuristic",
+            "conditions": [
+                {"if": "score < 0.3", "action": "goto", "target": "architecture_design", "reason": "Documentation gaps indicate architectural issues"},
+                {"if": "score < 0.6", "action": "goto", "target": "development", "reason": "Documentation needs code-level fixes"},
+                {"if": "score >= 0.6", "action": "continue", "reason": "Documentation approved"},
+            ],
+            "max_retries": 2,
+        },
+        # After security review - can jump to architecture or development
+        {
+            "after_phase": "security_review",
+            "evaluator": "heuristic",
+            "conditions": [
+                {"if": "score < 0.3", "action": "goto", "target": "architecture_design", "reason": "Security issues require architectural changes"},
+                {"if": "score < 0.7", "action": "goto", "target": "development", "reason": "Security issues found, returning to development"},
+                {"if": "score >= 0.7", "action": "continue", "reason": "Security review passed"},
+            ],
+            "max_retries": 2,
+        },
+        # After QA validation - can jump to architecture or development
+        {
+            "after_phase": "qa_validation",
+            "evaluator": "heuristic",
+            "conditions": [
+                {"if": "score < 0.3", "action": "goto", "target": "architecture_design", "reason": "Test failures indicate architectural problems"},
+                {"if": "score < 0.7", "action": "goto", "target": "development", "reason": "QA failed, returning to development"},
+                {"if": "score >= 0.7", "action": "continue", "reason": "QA passed"},
+            ],
+            "max_retries": 2,
+        },
+        # After product validation - can jump back if not validated
+        {
+            "after_phase": "product_validation",
+            "evaluator": "heuristic",
+            "conditions": [
+                {"if": "score < 0.3", "action": "goto", "target": "architecture_design", "reason": "Product validation failed, needs architectural review"},
+                {"if": "score < 0.7", "action": "goto", "target": "development", "reason": "Product validation failed, returning to development"},
+                {"if": "score >= 0.7", "action": "continue", "reason": "Product validated, proceeding to commit"},
+            ],
+            "max_retries": 2,
+        },
+    ],
+}
+
 AUTOPILOT_WORKFLOW_CONFIG = WorkflowConfig(
     has_result=True,
     result_criteria="Feature validated and committed to git, ready for human review",

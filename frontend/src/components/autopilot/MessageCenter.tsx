@@ -150,9 +150,17 @@ const MessageCenter: React.FC = () => {
       actions.push({
         label: 'Respond',
         icon: Reply,
-        onClick: () => {
-          setCurrentRequestId(data.request_id);
-          setShowInputModal(true);
+        onClick: async () => {
+          // Check if input request still exists
+          const currentInput = await apiService.getAutopilotInput();
+          if (currentInput && currentInput.id === data.request_id) {
+            setCurrentRequestId(data.request_id);
+            setShowInputModal(true);
+          } else if (currentInput) {
+            toast.error('Another input request is pending - respond to that one instead');
+          } else {
+            toast.error('This input request has expired or was already answered');
+          }
         },
         color: 'violet',
       });
@@ -243,6 +251,7 @@ const MessageCenter: React.FC = () => {
                     initial={{ opacity: 0, x: -10 }}
                     animate={{ opacity: 1, x: 0 }}
                     transition={{ delay: index * 0.02 }}
+                    onClick={() => hasActions && actions[0].onClick()}
                     className={`flex items-start gap-3 px-4 py-3 bg-white rounded-xl border border-gray-100 transition-all ${
                       hasActions ? 'hover:shadow-md hover:border-gray-200 cursor-pointer' : 'hover:shadow-sm'
                     }`}
@@ -303,29 +312,6 @@ const MessageCenter: React.FC = () => {
                     </div>
 
                     <div className="flex items-center gap-2 flex-shrink-0">
-                      {actions.map((action, i) => {
-                        const ActionIcon = action.icon;
-                        return (
-                          <button
-                            key={i}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              action.onClick();
-                            }}
-                            className={`flex items-center gap-1 px-2 py-1 text-xs font-medium rounded-lg transition-colors ${
-                              action.color === 'violet'
-                                ? 'bg-violet-50 text-violet-600 hover:bg-violet-100'
-                                : action.color === 'amber'
-                                ? 'bg-amber-50 text-amber-600 hover:bg-amber-100'
-                                : 'bg-blue-50 text-blue-600 hover:bg-blue-100'
-                            }`}
-                            title={action.label}
-                          >
-                            <ActionIcon className="w-3 h-3" />
-                            <span className="hidden sm:inline">{action.label}</span>
-                          </button>
-                        );
-                      })}
                       <span className="text-xs text-gray-400">
                         {formatDistanceToNow(new Date(msg.timestamp), { addSuffix: true })}
                       </span>

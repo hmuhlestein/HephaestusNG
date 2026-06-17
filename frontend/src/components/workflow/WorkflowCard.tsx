@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { motion } from 'framer-motion';
 import { apiService } from '@/services/api';
 import type { WorkflowExecution } from '@/types';
@@ -6,13 +6,14 @@ import WorkflowStats from './WorkflowStats';
 import PhaseList from './PhaseList';
 import { useNavigate } from 'react-router-dom';
 import { useWorkflow } from '@/context/WorkflowContext';
-import { ExternalLink, Layers } from 'lucide-react';
+import { ExternalLink, Layers, Play, Pause, Trash2 } from 'lucide-react';
 
 const statusColors: Record<string, string> = {
   active: 'bg-green-500',
   paused: 'bg-yellow-500',
   completed: 'bg-blue-500',
   failed: 'bg-red-500',
+  cancelled: 'bg-gray-500',
 };
 
 const formatDuration = (startTime: string) => {
@@ -44,6 +45,38 @@ export default function WorkflowCard({
 }: WorkflowCardProps) {
   const navigate = useNavigate();
   const { selectExecution } = useWorkflow();
+  const queryClient = useQueryClient();
+
+  const stopMutation = useMutation({
+    mutationFn: () => apiService.stopWorkflow(execution.id),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['workflow-executions'] }),
+  });
+
+  const resumeMutation = useMutation({
+    mutationFn: () => apiService.resumeWorkflow(execution.id),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['workflow-executions'] }),
+  });
+
+  const cancelMutation = useMutation({
+    mutationFn: () => apiService.cancelWorkflow(execution.id),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['workflow-executions'] }),
+  });
+
+  const handlePause = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    await stopMutation.mutateAsync();
+  };
+
+  const handleResume = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    await resumeMutation.mutateAsync();
+  };
+
+  const handleCancel = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!confirm('Cancel this workflow and terminate all agents?')) return;
+    await cancelMutation.mutateAsync();
+  };
 
   // Fetch phase data when expanded
   const { data: details } = useQuery({
@@ -84,7 +117,39 @@ export default function WorkflowCard({
           >
             {execution.status.toUpperCase()}
           </span>
-          <span className="text-gray-500 text-sm">{execution.definition_name}</span>
+          <div className="flex items-center gap-2">
+            <span className="text-gray-500 text-sm">{execution.definition_name}</span>
+            {execution.status === 'active' && (
+              <button
+                onClick={handlePause}
+                disabled={stopMutation.isPending}
+                className="p-1.5 bg-yellow-500 hover:bg-yellow-600 text-white rounded transition-colors disabled:opacity-50"
+                title="Pause workflow"
+              >
+                <Pause className="w-3 h-3" />
+              </button>
+            )}
+            {execution.status === 'paused' && (
+              <button
+                onClick={handleResume}
+                disabled={resumeMutation.isPending}
+                className="p-1.5 bg-green-500 hover:bg-green-600 text-white rounded transition-colors disabled:opacity-50"
+                title="Resume workflow"
+              >
+                <Play className="w-3 h-3" />
+              </button>
+            )}
+            {(execution.status === 'active' || execution.status === 'paused') && (
+              <button
+                onClick={handleCancel}
+                disabled={cancelMutation.isPending}
+                className="p-1.5 bg-red-500 hover:bg-red-600 text-white rounded transition-colors disabled:opacity-50"
+                title="Cancel workflow"
+              >
+                <Trash2 className="w-3 h-3" />
+              </button>
+            )}
+          </div>
         </div>
 
         {/* Title */}

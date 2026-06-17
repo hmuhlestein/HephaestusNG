@@ -859,16 +859,30 @@ REMEMBER:
                 except Exception as e:
                     logger.error(f"Failed to kill tmux session: {e}")
 
+            # Capture output BEFORE killing the tmux session
+            final_output = ""
+            try:
+                if agent.tmux_session_name and self.tmux_server.has_session(agent.tmux_session_name):
+                    for tmux_sess in self.tmux_server.sessions:
+                        if tmux_sess.name == agent.tmux_session_name:
+                            pane = tmux_sess.attached_window.attached_pane
+                            final_output = pane.capture_pane()[-50:]  # Last 50 lines
+                            final_output = '\n'.join(final_output)
+                            break
+            except Exception as e:
+                logger.debug(f"Could not capture output before terminate: {e}")
+
             # Update agent status
             agent.status = "terminated"
 
-            # Log termination
+            # Log termination with captured output
             log_entry = AgentLog(
                 agent_id=agent_id,
                 log_type="terminated",
                 message="Agent terminated",
                 details={
-                    "terminated_at": datetime.utcnow().isoformat()
+                    "terminated_at": datetime.utcnow().isoformat(),
+                    "final_output": final_output,
                 }
             )
             session.add(log_entry)
@@ -1074,6 +1088,21 @@ REMEMBER:
                         return final_output
 
                 logger.warning(f"No stored output found for terminated agent {agent_id}")
+                # Try to get last logs from agent_logs
+                recent_logs = session.query(AgentLog).filter_by(
+                    agent_id=agent_id
+                ).order_by(AgentLog.timestamp.desc()).limit(10).all()
+                if recent_logs:
+                    log_lines = []
+                    for log in reversed(recent_logs):
+                        msg = log.message or ""
+                        if log.details:
+                            summary = log.details.get('summary', '') or log.details.get('trajectory_summary', '')
+                            if summary:
+                                msg = f"{msg}: {summary[:100]}"
+                        if msg:
+                            log_lines.append(f"[{log.log_type}] {msg}")
+                    return "Agent terminated. Last logs:\n" + "\n".join(log_lines[-10:])
                 return "Agent terminated - no output was captured"
 
             # For non-terminated agents, get output from tmux session

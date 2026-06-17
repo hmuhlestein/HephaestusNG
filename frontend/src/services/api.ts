@@ -77,6 +77,21 @@ export const apiService = {
     return data;
   },
 
+  stopWorkflow: async (workflowId: string): Promise<{ status: string; agents_terminated: number }> => {
+    const { data } = await api.post(`/workflow-executions/${workflowId}/stop`);
+    return data;
+  },
+
+  resumeWorkflow: async (workflowId: string): Promise<{ status: string }> => {
+    const { data } = await api.post(`/workflow-executions/${workflowId}/resume`);
+    return data;
+  },
+
+  cancelWorkflow: async (workflowId: string): Promise<{ cancelled: string; agents_terminated: number }> => {
+    const { data } = await api.post(`/workflow-executions/${workflowId}/cancel`);
+    return data;
+  },
+
   // Dashboard
   getDashboardStats: async (workflowId?: string): Promise<DashboardStats> => {
     const params = workflowId ? `?workflow_id=${workflowId}` : '';
@@ -658,6 +673,10 @@ export const apiService = {
 
   getAutopilotProjectDesigns: async (projectId: string): Promise<any[]> => {
     const { data } = await api.get(`/autopilot/projects/${encodeURIComponent(projectId)}/designs`);
+    return data;
+  },
+  reloadAutopilotProjectDesigns: async (projectId: string): Promise<any[]> => {
+    const { data } = await api.post(`/autopilot/projects/${encodeURIComponent(projectId)}/designs/reload`);
     return data;
   },
 
