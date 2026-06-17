@@ -15,7 +15,7 @@ import asyncio
 
 from src.core.simple_config import get_config
 from src.core.database import DatabaseManager, Task, Agent, Memory, Phase, ValidationReview, AgentResult, WorkflowResult, Workflow, get_db
-from src.core.worktree_manager import WorktreeManager
+from src.core.branch_manager import BranchManager
 from src.interfaces import get_cli_agent
 from src.memory.vector_store import VectorStoreManager
 from src.agents.manager import AgentManager
@@ -563,7 +563,7 @@ class ServerState:
         self.agent_manager: Optional[AgentManager] = None
         self.rag_system: Optional[RAGSystem] = None
         self.phase_manager: Optional[PhaseManager] = None
-        self.worktree_manager: Optional[WorktreeManager] = None
+        self.branch_manager: Optional[BranchManager] = None
         self.result_validator_service: Optional[ResultValidatorService] = None
         self.embedding_service: Optional[EmbeddingService] = None
         self.task_similarity_service: Optional[TaskSimilarityService] = None
@@ -604,7 +604,7 @@ class ServerState:
         )
 
         # Initialize worktree manager
-        self.worktree_manager = WorktreeManager(
+        self.branch_manager = BranchManager(
             db_manager=self.db_manager
         )
 
@@ -1855,9 +1855,9 @@ async def update_task_status(
 
                     # Commit agent's work for validation (using worktree manager)
                     commit_sha = None
-                    if hasattr(server_state, 'worktree_manager'):
+                    if hasattr(server_state, 'branch_manager'):
                         try:
-                            commit_result = server_state.worktree_manager.commit_for_validation(
+                            commit_result = server_state.branch_manager.commit_for_validation(
                                 agent_id=agent_id,
                                 iteration=task_validation_iteration
                             )
@@ -1873,7 +1873,7 @@ async def update_task_status(
                         workflow_id=task_workflow_id,
                         commit_sha=commit_sha or "HEAD",
                         db_manager=server_state.db_manager,
-                        worktree_manager=getattr(server_state, 'worktree_manager', None),
+                        branch_manager=getattr(server_state, 'branch_manager', None),
                         agent_manager=server_state.agent_manager,
                         original_agent_id=agent_id
                     )
@@ -1933,9 +1933,9 @@ async def update_task_status(
 
             # If task completed successfully without validation, merge to parent
             merge_commit_sha = None
-            if request.status == "done" and hasattr(server_state, 'worktree_manager'):
+            if request.status == "done" and hasattr(server_state, 'branch_manager'):
                 try:
-                    merge_result = server_state.worktree_manager.merge_to_parent(agent_id)
+                    merge_result = server_state.branch_manager.merge_to_parent(agent_id)
                     merge_commit_sha = merge_result.get("commit_sha") if isinstance(merge_result, dict) else None
                     logger.info(f"Merged completed work to parent (no validation): {merge_result}")
                 except Exception as e:
@@ -2289,9 +2289,9 @@ async def give_validation_review(
             session.commit()
 
             # Merge agent's work to parent (if using worktrees)
-            if hasattr(server_state, 'worktree_manager') and original_agent_id:
+            if hasattr(server_state, 'branch_manager') and original_agent_id:
                 try:
-                    merge_result = server_state.worktree_manager.merge_to_parent(original_agent_id)
+                    merge_result = server_state.branch_manager.merge_to_parent(original_agent_id)
                     logger.info(f"Merged validated work: {merge_result}")
                 except Exception as e:
                     logger.warning(f"Failed to merge validated work: {e}")
@@ -2437,9 +2437,9 @@ async def submit_result(
 
         # Create commit for result submission
         commit_sha = None
-        if hasattr(server_state, 'worktree_manager'):
+        if hasattr(server_state, 'branch_manager'):
             try:
-                commit_result = server_state.worktree_manager.commit_for_validation(
+                commit_result = server_state.branch_manager.commit_for_validation(
                     agent_id=agent_id,
                     iteration=1,  # Results are always first iteration
                     message="Result submitted for workflow validation"
@@ -2466,7 +2466,7 @@ async def submit_result(
                         workflow_id=workflow_id,
                         commit_sha=commit_sha or "HEAD",
                         db_manager=server_state.db_manager,
-                        worktree_manager=getattr(server_state, 'worktree_manager', None),
+                        branch_manager=getattr(server_state, 'branch_manager', None),
                         agent_manager=server_state.agent_manager,
                         criteria=criteria,
                         original_agent_id=agent_id

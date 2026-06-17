@@ -273,14 +273,14 @@ class MessageItem(BaseModel):
 
 @router.get("/status", response_model=PipelineStatus)
 async def get_pipeline_status():
-    cached = _cached("status", ttl=5.0)
+    cached = _cached("status", ttl=2.0)
     if cached is not None:
         return cached
 
     run_dir = _get_latest_run_dir()
     running = await _is_orchestrator_running()
 
-    state = _cached("state", ttl=5.0)
+    state = _cached("state", ttl=2.0)
     if state is None:
         # Try run-specific state first, then persistent state
         if run_dir:

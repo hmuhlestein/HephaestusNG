@@ -17,7 +17,7 @@ from src.core.database import (
     WorktreeCommit,
     AgentWorktree
 )
-from src.core.worktree_manager import WorktreeManager
+from src.core.branch_manager import BranchManager
 from src.validation.prompt_builder import ValidationPromptBuilder
 from src.agents.manager import AgentManager
 
@@ -81,7 +81,7 @@ async def spawn_validator_agent(
     workflow_id: str,
     commit_sha: str,
     db_manager: DatabaseManager,
-    worktree_manager: WorktreeManager,
+    branch_manager: BranchManager,
     agent_manager: AgentManager,
     original_agent_id: str,
     criteria: str = None
@@ -94,7 +94,7 @@ async def spawn_validator_agent(
         workflow_id: ID of the workflow
         commit_sha: Commit SHA to validate
         db_manager: Database manager
-        worktree_manager: Worktree manager
+        branch_manager: Worktree manager
         agent_manager: Agent manager
         original_agent_id: ID of the agent that created the task/result
         criteria: Validation criteria (for result validation)
@@ -121,7 +121,7 @@ async def spawn_validator_agent(
                 phase = session.query(Phase).filter_by(id=task.phase_id).first()
 
             # Get workspace changes
-            workspace_changes = worktree_manager.get_workspace_changes(
+            workspace_changes = branch_manager.get_workspace_changes(
                 agent_id=original_agent_id,
                 since_commit=None  # Get all changes
             )
@@ -143,7 +143,7 @@ async def spawn_validator_agent(
                 enriched_description=task.enriched_description or task.raw_description,
                 original_agent_id=original_agent_id,
                 iteration=task.validation_iteration,
-                working_directory=worktree_manager.get_agent_worktree_path(original_agent_id) or "/tmp",
+                working_directory=branch_manager.get_agent_worktree_path(original_agent_id) or "/tmp",
                 commit_sha=commit_sha,
                 previous_feedback=previous_feedback
             )
