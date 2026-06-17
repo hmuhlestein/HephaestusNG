@@ -1043,7 +1043,10 @@ async def get_project_design_content(project_id: str, filename: str):
         base_dir = proj.base_dir
 
     design_dir = _get_design_queue_dir(base_dir)
-    filepath = _safe_path(str(design_dir), filename)
+    # Validate filename doesn't contain path traversal
+    if ".." in filename or "/" in filename:
+        raise HTTPException(400, "Invalid filename")
+    filepath = design_dir / filename
     if not filepath.exists():
         raise HTTPException(404, f"Design '{filename}' not found")
     return {"filename": filename, "content": filepath.read_text(errors="replace")}
