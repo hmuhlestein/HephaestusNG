@@ -278,6 +278,7 @@ DO NOT:
 - Create tightly coupled components without abstractions
 - Use silent fallbacks that hide configuration errors — throw clear exceptions instead
   (Exception: retry logic, graceful degradation with explicit logging, and user-facing defaults are acceptable)
+- Hardcode values (ports, paths, URLs, timeouts) — put them in config with sensible defaults
 
 
 ═══════════════════════════════════════════════════════════════════════

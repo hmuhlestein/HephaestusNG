@@ -7,7 +7,7 @@ import logging
 import os
 import time
 from datetime import datetime, timedelta
-from fastapi import FastAPI, HTTPException, Header, WebSocket, WebSocketDisconnect, Body, Request
+from fastapi import FastAPI, HTTPException, Header, WebSocket, WebSocketDisconnect, Body, Request, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
