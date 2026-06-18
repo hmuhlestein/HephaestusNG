@@ -254,6 +254,7 @@ class FeatureDetail(BaseModel):
 class PipelineStatus(BaseModel):
     running: bool
     current_design: Optional[str] = None
+    current_workflow_id: Optional[str] = None
     designs_processed: int = 0
     designs_succeeded: int = 0
     designs_failed: int = 0
@@ -326,6 +327,7 @@ async def get_pipeline_status():
     result = PipelineStatus(
         running=running,
         current_design=state.get("current_design"),
+        current_workflow_id=state.get("current_workflow_id"),
         designs_processed=state.get("designs_processed", 0),
         designs_succeeded=state.get("designs_succeeded", 0),
         designs_failed=state.get("designs_failed", 0),
@@ -429,6 +431,248 @@ async def reorder_queue(req: QueueReorderRequest):
     return {"order": req.filenames}
 
 
+@router.post("/queue/requeue")
+async def requeue_design(request: dict):
+    """Move a design to the front of the queue and pause its active workflow."""
+    from src.core.database import get_db, Workflow, Task, Agent
+    from sqlalchemy import text
+
+    filename = request.get("filename")
+    if not filename:
+        raise HTTPException(400, "filename is required")
+
+    # Get the queue order
+    order = _load_queue_order()
+    
+    # Move to front
+    if filename in order:
+        order.remove(filename)
+    order.insert(0, filename)
+    _save_queue_order(order)
+    _invalidate("queue")
+
+    # Pause any active workflow processing this design
+    paused_count = 0
+    try:
+        with get_db() as db:
+            # Find autopilot workflows that are active
+            active_workflows = db.query(Workflow).filter(
+                Workflow.definition_id == 'autopilot',
+                Workflow.status.in_(['active', 'running'])
+            ).all()
+
+            for wf in active_workflows:
+                if wf.launch_params:
+                    params = json.loads(wf.launch_params) if isinstance(wf.launch_params, str) else wf.launch_params
+                    design_doc = params.get("design_document", "")
+                    if filename in str(design_doc):
+                        # Terminate agents for this workflow
+                        task_ids = [t.id for t in db.query(Task).filter(
+                            Task.workflow_id == wf.id,
+                            Task.status.in_(['pending', 'queued', 'assigned', 'in_progress'])
+                        ).all()]
+
+                        if task_ids:
+                            agents = db.query(Agent).filter(
+                                Agent.current_task_id.in_(task_ids),
+                                Agent.status.in_(['working', 'starting', 'idle'])
+                            ).all()
+                            for agent in agents:
+                                agent.status = 'terminated'
+
+                        # Pause the workflow
+                        wf.status = 'paused'
+                        paused_count += 1
+
+            db.commit()
+    except Exception as e:
+        logger.error(f"Error pausing workflows for requeue: {e}")
+
+    _invalidate("status")
+
+    return {
+        "requeued": True,
+        "filename": filename,
+        "paused_workflows": paused_count,
+    }
+
+
+@router.post("/queue/rerun")
+async def rerun_design(request: dict):
+    """Rerun a design: stop everything, move to front, start pipeline."""
+    from src.core.database import get_db, Workflow, Task, Agent
+    import subprocess
+    import signal
+    from dotenv import load_dotenv
+    from pathlib import Path
+    import time
+
+    filename = request.get("filename")
+    if not filename:
+        raise HTTPException(400, "filename is required")
+
+    project_path = request.get("project_path")
+    if not project_path:
+        raise HTTPException(400, "project_path is required")
+
+    # Validate project path exists
+    project = Path(project_path).resolve()
+    if not project.exists():
+        raise HTTPException(400, f"Project path does not exist: {project_path}")
+
+    # Validate design exists in queue
+    queue_dir = project / "docs" / "design-queue"
+    design_path = queue_dir / filename
+    if not design_path.exists():
+        raise HTTPException(404, f"Design not found in queue: {filename}")
+
+    # Step 1: Kill orchestrator process if running
+    try:
+        pid_dir = Path(AUTOPILOT_STATE_DIR)
+        pid_file = pid_dir / "orchestrator.pid"
+        if pid_file.exists():
+            pid = int(pid_file.read_text().strip())
+            try:
+                os.kill(pid, signal.SIGTERM)
+                # Wait for process to die (up to 5 seconds)
+                for _ in range(10):
+                    time.sleep(0.5)
+                    try:
+                        os.kill(pid, 0)  # Check if alive
+                    except ProcessLookupError:
+                        break
+                # Force kill if still alive
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                    time.sleep(0.5)  # Give OS time to clean up
+                except ProcessLookupError:
+                    pass
+            except ProcessLookupError:
+                pass
+            pid_file.unlink(missing_ok=True)
+    except Exception as e:
+        logger.error(f"Error killing orchestrator: {e}")
+
+    # Step 2: Stop all active workflows and agents
+    try:
+        with get_db() as db:
+            # Terminate all active agents
+            active_agents = db.query(Agent).filter(
+                Agent.status.in_(['working', 'starting', 'idle'])
+            ).all()
+            for agent in active_agents:
+                agent.status = 'terminated'
+            
+            # Mark all active workflows as paused (not active/running)
+            active_workflows = db.query(Workflow).filter(
+                Workflow.status.in_(['active', 'running'])
+            ).all()
+            for wf in active_workflows:
+                wf.status = 'paused'
+            
+            db.commit()
+    except Exception as e:
+        logger.error(f"Error stopping workflows for rerun: {e}")
+
+    # Step 3: Clean up branches (non-blocking)
+    try:
+        from src.core.branch_manager import BranchManager
+        from src.core.database import DatabaseManager
+        db_manager = DatabaseManager()
+        bm = BranchManager(db_manager)
+        # Run cleanup in background thread to not block pipeline start
+        import threading
+        thread = threading.Thread(
+            target=lambda: bm.cleanup_all_stale_branches(),
+            daemon=True
+        )
+        thread.start()
+    except Exception as e:
+        logger.error(f"Error starting branch cleanup: {e}")
+
+    # Step 4: Move design to front of queue
+    order = _load_queue_order()
+    if filename in order:
+        order.remove(filename)
+    order.insert(0, filename)
+    _save_queue_order(order)
+    _invalidate("queue")
+
+    # Step 5: Clear pipeline state so orchestrator starts fresh
+    try:
+        pipeline_state_file = Path(AUTOPILOT_STATE_DIR) / "pipeline_state.json"
+        if pipeline_state_file.exists():
+            pipeline_state_file.unlink()
+        processed_file = Path(AUTOPILOT_STATE_DIR) / "processed_designs.json"
+        if processed_file.exists():
+            processed_file.unlink()
+    except Exception as e:
+        logger.error(f"Error clearing pipeline state: {e}")
+
+    # Step 6: Start pipeline
+    try:
+        venv_python = Path(__file__).parent.parent.parent.parent / ".venv" / "bin" / "python"
+        python = str(venv_python) if venv_python.exists() else "python"
+
+        env_file = Path(__file__).parent.parent.parent.parent / ".env"
+        if env_file.exists():
+            load_dotenv(env_file, override=False)
+
+        env = os.environ.copy()
+
+        cmd = [
+            python, "-m", "src.autopilot.orchestrator",
+            "--project-path", str(project),
+            "--design-queue", str(queue_dir),
+            "--max-iterations", "3",
+        ]
+
+        proc = subprocess.Popen(
+            cmd,
+            cwd=str(Path(__file__).parent.parent.parent.parent),
+            env=env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+
+        pid_dir.mkdir(parents=True, exist_ok=True)
+        (pid_dir / "orchestrator.pid").write_text(str(proc.pid))
+
+        # Wait for new workflow to be created (up to 15 seconds)
+        new_workflow_id = None
+        design_name_clean = filename.replace('.md', '').replace('_', ' ').lower()
+        for _ in range(30):  # 30 * 0.5s = 15s max
+            time.sleep(0.5)
+            try:
+                with get_db() as db:
+                    # Check for new active workflow
+                    wf = db.query(Workflow).filter(
+                        Workflow.definition_id == 'autopilot',
+                        Workflow.status == 'active'
+                    ).order_by(Workflow.created_at.desc()).first()
+                    if wf:
+                        # Verify it's for this design by checking description
+                        desc = (wf.description or "").lower()
+                        # Use exact match on design name (without extension)
+                        if design_name_clean in desc:
+                            new_workflow_id = wf.id
+                            break
+            except Exception:
+                pass
+    except Exception as e:
+        logger.error(f"Error starting pipeline for rerun: {e}")
+        raise HTTPException(500, f"Failed to start pipeline: {e}")
+
+    _invalidate("status")
+
+    return {
+        "rerun": True,
+        "filename": filename,
+        "workflow_id": new_workflow_id,
+        "message": f"Pipeline restarted for {filename}",
+    }
+
+
 @router.post("/queue", response_model=DesignQueueItem)
 async def add_to_queue(item: DesignQueueAdd):
     try:
@@ -494,10 +738,17 @@ async def get_queue_item_content(filename: str):
 
 import re
 import uuid
+import hashlib
 import asyncio as _asyncio
 
 DESIGN_SUBDIR = "docs/design-queue"
 _ORDINAL_RE = re.compile(r"^(\d+)[-_]")
+
+
+def _design_id(project_id: str, filename: str) -> str:
+    """Generate a stable, deterministic ID for a design document."""
+    h = hashlib.sha256(f"{project_id}:{filename}".encode()).hexdigest()[:12]
+    return f"des-{h}"
 
 
 class ProjectItem(BaseModel):
@@ -620,7 +871,7 @@ def _sync_project_designs(project_id: str, project_base: str, db) -> List[Dict[s
             # Don't overwrite ordinal - preserve manual reorders
         else:
             d = AutopilotDesign(
-                id=f"des-{uuid.uuid4().hex[:12]}",
+                id=_design_id(project_id, fname),
                 project_id=project_id,
                 filename=fname,
                 name=name,
@@ -649,7 +900,7 @@ def _sync_project_designs(project_id: str, project_base: str, db) -> List[Dict[s
         else:
             max_prefixed += 1
             d = AutopilotDesign(
-                id=f"des-{uuid.uuid4().hex[:12]}",
+                id=_design_id(project_id, fname),
                 project_id=project_id,
                 filename=fname,
                 name=name,
@@ -946,7 +1197,7 @@ async def add_project_design(project_id: str, req: DesignAddRequest):
     filepath.write_text(req.content)
     stat = filepath.stat()
 
-    design_id = f"des-{uuid.uuid4().hex[:12]}"
+    design_id = _design_id(project_id, filename)
 
     with get_db() as db:
         max_ord = db.query(AutopilotDesign).filter_by(project_id=project_id).count()
@@ -1050,6 +1301,142 @@ async def get_project_design_content(project_id: str, filename: str):
     if not filepath.exists():
         raise HTTPException(404, f"Design '{filename}' not found")
     return {"filename": filename, "content": filepath.read_text(errors="replace")}
+
+
+@router.get("/projects/{project_id}/designs/{filename}/status")
+async def get_project_design_status(project_id: str, filename: str):
+    """Get full status for a design: workflow, tasks, branch, feature folder."""
+    from src.core.database import (
+        AutopilotProject, Workflow, Task, Agent, Phase, PhaseExecution,
+        AgentWorktree, get_db
+    )
+    import json
+
+    with get_db() as db:
+        proj = db.query(AutopilotProject).get(project_id)
+        if not proj:
+            raise HTTPException(404, "Project not found")
+        base_dir = proj.base_dir
+
+    design_dir = _get_design_queue_dir(base_dir)
+    if ".." in filename or "/" in filename:
+        raise HTTPException(400, "Invalid filename")
+    filepath = design_dir / filename
+    if not filepath.exists():
+        raise HTTPException(404, f"Design '{filename}' not found")
+
+    design_content = filepath.read_text(errors="replace")
+    design_name = filepath.stem.replace("_", " ").replace("-", " ")
+
+    # Find all workflows that processed this design
+    with get_db() as db:
+        # Use LIKE query for efficiency instead of loading all workflows
+        matching_workflows = db.query(Workflow).filter(
+            Workflow.definition_id == "autopilot",
+            Workflow.launch_params.like(f'%{filename}%')
+        ).order_by(Workflow.created_at.desc()).all()
+
+        # Get tasks and agents for all matching workflows
+        all_tasks = []
+        all_agents = []
+        workflow_ids = [wf.id for wf in matching_workflows]
+        
+        # Build phase name lookup
+        phase_map = {}
+        if workflow_ids:
+            phases = db.query(Phase).filter(Phase.workflow_id.in_(workflow_ids)).all()
+            phase_map = {p.id: p.name for p in phases}
+        
+        if workflow_ids:
+            tasks = db.query(Task).filter(Task.workflow_id.in_(workflow_ids)).order_by(Task.created_at).all()
+            
+            # Bulk-fetch agents to avoid N+1
+            agent_ids = list(set(t.assigned_agent_id for t in tasks if t.assigned_agent_id))
+            agents_map = {}
+            if agent_ids:
+                agents_list = db.query(Agent).filter(Agent.id.in_(agent_ids)).all()
+                agents_map = {a.id: a for a in agents_list}
+            
+            for t in tasks:
+                agent = agents_map.get(t.assigned_agent_id) if t.assigned_agent_id else None
+                all_tasks.append({
+                    "id": t.id,
+                    "description": (t.enriched_description or t.raw_description or "")[:200],
+                    "status": t.status,
+                    "priority": t.priority,
+                    "phase_id": t.phase_id,
+                    "phase_name": phase_map.get(t.phase_id),
+                    "workflow_id": t.workflow_id,
+                    "created_at": t.created_at.isoformat() if t.created_at else None,
+                    "completed_at": t.completed_at.isoformat() if t.completed_at else None,
+                    "agent_id": t.assigned_agent_id,
+                    "agent_status": agent.status if agent else None,
+                })
+
+            # Get agent IDs for branch info - check both task.assigned_agent_id and agents.current_task_id
+            agent_ids = list(set(t.assigned_agent_id for t in tasks if t.assigned_agent_id))
+            # Also get agents assigned to these tasks via agents.current_task_id
+            task_ids = [t.id for t in tasks]
+            if task_ids:
+                assigned_agents = db.query(Agent).filter(Agent.current_task_id.in_(task_ids)).all()
+                for a in assigned_agents:
+                    if a.id not in agent_ids:
+                        agent_ids.append(a.id)
+            
+            if agent_ids:
+                worktrees = db.query(AgentWorktree).filter(AgentWorktree.agent_id.in_(agent_ids)).all()
+                for wt in worktrees:
+                    all_agents.append({
+                        "agent_id": wt.agent_id,
+                        "branch_name": wt.branch_name,
+                        "status": wt.merge_status,
+                    })
+
+        # Determine overall status
+        if not matching_workflows:
+            overall_status = "pending"
+        else:
+            statuses = [wf.status for wf in matching_workflows]
+            if any(s == "active" for s in statuses):
+                overall_status = "active"
+            elif all(s == "completed" for s in statuses):
+                overall_status = "completed"
+            elif any(s == "failed" for s in statuses):
+                overall_status = "failed"
+            else:
+                overall_status = statuses[0] if statuses else "unknown"
+
+        # Find feature folder
+        feature_folder = None
+        for wf in matching_workflows:
+            if wf.working_directory:
+                features_dir = Path(wf.working_directory) / ".hephaestus" / "features"
+                if features_dir.exists():
+                    for d in sorted(features_dir.iterdir(), reverse=True):
+                        if d.is_dir() and filename.replace(".md", "").lower() in d.name.lower():
+                            feature_folder = str(d)
+                            break
+                if feature_folder:
+                    break
+
+        # Get branch names
+        branch_names = list(set(a["branch_name"] for a in all_agents if a.get("branch_name")))
+
+        return {
+            "filename": filename,
+            "name": design_name,
+            "content": design_content,
+            "status": overall_status,
+            "workflows": [{
+                "id": wf.id,
+                "status": wf.status,
+                "created_at": wf.created_at.isoformat() if wf.created_at else None,
+            } for wf in matching_workflows],
+            "tasks": all_tasks,
+            "agents": all_agents,
+            "branches": branch_names,
+            "feature_folder": feature_folder,
+        }
 
 
 # ── Features Gallery ─────────────────────────────────────────────
@@ -1257,6 +1644,110 @@ async def get_messages(limit: int = Query(50, ge=1, le=500)):
     return _store(cache_key, result)
 
 
+@router.get("/messages/archived")
+async def get_archived_messages():
+    """Get archived message IDs."""
+    from src.core.database import get_db
+    from sqlalchemy import text
+
+    with get_db() as db:
+        try:
+            db.execute(text("SELECT 1 FROM archived_events LIMIT 1"))
+        except Exception:
+            db.execute(text("""CREATE TABLE IF NOT EXISTS archived_events (
+                id TEXT PRIMARY KEY,
+                message_type TEXT,
+                timestamp TEXT,
+                archived_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )"""))
+            db.commit()
+
+        result = db.execute(text("SELECT id FROM archived_events")).fetchall()
+        return {"archived_ids": [r[0] for r in result]}
+
+
+@router.post("/messages/archive")
+async def archive_message(request: dict):
+    """Archive a message by its ID."""
+    from src.core.database import get_db
+    from sqlalchemy import text
+
+    msg_id = request.get("message_id")
+    msg_type = request.get("message_type", "unknown")
+    timestamp = request.get("timestamp", "")
+
+    if not msg_id:
+        raise HTTPException(400, "message_id is required")
+
+    with get_db() as db:
+        try:
+            db.execute(text("SELECT 1 FROM archived_events LIMIT 1"))
+        except Exception:
+            db.execute(text("""CREATE TABLE IF NOT EXISTS archived_events (
+                id TEXT PRIMARY KEY,
+                message_type TEXT,
+                timestamp TEXT,
+                archived_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )"""))
+            db.commit()
+
+        db.execute(
+            text("INSERT OR IGNORE INTO archived_events (id, message_type, timestamp) VALUES (:id, :type, :ts)"),
+            {"id": msg_id, "type": msg_type, "ts": timestamp}
+        )
+        db.commit()
+    return {"archived": True}
+
+
+@router.post("/messages/unarchive")
+async def unarchive_message(request: dict):
+    """Unarchive a message by its ID."""
+    from src.core.database import get_db
+    from sqlalchemy import text
+
+    msg_id = request.get("message_id")
+    if not msg_id:
+        raise HTTPException(400, "message_id is required")
+
+    with get_db() as db:
+        try:
+            db.execute(text("DELETE FROM archived_events WHERE id = :id"), {"id": msg_id})
+            db.commit()
+        except Exception:
+            pass
+    return {"unarchived": True}
+
+
+@router.post("/messages/unarchive-all")
+async def unarchive_all_messages():
+    """Unarchive all messages."""
+    from src.core.database import get_db
+    from sqlalchemy import text
+
+    with get_db() as db:
+        try:
+            db.execute(text("DELETE FROM archived_events"))
+            db.commit()
+        except Exception:
+            pass
+    return {"unarchived": True}
+
+
+@router.post("/messages/cleanup-archives")
+async def cleanup_old_archives():
+    """Remove archived messages older than 30 days."""
+    from src.core.database import get_db
+    from sqlalchemy import text
+
+    with get_db() as db:
+        try:
+            db.execute(text("DELETE FROM archived_events WHERE archived_at < datetime('now', '-30 days')"))
+            db.commit()
+        except Exception:
+            pass
+    return {"cleaned": True}
+
+
 @router.get("/logs")
 async def get_logs(lines: int = Query(100, ge=1, le=2000)):
     cache_key = f"logs:{lines}"
@@ -1430,6 +1921,30 @@ async def start_pipeline(project_path: str, design_queue: str = "", max_iteratio
     pid_dir.mkdir(parents=True, exist_ok=True)
     (pid_dir / "orchestrator.pid").write_text(str(proc.pid))
 
+    # Create orchestrator agent record in DB
+    try:
+        from src.core.database import Agent, get_db
+        import uuid as _uuid
+        with get_db() as _db:
+            # First: terminate any orphaned orchestrator agents from previous runs
+            _db.query(Agent).filter_by(agent_type='orchestrator', status='working').update({'status': 'terminated'})
+            _db.commit()
+            
+            orchestrator_agent = Agent(
+                id=str(_uuid.uuid4()),
+                system_prompt=f"Autopilot orchestrator managing pipeline for {project_path}",
+                status="working",
+                cli_type="orchestrator",
+                agent_type="orchestrator",
+                tmux_session_name=None,  # No tmux session for orchestrator
+            )
+            _db.add(orchestrator_agent)
+            _db.commit()
+            # Store agent ID for status updates
+            (pid_dir / "orchestrator_agent_id").write_text(orchestrator_agent.id)
+    except Exception as e:
+        logger.warning(f"Failed to create orchestrator agent record: {e}")
+
     _invalidate("status")
     return {"started": True, "pid": proc.pid}
 
@@ -1475,6 +1990,7 @@ async def stop_pipeline(clear_state: bool = False):
 
     # Second: kill orchestrator process
     pid_file = Path(AUTOPILOT_STATE_DIR) / "orchestrator.pid"
+    agent_id_file = Path(AUTOPILOT_STATE_DIR) / "orchestrator_agent_id"
     orchestrator_pid = None
     if pid_file.exists():
         try:
@@ -1483,6 +1999,17 @@ async def stop_pipeline(clear_state: bool = False):
         except (ProcessLookupError, ValueError):
             pass
         pid_file.unlink(missing_ok=True)
+
+    # Mark orchestrator agent as terminated
+    if agent_id_file.exists():
+        try:
+            agent_id = agent_id_file.read_text().strip()
+            with get_db() as db:
+                db.query(Agent).filter_by(id=agent_id).update({'status': 'terminated'})
+                db.commit()
+        except Exception:
+            pass
+        agent_id_file.unlink(missing_ok=True)
 
     # Wait for graceful shutdown
     if orchestrator_pid:
@@ -1506,6 +2033,22 @@ async def stop_pipeline(clear_state: bool = False):
 
     _invalidate("status")
     return {"stopped": True, "pid": orchestrator_pid, "agents_terminated": terminated_count, "state_cleared": clear_state}
+
+
+@router.post("/cleanup-branches")
+async def cleanup_branches():
+    """Clean up all stale agent branches."""
+    from src.core.branch_manager import BranchManager
+    from src.core.database import DatabaseManager, get_db
+
+    try:
+        db_manager = DatabaseManager()
+        branch_manager = BranchManager(db_manager)
+        result = branch_manager.cleanup_all_stale_branches()
+        return result
+    except Exception as e:
+        logger.error(f"Failed to cleanup branches: {e}")
+        raise HTTPException(500, str(e))
 
 
 # ── Config ───────────────────────────────────────────────────────

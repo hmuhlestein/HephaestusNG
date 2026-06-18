@@ -112,7 +112,7 @@ Each ticket must have:
 - Tags for categorization
 
 ═══════════════════════════════════════════════════════════════════════
-STEP 5: CREATE DEVELOPMENT TASKS
+STEP 5: CREATE DEVELOPMENT TASKS WITH DEPENDENCY GRAPH
 ═══════════════════════════════════════════════════════════════════════
 
 Create ONE Phase 3 task per ticket (1:1 relationship):
@@ -123,10 +123,93 @@ Create ONE Phase 3 task per ticket (1:1 relationship):
 - Include code snippets showing key interfaces, function signatures, or data structures
 - Specify logging requirements: what to log, at what level, with what context
 
-Example task structure:
+═══════════════════════════════════════════════════════════════════════
+CRITICAL: TASK DEPENDENCIES AND PARALLEL EXECUTION
+═══════════════════════════════════════════════════════════════════════
+
+When creating tasks via create_task, you MUST specify dependencies to enable
+parallel execution. The system defaults to SEQUENTIAL (one task at a time)
+unless you explicitly set dependencies.
+
+**How it works:**
+- `depends_on`: List of task IDs that must complete before this task starts
+- `parallel_group`: Tasks in the same group CAN run in parallel (optional)
+- If `depends_on` is omitted or null → task runs SEQUENTIALLY (one at a time)
+- If `depends_on` is set to `[]` (empty array) → task runs IMMEDIATELY (parallel)
+- If `depends_on` has task IDs → task runs when ALL listed tasks are complete
+
+**⚠️ CRITICAL: If you omit depends_on, tasks will run ONE AT A TIME.**
+**To enable parallelism, you MUST explicitly set depends_on: [] or depends_on: [task_ids]**
+
+**PARALLEL GROUPS:**
+- Tasks with the same `parallel_group` value can run together
+- Tasks in different groups (or no group) run sequentially
+- Example: all tasks with `parallel_group: "types"` run in parallel
+- But `parallel_group: "handlers"` waits for `parallel_group: "types"` to finish
+
+**Example - Sequential (no parallelism):**
+task1: {"depends_on": null}  → runs first
+task2: {"depends_on": null}  → waits for task1
+task3: {"depends_on": null}  → waits for task2
+
+**Example - Parallel with dependencies:**
+task1: {"depends_on": []}           → runs immediately
+task2: {"depends_on": [task1_id]}  → runs when task1 done
+task3: {"depends_on": [task1_id]}  → runs when task1 done (parallel with task2!)
+task4: {"depends_on": [task2_id, task3_id]} → runs when both task2 and task3 done
+
+**Example - Parallel group:**
+task1: {"parallel_group": "types"}     → can run with other "types" tasks
+task2: {"parallel_group": "types"}     → can run with task1
+task3: {"parallel_group": "handlers"}  → waits for "types" group to finish
+
+**Example - Combined (dependencies + parallel group):**
+task1: {"depends_on": [], "parallel_group": "types"}     → runs immediately
+task2: {"depends_on": [], "parallel_group": "types"}     → runs immediately, parallel with task1
+task3: {"depends_on": [task1_id, task2_id], "parallel_group": "handlers"} → runs after both types tasks
+task4: {"depends_on": [task1_id, task2_id], "parallel_group": "handlers"} → runs parallel with task3
+
+**YOUR RESPONSIBILITY AS ARCHITECT:**
+1. Analyze which tasks can run in parallel (no data dependencies)
+2. Create tasks with `depends_on` listing prerequisite task IDs
+3. Store task IDs as you create them so you can reference them
+4. Tasks without dependencies will run ONE AT A TIME (slow!)
+
+**RELIABLE COMMUNICATION PATTERN:**
+When creating tasks, use this structure:
+
+```python
+# First, create all tasks and collect their IDs
+task_ids = {}
+task_ids['types'] = create_task({
+    "task_description": "Create type definitions...",
+    "depends_on": [],  # No dependencies - runs first
+})
+task_ids['config'] = create_task({
+    "task_description": "Create config module...",
+    "depends_on": [],  # No dependencies - runs parallel with types
+})
+task_ids['handlers'] = create_task({
+    "task_description": "Create HTTP handlers...",
+    "depends_on": [task_ids['types'], task_ids['config']],  # Wait for types and config
+})
+task_ids['tests'] = create_task({
+    "task_description": "Create integration tests...",
+    "depends_on": [task_ids['handlers']],  # Wait for handlers
+})
+```
+
+**PARALLELISM RULES:**
+- Tasks with `depends_on: []` run immediately (up to max_concurrent_agents)
+- Tasks with `depends_on: [X]` run after X completes
+- The orchestrator automatically manages the dependency graph
+- If you don't specify dependencies, tasks run ONE AT A TIME (sequential)
+
+**Task structure with dependencies:**
 ```
 Task: Implement [Component]
 Ticket: TICKET-001
+Dependencies: [TICKET-002_id, TICKET-003_id]  ← MUST specify for parallel
 
 Files to create/modify:
 - src/component.py (new)
