@@ -1259,7 +1259,7 @@ async def process_queue():
             task = session.query(Task).filter_by(id=next_task.id).first()
             if task:
                 task.assigned_agent_id = agent.id
-                task.status = "assigned"
+                task.status = "in_progress"  # Agent is now working
                 task.started_at = datetime.utcnow()
                 session.commit()
         finally:
