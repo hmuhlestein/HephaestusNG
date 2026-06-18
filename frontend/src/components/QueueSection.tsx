@@ -11,7 +11,6 @@ import {
   Trash2
 } from 'lucide-react';
 import { apiService } from '@/services/api';
-import { Agent } from '@/types';
 import { useWebSocket } from '@/context/WebSocketContext';
 import { useWorkflow } from '@/context/WorkflowContext';
 import StatusBadge from '@/components/StatusBadge';
@@ -39,12 +38,12 @@ const QueueSection: React.FC<QueueSectionProps> = ({
   });
 
   // Fetch active agents
-  const { data: agents, refetch: refetchAgents } = useQuery({
+  const { data: agentData, refetch: refetchAgents } = useQuery({
     queryKey: ['agents-for-queue'],
-    queryFn: apiService.getAgents,
+    queryFn: () => apiService.getAgents('active'),
     refetchInterval: 3000,
-    select: (data) => data.filter((a: Agent) => a.status !== 'terminated'),
   });
+  const agents = agentData?.agents || [];
 
   // Subscribe to WebSocket events
   useEffect(() => {

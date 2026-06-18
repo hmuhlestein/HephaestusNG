@@ -55,7 +55,7 @@ const AgentDetailModal: React.FC<AgentDetailModalProps> = ({
 
   const { data: agent, isLoading } = useQuery<Agent>({
     queryKey: ['agent', agentId],
-    queryFn: () => agentId ? apiService.getAgents().then(agents => agents.find(a => a.id === agentId)!) : Promise.reject(),
+    queryFn: () => agentId ? apiService.getAgents('all').then(res => res.agents.find((a: Agent) => a.id === agentId)!) : Promise.reject(),
     enabled: !!agentId,
     refetchInterval: 3000,
   });

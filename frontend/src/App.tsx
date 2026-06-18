@@ -40,14 +40,14 @@ function App() {
                 <Route path="workflows" element={<WorkflowExecutions />} />
                 <Route path="overview" element={<Overview />} />
                 <Route path="tasks" element={<Tasks />} />
-                <Route path="agents" element={<Agents />} />
+                <Route path="agents/:agentId?" element={<Agents />} />
                 <Route path="phases" element={<Phases />} />
                 <Route path="memories" element={<Memories />} />
                 <Route path="graph" element={<Graph />} />
                 <Route path="observability" element={<Observability />} />
                 <Route path="results" element={<Results />} />
                 <Route path="tickets" element={<Tickets />} />
-                <Route path="autopilot" element={<Autopilot />} />
+                <Route path="autopilot/:tab?" element={<Autopilot />} />
               </Route>
             </Routes>
           </BrowserRouter>

@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useQuery, useMutation } from '@tanstack/react-query';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Rocket, ListOrdered, History, MessageSquare, Activity, ChevronRight,
@@ -20,13 +20,31 @@ import HumanInputBanner from '@/components/autopilot/HumanInputBanner';
 import { useProject } from '@/context/ProjectContext';
 
 type Tab = 'overview' | 'queue' | 'features' | 'messages' | 'logs';
+const VALID_TABS: Tab[] = ['overview', 'queue', 'features', 'messages', 'logs'];
 
 const Autopilot: React.FC = () => {
-  const [activeTab, setActiveTab] = useState<Tab>('overview');
+  const { tab: urlTab } = useParams<{ tab?: string }>();
+  const navigate = useNavigate();
+  const [activeTab, setActiveTab] = useState<Tab>(
+    VALID_TABS.includes(urlTab as Tab) ? (urlTab as Tab) : 'overview'
+  );
   const [selectedFeatureId, setSelectedFeatureId] = useState<string | null>(null);
   const [showAddDesign, setShowAddDesign] = useState(false);
   const { activeProject } = useProject();
   const projectId = activeProject?.id || null;
+
+  // Sync tab state to URL path
+  const handleTabChange = (tab: Tab) => {
+    setActiveTab(tab);
+    navigate(`/autopilot/${tab}`, { replace: true });
+  };
+
+  // Sync from URL on mount
+  useEffect(() => {
+    if (urlTab && VALID_TABS.includes(urlTab as Tab)) {
+      setActiveTab(urlTab as Tab);
+    }
+  }, [urlTab]);
 
   const { data: status, refetch: refetchStatus } = useQuery({
     queryKey: ['autopilot-status'],
@@ -54,11 +72,12 @@ const Autopilot: React.FC = () => {
     refetchInterval: 15000,
   });
 
-  const { data: agents } = useQuery({
+  const { data: agentData } = useQuery({
     queryKey: ['agents'],
-    queryFn: () => fetch('/api/agents').then(r => r.json()),
+    queryFn: () => fetch('/api/agents?status=all&per_page=100').then(r => r.json()),
     refetchInterval: 5000,
   });
+  const agents = agentData?.agents || [];
 
   const activeAgents = (agents || []).filter((a: any) => 
     ['working', 'starting', 'idle'].includes(a.status)
@@ -126,7 +145,7 @@ const Autopilot: React.FC = () => {
           {tabs.map((tab) => (
             <button
               key={tab.id}
-              onClick={() => setActiveTab(tab.id)}
+              onClick={() => handleTabChange(tab.id)}
               className={`
                 flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 transition-colors
                 ${activeTab === tab.id

@@ -49,6 +49,50 @@ const MessageCenter: React.FC = () => {
   const [showInputModal, setShowInputModal] = useState(false);
   const [currentRequestId, setCurrentRequestId] = useState<string | null>(null);
   const [messageText, setMessageText] = useState('');
+  const [showArchived, setShowArchived] = useState(false);
+  
+  // Fetch archived message IDs from DB
+  const { data: archivedData, refetch: refetchArchived } = useQuery({
+    queryKey: ['autopilot-archived-messages'],
+    queryFn: () => apiService.getAutopilotArchivedMessages(),
+    refetchInterval: 30000,
+  });
+  const archivedIds = new Set(archivedData?.archived_ids || []);
+  
+  const archiveMutation = useMutation({
+    mutationFn: ({ msgId, msgType, timestamp }: { msgId: string; msgType: string; timestamp: string }) =>
+      apiService.archiveAutopilotMessage(msgId, msgType, timestamp),
+    onSuccess: () => {
+      refetchArchived();
+      toast.success('Message archived');
+    },
+  });
+  
+  const unarchiveMutation = useMutation({
+    mutationFn: (msgId: string) => apiService.unarchiveAutopilotMessage(msgId),
+    onSuccess: () => {
+      refetchArchived();
+      toast.success('Message restored');
+    },
+  });
+  
+  const unarchiveAllMutation = useMutation({
+    mutationFn: () => apiService.unarchiveAllAutopilotMessages(),
+    onSuccess: () => {
+      refetchArchived();
+      toast.success('All messages restored');
+    },
+  });
+  
+  const archiveMessage = (msg: any) => {
+    const msgId = `${msg.timestamp}-${msg.type}`;
+    archiveMutation.mutate({ msgId, msgType: msg.type, timestamp: msg.timestamp });
+  };
+  
+  const unarchiveMessage = (msg: any) => {
+    const msgId = `${msg.timestamp}-${msg.type}`;
+    unarchiveMutation.mutate(msgId);
+  };
   
   const { data: messages, isLoading } = useQuery({
     queryKey: ['autopilot-messages'],
@@ -96,8 +140,21 @@ const MessageCenter: React.FC = () => {
   }
 
   // Group messages by date
+  const filteredMessages = messages.filter((msg: any) => {
+    const msgId = `${msg.timestamp}-${msg.type}`;
+    // Filter out archived messages
+    if (archivedIds.has(msgId)) {
+      return showArchived;
+    }
+    // Filter out non-actionable system events
+    if (msg.type === 'human_input' && msg.data?.choice === 'timeout') {
+      return false;
+    }
+    return !showArchived;
+  });
+
   const grouped: Record<string, any[]> = {};
-  for (const msg of messages) {
+  for (const msg of filteredMessages) {
     const date = new Date(msg.timestamp).toLocaleDateString();
     if (!grouped[date]) grouped[date] = [];
     grouped[date].push(msg);
@@ -220,6 +277,37 @@ const MessageCenter: React.FC = () => {
   return (
     <>
       <div className="space-y-6">
+        {/* Filter toggle */}
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setShowArchived(false)}
+              className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${
+                !showArchived ? 'bg-violet-100 text-violet-700' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+              }`}
+            >
+              Active ({messages.length - archivedIds.size})
+            </button>
+            <button
+              onClick={() => setShowArchived(true)}
+              className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${
+                showArchived ? 'bg-violet-100 text-violet-700' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+              }`}
+            >
+              Archived ({archivedIds.size})
+            </button>
+          </div>
+          {showArchived && archivedIds.size > 0 && (
+            <button
+              onClick={() => unarchiveAllMutation.mutate()}
+              disabled={unarchiveAllMutation.isPending}
+              className="text-xs text-gray-500 hover:text-gray-700"
+            >
+              Restore all
+            </button>
+          )}
+        </div>
+
         {Object.entries(grouped).map(([date, msgs]) => (
           <div key={date}>
             <div className="flex items-center gap-3 mb-4">
@@ -292,29 +380,60 @@ const MessageCenter: React.FC = () => {
                       )}
                       
                       {/* Other data fields */}
-                      {msg.data && Object.keys(msg.data).length > 0 && (
-                        <div className="mt-1 flex flex-wrap gap-2">
-                          {Object.entries(msg.data)
-                            .filter(([key]) => !['error', 'reason'].includes(key))
-                            .map(([key, value]) => (
-                            <span
-                              key={key}
-                              className="inline-flex items-center gap-1 text-xs text-gray-500 bg-gray-50 px-2 py-0.5 rounded"
-                            >
-                              <span className="text-gray-400">{key}:</span>
-                              <span className="font-medium text-gray-600 truncate max-w-[200px]">
-                                {String(value)}
+                      {msg.data && Object.keys(msg.data).length > 0 && (() => {
+                        // Filter out unhelpful fields based on message type
+                        const excludeFields: Record<string, string[]> = {
+                          'human_input': ['request_id', 'choice', 'source'],
+                          'human_input_required': ['request_id'],
+                        };
+                        const excluded = excludeFields[msg.type] || [];
+                        
+                        const displayFields = Object.entries(msg.data)
+                          .filter(([key]) => !['error', 'reason', ...excluded].includes(key))
+                          .filter(([, value]) => value !== null && value !== undefined && String(value).trim() !== '');
+                        
+                        if (displayFields.length === 0) return null;
+                        
+                        return (
+                          <div className="mt-1 flex flex-wrap gap-2">
+                            {displayFields.map(([key, value]) => (
+                              <span
+                                key={key}
+                                className="inline-flex items-center gap-1 text-xs text-gray-500 bg-gray-50 px-2 py-0.5 rounded"
+                              >
+                                <span className="text-gray-400">{formatFieldLabel(key)}:</span>
+                                <span className="font-medium text-gray-600 truncate max-w-[200px]">
+                                  {formatFieldValue(key, value)}
+                                </span>
                               </span>
-                            </span>
-                          ))}
-                        </div>
-                      )}
+                            ))}
+                          </div>
+                        );
+                      })()}
                     </div>
 
                     <div className="flex items-center gap-2 flex-shrink-0">
                       <span className="text-xs text-gray-400">
                         {formatDistanceToNow(new Date(msg.timestamp), { addSuffix: true })}
                       </span>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (showArchived) {
+                            unarchiveMessage(msg);
+                          } else {
+                            archiveMessage(msg);
+                          }
+                        }}
+                        className="p-1 rounded hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors"
+                        title={showArchived ? 'Restore message' : 'Archive message'}
+                      >
+                        {showArchived ? (
+                          <RotateCcw className="w-3.5 h-3.5" />
+                        ) : (
+                          <FolderOpen className="w-3.5 h-3.5" />
+                        )}
+                      </button>
                     </div>
                   </motion.div>
                 );
@@ -452,6 +571,32 @@ const formatEventType = (type: string): string => {
     .split('_')
     .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
     .join(' ');
+};
+
+const formatFieldLabel = (key: string): string => {
+  const labels: Record<string, string> = {
+    'workflow': 'Workflow',
+    'workflow_id': 'Workflow',
+    'path': 'Path',
+    'design_document': 'Design',
+    'feature_folder': 'Feature',
+    'feature_id': 'Feature',
+    'stop_reason': 'Reason',
+    'iteration': 'Iteration',
+    'phase': 'Phase',
+    'phase_name': 'Phase',
+    'agents_active': 'Agents',
+    'tasks_pending': 'Pending',
+    'tasks_done': 'Done',
+    'tasks_failed': 'Failed',
+  };
+  return labels[key] || key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+};
+
+const formatFieldValue = (key: string, value: any): string => {
+  if (key === 'stop_reason') return String(value).replace(/_/g, ' ');
+  if (key === 'workflow_id' || key === 'workflow') return String(value).substring(0, 8);
+  return String(value);
 };
 
 export default MessageCenter;
