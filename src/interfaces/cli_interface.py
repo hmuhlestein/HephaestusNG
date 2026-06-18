@@ -448,7 +448,7 @@ class PiAgent(CLIAgentInterface):
             # For pi: reference the agent file directly — don't inject the full phase text
             # The agent file already contains description, done_definitions, additional_notes
             # Extract only task-specific info from system_prompt to pass as user prompt
-            task_id = kwargs.get('task_id', 'default')
+            file_task_id = kwargs.get('task_id', 'default')
             
             # Extract task-specific sections from the system prompt
             task_lines = []
@@ -456,26 +456,25 @@ class PiAgent(CLIAgentInterface):
             for line in system_prompt.split('\n'):
                 if line.startswith('=== TASK ===') or line.startswith('═══ TASK ═══'):
                     in_task_section = True
-                elif line.startswith('=== ') and in_task_section or line.startswith('═══ ') and in_task_section:
+                elif (line.startswith('=== ') or line.startswith('═══ ')) and in_task_section:
                     in_task_section = False
                 elif in_task_section:
                     task_lines.append(line)
             
             # Build minimal user prompt with just task info and IDs
             user_parts = []
-            # Task description
             task_text = '\n'.join(task_lines).strip()
             if task_text:
                 user_parts.append(task_text)
             # IDs (critical for MCP tools)
             agent_id = kwargs.get('agent_id') or self._extract_id(system_prompt, 'Agent=')
             wf_id = kwargs.get('workflow_id') or self._extract_id(system_prompt, 'Workflow=')
-            task_id_val = kwargs.get('task_id') or self._extract_id(system_prompt, 'Task=')
+            id_task = kwargs.get('task_id') or self._extract_id(system_prompt, 'Task=')
             phase_id = kwargs.get('phase_id') or self._extract_id(system_prompt, 'Phase=')
-            if agent_id or task_id_val or wf_id:
+            if agent_id or id_task or wf_id:
                 ids_line = 'IDs:'
                 if agent_id: ids_line += f' Agent={agent_id}'
-                if task_id_val: ids_line += f' Task={task_id_val}'
+                if id_task: ids_line += f' Task={id_task}'
                 if wf_id: ids_line += f' Workflow={wf_id}'
                 if phase_id: ids_line += f' Phase={phase_id}'
                 user_parts.append(ids_line)
@@ -483,14 +482,14 @@ class PiAgent(CLIAgentInterface):
             user_prompt = '\n'.join(user_parts) if user_parts else system_prompt
             
             # Save user prompt to file for pi -p flag
-            prompt_file = f'/tmp/pi_prompt_{task_id}.txt'
+            prompt_file = f'/tmp/pi_prompt_{file_task_id}.txt'
             with open(prompt_file, 'w') as f:
                 f.write(user_prompt)
             os.chmod(prompt_file, 0o644)
 
-            # Use @file syntax to load the agent file as system prompt
+            # Load agent file as system prompt via shell expansion (not @file syntax)
             # Pass task info as initial message via -p
-            command = f'pi --append-system-prompt "@{agent_file}" -p "$(cat {prompt_file})" --model {model} --approve'
+            command = f'pi --append-system-prompt "$(cat {agent_file})" -p "$(cat {prompt_file})" --model {model} --approve'
         else:
             # Fallback: inject full prompt from file (no agent file available)
             task_id = kwargs.get('task_id', 'default')

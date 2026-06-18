@@ -202,6 +202,9 @@ class AgentManager:
                 task_id=task.id,
                 model=model,  # Pass phase-specific or global model
                 phase_name=phase_name,
+                agent_id=agent_id,
+                workflow_id=task.workflow_id,
+                phase_id=task.phase_id,
             )
 
             # Send launch command to tmux
@@ -1021,6 +1024,9 @@ REMEMBER:
                 system_prompt=agent.system_prompt,
                 task_id=task.id,
                 phase_name=restart_phase_name,
+                agent_id=agent_id,
+                workflow_id=task.workflow_id,
+                phase_id=task.phase_id,
             )
 
             pane = tmux_session.attached_window.attached_pane
