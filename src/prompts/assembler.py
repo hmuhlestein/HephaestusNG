@@ -135,6 +135,7 @@ class PromptAssembler:
         task_done_definition: Optional[str] = None,
         agent_id: Optional[str] = None,
         task_id: Optional[str] = None,
+        phase_id: Optional[str] = None,
         memories: Optional[List[Dict[str, Any]]] = None,
         project_context: str = "",
     ) -> RenderedPrompt:
@@ -181,6 +182,9 @@ class PromptAssembler:
             task_done_definition=task_done_definition,
             project_context=project_context,
             memories=memories or [],
+            agent_id=agent_id,
+            task_id=task_id,
+            phase_id=phase_id,
         )
 
         # Build user prompt
@@ -270,6 +274,9 @@ class PromptAssembler:
         task_done_definition: Optional[str],
         project_context: str,
         memories: List[Dict[str, Any]],
+        agent_id: Optional[str] = None,
+        task_id: Optional[str] = None,
+        phase_id: Optional[str] = None,
     ) -> str:
         """Build the system prompt the LLM receives.
 
@@ -337,7 +344,7 @@ Note: workflow_id is required for task creation. Use your current workflow_id.
 4. Spawn subagents for specialized work (architecture, development, review, etc.)
 5. Call update_task_status when done (status='done') or failed (status='failed')
 
-IDs: Agent={agent_id or 'unknown'} | Task={task_id or 'unknown'}"""
+IDs: Agent={agent_id or 'unknown'} | Task={task_id or 'unknown'} | Phase={phase_id or 'unknown'}"""
 
     def _build_user_prompt(
         self,

@@ -177,7 +177,70 @@ Run quick end-to-end validation:
 - Check error handling
 
 ═══════════════════════════════════════════════════════════════════════
-STEP 7: CREATE QA REPORT
+STEP 7: CREATE TICKETS FOR ISSUES FOUND
+═══════════════════════════════════════════════════════════════════════
+
+For EACH issue found (Critical, Major, Minor), create a ticket using create_ticket.
+
+TICKET TEMPLATE (copy this for each issue):
+
+```
+create_ticket(
+  agent_id="<your agent id>",
+  workflow_id="<your workflow id>",
+  task_id="<your task id>",
+  phase_id="<your phase id>",
+  title="[BUG] <short descriptive title>",
+  description='''
+## Issue Description
+<What is the problem?>
+
+## Expected Behavior
+<What should happen?>
+
+## Actual Behavior
+<What actually happens?>
+
+## Steps to Reproduce
+1. <Step 1>
+2. <Step 2>
+3. <Step 3>
+
+## Environment
+- OS: <macOS/Linux/Windows>
+- Python/Node version: <version>
+- Related files: <file paths involved>
+
+## Severity
+<Critical/Major/Minor>
+
+## Suggested Fix
+<If known, suggest a fix>
+''',
+  ticket_type="bug",
+  priority="<critical/high/medium/low>",
+  tags=["qa-finding", "phase-7", "<feature-name>"]
+)
+```
+
+TICKET CATEGORIES:
+- **Critical**: Security vulnerabilities, data loss, complete feature failure
+- **Major**: Core functionality broken, significant UX issues, performance degradation
+- **Minor**: Cosmetic issues, minor edge cases, documentation gaps
+
+After creating tickets, include them in your QA report:
+
+```markdown
+## Tickets Created
+
+| Ticket ID | Title | Priority | Category |
+|-----------|-------|----------|----------|
+| ticket-xxx | [BUG] Auth bypass | Critical | Security |
+| ticket-yyy | [BUG] Slow query | Major | Performance |
+```
+
+═══════════════════════════════════════════════════════════════════════
+STEP 8: CREATE QA REPORT
 ═══════════════════════════════════════════════════════════════════════
 
 Write qa_report.md with:
@@ -251,7 +314,7 @@ The implementation is complete.
 2. [Problem 2]
 
 ═══════════════════════════════════════════════════════════════════════
-STEP 8: SAVE TO MEMORY
+STEP 9: SAVE TO MEMORY
 ═══════════════════════════════════════════════════════════════════════
 
 Save QA findings to memory:
@@ -270,6 +333,9 @@ DO:
 - Test security fixes thoroughly
 - Provide specific pass/fail evidence
 - Give clear iteration recommendation
+- CREATE TICKETS for all issues found (Critical, Major, Minor)
+- Include reproduction steps in every ticket
+- Search for existing tickets before creating (avoid duplicates)
 
 DO NOT:
 - Skip test categories

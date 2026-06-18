@@ -663,6 +663,8 @@ class Ticket(Base):
 
     # Links & References
     parent_ticket_id = Column(String, ForeignKey("tickets.id"))
+    task_id = Column(String, ForeignKey("tasks.id"))  # Primary task this ticket relates to
+    phase_id = Column(String, ForeignKey("phases.id"))  # Phase where this ticket was created
     related_task_ids = Column(JSON)  # List of related task IDs
     related_ticket_ids = Column(JSON)  # List of related ticket IDs for context
     tags = Column(JSON)  # List of tags
@@ -698,6 +700,8 @@ class Ticket(Base):
     parent_ticket = relationship(
         "Ticket", remote_side=[id], foreign_keys=[parent_ticket_id], backref="sub_tickets"
     )
+    task = relationship("Task", backref="tickets")
+    phase = relationship("Phase", backref="tickets")
     comments = relationship("TicketComment", back_populates="ticket")
     history = relationship("TicketHistory", back_populates="ticket")
     commits = relationship("TicketCommit", back_populates="ticket")
