@@ -30,6 +30,7 @@ methodology refinements, and patterns that could reduce iterations.""",
         "Stuck/crashed agents identified with timestamps",
         "Common issue patterns cataloged",
         "Specific prompt rewrites proposed (with before/after text)",
+        "Tickets created for actionable findings",
         "forensics_report.md created in Docs Path",
         "Memory entries saved with feature-scoped tags",
         "Task marked as done",
@@ -218,7 +219,45 @@ Keep the report focused. Do not pad with boilerplate.
 If a phase performed well, say so in one line and move on.
 
 ═══════════════════════════════════════════════════════════════════════
-STEP 7: SAVE TO MEMORY (SCOPED)
+STEP 7: CREATE TICKETS FOR FINDINGS
+═══════════════════════════════════════════════════════════════════════
+
+For each actionable finding in your report, create a ticket:
+
+```
+create_ticket(
+  agent_id="<your agent id>",
+  workflow_id="<your workflow id>",
+  task_id="<your task id>",
+  phase_id="<your phase id>",
+  title="[IMPROVEMENT] <short descriptive title>",
+  description='''
+## Finding
+<What was observed>
+
+## Root Cause
+<Why it happened>
+
+## Recommendation
+<Specific change to make>
+
+## Affected Phase
+<Which phase needs the change>
+''',
+  ticket_type="improvement",
+  priority="<high/medium/low>",
+  tags=["forensics", "<feature-name>", "phase-10"]
+)
+```
+
+Focus on:
+- Prompt rewrites (high priority)
+- Missing instructions (medium priority)
+- Context loss between phases (high priority)
+- Agent performance issues (low priority)
+
+═══════════════════════════════════════════════════════════════════════
+STEP 8: SAVE TO MEMORY (SCOPED)
 ═══════════════════════════════════════════════════════════════════════
 
 Save improvements to memory, scoped to this feature:
