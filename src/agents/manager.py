@@ -53,7 +53,7 @@ class AgentManager:
         """Create an agent for a specific task.
 
         Args:
-            task: Task to assign to agent
+            task: Task to assign to agent (REQUIRED)
             enriched_data: Enriched task data from LLM
             memories: Relevant memories from RAG
             project_context: Current project context
@@ -68,7 +68,13 @@ class AgentManager:
 
         Returns:
             Created agent
+
+        Raises:
+            ValueError: If task is None
         """
+        if task is None:
+            raise ValueError("task is REQUIRED for create_agent_for_task — cannot create agent without a task")
+
         agent_id = str(uuid.uuid4())
         # Use phase config with fallback to global defaults
         cli_type = phase_cli_tool or cli_type or self.config.default_cli_tool
@@ -189,6 +195,31 @@ class AgentManager:
                     pane.send_keys(f'export {key}="{value}"', enter=True)
                 # Brief pause to ensure exports complete
                 await asyncio.sleep(0.5)
+
+            # Echo task info to terminal so we can see what the agent is working on
+            phase_name = "unknown"
+            phase_order = "?"
+            if task.phase_id:
+                from src.core.database import Phase
+                session = self.db_manager.get_session()
+                try:
+                    if task.phase_id.isdigit():
+                        phase = session.query(Phase).filter_by(order=int(task.phase_id), workflow_id=task.workflow_id).first()
+                    else:
+                        phase = session.query(Phase).filter_by(id=task.phase_id).first()
+                    if phase:
+                        phase_name = phase.name
+                        phase_order = str(phase.order)
+                finally:
+                    session.close()
+            
+            task_desc = (task.enriched_description or task.raw_description or "")[:200]
+            pane.send_keys(f'echo "="', enter=True)
+            pane.send_keys(f'echo "AGENT: {agent_id[:8]}"', enter=True)
+            pane.send_keys(f'echo "PHASE: {phase_order}. {phase_name}"', enter=True)
+            pane.send_keys(f'echo "TASK: {task_desc}"', enter=True)
+            pane.send_keys(f'echo "="', enter=True)
+            await asyncio.sleep(0.3)
 
             # Now send the claude launch command
             pane.send_keys(launch_command, enter=True)  # enter=True sends Enter key after command
