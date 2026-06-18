@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { useParams, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { Bot, Terminal, Activity, FileText, Clock, MessageCircle, XCircle } from 'lucide-react';
 import { apiService } from '@/services/api';
@@ -62,9 +63,23 @@ const AgentCard: React.FC<{
           <Bot className="w-6 h-6 text-gray-600 mr-2" />
           <div>
             <p className="font-semibold text-gray-800">
-              {agent.id.substring(0, 8)}{agent.current_task?.phase_info?.name ? ` — ${agent.current_task.phase_info.name.replace(/_/g, ' ')}` : ''}
+              {agent.agent_type === 'orchestrator' 
+                ? 'Autopilot Orchestrator'
+                : agent.id.substring(0, 8)}{agent.current_task?.phase_info?.name ? ` — ${agent.current_task.phase_info.name.replace(/_/g, ' ')}` : ''}
             </p>
-            <p className="text-xs text-gray-500">{agent.cli_type}</p>
+            <p className="text-xs text-gray-500">{agent.agent_type === 'orchestrator' ? 'orchestrator' : agent.cli_type}</p>
+            {agent.workflow && (
+              <p className="text-xs text-violet-600 mt-0.5">
+                {agent.workflow.name || agent.workflow.id.substring(0, 8)}
+                <span className={`ml-1 px-1.5 py-0.5 rounded text-[10px] font-semibold ${
+                  agent.workflow.status === 'active' ? 'bg-green-100 text-green-700' :
+                  agent.workflow.status === 'completed' ? 'bg-gray-100 text-gray-600' :
+                  'bg-red-100 text-red-700'
+                }`}>
+                  {agent.workflow.status}
+                </span>
+              </p>
+            )}
           </div>
         </div>
         <StatusBadge status={agent.status} size="sm" />
@@ -165,7 +180,9 @@ const AgentCard: React.FC<{
         <div className="mb-4 p-3 bg-gray-50 rounded-lg border border-gray-200">
           <div className="flex items-center text-gray-500 text-sm mb-2">
             <FileText className="w-4 h-4 mr-2" />
-            No current task
+            {agent.agent_type === 'orchestrator' 
+              ? 'Managing pipeline execution'
+              : 'No current task'}
           </div>
           <div className="space-y-2">
             <button
@@ -246,25 +263,54 @@ const AgentCard: React.FC<{
 
 
 const Agents: React.FC = () => {
+  const { agentId: urlAgentId } = useParams<{ agentId?: string }>();
+  const navigate = useNavigate();
   const [agents, setAgents] = useState<Agent[]>([]);
   const [selectedAgent, setSelectedAgent] = useState<Agent | null>(null);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [messageAgent, setMessageAgent] = useState<Agent | null>(null);
   const [activeAgentIds, setActiveAgentIds] = useState<Set<string>>(new Set());
+  const [showAll, setShowAll] = useState(false);
+  const [page, setPage] = useState(1);
   const { subscribe } = useWebSocket();
 
   const { data, isLoading, error, refetch } = useQuery({
-    queryKey: ['agents'],
-    queryFn: apiService.getAgents,
+    queryKey: ['agents', showAll ? 'all' : 'active', page],
+    queryFn: () => apiService.getAgents(showAll ? 'all' : 'active', page),
     refetchInterval: 5000,
   });
 
+  // Auto-select agent from URL
   useEffect(() => {
-    if (data) {
-      setAgents(data);
+    if (urlAgentId && !selectedAgent) {
+      // First try to find in loaded agents
+      const agent = agents.find(a => a.id === urlAgentId);
+      if (agent) {
+        setSelectedAgent(agent);
+        navigate('/agents', { replace: true });
+      } else if (agents.length > 0 && !showAll) {
+        // Not found, try all agents view
+        setShowAll(true);
+      } else if (agents.length > 0) {
+        // Still not found after switching to all, fetch directly
+        apiService.getAgent(urlAgentId).then(foundAgent => {
+          if (foundAgent) {
+            setSelectedAgent(foundAgent);
+          }
+          navigate('/agents', { replace: true });
+        }).catch(() => {
+          navigate('/agents', { replace: true });
+        });
+      }
+    }
+  }, [urlAgentId, agents, selectedAgent, showAll, navigate]);
+
+  useEffect(() => {
+    if (data?.agents) {
+      setAgents(data.agents);
       // Track active agents
       const active = new Set(
-        data.filter(a => a.status === 'working').map(a => a.id)
+        data.agents.filter(a => a.status === 'working').map(a => a.id)
       );
       setActiveAgentIds(active);
     }
@@ -301,9 +347,6 @@ const Agents: React.FC = () => {
       unsubscribeStatus();
     };
   }, [subscribe, refetch]);
-
-  const activeAgents = agents.filter(a => a.status !== 'terminated');
-  const terminatedAgents = agents.filter(a => a.status === 'terminated');
 
   const handleTerminateAgent = async (agentId: string) => {
     const confirmed = window.confirm(
@@ -343,40 +386,59 @@ const Agents: React.FC = () => {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold text-gray-800">Agents</h1>
-          <p className="text-gray-600 mt-1">All AI agents across all workflows</p>
+          <p className="text-gray-600 mt-1">
+            {data?.total || 0} total agents • Page {data?.page || 1} of {data?.pages || 1}
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => { setShowAll(false); setPage(1); }}
+            className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+              !showAll ? 'bg-violet-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+            }`}
+          >
+            Active
+          </button>
+          <button
+            onClick={() => { setShowAll(true); setPage(1); }}
+            className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+              showAll ? 'bg-violet-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+            }`}
+          >
+            All
+          </button>
         </div>
       </div>
 
       {/* Stats */}
       <div className="grid grid-cols-4 gap-4">
         <div className="bg-white rounded-lg shadow-md p-4">
-          <p className="text-sm text-gray-600">Total Active</p>
-          <p className="text-2xl font-bold text-gray-800">{activeAgents.length}</p>
+          <p className="text-sm text-gray-600">Total</p>
+          <p className="text-2xl font-bold text-gray-800">{data?.total || 0}</p>
         </div>
         <div className="bg-white rounded-lg shadow-md p-4">
           <p className="text-sm text-gray-600">Working</p>
           <p className="text-2xl font-bold text-green-600">
-            {activeAgents.filter(a => a.status === 'working').length}
+            {agents.filter(a => a.status === 'working').length}
           </p>
         </div>
         <div className="bg-white rounded-lg shadow-md p-4">
           <p className="text-sm text-gray-600">Stuck</p>
           <p className="text-2xl font-bold text-yellow-600">
-            {activeAgents.filter(a => a.status === 'stuck').length}
+            {agents.filter(a => a.status === 'stuck').length}
           </p>
         </div>
         <div className="bg-white rounded-lg shadow-md p-4">
           <p className="text-sm text-gray-600">Terminated</p>
-          <p className="text-2xl font-bold text-gray-500">{terminatedAgents.length}</p>
+          <p className="text-2xl font-bold text-gray-500">{agents.filter(a => a.status === 'terminated').length}</p>
         </div>
       </div>
 
-      {/* Active Agents */}
+      {/* Agent Grid */}
       <div>
-        <h2 className="text-xl font-semibold text-gray-800 mb-4">Active Agents</h2>
-        {activeAgents.length > 0 ? (
+        {agents.length > 0 ? (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {activeAgents.map((agent) => (
+            {agents.map((agent) => (
               <AgentCard
                 key={agent.id}
                 agent={agent}
@@ -390,29 +452,32 @@ const Agents: React.FC = () => {
           </div>
         ) : (
           <div className="bg-white rounded-lg shadow-md p-12 text-center text-gray-500">
-            No active agents
+            No agents found
           </div>
         )}
       </div>
 
-      {/* Terminated Agents (collapsed by default) */}
-      {terminatedAgents.length > 0 && (
-        <details>
-          <summary className="text-lg font-semibold text-gray-600 cursor-pointer">
-            Terminated Agents ({terminatedAgents.length})
-          </summary>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mt-4 opacity-50">
-            {terminatedAgents.map((agent) => (
-              <AgentCard
-                key={agent.id}
-                agent={agent}
-                onClick={() => setSelectedAgent(agent)}
-                onViewTask={(taskId) => setSelectedTaskId(taskId)}
-                onSendMessage={() => setMessageAgent(agent)}
-              />
-            ))}
-          </div>
-        </details>
+      {/* Pagination */}
+      {data && data.pages > 1 && (
+        <div className="flex items-center justify-center gap-2">
+          <button
+            onClick={() => setPage(p => Math.max(1, p - 1))}
+            disabled={page === 1}
+            className="px-3 py-1 rounded bg-gray-100 text-gray-600 hover:bg-gray-200 disabled:opacity-50"
+          >
+            Previous
+          </button>
+          <span className="text-sm text-gray-600">
+            Page {page} of {data.pages}
+          </span>
+          <button
+            onClick={() => setPage(p => Math.min(data.pages, p + 1))}
+            disabled={page === data.pages}
+            className="px-3 py-1 rounded bg-gray-100 text-gray-600 hover:bg-gray-200 disabled:opacity-50"
+          >
+            Next
+          </button>
+        </div>
       )}
 
       {/* Real-time Agent Output Modal */}

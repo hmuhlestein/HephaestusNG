@@ -1272,6 +1272,7 @@ ${taskDetails.child_tasks.map((t: any) => `- ${t.description} (${t.status})`).jo
           agent={{
             id: taskDetails.agent_info.id,
             status: taskDetails.agent_info.status as any,
+            agent_type: 'phase',
             cli_type: taskDetails.agent_info.cli_type,
             current_task_id: taskDetails.id,
             tmux_session_name: null,

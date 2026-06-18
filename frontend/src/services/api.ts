@@ -33,7 +33,7 @@ interface ResultQueryParams {
   offset?: number;
 }
 
-const api = axios.create({
+export const api = axios.create({
   baseURL: '/api',
   headers: {
     'Content-Type': 'application/json',
@@ -112,9 +112,20 @@ export const apiService = {
   },
 
   // Agents
-  getAgents: async (): Promise<Agent[]> => {
-    const { data } = await api.get('/agents');
+  getAgents: async (status: string = 'active', page: number = 1): Promise<{ agents: Agent[]; total: number; page: number; per_page: number; pages: number }> => {
+    const { data } = await api.get(`/agents?status=${status}&page=${page}&per_page=20`);
     return data;
+  },
+
+  getAgent: async (agentId: string): Promise<Agent | null> => {
+    try {
+      // Try fetching from all agents (most agents fit in one page)
+      const { data } = await api.get(`/agents?status=all&page=1&per_page=200`);
+      const agents = data?.agents || [];
+      return agents.find((a: Agent) => a.id === agentId) || null;
+    } catch {
+      return null;
+    }
   },
 
   getAgentOutput: async (agentId: string, lines = 2000): Promise<{ output: string; timestamp: string }> => {
@@ -628,6 +639,27 @@ export const apiService = {
     return data;
   },
 
+  getAutopilotArchivedMessages: async (): Promise<{ archived_ids: string[] }> => {
+    const { data } = await api.get('/autopilot/messages/archived');
+    return data;
+  },
+
+  archiveAutopilotMessage: async (messageId: string, messageType: string, timestamp: string): Promise<void> => {
+    await api.post('/autopilot/messages/archive', {
+      message_id: messageId,
+      message_type: messageType,
+      timestamp: timestamp,
+    });
+  },
+
+  unarchiveAutopilotMessage: async (messageId: string): Promise<void> => {
+    await api.post('/autopilot/messages/unarchive', { message_id: messageId });
+  },
+
+  unarchiveAllAutopilotMessages: async (): Promise<void> => {
+    await api.post('/autopilot/messages/unarchive-all');
+  },
+
   getAutopilotLogs: async (lines: number = 100): Promise<{ lines: string[] }> => {
     const { data } = await api.get(`/autopilot/logs?lines=${lines}`);
     return data;
@@ -689,12 +721,22 @@ export const apiService = {
     await api.put(`/autopilot/projects/${encodeURIComponent(projectId)}/designs/reorder`, { design_ids: designIds });
   },
 
+  requeueAutopilotDesign: async (filename: string): Promise<{ requeued: boolean; paused_workflows: number }> => {
+    const { data } = await api.post('/autopilot/queue/requeue', { filename });
+    return data;
+  },
+
   removeAutopilotProjectDesign: async (projectId: string, filename: string): Promise<void> => {
     await api.delete(`/autopilot/projects/${encodeURIComponent(projectId)}/designs/${encodeURIComponent(filename)}`);
   },
 
   getAutopilotProjectDesignContent: async (projectId: string, filename: string): Promise<{ filename: string; content: string }> => {
     const { data } = await api.get(`/autopilot/projects/${encodeURIComponent(projectId)}/designs/${encodeURIComponent(filename)}/content`);
+    return data;
+  },
+
+  getAutopilotProjectDesignStatus: async (projectId: string, filename: string): Promise<any> => {
+    const { data } = await api.get(`/autopilot/projects/${encodeURIComponent(projectId)}/designs/${encodeURIComponent(filename)}/status`);
     return data;
   },
 

@@ -59,14 +59,16 @@ const Observability: React.FC = () => {
   const [showCustomLayoutDialog, setShowCustomLayoutDialog] = useState(false);
 
   // Fetch agents data - only fetch on mount and explicit WebSocket lifecycle events
-  const { data: agents = [], isLoading, error, refetch } = useQuery({
+  const { data: agentData, isLoading, error, refetch } = useQuery({
     queryKey: ['agents'],
-    queryFn: apiService.getAgents,
+    queryFn: () => apiService.getAgents('active'),
     refetchInterval: false, // Disable automatic refetching
     refetchOnWindowFocus: false, // Don't refetch on window focus
     refetchOnMount: true, // Only fetch on initial mount
     staleTime: Infinity, // Consider data always fresh
   });
+
+  const agents = agentData?.agents || [];
 
   // WebSocket for real-time agent status updates
   const { subscribe } = useWebSocket();

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion } from 'framer-motion';
 import {
   DndContext,
   closestCenter,
@@ -19,12 +19,14 @@ import {
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import {
-  Plus, Trash2, FileText, Clock, GripVertical, Search, ListOrdered, RefreshCw
+  Plus, Trash2, FileText, Clock, GripVertical, Search, ListOrdered, RefreshCw,
+  CheckCircle2, XCircle, Loader2
 } from 'lucide-react';
 import { apiService } from '@/services/api';
 import { Button } from '@/components/ui/button';
 import { formatDistanceToNow } from 'date-fns';
 import toast from 'react-hot-toast';
+import DesignDetailModal from './DesignDetailModal';
 
 interface DesignQueuePanelProps {
   projectId: string | null;
@@ -34,17 +36,40 @@ interface DesignQueuePanelProps {
 
 const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDesign, currentDesign }) => {
   const queryClient = useQueryClient();
-  const [previewFile, setPreviewFile] = useState<string | null>(null);
-  const [previewContent, setPreviewContent] = useState<string>('');
   const [search, setSearch] = useState('');
   const [localOrder, setLocalOrder] = useState<any[] | null>(null);
+  const [detailFile, setDetailFile] = useState<string | null>(null);
+  const [designStatuses, setDesignStatuses] = useState<Record<string, string>>({});
 
+  // Fetch status for all designs to show badges
   const { data: designs, isLoading } = useQuery({
     queryKey: ['autopilot-project-designs', projectId],
     queryFn: () => projectId ? apiService.getAutopilotProjectDesigns(projectId) : Promise.resolve([]),
     enabled: !!projectId,
     refetchInterval: 30000,
   });
+
+  // Fetch status for each design
+  useEffect(() => {
+    if (!projectId || !designs || designs.length === 0) return;
+    
+    const fetchStatuses = async () => {
+      const statuses: Record<string, string> = {};
+      await Promise.all(
+        designs.map(async (d: any) => {
+          try {
+            const status = await apiService.getAutopilotProjectDesignStatus(projectId, d.filename);
+            statuses[d.filename] = status.status || 'pending';
+          } catch {
+            statuses[d.filename] = 'pending';
+          }
+        })
+      );
+      setDesignStatuses(statuses);
+    };
+    
+    fetchStatuses();
+  }, [projectId, designs]);
 
   const items = localOrder ?? designs ?? [];
 
@@ -95,6 +120,10 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
     },
   });
 
+  const handleDetail = (filename: string) => {
+    setDetailFile(filename);
+  };
+
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
@@ -112,17 +141,6 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
       reorderMutation.mutate(reordered.map((i) => i.id));
       return reordered;
     });
-  };
-
-  const handlePreview = async (filename: string) => {
-    if (!projectId) return;
-    try {
-      const result = await apiService.getAutopilotProjectDesignContent(projectId, filename);
-      setPreviewFile(filename);
-      setPreviewContent(result.content);
-    } catch (e) {
-      toast.error('Failed to load preview');
-    }
   };
 
   const filteredQueue = items.filter((item: any) =>
@@ -189,7 +207,8 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
                   item={item}
                   index={index}
                   isActive={item.name === currentDesign}
-                  onPreview={handlePreview}
+                  status={designStatuses[item.filename]}
+                  onDetail={handleDetail}
                   onRemove={(filename) => {
                     if (confirm(`Remove "${item.name}" from queue?`)) {
                       removeMutation.mutate(filename);
@@ -214,35 +233,41 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
         </div>
       )}
 
-      <AnimatePresence>
-        {previewFile && (
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: 20 }}
-            className="bg-white rounded-xl border shadow-lg"
-          >
-            <div className="px-5 py-3 border-b flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <FileText className="w-4 h-4 text-violet-600" />
-                <span className="text-sm font-medium text-gray-700">{previewFile}</span>
-              </div>
-              <button
-                onClick={() => { setPreviewFile(null); setPreviewContent(''); }}
-                className="text-gray-400 hover:text-gray-600 text-sm"
-              >
-                Close
-              </button>
-            </div>
-            <div className="p-5 max-h-96 overflow-y-auto">
-              <pre className="text-sm text-gray-700 whitespace-pre-wrap font-mono leading-relaxed">
-                {previewContent}
-              </pre>
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      {/* Design Detail Modal */}
+      {detailFile && projectId && (
+        <DesignDetailModal
+          projectId={projectId}
+          filename={detailFile}
+          onClose={() => setDetailFile(null)}
+          onRerun={() => {
+            queryClient.invalidateQueries({ queryKey: ['autopilot-project-designs', projectId] });
+            queryClient.invalidateQueries({ queryKey: ['autopilot-projects'] });
+            queryClient.invalidateQueries({ queryKey: ['autopilot-status'] });
+            setDetailFile(null);
+          }}
+        />
+      )}
     </div>
+  );
+};
+
+// ── Status Badge ───────────────────────────────────────────────
+
+const STATUS_CONFIG: Record<string, { color: string; icon: React.ReactNode; label: string }> = {
+  pending: { color: 'bg-gray-100 text-gray-600', icon: <Clock className="w-3 h-3" />, label: 'Pending' },
+  active: { color: 'bg-blue-100 text-blue-700', icon: <Loader2 className="w-3 h-3 animate-spin" />, label: 'Active' },
+  completed: { color: 'bg-green-100 text-green-700', icon: <CheckCircle2 className="w-3 h-3" />, label: 'Done' },
+  failed: { color: 'bg-red-100 text-red-700', icon: <XCircle className="w-3 h-3" />, label: 'Failed' },
+};
+
+const StatusBadge: React.FC<{ status: string }> = ({ status }) => {
+  const config = STATUS_CONFIG[status];
+  if (!config) return null;
+  return (
+    <span className={`px-2 py-0.5 text-xs font-semibold rounded-full flex items-center gap-1 ${config.color}`}>
+      {config.icon}
+      {config.label}
+    </span>
   );
 };
 
@@ -252,11 +277,12 @@ interface SortableDesignItemProps {
   item: any;
   index: number;
   isActive?: boolean;
-  onPreview: (filename: string) => void;
   onRemove: (filename: string) => void;
+  onDetail: (filename: string) => void;
+  status?: string;
 }
 
-const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, isActive, onPreview, onRemove }) => {
+const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, isActive, onRemove, onDetail, status }) => {
   const {
     attributes,
     listeners,
@@ -279,7 +305,7 @@ const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, is
         initial={{ opacity: 0, x: -20 }}
         animate={{ opacity: 1, x: 0 }}
         transition={{ delay: index * 0.03 }}
-        onClick={() => onPreview(item.filename)}
+        onClick={() => onDetail(item.filename)}
         className={`rounded-xl border shadow-sm transition-all cursor-pointer ${
           isDragging ? 'shadow-lg border-violet-300 ring-2 ring-violet-200' :
           isActive ? 'bg-gradient-to-r from-violet-50 to-purple-50 border-violet-300 shadow-md ring-1 ring-violet-200' :
@@ -298,14 +324,14 @@ const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, is
 
           <div 
             className={`p-2.5 rounded-lg cursor-pointer ${isActive ? 'bg-violet-200' : 'bg-violet-50'}`}
-            onClick={() => onPreview(item.filename)}
+            onClick={() => onDetail(item.filename)}
           >
             <FileText className={`w-5 h-5 ${isActive ? 'text-violet-700' : 'text-violet-600'}`} />
           </div>
 
           <div 
             className="flex-1 min-w-0 cursor-pointer"
-            onClick={() => onPreview(item.filename)}
+            onClick={() => onDetail(item.filename)}
           >
             <h4 className="text-sm font-semibold text-gray-800 truncate">{item.name}</h4>
             <div className="flex items-center gap-3 mt-1">
@@ -321,10 +347,8 @@ const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, is
           </div>
 
           <div className="flex items-center gap-2">
-            {isActive && (
-              <span className="px-2 py-1 text-xs font-semibold bg-violet-600 text-white rounded-full animate-pulse">
-                Active
-              </span>
+            {status && status !== 'pending' && (
+              <StatusBadge status={status} />
             )}
             <button
               onClick={(e) => { e.stopPropagation(); onRemove(item.filename); }}

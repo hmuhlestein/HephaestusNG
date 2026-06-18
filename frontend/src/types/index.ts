@@ -1,12 +1,19 @@
 export interface Agent {
   id: string;
   status: 'idle' | 'working' | 'stuck' | 'terminated';
+  agent_type: 'phase' | 'validator' | 'result_validator' | 'monitor' | 'diagnostic' | 'orchestrator';
   cli_type: string;
   current_task_id: string | null;
   tmux_session_name: string | null;
   health_check_failures: number;
   created_at: string;
   last_activity: string | null;
+  workflow?: {
+    id: string;
+    name: string;
+    status: string;
+    description: string;
+  };
   current_task?: {
     id: string;
     description: string;

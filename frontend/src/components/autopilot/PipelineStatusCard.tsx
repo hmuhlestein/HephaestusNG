@@ -70,9 +70,12 @@ const PipelineStatusCard: React.FC<PipelineStatusCardProps> = ({ status, onToggl
                 {running ? 'Pipeline Running' : 'Pipeline Idle'}
               </h2>
               {currentDesign ? (
-                <p className="text-white/80 text-sm mt-1">
-                  Processing: <span className="font-semibold">{currentDesign}</span>
-                </p>
+                <div className="text-white/80 text-sm mt-1">
+                  <span className="font-semibold">{currentDesign}</span>
+                  {status?.current_workflow_id && (
+                    <span className="text-white/50 ml-2">• {status.current_workflow_id.substring(0, 8)}</span>
+                  )}
+                </div>
               ) : (
                 <p className="text-white/60 text-sm mt-1">
                   {running ? 'Waiting for designs...' : 'Add a design to the queue to start'}
