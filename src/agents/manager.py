@@ -861,6 +861,26 @@ REMEMBER:
                 except Exception as e:
                     logger.error(f"Failed to kill tmux session: {e}")
 
+                # Kill any orphaned child processes (opencode, claude, pi) in the session
+                try:
+                    import subprocess
+                    # Find PIDs in the tmux session before it dies
+                    result = subprocess.run(
+                        ["tmux", "list-panes", "-t", agent.tmux_session_name, "-F", "#{pane_pid}"],
+                        capture_output=True, text=True, timeout=3
+                    )
+                    if result.returncode == 0:
+                        for pane_pid in result.stdout.strip().split('\n'):
+                            pane_pid = pane_pid.strip()
+                            if pane_pid:
+                                # Kill the pane's process tree
+                                try:
+                                    subprocess.run(["kill", "-9", "--", "-" + pane_pid], timeout=3)
+                                except Exception:
+                                    pass
+                except Exception:
+                    pass
+
             # Capture output BEFORE killing the tmux session
             final_output = ""
             try:
