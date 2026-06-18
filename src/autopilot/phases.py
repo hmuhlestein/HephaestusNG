@@ -129,6 +129,24 @@ AUTOPILOT_ORCHESTRATOR_CONFIG = {
             ],
             "max_retries": 2,
         },
+        # After git commit - always continue to forensics (forensics always runs)
+        {
+            "after_phase": "git_commit_push",
+            "evaluator": "heuristic",
+            "conditions": [
+                {"if": "score >= 0.0", "action": "continue", "reason": "Git commit complete, proceeding to forensics"},
+            ],
+            "max_retries": 0,
+        },
+        # Forensics always runs - no conditions needed, just continue
+        {
+            "after_phase": "forensics_analysis",
+            "evaluator": "heuristic",
+            "conditions": [
+                {"if": "score >= 0.0", "action": "continue", "reason": "Forensics complete"},
+            ],
+            "max_retries": 0,
+        },
     ],
 }
 
