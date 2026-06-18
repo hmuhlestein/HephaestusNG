@@ -614,7 +614,9 @@ async def create_ticket(
     tags: list = None,
     blocked_by_ticket_ids: list = None,
     assigned_agent_id: str = None,
-    parent_ticket_id: str = None
+    parent_ticket_id: str = None,
+    task_id: str = None,
+    phase_id: str = None
 ) -> str:
     """Create a new ticket in the workflow tracking system.
 
@@ -632,6 +634,8 @@ async def create_ticket(
         blocked_by_ticket_ids: List of ticket IDs that block this ticket
         assigned_agent_id: Optional agent to assign ticket to
         parent_ticket_id: Optional parent ticket for sub-tickets
+        task_id: Optional task ID this ticket relates to (e.g., the task that found this issue)
+        phase_id: Optional phase ID where this ticket was created
 
     CRITICAL: Both agent_id and workflow_id must be your actual UUIDs from your initial prompt!
     DO NOT use 'agent' or 'agent-mcp' - it will fail with "Agent not found"!
@@ -669,6 +673,9 @@ async def create_ticket(
                 "blocked_by_ticket_ids": blocked_by_ticket_ids or [],
                 "assigned_agent_id": assigned_agent_id,
                 "parent_ticket_id": parent_ticket_id,
+                "task_id": task_id,
+                "phase_id": phase_id,
+                "created_by_agent_id": agent_id,
             }
 
             logger.info(f"[MCP_CLIENT_TICKET] Payload: {payload}")

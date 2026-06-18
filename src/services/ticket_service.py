@@ -152,6 +152,8 @@ class TicketService:
         blocked_by_ticket_ids: List[str] = None,
         tags: List[str] = None,
         related_task_ids: List[str] = None,
+        task_id: Optional[str] = None,
+        phase_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Create a new ticket in the workflow.
@@ -169,6 +171,8 @@ class TicketService:
             blocked_by_ticket_ids: List of ticket IDs blocking this ticket
             tags: List of tags for categorization
             related_task_ids: List of related task IDs
+            task_id: Optional task ID this ticket relates to
+            phase_id: Optional phase ID where this ticket was created
 
         Returns:
             Dictionary containing ticket details and status
@@ -291,6 +295,8 @@ class TicketService:
                 priority=priority,
                 status=initial_status,
                 parent_ticket_id=parent_ticket_id,
+                task_id=task_id,
+                phase_id=phase_id,
                 blocked_by_ticket_ids=blocked_by_ticket_ids,
                 tags=tags,
                 related_task_ids=related_task_ids,
