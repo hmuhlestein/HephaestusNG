@@ -675,7 +675,7 @@ async def create_ticket(
                 "parent_ticket_id": parent_ticket_id,
                 "task_id": task_id,
                 "phase_id": phase_id,
-                "created_by_agent_id": agent_id,
+                "agent_id": agent_id,
             }
 
             logger.info(f"[MCP_CLIENT_TICKET] Payload: {payload}")
