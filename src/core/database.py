@@ -50,7 +50,7 @@ class Agent(Base):
     agent_type = Column(
         String,
         CheckConstraint(
-            "agent_type IN ('phase', 'validator', 'result_validator', 'monitor', 'diagnostic')"
+            "agent_type IN ('phase', 'validator', 'result_validator', 'monitor', 'diagnostic', 'orchestrator')"
         ),
         default="phase",
         nullable=False,
@@ -119,6 +119,11 @@ class Task(Base):
     queued_at = Column(DateTime)  # When task was queued
     queue_position = Column(Integer)  # Position in queue (for UI display)
     priority_boosted = Column(Boolean, default=False)  # If manually boosted to bypass queue
+
+    # Task dependency and concurrency fields
+    depends_on = Column(JSON)  # List of task IDs that must complete before this one
+    parallel_group = Column(String)  # Tasks in same group can run in parallel; different groups are sequential
+    max_concurrent = Column(Integer, default=1)  # Max agents working on this task simultaneously
 
     # Ticket tracking integration
     ticket_id = Column(
@@ -964,6 +969,9 @@ class DatabaseManager:
         # Create indexes for performance optimization
         self._create_indexes()
 
+        # Migrate new columns for existing databases
+        self._migrate_task_dependency_columns()
+
     def _create_fts5_tables(self):
         """Create FTS5 virtual tables and triggers for ticket search."""
         try:
@@ -1120,6 +1128,33 @@ class DatabaseManager:
                 logger.info("Created performance indexes for ticket tracking system")
         except Exception as e:
             logger.debug(f"Index creation (may already exist): {e}")
+
+    def _migrate_task_dependency_columns(self):
+        """Add dependency columns to tasks table for existing databases."""
+        try:
+            with self.engine.connect() as conn:
+                # Add depends_on column
+                try:
+                    conn.execute(text("ALTER TABLE tasks ADD COLUMN depends_on TEXT"))
+                except Exception:
+                    pass  # Column already exists
+
+                # Add parallel_group column
+                try:
+                    conn.execute(text("ALTER TABLE tasks ADD COLUMN parallel_group TEXT"))
+                except Exception:
+                    pass  # Column already exists
+
+                # Add max_concurrent column
+                try:
+                    conn.execute(text("ALTER TABLE tasks ADD COLUMN max_concurrent INTEGER DEFAULT 1"))
+                except Exception:
+                    pass  # Column already exists
+
+                conn.commit()
+                logger.info("Migrated task dependency columns")
+        except Exception as e:
+            logger.debug(f"Task dependency migration (may already exist): {e}")
 
     def get_session(self):
         """Get a database session."""

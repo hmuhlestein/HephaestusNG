@@ -64,7 +64,7 @@ llm:
       temperature: 0.8
       max_tokens: 4000
 agents:
-  default_cli_tool: opencode
+  default_cli_tool: pi
   cli_model: openrouter/xiaomi/mimo-v2.5
   tmux_session_prefix: agent
   health_check_interval: 60

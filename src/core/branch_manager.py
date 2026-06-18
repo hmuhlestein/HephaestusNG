@@ -669,3 +669,161 @@ class BranchManager:
         finally:
             session.close()
 
+    def cleanup_all_stale_branches(self) -> Dict[str, Any]:
+        """Clean up all branches and worktrees from terminated agents.
+
+        1. Remove stale worktrees
+        2. Try to merge branches into main (with conflict resolution)
+        3. Delete branches
+        """
+        session = self.db_manager.get_session()
+        cleaned = []
+        merged = []
+        failed = []
+        worktrees_cleaned = 0
+        stashed = False
+        try:
+            # Step 1: Clean up stale worktrees first
+            try:
+                worktrees = self.main_repo.git.worktree("list", "--porcelain").split("\n\n")
+                for wt in worktrees:
+                    lines = wt.strip().split("\n")
+                    if not lines or not lines[0].startswith("worktree "):
+                        continue
+                    wt_path = lines[0].split(" ", 1)[1]
+                    # Skip the main worktree
+                    if wt_path == str(self.main_repo.working_dir):
+                        continue
+                    # Remove the worktree
+                    try:
+                        self.main_repo.git.worktree("remove", wt_path, "--force")
+                        worktrees_cleaned += 1
+                        logger.info(f"[BRANCH] Removed worktree: {wt_path}")
+                    except GitCommandError:
+                        pass
+            except GitCommandError:
+                pass
+
+            # Step 2: Stash any uncommitted changes in main first
+            if self.main_repo.is_dirty() or self.main_repo.untracked_files:
+                try:
+                    self.main_repo.git.stash("push", "-u", "-m", "[Cleanup] Auto-stash before branch cleanup")
+                    stashed = True
+                    logger.info("[BRANCH] Stashed main repo changes before cleanup")
+                except GitCommandError:
+                    pass
+
+            # Find all worktree records
+            records = session.query(AgentWorktree).filter(
+                AgentWorktree.merge_status.in_(["active", None])
+            ).all()
+            tracked_branches = {r.branch_name for r in records}
+
+            # Also find untracked agent/autopilot branches (created before tracking)
+            all_branches = [b.name for b in self.main_repo.branches]
+            untracked_branches = [
+                b for b in all_branches
+                if b.startswith(("agent-", "autopilot-")) and b not in tracked_branches
+            ]
+
+            # Process tracked branches
+            for record in records:
+                branch_name = record.branch_name
+                agent_id = record.agent_id
+                try:
+                    # Check if branch exists
+                    self.main_repo.git.rev_parse("--verify", branch_name)
+
+                    # Ensure we're on main
+                    target_branch = self.config.base_branch
+                    self.main_repo.heads[target_branch].checkout()
+
+                    # Try to merge the branch into main
+                    try:
+                        self.main_repo.git.merge(
+                            branch_name,
+                            no_ff=True,
+                            m=f"[Cleanup] Merged {branch_name} into {target_branch}"
+                        )
+                        merged.append(branch_name)
+                        logger.info(f"[BRANCH] Merged {branch_name} into {target_branch}")
+                    except GitCommandError as e:
+                        if "CONFLICT" in str(e):
+                            # Resolve conflicts using newest-file-wins
+                            logger.info(f"[BRANCH] Conflicts merging {branch_name}, resolving...")
+                            self._resolve_conflicts(agent_id, session)
+                            self.main_repo.git.commit(
+                                f"[Cleanup] Resolved conflicts merging {branch_name}",
+                                "--no-verify"
+                            )
+                            merged.append(branch_name)
+                        else:
+                            logger.warning(f"[BRANCH] Could not merge {branch_name}: {e}")
+                            failed.append(branch_name)
+                            continue
+
+                    # Delete the branch
+                    self.main_repo.git.branch("-D", branch_name)
+                    record.merge_status = "cleaned"
+                    cleaned.append(branch_name)
+                    logger.info(f"[BRANCH] Deleted branch {branch_name}")
+
+                except GitCommandError:
+                    # Branch doesn't exist, just mark as cleaned
+                    record.merge_status = "cleaned"
+                    cleaned.append(branch_name)
+
+            # Process untracked branches (no DB record)
+            for branch_name in untracked_branches:
+                try:
+                    self.main_repo.git.rev_parse("--verify", branch_name)
+
+                    target_branch = self.config.base_branch
+                    self.main_repo.heads[target_branch].checkout()
+
+                    try:
+                        self.main_repo.git.merge(
+                            branch_name,
+                            no_ff=True,
+                            m=f"[Cleanup] Merged untracked {branch_name}"
+                        )
+                        merged.append(branch_name)
+                    except GitCommandError as e:
+                        # Can't merge — abort and force delete
+                        try:
+                            self.main_repo.git.merge("--abort")
+                        except GitCommandError:
+                            pass
+                        # Force delete without merge
+                        try:
+                            self.main_repo.git.branch("-D", branch_name)
+                            cleaned.append(branch_name)
+                            logger.info(f"[BRANCH] Force-deleted unmergeable branch {branch_name}")
+                        except GitCommandError:
+                            failed.append(branch_name)
+                        continue
+
+                    self.main_repo.git.branch("-D", branch_name)
+                    cleaned.append(branch_name)
+
+                except GitCommandError:
+                    failed.append(branch_name)
+
+            session.commit()
+            return {
+                "cleaned": len(cleaned),
+                "merged": len(merged),
+                "failed": len(failed),
+                "worktrees_cleaned": worktrees_cleaned,
+                "branches": cleaned,
+            }
+        finally:
+            # Restore stashed changes if we stashed
+            if stashed:
+                try:
+                    self.main_repo.git.stash("pop")
+                    logger.info("[BRANCH] Restored stashed changes")
+                except GitCommandError as e:
+                    logger.warning(f"[BRANCH] Could not restore stash: {e}")
+            session.close()
+
