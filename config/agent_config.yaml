@@ -21,7 +21,7 @@ cli_tools:
       - "invalid response"
 
 # Agent Defaults
-agent_defaults:
+agents:
   default_cli_tool: "pi"
   max_retries: 3
   health_check_interval: 300  # seconds
@@ -74,3 +74,14 @@ monitoring:
     recreate:
       enhanced_prompt: true
       include_failure_context: true
+# Diagnostic Agent Settings
+diagnostic_agent:
+  enabled: true
+  cooldown_seconds: 120  # 2 minutes between diagnostic runs
+  min_stuck_time_seconds: 180  # 3 minutes before considering workflow stuck
+  max_agents_to_analyze: 15
+  max_tasks_per_run: 5
+
+# Autopilot Orchestrator Settings
+autopilot:
+  max_concurrent_agents: 3  # Max agents to run simultaneously per workflow
