@@ -6,7 +6,7 @@ Migration script to add task_id, phase_id columns to tickets table.
 import sqlite3
 import os
 
-DB_PATH = os.path.join(os.getcwd(), "hephaestus.db")
+DB_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "hephaestus.db")
 
 
 def migrate():

@@ -1,62 +1,106 @@
 # Adversarial Review
 
-**Target:** Ticket system additions — task_id, phase_id, agent_id fields (commit 548f3d5)
+**Target:** Pi agent file integration, ticket system fields, forensics always-run, MCP paths
 
 ## Summary
-- **BLOCKERS:** 1
+- **BLOCKERS:** 2
 - **FIXES:** 4
-- **DEFERRED:** 1
+- **DEFERRED:** 3
 
 ## Findings
 
-### [BLOCKER] agent_id body field overrides X-Agent-ID header — agent impersonation
-- **File:** `src/mcp/server.py:2776`
+### [BLOCKER] Pi `-p` flag kills agent before tmux message delivery
+
+- **File:** `src/interfaces/cli_interface.py:493`
+- **Evidence:** PiAgent's launch command uses `-p` (non-interactive mode: "process prompt and exit"):
+  ```python
+  command = f'pi --append-system-prompt "@{agent_file}" -p "$(cat {prompt_file})" --model {model} --approve'
+  ```
+  Meanwhile, `src/agents/manager.py:243-258` waits 25 seconds then sends the full initial message (with all MCP tool instructions, workflow context, agent_id, workflow_id, phase_id, memory guidelines, etc.) via tmux chunks. Pi exits after `-p` completes, so the tmux message lands in a dead shell prompt.
+- **Impact:** Pi agents launched with an agent file receive only the minimal extracted task snippet (from prompt_file) — they never get the full MCP tool instructions, workflow context, or communication guidelines. The agent would lack critical context (e.g., how to use create_ticket, save_memory, agent communication). Agents without an agent file (fallback path) work correctly since they don't use `-p`.
+- **Fix:** Either (a) remove `-p` from PiAgent and launch interactively, relying on tmux chunk delivery like Claude/Droid/Codex, or (b) include ALL necessary info (full initial message) in the prompt_file instead of just the task snippet, and skip the tmux delivery for pi.
+
+### [BLOCKER] `@file` syntax invalid for `--append-system-prompt`
+
+- **File:** `src/interfaces/cli_interface.py:493`
+- **Evidence:** The command uses:
+  ```python
+  command = f'pi --append-system-prompt "@{agent_file}" ...'
+  ```
+  Pi's `@file` expansion is for **positional arguments** (`pi [options] [@files...] [messages...]`), not for option values. `--append-system-prompt` takes raw text — `@/path/to/file.md` would be passed as the literal string, not expanded to file contents. Compare with `mcp/claude_mcp_client.py:1670` which correctly uses shell expansion:
+  ```python
+  cmd = f'pi --append-system-prompt "$(cat {agent_file})" -p "{task[:200]}"'
+  ```
+- **Impact:** The agent file contents are NOT loaded as the system prompt. Pi receives the literal string `@/home/user/.pi/agent/agents/hephaestus-xxx.md` as appended system prompt text. Combined with Blocker #1, pi gets garbage system prompt + minimal task info + no tmux message.
+- **Fix:** Use `$(cat {agent_file})` for shell expansion, matching the spawn_agent pattern:
+  ```python
+  command = f'pi --append-system-prompt "$(cat {agent_file})" -p "$(cat {prompt_file})" --model {model} --approve'
+  ```
+  But also note: `$(cat file)` inside double quotes in shell could still work for large files, though tmux buffer limits may apply.
+
+### [FIX] spawn_agent hardcodes phase_id=1 for all spawned agents
+
+- **File:** `mcp/claude_mcp_client.py:1654`
 - **Evidence:**
   ```python
-  agent_id_from_request = request.agent_id or agent_id
+  "phase_id": 1,
   ```
-  The `CreateTicketRequest.agent_id` field (line 224) is described as "Agent ID creating this ticket (overrides header)". The header `X-Agent-ID` is the authenticated identity. The body field lets any agent create tickets as any other agent by setting `agent_id` in the JSON payload to an arbitrary UUID.
-- **Impact:** An agent can impersonate any other agent as the ticket creator. The created_by_agent_id in the DB will be the spoofed ID. This undermines audit trails and accountability.
-- **Fix:** Remove the `agent_id` body override from `CreateTicketRequest` and the endpoint. The `agent_id` must come exclusively from the `X-Agent-ID` header. If the use case is "assign ticket to an agent", use `assigned_agent_id` (which already exists). The MCP client (claude_mcp_client.py) already sends `agent_id` in the payload and header separately — the payload `agent_id` should be dropped from the client too.
+  The `spawn_agent` function always creates sub-tasks with `phase_id: 1` regardless of which phase the agent is spawned from. The function doesn't accept a `phase_id` parameter, so callers cannot override it. When a Phase 7 agent spawns a Phase 3 development subagent, the sub-task is assigned to Phase 1 (Product Requirements) instead.
+- **Impact:** Sub-tasks created by spawn_agent are assigned to the wrong phase. This causes incorrect phase context in prompts, wrong agent file resolution (via phase_name), and incorrect evaluation point targeting in the orchestrator.
+- **Fix:** Add a `phase_id` parameter to `spawn_agent` and pass it through to `create_task`. Derive it from the agent_name if not provided (e.g., `hephaestus-development` → check the workflow's phase list for name matching).
 
-### [FIX] phase_id not passed in any assembler render call — dead parameter
-- **File:** `src/prompts/assembler.py:584` and `src/prompts/assembler.py:525`
-- **Evidence:** `assemble_task_prompt()` at line 584 calls `assembler.render()` with `agent_id` and `task_id` but omits `phase_id`, even though `task.phase_id` is available and used to look up the phase object. Same for `assemble_phase_prompt()` at line 525 which has `phase_id` in scope but doesn't pass it. The preview endpoint at `src/mcp/api.py:2123` also omits it.
-- **Impact:** The `Phase={phase_id or 'unknown'}` line in the system prompt (line 347) will always render `Phase=unknown`, making the new phase_id feature a no-op in actual prompts.
-- **Fix:** Pass `phase_id=phase_id` (or `phase_id=task.phase_id` / `phase_id=phase_id`) in all three `assembler.render()` call sites.
+### [FIX] Missing workflow_id and phase_id in PiAgent extracted IDs
 
-### [FIX] No FK validation for task_id and phase_id in TicketService
-- **File:** `src/services/ticket_service.py:295-296`
-- **Evidence:** The service validates `workflow_id` exists (line 196), `agent_id` exists (line 279), and all `blocked_by_ticket_ids` exist (line 265), but `task_id` and `phase_id` are passed through to the Ticket constructor without any existence check.
-- **Impact:** Tickets can reference non-existent tasks or phases. SQLite does not enforce foreign key constraints by default (requires `PRAGMA foreign_keys = ON`), so orphaned references will silently persist. The relationships `task` and `phase` on the Ticket model will return `None` even when IDs are set to garbage.
-- **Fix:** Add validation:
+- **File:** `src/interfaces/cli_interface.py:472-476`
+- **Evidence:** The IDs extraction from system_prompt only finds Agent= and Task= because `llm_interface.py:361` (`generate_agent_prompt`) generates:
+  ```
+  IDs: Agent=xxx | Task=yyy
+  ```
+  There is no `Workflow=` or `Phase=` in this format. The PiAgent tries to extract them:
   ```python
-  if task_id:
-      task = db.query(Task).filter_by(id=task_id).first()
-      if not task:
-          raise ValueError(f"Task not found: {task_id}")
-  if phase_id:
-      phase = db.query(Phase).filter_by(id=phase_id).first()
-      if not phase:
-          raise ValueError(f"Phase not found: {phase_id}")
+  wf_id = kwargs.get('workflow_id') or self._extract_id(system_prompt, 'Workflow=')
+  phase_id = kwargs.get('phase_id') or self._extract_id(system_prompt, 'Phase=')
   ```
+  Both return None because (a) `workflow_id`/`phase_id` are NOT passed as kwargs from `manager.py:197-201`, and (b) the system_prompt doesn't contain `Workflow=` or `Phase=` in its IDs line.
+- **Impact:** The user prompt sent to pi via `-p` is missing workflow_id and phase_id. Agents cannot create tickets (requires workflow_id), cannot create properly-phased tasks, and lose workflow context.
+- **Fix:** Pass `workflow_id` and `phase_id` as kwargs in `manager.py`'s `get_launch_command` call, and include them in the IDs line of `generate_agent_prompt`.
 
-### [FIX] agent_id parameter naming inconsistency across layers
-- **File:** `src/mcp/server.py:224`, `mcp/claude_mcp_client.py:608`, `src/services/ticket_service.py:144`
-- **Evidence:** Three different names for the same concept:
-  - DB model column: `created_by_agent_id` (database.py:664)
-  - Service/MCP/API parameter: `agent_id`
-  - MCP client function parameter: `agent_id`
-  The service silently maps `agent_id` → `created_by_agent_id=agent_id` at line 290. The `assigned_agent_id` is a separate, correct field.
-- **Impact:** Confusion during maintenance. A developer reading the API signature sees `agent_id` and may not realize it maps to `created_by_agent_id` in the DB. The new `agent_id` body field (from the BLOCKER above) compounds this — now there are three things named `agent_id` that mean different things in different contexts.
-- **Fix:** If the BLOCKER fix is applied (removing the body override), rename the service parameter to `created_by_agent_id` to match the DB column. Update all callers. This is a broader refactor but would eliminate ambiguity.
+### [FIX] Operator precedence in task section parsing creates fragile boundary detection
 
-### [FIX] MCP tool schema missing workflow_id — agents can't discover it's required
-- **File:** `src/mcp/server.py:4916-4926`
-- **Evidence:** The `create_ticket` tool schema properties are: title, description, ticket_type, priority, tags, blocked_by_ticket_ids, agent_id, task_id, phase_id. `workflow_id` is absent. But `CreateTicketRequest` requires it (`workflow_id: str = Field(...)`). The MCP client function (`claude_mcp_client.py:609`) does accept it and sends it in the payload.
-- **Impact:** Agents relying on the MCP tool schema (list_tools endpoint) won't know `workflow_id` is needed. The request will fail with a validation error. Pre-existing issue, but now more visible with the new fields added to the same schema.
-- **Fix:** Add `"workflow_id": {"type": "string", "description": "ID of the workflow this ticket belongs to"}` to the properties and add it to `required`.
+- **File:** `src/interfaces/cli_interface.py:459-460`
+- **Evidence:**
+  ```python
+  elif line.startswith('=== ') and in_task_section or line.startswith('═══ ') and in_task_section:
+      in_task_section = False
+  ```
+  Python precedence: `(A and B) or (C and D)` — this happens to be the intended logic. However, ANY line within the task description that starts with `═══ ` (e.g., a separator in a requirements table) would prematurely terminate the task section, causing the rest of the task content to be silently dropped.
+- **Impact:** If the enriched task description contains a line starting with `═══ `, the extracted task text is truncated. The agent receives an incomplete task description.
+- **Fix:** Only match known section delimiters (e.g., `═══ PRE-LOADED CONTEXT ═══`, `═══ AVAILABLE TOOLS ═══`) rather than any line starting with `═══ `. Or match the exact delimiter pattern.
 
-### [DEFER] Migration script doesn't add agent_id column
-- **File:** `scripts/add_ticket_task_phase_columns.py`
-- **Reason:** The migration only adds `task_id` and `phase_id`. The `created_by_agent_id` column already exists (pre-existing). The migration is correct for its scope. The script should arguably be idempotent with all new columns (including any future ones) but this is not a regression.
+### [FIX] `_extract_id` regex greedily captures pipe separator in some edge cases
+
+- **File:** `src/interfaces/cli_interface.py:501`
+- **Evidence:**
+  ```python
+  match = re.search(rf'{prefix}\s*(\S+)', text)
+  ```
+  The IDs line format from `generate_agent_prompt` is: `IDs: Agent=xxx | Task=yyy`. The regex `\S+` matches non-whitespace, so for `Agent=xxx`, it captures `xxx` correctly (stops at the space before `|`). However, if the format changes to have no spaces around `|` (e.g., `Agent=xxx|Task=yyy`), the regex would capture `xxx|Task=yyy` as the agent_id. This is fragile.
+- **Impact:** Low risk currently since the format has spaces. But any format change would silently corrupt ID extraction.
+- **Fix:** Use a more specific regex like `{prefix}\s*(\S+?)(?:\s*\||\s*$)` or split on `|` first, then extract each ID.
+
+## Findings (continued)
+
+### [DEFER] generate_pi_agents.py hardcodes model `openrouter/xiaomi/mimo-v2.5`
+
+- **File:** `scripts/generate_pi_agents.py:99`
+- **Reason:** Agent files are generated with `model: openrouter/xiaomi/mimo-v2.5`, but the command-line `--model` flag overrides this. Not a runtime issue, but misleading for anyone reading the agent files directly.
+
+### [DEFER] Forensics evaluation point is post-hoc, not a pre-gate
+
+- **File:** `src/autopilot/phases.py:244-248`
+- **Reason:** The evaluation point `after_phase: "forensics_analysis"` evaluates AFTER forensics runs. There's no mechanism to skip forensics because it's sequential. This is correct behavior — forensics always runs because it's the last phase and git_commit_push always continues. No action needed.
+
+### [DEFER] MCP client hardcoded to `localhost:8300`
+
+- **File:** `mcp/claude_mcp_client.py:15`
+- **Reason:** `HEPHAESTUS_URL = "http://localhost:8300"` is hardcoded. Fine for local development but breaks remote/distributed deployments. Low priority since MCP clients are typically co-located.
