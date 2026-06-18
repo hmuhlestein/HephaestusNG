@@ -221,13 +221,13 @@ class CreateTicketRequest(BaseModel):
     priority: str = Field(default="medium", pattern="^(low|medium|high|critical)$", description="Priority level")
     initial_status: Optional[str] = Field(default=None, description="Initial status (if None, uses board_config.initial_status)")
     assigned_agent_id: Optional[str] = Field(default=None, description="Optional agent to assign to")
+    agent_id: Optional[str] = Field(default=None, description="Agent ID creating this ticket (overrides header)")
     parent_ticket_id: Optional[str] = Field(default=None, description="Parent ticket ID for sub-tickets")
     blocked_by_ticket_ids: List[str] = Field(default_factory=list, description="List of ticket IDs blocking this ticket")
     tags: List[str] = Field(default_factory=list, description="List of tags for categorization")
     related_task_ids: List[str] = Field(default_factory=list, description="List of related task IDs")
     task_id: Optional[str] = Field(default=None, description="Task ID this ticket relates to")
     phase_id: Optional[str] = Field(default=None, description="Phase ID where this ticket was created")
-    created_by_agent_id: Optional[str] = Field(default=None, description="Agent ID creating this ticket (overrides header)")
 
 
 class CreateTicketResponse(BaseModel):
@@ -2774,8 +2774,9 @@ async def create_ticket_endpoint(
     agent_id: str = Header(..., alias="X-Agent-ID"),
 ):
     """Create a new ticket in the workflow tracking system."""
-    # Use created_by_agent_id from request if provided, otherwise use header
-    created_by_agent_id = request.created_by_agent_id or agent_id
+    # Use agent_id from request if provided, otherwise use header
+    # Note: request.agent_id is the agent_id from the payload, agent_id is from X-Agent-ID header
+    created_by_agent_id = request.agent_id or agent_id
     
     logger.info(f"[TICKET_CREATE] ========== START ==========")
     logger.info(f"[TICKET_CREATE] Agent: {created_by_agent_id}")
@@ -4914,9 +4915,9 @@ async def list_tools():
                         "priority": {"type": "string", "enum": ["low", "medium", "high", "critical"], "description": "Priority level"},
                         "tags": {"type": "array", "items": {"type": "string"}, "description": "Tags for categorization"},
                         "blocked_by_ticket_ids": {"type": "array", "items": {"type": "string"}, "description": "IDs of blocking tickets"},
+                        "agent_id": {"type": "string", "description": "Agent ID creating this ticket"},
                         "task_id": {"type": "string", "description": "Task ID this ticket relates to"},
-                        "phase_id": {"type": "string", "description": "Phase ID where this ticket was created"},
-                        "created_by_agent_id": {"type": "string", "description": "Agent ID creating this ticket"}
+                        "phase_id": {"type": "string", "description": "Phase ID where this ticket was created"}
                     },
                     "required": ["title", "description", "ticket_type", "priority"]
                 }
