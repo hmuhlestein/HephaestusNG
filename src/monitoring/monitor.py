@@ -1243,6 +1243,23 @@ class MonitoringLoop:
             conditions["all_tasks_finished"] = True
             logger.info(f"[DIAGNOSTIC MONITOR] ✅ All tasks finished: {len(finished_tasks)} tasks")
 
+            # Step 2.5: Check if a phase was recently completed (cooldown after phase completion)
+            from src.core.database import PhaseExecution
+            recent_phase_completion = session.query(PhaseExecution).filter(
+                PhaseExecution.workflow_execution_id == workflow_id,
+                PhaseExecution.status == 'completed',
+                PhaseExecution.completed_at.isnot(None)
+            ).order_by(PhaseExecution.completed_at.desc()).first()
+
+            if recent_phase_completion:
+                time_since_completion = (datetime.utcnow() - recent_phase_completion.completed_at).total_seconds()
+                phase_cooldown = 120  # 2 minutes after phase completion
+                if time_since_completion < phase_cooldown:
+                    logger.info(f"[DIAGNOSTIC MONITOR] ❌ Phase recently completed ({recent_phase_completion.phase_id[:8]}), cooling down: {time_since_completion:.0f}s / {phase_cooldown}s")
+                    self._log_diagnostic_status_report(conditions, trigger=False,
+                                                       reason=f"Phase completed {time_since_completion:.0f}s ago, cooling down")
+                    return
+
             # Step 3: Check if we have a validated result
             validated_result = session.query(WorkflowResult).filter(
                 WorkflowResult.workflow_id == workflow_id,
@@ -1373,6 +1390,17 @@ class MonitoringLoop:
             logger.info(f"[DIAGNOSTIC MONITOR] Context gathered: {len(context['phases_summary'])} phases, {len(context['agents_summary'])} agents reviewed")
 
             # Create diagnostic task
+            # Find the current phase to assign the diagnostic to
+            current_phase_id = None
+            for t in workflow_tasks:
+                if t.phase_id and t.status in ('done', 'in_progress'):
+                    current_phase_id = t.phase_id
+                    break
+            
+            if not current_phase_id:
+                logger.warning("[DIAGNOSTIC MONITOR] No phase_id found on any task, skipping diagnostic creation")
+                return
+
             task_id = str(uuid.uuid4())
             diagnostic_task = Task(
                 id=task_id,
@@ -1383,7 +1411,7 @@ class MonitoringLoop:
                 priority="high",
                 workflow_id=workflow_id,
                 created_by_agent_id="monitor",
-                phase_id=None,  # Diagnostic tasks are phase-agnostic
+                phase_id=current_phase_id,
             )
             session.add(diagnostic_task)
             session.flush()
