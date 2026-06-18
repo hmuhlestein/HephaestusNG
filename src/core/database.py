@@ -146,7 +146,7 @@ class Task(Base):
     phase = relationship("Phase", back_populates="tasks")
     workflow = relationship("Workflow", backref="tasks")
     results = relationship("AgentResult", back_populates="task")
-    ticket = relationship("Ticket", backref="related_tasks")
+    ticket = relationship("Ticket", foreign_keys=[ticket_id], backref="related_tasks")
 
 
 class Memory(Base):
@@ -700,8 +700,8 @@ class Ticket(Base):
     parent_ticket = relationship(
         "Ticket", remote_side=[id], foreign_keys=[parent_ticket_id], backref="sub_tickets"
     )
-    task = relationship("Task", backref="tickets")
-    phase = relationship("Phase", backref="tickets")
+    task = relationship("Task", foreign_keys=[task_id], backref="tickets")
+    phase = relationship("Phase", foreign_keys=[phase_id], backref="tickets")
     comments = relationship("TicketComment", back_populates="ticket")
     history = relationship("TicketHistory", back_populates="ticket")
     commits = relationship("TicketCommit", back_populates="ticket")
