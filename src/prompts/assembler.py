@@ -590,4 +590,5 @@ def assemble_task_prompt(
         task_done_definition=task.done_definition,
         agent_id=task.assigned_agent_id,
         task_id=task.id,
+        phase_id=task.phase_id,
     )
