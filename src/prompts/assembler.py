@@ -308,6 +308,7 @@ Hephaestus MCP (task management):
 • create_task - Create sub-tasks (MUST set parent_task_id="{task_id or 'unknown'}")
 • update_task_status - Mark done/failed when complete (REQUIRED)
 • save_memory - Save discoveries for other agents
+• spawn_agent - Spawn a specialized Hephaestus subagent (see below)
 
 Qdrant MCP (memory search):
 • qdrant-find - Search agent memories semantically
@@ -315,11 +316,26 @@ Qdrant MCP (memory search):
   Example: "qdrant-find 'PostgreSQL connection timeout solutions'"
   Note: Pre-loaded context covers most needs; search for specifics
 
+═══ SUBAGENT SPAWNING ═══
+To delegate specialized work, use spawn_agent:
+
+• spawn_agent(agent_name="hephaestus-development", task="implement X", workflow_id="your-workflow-id")
+• spawn_agent(agent_name="hephaestus-architecture-design", task="design Y", workflow_id="your-workflow-id")
+• spawn_agent(agent_name="hephaestus-adversarial-review", task="review Z", workflow_id="your-workflow-id")
+
+Available agents: hephaestus-product-requirements, hephaestus-architecture-design,
+hephaestus-development, hephaestus-adversarial-review, hephaestus-doc-review,
+hephaestus-security-review, hephaestus-qa-validation, hephaestus-product-validation,
+hephaestus-git-commit-push, hephaestus-forensics-analysis
+
+Note: workflow_id is required for task creation. Use your current workflow_id.
+
 ═══ WORKFLOW ═══
 1. Work on your task using pre-loaded context
 2. Use qdrant-find if you need specific information (errors, patterns, implementations)
 3. Save important discoveries via save_memory (error fixes, decisions, warnings)
-4. Call update_task_status when done (status='done') or failed (status='failed')
+4. Spawn subagents for specialized work (architecture, development, review, etc.)
+5. Call update_task_status when done (status='done') or failed (status='failed')
 
 IDs: Agent={agent_id or 'unknown'} | Task={task_id or 'unknown'}"""
 

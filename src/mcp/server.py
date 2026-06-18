@@ -67,6 +67,9 @@ class CreateTaskRequest(BaseModel):
     phase_order: Optional[int] = Field(default=None, description="Phase order number (alternative to phase_id)")
     cwd: Optional[str] = Field(default=None, description="Working directory for the task")
     ticket_id: Optional[str] = Field(default=None, description="Associated ticket ID (required when ticket tracking enabled)")
+    depends_on: Optional[List[str]] = Field(default=None, description="List of task IDs that must complete before this one")
+    parallel_group: Optional[str] = Field(default=None, description="Tasks in same group can run in parallel; different groups are sequential")
+    max_concurrent: Optional[int] = Field(default=1, description="Max agents working on this task simultaneously")
 
 
 class CreateTaskResponse(BaseModel):
@@ -1362,13 +1365,16 @@ async def create_task(
 
         # Validate phase_id is REQUIRED for workflow tasks
         if request.workflow_id:
+            logger.info(f"[CREATE_TASK] phase_id={repr(request.phase_id)}, phase_order={repr(request.phase_order)}")
             if not request.phase_id and not request.phase_order:
+                logger.error(f"[CREATE_TASK] REJECTED: no phase_id for workflow {request.workflow_id}")
                 raise HTTPException(
                     status_code=400,
                     detail=f"phase_id or phase_order is REQUIRED for workflow tasks. "
                            f"Agent {agent_id} must provide phase_id when workflow_id is set."
                 )
             if request.phase_id in ("None", "none", "null", ""):
+                logger.error(f"[CREATE_TASK] REJECTED: invalid phase_id={repr(request.phase_id)}")
                 raise HTTPException(
                     status_code=400,
                     detail=f"phase_id cannot be None/null/empty string. "
@@ -1390,6 +1396,9 @@ async def create_task(
             workflow_id=request.workflow_id,  # Use workflow_id from request
             estimated_complexity=5,  # Default value
             ticket_id=request.ticket_id,  # Store associated ticket ID
+            depends_on=request.depends_on,  # Task dependencies
+            parallel_group=request.parallel_group,  # Parallel execution group
+            max_concurrent=request.max_concurrent or 1,  # Max concurrent agents
         )
         session.add(task)
         session.commit()
@@ -1944,7 +1953,13 @@ async def update_task_status(
                 try:
                     merge_result = server_state.branch_manager.merge_to_parent(agent_id)
                     merge_commit_sha = merge_result.get("commit_sha") if isinstance(merge_result, dict) else None
-                    logger.info(f"Merged completed work to parent (no validation): {merge_result}")
+                    logger.info(f"Merged completed work to parent: {merge_result}")
+                    # Clean up the branch after successful merge
+                    try:
+                        server_state.branch_manager.cleanup_branch(agent_id)
+                        logger.info(f"Cleaned up branch for agent {agent_id[:8]}")
+                    except Exception as e:
+                        logger.warning(f"Failed to cleanup branch: {e}")
                 except Exception as e:
                     logger.warning(f"Failed to merge completed work to parent: {e}")
 
@@ -2016,6 +2031,30 @@ async def update_task_status(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+
+async def _get_project_id_for_agent(agent_id: str) -> Optional[str]:
+    """Resolve project_id from agent's workflow working_directory."""
+    try:
+        session = server_state.db_manager.get_session()
+        try:
+            agent = session.query(Agent).filter_by(id=agent_id).first()
+            if not agent or not agent.current_task_id:
+                return None
+            task = session.query(Task).filter_by(id=agent.current_task_id).first()
+            if not task or not task.workflow_id:
+                return None
+            workflow = session.query(Workflow).filter_by(id=task.workflow_id).first()
+            if not workflow or not workflow.working_directory:
+                return None
+            project = session.query(AutopilotProject).filter_by(base_dir=workflow.working_directory).first()
+            return project.id if project else None
+        finally:
+            session.close()
+    except Exception as e:
+        logger.warning(f"Failed to resolve project_id for agent {agent_id}: {e}")
+        return None
+
+
 @app.post("/save_memory", response_model=SaveMemoryResponse)
 async def save_memory(
     request: SaveMemoryRequest,
@@ -2059,6 +2098,9 @@ async def save_memory(
 
                 # 3. If not duplicate, store in vector database
                 if not similar or similar[0]["score"] < 0.95:
+                    # Resolve project_id from agent's workflow
+                    project_id = await _get_project_id_for_agent(agent_id)
+
                     # Store in vector database
                     success = await server_state.vector_store.store_memory(
                         collection="agent_memories",
@@ -2070,6 +2112,7 @@ async def save_memory(
                             "memory_type": request.memory_type,
                             "related_files": request.related_files,
                             "tags": request.tags,
+                            "project_id": project_id,
                         },
                     )
 
@@ -2123,6 +2166,7 @@ class SearchMemoryRequest(BaseModel):
     query: str
     limit: int = 10
     memory_type: Optional[str] = None
+    project_id: Optional[str] = None  # Filter by project (auto-detected from agent if not set)
 
 
 class SearchMemoryResponse(BaseModel):
@@ -2132,19 +2176,33 @@ class SearchMemoryResponse(BaseModel):
 
 
 @app.post("/search_memory", response_model=SearchMemoryResponse)
-async def search_memory(request: SearchMemoryRequest):
+async def search_memory(
+    request: SearchMemoryRequest,
+    agent_id: str = Header(None, alias="X-Agent-ID"),
+):
     """Search the knowledge base for relevant memories using semantic search."""
     logger.info(f"Searching memory: '{request.query[:100]}' (limit={request.limit})")
 
     try:
         query_embedding = await server_state.llm_provider.generate_embedding(request.query)
 
-        filters = None
+        # Build filter conditions
+        must_conditions = []
         if request.memory_type:
-            filters = {"must": [{"key": "memory_type", "match": {"value": request.memory_type}}]}
+            must_conditions.append({"key": "memory_type", "match": {"value": request.memory_type}})
+        
+        # Auto-detect project_id from agent if not provided
+        project_id = request.project_id
+        if not project_id and agent_id:
+            project_id = await _get_project_id_for_agent(agent_id)
+        
+        if project_id:
+            must_conditions.append({"key": "project_id", "match": {"value": project_id}})
+
+        filters = {"must": must_conditions} if must_conditions else None
 
         results = await server_state.vector_store.search(
-            collection="memories",
+            collection="agent_memories",
             query_vector=query_embedding,
             limit=request.limit,
             filters=filters,
@@ -3648,6 +3706,51 @@ async def get_workflows_endpoint(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/api/create_agent_for_task")
+async def create_agent_for_task_endpoint(
+    task_id: str = Body(..., embed=True),
+    workflow_id: str = Body(default=None, embed=True),
+    phase_id: str = Body(default=None, embed=True),
+):
+    """Create an agent for a pending task."""
+    logger.info(f"Creating agent for task {task_id}")
+
+    try:
+        session = server_state.db_manager.get_session()
+        try:
+            # Get the task
+            task = session.query(Task).filter_by(id=task_id).first()
+            if not task:
+                raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+
+            # Get enriched data if available
+            enriched_data = {}
+            if task.enriched_description:
+                enriched_data['enriched_description'] = task.enriched_description
+            if hasattr(task, 'completion_criteria') and task.completion_criteria:
+                enriched_data['completion_criteria'] = task.completion_criteria
+
+            # Create agent
+            agent = await server_state.agent_manager.create_agent_for_task(
+                task=task,
+                enriched_data=enriched_data,
+                memories=[],
+                project_context="",
+                agent_type="phase",
+                use_existing_worktree=True,
+            )
+
+            logger.info(f"Created agent {agent.id[:8]} for task {task_id}")
+            return {"agent_id": agent.id, "status": "created"}
+        finally:
+            session.close()
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error creating agent for task: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/api/terminate_agent")
 async def terminate_agent_endpoint(
     agent_id: str = Body(..., embed=True),
@@ -4126,37 +4229,44 @@ def _require_localhost(request: Request):
 
 
 @app.get("/api/agents")
-async def list_agents(request: Request):
-    """List all agents."""
+async def list_agents(
+    request: Request,
+    status: str = Query("active", regex="^(active|all)$"),
+    page: int = Query(1, ge=1),
+    per_page: int = Query(20, ge=1, le=100),
+):
+    """List agents with pagination. status='active' excludes terminated, 'all' includes everything."""
     _require_localhost(request)
     from src.core.database import Workflow
     session = server_state.db_manager.get_session()
     try:
-        agents = session.query(Agent).all()
+        query = session.query(Agent)
+        if status == "active":
+            query = query.filter(Agent.status != "terminated")
+        
+        total = query.count()
+        agents = query.order_by(Agent.created_at.desc()).offset((page - 1) * per_page).limit(per_page).all()
+        
         result = []
         for a in agents:
-            # Skip agents from completed workflows (orphaned agents)
-            skip_agent = False
             agent_data = {
                 "id": a.id,
                 "status": a.status,
+                "agent_type": getattr(a, 'agent_type', 'phase'),
                 "current_task_id": a.current_task_id,
                 "health_check_failures": a.health_check_failures,
                 "last_activity": a.last_activity.isoformat() if a.last_activity else None,
+                "created_at": a.created_at.isoformat() if a.created_at else None,
                 "tmux_session_name": a.tmux_session_name,
                 "cli_type": getattr(a, 'cli_type', None),
                 "current_task": None,
+                "workflow": None,
             }
-            # Add full task info with phase_info
+            # Add task and workflow info
             if a.current_task_id:
                 from src.core.database import Task
                 task = session.query(Task).filter_by(id=a.current_task_id).first()
                 if task:
-                    # Check if workflow is completed
-                    wf = session.query(Workflow).filter_by(id=task.workflow_id).first()
-                    if wf and wf.status in ('completed', 'failed'):
-                        skip_agent = True
-                    
                     task_data = {
                         "id": task.id,
                         "description": (task.enriched_description or task.raw_description or '')[:200],
@@ -4180,11 +4290,30 @@ async def list_agents(request: Request):
                                 "order": phase.order,
                             }
                     elif task.workflow_id:
-                        logger.warning(f"Task {task.id} has workflow_id but no phase_id — this is a bug")
+                        # Task has workflow but no phase_id — agent should have set it
+                        logger.warning(f"Task {task.id} has workflow_id={task.workflow_id} but no phase_id — agent failed to provide it")
                     agent_data["current_task"] = task_data
-            if not skip_agent and a.status != 'terminated':
-                result.append(agent_data)
-        return result
+                    
+                    # Add workflow info
+                    if task.workflow_id:
+                        wf = session.query(Workflow).filter_by(id=task.workflow_id).first()
+                        if wf:
+                            agent_data["workflow"] = {
+                                "id": wf.id,
+                                "name": wf.name,
+                                "status": wf.status,
+                                "description": (wf.description or '')[:100],
+                            }
+            
+            result.append(agent_data)
+        
+        return {
+            "agents": result,
+            "total": total,
+            "page": page,
+            "per_page": per_page,
+            "pages": (total + per_page - 1) // per_page,
+        }
     finally:
         session.close()
 
@@ -4720,7 +4849,10 @@ async def list_tools():
                         "workflow_id": {"type": "string", "description": "ID of the workflow execution this task belongs to (REQUIRED)"},
                         "phase_id": {"type": "string", "description": "Phase ID for workflow-based tasks (REQUIRED)"},
                         "priority": {"type": "string", "enum": ["low", "medium", "high"]},
-                        "ticket_id": {"type": "string", "description": "Associated ticket ID"}
+                        "ticket_id": {"type": "string", "description": "Associated ticket ID"},
+                        "depends_on": {"type": "array", "items": {"type": "string"}, "description": "List of task IDs that must complete before this one. OMIT or set null for sequential execution (one at a time). Set to [] for immediate parallel execution. Set to [task_id, ...] to wait for specific tasks."},
+                        "parallel_group": {"type": "string", "description": "Tasks in same group can run in parallel. Different groups are sequential."},
+                        "max_concurrent": {"type": "integer", "description": "Max agents working on this task simultaneously (default: 1)"}
                     },
                     "required": ["task_description", "done_definition", "workflow_id", "phase_id"]
                 }
@@ -4746,7 +4878,8 @@ async def list_tools():
                     "properties": {
                         "query": {"type": "string", "description": "Search query to find relevant memories"},
                         "limit": {"type": "integer", "description": "Maximum number of results (default: 10)"},
-                        "memory_type": {"type": "string", "description": "Filter by memory type (e.g., decision, discovery, learning)"}
+                        "memory_type": {"type": "string", "description": "Filter by memory type (e.g., decision, discovery, learning)"},
+                        "project_id": {"type": "string", "description": "Filter by project ID (auto-detected from agent if not set)"}
                     },
                     "required": ["query"]
                 }
@@ -5334,7 +5467,10 @@ async def execute_tool(request: Dict[str, Any]):
                 workflow_id=workflow_id,
                 phase_id=arguments.get("phase_id"),
                 priority=arguments.get("priority", "medium"),
-                ticket_id=arguments.get("ticket_id")
+                ticket_id=arguments.get("ticket_id"),
+                depends_on=arguments.get("depends_on"),
+                parallel_group=arguments.get("parallel_group"),
+                max_concurrent=arguments.get("max_concurrent", 1)
             ),
             agent_id="mcp-claude"
         )
@@ -5355,7 +5491,9 @@ async def execute_tool(request: Dict[str, Any]):
                 query=arguments.get("query", ""),
                 limit=arguments.get("limit", 10),
                 memory_type=arguments.get("memory_type"),
-            )
+                project_id=arguments.get("project_id"),
+            ),
+            agent_id=arguments.get("_agent_id"),
         )
     elif tool_name == "get_task_status":
         return await task_progress()

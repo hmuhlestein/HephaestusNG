@@ -227,6 +227,9 @@ class FrontendAPI:
                     "estimated_complexity": task.estimated_complexity,
                     "phase_id": task.phase_id,
                     "workflow_id": task.workflow_id,
+                    "depends_on": task.depends_on,
+                    "parallel_group": task.parallel_group,
+                    "max_concurrent": task.max_concurrent,
                 }
 
                 # Add phase information if available

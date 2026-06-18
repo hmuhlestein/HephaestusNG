@@ -1576,6 +1576,109 @@ Stats:
         return f"Error getting workflow execution: {str(e)}"
 
 
+@mcp.tool()
+async def spawn_agent(
+    agent_name: str,
+    task: str,
+    parent_task_id: str = None,
+    agent_id: str = None,
+    workflow_id: str = None
+) -> str:
+    """Spawn a pi subagent with a specific Hephaestus agent configuration.
+
+    This spawns a pi subagent using the installed Hephaestus agent files
+    (e.g., hephaestus-development, hephaestus-architecture-design).
+
+    Pi agents are invoked via --append-system-prompt with the agent file contents.
+
+    Args:
+        agent_name: Name of the Hephaestus agent to spawn
+                    (e.g., 'hephaestus-development', 'hephaestus-architecture-design')
+        task: The task description/prompt for the subagent
+        parent_task_id: Parent task ID (sets parent_task_id on subagent's task)
+        agent_id: Your agent ID (for creating the sub-task)
+        workflow_id: Workflow ID (REQUIRED for task creation)
+
+    Available agents:
+        - hephaestus-product-requirements: Extract requirements from design docs
+        - hephaestus-architecture-design: Create technical architecture
+        - hephaestus-development: Implement components
+        - hephaestus-adversarial-review: Harsh code review
+        - hephaestus-doc-review: Documentation review
+        - hephaestus-security-review: Security review
+        - hephaestus-qa-validation: QA testing
+        - hephaestus-product-validation: Final product validation
+        - hephaestus-git-commit-push: Git commit and push
+        - hephaestus-forensics-analysis: Pipeline self-improvement
+
+    Example:
+        spawn_agent(
+            agent_name="hephaestus-development",
+            task="Implement the user authentication module with JWT support",
+            parent_task_id="abc-123",
+            workflow_id="xyz-789"
+        )
+    """
+    import os
+
+    try:
+        # Get the path to the pi agent file
+        pi_agents_dir = os.path.expanduser("~/.pi/agent/agents")
+        agent_file = os.path.join(pi_agents_dir, f"{agent_name}.md")
+
+        if not os.path.exists(agent_file):
+            return f"Error: Agent '{agent_name}' not found at {agent_file}"
+
+        # Create a sub-task for this agent (workflow_id is required)
+        sub_task_id = None
+        if agent_id and workflow_id:
+            try:
+                async with httpx.AsyncClient() as client:
+                    response = await client.post(
+                        f"{HEPHAESTUS_URL}/create_task",
+                        json={
+                            "task_description": task,
+                            "done_definition": "Complete the assigned task as described",
+                            "ai_agent_id": agent_id,
+                            "workflow_id": workflow_id,
+                            "phase_id": 1,
+                            "priority": "high",
+                            "parent_task_id": parent_task_id,
+                        },
+                        headers={"Content-Type": "application/json", "X-Agent-ID": agent_id},
+                        timeout=10.0
+                    )
+                    if response.status_code == 200:
+                        sub_task_id = response.json().get("task_id")
+                    else:
+                        return f"Failed to create sub-task: {response.text}"
+            except Exception as e:
+                return f"Error creating sub-task: {str(e)}"
+        else:
+            return "Error: agent_id and workflow_id are required to create sub-task"
+
+        # Build the pi command using --append-system-prompt
+        # Pi reads the agent file and appends it to the system prompt
+        # Use cat to read file contents and pass via shell expansion
+        cmd = f'pi --append-system-prompt "$(cat {agent_file})" -p "{task[:200]}"'
+
+        return f"""Agent '{agent_name}' ready to spawn.
+
+Sub-task created: {sub_task_id}
+
+To run this agent, use bash:
+{cmd}
+
+The agent will use the system prompt from:
+{agent_file}
+
+MCP tools (save_memory, update_task_status) are available.
+The sub-task ID is: {sub_task_id}"""
+
+    except Exception as e:
+        return f"Error spawning agent: {str(e)}"
+
+
 # Run the MCP server
 if __name__ == "__main__":
     print("🚀 Starting Claude MCP Client for Hephaestus...")
