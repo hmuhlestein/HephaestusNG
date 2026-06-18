@@ -1179,7 +1179,11 @@ REMEMBER:
 
             # Send message
             pane = tmux_session.attached_window.attached_pane
-            pane.send_keys(formatted_message, enter=True)
+            
+            # Escape special shell characters to prevent glob/syntax errors
+            # Wrap in quotes to prevent shell interpretation of [, ], etc.
+            escaped_message = formatted_message.replace('"', '\\"').replace('$', '\\$').replace('`', '\\`')
+            pane.send_keys(f'"{escaped_message}"', enter=True)
 
             # Wait a moment then send Enter to ensure message is submitted
             await asyncio.sleep(1)
