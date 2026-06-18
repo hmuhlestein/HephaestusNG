@@ -502,4 +502,234 @@ else
     ok "OpenCode config already up to date"
 fi
 
+# ─── Pi Agent MCP Configuration ──────────────────────────────────
+
+header "Pi Agent MCP Configuration"
+
+PI_AGENTS_DIR="$HOME/.pi/agent/agents"
+PI_MCP_CONFIG="$HOME/.config/mcp/mcp.json"
+PI_MCP_BACKUP="$HOME/.config/mcp/mcp.json.bak"
+
+# Check if pi is installed
+if command -v pi >/dev/null 2>&1 || [ -d "$HOME/.pi" ]; then
+    log "Pi detected — configuring MCP tools"
+    
+    # Check if pi-mcp-adapter is installed
+    if ! command -v pi-mcp-adapter >/dev/null 2>&1; then
+        log "Installing pi-mcp-adapter..."
+        if pi install npm:pi-mcp-adapter 2>/dev/null; then
+            ok "pi-mcp-adapter installed via pi"
+        elif npm install -g pi-mcp-adapter 2>/dev/null; then
+            ok "pi-mcp-adapter installed via npm"
+        else
+            warn "Failed to install pi-mcp-adapter — MCP tools may not work"
+        fi
+    else
+        ok "pi-mcp-adapter already installed"
+    fi
+    
+    # Generate and install Hephaestus pi agents from phase files
+    log "Generating Hephaestus pi agents from phase definitions..."
+    if [ -f "$PREFIX/scripts/generate_pi_agents.py" ]; then
+        "$PYTHON_PATH" "$PREFIX/scripts/generate_pi_agents.py" 2>/dev/null
+        if [ $? -eq 0 ]; then
+            # Copy generated agents to pi agents directory
+            mkdir -p "$PI_AGENTS_DIR"
+            if [ -d "$PREFIX/agents/pi" ]; then
+                cp "$PREFIX/agents/pi"/*.md "$PI_AGENTS_DIR" 2>/dev/null
+                agent_count=$(ls -1 "$PREFIX/agents/pi"/*.md 2>/dev/null | wc -l)
+                ok "Installed $agent_count Hephaestus pi agents"
+            fi
+        else
+            warn "Failed to generate pi agents"
+        fi
+    else
+        warn "generate_pi_agents.py not found — skipping agent generation"
+    fi
+    
+    # Create MCP config directory
+    mkdir -p "$(dirname "$PI_MCP_CONFIG")"
+    
+    # Determine python path for MCP server
+    if [ -n "$VENV_DIR" ] && [ -f "$VENV_DIR/bin/python" ]; then
+        MCP_PYTHON="$VENV_DIR/bin/python"
+    elif command -v python3 >/dev/null 2>&1; then
+        MCP_PYTHON="$(which python3)"
+    else
+        warn "Python not found — cannot configure MCP"
+        MCP_PYTHON=""
+    fi
+    
+    # Determine MCP script path
+    if [ "$LOCAL_MODE" = true ]; then
+        MCP_SCRIPT_PATH="$PREFIX/claude_mcp_client.py"
+    else
+        MCP_SCRIPT_PATH="$PREFIX/claude_mcp_client.py"
+    fi
+    
+    # Verify MCP script exists
+    if [ ! -f "$MCP_SCRIPT_PATH" ]; then
+        warn "MCP script not found at $MCP_SCRIPT_PATH — skipping MCP config"
+        MCP_SCRIPT_PATH=""
+    fi
+    
+    # Configure MCP if we have python and script
+    if [ -n "$MCP_PYTHON" ] && [ -n "$MCP_SCRIPT_PATH" ]; then
+        # Backup existing config
+        if [ -f "$PI_MCP_CONFIG" ]; then
+            cp "$PI_MCP_CONFIG" "$PI_MCP_BACKUP" 2>/dev/null
+        fi
+        
+        # Write MCP config if it doesn't exist, or merge if it does
+        if [ ! -f "$PI_MCP_CONFIG" ]; then
+            cat > "$PI_MCP_CONFIG" << MCPEOF
+{
+  "mcpServers": {
+    "hephaestus": {
+      "command": "$MCP_PYTHON",
+      "args": ["$MCP_SCRIPT_PATH"]
+    }
+  }
+}
+MCPEOF
+            if [ $? -eq 0 ]; then
+                ok "Wrote $PI_MCP_CONFIG"
+            else
+                warn "Failed to write MCP config"
+            fi
+        else
+            # Check if hephaestus is already configured
+            if grep -q '"hephaestus"' "$PI_MCP_CONFIG" 2>/dev/null; then
+                ok "Hephaestus MCP already configured"
+            else
+                # Add hephaestus to existing config using python for safe JSON merge
+                log "Adding hephaestus to existing MCP config..."
+                "$MCP_PYTHON" -c "
+import json
+import sys
+import os
+
+config_path = '$PI_MCP_CONFIG'
+backup_path = '$PI_MCP_BACKUP'
+
+try:
+    # Read existing config
+    with open(config_path, 'r') as f:
+        content = f.read().strip()
+        if content:
+            config = json.loads(content)
+        else:
+            config = {}
+except (json.JSONDecodeError, FileNotFoundError) as e:
+    # If backup exists, restore it
+    if os.path.exists(backup_path):
+        with open(backup_path, 'r') as f:
+            config = json.load(f)
+    else:
+        config = {}
+
+# Ensure mcpServers exists
+if 'mcpServers' not in config:
+    config['mcpServers'] = {}
+
+# Add hephaestus server
+config['mcpServers']['hephaestus'] = {
+    'command': '$MCP_PYTHON',
+    'args': ['$MCP_SCRIPT_PATH']
+}
+
+# Write updated config
+with open(config_path, 'w') as f:
+    json.dump(config, f, indent=2)
+
+print('OK')
+" 2>/dev/null
+                if [ $? -eq 0 ]; then
+                    ok "Added hephaestus to MCP config"
+                else
+                    warn "Failed to update MCP config"
+                    # Restore backup if it exists
+                    if [ -f "$PI_MCP_BACKUP" ]; then
+                        cp "$PI_MCP_BACKUP" "$PI_MCP_CONFIG" 2>/dev/null
+                        log "Restored backup config"
+                    fi
+                fi
+            fi
+        fi
+    fi
+    
+    # Add MCP tools to pi agent files if they exist
+    mkdir -p "$PI_AGENTS_DIR"
+    
+    # MCP tools to add to pi agents
+    MCP_TOOLS="mcp:hephaestus/save_memory, mcp:hephaestus/search_memory, mcp:hephaestus/get_task_status, mcp:hephaestus/create_task, mcp:hephaestus/update_task_status"
+    
+    # Function to add MCP tools to agent file
+    add_mcp_tools() {
+        local agent_file="$1"
+        local agent_name="$2"
+        
+        if [ ! -f "$agent_file" ]; then
+            log "$agent_name not found — skipping"
+            return
+        fi
+        
+        # Check if already has MCP tools
+        if grep -q 'mcp:hephaestus' "$agent_file" 2>/dev/null; then
+            ok "$agent_name already has MCP tools"
+            return
+        fi
+        
+        # Backup the agent file
+        cp "$agent_file" "${agent_file}.bak" 2>/dev/null
+        
+        # Try to add MCP tools to tools line
+        if grep -q '^tools:' "$agent_file" 2>/dev/null; then
+            # Check if tools line is the simple format we expect
+            if grep -q '^tools: read, write, edit, bash, grep, find, ls$' "$agent_file" 2>/dev/null; then
+                sed -i '' "s|^tools: read, write, edit, bash, grep, find, ls$|tools: read, write, edit, bash, grep, find, ls, $MCP_TOOLS|" "$agent_file" 2>/dev/null
+            else
+                # Tools line has custom content, append MCP tools
+                sed -i '' "s|^tools: |tools: | $MCP_TOOLS|" "$agent_file" 2>/dev/null
+            fi
+            
+            if [ $? -eq 0 ]; then
+                ok "Added MCP tools to $agent_name"
+            else
+                warn "Failed to update $agent_name"
+                # Restore backup
+                if [ -f "${agent_file}.bak" ]; then
+                    cp "${agent_file}.bak" "$agent_file" 2>/dev/null
+                fi
+            fi
+        else
+            log "$agent_name has no tools line — skipping"
+        fi
+    }
+    
+    # Update pi-developer agent
+    add_mcp_tools "$PI_AGENTS_DIR/pi-developer.md" "pi-developer"
+    
+    # Update pi-adversarial-review agent
+    add_mcp_tools "$PI_AGENTS_DIR/pi-adversarial-review.md" "pi-adversarial-review"
+    
+    # Update pi-qa agent
+    add_mcp_tools "$PI_AGENTS_DIR/pi-qa.md" "pi-qa"
+    
+    # Update pi-researcher agent
+    add_mcp_tools "$PI_AGENTS_DIR/pi-researcher.md" "pi-researcher"
+    
+    # Cleanup backup files
+    rm -f "$PI_MCP_BACKUP" 2>/dev/null
+    rm -f "$PI_AGENTS_DIR"/*.bak 2>/dev/null
+    
+    log "Restart Pi after installation for MCP tools to take effect"
+    
+else
+    log "Pi not detected — skipping MCP tool configuration"
+    log "To configure later:"
+    log "  1. Install pi-mcp-adapter: pi install npm:pi-mcp-adapter"
+    log "  2. Create $PI_MCP_CONFIG with your MCP server configuration"
+fi
+
 header "Done"
