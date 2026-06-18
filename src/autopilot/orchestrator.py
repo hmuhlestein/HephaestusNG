@@ -35,6 +35,7 @@ HEPHAESTUS_DIR = Path(__file__).parent.parent.parent
 API_BASE = os.environ.get("HEPHAESTUS_API_BASE", "http://127.0.0.1:8300")
 
 from src.core.constants import AUTOPILOT_STATE_DIR
+from src.core.simple_config import get_config
 
 POLL_INTERVAL = 15
 STUCK_THRESHOLD = 3
@@ -134,6 +135,7 @@ class PipelineState:
     designs_failed: int = 0
     total_elapsed: int = 0
     current_design: Optional[str] = None
+    current_workflow_id: Optional[str] = None
     current_feature_folder: Optional[str] = None
     current_iteration: int = 0
     queue_status: Dict[str, str] = field(default_factory=dict)
@@ -147,6 +149,7 @@ class PipelineState:
             "designs_failed": self.designs_failed,
             "total_elapsed": self.total_elapsed,
             "current_design": self.current_design,
+            "current_workflow_id": self.current_workflow_id,
             "current_feature_folder": self.current_feature_folder,
             "current_iteration": self.current_iteration,
             "queue_status": self.queue_status,
@@ -161,6 +164,7 @@ class PipelineState:
         state.designs_failed = data.get("designs_failed", 0)
         state.total_elapsed = data.get("total_elapsed", 0)
         state.current_design = data.get("current_design")
+        state.current_workflow_id = data.get("current_workflow_id")
         state.current_feature_folder = data.get("current_feature_folder")
         state.current_iteration = data.get("current_iteration", 0)
         state.queue_status = data.get("queue_status", {})
@@ -333,7 +337,8 @@ def get_tasks(status: str = None, workflow_id: str = None) -> list:
 
 def get_agents(workflow_id: str = None) -> list:
     """Get agents, optionally filtered by workflow_id via their assigned tasks."""
-    data = api_get("/api/agents")
+    # Get ALL agents (not paginated) for internal use
+    data = api_get("/api/agents?status=all&per_page=1000")
     if data is None:
         return []
     agents = data if isinstance(data, list) else data.get("agents", [])
@@ -380,7 +385,7 @@ def get_active_workflows() -> list:
     data = api_get("/api/workflow-executions") or []
     if isinstance(data, dict):
         data = data.get("executions", [])
-    return [w for w in data if w.get("status") == "active"]
+    return [w for w in data if w.get("status") in ("active", "running")]
 
 
 def check_api_credits() -> Tuple[bool, str]:
@@ -1152,37 +1157,39 @@ def generate_product_validation_report(
 
 def run_single_workflow(sdk, workflow_id: str, project_path: str, description: str,
                         logger: OrchestratorLogger,
-                        launch_params: Dict[str, Any] = None) -> str:
-    # Check for existing active workflows and wait for them
+                        launch_params: Dict[str, Any] = None,
+                        state: PipelineState = None) -> str:
+    # Check for existing active workflows and stop them
     existing_workflows = get_active_workflows()
     if existing_workflows:
-        logger.log(f"Found {len(existing_workflows)} active workflow(s), waiting for them to complete (max 300s total)...")
-        wait_start = time.time()
+        logger.log(f"Found {len(existing_workflows)} active workflow(s) — stopping them...")
         for wf in existing_workflows:
-            # Check total timeout
-            elapsed = time.time() - wait_start
-            if elapsed >= 300:
-                logger.log(f"  Total wait timeout reached ({elapsed:.0f}s), proceeding anyway")
-                break
-            
             wf_id = wf.get('id', '')
-            remaining = 300 - elapsed
-            logger.log(f"  Waiting for workflow {wf_id[:8]}... ({remaining:.0f}s remaining)")
-            
-            # Wait for this workflow to complete
-            wf_wait_start = time.time()
-            while time.time() - wait_start < 300:  # Check total timeout
-                wf_status = get_workflow_status(wf_id)
-                status = wf_status.get('status', '')
-                if status in ('completed', 'failed', 'cancelled'):
-                    logger.log(f"  Workflow {wf_id[:8]} finished with status: {status}")
-                    break
-                time.sleep(10)
-            else:
-                logger.log(f"  Workflow {wf_id[:8]} timed out, proceeding anyway")
+            try:
+                # Terminate agents for this workflow
+                agents = get_agents(workflow_id=wf_id)
+                for agent in agents:
+                    if agent.get('status') in ACTIVE_AGENT_STATUSES:
+                        try:
+                            api_post(f"/api/agents/{agent['id']}/terminate")
+                            logger.log(f"  Terminated agent {agent['id'][:8]} for workflow {wf_id[:8]}")
+                        except Exception:
+                            pass
+                # Mark workflow as paused
+                api_post(f"/api/workflow-executions/{wf_id}/pause")
+                logger.log(f"  Paused workflow {wf_id[:8]}")
+            except Exception as e:
+                logger.log(f"  Failed to stop workflow {wf_id[:8]}: {e}", "WARN")
     
     logger.log(f"Launching workflow: {workflow_id}")
-    logger.event("workflow_launch", {"workflow": workflow_id, "path": project_path})
+    # Extract design document from launch_params for the event
+    design_doc = (launch_params or {}).get("design_document", "")
+    design_name = Path(design_doc).stem.replace("_", " ").replace("-", " ") if design_doc else ""
+    logger.event("workflow_launch", {
+        "workflow": workflow_id,
+        "path": project_path,
+        "design": design_name or design_doc,
+    })
 
     try:
         exec_id = sdk.start_workflow(
@@ -1192,6 +1199,8 @@ def run_single_workflow(sdk, workflow_id: str, project_path: str, description: s
             launch_params=launch_params or {},
         )
         logger.log(f"Workflow launched: {exec_id}")
+        if state:
+            state.current_workflow_id = exec_id
     except Exception as e:
         logger.log(f"Failed to launch workflow {workflow_id}: {e}", "ERROR")
         return "failed"
@@ -1221,12 +1230,137 @@ def run_single_workflow(sdk, workflow_id: str, project_path: str, description: s
             in_progress = get_tasks(status="in_progress", workflow_id=exec_id)
             done = get_tasks(status="done", workflow_id=exec_id)
             failed = get_tasks(status="failed", workflow_id=exec_id)
+            # Also check for non-terminal statuses that mean work is still happening
+            assigned = get_tasks(status="assigned", workflow_id=exec_id)
+            queued = get_tasks(status="queued", workflow_id=exec_id)
+            under_review = get_tasks(status="under_review", workflow_id=exec_id)
+            validation = get_tasks(status="validation_in_progress", workflow_id=exec_id)
+            needs_work = get_tasks(status="needs_work", workflow_id=exec_id)
+            blocked = get_tasks(status="blocked", workflow_id=exec_id)
+            non_terminal = assigned + queued + under_review + validation + needs_work + blocked
 
             logger.log(
                 f"[{workflow_id}] [{elapsed}s] Agents: {len(active_agents)} active | "
                 f"Tasks: {len(pending)} pending, {len(in_progress)} active, "
                 f"{len(done)} done, {len(failed)} failed"
             )
+
+            # Auto-launch agents for pending tasks (respecting concurrency limit)
+            if pending:
+                # Get max concurrent agents from config
+                config = get_config()
+                max_concurrent = getattr(config, 'max_concurrent_agents', 3)
+                
+                # Check if we have capacity to launch more agents
+                if len(active_agents) < max_concurrent:
+                    # Find launchable tasks based on dependencies and parallel groups
+                    # - depends_on: [] → runs immediately (parallel)
+                    # - depends_on: [ids] → runs when all deps complete
+                    # - depends_on: null/omitted → runs sequentially (one at a time)
+                    # - parallel_group: tasks in same group can run together
+                    # - max_concurrent: limit agents per task
+                    launchable = []
+                    sequential_seen = False  # Track if we've seen a sequential task
+                    
+                    # Get task IDs that already have agents assigned
+                    task_ids_with_agents = set()
+                    for agent in agents:
+                        task_id = agent.get('current_task_id')
+                        if task_id:
+                            task_ids_with_agents.add(task_id)
+                    
+                    for task in pending:
+                        task_id = task.get('id')
+                        
+                        # Skip tasks that already have agents assigned
+                        if task_id in task_ids_with_agents:
+                            continue
+                        
+                        depends_on = task.get('depends_on')  # JSON list of task IDs
+                        parallel_group = task.get('parallel_group')
+                        task_max_concurrent = task.get('max_concurrent', 1)
+                        
+                        # Parse depends_on if it's a string
+                        if isinstance(depends_on, str):
+                            depends_on = json.loads(depends_on)
+                        
+                        # Check dependencies
+                        if depends_on is not None:
+                            # Explicit depends_on set (including empty list)
+                            if len(depends_on) == 0:
+                                # Empty list = runs immediately (parallel)
+                                launchable.append(task)
+                            else:
+                                # Check if all deps are done
+                                deps_met = True
+                                for dep_id in depends_on:
+                                    dep_done = any(t.get('id') == dep_id for t in done)
+                                    dep_failed = any(t.get('id') == dep_id for t in failed)
+                                    if not dep_done and not dep_failed:
+                                        deps_met = False
+                                        break
+                                
+                                if deps_met:
+                                    launchable.append(task)
+                                else:
+                                    logger.log(f"  Task {task_id[:8]} waiting on dependencies: {depends_on}")
+                        else:
+                            # No depends_on specified - sequential
+                            if not sequential_seen:
+                                sequential_seen = True
+                                launchable.append(task)
+                            # else: skip - only one sequential task per cycle
+                    
+                    # Now filter by parallel_group constraints
+                    # Tasks in the SAME parallel_group can run together
+                    # Tasks in DIFFERENT parallel_groups (or no group) run sequentially
+                    if launchable:
+                        grouped = {}  # group_name -> [tasks]
+                        ungrouped = []
+                        
+                        for task in launchable:
+                            group = task.get('parallel_group')
+                            if group:
+                                if group not in grouped:
+                                    grouped[group] = []
+                                grouped[group].append(task)
+                            else:
+                                ungrouped.append(task)
+                        
+                        # Rebuild launchable: all tasks from the first group, then ungrouped
+                        final_launchable = []
+                        
+                        # Add all tasks from the first parallel group
+                        for group_name, group_tasks in grouped.items():
+                            final_launchable.extend(group_tasks)
+                            break  # Only one group at a time
+                        
+                        # If no groups, add first ungrouped task
+                        if not final_launchable and ungrouped:
+                            final_launchable.append(ungrouped[0])
+                        
+                        launchable = final_launchable
+                    
+                    agents_to_launch = min(len(launchable), max_concurrent - len(active_agents))
+                    if launchable:
+                        logger.log(f"[AUTO-LAUNCH] {len(launchable)} launchable task(s) (of {len(pending)} pending), launching {agents_to_launch} (active: {len(active_agents)}, max: {max_concurrent})")
+                    
+                    for i, task in enumerate(launchable[:agents_to_launch]):
+                        task_id = task.get('id')
+                        phase_id = task.get('phase_id')
+                        if not task_id:
+                            continue
+                        try:
+                            # Create agent via API
+                            agent_data = api_post("/api/create_agent_for_task", {
+                                "task_id": task_id,
+                                "workflow_id": exec_id,
+                                "phase_id": phase_id,
+                            })
+                            agent_id = agent_data.get('agent_id', 'unknown')
+                            logger.log(f"  Launched agent {agent_id[:8]} for task {task_id[:8]}")
+                        except Exception as e:
+                            logger.log(f"  Failed to launch agent for task {task_id[:8]}: {e}", "ERROR")
 
             # Parent peeks at children's output periodically for observability
             if elapsed > 0 and elapsed % PARENT_PEEK_INTERVAL < POLL_INTERVAL:
@@ -1299,6 +1433,22 @@ def run_single_workflow(sdk, workflow_id: str, project_path: str, description: s
             if wf_state in ("completed", "failed"):
                 logger.log(f"Workflow {wf_state}: {exec_id}")
                 return wf_state
+
+            # Check if workflow should be considered complete:
+            # No active agents AND no pending/in-progress/non-terminal tasks
+            if not active_agents and not pending and not in_progress and not non_terminal:
+                # All agents done, no more work to do
+                if done:
+                    logger.log(f"Workflow complete: {len(done)} tasks done, no agents active")
+                    if state:
+                        state.current_workflow_id = None
+                    return "completed"
+                elif elapsed > 60:
+                    # No tasks at all after 60s — might be an empty workflow
+                    logger.log(f"No tasks and no agents after {elapsed}s — workflow appears empty")
+                    if state:
+                        state.current_workflow_id = None
+                    return "completed"
 
             out_of_credits, credit_reason = check_api_credits()
             if out_of_credits:
@@ -1471,6 +1621,7 @@ def run_single_design(
             wf_status = run_single_workflow(
                 sdk, "autopilot", str(project_path), description, logger,
                 launch_params=launch_params,
+                state=state,
             )
 
             iter_elapsed = int(time.time() - iter_start)
@@ -1883,6 +2034,22 @@ def main():
 
     args = parser.parse_args()
 
+    # Check if another orchestrator is already running
+    pid_dir = Path(AUTOPILOT_STATE_DIR)
+    pid_file = pid_dir / "orchestrator.pid"
+    if pid_file.exists():
+        try:
+            existing_pid = int(pid_file.read_text().strip())
+            # Check if process is alive
+            os.kill(existing_pid, 0)
+            # Process is alive - check if it's us
+            if existing_pid != os.getpid():
+                print(f"Another orchestrator is already running (PID: {existing_pid}). Exiting.")
+                sys.exit(1)
+        except (ProcessLookupError, ValueError):
+            # Process not alive or invalid PID, clean up
+            pid_file.unlink(missing_ok=True)
+
     # Default design queue to <project-path>/docs/design-queue
     if not args.design_queue:
         args.design_queue = str(Path(args.project_path) / "docs" / "design-queue")
@@ -1893,7 +2060,15 @@ def main():
             db.unlink()
             print(f"Dropped {db}")
 
-    run_continuous_pipeline(args)
+    # Write our PID
+    pid_dir.mkdir(parents=True, exist_ok=True)
+    pid_file.write_text(str(os.getpid()))
+
+    try:
+        run_continuous_pipeline(args)
+    finally:
+        # Clean up PID file
+        pid_file.unlink(missing_ok=True)
 
 
 if __name__ == "__main__":
