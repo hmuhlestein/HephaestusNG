@@ -426,30 +426,44 @@ class PiAgent(CLIAgentInterface):
         """Generate launch command for pi.
 
         Pi's --append-system-prompt flag appends text or file contents to the system prompt.
-        We save the prompt to a temp file and use --append-system-prompt @file to load it.
+        If a Hephaestus pi agent file exists for this phase, we reference it directly
+        instead of injecting the full phase text (which is already in the agent file).
         """
         import os
         from src.core.simple_config import get_config
 
         config = get_config()
 
-        # Save prompt to a temp file
-        task_id = kwargs.get('task_id', 'default')
-        prompt_file = f"/tmp/pi_prompt_{task_id}.txt"
-
-        # Write the system prompt to file
-        with open(prompt_file, 'w') as f:
-            f.write(system_prompt)
-
-        # Make sure the file is readable
-        os.chmod(prompt_file, 0o644)
+        # Check if a Hephaestus pi agent file exists for this phase
+        phase_name = kwargs.get('phase_name', '')
+        pi_agents_dir = os.path.expanduser('~/.pi/agent/agents')
+        # Phase names use underscores (architecture_design), agent files use hyphens (architecture-design)
+        agent_name = phase_name.replace('_', '-') if phase_name else None
+        agent_file = os.path.join(pi_agents_dir, f'hephaestus-{agent_name}.md') if agent_name else None
 
         # Get configured model (pi uses --model flag)
         model = kwargs.get('model') or getattr(config, 'cli_model', 'anthropic/claude-sonnet-4')
 
-        # Pi command with --append-system-prompt to load the system prompt from file
-        # Note: @file syntax is NOT supported for --append-system-prompt, must use shell expansion
-        command = f'pi --append-system-prompt "$(cat {prompt_file})" --model {model} --approve'
+        if agent_file and os.path.exists(agent_file):
+            # For pi: reference the agent file directly — don't inject the full phase text
+            # The agent file already contains description, done_definitions, additional_notes
+            # The system_prompt here would be redundant, so we pass a minimal task-only prompt
+            task_id = kwargs.get('task_id', 'default')
+            prompt_file = f'/tmp/pi_prompt_{task_id}.txt'
+            with open(prompt_file, 'w') as f:
+                f.write(system_prompt)
+            os.chmod(prompt_file, 0o644)
+
+            # Use @file syntax to load the agent file as system prompt
+            command = f'pi --append-system-prompt "@{agent_file}" --model {model} --approve'
+        else:
+            # Fallback: inject full prompt from file (no agent file available)
+            task_id = kwargs.get('task_id', 'default')
+            prompt_file = f'/tmp/pi_prompt_{task_id}.txt'
+            with open(prompt_file, 'w') as f:
+                f.write(system_prompt)
+            os.chmod(prompt_file, 0o644)
+            command = f'pi --append-system-prompt "$(cat {prompt_file})" --model {model} --approve'
 
         return command
 

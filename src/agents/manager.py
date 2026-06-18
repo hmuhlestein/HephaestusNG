@@ -179,25 +179,9 @@ class AgentManager:
 
             # 5. Launch CLI agent
             cli_agent = get_cli_agent(cli_type)
-            launch_command = cli_agent.get_launch_command(
-                system_prompt=system_prompt,
-                task_id=task.id,
-                model=model,  # Pass phase-specific or global model
-            )
 
-            # Send launch command to tmux
-            pane = tmux_session.attached_window.attached_pane
-
-            # If using GLM, export env vars in the shell first
-            if env_vars:
-                logger.info(f"Exporting GLM environment variables in shell for agent {agent_id}")
-                for key, value in env_vars.items():
-                    pane.send_keys(f'export {key}="{value}"', enter=True)
-                # Brief pause to ensure exports complete
-                await asyncio.sleep(0.5)
-
-            # Echo task info to terminal so we can see what the agent is working on
-            phase_name = "unknown"
+            # Resolve phase_name before launching so pi can reference the agent file
+            phase_name = None
             phase_order = "?"
             if task.phase_id:
                 from src.core.database import Phase
@@ -212,7 +196,26 @@ class AgentManager:
                         phase_order = str(phase.order)
                 finally:
                     session.close()
-            
+
+            launch_command = cli_agent.get_launch_command(
+                system_prompt=system_prompt,
+                task_id=task.id,
+                model=model,  # Pass phase-specific or global model
+                phase_name=phase_name,
+            )
+
+            # Send launch command to tmux
+            pane = tmux_session.attached_window.attached_pane
+
+            # If using GLM, export env vars in the shell first
+            if env_vars:
+                logger.info(f"Exporting GLM environment variables in shell for agent {agent_id}")
+                for key, value in env_vars.items():
+                    pane.send_keys(f'export {key}="{value}"', enter=True)
+                # Brief pause to ensure exports complete
+                await asyncio.sleep(0.5)
+
+            # Echo task info to terminal so we can see what the agent is working on
             task_desc = (task.enriched_description or task.raw_description or "")[:200]
             pane.send_keys(f'echo "="', enter=True)
             pane.send_keys(f'echo "AGENT: {agent_id[:8]}"', enter=True)
@@ -998,9 +1001,26 @@ REMEMBER:
 
             # Relaunch agent
             cli_agent = get_cli_agent(agent.cli_type)
+
+            # Resolve phase_name for pi agent file lookup
+            restart_phase_name = None
+            if task.phase_id:
+                from src.core.database import Phase
+                restart_session = self.db_manager.get_session()
+                try:
+                    if task.phase_id.isdigit():
+                        restart_phase = restart_session.query(Phase).filter_by(order=int(task.phase_id), workflow_id=task.workflow_id).first()
+                    else:
+                        restart_phase = restart_session.query(Phase).filter_by(id=task.phase_id).first()
+                    if restart_phase:
+                        restart_phase_name = restart_phase.name
+                finally:
+                    restart_session.close()
+
             launch_command = cli_agent.get_launch_command(
                 system_prompt=agent.system_prompt,
                 task_id=task.id,
+                phase_name=restart_phase_name,
             )
 
             pane = tmux_session.attached_window.attached_pane
