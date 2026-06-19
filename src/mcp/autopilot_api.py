@@ -2054,15 +2054,20 @@ async def cleanup_branches():
 
 @router.get("/health")
 async def get_system_health():
-    """Get system health audit results.
+    """Get system health audit results."""
+    return run_health_audit()
 
-    Returns findings from the monitoring system:
-    - Orphaned processes
-    - Unmerged branches
-    - Stuck designs
-    - Failed tasks
+
+def run_health_audit(db_manager=None):
+    """Shared health audit logic used by both Monitor and API endpoint.
+
+    Returns:
+        dict with 'findings', 'workflows', 'summary' keys
     """
-    from src.core.database import DatabaseManager, Agent, Task, get_db
+    from src.core.database import DatabaseManager, Agent, Task, Workflow, Phase, get_db
+
+    if db_manager is None:
+        db_manager = DatabaseManager()
 
     findings = []
 
@@ -2101,8 +2106,8 @@ async def get_system_health():
                     "pids": orphaned[:10],
                     "action": f"kill -9 {' '.join(orphaned[:5])}"
                 })
-    except Exception as e:
-        logger.debug(f"Process check failed: {e}")
+    except Exception:
+        pass
 
     # 2. Unmerged branches
     try:
@@ -2122,21 +2127,18 @@ async def get_system_health():
                     "branches": branches[:10],
                     "action": "heph cleanup branches"
                 })
-    except Exception as e:
-        logger.debug(f"Branch check failed: {e}")
+    except Exception:
+        pass
 
-    # 3. Workflow progress
-    from src.core.database import DatabaseManager
-    db_manager = DatabaseManager()
+    # 3. Workflow progress + stuck/failed
+    workflows_summary = []
     session = db_manager.get_session()
     try:
-        from src.core.database import Workflow, Phase
         autopilot_wfs = session.query(Workflow).filter(
             Workflow.definition_id == 'autopilot',
             Workflow.status.in_(['active', 'running', 'paused'])
         ).all()
 
-        workflows_summary = []
         for wf in autopilot_wfs:
             design_name = "unknown"
             if wf.launch_params:
@@ -2170,7 +2172,6 @@ async def get_system_health():
                 "progress_pct": round(done / total * 100) if total > 0 else 0,
             }
 
-            # Check for stuck
             if in_progress == 0 and pending > 0 and done < total and wf.status == 'active':
                 progress["stuck"] = True
                 findings.append({
@@ -2181,7 +2182,6 @@ async def get_system_health():
                     "action": "Relaunch agents or pause workflow"
                 })
 
-            # Failed tasks
             for t in tasks:
                 if t.status == "failed":
                     findings.append({
