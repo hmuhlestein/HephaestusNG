@@ -1851,7 +1851,7 @@ def run_continuous_pipeline(args) -> None:
     from src.sdk.models import WorkflowDefinition
     from src.autopilot.phases import AUTOPILOT_PHASES, AUTOPILOT_WORKFLOW_CONFIG, AUTOPILOT_LAUNCH_TEMPLATE
 
-    cli_tool = os.getenv("HEPHAESTUS_CLI_TOOL", os.getenv("DEFAULT_CLI_TOOL", "opencode"))
+    cli_tool = os.getenv("HEPHAESTUS_CLI_TOOL", os.getenv("DEFAULT_CLI_TOOL", "pi"))
 
     autopilot_def = WorkflowDefinition(
         id="autopilot",
