@@ -790,63 +790,49 @@ def _run_repair(repair_id: str, filename: str, project: Path, logger):
     actions_taken = []
 
     try:
-        # 1. Find all workflows for this design
+        # 1. Create a new workflow for this repair
         design_name = filename.replace('.md', '').replace('_', ' ').replace('-', ' ')
+        
+        # Launch a new autopilot workflow for this design
+        workflow_data = api_post("/api/workflow-executions", {
+            "definition_id": "autopilot",
+            "launch_params": {
+                "design_document": str(project / 'docs' / 'design-queue' / filename),
+                "project_path": str(project),
+                "repair_mode": True
+            }
+        })
+        
+        if not workflow_data or not workflow_data.get('id'):
+            findings.append({"type": "error", "message": "Failed to create repair workflow"})
+            return
+        
+        wf_id = workflow_data['id']
+        actions_taken.append(f"Created repair workflow {wf_id[:8]}")
+        findings.append({"type": "info", "message": f"Created repair workflow {wf_id[:8]}"})
+
+        # 2. Spawn review agent on the new workflow
+        spawn_repair_review_agent(wf_id, filename, project, "Repair initiated", logger, actions_taken)
+        
+        # 3. Find any existing workflows for context
         with get_db() as db:
             workflows = db.query(Workflow).filter(
                 Workflow.definition_id == 'autopilot'
             ).all()
 
-            design_workflow_ids = []
+            existing_workflow_ids = []
             for wf in workflows:
                 if wf.launch_params:
                     try:
                         params = json.loads(wf.launch_params) if isinstance(wf.launch_params, str) else wf.launch_params
                         doc = params.get('design_document', '')
                         if filename in doc or design_name.lower() in doc.lower():
-                            design_workflow_ids.append(wf.id)
+                            existing_workflow_ids.append(wf.id)
                     except Exception:
                         pass
 
-            if not design_workflow_ids:
-                findings.append({"type": "info", "message": f"No workflows found for design '{filename}'"})
-            else:
-                findings.append({"type": "info", "message": f"Found {len(design_workflow_ids)} workflow(s) for this design"})
-
-        # 2. Resume all paused workflows for this design
-        for wf_id in design_workflow_ids:
-            wf_status = get_workflow_status(wf_id)
-            if wf_status.get('status') == 'paused':
-                try:
-                    api_post(f"/api/workflow-executions/{wf_id}/resume")
-                    actions_taken.append(f"Resumed workflow {wf_id[:8]}")
-                except Exception as e:
-                    logger.error(f"Failed to resume workflow {wf_id}: {e}")
-
-        # 3. Check each workflow
-        for wf_id in design_workflow_ids:
-            is_complete, reason = is_design_fully_complete(wf_id, logger)
-            findings.append({
-                "type": "completion_check",
-                "workflow_id": wf_id[:8],
-                "is_complete": is_complete,
-                "reason": reason
-            })
-
-            # Attempt programmatic recovery
-            if not is_complete:
-                success, recovery_msg = attempt_recovery(wf_id, logger)
-                if success:
-                    actions_taken.append(f"Workflow {wf_id[:8]}: {recovery_msg}")
-                findings.append({
-                    "type": "recovery",
-                    "workflow_id": wf_id[:8],
-                    "success": success,
-                    "message": recovery_msg
-                })
-
-                # Spawn review agent — it has authority to call other agents
-                spawn_repair_review_agent(wf_id, filename, project, reason, logger, actions_taken)
+            if existing_workflow_ids:
+                findings.append({"type": "info", "message": f"Found {len(existing_workflow_ids)} existing workflow(s) for context"})
 
         # 3. Check for unmerged branches
         try:
@@ -896,7 +882,7 @@ def _run_repair(repair_id: str, filename: str, project: Path, logger):
             "summary": {
                 "total_findings": len(findings),
                 "actions_taken": len(actions_taken),
-                "workflows_found": len(design_workflow_ids),
+                "workflows_created": 1,
             }
         }
 
