@@ -680,6 +680,7 @@ async def repair_design(request: dict):
     import asyncio
     from pathlib import Path
 
+    logger.info("[REPAIR] Received repair request")
     filename = request.get("filename")
     if not filename:
         raise HTTPException(400, "filename is required")
@@ -695,8 +696,9 @@ async def repair_design(request: dict):
     # Generate repair ID for tracking
     repair_id = str(uuid.uuid4())[:8]
 
-    # Run repair in background
-    asyncio.create_task(_run_repair(repair_id, filename, project, logger))
+    # Run repair in background thread pool (not async - uses sync subprocess calls)
+    loop = asyncio.get_event_loop()
+    loop.run_in_executor(None, _run_repair, repair_id, filename, project, logger)
 
     return {
         "repair_id": repair_id,
@@ -705,7 +707,7 @@ async def repair_design(request: dict):
     }
 
 
-async def _run_repair(repair_id: str, filename: str, project: Path, logger):
+def _run_repair(repair_id: str, filename: str, project: Path, logger):
     """Background repair task."""
     from src.core.database import get_db, Workflow
     from src.autopilot.orchestrator import is_design_fully_complete, attempt_recovery, get_workflow_status, api_post
@@ -839,15 +841,19 @@ async def _run_repair(repair_id: str, filename: str, project: Path, logger):
 @router.get("/queue/repair/{repair_id}")
 async def get_repair_status(repair_id: str):
     """Get repair status and results."""
+    logger.info(f"[REPAIR] Status check for {repair_id}")
     result_file = Path.home() / ".hephaestus" / "autopilot" / f"repair_{repair_id}.json"
     if not result_file.exists():
+        logger.info(f"[REPAIR] {repair_id} still running (no result file yet)")
         return {"repair_id": repair_id, "status": "running", "message": "Repair still in progress..."}
     
     try:
         result = json.loads(result_file.read_text())
         result["status"] = "completed"
+        logger.info(f"[REPAIR] {repair_id} completed")
         return result
     except Exception as e:
+        logger.error(f"[REPAIR] {repair_id} error reading results: {e}")
         return {"repair_id": repair_id, "status": "error", "message": str(e)}
 
 
