@@ -1102,7 +1102,8 @@ class MonitoringLoop:
         self._health_findings = result["findings"]
 
     async def _cleanup_orphaned_tmux_sessions(self):
-        """Clean up tmux sessions that don't have corresponding active agents."""
+        """Clean up tmux sessions that don't have corresponding active agents.
+        Also clean up orphaned agents (working but no active workflow)."""
         logger.debug("Starting orphaned tmux session cleanup")
 
         try:
@@ -1131,6 +1132,20 @@ class MonitoringLoop:
                 }
 
                 logger.debug(f"Found {len(active_session_names)} active agent sessions: {active_session_names}")
+
+                # Clean up orphaned agents (working but no active workflow)
+                from src.core.database import Workflow
+                active_workflow_ids = {wf.id for wf in session.query(Workflow).filter(
+                    Workflow.status.in_(['active', 'running'])
+                ).all()}
+
+                for agent in active_agents:
+                    if agent.current_task_id:
+                        task = session.query(Task).filter_by(id=agent.current_task_id).first()
+                        if task and task.workflow_id and task.workflow_id not in active_workflow_ids:
+                            logger.info(f"Terminating orphaned agent {agent.id[:8]} - workflow {task.workflow_id[:8]} not active")
+                            agent.status = 'terminated'
+                session.commit()
 
             finally:
                 session.close()
