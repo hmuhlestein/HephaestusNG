@@ -708,42 +708,55 @@ async def repair_design(request: dict):
 
 
 def spawn_repair_review_agent(wf_id: str, filename: str, project: Path, reason: str, logger, actions_taken: list):
-    """Spawn a review agent with full context and authority to fix."""
+    """Spawn a review agent that checks each task, acts, and monitors completion."""
     try:
         failed_tasks = get_tasks(status='failed', workflow_id=wf_id)
-        failed_context = []
-        for t in failed_tasks[:5]:
-            failed_context.append(f"- Task {t.get('id', '')[:8]}: {(t.get('enriched_description') or t.get('raw_description') or '')[:100]}")
-
         pending_tasks = get_tasks(status='pending', workflow_id=wf_id)
         in_progress_tasks = get_tasks(status='in_progress', workflow_id=wf_id)
+        done_tasks = get_tasks(status='done', workflow_id=wf_id)
 
-        review_instructions = f"""REPAIR REVIEW: Design '{filename}' needs a full review.
+        task_summary = []
+        for t in failed_tasks[:5]:
+            task_summary.append(f"  FAILED: {t.get('id', '')[:8]} - {(t.get('enriched_description') or t.get('raw_description') or '')[:80]}")
+        for t in pending_tasks[:5]:
+            task_summary.append(f"  PENDING: {t.get('id', '')[:8]} - {(t.get('enriched_description') or t.get('raw_description') or '')[:80]}")
+        for t in in_progress_tasks[:5]:
+            task_summary.append(f"  IN_PROGRESS: {t.get('id', '')[:8]} - {(t.get('enriched_description') or t.get('raw_description') or '')[:80]}")
 
-Workflow {wf_id[:8]} status:
-- Reason: {reason}
-- Failed tasks: {len(failed_tasks)}
-- Pending tasks: {len(pending_tasks)}
-- In progress tasks: {len(in_progress_tasks)}
+        review_instructions = f"""REPAIR AGENT: Design '{filename}' needs systematic repair.
 
-Failed tasks:
-{chr(10).join(failed_context) if failed_context else 'None'}
+Workflow {wf_id[:8]} status: {reason}
+Completed: {len(done_tasks)} | Failed: {len(failed_tasks)} | Pending: {len(pending_tasks)} | In Progress: {len(in_progress_tasks)}
 
-Your job as REVIEW AGENT:
-1. Read the design document at {project / 'docs' / 'design-queue' / filename}
-2. Check what has been completed so far in the feature folder
-3. Identify what's blocking progress
-4. You have FULL AUTHORITY to:
-   - Spawn agents for failed or pending tasks using create_task + create_agent_for_task
-   - Merge branches using the MCP tools
-   - Fix code issues directly
-5. For each blocking issue, create a task and spawn an agent to fix it
-6. Write a repair_report.md summarizing what you found and fixed
-7. Mark your task as done when complete"""
+Tasks:
+{chr(10).join(task_summary) if task_summary else 'No tasks found'}
+
+YOUR WORKFLOW — check each task, determine action, act, monitor:
+
+1. READ the design doc at {project / 'docs' / 'design-queue' / filename}
+2. For EACH failed task:
+   a. Read the error and understand why it failed
+   b. Determine: can it be retried? does it need rework? is it blocked?
+   c. If retryable: call update_task_status to reset to 'pending', then create_agent_for_task to relaunch
+   d. If needs rework: create a new task with corrected instructions, spawn agent
+   e. If blocked: document the blocker and move on
+   f. MONITOR: after spawning, check get_task_status periodically until done or failed
+3. For EACH pending task:
+   a. Check if its dependencies are met (depends_on tasks are done)
+   b. If dependencies met: spawn agent via create_agent_for_task
+   c. If dependencies not met: skip and come back later
+   d. MONITOR: check status after spawning
+4. For EACH in_progress task:
+   a. Check agent output via get_agent_output
+   b. If stuck (no progress): nudge agent or terminate and respawn
+   c. If progressing: let it continue
+5. MERGE: after all tasks complete, merge branches to main
+6. WRITE repair_report.md summarizing actions taken
+7. Mark your task done when ALL tasks are resolved"""
 
         task_data = api_post("/api/create_task", {
             "task_description": review_instructions,
-            "done_definition": "All blocking issues resolved, repair_report.md written",
+            "done_definition": "All tasks resolved, branches merged, repair_report.md written",
             "workflow_id": wf_id,
             "phase_id": "repair-review",
             "priority": "high"
@@ -795,27 +808,8 @@ def _run_repair(repair_id: str, filename: str, project: Path, logger):
             else:
                 findings.append({"type": "info", "message": f"Found {len(design_workflow_ids)} workflow(s) for this design"})
 
-        # 2. Pause all active agents for this design's workflows
-        try:
-            agents_data = api_get("/api/agents?status=all&per_page=100")
-            agents = agents_data.get("agents", []) if isinstance(agents_data, dict) else agents_data if isinstance(agents_data, list) else []
-            for agent in agents:
-                if agent.get("status") in ("working", "starting", "idle"):
-                    agent_wf = agent.get("workflow", {})
-                    if agent_wf and agent_wf.get("id") in design_workflow_ids:
-                        api_post(f"/api/agents/{agent['id']}/terminate")
-                        actions_taken.append(f"Terminated agent {agent['id'][:8]}")
-        except Exception as e:
-            logger.error(f"Failed to terminate agents: {e}")
-
-        # 3. Check each workflow using orchestrator functions
+        # 2. Check each workflow
         for wf_id in design_workflow_ids:
-            # Resume paused workflows
-            wf_status = get_workflow_status(wf_id)
-            if wf_status.get('status') == 'paused':
-                api_post(f"/api/workflow-executions/{wf_id}/resume")
-                actions_taken.append(f"Resumed paused workflow {wf_id[:8]}")
-
             is_complete, reason = is_design_fully_complete(wf_id, logger)
             findings.append({
                 "type": "completion_check",
@@ -836,7 +830,7 @@ def _run_repair(repair_id: str, filename: str, project: Path, logger):
                     "message": recovery_msg
                 })
 
-                # Always spawn review agent — it has authority to call other agents
+                # Spawn review agent — it has authority to call other agents
                 spawn_repair_review_agent(wf_id, filename, project, reason, logger, actions_taken)
 
         # 3. Check for unmerged branches
