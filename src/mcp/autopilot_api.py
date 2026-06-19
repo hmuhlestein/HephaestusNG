@@ -813,7 +813,17 @@ def _run_repair(repair_id: str, filename: str, project: Path, logger):
             else:
                 findings.append({"type": "info", "message": f"Found {len(design_workflow_ids)} workflow(s) for this design"})
 
-        # 2. Check each workflow
+        # 2. Resume all paused workflows for this design
+        for wf_id in design_workflow_ids:
+            wf_status = get_workflow_status(wf_id)
+            if wf_status.get('status') == 'paused':
+                try:
+                    api_post(f"/api/workflow-executions/{wf_id}/resume")
+                    actions_taken.append(f"Resumed workflow {wf_id[:8]}")
+                except Exception as e:
+                    logger.error(f"Failed to resume workflow {wf_id}: {e}")
+
+        # 3. Check each workflow
         for wf_id in design_workflow_ids:
             is_complete, reason = is_design_fully_complete(wf_id, logger)
             findings.append({
