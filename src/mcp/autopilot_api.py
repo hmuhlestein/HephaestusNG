@@ -747,6 +747,12 @@ async def _run_repair(repair_id: str, filename: str, project: Path, logger):
 
         # 2. Check each workflow using orchestrator functions
         for wf_id in design_workflow_ids:
+            # Resume paused workflows
+            wf_status = get_workflow_status(wf_id)
+            if wf_status.get('status') == 'paused':
+                api_post(f"/api/workflow-executions/{wf_id}/resume")
+                actions_taken.append(f"Resumed paused workflow {wf_id[:8]}")
+
             is_complete, reason = is_design_fully_complete(wf_id, logger)
             findings.append({
                 "type": "completion_check",
