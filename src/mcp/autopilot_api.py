@@ -708,34 +708,42 @@ async def repair_design(request: dict):
 
 
 def spawn_repair_review_agent(wf_id: str, filename: str, project: Path, reason: str, logger, actions_taken: list):
-    """Spawn a review agent with context when repair recovery fails."""
+    """Spawn a review agent with full context and authority to fix."""
     try:
         failed_tasks = get_tasks(status='failed', workflow_id=wf_id)
         failed_context = []
-        for t in failed_tasks[:3]:
+        for t in failed_tasks[:5]:
             failed_context.append(f"- Task {t.get('id', '')[:8]}: {(t.get('enriched_description') or t.get('raw_description') or '')[:100]}")
 
-        review_instructions = f"""REPAIR REVIEW: Design '{filename}' has issues that need investigation.
+        pending_tasks = get_tasks(status='pending', workflow_id=wf_id)
+        in_progress_tasks = get_tasks(status='in_progress', workflow_id=wf_id)
 
-Workflow {wf_id[:8]} is not complete. Recovery attempted but failed.
+        review_instructions = f"""REPAIR REVIEW: Design '{filename}' needs a full review.
 
-Reason: {reason}
+Workflow {wf_id[:8]} status:
+- Reason: {reason}
+- Failed tasks: {len(failed_tasks)}
+- Pending tasks: {len(pending_tasks)}
+- In progress tasks: {len(in_progress_tasks)}
 
 Failed tasks:
-{chr(10).join(failed_context) if failed_context else 'No failed tasks found'}
+{chr(10).join(failed_context) if failed_context else 'None'}
 
-Your job:
+Your job as REVIEW AGENT:
 1. Read the design document at {project / 'docs' / 'design-queue' / filename}
-2. Check the feature folder for completed work
+2. Check what has been completed so far in the feature folder
 3. Identify what's blocking progress
-4. If code exists, review it for issues
-5. Write a repair_report.md with findings and recommended next steps
-6. If you can fix issues directly, do so
+4. You have FULL AUTHORITY to:
+   - Spawn agents for failed or pending tasks using create_task + create_agent_for_task
+   - Merge branches using the MCP tools
+   - Fix code issues directly
+5. For each blocking issue, create a task and spawn an agent to fix it
+6. Write a repair_report.md summarizing what you found and fixed
 7. Mark your task as done when complete"""
 
         task_data = api_post("/api/create_task", {
             "task_description": review_instructions,
-            "done_definition": "Repair report written and issues identified or fixed",
+            "done_definition": "All blocking issues resolved, repair_report.md written",
             "workflow_id": wf_id,
             "phase_id": "repair-review",
             "priority": "high"
@@ -787,7 +795,20 @@ def _run_repair(repair_id: str, filename: str, project: Path, logger):
             else:
                 findings.append({"type": "info", "message": f"Found {len(design_workflow_ids)} workflow(s) for this design"})
 
-        # 2. Check each workflow using orchestrator functions
+        # 2. Pause all active agents for this design's workflows
+        try:
+            agents_data = api_get("/api/agents?status=all&per_page=100")
+            agents = agents_data.get("agents", []) if isinstance(agents_data, dict) else agents_data if isinstance(agents_data, list) else []
+            for agent in agents:
+                if agent.get("status") in ("working", "starting", "idle"):
+                    agent_wf = agent.get("workflow", {})
+                    if agent_wf and agent_wf.get("id") in design_workflow_ids:
+                        api_post(f"/api/agents/{agent['id']}/terminate")
+                        actions_taken.append(f"Terminated agent {agent['id'][:8]}")
+        except Exception as e:
+            logger.error(f"Failed to terminate agents: {e}")
+
+        # 3. Check each workflow using orchestrator functions
         for wf_id in design_workflow_ids:
             # Resume paused workflows
             wf_status = get_workflow_status(wf_id)
@@ -803,7 +824,7 @@ def _run_repair(repair_id: str, filename: str, project: Path, logger):
                 "reason": reason
             })
 
-            # If not complete, attempt recovery
+            # Attempt programmatic recovery
             if not is_complete:
                 success, recovery_msg = attempt_recovery(wf_id, logger)
                 if success:
@@ -815,9 +836,8 @@ def _run_repair(repair_id: str, filename: str, project: Path, logger):
                     "message": recovery_msg
                 })
 
-                # If recovery failed, spawn review agent with context
-                if not success:
-                    spawn_repair_review_agent(wf_id, filename, project, reason, logger, actions_taken)
+                # Always spawn review agent — it has authority to call other agents
+                spawn_repair_review_agent(wf_id, filename, project, reason, logger, actions_taken)
 
         # 3. Check for unmerged branches
         try:
