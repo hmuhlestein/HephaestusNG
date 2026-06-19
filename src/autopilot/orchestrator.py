@@ -15,9 +15,8 @@ import os
 import sys
 import time
 import json
-import glob
-import signal
 import shutil
+import subprocess
 import hashlib
 import logging
 import html as html_mod
@@ -1244,7 +1243,7 @@ def generate_product_validation_report(
         try:
             existing = validation_path.read_text()
             meets_spec = qa_passed and ("PASS" in existing or "pass" in existing.lower())
-            logger.log(f"Using existing product validation from Phase 8")
+            logger.log("Using existing product validation from Phase 8")
             return meets_spec, existing
         except Exception:
             pass
@@ -1801,7 +1800,7 @@ def run_single_design(
                 break
 
             if wf_status == "skipped":
-                logger.log(f"Design skipped by user")
+                logger.log("Design skipped by user")
                 stop_reason = StopReason.USER_SKIP
                 break
 
@@ -2059,7 +2058,7 @@ def run_continuous_pipeline(args) -> None:
     # Register orchestrator as an agent
     try:
         import uuid
-        from src.core.database import DatabaseManager, Agent, get_db
+        from src.core.database import DatabaseManager, Agent
         db_manager = DatabaseManager()
         session = db_manager.get_session()
         try:
