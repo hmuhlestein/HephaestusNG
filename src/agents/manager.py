@@ -221,11 +221,11 @@ class AgentManager:
 
             # Echo task info to terminal so we can see what the agent is working on
             task_desc = (task.enriched_description or task.raw_description or "")[:200]
-            pane.send_keys(f'echo "="', enter=True)
+            pane.send_keys('echo "="', enter=True)
             pane.send_keys(f'echo "AGENT: {agent_id[:8]}"', enter=True)
             pane.send_keys(f'echo "PHASE: {phase_order}. {phase_name}"', enter=True)
             pane.send_keys(f'echo "TASK: {task_desc}"', enter=True)
-            pane.send_keys(f'echo "="', enter=True)
+            pane.send_keys('echo "="', enter=True)
             await asyncio.sleep(0.3)
 
             # Now send the claude launch command
@@ -274,7 +274,7 @@ class AgentManager:
             # Save the full prompt to /tmp for debugging
             debug_prompt_path = f"/tmp/hephaestus_debug_prompt_{agent_id}.txt"
             with open(debug_prompt_path, 'w') as f:
-                f.write(f"=== FULL INITIAL MESSAGE DEBUG ===\n")
+                f.write("=== FULL INITIAL MESSAGE DEBUG ===\n")
                 f.write(f"Agent ID: {agent_id}\n")
                 f.write(f"Task ID: {task.id}\n")
                 f.write(f"Message length: {len(initial_message)} characters\n")
@@ -291,7 +291,7 @@ class AgentManager:
             # Check if tmux session is still alive
             if not self.tmux_server.has_session(session_name):
                 logger.error(f"Tmux session {session_name} died during initialization wait!")
-                raise Exception(f"Tmux session died during initialization wait")
+                raise Exception("Tmux session died during initialization wait")
 
             # Send initial prompt (or just Enter for OpenCode)
             await self._send_initial_prompt_with_retry(
@@ -501,7 +501,7 @@ All tasks and tickets you create must use workflow_id: {workflow_id if workflow_
                 logger.warning(f"Phase manager not available or is None: hasattr={hasattr(self, 'phase_manager')}, value={getattr(self, 'phase_manager', 'MISSING')}")
 
             logger.info(f"🔍 PROMPT SIZE DEBUG: Final phase_context_section length: {len(phase_context_section)}")
-            logger.info(f"=== END PHASE CONTEXT DEBUG ===")
+            logger.info("=== END PHASE CONTEXT DEBUG ===")
         else:
             logger.info(f"Task {task.id} has no phase_id: {getattr(task, 'phase_id', 'NO ATTRIBUTE')}")
 
@@ -548,7 +548,7 @@ IMPORTANT INSTRUCTIONS:
 
         # Add phase-specific instructions if in a workflow
         if hasattr(task, 'phase_id') and task.phase_id:
-            base_message += f"""
+            base_message += """
    - When creating tasks, specify the phase number (1, 2, 3...) for the phase you want
    - Example: create_task(description="...", done_definition="...", phase=1) for Planning phase
    - Example: create_task(description="...", done_definition="...", phase=2) for Implementation phase"""
@@ -638,7 +638,7 @@ When another agent sends you a message, consider responding if you have helpful 
 
         # Add phase transition instructions if available
         if hasattr(task, 'phase_id') and task.phase_id:
-            base_message += f"""
+            base_message += """
 
 7. Phase-Aware Task Creation:
    - Always specify the phase number when creating tasks: phase=1, phase=2, etc.
@@ -661,7 +661,7 @@ REMEMBER:
         logger.info(f"🔍 PROMPT SIZE DEBUG: Message before adding phase context: {len(base_message)} chars")
 
         # Phase context was already added earlier in the message building process, so don't add it again
-        logger.info(f"🔍 PROMPT SIZE DEBUG: Skipping duplicate phase context addition")
+        logger.info("🔍 PROMPT SIZE DEBUG: Skipping duplicate phase context addition")
 
         logger.info(f"🔍 PROMPT SIZE DEBUG: FINAL MESSAGE LENGTH: {len(base_message)} characters")
         logger.info(f"🔍 PROMPT SIZE DEBUG: Phase context contributed: {len(phase_context_section)} chars ({len(phase_context_section)/len(base_message)*100:.1f}% of total if only added once)")
@@ -732,7 +732,7 @@ REMEMBER:
         if not verify_delivery:
             if is_opencode:
                 # OpenCode: Prompt already loaded via -p flag, just send Enter after 5 seconds
-                logger.info(f"OpenCode agent: Prompt loaded via -p flag, waiting 5 seconds then sending Enter")
+                logger.info("OpenCode agent: Prompt loaded via -p flag, waiting 5 seconds then sending Enter")
                 await asyncio.sleep(5)
                 pane.send_keys('', enter=True)  # Send Enter to submit the prompt
                 logger.info(f"OpenCode: Enter sent to agent {agent_id}")
@@ -759,7 +759,7 @@ REMEMBER:
                     await asyncio.sleep(0.2)  # Delay between chunks to avoid overwhelming tmux
 
                 # Now send Enter to submit the entire message
-                logger.info(f"All chunks sent, submitting message with Enter")
+                logger.info("All chunks sent, submitting message with Enter")
                 await asyncio.sleep(0.5)  # Brief pause before Enter
                 pane.send_keys('', enter=True)  # This sends just the Enter key
                 logger.info(f"Initial prompt sent to {agent_name} agent {agent_id}")
@@ -779,7 +779,7 @@ REMEMBER:
 
             if is_opencode:
                 # OpenCode: Prompt already loaded via -p flag, just send Enter after 5 seconds
-                logger.info(f"OpenCode agent: Prompt loaded via -p flag, waiting 5 seconds then sending Enter")
+                logger.info("OpenCode agent: Prompt loaded via -p flag, waiting 5 seconds then sending Enter")
                 await asyncio.sleep(5)
                 pane.send_keys('', enter=True)  # Send Enter to submit the prompt
             elif is_claude or is_droid or is_codex or is_pi:
@@ -803,7 +803,7 @@ REMEMBER:
                     await asyncio.sleep(0.1)  # Delay between chunks to avoid overwhelming tmux
 
                 # Now send Enter to submit the entire message
-                logger.info(f"All chunks sent, submitting message with Enter")
+                logger.info("All chunks sent, submitting message with Enter")
                 await asyncio.sleep(0.5)  # Brief pause before Enter
                 pane.send_keys('', enter=True)  # This sends just the Enter key
             else:
@@ -965,7 +965,7 @@ REMEMBER:
 
                         if tmux_session:
                             tmux_session.kill_session()
-                except:
+                except Exception:
                     pass
 
             # Prepare environment variables for GLM if needed

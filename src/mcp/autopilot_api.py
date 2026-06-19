@@ -9,7 +9,7 @@ import subprocess
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple, TypeVar
+from typing import Any, Dict, List, Optional, Tuple, TypeVar
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import HTMLResponse, FileResponse
@@ -436,7 +436,6 @@ async def reorder_queue(req: QueueReorderRequest):
 async def requeue_design(request: dict):
     """Move a design to the front of the queue and pause its active workflow."""
     from src.core.database import get_db, Workflow, Task, Agent
-    from sqlalchemy import text
 
     filename = request.get("filename")
     if not filename:
@@ -501,7 +500,7 @@ async def requeue_design(request: dict):
 @router.post("/queue/rerun")
 async def rerun_design(request: dict):
     """Rerun a design: stop everything, move to front, start pipeline."""
-    from src.core.database import get_db, Workflow, Task, Agent
+    from src.core.database import get_db, Workflow, Agent
     import subprocess
     import signal
     from dotenv import load_dotenv
@@ -677,15 +676,9 @@ async def rerun_design(request: dict):
 @router.post("/queue/repair")
 async def repair_design(request: dict):
     """Repair a design: analyze state, merge branches, terminate orphans, report status."""
-    from src.core.database import get_db, Workflow, Task, Agent
-    from src.core.logger import SimpleLogger
-    from src.autopilot.orchestrator import is_design_fully_complete, attempt_recovery
-    import subprocess
-    from pathlib import Path
-    import asyncio
     import uuid
-
-    repair_logger = SimpleLogger("repair")
+    import asyncio
+    from pathlib import Path
 
     filename = request.get("filename")
     if not filename:
@@ -715,6 +708,7 @@ async def repair_design(request: dict):
 async def _run_repair(repair_id: str, filename: str, project: Path, logger):
     """Background repair task."""
     from src.core.database import get_db, Workflow
+    from src.autopilot.orchestrator import is_design_fully_complete, attempt_recovery, get_workflow_status, api_post
     import json
     import subprocess
 
@@ -1494,10 +1488,8 @@ async def get_project_design_content(project_id: str, filename: str):
 async def get_project_design_status(project_id: str, filename: str):
     """Get full status for a design: workflow, tasks, branch, feature folder."""
     from src.core.database import (
-        AutopilotProject, Workflow, Task, Agent, Phase, PhaseExecution,
-        AgentWorktree, get_db
+        AutopilotProject, Workflow, Task, Agent, Phase, AgentWorktree, get_db
     )
-    import json
 
     with get_db() as db:
         proj = db.query(AutopilotProject).get(project_id)
@@ -2063,7 +2055,6 @@ async def dismiss_human_input(request_id: str):
 async def start_pipeline(project_path: str, design_queue: str = "", max_iterations: int = 3):
     """Start the autopilot pipeline."""
     import subprocess
-    import signal
     from dotenv import load_dotenv
 
     running = await _is_orchestrator_running()
@@ -2240,7 +2231,7 @@ async def stop_pipeline(clear_state: bool = False):
 async def cleanup_branches():
     """Clean up all stale agent branches."""
     from src.core.branch_manager import BranchManager
-    from src.core.database import DatabaseManager, get_db
+    from src.core.database import DatabaseManager
 
     try:
         db_manager = DatabaseManager()
@@ -2264,7 +2255,7 @@ def run_health_audit(db_manager=None):
     Returns:
         dict with 'findings', 'workflows', 'summary' keys
     """
-    from src.core.database import DatabaseManager, Agent, Task, Workflow, Phase, get_db
+    from src.core.database import DatabaseManager, Agent, Task, Workflow, get_db
 
     if db_manager is None:
         db_manager = DatabaseManager()
