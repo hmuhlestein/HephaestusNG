@@ -769,6 +769,54 @@ def _run_repair(repair_id: str, filename: str, project: Path, logger):
                     "message": recovery_msg
                 })
 
+                # If recovery failed, spawn review agent with context
+                if not success:
+                    try:
+                        # Get failed tasks for context
+                        failed_tasks = get_tasks(status='failed', workflow_id=wf_id)
+                        failed_context = []
+                        for t in failed_tasks[:3]:
+                            failed_context.append(f"- Task {t.get('id', '')[:8]}: {(t.get('enriched_description') or t.get('raw_description') or '')[:100]}")
+                        
+                        review_instructions = f"""REPAIR REVIEW: Design '{filename}' has issues that need investigation.
+
+Workflow {wf_id[:8]} is not complete. Recovery attempted but failed.
+
+Reason: {reason}
+
+Failed tasks:
+{chr(10).join(failed_context) if failed_context else 'No failed tasks found'}
+
+Your job:
+1. Read the design document at {project / 'docs' / 'design-queue' / filename}
+2. Check the feature folder for completed work
+3. Identify what's blocking progress
+4. If code exists, review it for issues
+5. Write a repair_report.md with findings and recommended next steps
+6. If you can fix issues directly, do so
+7. Mark your task as done when complete"""
+                        
+                        # Create task for review agent
+                        task_data = api_post("/api/create_task", {
+                            "task_description": review_instructions,
+                            "done_definition": "Repair report written and issues identified or fixed",
+                            "workflow_id": wf_id,
+                            "phase_id": "repair-review",
+                            "priority": "high"
+                        })
+                        
+                        if task_data and task_data.get('task_id'):
+                            # Spawn agent for the task
+                            agent_data = api_post("/api/create_agent_for_task", {
+                                "task_id": task_data['task_id'],
+                                "workflow_id": wf_id,
+                                "phase_id": "repair-review"
+                            })
+                            if agent_data:
+                                actions_taken.append(f"Spawned review agent {agent_data.get('agent_id', '')[:8]} for {wf_id[:8]}")
+                    except Exception as e:
+                        logger.error(f"Failed to spawn review agent: {e}")
+
         # 3. Check for unmerged branches
         try:
             result = subprocess.run(
