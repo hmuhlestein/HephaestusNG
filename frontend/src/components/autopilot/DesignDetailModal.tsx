@@ -84,13 +84,38 @@ const DesignDetailModal: React.FC<DesignDetailModalProps> = ({ projectId, filena
       });
     },
     onSuccess: (data: any) => {
-      const actions = data.actions_taken || [];
-      if (actions.length > 0) {
-        toast.success(`Repaired: ${actions.join(', ')}`);
+      const repairId = data.repair_id;
+      if (repairId) {
+        toast.success(`Repair started (${repairId}). Checking status...`);
+        // Poll for completion
+        const poll = async () => {
+          for (let i = 0; i < 30; i++) {
+            await new Promise(r => setTimeout(r, 2000));
+            try {
+              const result = await api.get(`/autopilot/queue/repair/${repairId}`);
+              const data = result.data || result;
+              if (data.status === 'completed') {
+                const actions = data.actions_taken || [];
+                if (actions.length > 0) {
+                  toast.success(`Repaired: ${actions.join(', ')}`);
+                } else {
+                  toast.success('Design looks healthy - no repairs needed');
+                }
+                onClose();
+                return;
+              }
+            } catch (e) {
+              // continue polling
+            }
+          }
+          toast.success('Repair completed');
+          onClose();
+        };
+        poll();
       } else {
-        toast.success('Design looks healthy - no repairs needed');
+        toast.success('Repair started');
+        onClose();
       }
-      onClose();
     },
     onError: (e: any) => {
       toast.error(e?.response?.data?.detail || 'Failed to repair');

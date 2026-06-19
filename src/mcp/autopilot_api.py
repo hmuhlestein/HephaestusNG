@@ -839,6 +839,21 @@ async def _run_repair(repair_id: str, filename: str, project: Path, logger):
         result_file.write_text(json.dumps(result, indent=2))
 
 
+@router.get("/queue/repair/{repair_id}")
+async def get_repair_status(repair_id: str):
+    """Get repair status and results."""
+    result_file = Path.home() / ".hephaestus" / "autopilot" / f"repair_{repair_id}.json"
+    if not result_file.exists():
+        return {"repair_id": repair_id, "status": "running", "message": "Repair still in progress..."}
+    
+    try:
+        result = json.loads(result_file.read_text())
+        result["status"] = "completed"
+        return result
+    except Exception as e:
+        return {"repair_id": repair_id, "status": "error", "message": str(e)}
+
+
 @router.post("/queue", response_model=DesignQueueItem)
 async def add_to_queue(item: DesignQueueAdd):
     try:
