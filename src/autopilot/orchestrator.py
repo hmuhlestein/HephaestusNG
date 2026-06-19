@@ -140,7 +140,7 @@ class PipelineState:
     queue_status: Dict[str, str] = field(default_factory=dict)
     start_time: float = field(default_factory=time.time)
     run_id: Optional[str] = None
-    
+
     def to_dict(self) -> dict:
         return {
             "designs_processed": self.designs_processed,
@@ -154,7 +154,7 @@ class PipelineState:
             "queue_status": self.queue_status,
             "run_id": self.run_id,
         }
-    
+
     @classmethod
     def from_dict(cls, data: dict) -> "PipelineState":
         state = cls()
@@ -173,16 +173,16 @@ class PipelineState:
 
 class PersistentPipelineState:
     """Manages pipeline state that survives restarts."""
-    
+
     def __init__(self):
         self.state_dir = Path(AUTOPILOT_STATE_DIR)
         self.state_dir.mkdir(parents=True, exist_ok=True)
         self.state_file = self.state_dir / "pipeline_state.json"
         self.processed_file = self.state_dir / "processed_designs.json"
-    
+
     def save(self, state: PipelineState, processed_hashes: Set[str]):
         """Save pipeline state and processed designs to disk.
-        
+
         Write order: processed_designs first, then state.
         If crash occurs between them, design is safely skipped (in processed)
         but state undercounts by 1 - safer than double-processing.
@@ -190,18 +190,18 @@ class PersistentPipelineState:
         # Write processed_designs first (safer on crash)
         with open(self.processed_file, "w") as f:
             json.dump(list(processed_hashes), f)
-        
+
         # Then write state
         state_data = state.to_dict()
         state_data["saved_at"] = datetime.now().isoformat()
         with open(self.state_file, "w") as f:
             json.dump(state_data, f, indent=2)
-    
+
     def load(self) -> Tuple[PipelineState, Set[str]]:
         """Load pipeline state and processed designs from disk."""
         state = PipelineState()
         processed_hashes: Set[str] = set()
-        
+
         if self.state_file.exists():
             try:
                 with open(self.state_file) as f:
@@ -210,7 +210,7 @@ class PersistentPipelineState:
                 logger.info(f"Loaded pipeline state: {state.designs_processed} designs processed")
             except Exception as e:
                 logger.warning(f"Failed to load pipeline state: {e}")
-        
+
         if self.processed_file.exists():
             try:
                 with open(self.processed_file) as f:
@@ -218,33 +218,33 @@ class PersistentPipelineState:
                 logger.info(f"Loaded {len(processed_hashes)} processed designs")
             except Exception as e:
                 logger.warning(f"Failed to load processed designs: {e}")
-        
+
         return state, processed_hashes
-    
+
     def clear(self):
         """Clear persisted state (for fresh start)."""
         if self.state_file.exists():
             self.state_file.unlink()
         if self.processed_file.exists():
             self.processed_file.unlink()
-    
+
     def has_incomplete_work(self) -> bool:
         """Check if there's incomplete work from a previous run."""
         if not self.state_file.exists():
             return False
-        
+
         try:
             with open(self.state_file) as f:
                 state_data = json.load(f)
-            
+
             # Check if there was a design in progress
             current_design = state_data.get("current_design")
             queue_status = state_data.get("queue_status", {})
-            
+
             return current_design is not None or queue_status.get("status") == "processing"
         except Exception:
             return False
-    
+
     def get_last_run_id(self) -> Optional[str]:
         """Get the run ID from the last persisted state."""
         if not self.state_file.exists():
@@ -341,10 +341,10 @@ def get_agents(workflow_id: str = None) -> list:
     if data is None:
         return []
     agents = data if isinstance(data, list) else data.get("agents", [])
-    
+
     if not workflow_id:
         return agents
-    
+
     # Filter agents to only those working on tasks in this workflow
     # Get all tasks for this workflow
     tasks = get_tasks(workflow_id=workflow_id)
@@ -354,7 +354,7 @@ def get_agents(workflow_id: str = None) -> list:
             agent_ids.add(t['assigned_agent_id'])
         if t.get('created_by_agent_id'):
             agent_ids.add(t['created_by_agent_id'])
-    
+
     return [a for a in agents if a.get('id') in agent_ids]
 
 
@@ -393,7 +393,7 @@ def is_design_fully_complete(workflow_id: str, logger: OrchestratorLogger) -> Tu
     2. No active agents
     3. All agent branches merged to main
     4. No failed tasks
-    
+
     Returns:
         (is_complete, reason) tuple
     """
@@ -402,7 +402,7 @@ def is_design_fully_complete(workflow_id: str, logger: OrchestratorLogger) -> Tu
     wf_status = wf.get('status', '')
     if wf_status not in ('completed', 'active', 'running', 'paused'):
         return False, f"Workflow status: {wf_status}"
-    
+
     # Check task statuses
     pending = get_tasks(status='pending', workflow_id=workflow_id)
     queued = get_tasks(status='queued', workflow_id=workflow_id)
@@ -410,24 +410,24 @@ def is_design_fully_complete(workflow_id: str, logger: OrchestratorLogger) -> Tu
     assigned = get_tasks(status='assigned', workflow_id=workflow_id)
     failed = get_tasks(status='failed', workflow_id=workflow_id)
     done = get_tasks(status='done', workflow_id=workflow_id)
-    
+
     # All non-done statuses that indicate work remaining
     active_tasks = pending + queued + in_progress + assigned
-    
+
     if active_tasks:
         task_ids = [t.get('id', '')[:8] for t in active_tasks[:3]]
         return False, f"{len(active_tasks)} task(s) still active: {', '.join(task_ids)}"
-    
+
     if failed:
         return False, f"{len(failed)} task(s) failed"
-    
+
     # Check for active agents
     agents = get_agents(workflow_id=workflow_id)
     active_agents = [a for a in agents if a.get('status') in ('working', 'starting', 'idle')]
     if active_agents:
         agent_ids = [a.get('id', '')[:8] for a in active_agents[:3]]
         return False, f"{len(active_agents)} agent(s) still active: {', '.join(agent_ids)}"
-    
+
     # Check for unmerged agent branches
     try:
         project_path = os.getenv("PROJECT_PATH", "/Users/hmuhlestein/code/sotto")
@@ -442,40 +442,40 @@ def is_design_fully_complete(workflow_id: str, logger: OrchestratorLogger) -> Tu
                 return False, f"{len(branches)} unmerged agent branch(es)"
     except Exception:
         pass
-    
+
     # Check if all phases are done (for autopilot: 10 phases = 10 tasks)
     if len(done) < 10:
         return False, f"Only {len(done)}/10 phases done"
-    
+
     return True, "All phases done, branches merged"
 
 
 def attempt_recovery(workflow_id: str, logger: OrchestratorLogger) -> Tuple[bool, str]:
     """Attempt to recover issues found by is_design_fully_complete.
-    
+
     Actions:
     1. Retry failed tasks by creating new agents
     2. Merge unmerged agent branches to main
     3. Terminate stale agents
-    
+
     Returns:
         (success, message) tuple
     """
     recovered = []
-    
+
     # 1. Retry failed tasks
     failed = get_tasks(status='failed', workflow_id=workflow_id)
     for task in failed:
         task_id = task.get('id')
         phase_id = task.get('phase_id')
         task.get('enriched_description') or task.get('raw_description') or ''
-        
+
         # Only retry if not retried too many times
         retry_count = task.get('retry_count', 0)
         if retry_count >= 2:
-            logger.info(f"  Task {task_id[:8]} failed {retry_count} times — skipping retry")
+            logger.info(f"  Task {task_id[:8]} failed {retry_count} times - skipping retry")
             continue
-        
+
         logger.info(f"  Retrying failed task {task_id[:8]} (retry #{retry_count + 1})")
         try:
             # Reset task status to pending
@@ -491,7 +491,7 @@ def attempt_recovery(workflow_id: str, logger: OrchestratorLogger) -> Tuple[bool
             recovered.append(f"retried task {task_id[:8]}")
         except Exception as e:
             logger.error(f"  Failed to retry task {task_id[:8]}: {e}")
-    
+
     # 2. Merge unmerged agent branches
     try:
         project_path = os.getenv("PROJECT_PATH", "/Users/hmuhlestein/code/sotto")
@@ -521,8 +521,8 @@ def attempt_recovery(workflow_id: str, logger: OrchestratorLogger) -> Tuple[bool
                         subprocess.run(["git", "branch", "-d", branch], capture_output=True, timeout=10, cwd=project_path)
                         recovered.append(f"merged {branch}")
                     else:
-                        # Conflict — use theirs (newest file wins)
-                        logger.warning(f"  Merge conflict on {branch} — using theirs")
+                        # Conflict - use theirs (newest file wins)
+                        logger.warning(f"  Merge conflict on {branch} - using theirs")
                         subprocess.run(["git", "checkout", "--theirs", "."], capture_output=True, timeout=10, cwd=project_path)
                         subprocess.run(["git", "add", "."], capture_output=True, timeout=10, cwd=project_path)
                         subprocess.run(["git", "commit", "-m", f"Merge {branch} with conflict resolution"], capture_output=True, timeout=10, cwd=project_path)
@@ -534,7 +534,7 @@ def attempt_recovery(workflow_id: str, logger: OrchestratorLogger) -> Tuple[bool
                     subprocess.run(["git", "checkout", "main"], capture_output=True, timeout=10, cwd=project_path)
     except Exception as e:
         logger.warning(f"  Branch merge check failed: {e}")
-    
+
     # 3. Terminate stale agents
     agents = get_agents(workflow_id=workflow_id)
     active_agents = [a for a in agents if a.get('status') in ('working', 'starting', 'idle')]
@@ -546,7 +546,7 @@ def attempt_recovery(workflow_id: str, logger: OrchestratorLogger) -> Tuple[bool
             recovered.append(f"terminated agent {aid[:8]}")
         except Exception as e:
             logger.warning(f"  Failed to terminate {aid[:8]}: {e}")
-    
+
     if recovered:
         return True, f"Recovered: {', '.join(recovered)}"
     return False, "No recovery actions needed"
@@ -579,7 +579,7 @@ def detect_hard_error(agents: list, failed_tasks: list, workflow_id: str = None)
     # Filter to only tasks from the current workflow if provided
     if workflow_id:
         failed_tasks = [t for t in failed_tasks if t.get("workflow_id") == workflow_id]
-    
+
     # Check for crashed/errored agents (agents list is already scoped by get_agents)
     crashed_agents = [
         a for a in agents
@@ -588,7 +588,7 @@ def detect_hard_error(agents: list, failed_tasks: list, workflow_id: str = None)
     if crashed_agents:
         names = [a.get("id", "unknown")[:20] for a in crashed_agents[:3]]
         return True, f"Crashed agents: {', '.join(names)}"
-    
+
     critical_failures = [
         t for t in failed_tasks
         if t.get("priority") == "critical" or "architectural" in (t.get("description", "") or "").lower()
@@ -602,20 +602,20 @@ def detect_hard_error(agents: list, failed_tasks: list, workflow_id: str = None)
 
 def detect_impasse(agents: list, pending_tasks: list, in_progress_tasks: list, elapsed_seconds: int = 0) -> Tuple[bool, str]:
     """Detect if the workflow is stuck.
-    
+
     Parent-child model: check if tasks are progressing, not health_check_failures.
     """
     active_agents = [a for a in agents if a.get("status") in ACTIVE_AGENT_STATUSES]
-    
+
     # If there are pending tasks but no active agents, something is wrong
     # But give a 60 second grace period for agents to start
     if not active_agents and pending_tasks and elapsed_seconds > 60:
         return True, f"No active agents but {len(pending_tasks)} tasks pending"
-    
+
     # Check for agents that have been working too long without progress
     # (assigned tasks that never move to done)
     if in_progress_tasks and not pending_tasks:
-        # Tasks are in progress — check if they've been stuck
+        # Tasks are in progress - check if they've been stuck
         for task in in_progress_tasks:
             started = task.get('started_at')
             if started:
@@ -629,7 +629,7 @@ def detect_impasse(agents: list, pending_tasks: list, in_progress_tasks: list, e
                         return True, f"Task {task.get('id', '?')[:8]} stuck for {int(elapsed)}s"
                 except Exception:
                     pass
-    
+
     return False, ""
 
 
@@ -701,21 +701,21 @@ def prompt_human(reason: str, logger: OrchestratorLogger, timeout: int = 600) ->
             logger.info("Input request was dismissed (auto-continuing)", "WARN")
             response_file.unlink(missing_ok=True)
             return "c"  # Auto-continue when dismissed
-        
+
         # Check file response
         if response_file.exists():
             try:
                 data = json.loads(response_file.read_text())
                 choice = data.get("choice", "").strip().lower()
                 message = data.get("message", "")
-                
+
                 if choice == "m" and message:
                     # Log the message and continue waiting for actual decision
                     logger.info(f"Human message: {message}")
                     logger.event("human_input", {"choice": "m", "message": message, "reason": reason, "source": "web", "request_id": request_id})
                     response_file.unlink(missing_ok=True)  # Delete response, keep waiting
                     continue
-                
+
                 if choice in ("c", "s", "q"):
                     logger.event("human_input", {"choice": choice, "reason": reason, "source": "web", "request_id": request_id})
                     request_file.unlink(missing_ok=True)
@@ -741,7 +741,7 @@ def prompt_human(reason: str, logger: OrchestratorLogger, timeout: int = 600) ->
         except (OSError, ValueError):
             time.sleep(2)
 
-    # Timeout — auto-continue
+    # Timeout - auto-continue
     logger.warning(f"Human input timed out after {timeout}s, auto-continuing")
     logger.event("human_input", {"choice": "timeout", "reason": reason, "request_id": request_id})
     request_file.unlink(missing_ok=True)
@@ -811,7 +811,7 @@ def create_feature_folder(project_path: Path, design_name: str, logger: Orchestr
     feature_folder = project_path / ".hephaestus" / "features" / f"{timestamp}_{safe_name}"
     feature_folder.mkdir(parents=True, exist_ok=True)
     (feature_folder / "docs").mkdir(exist_ok=True)
-    
+
     # Ensure .hephaestus/ is in .gitignore
     gitignore = project_path / ".gitignore"
     hephaestus_entry = ".hephaestus/"
@@ -828,7 +828,7 @@ def create_feature_folder(project_path: Path, design_name: str, logger: Orchestr
             logger.info(f"Created .gitignore with {hephaestus_entry}")
     except Exception as e:
         logger.warning(f"Warning: Could not update .gitignore: {e}")
-    
+
     logger.info(f"Feature folder: {feature_folder}")
     return feature_folder
 
@@ -842,7 +842,7 @@ def copy_design_document(design_entry: DesignEntry, feature_folder: Path) -> Pat
 # ── Stray-file sweep ────────────────────────────────────────────────
 # Agents may accidentally write docs, reports, scripts, or diagnostic
 # files to the project root instead of the feature docs dir.  This
-# function copies (not moves — the iteration loop may still need them
+# function copies (not moves - the iteration loop may still need them
 # in the root) every stray artifact into docs_dir so that nothing is
 # lost and the project root stays clean.
 
@@ -1323,7 +1323,7 @@ def run_single_workflow(sdk, workflow_id: str, project_path: str, description: s
     # Check for existing active workflows and stop them
     existing_workflows = get_active_workflows()
     if existing_workflows:
-        logger.info(f"Found {len(existing_workflows)} active workflow(s) — stopping them...")
+        logger.info(f"Found {len(existing_workflows)} active workflow(s) - stopping them...")
         for wf in existing_workflows:
             wf_id = wf.get('id', '')
             try:
@@ -1341,7 +1341,7 @@ def run_single_workflow(sdk, workflow_id: str, project_path: str, description: s
                 logger.info(f"  Paused workflow {wf_id[:8]}")
             except Exception as e:
                 logger.warning(f"  Failed to stop workflow {wf_id[:8]}: {e}")
-    
+
     logger.info(f"Launching workflow: {workflow_id}")
     # Extract design document from launch_params for the event
     design_doc = (launch_params or {}).get("design_document", "")
@@ -1411,7 +1411,7 @@ def run_single_workflow(sdk, workflow_id: str, project_path: str, description: s
                 # Get max concurrent agents from config
                 config = get_config()
                 max_concurrent = getattr(config, 'max_concurrent_agents', 3)
-                
+
                 # Check if we have capacity to launch more agents
                 if len(active_agents) < max_concurrent:
                     # Find launchable tasks based on dependencies and parallel groups
@@ -1422,29 +1422,29 @@ def run_single_workflow(sdk, workflow_id: str, project_path: str, description: s
                     # - max_concurrent: limit agents per task
                     launchable = []
                     sequential_seen = False  # Track if we've seen a sequential task
-                    
+
                     # Get task IDs that already have agents assigned
                     task_ids_with_agents = set()
                     for agent in agents:
                         task_id = agent.get('current_task_id')
                         if task_id:
                             task_ids_with_agents.add(task_id)
-                    
+
                     for task in pending:
                         task_id = task.get('id')
-                        
+
                         # Skip tasks that already have agents assigned
                         if task_id in task_ids_with_agents:
                             continue
-                        
+
                         depends_on = task.get('depends_on')  # JSON list of task IDs
                         task.get('parallel_group')
                         task.get('max_concurrent', 1)
-                        
+
                         # Parse depends_on if it's a string
                         if isinstance(depends_on, str):
                             depends_on = json.loads(depends_on)
-                        
+
                         # Check dependencies
                         if depends_on is not None:
                             # Explicit depends_on set (including empty list)
@@ -1460,7 +1460,7 @@ def run_single_workflow(sdk, workflow_id: str, project_path: str, description: s
                                     if not dep_done and not dep_failed:
                                         deps_met = False
                                         break
-                                
+
                                 if deps_met:
                                     launchable.append(task)
                                 else:
@@ -1471,14 +1471,14 @@ def run_single_workflow(sdk, workflow_id: str, project_path: str, description: s
                                 sequential_seen = True
                                 launchable.append(task)
                             # else: skip - only one sequential task per cycle
-                    
+
                     # Now filter by parallel_group constraints
                     # Tasks in the SAME parallel_group can run together
                     # Tasks in DIFFERENT parallel_groups (or no group) run sequentially
                     if launchable:
                         grouped = {}  # group_name -> [tasks]
                         ungrouped = []
-                        
+
                         for task in launchable:
                             group = task.get('parallel_group')
                             if group:
@@ -1487,25 +1487,25 @@ def run_single_workflow(sdk, workflow_id: str, project_path: str, description: s
                                 grouped[group].append(task)
                             else:
                                 ungrouped.append(task)
-                        
+
                         # Rebuild launchable: all tasks from the first group, then ungrouped
                         final_launchable = []
-                        
+
                         # Add all tasks from the first parallel group
                         for group_name, group_tasks in grouped.items():
                             final_launchable.extend(group_tasks)
                             break  # Only one group at a time
-                        
+
                         # If no groups, add first ungrouped task
                         if not final_launchable and ungrouped:
                             final_launchable.append(ungrouped[0])
-                        
+
                         launchable = final_launchable
-                    
+
                     agents_to_launch = min(len(launchable), max_concurrent - len(active_agents))
                     if launchable:
                         logger.info(f"[AUTO-LAUNCH] {len(launchable)} launchable task(s) (of {len(pending)} pending), launching {agents_to_launch} (active: {len(active_agents)}, max: {max_concurrent})")
-                    
+
                     for i, task in enumerate(launchable[:agents_to_launch]):
                         task_id = task.get('id')
                         phase_id = task.get('phase_id')
@@ -1535,23 +1535,23 @@ def run_single_workflow(sdk, workflow_id: str, project_path: str, description: s
                             preview = ' | '.join(lines[-3:])  # last 3 lines
                             logger.info(f"  [{aid[:8]}] {preview}")
 
-            # Track progress — detect if agents are stuck
+            # Track progress - detect if agents are stuck
             current_done = len(done)
             if current_done > last_done_count:
                 last_done_count = current_done
                 last_progress_time = time.time()
-            
+
             no_progress_seconds = time.time() - last_progress_time
             if no_progress_seconds > PARENT_STUCK_THRESHOLD and active_agents and not pending:
-                # No progress for threshold time — nudge each agent
-                logger.info(f"[WARN] No task progress for {int(no_progress_seconds)}s — nudging agents:")
+                # No progress for threshold time - nudge each agent
+                logger.info(f"[WARN] No task progress for {int(no_progress_seconds)}s - nudging agents:")
                 for agent in active_agents:
                     aid = agent.get('id', '')
                     # Peek at output to include in nudge context
                     output = peek_agent_output(aid, lines=20)
                     if output:
                         [l.strip() for l in output.strip().split('\n') if l.strip()][-3:]
-                    
+
                     # Send nudge message via API
                     nudge_msg = (
                         f"[PARENT NUDGE] No task progress for {int(no_progress_seconds)}s. "
@@ -1559,24 +1559,24 @@ def run_single_workflow(sdk, workflow_id: str, project_path: str, description: s
                         f"Do NOT exit to the command line. Do NOT print a summary and stop. "
                         f"If stuck, create a sub-task or ask for help."
                     )
-                    
+
                     try:
                         api_post(f"/api/agents/{aid}/message", {"message": nudge_msg})
                         logger.info(f"  Nudged {aid[:8]}")
                     except Exception as e:
                         logger.info(f"  Failed to nudge {aid[:8]}: {e}")
-                
+
                 # Auto-kill agents stuck for 2x the threshold
                 # Only kill agents that show no activity (not actively streaming)
                 if no_progress_seconds > PARENT_STUCK_THRESHOLD * 2:
-                    logger.info(f"[AUTO-KILL] Stuck for {int(no_progress_seconds)}s — checking agents:")
+                    logger.info(f"[AUTO-KILL] Stuck for {int(no_progress_seconds)}s - checking agents:")
                     killed_any = False
                     for agent in active_agents:
                         aid = agent.get('id', '')
-                        # Peek at output — if agent is actively streaming, don't kill
+                        # Peek at output - if agent is actively streaming, don't kill
                         output = peek_agent_output(aid, lines=5)
                         if output and any(kw in output.lower() for kw in ['→', '←', 'edit', 'write', 'create', 'reading']):
-                            logger.info(f"  {aid[:8]}: actively working — skipping")
+                            logger.info(f"  {aid[:8]}: actively working - skipping")
                             continue
                         try:
                             api_post(f"/api/agents/{aid}/terminate")
@@ -1586,7 +1586,7 @@ def run_single_workflow(sdk, workflow_id: str, project_path: str, description: s
                             logger.info(f"  {aid[:8]}: failed to terminate: {e}")
                     if killed_any:
                         return "timeout"
-                
+
                 last_progress_time = time.time()  # Reset so we don't spam
 
             wf_state = wf_status.get("status", "")
@@ -1604,8 +1604,8 @@ def run_single_workflow(sdk, workflow_id: str, project_path: str, description: s
                         state.current_workflow_id = None
                     return "completed"
                 elif elapsed > 60:
-                    # No tasks at all after 60s — might be an empty workflow
-                    logger.info(f"No tasks and no agents after {elapsed}s — workflow appears empty")
+                    # No tasks at all after 60s - might be an empty workflow
+                    logger.info(f"No tasks and no agents after {elapsed}s - workflow appears empty")
                     if state:
                         state.current_workflow_id = None
                     return "completed"
@@ -1638,7 +1638,7 @@ def run_single_workflow(sdk, workflow_id: str, project_path: str, description: s
                         return "interrupted"
                     elif choice == "s":
                         stuck_count = 0
-                        # Skip this design — terminate all active agents for this workflow
+                        # Skip this design - terminate all active agents for this workflow
                         for a in agents:
                             if a.get("status") in ACTIVE_AGENT_STATUSES:
                                 try:
@@ -1749,7 +1749,7 @@ def run_single_design(
     try:
         for iteration in range(1, max_iterations + 1):
             iter_start = time.time()
-            
+
             # Update state with current iteration
             if state:
                 state.current_iteration = iteration
@@ -1862,7 +1862,7 @@ def run_single_design(
         stop_reason = StopReason.USER_INTERRUPT
         logger.info("Design processing interrupted")
 
-    # Organize: copy stray docs from project root into feature docs (don't move — iteration loop needs them)
+    # Organize: copy stray docs from project root into feature docs (don't move - iteration loop needs them)
     _sweep_stray_files(project_path, feature_folder, docs_dir, logger)
 
     # Collect summaries from the correct locations (docs in features, code in builds)
@@ -1970,7 +1970,7 @@ def run_continuous_pipeline(args) -> None:
     # Load persistent state from previous runs
     persistent_state = PersistentPipelineState()
     state, processed_hashes = persistent_state.load()
-    
+
     # Check for incomplete work from previous run
     if persistent_state.has_incomplete_work():
         last_design = state.current_design
@@ -1979,11 +1979,11 @@ def run_continuous_pipeline(args) -> None:
         state.current_design = None
         state.current_feature_folder = None
         state.current_iteration = 0
-    
+
     # Generate new run ID
     state.run_id = datetime.now().strftime("run-%Y%m%d-%H%M%S")
     state.start_time = time.time()
-    
+
     logger.info("=" * 70)
     logger.info("AUTOPILOT CONTINUOUS PIPELINE")
     logger.info("=" * 70)
@@ -1993,10 +1993,10 @@ def run_continuous_pipeline(args) -> None:
     logger.info(f"Poll Interval: {DESIGN_QUEUE_SCAN_INTERVAL}s")
     logger.info(f"Run ID: {state.run_id}")
     logger.info(f"Logs: {log_dir}")
-    
+
     if processed_hashes:
         logger.info(f"Loaded {len(processed_hashes)} previously processed designs")
-    
+
     logger.info("=" * 70)
 
     queue_dir = Path(args.design_queue)
@@ -2039,7 +2039,7 @@ def run_continuous_pipeline(args) -> None:
         project_root=str(project_path),
         auto_commit=True,
         conflict_resolution="newest_file_wins",
-        worktree_branch_prefix="autopilot-",
+        worktree_branch_prefix="agent-",
     )
 
     logger.info("Starting services...")
@@ -2080,7 +2080,7 @@ def run_continuous_pipeline(args) -> None:
     try:
         active_workflows = get_active_workflows()
         if active_workflows:
-            logger.info(f"Found {len(active_workflows)} stale active workflow(s) from previous runs — cleaning up...")
+            logger.info(f"Found {len(active_workflows)} stale active workflow(s) from previous runs - cleaning up...")
             for wf in active_workflows:
                 wf_id = wf.get('id', '')
                 try:
@@ -2106,29 +2106,29 @@ def run_continuous_pipeline(args) -> None:
             if now - last_queue_scan >= DESIGN_QUEUE_SCAN_INTERVAL:
                 last_queue_scan = now
 
-                # Check if any workflow is still active — don't start a new design while one is running
+                # Check if any workflow is still active - don't start a new design while one is running
                 try:
                     active_workflows = get_active_workflows()
                     if active_workflows:
                         wf_ids = [wf.get('id', '')[:8] for wf in active_workflows]
-                        logger.info(f"Workflow still active ({', '.join(wf_ids)}) — waiting before picking next design")
+                        logger.info(f"Workflow still active ({', '.join(wf_ids)}) - waiting before picking next design")
                         state.queue_status = {"status": "waiting", "reason": "workflow_active", "active_workflows": wf_ids}
                         logger.save_state(state)
                         persistent_state.save(state, processed_hashes)
                         time.sleep(POLL_INTERVAL)
                         continue
-                    
+
                     # Also check previous workflow is fully complete (all phases done, branches merged)
                     if state.current_workflow_id:
                         is_complete, reason = is_design_fully_complete(state.current_workflow_id, logger)
                         if not is_complete:
                             logger.info(f"Previous workflow not yet complete: {reason}")
-                            
+
                             # Attempt recovery
                             success, recovery_msg = attempt_recovery(state.current_workflow_id, logger)
                             if success:
                                 logger.info(f"Recovery actions: {recovery_msg}")
-                            
+
                             state.queue_status = {"status": "waiting", "reason": reason, "recovery": recovery_msg if success else None}
                             logger.save_state(state)
                             persistent_state.save(state, processed_hashes)
