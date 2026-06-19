@@ -20,13 +20,15 @@ This phase runs after adversarial code review so it reviews docs that reflect
 the post-review state of the code.
 
 ═══════════════════════════════════════════════════════════════════════
-YOU ARE A DOCUMENTATION REVIEWER - VERIFY AND FIX ALL DOCS
+
 ════════════════════════════════════════════════════════════════════════
 
+
+CRITICAL RULE: Do NOT modify the design document. It is read-only reference.
 YOUR MISSION: Review every doc against the implementation and FIX issues
 
 ═══════════════════════════════════════════════════════════════════════
-STEP 1: ORGANIZE STRAY FILES INTO DOCS PATH (MANDATORY FIRST STEP)
+
 ═══════════════════════════════════════════════════════════════════════
 
 BEFORE reviewing anything, you MUST move misplaced files to the correct location.
@@ -115,7 +117,7 @@ ls "$PROJECT"/*.txt 2>/dev/null
 Only legitimate project files (README.md, AGENTS.md, etc.) should remain.
 
 ═══════════════════════════════════════════════════════════════════════
-STEP 2: READ ALL DOCUMENTATION AND CODE
+
 ═══════════════════════════════════════════════════════════════════════
 
 CRITICAL PATH RULE: You MUST use the FULL ABSOLUTE PATHS from your task description.
@@ -133,7 +135,7 @@ Read:
 - All source code files in Project Path (to verify docs match)
 
 ═══════════════════════════════════════════════════════════════════════
-STEP 2: REQUIREMENTS DOC ACCURACY
+
 ═══════════════════════════════════════════════════════════════════════
 
 Compare requirements_analysis.md against the implementation:
@@ -146,7 +148,7 @@ Compare requirements_analysis.md against the implementation:
 Fix any discrepancies directly in the document.
 
 ═══════════════════════════════════════════════════════════════════════
-STEP 3: ARCHITECTURE DOC ACCURACY
+
 ═══════════════════════════════════════════════════════════════════════
 
 Compare architecture.md against the actual code:
@@ -161,7 +163,7 @@ Compare architecture.md against the actual code:
 Fix any discrepancies directly in the document.
 
 ═══════════════════════════════════════════════════════════════════════
-STEP 4: README AND SETUP DOCS
+
 ═══════════════════════════════════════════════════════════════════════
 
 Verify setup/usage documentation:
@@ -175,7 +177,7 @@ Verify setup/usage documentation:
 Fix any issues found.
 
 ═══════════════════════════════════════════════════════════════════════
-STEP 5: API AND INTERFACE DOCS
+
 ═══════════════════════════════════════════════════════════════════════
 
 Check API/interface documentation:
@@ -189,7 +191,7 @@ Check API/interface documentation:
 Fix any issues found.
 
 ═══════════════════════════════════════════════════════════════════════
-STEP 6: DOCSTRINGS AND INLINE COMMENTS
+
 ═══════════════════════════════════════════════════════════════════════
 
 Review inline documentation:
@@ -204,7 +206,7 @@ Review inline documentation:
 Fix inaccurate docstrings and comments directly in the code.
 
 ═══════════════════════════════════════════════════════════════════════
-STEP 7: CONSISTENCY AND QUALITY
+
 ═══════════════════════════════════════════════════════════════════════
 
 Check cross-document consistency:
@@ -218,7 +220,7 @@ Check cross-document consistency:
 Fix consistency issues.
 
 ═══════════════════════════════════════════════════════════════════════
-STEP 8: CREATE DOC REVIEW REPORT
+
 ═══════════════════════════════════════════════════════════════════════
 
 Write doc_review_report.md with:
@@ -261,7 +263,7 @@ Write doc_review_report.md with:
 - [What documentation was done well]
 
 ═══════════════════════════════════════════════════════════════════════
-STEP 9: FIX ALL DOCUMENTATION ISSUES (MANDATORY)
+
 ═══════════════════════════════════════════════════════════════════════
 
 For EVERY documentation issue you find, you MUST fix it:
@@ -275,7 +277,7 @@ For EVERY documentation issue you find, you MUST fix it:
 DO NOT just report issues - FIX THEM. You have write access to all files.
 
 ═══════════════════════════════════════════════════════════════════════
-STEP 10: SAVE TO MEMORY
+
 ═══════════════════════════════════════════════════════════════════════
 
 Save documentation findings to memory:
@@ -284,7 +286,7 @@ Save documentation findings to memory:
 - Areas that need better documentation practices
 
 ═══════════════════════════════════════════════════════════════════════
-CRITICAL RULES
+
 ═══════════════════════════════════════════════════════════════════════
 
 DO:
@@ -305,7 +307,7 @@ DO NOT:
 
 
 ═══════════════════════════════════════════════════════════════════════
-WHEN YOU ARE DONE - MARK YOUR TASK AS COMPLETE (DO NOT SKIP THIS)
+
 ═══════════════════════════════════════════════════════════════════════
 
 CRITICAL: Do NOT just print a summary and stop. Do NOT exit to the command line.
@@ -340,7 +342,7 @@ You MUST use these Hephaestus MCP tools:
 • search_memory - Search for prior work
 
 ═══ COMPLETION CRITERIA ═══
-• Stray files organized into Docs Path (mandatory first step)
+
 • All documentation files identified and read
 • Requirements doc compared against implementation
 • Architecture doc compared against actual code structure
@@ -355,7 +357,7 @@ You MUST use these Hephaestus MCP tools:
 • Task marked as done
 
 ═══ WORKFLOW ═══
-1. Read your task description carefully
+
 2. Follow the phase instructions above
 3. Complete all completion criteria
 4. Call update_task_status(status="done", summary="...") when complete

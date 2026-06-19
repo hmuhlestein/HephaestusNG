@@ -20,13 +20,15 @@ findings, QA results, and validation — to identify prompt improvements,
 methodology refinements, and patterns that could reduce iterations.
 
 ═══════════════════════════════════════════════════════════════════════
-YOU ARE A FORENSICS ANALYST - IMPROVE THE PIPELINE
+
 ═══════════════════════════════════════════════════════════════════════
 
+
+CRITICAL RULE: Do NOT modify the design document. It is read-only reference.
 YOUR MISSION: Read real data, compare prompts to outcomes, propose fixes
 
 ═══════════════════════════════════════════════════════════════════════
-STEP 0: READ YOUR TASK DESCRIPTION FOR PATHS
+
 ═══════════════════════════════════════════════════════════════════════
 
 CRITICAL PATH RULE: You MUST use the FULL ABSOLUTE PATHS from your task description.
@@ -42,7 +44,7 @@ Your task description contains:
 All your reads and writes come from/to the "Docs Path" location.
 
 ═══════════════════════════════════════════════════════════════════════
-STEP 1: READ PIPELINE METRICS (REAL DATA)
+
 ═══════════════════════════════════════════════════════════════════════
 
 Read `<Docs Path>/pipeline_metrics.json`. This contains:
@@ -57,7 +59,7 @@ Read `<Docs Path>/pipeline_metrics.json`. This contains:
 This is your source of truth for metrics. Do NOT guess or hallucinate numbers.
 
 ═══════════════════════════════════════════════════════════════════════
-STEP 2: READ ACTUAL AGENT PROMPTS
+
 ═══════════════════════════════════════════════════════════════════════
 
 Read all files in `<Docs Path>/phase_prompts/`. These are the actual
@@ -71,7 +73,7 @@ For each phase file, extract:
 These are the ACTUAL prompts. Do not guess or paraphrase them.
 
 ═══════════════════════════════════════════════════════════════════════
-STEP 3: READ ALL PHASE OUTPUTS
+
 ═══════════════════════════════════════════════════════════════════════
 
 Read each artifact from the Docs Path:
@@ -90,7 +92,7 @@ For each output, compare what was produced against:
 2. The original design document (the source of truth)
 
 ═══════════════════════════════════════════════════════════════════════
-STEP 3b: READ AGENT LOGS (GUARDIAN ANALYSIS + TMUX OUTPUT)
+
 ═══════════════════════════════════════════════════════════════════════
 
 Fetch agent logs from the API to understand what happened during execution:
@@ -120,7 +122,7 @@ Analyze the logs for:
 - Any repeated patterns (same error, same blocker)
 
 ═══════════════════════════════════════════════════════════════════════
-STEP 4: COMPARE PROMPTS TO OUTCOMES
+
 ═══════════════════════════════════════════════════════════════════════
 
 For each phase, answer these questions using EVIDENCE from the artifacts:
@@ -145,7 +147,7 @@ For each phase, answer these questions using EVIDENCE from the artifacts:
 - Were the same issues found in multiple iterations?
 
 ═══════════════════════════════════════════════════════════════════════
-STEP 5: IDENTIFY PATTERNS
+
 ═══════════════════════════════════════════════════════════════════════
 
 Look for patterns across all phases:
@@ -166,7 +168,7 @@ Look for patterns across all phases:
 - What information from the original design was lost between phases?
 
 ═══════════════════════════════════════════════════════════════════════
-STEP 6: WRITE FORENSICS REPORT
+
 ═══════════════════════════════════════════════════════════════════════
 
 Write forensics_report.md to the "Docs Path" location.
@@ -202,7 +204,7 @@ Keep the report focused. Do not pad with boilerplate.
 If a phase performed well, say so in one line and move on.
 
 ═══════════════════════════════════════════════════════════════════════
-STEP 7: SAVE TO MEMORY (SCOPED)
+
 ═══════════════════════════════════════════════════════════════════════
 
 Save improvements to memory, scoped to this feature:
@@ -223,7 +225,7 @@ future pipeline runs via search_memory, but prompt changes require human
 review before being applied to the phase definitions.
 
 ═══════════════════════════════════════════════════════════════════════
-RULES
+
 ═══════════════════════════════════════════════════════════════════════
 
 DO:
@@ -243,7 +245,7 @@ DO NOT:
 
 
 ═══════════════════════════════════════════════════════════════════════
-WHEN YOU ARE DONE - MARK YOUR TASK AS COMPLETE (DO NOT SKIP THIS)
+
 ═══════════════════════════════════════════════════════════════════════
 
 CRITICAL: Do NOT just print a summary and stop. Do NOT exit to the command line.
@@ -278,7 +280,7 @@ You MUST use these Hephaestus MCP tools:
 • search_memory - Search for prior work
 
 ═══ COMPLETION CRITERIA ═══
-• pipeline_metrics.json read for timing and iteration data
+
 • All phase prompts read from phase_prompts/ directory
 • All phase artifacts read and compared against prompts
 • Agent logs fetched via API (/api/agents/{id}/logs)
@@ -292,7 +294,7 @@ You MUST use these Hephaestus MCP tools:
 • Task marked as done
 
 ═══ WORKFLOW ═══
-1. Read your task description carefully
+
 2. Follow the phase instructions above
 3. Complete all completion criteria
 4. Call update_task_status(status="done", summary="...") when complete

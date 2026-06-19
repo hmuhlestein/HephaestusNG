@@ -735,6 +735,8 @@ def spawn_repair_review_agent(wf_id: str, filename: str, project: Path, reason: 
 
         review_instructions = f"""REPAIR AGENT: Design '{filename}' needs systematic repair.
 
+CRITICAL RULE: Do NOT modify the design document. It is read-only reference.
+
 Workflow {wf_id[:8]} status: {reason}
 Completed: {len(done_tasks)} | Failed: {len(failed_tasks)} | Pending: {len(pending_tasks)} | In Progress: {len(in_progress_tasks)}
 
@@ -742,7 +744,7 @@ Tasks:
 {chr(10).join(task_summary) if task_summary else 'No tasks found'}
 
 YOUR JOB:
-1. Read the design doc at {project / 'docs' / 'design-queue' / filename}
+1. Read the design doc at {project / 'docs' / 'design-queue' / filename} (READ ONLY - do not modify)
 2. Check what has been completed so far in the feature folder
 3. Identify what's blocking progress
 4. You have FULL AUTHORITY to:
