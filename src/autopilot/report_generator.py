@@ -31,7 +31,7 @@ def generate_feature_report(docs_path: str, metrics: dict = None) -> str:
     try:
         commit_hash = subprocess.run(["git", "rev-parse", "--short", "HEAD"], 
                                    capture_output=True, text=True, cwd=str(docs_dir.parent)).stdout.strip()
-    except:
+    except Exception:
         commit_hash = "N/A"
     
     design_name = metrics.get("design_name", "Feature")

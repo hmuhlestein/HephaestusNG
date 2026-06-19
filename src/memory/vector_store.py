@@ -98,7 +98,7 @@ class VectorStoreManager:
                         ),
                     )
                     logger.info(f"Created collection '{full_name}': {config['description']}")
-                except:
+                except Exception:
                     # Collection likely already exists
                     logger.debug(f"Collection '{full_name}' initialization handled")
 
