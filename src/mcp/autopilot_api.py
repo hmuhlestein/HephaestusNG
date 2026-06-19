@@ -697,17 +697,6 @@ async def repair_design(request: dict):
     findings = []
     actions_taken = []
 
-    # Create a simple logger for the orchestrator functions
-    class RepairLogger:
-        def log(self, msg, level="INFO"):
-            findings.append({"type": "log", "level": level, "message": msg})
-        def event(self, name, data):
-            findings.append({"type": "event", "event": name, "data": data})
-        def save_state(self, state):
-            pass
-
-    logger = RepairLogger()
-
     # 1. Find all workflows for this design
     design_name = filename.replace('.md', '').replace('_', ' ').replace('-', ' ')
     with get_db() as db:
