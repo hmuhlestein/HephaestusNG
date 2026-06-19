@@ -1,6 +1,5 @@
 """Utility for loading and formatting trajectory monitoring prompts."""
 
-import os
 from pathlib import Path
 from typing import Dict, Any, Optional
 import json

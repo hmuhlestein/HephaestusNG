@@ -1,9 +1,7 @@
 """Epic forge ASCII art for Hephaestus."""
 
-from textual.app import ComposeResult
 from textual.widgets import Static
 from rich.text import Text
-from rich.panel import Panel
 from rich.align import Align
 
 

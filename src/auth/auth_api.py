@@ -2,14 +2,14 @@
 
 from datetime import datetime, timedelta
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, status, Body
+from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy.orm import Session
 import uuid
 import logging
 
-from src.core.database import get_db, DatabaseManager
+from src.core.database import DatabaseManager
 from src.core.user_models import User, AuthToken, UserSession, LoginAttempt, AuditLog
 from . import (
     hash_password,

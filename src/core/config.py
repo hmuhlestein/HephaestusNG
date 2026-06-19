@@ -3,7 +3,7 @@
 from typing import Optional, Literal
 from pathlib import Path
 from pydantic_settings import BaseSettings
-from pydantic import Field, field_validator, SecretStr
+from pydantic import Field, SecretStr
 
 
 class LLMConfig(BaseSettings):

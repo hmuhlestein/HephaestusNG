@@ -7,7 +7,6 @@ from textual.widget import Widget
 from textual.widgets import Static
 from textual.reactive import reactive
 from textual.message import Message
-from rich.text import Text
 
 
 class ActionMenu(Widget):

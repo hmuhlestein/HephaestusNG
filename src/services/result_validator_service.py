@@ -7,7 +7,6 @@ from typing import Dict, Any, Optional
 from src.core.database import DatabaseManager, WorkflowResult, Workflow, Agent, Task
 from src.services.result_validation_helpers import (
     validate_result_criteria,
-    validate_file_contains_solution,
     ValidationResult,
 )
 from src.phases.phase_manager import PhaseManager
@@ -127,7 +126,7 @@ class ResultValidatorService:
                 id=validation_task_id,
                 raw_description=f"Validate result submission for task: {original_task.raw_description if original_task else 'Unknown'}",
                 enriched_description=f"Validate the result submitted by agent {result.agent_id} for workflow {workflow_id}",
-                done_definition=f"Review and validate the submitted result against workflow criteria, then submit validation using submit_result_validation tool",
+                done_definition="Review and validate the submitted result against workflow criteria, then submit validation using submit_result_validation tool",
                 status="assigned",
                 priority="high",
                 assigned_agent_id=validator_agent_id,

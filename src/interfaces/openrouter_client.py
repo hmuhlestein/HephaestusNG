@@ -6,10 +6,8 @@ instead of directly to OpenRouter, enabling per-feature cost tracking.
 """
 
 import logging
-import os
 from typing import Dict, Any, List, Optional
 import httpx
-import json
 
 logger = logging.getLogger(__name__)
 

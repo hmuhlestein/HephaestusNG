@@ -5,8 +5,7 @@ from pathlib import Path
 import yaml
 import os
 
-from pydantic import BaseModel, Field, field_validator
-from pydantic_settings import BaseSettings
+from pydantic import BaseModel, Field
 
 
 class ModelInfo(BaseModel):

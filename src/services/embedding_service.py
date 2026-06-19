@@ -2,7 +2,7 @@
 
 import numpy as np
 import openai
-from typing import List, Dict, Any, Optional
+from typing import List
 import logging
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 from src.core.simple_config import get_config
@@ -181,7 +181,7 @@ class EmbeddingService:
         tag_text = " ".join(tags)
         weighted_text = f"{title} {title} {description} {tag_text} {tag_text}"
 
-        logger.debug(f"Generating weighted ticket embedding (title 2x, tags 1.5x)")
+        logger.debug("Generating weighted ticket embedding (title 2x, tags 1.5x)")
         return await self.generate_embedding(weighted_text)
 
     async def generate_query_embedding(self, query: str) -> List[float]:

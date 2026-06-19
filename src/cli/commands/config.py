@@ -1,6 +1,5 @@
 """heph config — Show and edit configuration."""
 
-import os
 from pathlib import Path
 from src.cli.utils import output
 
@@ -82,7 +81,7 @@ def _print_active_project_overlay():
                 sqlalchemy.text("SELECT name, base_dir FROM autopilot_projects WHERE is_active = 1 LIMIT 1")
             ).fetchone()
             if active:
-                print(f"\n# Active project (overrides paths.project_root and git.main_repo_path):")
+                print("\n# Active project (overrides paths.project_root and git.main_repo_path):")
                 print(f"#   name: {active[0]}")
                 print(f"#   path: {active[1]}")
     except Exception:

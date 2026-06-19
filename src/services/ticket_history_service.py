@@ -1,6 +1,5 @@
 """Service layer for managing ticket history and audit trail."""
 
-import json
 from datetime import datetime
 from typing import Optional, Dict, Any, List
 from sqlalchemy.orm import Session

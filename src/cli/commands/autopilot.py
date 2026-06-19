@@ -5,7 +5,7 @@ import sys
 import subprocess
 from pathlib import Path
 
-from src.cli.utils import api_get, api_post, output, require_backend, table, status_icon
+from src.cli.utils import output
 
 HEPHAESTUS_DIR = Path(__file__).parent.parent.parent.parent
 
@@ -120,7 +120,7 @@ def stop_pipeline(args):
             for agent in active:
                 agent_id = agent.get("id", "")
                 try:
-                    requests.post(f"http://127.0.0.1:8300/api/terminate_agent", json={"agent_id": agent_id}, timeout=5)
+                    requests.post("http://127.0.0.1:8300/api/terminate_agent", json={"agent_id": agent_id}, timeout=5)
                     print(f"  Terminated agent {agent_id[:8]}")
                 except Exception:
                     pass
@@ -195,7 +195,7 @@ def _print_pipeline_status(data):
     run = data.get("latest_run")
     if run:
         print()
-        print(f"Latest run:")
+        print("Latest run:")
         print(f"  Processed:  {run.get('designs_processed', 0)}")
         print(f"  Succeeded:  {run.get('designs_succeeded', 0)}")
         print(f"  Failed:     {run.get('designs_failed', 0)}")

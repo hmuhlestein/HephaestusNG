@@ -180,7 +180,7 @@ class TicketService:
         Raises:
             ValueError: If validation fails
         """
-        logger.info(f"[TICKET_SERVICE] ========== START ==========")
+        logger.info("[TICKET_SERVICE] ========== START ==========")
         logger.info(f"[TICKET_SERVICE] workflow_id: {workflow_id}")
         logger.info(f"[TICKET_SERVICE] agent_id: {agent_id}")
         logger.info(f"[TICKET_SERVICE] title: {title[:60]}...")
@@ -197,7 +197,7 @@ class TicketService:
             logger.info(f"[TICKET_SERVICE] Workflow found: {workflow is not None}")
             if not workflow:
                 logger.error(f"[TICKET_SERVICE] ❌ Workflow not found: {workflow_id}")
-                logger.error(f"[TICKET_SERVICE] ========== FAILED ==========")
+                logger.error("[TICKET_SERVICE] ========== FAILED ==========")
                 raise ValueError(f"Workflow not found: {workflow_id}")
             if workflow.status not in ["active", "paused"]:
                 raise ValueError(f"Workflow is not active: {workflow.status}")
@@ -317,10 +317,10 @@ class TicketService:
             db.add(ticket)
             logger.info(f"[TICKET_SERVICE] Ticket object created: {ticket_id}")
             db.flush()  # Flush to get the ID for history
-            logger.info(f"[TICKET_SERVICE] db.flush() completed")
+            logger.info("[TICKET_SERVICE] db.flush() completed")
 
             # Record creation in ticket_history
-            logger.info(f"[TICKET_SERVICE] Recording ticket history...")
+            logger.info("[TICKET_SERVICE] Recording ticket history...")
             await TicketHistoryService.record_change(
                 ticket_id=ticket_id,
                 agent_id=agent_id,
@@ -334,11 +334,11 @@ class TicketService:
                 },
                 db=db,
             )
-            logger.info(f"[TICKET_SERVICE] History recorded")
+            logger.info("[TICKET_SERVICE] History recorded")
 
-            logger.info(f"[TICKET_SERVICE] Committing transaction...")
+            logger.info("[TICKET_SERVICE] Committing transaction...")
             db.commit()
-            logger.info(f"[TICKET_SERVICE] ✅ Transaction committed - ticket saved to database")
+            logger.info("[TICKET_SERVICE] ✅ Transaction committed - ticket saved to database")
 
         # If human review required, wait for approval
         if human_review_enabled:
@@ -521,7 +521,7 @@ class TicketService:
             "similar_tickets": similar_tickets,
         }
         logger.info(f"[TICKET_SERVICE] Returning result: {result}")
-        logger.info(f"[TICKET_SERVICE] ========== SUCCESS ==========")
+        logger.info("[TICKET_SERVICE] ========== SUCCESS ==========")
         return result
 
     @staticmethod

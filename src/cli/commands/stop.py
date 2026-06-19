@@ -5,7 +5,7 @@ import signal
 import subprocess
 import time
 
-from src.cli.utils import output, read_pid, remove_pid, is_process_running, PID_DIR
+from src.cli.utils import output, read_pid, remove_pid, is_process_running
 
 
 def register(subparsers):

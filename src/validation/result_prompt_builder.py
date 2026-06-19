@@ -1,6 +1,5 @@
 """Build prompts for result validator agents."""
 
-from typing import Dict, Any, Optional
 from src.core.database import WorkflowResult, Workflow
 
 

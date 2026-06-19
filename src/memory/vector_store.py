@@ -11,9 +11,7 @@ from qdrant_client.models import (
     Filter,
     FieldCondition,
     MatchValue,
-    SearchRequest,
 )
-from qdrant_client.http.exceptions import UnexpectedResponse
 
 logger = logging.getLogger(__name__)
 
@@ -89,7 +87,7 @@ class VectorStoreManager:
                         ),
                     )
                     logger.info(f"Created collection '{full_name}': {config['description']}")
-            except Exception as e:
+            except Exception:
                 # If listing fails, try to create anyway
                 try:
                     self.client.create_collection(
@@ -299,7 +297,7 @@ class VectorStoreManager:
                 "indexed_vectors_count": count.count if hasattr(count, 'count') else 0,
                 "status": "green",
             }
-        except Exception as e:
+        except Exception:
             # Suppress verbose error logging for stats
             return {
                 "name": collection,

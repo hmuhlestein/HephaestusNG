@@ -1,6 +1,5 @@
 """Main Hephaestus SDK client."""
 
-import os
 import time
 import yaml
 import tempfile
@@ -11,8 +10,7 @@ from typing import Optional, List, Dict, Any
 from datetime import datetime
 
 from src.sdk.models import (
-    Phase, TaskStatus, AgentStatus, Workflow, WorkflowResult,
-    WorkflowConfig, WorkflowDefinition, WorkflowExecution
+    Phase, TaskStatus, WorkflowConfig, WorkflowDefinition, WorkflowExecution
 )
 from src.sdk.config import HephaestusConfig
 from src.sdk.process_manager import ProcessManager
@@ -327,7 +325,7 @@ class HephaestusSDK:
         """Start in headless mode with console output."""
         # Check Qdrant only if using qdrant backend
         if self.config.vector_store_backend == "qdrant":
-            print(f"[Hephaestus] Checking Qdrant connectivity...")
+            print("[Hephaestus] Checking Qdrant connectivity...")
             if not self._check_qdrant_health():
                 raise QdrantConnectionError(
                     f"Qdrant is not accessible at {self.config.qdrant_url}. "
@@ -341,8 +339,8 @@ class HephaestusSDK:
 
         # Print log directory
         print(f"\nLogs: {self.log_dir}/")
-        print(f"  → backend.log")
-        print(f"  → monitor.log\n")
+        print("  → backend.log")
+        print("  → monitor.log\n")
 
         # Spawn processes
         print("[Hephaestus] Starting backend process...")
@@ -509,7 +507,7 @@ class HephaestusSDK:
             tui_app = HephaestusTUI(sdk_instance=self, log_dir=str(self.log_dir))
             tui_app.run()  # Blocking until user quits
 
-        except Exception as e:
+        except Exception:
             # Clean up on error
             if self.process_manager:
                 self.process_manager.shutdown_all()

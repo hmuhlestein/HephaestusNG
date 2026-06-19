@@ -253,7 +253,7 @@ class PhaseContext(BaseModel):
                         context += f"  • {criterion}\n"
                 context += "\n"
 
-        context += f"""
+        context += """
 ### Creating Tasks for Different Phases:
 When creating tasks, ALWAYS specify the phase number: phase=1, phase=2, etc.
 

@@ -1,9 +1,8 @@
 """Service for detecting duplicate and related tasks based on embeddings."""
 
-from typing import Dict, List, Optional, Any, Tuple
+from typing import Dict, List, Optional, Any
 import logging
 import json
-from sqlalchemy.orm import Session
 from src.core.database import Task, DatabaseManager
 from src.services.embedding_service import EmbeddingService
 from src.core.simple_config import get_config

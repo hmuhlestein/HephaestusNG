@@ -5,16 +5,15 @@ import logging
 from typing import Dict, Any, Optional, List
 from datetime import datetime, timedelta
 from enum import Enum
-import json
 
 from src.core.simple_config import get_config
-from src.core.database import DatabaseManager, Agent, Task, AgentLog, GuardianAnalysis, ConductorAnalysis, DetectedDuplicate, SteeringIntervention
+from src.core.database import DatabaseManager, Agent, Task, AgentLog, GuardianAnalysis, ConductorAnalysis, DetectedDuplicate
 from src.agents.manager import AgentManager
 from src.interfaces import LLMProviderInterface, get_cli_agent
 from src.memory.rag import RAGSystem
 from src.phases import PhaseManager
 from src.monitoring.guardian import Guardian
-from src.monitoring.conductor import Conductor, SystemDecision
+from src.monitoring.conductor import Conductor
 from src.monitoring.trajectory_context import TrajectoryContext
 
 logger = logging.getLogger(__name__)
@@ -442,7 +441,7 @@ class MonitoringLoop:
         if self.phase_manager:
             logger.info(f"[DIAGNOSTIC CYCLE] phase_manager.workflow_id: {self.phase_manager.workflow_id[:8] if self.phase_manager.workflow_id else 'None'}")
         else:
-            logger.info(f"[DIAGNOSTIC CYCLE] phase_manager is None")
+            logger.info("[DIAGNOSTIC CYCLE] phase_manager is None")
 
         # Get all active agents
         agents = self.agent_manager.get_active_agents()
@@ -523,7 +522,7 @@ class MonitoringLoop:
                 logger.error(f"Error checking phase progression: {e}")
 
         # Check if workflow is stuck and needs diagnostic agent
-        logger.info(f"[DIAGNOSTIC] Checking if diagnostic agent needed...")
+        logger.info("[DIAGNOSTIC] Checking if diagnostic agent needed...")
         logger.info(f"[DIAGNOSTIC] phase_manager exists: {self.phase_manager is not None}")
         logger.info(f"[DIAGNOSTIC] workflow_id: {self.phase_manager.workflow_id[:8] if (self.phase_manager and self.phase_manager.workflow_id) else 'N/A'}")
 
@@ -559,10 +558,10 @@ class MonitoringLoop:
                 logger.error(f"[DIAGNOSTIC] Error checking workflow stuck state: {e}")
         else:
             if not self.phase_manager:
-                logger.warning(f"[DIAGNOSTIC] ❌ SKIPPED - No phase_manager")
+                logger.warning("[DIAGNOSTIC] ❌ SKIPPED - No phase_manager")
             elif not self.phase_manager.workflow_id:
-                logger.warning(f"[DIAGNOSTIC] ❌ SKIPPED - phase_manager.workflow_id is None")
-                logger.warning(f"[DIAGNOSTIC] 💡 This likely means there's an active workflow in the DB that wasn't loaded on startup")
+                logger.warning("[DIAGNOSTIC] ❌ SKIPPED - phase_manager.workflow_id is None")
+                logger.warning("[DIAGNOSTIC] 💡 This likely means there's an active workflow in the DB that wasn't loaded on startup")
 
     async def _guardian_analysis_for_agent(self, agent: Agent) -> Optional[Dict[str, Any]]:
         """Perform Guardian analysis for a single agent.
@@ -1360,7 +1359,7 @@ class MonitoringLoop:
             conditions["stuck_long_enough"] = True
 
             # ALL CONDITIONS MET - Trigger diagnostic agent
-            logger.warning(f"[DIAGNOSTIC MONITOR] 🚨 WORKFLOW STUCK DETECTED - All conditions met!")
+            logger.warning("[DIAGNOSTIC MONITOR] 🚨 WORKFLOW STUCK DETECTED - All conditions met!")
             logger.warning(f"[DIAGNOSTIC MONITOR] 🔥 Stuck for {stuck_time:.0f}s with no progress")
             self._log_diagnostic_status_report(conditions, trigger=True, stuck_time=stuck_time)
 
@@ -1397,10 +1396,10 @@ class MonitoringLoop:
         logger.info("[DIAGNOSTIC MONITOR] ───────────────────────────────────────")
 
         if trigger:
-            logger.warning(f"[DIAGNOSTIC MONITOR] 🚨 RESULT: TRIGGERING DIAGNOSTIC AGENT")
+            logger.warning("[DIAGNOSTIC MONITOR] 🚨 RESULT: TRIGGERING DIAGNOSTIC AGENT")
             logger.warning(f"[DIAGNOSTIC MONITOR] 🔥 Stuck Time: {stuck_time:.0f}s")
         else:
-            logger.info(f"[DIAGNOSTIC MONITOR] ✋ RESULT: NOT TRIGGERING")
+            logger.info("[DIAGNOSTIC MONITOR] ✋ RESULT: NOT TRIGGERING")
             if reason:
                 logger.info(f"[DIAGNOSTIC MONITOR] 📋 Reason: {reason}")
 
@@ -1503,7 +1502,7 @@ class MonitoringLoop:
             diagnostic_run.status = "running"
             session.commit()
 
-            logger.info(f"[DIAGNOSTIC MONITOR] ✅ Diagnostic agent created successfully!")
+            logger.info("[DIAGNOSTIC MONITOR] ✅ Diagnostic agent created successfully!")
             logger.info(f"[DIAGNOSTIC MONITOR] Agent ID: {agent.id[:8]}")
             logger.info(f"[DIAGNOSTIC MONITOR] Task ID: {task_id[:8]}")
             logger.info(f"[DIAGNOSTIC MONITOR] Run ID: {run_id[:8]}")
@@ -1528,7 +1527,7 @@ class MonitoringLoop:
             - workflow_status
             - submitted_results
         """
-        from src.core.database import Agent, GuardianAnalysis, ConductorAnalysis, WorkflowResult, Phase
+        from src.core.database import Agent, ConductorAnalysis, WorkflowResult, Phase
 
         session = self.db_manager.get_session()
         try:

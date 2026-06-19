@@ -1,7 +1,6 @@
 """Main Textual TUI application for Hephaestus."""
 
 from textual.app import App
-from textual.screen import Screen
 
 from src.sdk.tui.screens.forge_main import ForgeMainScreen
 

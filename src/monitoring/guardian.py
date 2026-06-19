@@ -1,9 +1,7 @@
 """Guardian monitoring system with trajectory thinking for individual agents."""
 
-import asyncio
 import logging
-import json
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List, Optional
 from datetime import datetime, timedelta
 from enum import Enum
 

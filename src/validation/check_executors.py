@@ -1,8 +1,7 @@
 """Validation check type executors."""
 
 from enum import Enum
-from typing import Dict, Any, List, Optional
-import os
+from typing import Dict, Any
 import subprocess
 from pathlib import Path
 

@@ -3,7 +3,7 @@
 from textual.app import ComposeResult
 from textual.screen import Screen
 from textual.widgets import Static, Footer, DataTable
-from textual.containers import Container, Vertical, Horizontal
+from textual.containers import Container, Vertical
 import requests
 
 

@@ -4,7 +4,6 @@ import os
 import uuid
 from datetime import datetime
 from typing import List, Optional, Dict, Any
-from pathlib import Path
 
 from src.core.database import get_db, WorkflowResult, Workflow, Agent
 from src.services.validation_helpers import (

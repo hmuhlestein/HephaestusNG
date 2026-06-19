@@ -1,7 +1,6 @@
 """Animation frames for peaceful medieval village scene."""
 
 from dataclasses import dataclass
-from typing import List
 
 
 @dataclass

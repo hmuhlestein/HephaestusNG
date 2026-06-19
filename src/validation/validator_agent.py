@@ -3,19 +3,14 @@
 import uuid
 import logging
 import asyncio
-from typing import Dict, Any, Optional, List
-from datetime import datetime
+from typing import Dict, Any
 
 from sqlalchemy.orm import Session
 
 from src.core.database import (
     DatabaseManager,
-    Agent,
     Task,
-    Phase,
-    ValidationReview,
-    WorktreeCommit,
-    AgentWorktree
+    Phase
 )
 from src.core.branch_manager import BranchManager
 from src.validation.prompt_builder import ValidationPromptBuilder
@@ -254,7 +249,6 @@ async def spawn_validator_tmux_session(
         prompt: Agent prompt
         read_only: Whether agent has read-only access
     """
-    import subprocess
     import libtmux
     from src.interfaces.cli_interface import get_cli_agent
 

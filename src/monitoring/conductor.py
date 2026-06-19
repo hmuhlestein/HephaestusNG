@@ -2,12 +2,11 @@
 
 import json
 import logging
-from typing import Dict, Any, List, Optional, Tuple
-from datetime import datetime, timedelta
-from collections import defaultdict
+from typing import Dict, Any, List
+from datetime import datetime
 from enum import Enum
 
-from src.core.database import DatabaseManager, Agent, Task, AgentLog
+from src.core.database import DatabaseManager, Agent
 from src.agents.manager import AgentManager
 
 logger = logging.getLogger(__name__)
