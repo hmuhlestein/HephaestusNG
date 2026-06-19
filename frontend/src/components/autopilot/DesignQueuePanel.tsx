@@ -143,6 +143,9 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['workflows'] });
+      queryClient.invalidateQueries({ queryKey: ['autopilot-project-designs', projectId] });
+      // Force refetch of designs to trigger status re-fetch
+      queryClient.refetchQueries({ queryKey: ['autopilot-project-designs', projectId] });
       toast.success('Workflow updated');
     },
     onError: () => {
