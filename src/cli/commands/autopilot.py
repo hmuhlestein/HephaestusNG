@@ -95,8 +95,22 @@ def start_pipeline(args):
 
 def stop_pipeline(args):
     import signal as sig
+    import requests
     from src.cli.utils import read_pid, remove_pid, is_process_running
 
+    # First, try to stop via API (properly pauses workflows and terminates agents)
+    try:
+        resp = requests.post("http://127.0.0.1:8300/api/autopilot/stop", json={"clear_state": True}, timeout=10)
+        if resp.status_code == 200:
+            print("Autopilot stopped (workflows paused, agents terminated)")
+        else:
+            print(f"API stop returned {resp.status_code}: {resp.text}")
+    except requests.exceptions.ConnectionError:
+        print("Backend not running, killing orchestrator directly")
+    except Exception as e:
+        print(f"API stop failed: {e}")
+
+    # Also kill orchestrator process if still running
     pid = read_pid("orchestrator")
     if pid and is_process_running(pid):
         try:
@@ -109,14 +123,24 @@ def stop_pipeline(args):
             else:
                 if is_process_running(pid):
                     os.kill(pid, sig.SIGKILL)
-            print(f"Autopilot pipeline stopped (pid {pid})")
+            print(f"Killed orchestrator process (pid {pid})")
         except OSError as e:
-            print(f"Error stopping pipeline: {e}")
+            print(f"Error killing orchestrator: {e}")
         finally:
             remove_pid("orchestrator")
     else:
-        print("No autopilot pipeline running.")
         remove_pid("orchestrator")
+
+    # Clear pipeline state
+    try:
+        from pathlib import Path
+        state_dir = Path.home() / ".hephaestus" / "autopilot"
+        (state_dir / "pipeline_state.json").unlink(missing_ok=True)
+        (state_dir / "orchestrator.pid").unlink(missing_ok=True)
+        (state_dir / "orchestrator_agent_id").unlink(missing_ok=True)
+    except Exception:
+        pass
+
     return 0
 
 
