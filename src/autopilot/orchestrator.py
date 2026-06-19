@@ -388,6 +388,69 @@ def get_active_workflows() -> list:
     return [w for w in data if w.get("status") in ("active", "running")]
 
 
+def is_design_fully_complete(workflow_id: str, logger: OrchestratorLogger) -> Tuple[bool, str]:
+    """Check if a design is fully complete:
+    1. All phases done (no pending/in_progress/queued tasks)
+    2. No active agents
+    3. All agent branches merged to main
+    4. No failed tasks
+    
+    Returns:
+        (is_complete, reason) tuple
+    """
+    # Check workflow status
+    wf = get_workflow_status(workflow_id)
+    wf_status = wf.get('status', '')
+    if wf_status not in ('completed', 'active', 'running', 'paused'):
+        return False, f"Workflow status: {wf_status}"
+    
+    # Check task statuses
+    pending = get_tasks(status='pending', workflow_id=workflow_id)
+    queued = get_tasks(status='queued', workflow_id=workflow_id)
+    in_progress = get_tasks(status='in_progress', workflow_id=workflow_id)
+    assigned = get_tasks(status='assigned', workflow_id=workflow_id)
+    failed = get_tasks(status='failed', workflow_id=workflow_id)
+    done = get_tasks(status='done', workflow_id=workflow_id)
+    
+    # All non-done statuses that indicate work remaining
+    active_tasks = pending + queued + in_progress + assigned
+    
+    if active_tasks:
+        task_ids = [t.get('id', '')[:8] for t in active_tasks[:3]]
+        return False, f"{len(active_tasks)} task(s) still active: {', '.join(task_ids)}"
+    
+    if failed:
+        return False, f"{len(failed)} task(s) failed"
+    
+    # Check for active agents
+    agents = get_agents(workflow_id=workflow_id)
+    active_agents = [a for a in agents if a.get('status') in ('working', 'starting', 'idle')]
+    if active_agents:
+        agent_ids = [a.get('id', '')[:8] for a in active_agents[:3]]
+        return False, f"{len(active_agents)} agent(s) still active: {', '.join(agent_ids)}"
+    
+    # Check for unmerged agent branches
+    try:
+        project_path = os.getenv("PROJECT_PATH", "/Users/hmuhlestein/code/sotto")
+        result = subprocess.run(
+            ["git", "branch", "--list", "agent-*"],
+            capture_output=True, text=True, timeout=10,
+            cwd=project_path
+        )
+        if result.returncode == 0:
+            branches = [b.strip().lstrip('* ') for b in result.stdout.strip().split('\n') if b.strip()]
+            if branches:
+                return False, f"{len(branches)} unmerged agent branch(es)"
+    except Exception:
+        pass
+    
+    # Check if all phases are done (for autopilot: 10 phases = 10 tasks)
+    if len(done) < 10:
+        return False, f"Only {len(done)}/10 phases done"
+    
+    return True, "All phases done, branches merged"
+
+
 def check_api_credits() -> Tuple[bool, str]:
     credit_errors = [
         "insufficient funds", "credit", "quota exceeded",
@@ -1945,6 +2008,34 @@ def run_continuous_pipeline(args) -> None:
 
             if now - last_queue_scan >= DESIGN_QUEUE_SCAN_INTERVAL:
                 last_queue_scan = now
+
+                # Check if any workflow is still active — don't start a new design while one is running
+                try:
+                    active_workflows = get_active_workflows()
+                    if active_workflows:
+                        wf_ids = [wf.get('id', '')[:8] for wf in active_workflows]
+                        logger.log(f"Workflow still active ({', '.join(wf_ids)}) — waiting before picking next design")
+                        state.queue_status = {"status": "waiting", "reason": "workflow_active", "active_workflows": wf_ids}
+                        logger.save_state(state)
+                        persistent_state.save(state, processed_hashes)
+                        time.sleep(POLL_INTERVAL)
+                        continue
+                    
+                    # Also check previous workflow is fully complete (all phases done, branches merged)
+                    if state.current_workflow_id:
+                        is_complete, reason = is_design_fully_complete(state.current_workflow_id, logger)
+                        if not is_complete:
+                            logger.log(f"Previous workflow not yet complete: {reason}")
+                            state.queue_status = {"status": "waiting", "reason": reason}
+                            logger.save_state(state)
+                            persistent_state.save(state, processed_hashes)
+                            time.sleep(POLL_INTERVAL)
+                            continue
+                        else:
+                            logger.log(f"Previous workflow fully complete: {reason}")
+                            state.current_workflow_id = None
+                except Exception as e:
+                    logger.log(f"Warning: Could not check active workflows: {e}", "WARN")
 
                 next_design = pick_next_design(queue_dir, processed_hashes, logger)
 
