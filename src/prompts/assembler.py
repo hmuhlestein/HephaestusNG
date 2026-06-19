@@ -303,7 +303,7 @@ COMPLETION CRITERIA:
 {task_done}
 
 ═══ PRE-LOADED CONTEXT ═══
-Top 10 relevant memories (use qdrant-find for more):
+Top 10 relevant memories (use search_memory for more):
 {memory_context}
 
 PROJECT:
@@ -318,7 +318,7 @@ Hephaestus MCP (task management):
 • spawn_agent - Spawn a specialized Hephaestus subagent (see below)
 
 Qdrant MCP (memory search):
-• qdrant-find - Search agent memories semantically
+• search_memory - Search agent memories semantically
   Use when: encountering errors, needing implementation details, finding related work
   Example: "qdrant-find 'PostgreSQL connection timeout solutions'"
   Note: Pre-loaded context covers most needs; search for specifics

@@ -46,6 +46,9 @@ Read requirements_analysis.md from Phase 1. Understand:
 - Technology constraints
 - Implementation order
 
+Also read the original design document to understand the overall vision.
+This context will be passed to developers via the 'context' field in create_task.
+
 ═══════════════════════════════════════════════════════════════════════
 STEP 2: DESIGN SYSTEM ARCHITECTURE
 ═══════════════════════════════════════════════════════════════════════
@@ -179,22 +182,34 @@ task4: {"depends_on": [task1_id, task2_id], "parallel_group": "handlers"} → ru
 When creating tasks, use this structure:
 
 ```python
+# First, read the design document and requirements for context
+design_doc = read_file('design_document.md')
+requirements = read_file('requirements_analysis.md')
+
+# Create a context summary to pass to each task
+context_summary = "DESIGN OVERVIEW:\n" + design_doc[:2000] + "\n\nREQUIREMENTS SUMMARY:\n" + requirements[:1000]
+
+# Create tasks with context
 # First, create all tasks and collect their IDs
 task_ids = {}
 task_ids['types'] = create_task({
     "task_description": "Create type definitions...",
+    "context": context_summary,  # Pass design context to developer
     "depends_on": [],  # No dependencies - runs first
 })
 task_ids['config'] = create_task({
     "task_description": "Create config module...",
+    "context": context_summary,  # Pass design context to developer
     "depends_on": [],  # No dependencies - runs parallel with types
 })
 task_ids['handlers'] = create_task({
     "task_description": "Create HTTP handlers...",
+    "context": context_summary,  # Pass design context to developer
     "depends_on": [task_ids['types'], task_ids['config']],  # Wait for types and config
 })
 task_ids['tests'] = create_task({
     "task_description": "Create integration tests...",
+    "context": context_summary,  # Pass design context to developer
     "depends_on": [task_ids['handlers']],  # Wait for handlers
 })
 ```

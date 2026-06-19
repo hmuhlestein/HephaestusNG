@@ -544,7 +544,7 @@ IMPORTANT INSTRUCTIONS:
    - update_task_status: Mark your task as done when completed (with task_id: {task.id})
    - save_memory: Save discoveries for other agents (USE THIS LIBERALLY - see Memory Guidelines below)
    - create_task: Create sub-tasks if you need to break down complex work
-   - qdrant-find: Search past memories when you need specific information (see Memory Search below)"""
+   - search_memory: Search past memories when you need specific information (see Memory Search below)"""
 
         # Add phase-specific instructions if in a workflow
         if hasattr(task, 'phase_id') and task.phase_id:
@@ -623,17 +623,17 @@ When another agent sends you a message, consider responding if you have helpful 
    - "Don't use os.fork() with SQLite - causes 'database locked' errors"
    - "API routes defined in src/api/routes/, grouped by resource type"
 
-   **When to SEARCH memories (qdrant-find):**
-   Use qdrant-find when you need specific information not in your initial context:
-   • Encountering an unfamiliar error? Search: "qdrant-find 'NameError when importing'"
-   • Need implementation details? Search: "qdrant-find 'how database migrations work'"
-   • Looking for patterns? Search: "qdrant-find 'API authentication setup'"
-   • Finding related work? Search: "qdrant-find 'previous rate limiting implementations'"
+   **When to SEARCH memories (search_memory):**
+   Use search_memory when you need specific information not in your initial context:
+   • Encountering an unfamiliar error? Search: "search_memory 'NameError when importing'"
+   • Need implementation details? Search: "search_memory 'how database migrations work'"
+   • Looking for patterns? Search: "search_memory 'API authentication setup'"
+   • Finding related work? Search: "search_memory 'previous rate limiting implementations'"
 
    Pro tips:
    - Save memories AS YOU GO, not just at task completion
    - Be specific in memory content (include error messages, file paths, exact solutions)
-   - Use qdrant-find before reinventing the wheel
+   - Use search_memory before reinventing the wheel
    - Include tags and related_files in save_memory for better searchability"""
 
         # Add phase transition instructions if available
