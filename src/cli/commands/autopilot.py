@@ -102,13 +102,30 @@ def stop_pipeline(args):
     try:
         resp = requests.post("http://127.0.0.1:8300/api/autopilot/stop", json={"clear_state": True}, timeout=10)
         if resp.status_code == 200:
-            print("Autopilot stopped (workflows paused, agents terminated)")
+            data = resp.json()
+            print(f"Autopilot stopped: {data.get('agents_terminated', 0)} agents terminated, workflows paused")
         else:
             print(f"API stop returned {resp.status_code}: {resp.text}")
     except requests.exceptions.ConnectionError:
         print("Backend not running, killing orchestrator directly")
     except Exception as e:
         print(f"API stop failed: {e}")
+
+    # Also terminate any remaining active agents
+    try:
+        resp = requests.get("http://127.0.0.1:8300/api/agents", timeout=5)
+        if resp.status_code == 200:
+            agents = resp.json().get("agents", resp.json()) if isinstance(resp.json(), dict) else resp.json()
+            active = [a for a in agents if isinstance(a, dict) and a.get("status") in ("working", "starting", "idle")]
+            for agent in active:
+                agent_id = agent.get("id", "")
+                try:
+                    requests.post(f"http://127.0.0.1:8300/api/terminate_agent", json={"agent_id": agent_id}, timeout=5)
+                    print(f"  Terminated agent {agent_id[:8]}")
+                except Exception:
+                    pass
+    except Exception:
+        pass
 
     # Also kill orchestrator process if still running
     pid = read_pid("orchestrator")
