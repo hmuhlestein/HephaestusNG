@@ -1485,7 +1485,7 @@ async def get_project_design_content(project_id: str, filename: str):
 async def get_project_design_status(project_id: str, filename: str):
     """Get full status for a design: workflow, tasks, branch, feature folder."""
     from src.core.database import (
-        AutopilotProject, Workflow, Task, Agent, Phase, AgentWorktree, get_db
+        AutopilotProject, Workflow, Task, Agent, Phase, AgentBranch, get_db
     )
 
     with get_db() as db:
@@ -1560,7 +1560,7 @@ async def get_project_design_status(project_id: str, filename: str):
                         agent_ids.append(a.id)
             
             if agent_ids:
-                worktrees = db.query(AgentWorktree).filter(AgentWorktree.agent_id.in_(agent_ids)).all()
+                worktrees = db.query(AgentBranch).filter(AgentBranch.agent_id.in_(agent_ids)).all()
                 for wt in worktrees:
                     all_agents.append({
                         "agent_id": wt.agent_id,

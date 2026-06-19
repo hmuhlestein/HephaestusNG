@@ -2039,7 +2039,7 @@ def run_continuous_pipeline(args) -> None:
         project_root=str(project_path),
         auto_commit=True,
         conflict_resolution="newest_file_wins",
-        worktree_branch_prefix="agent-",
+        branch_prefix="agent-",
     )
 
     logger.info("Starting services...")

@@ -21,7 +21,7 @@ from sqlalchemy.orm import Session
 
 from src.core.database import (
     DatabaseManager,
-    AgentWorktree,
+    AgentBranch,
     WorktreeCommit,
     MergeConflictResolution,
 )
@@ -180,7 +180,7 @@ class BranchManager:
                 parent_commit_sha = self.main_repo.head.commit.hexsha
                 logger.info(f"[BRANCH] Using main HEAD: {parent_commit_sha[:8]}")
 
-            branch_name = f"{self.config.worktree_branch_prefix}{agent_id}"
+            branch_name = f"{self.config.branch_prefix}{agent_id}"
 
             # Create branch from parent commit
             try:
@@ -194,10 +194,10 @@ class BranchManager:
                 else:
                     raise
 
-            # Record in database (reusing AgentWorktree table for compatibility)
-            record = AgentWorktree(
+            # Record in database (reusing AgentBranch table for compatibility)
+            record = AgentBranch(
                 agent_id=agent_id,
-                worktree_path=str(self.config.project_root),  # Main repo, not a worktree
+                branch_path=str(self.config.project_root),  # Main repo, not a worktree
                 branch_name=branch_name,
                 parent_agent_id=parent_agent_id,
                 parent_commit_sha=parent_commit_sha,
@@ -332,7 +332,7 @@ class BranchManager:
             lock_file = self._acquire_merge_lock(agent_id)
 
             # Step 2: Get branch info
-            worktree = session.query(AgentWorktree).filter_by(agent_id=agent_id).first()
+            worktree = session.query(AgentBranch).filter_by(agent_id=agent_id).first()
             if not worktree:
                 raise ValueError(f"No branch record found for agent {agent_id}")
 
@@ -541,7 +541,7 @@ class BranchManager:
 
     def _get_parent_commit(self, parent_id: str, session: Session) -> Optional[str]:
         """Get commit SHA to branch from for a child agent."""
-        parent = session.query(AgentWorktree).filter_by(agent_id=parent_id).first()
+        parent = session.query(AgentBranch).filter_by(agent_id=parent_id).first()
         if not parent:
             return None
 
@@ -595,7 +595,7 @@ class BranchManager:
         """Get diff for agent's changes."""
         session = self.db_manager.get_session()
         try:
-            record = session.query(AgentWorktree).filter_by(agent_id=agent_id).first()
+            record = session.query(AgentBranch).filter_by(agent_id=agent_id).first()
             if not record:
                 raise ValueError(f"No branch record for agent {agent_id}")
 
@@ -636,7 +636,7 @@ class BranchManager:
         finally:
             session.close()
 
-    def get_agent_worktree_path(self, agent_id: str) -> Optional[str]:
+    def get_agent_branch_path(self, agent_id: str) -> Optional[str]:
         """Get the working directory for an agent (always the project root)."""
         return str(self.config.project_root)
 
@@ -651,7 +651,7 @@ class BranchManager:
         """
         session = self.db_manager.get_session()
         try:
-            record = session.query(AgentWorktree).filter_by(agent_id=agent_id).first()
+            record = session.query(AgentBranch).filter_by(agent_id=agent_id).first()
             if not record:
                 return {"status": "not_found"}
 
@@ -713,8 +713,8 @@ class BranchManager:
                     pass
 
             # Find all worktree records
-            records = session.query(AgentWorktree).filter(
-                AgentWorktree.merge_status.in_(["active", None])
+            records = session.query(AgentBranch).filter(
+                AgentBranch.merge_status.in_(["active", None])
             ).all()
             tracked_branches = {r.branch_name for r in records}
 

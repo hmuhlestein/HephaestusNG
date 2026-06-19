@@ -137,7 +137,7 @@ async def spawn_validator_agent(
                 enriched_description=task.enriched_description or task.raw_description,
                 original_agent_id=original_agent_id,
                 iteration=task.validation_iteration,
-                working_directory=branch_manager.get_agent_worktree_path(original_agent_id) or "/tmp",
+                working_directory=branch_manager.get_agent_branch_path(original_agent_id) or "/tmp",
                 commit_sha=commit_sha,
                 previous_feedback=previous_feedback
             )
