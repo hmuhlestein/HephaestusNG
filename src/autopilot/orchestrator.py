@@ -1494,14 +1494,14 @@ def run_single_workflow(sdk, workflow_id: str, project_path: str, description: s
         logger.log("Interrupted by user")
         return "interrupted"
     finally:
-        # Clean up: mark workflow as completed in DB so it doesn't block future runs
+        # Clean up: mark workflow as paused (not completed) so it can be resumed
         # Only clean up if we have an exec_id and the workflow is still active
         if exec_id:
             try:
                 wf_status = get_workflow_status(exec_id)
                 if wf_status.get('status') == 'active':
-                    api_post(f"/api/workflow-executions/{exec_id}/complete")
-                    logger.log(f"Cleaned up workflow {exec_id[:8]}")
+                    api_post(f"/api/workflow-executions/{exec_id}/pause")
+                    logger.log(f"Paused workflow {exec_id[:8]}")
             except Exception as e:
                 logger.log(f"Workflow cleanup failed: {e}", "WARN")
 
@@ -2012,6 +2012,19 @@ def run_continuous_pipeline(args) -> None:
             "failed": state.designs_failed,
             "elapsed_seconds": state.total_elapsed,
         })
+
+        # Pause all active autopilot workflows
+        try:
+            active_workflows = get_active_workflows()
+            for wf in active_workflows:
+                wf_id = wf.get('id', '')
+                try:
+                    api_post(f"/api/workflow-executions/{wf_id}/pause")
+                    logger.log(f"Paused workflow {wf_id[:8]}")
+                except Exception:
+                    pass
+        except Exception as e:
+            logger.log(f"Failed to pause workflows: {e}", "WARN")
 
         if sdk is not None:
             sdk.shutdown(graceful=True, timeout=15)
