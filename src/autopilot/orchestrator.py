@@ -451,6 +451,108 @@ def is_design_fully_complete(workflow_id: str, logger: OrchestratorLogger) -> Tu
     return True, "All phases done, branches merged"
 
 
+def attempt_recovery(workflow_id: str, logger: OrchestratorLogger) -> Tuple[bool, str]:
+    """Attempt to recover issues found by is_design_fully_complete.
+    
+    Actions:
+    1. Retry failed tasks by creating new agents
+    2. Merge unmerged agent branches to main
+    3. Terminate stale agents
+    
+    Returns:
+        (success, message) tuple
+    """
+    recovered = []
+    
+    # 1. Retry failed tasks
+    failed = get_tasks(status='failed', workflow_id=workflow_id)
+    for task in failed:
+        task_id = task.get('id')
+        phase_id = task.get('phase_id')
+        description = task.get('enriched_description') or task.get('raw_description') or ''
+        
+        # Only retry if not retried too many times
+        retry_count = task.get('retry_count', 0)
+        if retry_count >= 2:
+            logger.log(f"  Task {task_id[:8]} failed {retry_count} times — skipping retry")
+            continue
+        
+        logger.log(f"  Retrying failed task {task_id[:8]} (retry #{retry_count + 1})")
+        try:
+            # Reset task status to pending
+            api_post(f"/api/tasks/{task_id}/status", {"status": "pending"})
+            # Create agent for it
+            agent_data = api_post("/api/create_agent_for_task", {
+                "task_id": task_id,
+                "workflow_id": workflow_id,
+                "phase_id": phase_id,
+            })
+            agent_id = agent_data.get('agent_id', 'unknown')
+            logger.log(f"  Created agent {agent_id[:8]} for retried task")
+            recovered.append(f"retried task {task_id[:8]}")
+        except Exception as e:
+            logger.log(f"  Failed to retry task {task_id[:8]}: {e}", "ERROR")
+    
+    # 2. Merge unmerged agent branches
+    try:
+        project_path = os.getenv("PROJECT_PATH", "/Users/hmuhlestein/code/sotto")
+        result = subprocess.run(
+            ["git", "branch", "--list", "agent-*"],
+            capture_output=True, text=True, timeout=10,
+            cwd=project_path
+        )
+        if result.returncode == 0:
+            branches = [b.strip().lstrip('* ') for b in result.stdout.strip().split('\n') if b.strip()]
+            for branch in branches:
+                logger.log(f"  Merging branch: {branch}")
+                try:
+                    # Checkout branch and merge to main
+                    subprocess.run(["git", "checkout", branch], capture_output=True, timeout=10, cwd=project_path)
+                    merge_result = subprocess.run(
+                        ["git", "checkout", "main"],
+                        capture_output=True, text=True, timeout=10, cwd=project_path
+                    )
+                    merge_result = subprocess.run(
+                        ["git", "merge", branch, "--no-edit"],
+                        capture_output=True, text=True, timeout=30, cwd=project_path
+                    )
+                    if merge_result.returncode == 0:
+                        logger.log(f"  Merged {branch} to main")
+                        # Delete the branch
+                        subprocess.run(["git", "branch", "-d", branch], capture_output=True, timeout=10, cwd=project_path)
+                        recovered.append(f"merged {branch}")
+                    else:
+                        # Conflict — use theirs (newest file wins)
+                        logger.log(f"  Merge conflict on {branch} — using theirs", "WARN")
+                        subprocess.run(["git", "checkout", "--theirs", "."], capture_output=True, timeout=10, cwd=project_path)
+                        subprocess.run(["git", "add", "."], capture_output=True, timeout=10, cwd=project_path)
+                        subprocess.run(["git", "commit", "-m", f"Merge {branch} with conflict resolution"], capture_output=True, timeout=10, cwd=project_path)
+                        subprocess.run(["git", "branch", "-d", branch], capture_output=True, timeout=10, cwd=project_path)
+                        recovered.append(f"merged {branch} (conflict resolved)")
+                except Exception as e:
+                    logger.log(f"  Failed to merge {branch}: {e}", "WARN")
+                    # Switch back to main
+                    subprocess.run(["git", "checkout", "main"], capture_output=True, timeout=10, cwd=project_path)
+    except Exception as e:
+        logger.log(f"  Branch merge check failed: {e}", "WARN")
+    
+    # 3. Terminate stale agents
+    agents = get_agents(workflow_id=workflow_id)
+    active_agents = [a for a in agents if a.get('status') in ('working', 'starting', 'idle')]
+    for agent in active_agents:
+        aid = agent.get('id', '')
+        logger.log(f"  Terminating stale agent {aid[:8]}")
+        try:
+            api_post(f"/api/agents/{aid}/terminate")
+            recovered.append(f"terminated agent {aid[:8]}")
+        except Exception as e:
+            logger.log(f"  Failed to terminate {aid[:8]}: {e}", "WARN")
+    
+    if recovered:
+        return True, f"Recovered: {', '.join(recovered)}"
+    return False, "No recovery actions needed"
+
+
 def check_api_credits() -> Tuple[bool, str]:
     credit_errors = [
         "insufficient funds", "credit", "quota exceeded",
@@ -2026,7 +2128,13 @@ def run_continuous_pipeline(args) -> None:
                         is_complete, reason = is_design_fully_complete(state.current_workflow_id, logger)
                         if not is_complete:
                             logger.log(f"Previous workflow not yet complete: {reason}")
-                            state.queue_status = {"status": "waiting", "reason": reason}
+                            
+                            # Attempt recovery
+                            success, recovery_msg = attempt_recovery(state.current_workflow_id, logger)
+                            if success:
+                                logger.log(f"Recovery actions: {recovery_msg}")
+                            
+                            state.queue_status = {"status": "waiting", "reason": reason, "recovery": recovery_msg if success else None}
                             logger.save_state(state)
                             persistent_state.save(state, processed_hashes)
                             time.sleep(POLL_INTERVAL)
