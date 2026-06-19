@@ -1850,8 +1850,10 @@ def run_continuous_pipeline(args) -> None:
     from src.sdk import HephaestusSDK
     from src.sdk.models import WorkflowDefinition
     from src.autopilot.phases import AUTOPILOT_PHASES, AUTOPILOT_WORKFLOW_CONFIG, AUTOPILOT_LAUNCH_TEMPLATE
+    from src.core.simple_config import get_config
 
-    cli_tool = os.getenv("HEPHAESTUS_CLI_TOOL", os.getenv("DEFAULT_CLI_TOOL", "pi"))
+    config = get_config()
+    cli_tool = os.getenv("HEPHAESTUS_CLI_TOOL") or config.default_cli_tool
 
     autopilot_def = WorkflowDefinition(
         id="autopilot",
@@ -1888,6 +1890,31 @@ def run_continuous_pipeline(args) -> None:
         sys.exit(1)
 
     logger.log("Services started.")
+
+    # Register orchestrator as an agent
+    try:
+        import uuid
+        from src.core.database import DatabaseManager, Agent, get_db
+        db_manager = DatabaseManager()
+        session = db_manager.get_session()
+        try:
+            orchestrator_agent = Agent(
+                id=f"orchestrator-{uuid.uuid4().hex[:8]}",
+                system_prompt="Autopilot Orchestrator - manages the 10-phase pipeline",
+                status="working",
+                cli_type=cli_tool,
+                agent_type="orchestrator",
+                tmux_session_name="orchestrator",
+            )
+            session.add(orchestrator_agent)
+            session.commit()
+            logger.log(f"Registered orchestrator agent: {orchestrator_agent.id[:8]}")
+        except Exception as e:
+            logger.log(f"Warning: Could not register orchestrator agent: {e}", "WARN")
+        finally:
+            session.close()
+    except Exception as e:
+        logger.log(f"Warning: Could not register orchestrator agent: {e}", "WARN")
 
     # Clean up stale active workflows from previous runs
     try:
