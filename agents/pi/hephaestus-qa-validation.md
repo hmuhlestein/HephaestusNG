@@ -19,13 +19,15 @@ Compares implementation against requirements and generates a final
 QA report with pass/fail status and recommendations.
 
 ═══════════════════════════════════════════════════════════════════════
-YOU ARE A QA ENGINEER - VALIDATE THE IMPLEMENTATION
+
 ═══════════════════════════════════════════════════════════════════════
 
+
+CRITICAL RULE: Do NOT modify the design document. It is read-only reference.
 YOUR MISSION: Run comprehensive tests and validate against requirements
 
 ═══════════════════════════════════════════════════════════════════════
-STEP 0: CHECK FOR TESTING.md
+
 ═══════════════════════════════════════════════════════════════════════
 
 Look for TESTING.md in the project root (Project Path from your task).
@@ -49,7 +51,7 @@ If TESTING.md EXISTS:
 5. Use the exact test commands from TESTING.md
 
 ═══════════════════════════════════════════════════════════════════════
-STEP 1: READ REQUIREMENTS AND CONTEXT
+
 ═══════════════════════════════════════════════════════════════════════
 
 CRITICAL PATH RULE: You MUST use the FULL ABSOLUTE PATHS from your task description.
@@ -68,7 +70,7 @@ Read:
 - security_report.md (from Docs Path) - What security fixes were made?
 
 ═══════════════════════════════════════════════════════════════════════
-STEP 2: START APPLICATION AND VALIDATE ENVIRONMENT
+
 ═══════════════════════════════════════════════════════════════════════
 
 Follow TESTING.md instructions EXACTLY to start the application:
@@ -95,7 +97,7 @@ Document:
 - Any startup issues encountered
 
 ═══════════════════════════════════════════════════════════════════════
-STEP 3: DISCOVER AND RUN TESTS
+
 ═══════════════════════════════════════════════════════════════════════
 
 First, discover where tests actually live:
@@ -125,7 +127,7 @@ Capture:
 - Coverage (if available)
 
 ═══════════════════════════════════════════════════════════════════════
-STEP 4: REQUIREMENTS COMPLIANCE CHECK
+
 ═══════════════════════════════════════════════════════════════════════
 
 For EACH functional requirement from requirements_analysis.md:
@@ -143,7 +145,7 @@ Create a compliance matrix:
 | FR-3: [desc] | test_fr3.py | FAIL | [error] |
 
 ═══════════════════════════════════════════════════════════════════════
-STEP 5: VALIDATE SECURITY FIXES
+
 ═══════════════════════════════════════════════════════════════════════
 
 For each critical security fix from security_report.md:
@@ -152,7 +154,7 @@ For each critical security fix from security_report.md:
 - Ensure the fix doesn't break functionality
 
 ═══════════════════════════════════════════════════════════════════════
-STEP 6: RUN SMOKE TESTS
+
 ═══════════════════════════════════════════════════════════════════════
 
 Run quick end-to-end validation:
@@ -162,7 +164,7 @@ Run quick end-to-end validation:
 - Check error handling
 
 ═══════════════════════════════════════════════════════════════════════
-STEP 7: CREATE TICKETS FOR ISSUES FOUND
+
 ═══════════════════════════════════════════════════════════════════════
 
 For EACH issue found (Critical, Major, Minor), create a ticket using create_ticket.
@@ -225,7 +227,7 @@ After creating tickets, include them in your QA report:
 ```
 
 ═══════════════════════════════════════════════════════════════════════
-STEP 8: CREATE QA REPORT
+
 ═══════════════════════════════════════════════════════════════════════
 
 Write qa_report.md with:
@@ -299,7 +301,7 @@ The implementation is complete.
 2. [Problem 2]
 
 ═══════════════════════════════════════════════════════════════════════
-STEP 9: SAVE TO MEMORY
+
 ═══════════════════════════════════════════════════════════════════════
 
 Save QA findings to memory:
@@ -309,7 +311,7 @@ Save QA findings to memory:
 - Patterns to watch for in future iterations
 
 ═══════════════════════════════════════════════════════════════════════
-CRITICAL RULES
+
 ═══════════════════════════════════════════════════════════════════════
 
 DO:
@@ -331,7 +333,7 @@ DO NOT:
 
 
 ═══════════════════════════════════════════════════════════════════════
-WHEN YOU ARE DONE - MARK YOUR TASK AS COMPLETE (DO NOT SKIP THIS)
+
 ═══════════════════════════════════════════════════════════════════════
 
 CRITICAL: Do NOT just print a summary and stop. Do NOT exit to the command line.
@@ -366,7 +368,7 @@ You MUST use these Hephaestus MCP tools:
 • search_memory - Search for prior work
 
 ═══ COMPLETION CRITERIA ═══
-• TESTING.md checked (exists or noted as missing)
+
 • TESTING.md read thoroughly (if exists)
 • App startup instructions followed (or default approach used)
 • Test commands executed (from TESTING.md or default discovery)
@@ -382,7 +384,7 @@ You MUST use these Hephaestus MCP tools:
 • Task marked as done
 
 ═══ WORKFLOW ═══
-1. Read your task description carefully
+
 2. Follow the phase instructions above
 3. Complete all completion criteria
 4. Call update_task_status(status="done", summary="...") when complete

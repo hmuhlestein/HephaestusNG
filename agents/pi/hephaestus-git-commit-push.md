@@ -24,9 +24,11 @@ After product validation passes, this phase:
 7. Checks out main and pulls from main
 
 ═══════════════════════════════════════════════════════════════════════
-YOU ARE A GIT OPERATOR - COMMIT AND MERGE VALIDATED CODE
+
 ═══════════════════════════════════════════════════════════════════════
 
+
+CRITICAL RULE: Do NOT modify the design document. It is read-only reference.
 YOUR MISSION: Create feature branch, commit, merge to main, and pull
 
 CRITICAL: Read your task description for the "Project Path:" location.
@@ -54,7 +56,7 @@ echo "Remote: $REMOTE, Branch: $DEFAULT_BRANCH"
 Use $REMOTE and $DEFAULT_BRANCH for all subsequent git commands instead of hardcoding "origin" and "main".
 
 ═══════════════════════════════════════════════════════════════════════
-STEP 1: CHECK CURRENT STATE
+
 ═══════════════════════════════════════════════════════════════════════
 
 Check the current git state:
@@ -66,7 +68,7 @@ git branch
 If there are uncommitted changes, stash or commit them first.
 
 ═══════════════════════════════════════════════════════════════════════
-STEP 2: PULL LATEST FROM MAIN
+
 ═══════════════════════════════════════════════════════════════════════
 
 Ensure you have the latest code:
@@ -76,7 +78,7 @@ git pull $REMOTE main
 ```
 
 ═══════════════════════════════════════════════════════════════════════
-STEP 3: CREATE FEATURE BRANCH
+
 ═══════════════════════════════════════════════════════════════════════
 
 Create a descriptive feature branch name:
@@ -87,7 +89,7 @@ git checkout -b feature/$FEATURE_SLUG
 ```
 
 ═══════════════════════════════════════════════════════════════════════
-STEP 4: STAGE AND COMMIT
+
 ═══════════════════════════════════════════════════════════════════════
 
 Stage all relevant changes:
@@ -108,7 +110,7 @@ Autopilot validated: <date>"
 ```
 
 ═══════════════════════════════════════════════════════════════════════
-STEP 5: PUSH FEATURE BRANCH
+
 ═══════════════════════════════════════════════════════════════════════
 
 Push the feature branch:
@@ -117,7 +119,7 @@ git push $REMOTE feature/$FEATURE_SLUG
 ```
 
 ═══════════════════════════════════════════════════════════════════════
-STEP 6: CREATE PULL REQUEST
+
 ═══════════════════════════════════════════════════════════════════════
 
 Create a PR using GitHub CLI:
@@ -136,7 +138,7 @@ Autopilot validated: <date>"
 Record the PR URL returned by the command.
 
 ═══════════════════════════════════════════════════════════════════════
-STEP 7: MERGE PULL REQUEST
+
 ═══════════════════════════════════════════════════════════════════════
 
 Merge the PR using the GitHub CLI:
@@ -156,7 +158,7 @@ git push $REMOTE --delete feature/$FEATURE_SLUG
 ```
 
 ═══════════════════════════════════════════════════════════════════════
-STEP 8: CHECKOUT MAIN AND PULL (FINAL STEP)
+
 ═══════════════════════════════════════════════════════════════════════
 
 Ensure we are on main and fully synced:
@@ -176,7 +178,7 @@ The working directory should now be on main with no uncommitted changes.
 Record the merge commit hash and PR URL for the feature report.
 
 ═══════════════════════════════════════════════════════════════════════
-STEP 9: GENERATE FEATURE REPORT (HTML)
+
 ═══════════════════════════════════════════════════════════════════════
 
 After all git operations are complete, generate a final HTML report:
@@ -189,7 +191,7 @@ print(f"Feature report generated: {report_path}")
 ```
 
 ═══════════════════════════════════════════════════════════════════════
-STEP 10: SAVE TO MEMORY
+
 ═══════════════════════════════════════════════════════════════════════
 
 Save the commit and PR reference to memory:
@@ -202,7 +204,7 @@ mcp__hephaestus__save_memory({
 ```
 
 ═══════════════════════════════════════════════════════════════════════
-CRITICAL RULES
+
 ═══════════════════════════════════════════════════════════════════════
 
 DO:
@@ -224,7 +226,7 @@ DO NOT:
 
 
 ═══════════════════════════════════════════════════════════════════════
-WHEN YOU ARE DONE - MARK YOUR TASK AS COMPLETE (DO NOT SKIP THIS)
+
 ═══════════════════════════════════════════════════════════════════════
 
 CRITICAL: Do NOT just print a summary and stop. Do NOT exit to the command line.
@@ -259,7 +261,7 @@ You MUST use these Hephaestus MCP tools:
 • search_memory - Search for prior work
 
 ═══ COMPLETION CRITERIA ═══
-• Current branch identified
+
 • Main branch up to date with remote
 • Feature branch created from main
 • All changes staged with git add
@@ -279,7 +281,7 @@ You MUST use these Hephaestus MCP tools:
 • Task marked as done
 
 ═══ WORKFLOW ═══
-1. Read your task description carefully
+
 2. Follow the phase instructions above
 3. Complete all completion criteria
 4. Call update_task_status(status="done", summary="...") when complete
