@@ -124,11 +124,22 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
   });
 
   const pauseResumeMutation = useMutation({
-    mutationFn: ({ workflowId, action }: { workflowId: string; action: 'pause' | 'resume' }) => {
-      if (action === 'pause') {
-        return apiService.pauseWorkflow(workflowId);
+    mutationFn: async ({ workflowId, action }: { workflowId: string; action: 'pause' | 'resume' }) => {
+      // workflowId is actually the design filename here
+      const designName = workflowId;
+      const status = await apiService.getAutopilotProjectDesignStatus(projectId!, designName);
+      const workflows = status.workflows || [];
+      
+      // Pause/resume all active workflows
+      const results = [];
+      for (const wf of workflows) {
+        if (action === 'pause' && wf.status === 'active') {
+          results.push(await apiService.pauseWorkflow(wf.id));
+        } else if (action === 'resume' && wf.status === 'paused') {
+          results.push(await apiService.resumeWorkflow(wf.id));
+        }
       }
-      return apiService.resumeWorkflow(workflowId);
+      return results;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['workflows'] });
@@ -229,7 +240,7 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
                   status={designStatuses[item.filename]?.status}
                   workflowId={designStatuses[item.filename]?.workflowId}
                   onDetail={handleDetail}
-                  onPauseResume={(workflowId, action) => pauseResumeMutation.mutate({ workflowId, action })}
+                  onPauseResume={(_workflowId, action) => pauseResumeMutation.mutate({ workflowId: item.filename, action })}
                   onRemove={(filename) => {
                     if (confirm(`Remove "${item.name}" from queue?`)) {
                       removeMutation.mutate(filename);
