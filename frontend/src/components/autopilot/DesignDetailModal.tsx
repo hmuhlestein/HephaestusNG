@@ -3,7 +3,7 @@ import { useQuery, useMutation } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   X, FileText, GitBranch, Clock, CheckCircle2, XCircle, AlertTriangle,
-  Loader2, RotateCcw, ChevronDown, ChevronRight, ExternalLink
+  Loader2, RotateCcw, ChevronDown, ChevronRight, ExternalLink, Wrench
 } from 'lucide-react';
 import { apiService, api } from '@/services/api';
 import { Button } from '@/components/ui/button';
@@ -71,6 +71,29 @@ const DesignDetailModal: React.FC<DesignDetailModalProps> = ({ projectId, filena
     },
     onError: (e: any) => {
       toast.error(e?.response?.data?.detail || 'Failed to requeue');
+    },
+  });
+
+  const repairMutation = useMutation({
+    mutationFn: async () => {
+      const project = await apiService.getActiveProject();
+      if (!project) throw new Error('No active project');
+      return api.post('/autopilot/queue/repair', {
+        filename,
+        project_path: project.base_dir,
+      });
+    },
+    onSuccess: (data: any) => {
+      const actions = data.actions_taken || [];
+      if (actions.length > 0) {
+        toast.success(`Repaired: ${actions.join(', ')}`);
+      } else {
+        toast.success('Design looks healthy - no repairs needed');
+      }
+      onClose();
+    },
+    onError: (e: any) => {
+      toast.error(e?.response?.data?.detail || 'Failed to repair');
     },
   });
 
@@ -298,6 +321,19 @@ const DesignDetailModal: React.FC<DesignDetailModalProps> = ({ projectId, filena
             <div className="flex items-center gap-2">
               {onRerun && (
                 <>
+                  <Button
+                    onClick={() => repairMutation.mutate()}
+                    disabled={repairMutation.isPending}
+                    variant="outline"
+                    className="text-emerald-600 border-emerald-200 hover:bg-emerald-50"
+                  >
+                    {repairMutation.isPending ? (
+                      <Loader2 className="w-4 h-4 mr-1 animate-spin" />
+                    ) : (
+                      <Wrench className="w-4 h-4 mr-1" />
+                    )}
+                    Repair
+                  </Button>
                   <Button
                     onClick={() => requeueMutation.mutate()}
                     disabled={requeueMutation.isPending}
