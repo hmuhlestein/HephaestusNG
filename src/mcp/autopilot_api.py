@@ -678,9 +678,14 @@ async def rerun_design(request: dict):
 async def repair_design(request: dict):
     """Repair a design: analyze state, merge branches, terminate orphans, report status."""
     from src.core.database import get_db, Workflow, Task, Agent
+    from src.core.logger import SimpleLogger
     from src.autopilot.orchestrator import is_design_fully_complete, attempt_recovery
     import subprocess
     from pathlib import Path
+    import asyncio
+    import uuid
+
+    repair_logger = SimpleLogger("repair")
 
     filename = request.get("filename")
     if not filename:
@@ -694,108 +699,144 @@ async def repair_design(request: dict):
     if not project.exists():
         raise HTTPException(400, f"Project path does not exist: {project_path}")
 
+    # Generate repair ID for tracking
+    repair_id = str(uuid.uuid4())[:8]
+
+    # Run repair in background
+    asyncio.create_task(_run_repair(repair_id, filename, project, repair_logger))
+
+    return {
+        "repair_id": repair_id,
+        "status": "started",
+        "message": f"Repair started for {filename}. Check /api/autopilot/queue/repair/{repair_id} for results."
+    }
+
+
+async def _run_repair(repair_id: str, filename: str, project: Path, logger):
+    """Background repair task."""
+    from src.core.database import get_db, Workflow
+    import json
+    import subprocess
+
     findings = []
     actions_taken = []
 
-    # 1. Find all workflows for this design
-    design_name = filename.replace('.md', '').replace('_', ' ').replace('-', ' ')
-    with get_db() as db:
-        workflows = db.query(Workflow).filter(
-            Workflow.definition_id == 'autopilot'
-        ).all()
+    try:
+        # 1. Find all workflows for this design
+        design_name = filename.replace('.md', '').replace('_', ' ').replace('-', ' ')
+        with get_db() as db:
+            workflows = db.query(Workflow).filter(
+                Workflow.definition_id == 'autopilot'
+            ).all()
 
-        design_workflows = []
-        for wf in workflows:
-            if wf.launch_params:
-                try:
-                    params = json.loads(wf.launch_params) if isinstance(wf.launch_params, str) else wf.launch_params
-                    doc = params.get('design_document', '')
-                    if filename in doc or design_name.lower() in doc.lower():
-                        design_workflows.append(wf)
-                except Exception:
-                    pass
+            design_workflow_ids = []
+            for wf in workflows:
+                if wf.launch_params:
+                    try:
+                        params = json.loads(wf.launch_params) if isinstance(wf.launch_params, str) else wf.launch_params
+                        doc = params.get('design_document', '')
+                        if filename in doc or design_name.lower() in doc.lower():
+                            design_workflow_ids.append(wf.id)
+                    except Exception:
+                        pass
 
-        if not design_workflows:
-            findings.append({"type": "info", "message": f"No workflows found for design '{filename}'"})
-        else:
-            findings.append({"type": "info", "message": f"Found {len(design_workflows)} workflow(s) for this design"})
+            if not design_workflow_ids:
+                findings.append({"type": "info", "message": f"No workflows found for design '{filename}'"})
+            else:
+                findings.append({"type": "info", "message": f"Found {len(design_workflow_ids)} workflow(s) for this design"})
 
-    # 2. Check each workflow using orchestrator functions
-    for wf in design_workflows:
-        is_complete, reason = is_design_fully_complete(wf.id, logger)
-        findings.append({
-            "type": "completion_check",
-            "workflow_id": wf.id[:8],
-            "status": wf.status,
-            "is_complete": is_complete,
-            "reason": reason
-        })
-
-        # If not complete, attempt recovery
-        if not is_complete and wf.status in ('active', 'running', 'paused'):
-            success, recovery_msg = attempt_recovery(wf.id, logger)
-            if success:
-                actions_taken.append(f"Workflow {wf.id[:8]}: {recovery_msg}")
+        # 2. Check each workflow using orchestrator functions
+        for wf_id in design_workflow_ids:
+            is_complete, reason = is_design_fully_complete(wf_id, logger)
             findings.append({
-                "type": "recovery",
-                "workflow_id": wf.id[:8],
-                "success": success,
-                "message": recovery_msg
+                "type": "completion_check",
+                "workflow_id": wf_id[:8],
+                "is_complete": is_complete,
+                "reason": reason
             })
 
-    # 3. Check for unmerged branches
-    try:
-        result = subprocess.run(
-            ['git', 'branch', '--list', 'agent-*'],
-            capture_output=True, text=True, timeout=10,
-            cwd=str(project)
-        )
-        if result.returncode == 0:
-            branches = [b.strip().lstrip('* ') for b in result.stdout.strip().split('\n') if b.strip()]
-            if branches:
+            # If not complete, attempt recovery
+            if not is_complete:
+                success, recovery_msg = attempt_recovery(wf_id, logger)
+                if success:
+                    actions_taken.append(f"Workflow {wf_id[:8]}: {recovery_msg}")
                 findings.append({
-                    "type": "unmerged_branches",
-                    "message": f"{len(branches)} unmerged agent branch(es)",
-                    "branches": branches[:10]
+                    "type": "recovery",
+                    "workflow_id": wf_id[:8],
+                    "success": success,
+                    "message": recovery_msg
                 })
 
-                # Try to merge each branch
-                for branch in branches:
-                    try:
-                        subprocess.run(['git', 'checkout', branch], capture_output=True, timeout=10, cwd=str(project))
-                        merge_result = subprocess.run(
-                            ['git', 'checkout', 'main'],
-                            capture_output=True, text=True, timeout=10, cwd=str(project)
-                        )
-                        merge_result = subprocess.run(
-                            ['git', 'merge', branch, '--no-edit'],
-                            capture_output=True, text=True, timeout=30, cwd=str(project)
-                        )
-                        if merge_result.returncode == 0:
-                            subprocess.run(['git', 'branch', '-d', branch], capture_output=True, timeout=10, cwd=str(project))
-                            actions_taken.append(f"Merged and deleted branch {branch}")
-                        else:
-                            subprocess.run(['git', 'checkout', '--theirs', '.'], capture_output=True, timeout=10, cwd=str(project))
-                            subprocess.run(['git', 'add', '.'], capture_output=True, timeout=10, cwd=str(project))
-                            subprocess.run(['git', 'commit', '-m', f'Merge {branch} with conflict resolution'], capture_output=True, timeout=10, cwd=str(project))
-                            subprocess.run(['git', 'branch', '-d', branch], capture_output=True, timeout=10, cwd=str(project))
-                            actions_taken.append(f"Merged {branch} (conflict resolved)")
-                    except Exception as e:
-                        findings.append({"type": "merge_error", "message": f"Failed to merge {branch}: {e}"})
-                        subprocess.run(['git', 'checkout', 'main'], capture_output=True, timeout=10, cwd=str(project))
-    except Exception as e:
-        findings.append({"type": "error", "message": f"Branch check failed: {e}"})
+        # 3. Check for unmerged branches
+        try:
+            result = subprocess.run(
+                ['git', 'branch', '--list', 'agent-*'],
+                capture_output=True, text=True, timeout=10,
+                cwd=str(project)
+            )
+            if result.returncode == 0:
+                branches = [b.strip().lstrip('* ') for b in result.stdout.strip().split('\n') if b.strip()]
+                if branches:
+                    findings.append({
+                        "type": "unmerged_branches",
+                        "message": f"{len(branches)} unmerged agent branch(es)",
+                        "branches": branches[:10]
+                    })
 
-    return {
-        "filename": filename,
-        "findings": findings,
-        "actions_taken": actions_taken,
-        "summary": {
-            "total_findings": len(findings),
-            "actions_taken": len(actions_taken),
-            "workflows_found": len(design_workflows),
+                    for branch in branches:
+                        try:
+                            subprocess.run(['git', 'checkout', branch], capture_output=True, timeout=10, cwd=str(project))
+                            merge_result = subprocess.run(
+                                ['git', 'checkout', 'main'],
+                                capture_output=True, text=True, timeout=10, cwd=str(project)
+                            )
+                            merge_result = subprocess.run(
+                                ['git', 'merge', branch, '--no-edit'],
+                                capture_output=True, text=True, timeout=30, cwd=str(project)
+                            )
+                            if merge_result.returncode == 0:
+                                subprocess.run(['git', 'branch', '-d', branch], capture_output=True, timeout=10, cwd=str(project))
+                                actions_taken.append(f"Merged and deleted branch {branch}")
+                            else:
+                                subprocess.run(['git', 'checkout', '--theirs', '.'], capture_output=True, timeout=10, cwd=str(project))
+                                subprocess.run(['git', 'add', '.'], capture_output=True, timeout=10, cwd=str(project))
+                                subprocess.run(['git', 'commit', '-m', f'Merge {branch} with conflict resolution'], capture_output=True, timeout=10, cwd=str(project))
+                                subprocess.run(['git', 'branch', '-d', branch], capture_output=True, timeout=10, cwd=str(project))
+                                actions_taken.append(f"Merged {branch} (conflict resolved)")
+                        except Exception as e:
+                            findings.append({"type": "merge_error", "message": f"Failed to merge {branch}: {e}"})
+                            subprocess.run(['git', 'checkout', 'main'], capture_output=True, timeout=10, cwd=str(project))
+        except Exception as e:
+            findings.append({"type": "error", "message": f"Branch check failed: {e}"})
+
+        # Store results
+        result = {
+            "repair_id": repair_id,
+            "filename": filename,
+            "findings": findings,
+            "actions_taken": actions_taken,
+            "summary": {
+                "total_findings": len(findings),
+                "actions_taken": len(actions_taken),
+                "workflows_found": len(design_workflow_ids),
+            }
         }
-    }
+
+        # Save to file for status check
+        result_file = Path.home() / ".hephaestus" / "autopilot" / f"repair_{repair_id}.json"
+        result_file.write_text(json.dumps(result, indent=2))
+
+    except Exception as e:
+        findings.append({"type": "error", "message": str(e)})
+        result = {
+            "repair_id": repair_id,
+            "filename": filename,
+            "findings": findings,
+            "actions_taken": actions_taken,
+            "summary": {"error": str(e)}
+        }
+        result_file = Path.home() / ".hephaestus" / "autopilot" / f"repair_{repair_id}.json"
+        result_file.write_text(json.dumps(result, indent=2))
 
 
 @router.post("/queue", response_model=DesignQueueItem)
