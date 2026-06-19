@@ -796,6 +796,7 @@ def _run_repair(repair_id: str, filename: str, project: Path, logger):
         # Launch a new autopilot workflow for this design
         workflow_data = api_post("/api/workflow-executions", {
             "definition_id": "autopilot",
+            "description": f"Repair: {filename}",
             "launch_params": {
                 "design_document": str(project / 'docs' / 'design-queue' / filename),
                 "project_path": str(project),
@@ -803,11 +804,11 @@ def _run_repair(repair_id: str, filename: str, project: Path, logger):
             }
         })
         
-        if not workflow_data or not workflow_data.get('id'):
+        if not workflow_data or not workflow_data.get('workflow_id'):
             findings.append({"type": "error", "message": "Failed to create repair workflow"})
             return
         
-        wf_id = workflow_data['id']
+        wf_id = workflow_data['workflow_id']
         actions_taken.append(f"Created repair workflow {wf_id[:8]}")
         findings.append({"type": "info", "message": f"Created repair workflow {wf_id[:8]}"})
 
