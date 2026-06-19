@@ -842,6 +842,32 @@ REMEMBER:
                 logger.warning(f"Agent {agent_id} not found")
                 return
 
+            # Capture pane PIDs and final output BEFORE killing the tmux session
+            pane_pids = []
+            final_output = ""
+            if agent.tmux_session_name:
+                try:
+                    import subprocess
+                    result = subprocess.run(
+                        ["tmux", "list-panes", "-t", agent.tmux_session_name, "-F", "#{pane_pid}"],
+                        capture_output=True, text=True, timeout=3
+                    )
+                    if result.returncode == 0:
+                        pane_pids = [p.strip() for p in result.stdout.strip().split('\n') if p.strip()]
+                except Exception:
+                    pass
+
+                try:
+                    if self.tmux_server.has_session(agent.tmux_session_name):
+                        for tmux_sess in self.tmux_server.sessions:
+                            if tmux_sess.name == agent.tmux_session_name:
+                                pane = tmux_sess.attached_window.attached_pane
+                                final_output = pane.capture_pane()[-50:]
+                                final_output = '\n'.join(final_output)
+                                break
+                except Exception as e:
+                    logger.debug(f"Could not capture output before terminate: {e}")
+
             # Kill tmux session using subprocess (more reliable than libtmux)
             if agent.tmux_session_name:
                 try:
@@ -862,37 +888,22 @@ REMEMBER:
                     logger.error(f"Failed to kill tmux session: {e}")
 
                 # Kill any orphaned child processes (opencode, claude, pi) in the session
-                try:
-                    import subprocess
-                    # Find PIDs in the tmux session before it dies
-                    result = subprocess.run(
-                        ["tmux", "list-panes", "-t", agent.tmux_session_name, "-F", "#{pane_pid}"],
-                        capture_output=True, text=True, timeout=3
-                    )
-                    if result.returncode == 0:
-                        for pane_pid in result.stdout.strip().split('\n'):
-                            pane_pid = pane_pid.strip()
-                            if pane_pid:
-                                # Kill the pane's process tree
-                                try:
-                                    subprocess.run(["kill", "-9", "--", "-" + pane_pid], timeout=3)
-                                except Exception:
-                                    pass
-                except Exception:
-                    pass
-
-            # Capture output BEFORE killing the tmux session
-            final_output = ""
-            try:
-                if agent.tmux_session_name and self.tmux_server.has_session(agent.tmux_session_name):
-                    for tmux_sess in self.tmux_server.sessions:
-                        if tmux_sess.name == agent.tmux_session_name:
-                            pane = tmux_sess.attached_window.attached_pane
-                            final_output = pane.capture_pane()[-50:]  # Last 50 lines
-                            final_output = '\n'.join(final_output)
-                            break
-            except Exception as e:
-                logger.debug(f"Could not capture output before terminate: {e}")
+                # First try graceful SIGINT, then force SIGKILL
+                for pane_pid in pane_pids:
+                    try:
+                        subprocess.run(["kill", "-2", "--", "-" + pane_pid], timeout=3)
+                    except Exception:
+                        pass
+                if pane_pids:
+                    time.sleep(1)
+                for pane_pid in pane_pids:
+                    try:
+                        # Check if still alive before sending SIGKILL
+                        result = subprocess.run(["kill", "-0", "-" + pane_pid], capture_output=True, timeout=3)
+                        if result.returncode == 0:
+                            subprocess.run(["kill", "-9", "--", "-" + pane_pid], timeout=3)
+                    except Exception:
+                        pass
 
             # Update agent status
             agent.status = "terminated"
