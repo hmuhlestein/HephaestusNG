@@ -1462,7 +1462,6 @@ class FrontendAPI:
             ).filter_by(id=result_id).first()
 
             if task_result and task_result.validation_review:
-                validation = task_result.validation_review
                 # Check if there's a report_path (if your ValidationReview model has this field)
                 # For now, return 404 as validation reports might not be stored as separate files
                 raise HTTPException(status_code=404, detail='Validation report file not available')

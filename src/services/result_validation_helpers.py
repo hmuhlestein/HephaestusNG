@@ -63,7 +63,7 @@ def validate_result_criteria(content: str, criteria: str) -> ValidationResult:
         ValidationResult with validation outcome
     """
     # Convert criteria to lowercase for case-insensitive matching
-    criteria_lower = criteria.lower()
+    criteria.lower()
     content_lower = content.lower()
 
     evidence = []

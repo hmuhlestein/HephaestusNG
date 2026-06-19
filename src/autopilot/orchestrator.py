@@ -468,7 +468,7 @@ def attempt_recovery(workflow_id: str, logger: OrchestratorLogger) -> Tuple[bool
     for task in failed:
         task_id = task.get('id')
         phase_id = task.get('phase_id')
-        description = task.get('enriched_description') or task.get('raw_description') or ''
+        task.get('enriched_description') or task.get('raw_description') or ''
         
         # Only retry if not retried too many times
         retry_count = task.get('retry_count', 0)
@@ -987,9 +987,7 @@ def generate_html_feature_report(
     def esc(s: str) -> str:
         return html_mod.escape(s)
 
-    status_color = "#22c55e" if report.product_validated else "#dc3545"
     status_text = "VALIDATED" if report.product_validated else "NEEDS REVIEW"
-    qa_color = "#22c55e" if report.qa_passed else "#dc3545"
     qa_text = "PASSED" if report.qa_passed else "FAILED"
 
     hours = report.total_time_seconds // 3600
@@ -1266,9 +1264,8 @@ def generate_product_validation_report(
         except Exception:
             pass
 
-    design_content = ""
     try:
-        design_content = design_entry.path.read_text()[:3000]
+        design_entry.path.read_text()[:3000]
     except Exception:
         pass
 
@@ -1441,8 +1438,8 @@ def run_single_workflow(sdk, workflow_id: str, project_path: str, description: s
                             continue
                         
                         depends_on = task.get('depends_on')  # JSON list of task IDs
-                        parallel_group = task.get('parallel_group')
-                        task_max_concurrent = task.get('max_concurrent', 1)
+                        task.get('parallel_group')
+                        task.get('max_concurrent', 1)
                         
                         # Parse depends_on if it's a string
                         if isinstance(depends_on, str):
@@ -1552,9 +1549,8 @@ def run_single_workflow(sdk, workflow_id: str, project_path: str, description: s
                     aid = agent.get('id', '')
                     # Peek at output to include in nudge context
                     output = peek_agent_output(aid, lines=20)
-                    last_lines = []
                     if output:
-                        last_lines = [l.strip() for l in output.strip().split('\n') if l.strip()][-3:]
+                        [l.strip() for l in output.strip().split('\n') if l.strip()][-3:]
                     
                     # Send nudge message via API
                     nudge_msg = (
@@ -1788,7 +1784,7 @@ def run_single_design(
                 state=state,
             )
 
-            iter_elapsed = int(time.time() - iter_start)
+            int(time.time() - iter_start)
             report.iterations = iteration
 
             if wf_status == "interrupted":

@@ -12,9 +12,8 @@ Allows any agent to:
 import logging
 from typing import Dict, Any, List, Optional
 from datetime import datetime, timedelta
-from sqlalchemy import and_
 
-from src.core.database import DatabaseManager, Agent, Task, AgentMessage
+from src.core.database import DatabaseManager, Agent, Task
 
 logger = logging.getLogger(__name__)
 
@@ -143,11 +142,11 @@ class AgentCommunicationService:
             else:
                 logger.error(f"Failed to send message: {result.stderr}")
                 return False
-        finally:
-            session.close()
         except Exception as e:
             logger.error(f"Failed to send message to child: {e}")
             return False
+        finally:
+            session.close()
 
     def nudge_child(
         self,

@@ -29,7 +29,7 @@ def validate_file_path(file_path: str) -> None:
     # Additional safety check
     try:
         # This will raise if path doesn't exist or is invalid
-        path_str = str(path)
+        str(path)
     except Exception as e:
         raise ValueError(f"Invalid file path: {file_path}") from e
 
