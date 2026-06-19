@@ -527,6 +527,12 @@ class MonitoringLoop:
         logger.info(f"[DIAGNOSTIC] phase_manager exists: {self.phase_manager is not None}")
         logger.info(f"[DIAGNOSTIC] workflow_id: {self.phase_manager.workflow_id[:8] if (self.phase_manager and self.phase_manager.workflow_id) else 'N/A'}")
 
+        # Phase 3: System Health Audit
+        try:
+            await self._audit_system_health()
+        except Exception as e:
+            logger.error(f"Error in system health audit: {e}")
+
         # DEBUG: Check database for active workflows
         session = self.db_manager.get_session()
         try:
@@ -1078,6 +1084,152 @@ class MonitoringLoop:
         }
 
         await self.intelligent_monitor.execute_intervention(agent, analysis)
+
+    async def _audit_system_health(self):
+        """Audit system health across all autopilot workflows.
+
+        Checks:
+        1. Orphaned processes (opencode/claude/pi not in tmux)
+        2. Unmerged agent branches
+        3. Stuck designs (no progress)
+        4. Failed tasks without recovery
+        """
+        import subprocess
+        import os
+        from pathlib import Path
+
+        findings = []
+
+        # 1. Check for orphaned opencode/claude/pi processes
+        try:
+            result = subprocess.run(
+                ["pgrep", "-la", "opencode|claude|pi"],
+                capture_output=True, text=True, timeout=5
+            )
+            if result.returncode == 0:
+                pids = []
+                for line in result.stdout.strip().split('\n'):
+                    if line:
+                        parts = line.split()
+                        if len(parts) >= 1:
+                            pids.append(parts[0])
+
+                # Check which PIDs are in tmux sessions
+                tmux_result = subprocess.run(
+                    ["tmux", "list-panes", "-a", "-F", "#{pane_pid} #{session_name}"],
+                    capture_output=True, text=True, timeout=5
+                )
+                tmux_pids = set()
+                if tmux_result.returncode == 0:
+                    for line in tmux_result.stdout.strip().split('\n'):
+                        if line:
+                            parts = line.split()
+                            if len(parts) >= 1:
+                                tmux_pids.add(parts[0])
+
+                orphaned = [p for p in pids if p not in tmux_pids]
+                if orphaned:
+                    findings.append({
+                        "type": "orphaned_processes",
+                        "severity": "warning",
+                        "message": f"{len(orphaned)} orphaned process(es) not in tmux: {', '.join(orphaned[:5])}",
+                        "pids": orphaned,
+                        "action": "Consider killing: kill -9 " + ' '.join(orphaned)
+                    })
+        except Exception as e:
+            logger.debug(f"Process check failed: {e}")
+
+        # 2. Check for unmerged agent branches
+        try:
+            project_path = os.getenv("PROJECT_PATH", "/Users/hmuhlestein/code/sotto")
+            result = subprocess.run(
+                ["git", "branch", "--list", "agent-*"],
+                capture_output=True, text=True, timeout=10,
+                cwd=project_path
+            )
+            if result.returncode == 0:
+                branches = [b.strip().lstrip('* ') for b in result.stdout.strip().split('\n') if b.strip()]
+                if branches:
+                    findings.append({
+                        "type": "unmerged_branches",
+                        "severity": "info",
+                        "message": f"{len(branches)} unmerged agent branch(es)",
+                        "branches": branches[:10],
+                        "action": "Run 'heph cleanup branches' to merge and clean"
+                    })
+        except Exception as e:
+            logger.debug(f"Branch check failed: {e}")
+
+        # 3. Check for stuck/failed designs
+        session = self.db_manager.get_session()
+        try:
+            from src.core.database import Workflow, Phase
+            autopilot_wfs = session.query(Workflow).filter(
+                Workflow.definition_id == 'autopilot',
+                Workflow.status.in_(['active', 'running'])
+            ).all()
+
+            for wf in autopilot_wfs:
+                # Extract design name from launch_params
+                design_name = "unknown"
+                if wf.launch_params:
+                    try:
+                        params = json.loads(wf.launch_params) if isinstance(wf.launch_params, str) else wf.launch_params
+                        doc = params.get("design_document", "")
+                        design_name = Path(doc).stem.replace("_", " ").replace("-", " ") if doc else "unknown"
+                    except Exception:
+                        pass
+
+                # Count task statuses for this workflow
+                tasks = session.query(Task).filter(Task.workflow_id == wf.id).all()
+                status_counts = {}
+                failed_tasks = []
+                for t in tasks:
+                    status_counts[t.status] = status_counts.get(t.status, 0) + 1
+                    if t.status == "failed":
+                        failed_tasks.append(t)
+
+                total = len(tasks)
+                done = status_counts.get("done", 0)
+                failed = status_counts.get("failed", 0)
+                pending = status_counts.get("pending", 0) + status_counts.get("queued", 0)
+                in_progress = status_counts.get("in_progress", 0)
+
+                # Check if stuck (active but no in_progress tasks)
+                if in_progress == 0 and pending > 0 and done < total:
+                    findings.append({
+                        "type": "stuck_design",
+                        "severity": "warning",
+                        "message": f"Design '{design_name}' stuck: {pending} pending, 0 in progress",
+                        "workflow_id": wf.id[:8],
+                        "action": "Check if agents need to be relaunched"
+                    })
+
+                # Report failed tasks
+                for ft in failed_tasks:
+                    findings.append({
+                        "type": "failed_task",
+                        "severity": "error",
+                        "message": f"Task failed in '{design_name}': {(ft.enriched_description or ft.raw_description or '')[:100]}",
+                        "task_id": ft.id[:8],
+                        "action": "Review failure reason and consider rerun"
+                    })
+
+                logger.info(f"[HEALTH] {design_name}: {done}/{total} done, {failed} failed, {in_progress} active, {pending} pending")
+        finally:
+            session.close()
+
+        # Log findings
+        if findings:
+            for f in findings:
+                log_fn = logger.warning if f["severity"] in ("warning", "error") else logger.info
+                log_fn(f"[HEALTH] {f['type']}: {f['message']}")
+
+            # Save findings for API access
+            self._health_findings = findings
+        else:
+            logger.debug("[HEALTH] No issues found")
+            self._health_findings = []
 
     async def _cleanup_orphaned_tmux_sessions(self):
         """Clean up tmux sessions that don't have corresponding active agents."""

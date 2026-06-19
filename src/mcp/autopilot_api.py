@@ -5,6 +5,7 @@ import collections
 import json
 import logging
 import os
+import subprocess
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -2049,6 +2050,173 @@ async def cleanup_branches():
     except Exception as e:
         logger.error(f"Failed to cleanup branches: {e}")
         raise HTTPException(500, str(e))
+
+
+@router.get("/health")
+async def get_system_health():
+    """Get system health audit results.
+
+    Returns findings from the monitoring system:
+    - Orphaned processes
+    - Unmerged branches
+    - Stuck designs
+    - Failed tasks
+    """
+    from src.core.database import DatabaseManager, Agent, Task, get_db
+
+    findings = []
+
+    # 1. Orphaned processes
+    try:
+        result = subprocess.run(
+            ["pgrep", "-la", "opencode|claude|pi"],
+            capture_output=True, text=True, timeout=5
+        )
+        if result.returncode == 0:
+            pids = []
+            for line in result.stdout.strip().split('\n'):
+                if line:
+                    parts = line.split()
+                    if len(parts) >= 1:
+                        pids.append(parts[0])
+
+            tmux_result = subprocess.run(
+                ["tmux", "list-panes", "-a", "-F", "#{pane_pid} #{session_name}"],
+                capture_output=True, text=True, timeout=5
+            )
+            tmux_pids = set()
+            if tmux_result.returncode == 0:
+                for line in tmux_result.stdout.strip().split('\n'):
+                    if line:
+                        parts = line.split()
+                        if len(parts) >= 1:
+                            tmux_pids.add(parts[0])
+
+            orphaned = [p for p in pids if p not in tmux_pids]
+            if orphaned:
+                findings.append({
+                    "type": "orphaned_processes",
+                    "severity": "warning",
+                    "message": f"{len(orphaned)} orphaned process(es) not in tmux",
+                    "pids": orphaned[:10],
+                    "action": f"kill -9 {' '.join(orphaned[:5])}"
+                })
+    except Exception as e:
+        logger.debug(f"Process check failed: {e}")
+
+    # 2. Unmerged branches
+    try:
+        project_path = os.getenv("PROJECT_PATH", "/Users/hmuhlestein/code/sotto")
+        result = subprocess.run(
+            ["git", "branch", "--list", "agent-*"],
+            capture_output=True, text=True, timeout=10,
+            cwd=project_path
+        )
+        if result.returncode == 0:
+            branches = [b.strip().lstrip('* ') for b in result.stdout.strip().split('\n') if b.strip()]
+            if branches:
+                findings.append({
+                    "type": "unmerged_branches",
+                    "severity": "info",
+                    "message": f"{len(branches)} unmerged agent branch(es)",
+                    "branches": branches[:10],
+                    "action": "heph cleanup branches"
+                })
+    except Exception as e:
+        logger.debug(f"Branch check failed: {e}")
+
+    # 3. Workflow progress
+    from src.core.database import DatabaseManager
+    db_manager = DatabaseManager()
+    session = db_manager.get_session()
+    try:
+        from src.core.database import Workflow, Phase
+        autopilot_wfs = session.query(Workflow).filter(
+            Workflow.definition_id == 'autopilot',
+            Workflow.status.in_(['active', 'running', 'paused'])
+        ).all()
+
+        workflows_summary = []
+        for wf in autopilot_wfs:
+            design_name = "unknown"
+            if wf.launch_params:
+                try:
+                    params = json.loads(wf.launch_params) if isinstance(wf.launch_params, str) else wf.launch_params
+                    doc = params.get("design_document", "")
+                    design_name = Path(doc).stem.replace("_", " ").replace("-", " ") if doc else "unknown"
+                except Exception:
+                    pass
+
+            tasks = session.query(Task).filter(Task.workflow_id == wf.id).all()
+            status_counts = {}
+            for t in tasks:
+                status_counts[t.status] = status_counts.get(t.status, 0) + 1
+
+            total = len(tasks)
+            done = status_counts.get("done", 0)
+            failed = status_counts.get("failed", 0)
+            in_progress = status_counts.get("in_progress", 0)
+            pending = status_counts.get("pending", 0) + status_counts.get("queued", 0)
+
+            progress = {
+                "design": design_name,
+                "workflow_id": wf.id[:8],
+                "status": wf.status,
+                "total_tasks": total,
+                "done": done,
+                "failed": failed,
+                "in_progress": in_progress,
+                "pending": pending,
+                "progress_pct": round(done / total * 100) if total > 0 else 0,
+            }
+
+            # Check for stuck
+            if in_progress == 0 and pending > 0 and done < total and wf.status == 'active':
+                progress["stuck"] = True
+                findings.append({
+                    "type": "stuck_design",
+                    "severity": "warning",
+                    "message": f"Design '{design_name}' stuck: {pending} pending, 0 active",
+                    "workflow_id": wf.id[:8],
+                    "action": "Relaunch agents or pause workflow"
+                })
+
+            # Failed tasks
+            for t in tasks:
+                if t.status == "failed":
+                    findings.append({
+                        "type": "failed_task",
+                        "severity": "error",
+                        "message": f"Failed in '{design_name}': {(t.enriched_description or t.raw_description or '')[:80]}",
+                        "task_id": t.id[:8],
+                        "action": "Review and rerun"
+                    })
+
+            workflows_summary.append(progress)
+    finally:
+        session.close()
+
+    # 4. Active agents
+    try:
+        with get_db() as db:
+            active = db.query(Agent).filter(Agent.status.in_(["working", "starting", "idle"])).count()
+            terminated = db.query(Agent).filter(Agent.status == "terminated").count()
+    except Exception:
+        active = 0
+        terminated = 0
+
+    return {
+        "findings": findings,
+        "workflows": workflows_summary,
+        "active_agents": active,
+        "terminated_agents": terminated,
+        "summary": {
+            "total_findings": len(findings),
+            "errors": len([f for f in findings if f["severity"] == "error"]),
+            "warnings": len([f for f in findings if f["severity"] == "warning"]),
+            "info": len([f for f in findings if f["severity"] == "info"]),
+        }
+    }
 
 
 # ── Config ───────────────────────────────────────────────────────
