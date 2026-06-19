@@ -3721,11 +3721,14 @@ async def get_workflows_endpoint(
 @app.post("/api/create_agent_for_task")
 async def create_agent_for_task_endpoint(
     task_id: str = Body(..., embed=True),
-    workflow_id: str = Body(default=None, embed=True),
+    workflow_id: str = Body(..., embed=True),
     phase_id: str = Body(default=None, embed=True),
 ):
     """Create an agent for a pending task."""
     logger.info(f"Creating agent for task {task_id}")
+
+    if not workflow_id:
+        raise HTTPException(status_code=400, detail="workflow_id is REQUIRED for create_agent_for_task")
 
     try:
         session = server_state.db_manager.get_session()
