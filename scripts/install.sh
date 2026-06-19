@@ -514,18 +514,19 @@ PI_MCP_BACKUP="$HOME/.config/mcp/mcp.json.bak"
 if command -v pi >/dev/null 2>&1 || [ -d "$HOME/.pi" ]; then
     log "Pi detected — configuring MCP tools"
     
-    # Check if pi-mcp-adapter is installed
-    if ! command -v pi-mcp-adapter >/dev/null 2>&1; then
-        log "Installing pi-mcp-adapter..."
-        if pi install npm:pi-mcp-adapter 2>/dev/null; then
-            ok "pi-mcp-adapter installed via pi"
-        elif npm install -g pi-mcp-adapter 2>/dev/null; then
-            ok "pi-mcp-adapter installed via npm"
+    # Check if mcporter is installed (wraps MCP servers as CLI tools for pi)
+    if ! command -v mcporter >/dev/null 2>&1; then
+        log "Installing mcporter (MCP-to-CLI wrapper for pi)..."
+        if command -v npm >/dev/null 2>&1; then
+            npm install -g mcporter 2>/dev/null && ok "mcporter installed via npm"
+        elif command -v brew >/dev/null 2>&1; then
+            brew install steipete/mcporter/mcporter 2>/dev/null && ok "mcporter installed via homebrew"
         else
-            warn "Failed to install pi-mcp-adapter — MCP tools may not work"
+            warn "Failed to install mcporter — pi MCP tools may not work"
+            warn "Install manually: npm install -g mcporter"
         fi
     else
-        ok "pi-mcp-adapter already installed"
+        ok "mcporter already installed: $(mcporter --version 2>/dev/null || echo 'installed')"
     fi
     
     # Generate and install Hephaestus pi agents from phase files
@@ -724,11 +725,12 @@ print('OK')
     rm -f "$PI_AGENTS_DIR"/*.bak 2>/dev/null
     
     log "Restart Pi after installation for MCP tools to take effect"
+    log "MCPorter wraps MCP servers as CLI tools that pi can call via bash"
     
 else
     log "Pi not detected — skipping MCP tool configuration"
     log "To configure later:"
-    log "  1. Install pi-mcp-adapter: pi install npm:pi-mcp-adapter"
+    log "  1. Install mcporter: npm install -g mcporter"
     log "  2. Create $PI_MCP_CONFIG with your MCP server configuration"
 fi
 
