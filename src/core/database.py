@@ -358,6 +358,10 @@ class AgentWorktree(Base):
     )
 
 
+# Alias for consistent naming (DB table stays agent_worktrees)
+AgentBranch = AgentWorktree
+
+
 class WorktreeCommit(Base):
     """Track commits within agent worktrees for traceability."""
 
