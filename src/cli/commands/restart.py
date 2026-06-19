@@ -21,6 +21,5 @@ def run(args):
         args.no_monitor = False
     print("Stopping...")
     stop_run(args)
-    time.sleep(2)
     print("Starting...")
     return start_run(args)

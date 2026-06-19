@@ -242,7 +242,7 @@ class RAGSystem:
             else:
                 return 0.3
 
-        except:
+        except Exception:
             return 0.5
 
     def _get_type_relevance_score(

@@ -749,7 +749,7 @@ class HephaestusSDK:
             # Try to get error details from response
             try:
                 error_detail = response.json().get("detail", str(e))
-            except:
+            except Exception:
                 error_detail = response.text
             raise TaskCreationError(f"Failed to start workflow: {e} - Details: {error_detail}")
         except Exception as e:

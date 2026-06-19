@@ -87,6 +87,11 @@ export const apiService = {
     return data;
   },
 
+  pauseWorkflow: async (workflowId: string): Promise<{ status: string }> => {
+    const { data } = await api.post(`/workflow-executions/${workflowId}/stop`);
+    return data;
+  },
+
   cancelWorkflow: async (workflowId: string): Promise<{ cancelled: string; agents_terminated: number }> => {
     const { data } = await api.post(`/workflow-executions/${workflowId}/cancel`);
     return data;

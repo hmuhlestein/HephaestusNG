@@ -83,7 +83,7 @@ class Conductor:
             llm_provider = get_llm_provider()
             if hasattr(llm_provider, 'get_model_for_component'):
                 model_name = llm_provider.get_model_for_component('conductor_analysis')
-        except:
+        except Exception:
             pass
 
         logger.info(f"Conductor analyzing system with {len(guardian_summaries)} agents using {model_name}")

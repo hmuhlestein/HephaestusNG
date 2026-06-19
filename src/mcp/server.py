@@ -700,7 +700,7 @@ class ServerState:
         for websocket in self.active_websockets:
             try:
                 await websocket.send_json(message)
-            except:
+            except Exception:
                 disconnected.append(websocket)
 
         # Remove disconnected clients
@@ -5393,7 +5393,7 @@ async def stop_workflow(workflow_id: str, request: Request):
                 try:
                     subprocess.run(['tmux', 'kill-session', '-t', agent.tmux_session_name],
                                  capture_output=True, timeout=5)
-                except:
+                except Exception:
                     pass
                 agent.status = 'terminated'
                 terminated_count += 1
@@ -5448,7 +5448,7 @@ async def cancel_workflow(workflow_id: str, request: Request):
                 try:
                     subprocess.run(['tmux', 'kill-session', '-t', agent.tmux_session_name],
                                  capture_output=True, timeout=5)
-                except:
+                except Exception:
                     pass
                 agent.status = 'terminated'
                 terminated_count += 1

@@ -20,7 +20,7 @@ import {
 import { CSS } from '@dnd-kit/utilities';
 import {
   Plus, Trash2, FileText, Clock, GripVertical, Search, ListOrdered, RefreshCw,
-  CheckCircle2, XCircle, Loader2
+  CheckCircle2, XCircle, Loader2, Pause, Play
 } from 'lucide-react';
 import { apiService } from '@/services/api';
 import { Button } from '@/components/ui/button';
@@ -39,7 +39,7 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
   const [search, setSearch] = useState('');
   const [localOrder, setLocalOrder] = useState<any[] | null>(null);
   const [detailFile, setDetailFile] = useState<string | null>(null);
-  const [designStatuses, setDesignStatuses] = useState<Record<string, string>>({});
+  const [designStatuses, setDesignStatuses] = useState<Record<string, { status: string; workflowId?: string }>>({});
 
   // Fetch status for all designs to show badges
   const { data: designs, isLoading } = useQuery({
@@ -54,14 +54,17 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
     if (!projectId || !designs || designs.length === 0) return;
     
     const fetchStatuses = async () => {
-      const statuses: Record<string, string> = {};
+      const statuses: Record<string, { status: string; workflowId?: string }> = {};
       await Promise.all(
         designs.map(async (d: any) => {
           try {
             const status = await apiService.getAutopilotProjectDesignStatus(projectId, d.filename);
-            statuses[d.filename] = status.status || 'pending';
+            statuses[d.filename] = {
+              status: status.status || 'pending',
+              workflowId: status.workflows?.[0]?.id
+            };
           } catch {
-            statuses[d.filename] = 'pending';
+            statuses[d.filename] = { status: 'pending' };
           }
         })
       );
@@ -117,6 +120,22 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
     onError: () => {
       queryClient.invalidateQueries({ queryKey: ['autopilot-project-designs', projectId] });
       toast.error('Failed to save order');
+    },
+  });
+
+  const pauseResumeMutation = useMutation({
+    mutationFn: ({ workflowId, action }: { workflowId: string; action: 'pause' | 'resume' }) => {
+      if (action === 'pause') {
+        return apiService.pauseWorkflow(workflowId);
+      }
+      return apiService.resumeWorkflow(workflowId);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['workflows'] });
+      toast.success('Workflow updated');
+    },
+    onError: () => {
+      toast.error('Failed to update workflow');
     },
   });
 
@@ -207,8 +226,10 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
                   item={item}
                   index={index}
                   isActive={item.name === currentDesign}
-                  status={designStatuses[item.filename]}
+                  status={designStatuses[item.filename]?.status}
+                  workflowId={designStatuses[item.filename]?.workflowId}
                   onDetail={handleDetail}
+                  onPauseResume={(workflowId, action) => pauseResumeMutation.mutate({ workflowId, action })}
                   onRemove={(filename) => {
                     if (confirm(`Remove "${item.name}" from queue?`)) {
                       removeMutation.mutate(filename);
@@ -280,10 +301,12 @@ interface SortableDesignItemProps {
   isActive?: boolean;
   onRemove: (filename: string) => void;
   onDetail: (filename: string) => void;
+  onPauseResume?: (workflowId: string, action: 'pause' | 'resume') => void;
   status?: string;
+  workflowId?: string;
 }
 
-const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, isActive, onRemove, onDetail, status }) => {
+const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, isActive, onRemove, onDetail, onPauseResume, status, workflowId }) => {
   const {
     attributes,
     listeners,
@@ -350,6 +373,22 @@ const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, is
           <div className="flex items-center gap-2">
             {status && status !== 'pending' && (
               <StatusBadge status={status} />
+            )}
+            {workflowId && status && (status === 'active' || status === 'paused') && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onPauseResume?.(workflowId, status === 'paused' ? 'resume' : 'pause');
+                }}
+                className={`p-2 rounded-lg transition-colors ${
+                  status === 'paused'
+                    ? 'hover:bg-green-50 text-gray-400 hover:text-green-600'
+                    : 'hover:bg-yellow-50 text-gray-400 hover:text-yellow-600'
+                }`}
+                title={status === 'paused' ? 'Resume' : 'Pause'}
+              >
+                {status === 'paused' ? <Play className="w-4 h-4" /> : <Pause className="w-4 h-4" />}
+              </button>
             )}
             <button
               onClick={(e) => { e.stopPropagation(); onRemove(item.filename); }}
