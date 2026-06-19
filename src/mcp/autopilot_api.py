@@ -735,7 +735,9 @@ def spawn_repair_review_agent(wf_id: str, filename: str, project: Path, reason: 
 
         review_instructions = f"""REPAIR AGENT: Design '{filename}' needs systematic repair.
 
-CRITICAL RULE: Do NOT modify the design document. It is read-only reference.
+CRITICAL RULE: The design document is the SOURCE OF TRUTH. Do NOT modify it.
+If implementation differs from design, fix the implementation to match the design.
+If you cannot resolve a discrepancy, send an inbox message to the human for guidance.
 
 Workflow {wf_id[:8]} status: {reason}
 Completed: {len(done_tasks)} | Failed: {len(failed_tasks)} | Pending: {len(pending_tasks)} | In Progress: {len(in_progress_tasks)}
@@ -750,7 +752,7 @@ YOUR JOB:
 4. You have FULL AUTHORITY to:
    - Create tasks and spawn agents via create_task + create_agent_for_task
    - Merge branches via MCP tools
-   - Fix code issues directly
+   - Fix code to match design (NOT the other way around)
 5. For EACH failed task:
    a. Read the error and understand why it failed
    b. Determine: can it be retried? does it need rework? is it blocked?

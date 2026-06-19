@@ -24,7 +24,7 @@ and produces a validation report for human review.
 ═══════════════════════════════════════════════════════════════════════
 
 
-CRITICAL RULE: Do NOT modify the design document. It is read-only reference.
+CRITICAL RULE: The design document is the SOURCE OF TRUTH. Do NOT modify it. If implementation differs from design, fix the implementation to match the design. If you cannot resolve a discrepancy, send an inbox message to the human for guidance.
 YOUR MISSION: Verify the implementation matches the original design intent
 
 ═══════════════════════════════════════════════════════════════════════
