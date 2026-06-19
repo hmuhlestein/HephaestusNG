@@ -473,10 +473,10 @@ def attempt_recovery(workflow_id: str, logger: OrchestratorLogger) -> Tuple[bool
         # Only retry if not retried too many times
         retry_count = task.get('retry_count', 0)
         if retry_count >= 2:
-            logger.log(f"  Task {task_id[:8]} failed {retry_count} times — skipping retry")
+            logger.info(f"  Task {task_id[:8]} failed {retry_count} times — skipping retry")
             continue
         
-        logger.log(f"  Retrying failed task {task_id[:8]} (retry #{retry_count + 1})")
+        logger.info(f"  Retrying failed task {task_id[:8]} (retry #{retry_count + 1})")
         try:
             # Reset task status to pending
             api_post(f"/api/tasks/{task_id}/status", {"status": "pending"})
@@ -487,10 +487,10 @@ def attempt_recovery(workflow_id: str, logger: OrchestratorLogger) -> Tuple[bool
                 "phase_id": phase_id,
             })
             agent_id = agent_data.get('agent_id', 'unknown')
-            logger.log(f"  Created agent {agent_id[:8]} for retried task")
+            logger.info(f"  Created agent {agent_id[:8]} for retried task")
             recovered.append(f"retried task {task_id[:8]}")
         except Exception as e:
-            logger.log(f"  Failed to retry task {task_id[:8]}: {e}", "ERROR")
+            logger.error(f"  Failed to retry task {task_id[:8]}: {e}")
     
     # 2. Merge unmerged agent branches
     try:
@@ -503,7 +503,7 @@ def attempt_recovery(workflow_id: str, logger: OrchestratorLogger) -> Tuple[bool
         if result.returncode == 0:
             branches = [b.strip().lstrip('* ') for b in result.stdout.strip().split('\n') if b.strip()]
             for branch in branches:
-                logger.log(f"  Merging branch: {branch}")
+                logger.info(f"  Merging branch: {branch}")
                 try:
                     # Checkout branch and merge to main
                     subprocess.run(["git", "checkout", branch], capture_output=True, timeout=10, cwd=project_path)
@@ -516,36 +516,36 @@ def attempt_recovery(workflow_id: str, logger: OrchestratorLogger) -> Tuple[bool
                         capture_output=True, text=True, timeout=30, cwd=project_path
                     )
                     if merge_result.returncode == 0:
-                        logger.log(f"  Merged {branch} to main")
+                        logger.info(f"  Merged {branch} to main")
                         # Delete the branch
                         subprocess.run(["git", "branch", "-d", branch], capture_output=True, timeout=10, cwd=project_path)
                         recovered.append(f"merged {branch}")
                     else:
                         # Conflict — use theirs (newest file wins)
-                        logger.log(f"  Merge conflict on {branch} — using theirs", "WARN")
+                        logger.warning(f"  Merge conflict on {branch} — using theirs")
                         subprocess.run(["git", "checkout", "--theirs", "."], capture_output=True, timeout=10, cwd=project_path)
                         subprocess.run(["git", "add", "."], capture_output=True, timeout=10, cwd=project_path)
                         subprocess.run(["git", "commit", "-m", f"Merge {branch} with conflict resolution"], capture_output=True, timeout=10, cwd=project_path)
                         subprocess.run(["git", "branch", "-d", branch], capture_output=True, timeout=10, cwd=project_path)
                         recovered.append(f"merged {branch} (conflict resolved)")
                 except Exception as e:
-                    logger.log(f"  Failed to merge {branch}: {e}", "WARN")
+                    logger.warning(f"  Failed to merge {branch}: {e}")
                     # Switch back to main
                     subprocess.run(["git", "checkout", "main"], capture_output=True, timeout=10, cwd=project_path)
     except Exception as e:
-        logger.log(f"  Branch merge check failed: {e}", "WARN")
+        logger.warning(f"  Branch merge check failed: {e}")
     
     # 3. Terminate stale agents
     agents = get_agents(workflow_id=workflow_id)
     active_agents = [a for a in agents if a.get('status') in ('working', 'starting', 'idle')]
     for agent in active_agents:
         aid = agent.get('id', '')
-        logger.log(f"  Terminating stale agent {aid[:8]}")
+        logger.info(f"  Terminating stale agent {aid[:8]}")
         try:
             api_post(f"/api/agents/{aid}/terminate")
             recovered.append(f"terminated agent {aid[:8]}")
         except Exception as e:
-            logger.log(f"  Failed to terminate {aid[:8]}: {e}", "WARN")
+            logger.warning(f"  Failed to terminate {aid[:8]}: {e}")
     
     if recovered:
         return True, f"Recovered: {', '.join(recovered)}"
@@ -661,7 +661,7 @@ def prompt_human(reason: str, logger: OrchestratorLogger, timeout: int = 600) ->
     import sys
     import uuid
 
-    logger.log(f"DECISION POINT: {reason}", "INTERVENTION")
+    logger.warning(f"DECISION POINT: {reason}")
 
     input_dir = Path(AUTOPILOT_STATE_DIR)
     input_dir.mkdir(parents=True, exist_ok=True)
@@ -698,7 +698,7 @@ def prompt_human(reason: str, logger: OrchestratorLogger, timeout: int = 600) ->
     while time.time() - start < timeout:
         # Check if request file was dismissed (deleted by API)
         if not request_file.exists():
-            logger.log("Input request was dismissed (auto-continuing)", "WARN")
+            logger.info("Input request was dismissed (auto-continuing)", "WARN")
             response_file.unlink(missing_ok=True)
             return "c"  # Auto-continue when dismissed
         
@@ -711,7 +711,7 @@ def prompt_human(reason: str, logger: OrchestratorLogger, timeout: int = 600) ->
                 
                 if choice == "m" and message:
                     # Log the message and continue waiting for actual decision
-                    logger.log(f"Human message: {message}", "INFO")
+                    logger.info(f"Human message: {message}")
                     logger.event("human_input", {"choice": "m", "message": message, "reason": reason, "source": "web", "request_id": request_id})
                     response_file.unlink(missing_ok=True)  # Delete response, keep waiting
                     continue
@@ -722,7 +722,7 @@ def prompt_human(reason: str, logger: OrchestratorLogger, timeout: int = 600) ->
                     response_file.unlink(missing_ok=True)
                     return choice
             except (json.JSONDecodeError, OSError) as e:
-                logger.log(f"Error reading response file: {e}", "WARN")
+                logger.warning(f"Error reading response file: {e}")
 
         # Check terminal input (non-blocking on Unix only)
         try:
@@ -742,7 +742,7 @@ def prompt_human(reason: str, logger: OrchestratorLogger, timeout: int = 600) ->
             time.sleep(2)
 
     # Timeout — auto-continue
-    logger.log(f"Human input timed out after {timeout}s, auto-continuing", "WARN")
+    logger.warning(f"Human input timed out after {timeout}s, auto-continuing")
     logger.event("human_input", {"choice": "timeout", "reason": reason, "request_id": request_id})
     request_file.unlink(missing_ok=True)
     return "c"
@@ -795,12 +795,12 @@ def pick_next_design(queue_dir: Path, processed_hashes: Set[str], logger: Orches
     if not designs:
         return None
 
-    logger.log(f"Found {len(designs)} pending design(s) in queue")
+    logger.info(f"Found {len(designs)} pending design(s) in queue")
     for d in designs:
-        logger.log(f"  - {d.name} ({d.path.name})")
+        logger.info(f"  - {d.name} ({d.path.name})")
 
     next_design = designs[0]
-    logger.log(f"Selected: {next_design.name}")
+    logger.info(f"Selected: {next_design.name}")
     return next_design
 
 
@@ -821,15 +821,15 @@ def create_feature_folder(project_path: Path, design_name: str, logger: Orchestr
             if hephaestus_entry not in content:
                 with open(gitignore, "a") as f:
                     f.write(f"\n# Hephaestus local data\n{hephaestus_entry}\n")
-                logger.log(f"Added {hephaestus_entry} to .gitignore")
+                logger.info(f"Added {hephaestus_entry} to .gitignore")
         else:
             with open(gitignore, "w") as f:
                 f.write(f"# Hephaestus local data\n{hephaestus_entry}\n")
-            logger.log(f"Created .gitignore with {hephaestus_entry}")
+            logger.info(f"Created .gitignore with {hephaestus_entry}")
     except Exception as e:
-        logger.log(f"Warning: Could not update .gitignore: {e}", "WARN")
+        logger.warning(f"Warning: Could not update .gitignore: {e}")
     
-    logger.log(f"Feature folder: {feature_folder}")
+    logger.info(f"Feature folder: {feature_folder}")
     return feature_folder
 
 
@@ -875,7 +875,7 @@ def _sweep_stray_files(
         dest = docs_dir / f.name
         if not dest.exists():
             shutil.move(str(f), str(dest))
-            logger.log(f"Moved root file: {f.name} -> features/.../docs/")
+            logger.info(f"Moved root file: {f.name} -> features/.../docs/")
 
     # ── files in feature_folder root (above docs/) ─────────────────
     for f in feature_folder.iterdir():
@@ -886,7 +886,7 @@ def _sweep_stray_files(
         dest = docs_dir / f.name
         if not dest.exists():
             shutil.move(str(f), str(dest))
-            logger.log(f"Moved feature file: {f.name} -> features/.../docs/")
+            logger.info(f"Moved feature file: {f.name} -> features/.../docs/")
 
     # ── stray directories in project root ──────────────────────────
     for d_name in _STRAY_DIRS:
@@ -895,7 +895,7 @@ def _sweep_stray_files(
             dest_dir = docs_dir / d_name
             if not dest_dir.exists():
                 shutil.move(str(src_dir), str(dest_dir))
-                logger.log(f"Moved stray dir: {d_name}/ -> features/.../docs/")
+                logger.info(f"Moved stray dir: {d_name}/ -> features/.../docs/")
             else:
                 # merge contents then remove source
                 for item in src_dir.rglob("*"):
@@ -905,7 +905,7 @@ def _sweep_stray_files(
                         if not target.exists():
                             target.parent.mkdir(parents=True, exist_ok=True)
                             shutil.move(str(item), str(target))
-                            logger.log(f"Moved file from {d_name}/: {rel} -> features/.../docs/{d_name}/")
+                            logger.info(f"Moved file from {d_name}/: {rel} -> features/.../docs/{d_name}/")
                 shutil.rmtree(src_dir)
 
     # ── stray directories in feature_folder root ───────────────────
@@ -915,7 +915,7 @@ def _sweep_stray_files(
             dest_dir = docs_dir / d_name
             if not dest_dir.exists():
                 shutil.move(str(src_dir), str(dest_dir))
-                logger.log(f"Moved feature dir: {d_name}/ -> features/.../docs/")
+                logger.info(f"Moved feature dir: {d_name}/ -> features/.../docs/")
             else:
                 for item in src_dir.rglob("*"):
                     if item.is_file():
@@ -924,7 +924,7 @@ def _sweep_stray_files(
                         if not target.exists():
                             target.parent.mkdir(parents=True, exist_ok=True)
                             shutil.move(str(item), str(target))
-                            logger.log(f"Moved file from {d_name}/: {rel} -> features/.../docs/{d_name}/")
+                            logger.info(f"Moved file from {d_name}/: {rel} -> features/.../docs/{d_name}/")
                 shutil.rmtree(src_dir)
 
 
@@ -1224,7 +1224,7 @@ def generate_html_feature_report(
 </html>"""
 
     html_path.write_text(html)
-    logger.log(f"HTML feature report: {html_path}")
+    logger.info(f"HTML feature report: {html_path}")
     return html_path
 
 
@@ -1241,7 +1241,7 @@ def generate_product_validation_report(
         try:
             existing = validation_path.read_text()
             meets_spec = qa_passed and ("PASS" in existing or "pass" in existing.lower())
-            logger.log("Using existing product validation from Phase 8")
+            logger.info("Using existing product validation from Phase 8")
             return meets_spec, existing
         except Exception:
             pass
@@ -1312,7 +1312,7 @@ def generate_product_validation_report(
 """
 
     validation_path.write_text(report)
-    logger.log(f"Product validation: {validation_path}")
+    logger.info(f"Product validation: {validation_path}")
     return meets_spec, report
 
 
@@ -1323,7 +1323,7 @@ def run_single_workflow(sdk, workflow_id: str, project_path: str, description: s
     # Check for existing active workflows and stop them
     existing_workflows = get_active_workflows()
     if existing_workflows:
-        logger.log(f"Found {len(existing_workflows)} active workflow(s) — stopping them...")
+        logger.info(f"Found {len(existing_workflows)} active workflow(s) — stopping them...")
         for wf in existing_workflows:
             wf_id = wf.get('id', '')
             try:
@@ -1333,16 +1333,16 @@ def run_single_workflow(sdk, workflow_id: str, project_path: str, description: s
                     if agent.get('status') in ACTIVE_AGENT_STATUSES:
                         try:
                             api_post(f"/api/agents/{agent['id']}/terminate")
-                            logger.log(f"  Terminated agent {agent['id'][:8]} for workflow {wf_id[:8]}")
+                            logger.info(f"  Terminated agent {agent['id'][:8]} for workflow {wf_id[:8]}")
                         except Exception:
                             pass
                 # Mark workflow as paused
                 api_post(f"/api/workflow-executions/{wf_id}/pause")
-                logger.log(f"  Paused workflow {wf_id[:8]}")
+                logger.info(f"  Paused workflow {wf_id[:8]}")
             except Exception as e:
-                logger.log(f"  Failed to stop workflow {wf_id[:8]}: {e}", "WARN")
+                logger.warning(f"  Failed to stop workflow {wf_id[:8]}: {e}")
     
-    logger.log(f"Launching workflow: {workflow_id}")
+    logger.info(f"Launching workflow: {workflow_id}")
     # Extract design document from launch_params for the event
     design_doc = (launch_params or {}).get("design_document", "")
     design_name = Path(design_doc).stem.replace("_", " ").replace("-", " ") if design_doc else ""
@@ -1359,11 +1359,11 @@ def run_single_workflow(sdk, workflow_id: str, project_path: str, description: s
             working_directory=project_path,
             launch_params=launch_params or {},
         )
-        logger.log(f"Workflow launched: {exec_id}")
+        logger.info(f"Workflow launched: {exec_id}")
         if state:
             state.current_workflow_id = exec_id
     except Exception as e:
-        logger.log(f"Failed to launch workflow {workflow_id}: {e}", "ERROR")
+        logger.error(f"Failed to launch workflow {workflow_id}: {e}")
         return "failed"
 
     stuck_count = 0
@@ -1379,7 +1379,7 @@ def run_single_workflow(sdk, workflow_id: str, project_path: str, description: s
             # Timeout check
             elapsed = int(time.time() - start_time)
             if elapsed > MAX_WORKFLOW_TIME:
-                logger.log(f"Workflow timed out after {MAX_WORKFLOW_TIME}s", "ERROR")
+                logger.error(f"Workflow timed out after {MAX_WORKFLOW_TIME}s")
                 return "timeout"
 
             wf_status = get_workflow_status(exec_id)
@@ -1400,7 +1400,7 @@ def run_single_workflow(sdk, workflow_id: str, project_path: str, description: s
             blocked = get_tasks(status="blocked", workflow_id=exec_id)
             non_terminal = assigned + queued + under_review + validation + needs_work + blocked
 
-            logger.log(
+            logger.info(
                 f"[{workflow_id}] [{elapsed}s] Agents: {len(active_agents)} active | "
                 f"Tasks: {len(pending)} pending, {len(in_progress)} active, "
                 f"{len(done)} done, {len(failed)} failed"
@@ -1464,7 +1464,7 @@ def run_single_workflow(sdk, workflow_id: str, project_path: str, description: s
                                 if deps_met:
                                     launchable.append(task)
                                 else:
-                                    logger.log(f"  Task {task_id[:8]} waiting on dependencies: {depends_on}")
+                                    logger.info(f"  Task {task_id[:8]} waiting on dependencies: {depends_on}")
                         else:
                             # No depends_on specified - sequential
                             if not sequential_seen:
@@ -1504,7 +1504,7 @@ def run_single_workflow(sdk, workflow_id: str, project_path: str, description: s
                     
                     agents_to_launch = min(len(launchable), max_concurrent - len(active_agents))
                     if launchable:
-                        logger.log(f"[AUTO-LAUNCH] {len(launchable)} launchable task(s) (of {len(pending)} pending), launching {agents_to_launch} (active: {len(active_agents)}, max: {max_concurrent})")
+                        logger.info(f"[AUTO-LAUNCH] {len(launchable)} launchable task(s) (of {len(pending)} pending), launching {agents_to_launch} (active: {len(active_agents)}, max: {max_concurrent})")
                     
                     for i, task in enumerate(launchable[:agents_to_launch]):
                         task_id = task.get('id')
@@ -1519,9 +1519,9 @@ def run_single_workflow(sdk, workflow_id: str, project_path: str, description: s
                                 "phase_id": phase_id,
                             })
                             agent_id = agent_data.get('agent_id', 'unknown')
-                            logger.log(f"  Launched agent {agent_id[:8]} for task {task_id[:8]}")
+                            logger.info(f"  Launched agent {agent_id[:8]} for task {task_id[:8]}")
                         except Exception as e:
-                            logger.log(f"  Failed to launch agent for task {task_id[:8]}: {e}", "ERROR")
+                            logger.error(f"  Failed to launch agent for task {task_id[:8]}: {e}")
 
             # Parent peeks at children's output periodically for observability
             if elapsed > 0 and elapsed % PARENT_PEEK_INTERVAL < POLL_INTERVAL:
@@ -1533,7 +1533,7 @@ def run_single_workflow(sdk, workflow_id: str, project_path: str, description: s
                         lines = [l.strip() for l in output.strip().split('\n') if l.strip()][-8:]
                         if lines:
                             preview = ' | '.join(lines[-3:])  # last 3 lines
-                            logger.log(f"  [{aid[:8]}] {preview}")
+                            logger.info(f"  [{aid[:8]}] {preview}")
 
             # Track progress — detect if agents are stuck
             current_done = len(done)
@@ -1544,7 +1544,7 @@ def run_single_workflow(sdk, workflow_id: str, project_path: str, description: s
             no_progress_seconds = time.time() - last_progress_time
             if no_progress_seconds > PARENT_STUCK_THRESHOLD and active_agents and not pending:
                 # No progress for threshold time — nudge each agent
-                logger.log(f"[WARN] No task progress for {int(no_progress_seconds)}s — nudging agents:")
+                logger.info(f"[WARN] No task progress for {int(no_progress_seconds)}s — nudging agents:")
                 for agent in active_agents:
                     aid = agent.get('id', '')
                     # Peek at output to include in nudge context
@@ -1562,28 +1562,28 @@ def run_single_workflow(sdk, workflow_id: str, project_path: str, description: s
                     
                     try:
                         api_post(f"/api/agents/{aid}/message", {"message": nudge_msg})
-                        logger.log(f"  Nudged {aid[:8]}")
+                        logger.info(f"  Nudged {aid[:8]}")
                     except Exception as e:
-                        logger.log(f"  Failed to nudge {aid[:8]}: {e}")
+                        logger.info(f"  Failed to nudge {aid[:8]}: {e}")
                 
                 # Auto-kill agents stuck for 2x the threshold
                 # Only kill agents that show no activity (not actively streaming)
                 if no_progress_seconds > PARENT_STUCK_THRESHOLD * 2:
-                    logger.log(f"[AUTO-KILL] Stuck for {int(no_progress_seconds)}s — checking agents:")
+                    logger.info(f"[AUTO-KILL] Stuck for {int(no_progress_seconds)}s — checking agents:")
                     killed_any = False
                     for agent in active_agents:
                         aid = agent.get('id', '')
                         # Peek at output — if agent is actively streaming, don't kill
                         output = peek_agent_output(aid, lines=5)
                         if output and any(kw in output.lower() for kw in ['→', '←', 'edit', 'write', 'create', 'reading']):
-                            logger.log(f"  {aid[:8]}: actively working — skipping")
+                            logger.info(f"  {aid[:8]}: actively working — skipping")
                             continue
                         try:
                             api_post(f"/api/agents/{aid}/terminate")
-                            logger.log(f"  {aid[:8]}: terminated (no active output)")
+                            logger.info(f"  {aid[:8]}: terminated (no active output)")
                             killed_any = True
                         except Exception as e:
-                            logger.log(f"  {aid[:8]}: failed to terminate: {e}")
+                            logger.info(f"  {aid[:8]}: failed to terminate: {e}")
                     if killed_any:
                         return "timeout"
                 
@@ -1591,7 +1591,7 @@ def run_single_workflow(sdk, workflow_id: str, project_path: str, description: s
 
             wf_state = wf_status.get("status", "")
             if wf_state in ("completed", "failed"):
-                logger.log(f"Workflow {wf_state}: {exec_id}")
+                logger.info(f"Workflow {wf_state}: {exec_id}")
                 return wf_state
 
             # Check if workflow should be considered complete:
@@ -1599,13 +1599,13 @@ def run_single_workflow(sdk, workflow_id: str, project_path: str, description: s
             if not active_agents and not pending and not in_progress and not non_terminal:
                 # All agents done, no more work to do
                 if done:
-                    logger.log(f"Workflow complete: {len(done)} tasks done, no agents active")
+                    logger.info(f"Workflow complete: {len(done)} tasks done, no agents active")
                     if state:
                         state.current_workflow_id = None
                     return "completed"
                 elif elapsed > 60:
                     # No tasks at all after 60s — might be an empty workflow
-                    logger.log(f"No tasks and no agents after {elapsed}s — workflow appears empty")
+                    logger.info(f"No tasks and no agents after {elapsed}s — workflow appears empty")
                     if state:
                         state.current_workflow_id = None
                     return "completed"
@@ -1626,7 +1626,7 @@ def run_single_workflow(sdk, workflow_id: str, project_path: str, description: s
 
             hard_error, error_reason = detect_hard_error(agents, failed, workflow_id=exec_id)
             if hard_error:
-                logger.log(f"Hard error detected: {error_reason}", "ERROR")
+                logger.error(f"Hard error detected: {error_reason}")
                 return "hard_error"
 
             impasse, impasse_reason = detect_impasse(agents, pending, in_progress, elapsed)
@@ -1643,7 +1643,7 @@ def run_single_workflow(sdk, workflow_id: str, project_path: str, description: s
                             if a.get("status") in ACTIVE_AGENT_STATUSES:
                                 try:
                                     api_post(f"/api/agents/{a['id']}/terminate")
-                                    logger.log(f"Terminated agent {a['id'][:8]} (skip)")
+                                    logger.info(f"Terminated agent {a['id'][:8]} (skip)")
                                 except Exception:
                                     pass
                         return "skipped"
@@ -1651,7 +1651,7 @@ def run_single_workflow(sdk, workflow_id: str, project_path: str, description: s
                 stuck_count = 0
 
     except KeyboardInterrupt:
-        logger.log("Interrupted by user")
+        logger.info("Interrupted by user")
         return "interrupted"
     finally:
         # Clean up: mark workflow as paused (not completed) so it can be resumed
@@ -1661,9 +1661,9 @@ def run_single_workflow(sdk, workflow_id: str, project_path: str, description: s
                 wf_status = get_workflow_status(exec_id)
                 if wf_status.get('status') == 'active':
                     api_post(f"/api/workflow-executions/{exec_id}/pause")
-                    logger.log(f"Paused workflow {exec_id[:8]}")
+                    logger.info(f"Paused workflow {exec_id[:8]}")
             except Exception as e:
-                logger.log(f"Workflow cleanup failed: {e}", "WARN")
+                logger.warning(f"Workflow cleanup failed: {e}")
 
 
 def run_single_design(
@@ -1685,12 +1685,12 @@ def run_single_design(
 
     design_copy = copy_design_document(design_entry, feature_folder)
 
-    logger.log("=" * 70)
-    logger.log(f"PROCESSING DESIGN: {design_entry.name}")
-    logger.log(f"  Source: {design_entry.path}")
-    logger.log(f"  Project: {project_path}")
-    logger.log(f"  Feature: {feature_folder}")
-    logger.log("=" * 70)
+    logger.info("=" * 70)
+    logger.info(f"PROCESSING DESIGN: {design_entry.name}")
+    logger.info(f"  Source: {design_entry.path}")
+    logger.info(f"  Project: {project_path}")
+    logger.info(f"  Feature: {feature_folder}")
+    logger.info("=" * 70)
 
     report = FeatureReport(
         design_name=design_entry.name,
@@ -1717,7 +1717,7 @@ def run_single_design(
     phase_files = list((HEPHAESTUS_DIR / "src" / "autopilot").glob("phase_*.py"))
     for pf in sorted(phase_files):
         shutil.copy2(pf, phases_dir / pf.name)
-    logger.log(f"Copied {len(phase_files)} phase prompts to {phases_dir}")
+    logger.info(f"Copied {len(phase_files)} phase prompts to {phases_dir}")
 
     # Write initial pipeline_metrics.json BEFORE workflow so forensics agent can read it
     # (will be updated with final values after workflow completes)
@@ -1744,7 +1744,7 @@ def run_single_design(
     }
     metrics_path = docs_dir / "pipeline_metrics.json"
     metrics_path.write_text(json.dumps(initial_metrics, indent=2, default=str))
-    logger.log(f"Initial pipeline metrics: {metrics_path}")
+    logger.info(f"Initial pipeline metrics: {metrics_path}")
 
     try:
         for iteration in range(1, max_iterations + 1):
@@ -1754,10 +1754,10 @@ def run_single_design(
             if state:
                 state.current_iteration = iteration
 
-            logger.log("")
-            logger.log("-" * 60)
-            logger.log(f"DESIGN: {design_entry.name} | ITERATION {iteration}/{max_iterations}")
-            logger.log("-" * 60)
+            logger.info("")
+            logger.info("-" * 60)
+            logger.info(f"DESIGN: {design_entry.name} | ITERATION {iteration}/{max_iterations}")
+            logger.info("-" * 60)
 
             description = (
                 f"Autopilot: {design_entry.name} - Iteration {iteration}\n"
@@ -1796,12 +1796,12 @@ def run_single_design(
                 break
 
             if wf_status == "skipped":
-                logger.log("Design skipped by user")
+                logger.info("Design skipped by user")
                 stop_reason = StopReason.USER_SKIP
                 break
 
-            logger.log("")
-            logger.log("Running product validation...")
+            logger.info("")
+            logger.info("Running product validation...")
             qa_passed = False
             qa_reports = [
                 project_path / "qa_report.md",
@@ -1838,8 +1838,8 @@ def run_single_design(
             report.product_validated = product_validated
 
             if product_validated:
-                logger.log("")
-                logger.log(f"DESIGN VALIDATED: {design_entry.name}")
+                logger.info("")
+                logger.info(f"DESIGN VALIDATED: {design_entry.name}")
                 stop_reason = StopReason.COMPLETED
                 break
 
@@ -1849,18 +1849,18 @@ def run_single_design(
             ])
             if arch_issue:
                 stop_reason = StopReason.ARCHITECTURAL_ISSUE
-                logger.log(f"Architectural issue: {arch_reason}", "ERROR")
+                logger.error(f"Architectural issue: {arch_reason}")
                 break
 
             if iteration < max_iterations:
-                logger.log(f"Iteration {iteration} incomplete, starting {iteration + 1}...")
+                logger.info(f"Iteration {iteration} incomplete, starting {iteration + 1}...")
             else:
-                logger.log(f"Max iterations ({max_iterations}) reached")
+                logger.info(f"Max iterations ({max_iterations}) reached")
                 stop_reason = StopReason.MAX_ITERATIONS
 
     except KeyboardInterrupt:
         stop_reason = StopReason.USER_INTERRUPT
-        logger.log("Design processing interrupted")
+        logger.info("Design processing interrupted")
 
     # Organize: copy stray docs from project root into feature docs (don't move — iteration loop needs them)
     _sweep_stray_files(project_path, feature_folder, docs_dir, logger)
@@ -1907,7 +1907,7 @@ def run_single_design(
     }
     metrics_path = docs_dir / "pipeline_metrics.json"
     metrics_path.write_text(json.dumps(metrics, indent=2, default=str))
-    logger.log(f"Final pipeline metrics: {metrics_path}")
+    logger.info(f"Final pipeline metrics: {metrics_path}")
 
     report.total_time_seconds = int(time.time() - design_start)
     report.stop_reason = stop_reason.value
@@ -1935,7 +1935,7 @@ def run_single_design(
             cost_info, daily_breakdown = asyncio.run(fetch_costs())
 
             report.cost_total = cost_info.get("spend", 0)
-            logger.log(f"Cost for '{feature_user}': ${report.cost_total:.4f}")
+            logger.info(f"Cost for '{feature_user}': ${report.cost_total:.4f}")
 
             # Extract model breakdown from daily data
             for day_entry in daily_breakdown.get("results", []):
@@ -1948,7 +1948,7 @@ def run_single_design(
                     report.cost_breakdown[model_name] += model_spend
 
         except Exception as e:
-            logger.log(f"Failed to fetch cost data: {e}", "WARN")
+            logger.warning(f"Failed to fetch cost data: {e}")
 
     generate_html_feature_report(report, summaries, feature_folder, logger)
 
@@ -1974,7 +1974,7 @@ def run_continuous_pipeline(args) -> None:
     # Check for incomplete work from previous run
     if persistent_state.has_incomplete_work():
         last_design = state.current_design
-        logger.log(f"Resuming from previous run - last design: {last_design}")
+        logger.info(f"Resuming from previous run - last design: {last_design}")
         # Clear current design since we're starting fresh
         state.current_design = None
         state.current_feature_folder = None
@@ -1984,20 +1984,20 @@ def run_continuous_pipeline(args) -> None:
     state.run_id = datetime.now().strftime("run-%Y%m%d-%H%M%S")
     state.start_time = time.time()
     
-    logger.log("=" * 70)
-    logger.log("AUTOPILOT CONTINUOUS PIPELINE")
-    logger.log("=" * 70)
-    logger.log(f"Design Queue: {args.design_queue}")
-    logger.log(f"Project Root: {args.project_path}")
-    logger.log(f"Max Iterations per Design: {args.max_iterations}")
-    logger.log(f"Poll Interval: {DESIGN_QUEUE_SCAN_INTERVAL}s")
-    logger.log(f"Run ID: {state.run_id}")
-    logger.log(f"Logs: {log_dir}")
+    logger.info("=" * 70)
+    logger.info("AUTOPILOT CONTINUOUS PIPELINE")
+    logger.info("=" * 70)
+    logger.info(f"Design Queue: {args.design_queue}")
+    logger.info(f"Project Root: {args.project_path}")
+    logger.info(f"Max Iterations per Design: {args.max_iterations}")
+    logger.info(f"Poll Interval: {DESIGN_QUEUE_SCAN_INTERVAL}s")
+    logger.info(f"Run ID: {state.run_id}")
+    logger.info(f"Logs: {log_dir}")
     
     if processed_hashes:
-        logger.log(f"Loaded {len(processed_hashes)} previously processed designs")
+        logger.info(f"Loaded {len(processed_hashes)} previously processed designs")
     
-    logger.log("=" * 70)
+    logger.info("=" * 70)
 
     queue_dir = Path(args.design_queue)
     project_path = Path(args.project_path)
@@ -2024,7 +2024,7 @@ def run_continuous_pipeline(args) -> None:
         launch_template=AUTOPILOT_LAUNCH_TEMPLATE,
     )
 
-    logger.log("Initializing SDK...")
+    logger.info("Initializing SDK...")
     sdk = HephaestusSDK(
         workflow_definitions=[autopilot_def],
         database_path=os.environ.get("DATABASE_PATH", str(HEPHAESTUS_DIR / "hephaestus.db")),
@@ -2042,14 +2042,14 @@ def run_continuous_pipeline(args) -> None:
         worktree_branch_prefix="autopilot-",
     )
 
-    logger.log("Starting services...")
+    logger.info("Starting services...")
     try:
         sdk.start(enable_tui=False, timeout=60)
     except Exception as e:
-        logger.log(f"Failed to start: {e}", "ERROR")
+        logger.error(f"Failed to start: {e}")
         sys.exit(1)
 
-    logger.log("Services started.")
+    logger.info("Services started.")
 
     # Register orchestrator as an agent
     try:
@@ -2068,34 +2068,34 @@ def run_continuous_pipeline(args) -> None:
             )
             session.add(orchestrator_agent)
             session.commit()
-            logger.log(f"Registered orchestrator agent: {orchestrator_agent.id[:8]}")
+            logger.info(f"Registered orchestrator agent: {orchestrator_agent.id[:8]}")
         except Exception as e:
-            logger.log(f"Warning: Could not register orchestrator agent: {e}", "WARN")
+            logger.warning(f"Warning: Could not register orchestrator agent: {e}")
         finally:
             session.close()
     except Exception as e:
-        logger.log(f"Warning: Could not register orchestrator agent: {e}", "WARN")
+        logger.warning(f"Warning: Could not register orchestrator agent: {e}")
 
     # Clean up stale active workflows from previous runs
     try:
         active_workflows = get_active_workflows()
         if active_workflows:
-            logger.log(f"Found {len(active_workflows)} stale active workflow(s) from previous runs — cleaning up...")
+            logger.info(f"Found {len(active_workflows)} stale active workflow(s) from previous runs — cleaning up...")
             for wf in active_workflows:
                 wf_id = wf.get('id', '')
                 try:
                     api_post(f"/api/workflow-executions/{wf_id}/complete")
-                    logger.log(f"  Cleaned up stale workflow {wf_id[:8]}")
+                    logger.info(f"  Cleaned up stale workflow {wf_id[:8]}")
                 except Exception as e:
-                    logger.log(f"  Failed to clean up {wf_id[:8]}: {e}", "WARN")
+                    logger.warning(f"  Failed to clean up {wf_id[:8]}: {e}")
     except Exception as e:
-        logger.log(f"Warning: Could not check for stale workflows: {e}", "WARN")
+        logger.warning(f"Warning: Could not check for stale workflows: {e}")
 
-    logger.log("")
-    logger.log(f"Watching design queue: {queue_dir}")
-    logger.log("Drop .md or .txt files into the queue directory to add designs.")
-    logger.log("Press Ctrl+C to stop.")
-    logger.log("")
+    logger.info("")
+    logger.info(f"Watching design queue: {queue_dir}")
+    logger.info("Drop .md or .txt files into the queue directory to add designs.")
+    logger.info("Press Ctrl+C to stop.")
+    logger.info("")
 
     last_queue_scan = 0
 
@@ -2111,7 +2111,7 @@ def run_continuous_pipeline(args) -> None:
                     active_workflows = get_active_workflows()
                     if active_workflows:
                         wf_ids = [wf.get('id', '')[:8] for wf in active_workflows]
-                        logger.log(f"Workflow still active ({', '.join(wf_ids)}) — waiting before picking next design")
+                        logger.info(f"Workflow still active ({', '.join(wf_ids)}) — waiting before picking next design")
                         state.queue_status = {"status": "waiting", "reason": "workflow_active", "active_workflows": wf_ids}
                         logger.save_state(state)
                         persistent_state.save(state, processed_hashes)
@@ -2122,12 +2122,12 @@ def run_continuous_pipeline(args) -> None:
                     if state.current_workflow_id:
                         is_complete, reason = is_design_fully_complete(state.current_workflow_id, logger)
                         if not is_complete:
-                            logger.log(f"Previous workflow not yet complete: {reason}")
+                            logger.info(f"Previous workflow not yet complete: {reason}")
                             
                             # Attempt recovery
                             success, recovery_msg = attempt_recovery(state.current_workflow_id, logger)
                             if success:
-                                logger.log(f"Recovery actions: {recovery_msg}")
+                                logger.info(f"Recovery actions: {recovery_msg}")
                             
                             state.queue_status = {"status": "waiting", "reason": reason, "recovery": recovery_msg if success else None}
                             logger.save_state(state)
@@ -2135,15 +2135,15 @@ def run_continuous_pipeline(args) -> None:
                             time.sleep(POLL_INTERVAL)
                             continue
                         else:
-                            logger.log(f"Previous workflow fully complete: {reason}")
+                            logger.info(f"Previous workflow fully complete: {reason}")
                             state.current_workflow_id = None
                 except Exception as e:
-                    logger.log(f"Warning: Could not check active workflows: {e}", "WARN")
+                    logger.warning(f"Warning: Could not check active workflows: {e}")
 
                 next_design = pick_next_design(queue_dir, processed_hashes, logger)
 
                 if next_design is None:
-                    logger.log(f"Queue empty. Scanning again in {DESIGN_QUEUE_SCAN_INTERVAL}s...")
+                    logger.info(f"Queue empty. Scanning again in {DESIGN_QUEUE_SCAN_INTERVAL}s...")
                     state.queue_status = {"status": "empty", "processed": len(processed_hashes)}
                     logger.save_state(state)
                     persistent_state.save(state, processed_hashes)
@@ -2198,32 +2198,32 @@ def run_continuous_pipeline(args) -> None:
                     "feature_folder": str(next_design.feature_folder),
                 })
 
-                logger.log("")
-                logger.log(f"Design '{next_design.name}' complete. Status: {status.value}")
-                logger.log(f"Total designs processed: {state.designs_processed}")
-                logger.log(f"  Succeeded: {state.designs_succeeded}")
-                logger.log(f"  Failed: {state.designs_failed}")
-                logger.log("")
+                logger.info("")
+                logger.info(f"Design '{next_design.name}' complete. Status: {status.value}")
+                logger.info(f"Total designs processed: {state.designs_processed}")
+                logger.info(f"  Succeeded: {state.designs_succeeded}")
+                logger.info(f"  Failed: {state.designs_failed}")
+                logger.info("")
 
             time.sleep(POLL_INTERVAL)
 
     except KeyboardInterrupt:
-        logger.log("")
-        logger.log("Pipeline interrupted by user")
+        logger.info("")
+        logger.info("Pipeline interrupted by user")
     finally:
         state.total_elapsed = int(time.time() - state.start_time)
         state.queue_status = {"status": "stopped"}
 
-        logger.log("")
-        logger.log("=" * 70)
-        logger.log("PIPELINE STOPPED")
-        logger.log("=" * 70)
-        logger.log(f"Total Time: {state.total_elapsed}s")
-        logger.log(f"Designs Processed: {state.designs_processed}")
-        logger.log(f"  Succeeded: {state.designs_succeeded}")
-        logger.log(f"  Failed: {state.designs_failed}")
-        logger.log(f"Logs: {log_dir}")
-        logger.log("=" * 70)
+        logger.info("")
+        logger.info("=" * 70)
+        logger.info("PIPELINE STOPPED")
+        logger.info("=" * 70)
+        logger.info(f"Total Time: {state.total_elapsed}s")
+        logger.info(f"Designs Processed: {state.designs_processed}")
+        logger.info(f"  Succeeded: {state.designs_succeeded}")
+        logger.info(f"  Failed: {state.designs_failed}")
+        logger.info(f"Logs: {log_dir}")
+        logger.info("=" * 70)
 
         logger.save_state(state)
         persistent_state.save(state, processed_hashes)
@@ -2241,11 +2241,11 @@ def run_continuous_pipeline(args) -> None:
                 wf_id = wf.get('id', '')
                 try:
                     api_post(f"/api/workflow-executions/{wf_id}/pause")
-                    logger.log(f"Paused workflow {wf_id[:8]}")
+                    logger.info(f"Paused workflow {wf_id[:8]}")
                 except Exception:
                     pass
         except Exception as e:
-            logger.log(f"Failed to pause workflows: {e}", "WARN")
+            logger.warning(f"Failed to pause workflows: {e}")
 
         if sdk is not None:
             sdk.shutdown(graceful=True, timeout=15)
