@@ -696,7 +696,7 @@ async def repair_design(request: dict):
     repair_id = str(uuid.uuid4())[:8]
 
     # Run repair in background
-    asyncio.create_task(_run_repair(repair_id, filename, project, repair_logger))
+    asyncio.create_task(_run_repair(repair_id, filename, project, logger))
 
     return {
         "repair_id": repair_id,
@@ -783,29 +783,26 @@ async def _run_repair(repair_id: str, filename: str, project: Path, logger):
                         "branches": branches[:10]
                     })
 
+                    # Use BranchManager for robust merging
+                    from src.core.branch_manager import BranchManager
+                    from src.core.database import DatabaseManager
+                    db_manager = DatabaseManager()
+                    branch_manager = BranchManager(db_manager)
+                    branch_manager.reload(str(project))
+
                     for branch in branches:
+                        # Extract agent_id from branch name (agent-<uuid>)
+                        agent_id = branch.replace('agent-', '')
                         try:
-                            subprocess.run(['git', 'checkout', branch], capture_output=True, timeout=10, cwd=str(project))
-                            merge_result = subprocess.run(
-                                ['git', 'checkout', 'main'],
-                                capture_output=True, text=True, timeout=10, cwd=str(project)
-                            )
-                            merge_result = subprocess.run(
-                                ['git', 'merge', branch, '--no-edit'],
-                                capture_output=True, text=True, timeout=30, cwd=str(project)
-                            )
-                            if merge_result.returncode == 0:
-                                subprocess.run(['git', 'branch', '-d', branch], capture_output=True, timeout=10, cwd=str(project))
-                                actions_taken.append(f"Merged and deleted branch {branch}")
+                            result = branch_manager.merge_to_main(agent_id)
+                            if result.get('status') in ('success', 'conflict_resolved'):
+                                branch_manager.cleanup_branch(agent_id)
+                                actions_taken.append(f"Merged and cleaned {branch}: {result.get('status')}")
                             else:
-                                subprocess.run(['git', 'checkout', '--theirs', '.'], capture_output=True, timeout=10, cwd=str(project))
-                                subprocess.run(['git', 'add', '.'], capture_output=True, timeout=10, cwd=str(project))
-                                subprocess.run(['git', 'commit', '-m', f'Merge {branch} with conflict resolution'], capture_output=True, timeout=10, cwd=str(project))
-                                subprocess.run(['git', 'branch', '-d', branch], capture_output=True, timeout=10, cwd=str(project))
-                                actions_taken.append(f"Merged {branch} (conflict resolved)")
+                                findings.append({"type": "merge_warning", "message": f"Merge returned: {result.get('status')} for {branch}"})
                         except Exception as e:
+                            logger.error(f"Failed to merge {branch}: {e}")
                             findings.append({"type": "merge_error", "message": f"Failed to merge {branch}: {e}"})
-                            subprocess.run(['git', 'checkout', 'main'], capture_output=True, timeout=10, cwd=str(project))
         except Exception as e:
             findings.append({"type": "error", "message": f"Branch check failed: {e}"})
 
