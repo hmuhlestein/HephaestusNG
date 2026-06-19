@@ -101,7 +101,7 @@ def run_command(args):
         elapsed = time.time() - start
         with open(log_path, "w") as f:
             f.write(f"$ {cmd_str}\n")
-            f.write(f"exit code: TIMEOUT\n")
+            f.write("exit code: TIMEOUT\n")
             f.write(f"elapsed: {elapsed:.2f}s\n")
             f.write(f"killed after {args.timeout}s timeout\n")
         print(f"Timeout: killed after {args.timeout}s — log: {log_path}")
@@ -128,11 +128,10 @@ def ping(args):
 
 
 def exec_tool(args):
-    import json
     try:
         tool_args = json.loads(args.tool_args)
     except json.JSONDecodeError:
-        print(f"Error: --args must be valid JSON", file=sys.stderr)
+        print("Error: --args must be valid JSON", file=sys.stderr)
         return 1
 
     data = api_post(args, "/tools/execute", {
@@ -165,7 +164,6 @@ def list_endpoints(args):
 
 
 def raw_request(args):
-    import json
 
     # Validate path doesn't traverse outside API
     if ".." in args.path:

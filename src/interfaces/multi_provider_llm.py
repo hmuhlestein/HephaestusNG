@@ -2,15 +2,11 @@
 
 from typing import Dict, Any, List, Optional
 import logging
-import asyncio
 
 from src.interfaces.llm_interface import LLMProviderInterface
 from src.interfaces.langchain_llm_client import (
     LangChainLLMClient,
-    ComponentType,
-    LLMConfig as LangChainConfig,
-    ModelAssignment,
-    ProviderConfig
+    ComponentType
 )
 from src.core.llm_config import get_config
 

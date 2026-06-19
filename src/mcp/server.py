@@ -9,14 +9,13 @@ import time
 from datetime import datetime, timedelta
 from fastapi import FastAPI, HTTPException, Header, WebSocket, WebSocketDisconnect, Body, Request, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, HTMLResponse, JSONResponse
+from fastapi.responses import StreamingResponse, HTMLResponse
 from pydantic import BaseModel, Field
 import asyncio
 
 from src.core.simple_config import get_config
 from src.core.database import DatabaseManager, Task, Agent, Memory, Phase, ValidationReview, AgentResult, WorkflowResult, Workflow, get_db
 from src.core.branch_manager import BranchManager
-from src.interfaces import get_cli_agent
 from src.memory.vector_store import VectorStoreManager
 from src.agents.manager import AgentManager
 from src.memory.rag import RAGSystem
@@ -29,7 +28,6 @@ from src.services.embedding_service import EmbeddingService
 from src.services.task_similarity_service import TaskSimilarityService
 from src.services.queue_service import QueueService
 from src.services.ticket_service import TicketService
-from src.services.ticket_history_service import TicketHistoryService
 from src.services.ticket_search_service import TicketSearchService
 
 logger = logging.getLogger(__name__)
@@ -968,7 +966,7 @@ async def process_queue():
 
             if next_task.phase_id and server_state.phase_manager:
                 # BUG FIX: Convert phase order number to UUID (same logic as process_task_async)
-                logger.info(f"[QUEUE_ENRICHMENT] Converting phase_id to UUID if needed")
+                logger.info("[QUEUE_ENRICHMENT] Converting phase_id to UUID if needed")
                 logger.info(f"[QUEUE_ENRICHMENT]   - Original phase_id: {next_task.phase_id}")
                 logger.info(f"[QUEUE_ENRICHMENT]   - Is digit check: {str(next_task.phase_id).isdigit()}")
 
@@ -1000,15 +998,15 @@ async def process_queue():
 
             # Use the task's workflow_id if not obtained from phase context
             if not workflow_id:
-                logger.info(f"[QUEUE_ENRICHMENT] No workflow_id from phase context - using task's workflow_id")
+                logger.info("[QUEUE_ENRICHMENT] No workflow_id from phase context - using task's workflow_id")
                 workflow_id = next_task.workflow_id
                 if workflow_id:
                     logger.info(f"[QUEUE_ENRICHMENT] ✓ Got workflow_id from task: {workflow_id}")
                 else:
-                    logger.warning(f"[QUEUE_ENRICHMENT] ✗ Task has no workflow_id set")
+                    logger.warning("[QUEUE_ENRICHMENT] ✗ Task has no workflow_id set")
 
             # Retrieve RAG memories for enrichment
-            logger.info(f"[QUEUE_ENRICHMENT] Retrieving RAG memories for enrichment")
+            logger.info("[QUEUE_ENRICHMENT] Retrieving RAG memories for enrichment")
             context_memories_for_enrichment = await server_state.rag_system.retrieve_for_task(
                 task_description=next_task.raw_description,
                 requesting_agent_id="system",
@@ -1016,7 +1014,7 @@ async def process_queue():
             logger.info(f"[QUEUE_ENRICHMENT] ✓ Retrieved {len(context_memories_for_enrichment)} memories from RAG")
 
             # Get project context for enrichment
-            logger.info(f"[QUEUE_ENRICHMENT] Getting project context")
+            logger.info("[QUEUE_ENRICHMENT] Getting project context")
             project_context_for_enrichment = await server_state.agent_manager.get_project_context()
             logger.info(f"[QUEUE_ENRICHMENT] ✓ Got project context (length={len(project_context_for_enrichment)})")
 
@@ -1025,7 +1023,7 @@ async def process_queue():
                 logger.info(f"[QUEUE_ENRICHMENT] ✓ Added phase context to project context (total length={len(project_context_for_enrichment)})")
 
             # Enrich task using LLM
-            logger.info(f"[QUEUE_ENRICHMENT] Calling LLM for task enrichment")
+            logger.info("[QUEUE_ENRICHMENT] Calling LLM for task enrichment")
             logger.info(f"[QUEUE_ENRICHMENT]   - task_description: {next_task.raw_description[:100]}")
             logger.info(f"[QUEUE_ENRICHMENT]   - done_definition: {next_task.done_definition}")
             logger.info(f"[QUEUE_ENRICHMENT]   - context memories: {len(context_memories_for_enrichment)} items")
@@ -1038,33 +1036,33 @@ async def process_queue():
                 context=context_strings,
                 phase_context=phase_context_str if phase_context_str else None,
             )
-            logger.info(f"[QUEUE_ENRICHMENT] ✓ LLM enrichment complete!")
+            logger.info("[QUEUE_ENRICHMENT] ✓ LLM enrichment complete!")
             logger.info(f"[QUEUE_ENRICHMENT] Enriched description: {enriched_task['enriched_description'][:200]}")
             logger.info(f"[QUEUE_ENRICHMENT] Estimated complexity: {enriched_task.get('estimated_complexity', 'N/A')}")
 
             # Update task with enriched data
-            logger.info(f"[QUEUE_ENRICHMENT] Updating task in database")
+            logger.info("[QUEUE_ENRICHMENT] Updating task in database")
             session = server_state.db_manager.get_session()
             try:
                 task = session.query(Task).filter_by(id=next_task.id).first()
                 if task:
                     task.enriched_description = enriched_task["enriched_description"]
                     task.estimated_complexity = enriched_task.get("estimated_complexity", 5)
-                    logger.info(f"[QUEUE_ENRICHMENT] ✓ Set enriched_description and estimated_complexity")
+                    logger.info("[QUEUE_ENRICHMENT] ✓ Set enriched_description and estimated_complexity")
 
                     # BUG FIX: Update phase_id to UUID if we converted it from order
                     if phase_id_uuid and phase_id_uuid != next_task.phase_id:
                         logger.info(f"[QUEUE_ENRICHMENT] Updating phase_id from order {next_task.phase_id} to UUID {phase_id_uuid}")
                         task.phase_id = phase_id_uuid
                         next_task.phase_id = phase_id_uuid  # Update in-memory object too
-                        logger.info(f"[QUEUE_ENRICHMENT] ✓ Updated phase_id to UUID in database")
+                        logger.info("[QUEUE_ENRICHMENT] ✓ Updated phase_id to UUID in database")
 
                     # BUG FIX: Always set workflow_id (to match process_task_async behavior)
                     if workflow_id:
                         task.workflow_id = workflow_id
                         logger.info(f"[QUEUE_ENRICHMENT] ✓ Set workflow_id: {workflow_id}")
                     else:
-                        logger.warning(f"[QUEUE_ENRICHMENT] ✗ No workflow_id to set")
+                        logger.warning("[QUEUE_ENRICHMENT] ✗ No workflow_id to set")
 
                     # Check if phase has validation enabled
                     if phase_id_uuid:
@@ -1073,19 +1071,19 @@ async def process_queue():
                         if phase and phase.validation:
                             if phase.validation.get("enabled", True):
                                 task.validation_enabled = True
-                                logger.info(f"[QUEUE_ENRICHMENT] ✓ Inherited validation from phase (enabled=True)")
+                                logger.info("[QUEUE_ENRICHMENT] ✓ Inherited validation from phase (enabled=True)")
                             else:
-                                logger.info(f"[QUEUE_ENRICHMENT] Phase validation explicitly disabled")
+                                logger.info("[QUEUE_ENRICHMENT] Phase validation explicitly disabled")
                         else:
-                            logger.info(f"[QUEUE_ENRICHMENT] No validation config in phase")
+                            logger.info("[QUEUE_ENRICHMENT] No validation config in phase")
 
                     session.commit()
-                    logger.info(f"[QUEUE_ENRICHMENT] ✓ Database commit successful")
+                    logger.info("[QUEUE_ENRICHMENT] ✓ Database commit successful")
 
                     # Store enriched_task dict for passing to create_agent_for_task
                     next_task.enriched_description = enriched_task["enriched_description"]
                     next_task._enriched_task_dict = enriched_task  # Store full dict
-                    logger.info(f"[QUEUE_ENRICHMENT] ✓ Stored full enriched_task dict for agent creation")
+                    logger.info("[QUEUE_ENRICHMENT] ✓ Stored full enriched_task dict for agent creation")
                     logger.info(f"[QUEUE_ENRICHMENT] ========== ENRICHMENT PIPELINE COMPLETE FOR TASK {next_task.id} ==========")
                 else:
                     logger.error(f"[QUEUE_ENRICHMENT] ✗ Task {next_task.id} not found in database!")
@@ -1111,7 +1109,7 @@ async def process_queue():
         # BUG FIX: Convert phase order to UUID (same as enrichment above)
         phase_id_for_agent = None
         if next_task.phase_id and server_state.phase_manager:
-            logger.info(f"[QUEUE_AGENT_CREATE] Converting phase_id for agent creation")
+            logger.info("[QUEUE_AGENT_CREATE] Converting phase_id for agent creation")
             logger.info(f"[QUEUE_AGENT_CREATE]   - phase_id from task: {next_task.phase_id}")
 
             if str(next_task.phase_id).isdigit():
@@ -1135,7 +1133,7 @@ async def process_queue():
                 logger.warning(f"[QUEUE_AGENT_CREATE] ✗ No phase context for UUID: {phase_id_for_agent}")
 
         # Retrieve relevant memories (using enriched description if available)
-        logger.info(f"[QUEUE_AGENT_CREATE] Retrieving RAG memories")
+        logger.info("[QUEUE_AGENT_CREATE] Retrieving RAG memories")
         context_memories = await server_state.rag_system.retrieve_for_task(
             task_description=task_description_for_rag,
             requesting_agent_id="system",
@@ -1145,7 +1143,7 @@ async def process_queue():
         # Determine working directory
         working_directory = None
         if phase_id_for_agent:
-            logger.info(f"[QUEUE_AGENT_CREATE] Querying database for phase working directory")
+            logger.info("[QUEUE_AGENT_CREATE] Querying database for phase working directory")
             session = server_state.db_manager.get_session()
             try:
                 from src.core.database import Phase
@@ -1170,12 +1168,12 @@ async def process_queue():
 
         # BUG FIX: Refresh task from database to get updated enriched_description
         # The next_task object is stale if enrichment just ran
-        logger.info(f"[QUEUE_AGENT_CREATE] Refreshing task from database")
+        logger.info("[QUEUE_AGENT_CREATE] Refreshing task from database")
         session = server_state.db_manager.get_session()
         try:
             refreshed_task = session.query(Task).filter_by(id=next_task.id).first()
             if refreshed_task:
-                logger.info(f"[QUEUE_AGENT_CREATE] ✓ Refreshed task from DB")
+                logger.info("[QUEUE_AGENT_CREATE] ✓ Refreshed task from DB")
                 logger.info(f"[QUEUE_AGENT_CREATE]   - enriched_description: {refreshed_task.enriched_description[:100] if refreshed_task.enriched_description else 'NULL'}")
                 logger.info(f"[QUEUE_AGENT_CREATE]   - phase_id: {refreshed_task.phase_id}")
 
@@ -1194,25 +1192,25 @@ async def process_queue():
                 logger.info(f"[QUEUE_AGENT_CREATE] ✓ Created temp task object for agent (phase_id={temp_task.phase_id})")
             else:
                 # Fallback to next_task if refresh failed
-                logger.warning(f"[QUEUE_AGENT_CREATE] ✗ Could not refresh task from DB - using stale task")
+                logger.warning("[QUEUE_AGENT_CREATE] ✗ Could not refresh task from DB - using stale task")
                 task_for_agent = next_task
         finally:
             session.close()
 
         # BUG FIX: Prepare enriched_data dict to match process_task_async exactly
         # If we just ran enrichment, use the full dict; otherwise create minimal dict
-        logger.info(f"[QUEUE_AGENT_CREATE] Preparing enriched_data for agent")
+        logger.info("[QUEUE_AGENT_CREATE] Preparing enriched_data for agent")
         if hasattr(next_task, '_enriched_task_dict'):
             # Enrichment just ran - use full dict from LLM
             enriched_data_for_agent = next_task._enriched_task_dict
-            logger.info(f"[QUEUE_AGENT_CREATE] ✓ Using full enriched_task dict from LLM")
+            logger.info("[QUEUE_AGENT_CREATE] ✓ Using full enriched_task dict from LLM")
         else:
             # Task was already enriched - create minimal dict with enriched_description
             enriched_data_for_agent = {
                 "enriched_description": task_for_agent.enriched_description,
                 "estimated_complexity": task_for_agent.estimated_complexity or 5,
             }
-            logger.info(f"[QUEUE_AGENT_CREATE] ✓ Created minimal enriched_data dict")
+            logger.info("[QUEUE_AGENT_CREATE] ✓ Created minimal enriched_data dict")
 
         logger.info(f"[QUEUE_AGENT_CREATE] Creating agent for task {next_task.id}")
         logger.info(f"[QUEUE_AGENT_CREATE]   - task enriched_description: {task_for_agent.enriched_description[:100] if task_for_agent.enriched_description else 'NULL'}")
@@ -1241,7 +1239,7 @@ async def process_queue():
             finally:
                 phase_session.close()
         else:
-            logger.info(f"[QUEUE_AGENT_CREATE] No phase_id set on task, using global CLI config")
+            logger.info("[QUEUE_AGENT_CREATE] No phase_id set on task, using global CLI config")
 
         # Create agent for the task (using refreshed task data and full enriched_data)
         agent = await server_state.agent_manager.create_agent_for_task(
@@ -1492,7 +1490,7 @@ async def create_task(
                         phase_id = request.phase_id
                     else:
                         # No phase specified, get current phase
-                        logger.info(f"No explicit phase_id in request, calling get_phase_for_task")
+                        logger.info("No explicit phase_id in request, calling get_phase_for_task")
                         phase_id = server_state.phase_manager.get_phase_for_task(
                             phase_id=None,
                             order=request.phase_order,
@@ -1507,19 +1505,19 @@ async def create_task(
                         phase_context = server_state.phase_manager.get_phase_context(phase_id)
                         logger.debug(f"get_phase_context returned: {phase_context}")
                         if phase_context:
-                            logger.info(f"Phase context found, generating prompt context")
+                            logger.info("Phase context found, generating prompt context")
                             phase_context_str = phase_context.to_prompt_context()
                             workflow_id = phase_context.workflow_id
                             logger.info(f"Generated context length: {len(phase_context_str)}, workflow_id: {workflow_id}")
                         else:
                             logger.warning(f"No phase context returned for phase_id: {phase_id}")
                     else:
-                        logger.warning(f"No phase_id determined for task")
+                        logger.warning("No phase_id determined for task")
                 else:
-                    logger.warning(f"No active workflow in phase_manager")
+                    logger.warning("No active workflow in phase_manager")
 
                 logger.info(f"Final values: phase_id={phase_id}, workflow_id={workflow_id}, context_length={len(phase_context_str)}")
-                logger.info(f"=== END TASK CREATION PHASE DEBUG ===")
+                logger.info("=== END TASK CREATION PHASE DEBUG ===")
 
                 # 2. Determine working directory (priority: request > phase > server)
                 working_directory = request.cwd  # From request
@@ -2779,7 +2777,7 @@ async def create_ticket_endpoint(
     # Note: request.agent_id is the agent_id from the payload, agent_id is from X-Agent-ID header
     created_by_agent_id = request.agent_id or agent_id
     
-    logger.info(f"[TICKET_CREATE] ========== START ==========")
+    logger.info("[TICKET_CREATE] ========== START ==========")
     logger.info(f"[TICKET_CREATE] Agent: {created_by_agent_id}")
     logger.info(f"[TICKET_CREATE] Title: {request.title}")
     logger.info(f"[TICKET_CREATE] Type: {request.ticket_type}, Priority: {request.priority}")
@@ -2811,12 +2809,12 @@ async def create_ticket_endpoint(
             phase_id=request.phase_id,
         )
 
-        logger.info(f"[TICKET_CREATE] ✅ TicketService.create_ticket returned successfully")
+        logger.info("[TICKET_CREATE] ✅ TicketService.create_ticket returned successfully")
         logger.info(f"[TICKET_CREATE] Result: {result}")
         logger.info(f"[TICKET_CREATE] Ticket ID: {result.get('ticket_id')}")
 
         # Broadcast update
-        logger.info(f"[TICKET_CREATE] Broadcasting update...")
+        logger.info("[TICKET_CREATE] Broadcasting update...")
         await server_state.broadcast_update({
             "type": "ticket_created",
             "ticket_id": result["ticket_id"],
@@ -2824,12 +2822,12 @@ async def create_ticket_endpoint(
             "agent_id": agent_id,
             "title": request.title,
         })
-        logger.info(f"[TICKET_CREATE] Broadcast complete")
+        logger.info("[TICKET_CREATE] Broadcast complete")
 
-        logger.info(f"[TICKET_CREATE] Creating response object...")
+        logger.info("[TICKET_CREATE] Creating response object...")
         response = CreateTicketResponse(**result)
         logger.info(f"[TICKET_CREATE] Response created: {response}")
-        logger.info(f"[TICKET_CREATE] ========== SUCCESS ==========")
+        logger.info("[TICKET_CREATE] ========== SUCCESS ==========")
         return response
 
     except HTTPException:
@@ -2837,11 +2835,11 @@ async def create_ticket_endpoint(
         raise
     except ValueError as e:
         logger.error(f"[TICKET_CREATE] ❌ ValueError: {e}")
-        logger.error(f"[TICKET_CREATE] ========== FAILED (ValueError) ==========")
+        logger.error("[TICKET_CREATE] ========== FAILED (ValueError) ==========")
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"[TICKET_CREATE] ❌ Unexpected error: {type(e).__name__}: {e}")
-        logger.error(f"[TICKET_CREATE] ========== FAILED (Exception) ==========")
+        logger.error("[TICKET_CREATE] ========== FAILED (Exception) ==========")
         import traceback
         logger.error(f"[TICKET_CREATE] Traceback: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -3343,7 +3341,7 @@ async def request_ticket_clarification_endpoint(
     3. Returns detailed markdown guidance
     4. Stores clarification as ticket comment for audit trail
     """
-    logger.info(f"[CLARIFICATION] ========== START ==========")
+    logger.info("[CLARIFICATION] ========== START ==========")
     logger.info(f"[CLARIFICATION] Agent {agent_id[:8]} requesting clarification for ticket {request.ticket_id}")
     logger.info(f"[CLARIFICATION] Conflict: {request.conflict_description[:100]}...")
 
@@ -3398,7 +3396,7 @@ async def request_ticket_clarification_endpoint(
             }
 
         # 5. Call LLM for clarification
-        logger.info(f"[CLARIFICATION] Calling LLM arbitrator with full context...")
+        logger.info("[CLARIFICATION] Calling LLM arbitrator with full context...")
         logger.info(f"[CLARIFICATION] Potential solutions provided: {len(request.potential_solutions)}")
 
         clarification_markdown = await server_state.llm_provider.resolve_ticket_clarification(
@@ -3438,7 +3436,7 @@ async def request_ticket_clarification_endpoint(
         )
 
         logger.info(f"[CLARIFICATION] ✅ Stored as comment {comment_result['comment_id']}")
-        logger.info(f"[CLARIFICATION] ========== SUCCESS ==========")
+        logger.info("[CLARIFICATION] ========== SUCCESS ==========")
 
         # Broadcast update
         await server_state.broadcast_update({
@@ -3460,7 +3458,7 @@ async def request_ticket_clarification_endpoint(
         raise
     except Exception as e:
         logger.error(f"[CLARIFICATION] ❌ Error: {e}", exc_info=True)
-        logger.error(f"[CLARIFICATION] ========== FAILED ==========")
+        logger.error("[CLARIFICATION] ========== FAILED ==========")
         raise HTTPException(status_code=500, detail=f"Failed to generate clarification: {str(e)}")
 
 

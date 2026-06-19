@@ -1,11 +1,9 @@
 """heph project — Unified project management."""
 
-import os
-import sys
 import uuid
 from pathlib import Path
 
-from src.cli.utils import api_get, api_post, api_delete, output, require_backend, table, status_icon
+from src.cli.utils import api_get, api_post, api_delete
 
 HEPHAESTUS_DIR = Path(__file__).parent.parent.parent.parent
 
@@ -98,7 +96,7 @@ def create_project(args):
     print(f"  Path: {result['base_dir']}")
     print(f"  ID:   {result['id']}")
     if result.get("is_active"):
-        print(f"  Status: active")
+        print("  Status: active")
     return 0
 
 
@@ -162,7 +160,7 @@ def _create_offline(name: str, path: str, is_default: bool):
         print(f"  Path: {proj.base_dir}")
         print(f"  ID:   {proj.id}")
         if proj.is_active:
-            print(f"  Status: active")
+            print("  Status: active")
         return 0
 
 
@@ -207,7 +205,7 @@ def delete_project(args):
 
     if not args.force:
         # Get project info first
-        info = api_get(args, f"/api/projects")
+        info = api_get(args, "/api/projects")
         proj = next((p for p in (info or []) if p["id"] == project_id), None)
         name = proj["name"] if proj else project_id
         confirm = input(f"Delete project '{name}'? [y/N] ")

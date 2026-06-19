@@ -32,7 +32,6 @@ Usage::
 
 from __future__ import annotations
 
-import json
 import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set
@@ -487,7 +486,7 @@ def assemble_phase_prompt(
 
     This is the primary entry point for the preview endpoint.
     """
-    from src.core.database import DatabaseManager, Phase, TaskPromptOverride
+    from src.core.database import DatabaseManager, Phase
 
     if db_manager is None:
         db_manager = DatabaseManager("hephaestus.db")

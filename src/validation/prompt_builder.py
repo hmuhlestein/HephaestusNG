@@ -1,8 +1,6 @@
 """Build prompts for validator agents."""
 
-import json
-from typing import Dict, Any, Optional, List
-from datetime import datetime
+from typing import Dict, Any, Optional
 
 
 class ValidationPromptBuilder:
@@ -186,7 +184,7 @@ After checking all criteria, call mcp__hephaestus__give_validation_review with:
                 formatted.append(f"   Threshold: {threshold}")
 
             if criterion.get("evidence_required"):
-                formatted.append(f"   Evidence Required: Yes")
+                formatted.append("   Evidence Required: Yes")
 
             formatted.append("")  # Empty line between criteria
 

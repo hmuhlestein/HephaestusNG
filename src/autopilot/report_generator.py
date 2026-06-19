@@ -1,7 +1,6 @@
 """HTML report generator for autopilot pipeline features."""
 import json
 from pathlib import Path
-from datetime import datetime
 
 
 def generate_feature_report(docs_path: str, metrics: dict = None) -> str:

@@ -1,6 +1,6 @@
 """heph agent — Agent management."""
 
-from src.cli.utils import api_get, api_post, output, require_backend, table, truncate
+from src.cli.utils import api_get, api_post, output, require_backend, table
 
 
 def register(subparsers):

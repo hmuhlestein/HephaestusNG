@@ -1,7 +1,6 @@
 """User management database models for Hephaestus."""
 
 from datetime import datetime
-from typing import Optional, Dict, Any
 from sqlalchemy import (
     Column,
     String,

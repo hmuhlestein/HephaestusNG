@@ -6,7 +6,7 @@ import time
 import subprocess
 from pathlib import Path
 
-from src.cli.utils import output, check_backend, save_pid, read_pid, is_process_running
+from src.cli.utils import check_backend, save_pid, read_pid, is_process_running
 
 HEPHAESTUS_DIR = Path(__file__).parent.parent.parent.parent
 
@@ -248,6 +248,6 @@ def _print_results(results, port):
             icon = "FAIL"
         print(f"  {service:12s} {icon:4s} {status}")
     print()
-    print(f"  Frontend:  http://localhost:5173")
+    print("  Frontend:  http://localhost:5173")
     print(f"  Backend:   http://127.0.0.1:{port}")
     print(f"  Health:    http://127.0.0.1:{port}/health")

@@ -4,9 +4,8 @@ import os
 import uuid
 from datetime import datetime
 from typing import List, Optional, Dict, Any
-from pathlib import Path
 
-from src.core.database import get_db, AgentResult, Task, Agent
+from src.core.database import get_db, AgentResult, Task
 from src.services.validation_helpers import (
     validate_file_path,
     validate_file_size,

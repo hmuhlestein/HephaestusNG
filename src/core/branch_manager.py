@@ -5,7 +5,6 @@ instead of isolated worktrees. Simpler, fewer edge cases, and compatible
 with tools like opencode that need the full project directory.
 """
 
-import os
 import uuid
 import logging
 import fcntl
@@ -477,7 +476,7 @@ class BranchManager:
                 "total_conflicts": len(conflicts_resolved),
                 "conflicts_resolved": conflicts_resolved,
             }
-        except Exception as e:
+        except Exception:
             # Ensure we're back on main even on failure
             try:
                 self.main_repo.heads[self.config.base_branch].checkout()
@@ -788,7 +787,7 @@ class BranchManager:
                             m=f"[Cleanup] Merged untracked {branch_name}"
                         )
                         merged.append(branch_name)
-                    except GitCommandError as e:
+                    except GitCommandError:
                         # Can't merge — abort and force delete
                         try:
                             self.main_repo.git.merge("--abort")

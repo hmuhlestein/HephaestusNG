@@ -1,8 +1,7 @@
 """Validation helpers for workflow result content."""
 
 import re
-from typing import Dict, Any, List, Optional
-from pathlib import Path
+from typing import Dict, Any, List
 
 
 class ValidationResult:

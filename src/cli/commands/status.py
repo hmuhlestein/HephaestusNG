@@ -2,7 +2,7 @@
 
 import time
 import httpx
-from src.cli.utils import api_get, output, check_backend, table, status_icon, read_pid, is_process_running
+from src.cli.utils import api_get, output, table, status_icon, read_pid, is_process_running
 
 
 def register(subparsers):
@@ -121,7 +121,7 @@ def run(args):
 def _print_unreachable(data):
     fe_status = data.get("frontend", "not running")
     fe_icon = "OK" if fe_status == "running" else "FAIL"
-    print(f"Backend:   FAIL unreachable")
+    print("Backend:   FAIL unreachable")
     print(f"Frontend:  {fe_icon} {fe_status}")
     print()
     print("Start services with: heph start")

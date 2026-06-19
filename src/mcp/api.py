@@ -19,10 +19,8 @@ from src.core.database import (
     Phase,
     AgentResult,
     WorkflowResult,
-    ValidationReview,
     PhasePromptVersion,
     TaskPromptOverride,
-    PhasePromptTemplate,
 )
 from src.agents.manager import AgentManager
 from src.phases import PhaseManager
@@ -71,7 +69,6 @@ class FrontendAPI:
         Returns:
             Deduplicated list of results
         """
-        from datetime import timedelta
 
         # Group results by agent_id and workflow_id
         grouped = {}

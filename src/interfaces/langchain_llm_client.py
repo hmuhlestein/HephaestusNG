@@ -2,22 +2,18 @@
 
 import logging
 import os
-from typing import Dict, Any, List, Optional, Literal
+from typing import Dict, Any, List, Optional
 from enum import Enum
 import json
 import asyncio
-from abc import ABC, abstractmethod
 
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings, AzureChatOpenAI, AzureOpenAIEmbeddings
 from langchain_groq import ChatGroq
 from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.output_parsers import JsonOutputParser
-from langchain_core.documents import Document
-from pydantic import BaseModel, Field
-from typing import Optional as Opt
+from pydantic import BaseModel
 
-from src.monitoring.models import GuardianTrajectoryAnalysis, ConductorSystemAnalysis
 
 logger = logging.getLogger(__name__)
 
@@ -77,7 +73,6 @@ class LangChainLLMClient:
 
     def _initialize_models(self):
         """Initialize all configured models."""
-        import os
 
         # Initialize embedding model based on configured provider
         embedding_provider = getattr(self.config, 'embedding_provider', 'openai')
@@ -110,7 +105,7 @@ class LangChainLLMClient:
                     )
                     logger.info(f"  ✓ Embedding model initialized: Azure OpenAI {self.config.embedding_model}")
                 else:
-                    logger.warning(f"Azure OpenAI embedding configuration incomplete (key or endpoint missing)")
+                    logger.warning("Azure OpenAI embedding configuration incomplete (key or endpoint missing)")
 
         elif embedding_provider == "google_ai":
             google_provider = self.config.providers.get("google_ai")
@@ -123,7 +118,7 @@ class LangChainLLMClient:
                     )
                     logger.info(f"  ✓ Embedding model initialized: Google AI {self.config.embedding_model}")
                 else:
-                    logger.warning(f"Google AI embedding configuration incomplete (key missing)")
+                    logger.warning("Google AI embedding configuration incomplete (key missing)")
 
         if not self._embedding_model:
             logger.warning(f"Embedding model not initialized for provider: {embedding_provider}")
@@ -151,7 +146,6 @@ class LangChainLLMClient:
         Returns:
             Configured model instance or None if creation fails
         """
-        import os
 
         provider = assignment.provider
         provider_config = self.config.providers.get(provider)
@@ -232,7 +226,7 @@ class LangChainLLMClient:
                 # Requires azure_endpoint, api_version, and azure_deployment parameters
                 azure_endpoint = provider_config.base_url
                 if not azure_endpoint:
-                    logger.error(f"Azure OpenAI requires base_url (azure_endpoint) in configuration")
+                    logger.error("Azure OpenAI requires base_url (azure_endpoint) in configuration")
                     return None
 
                 api_version = provider_config.api_version or "2024-02-01"

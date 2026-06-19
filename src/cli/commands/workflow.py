@@ -1,6 +1,6 @@
 """heph workflow — Workflow management."""
 
-from src.cli.utils import api_get, api_post, output, require_backend, table, truncate, time_ago
+from src.cli.utils import api_get, api_post, output, require_backend, table, time_ago
 
 
 def register(subparsers):
@@ -134,7 +134,7 @@ def stop_workflow(args):
                     if not agent_id:
                         continue
                     try:
-                        result = api_post(args, f"/api/terminate_agent", {"agent_id": agent_id}, timeout=10)
+                        result = api_post(args, "/api/terminate_agent", {"agent_id": agent_id}, timeout=10)
                         if result is None:
                             print(f"  {agent_id[:8]}... connection error")
                         else:
@@ -177,7 +177,7 @@ def stop_workflow(args):
         for agent in wf_agents:
             agent_id = agent.get("id", "")
             try:
-                api_post(args, f"/api/terminate_agent", {"agent_id": agent_id}, timeout=10)
+                api_post(args, "/api/terminate_agent", {"agent_id": agent_id}, timeout=10)
             except Exception:
                 pass
     except Exception:

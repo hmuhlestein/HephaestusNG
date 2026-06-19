@@ -15,7 +15,7 @@ from src.phases.models import WorkflowDefinition, PhaseDefinition, PhaseContext,
 from src.phases.phase_loader import PhaseLoader
 from src.core.simple_config import get_config
 from src.workflow_engine.orchestrator import (
-    WorkflowOrchestrator, OrchestratorConfig, OrchestrationAction, EvaluationResult
+    WorkflowOrchestrator, OrchestratorConfig, OrchestrationAction
 )
 
 logger = logging.getLogger(__name__)
@@ -145,7 +145,7 @@ class PhaseManager:
 
             except Exception as e:
                 logger.error(f"[DIAGNOSTIC] Failed to load workflow definition from {workflow.phases_folder_path}: {e}")
-                logger.warning(f"[DIAGNOSTIC] Will set workflow_id anyway to allow diagnostic agent to work")
+                logger.warning("[DIAGNOSTIC] Will set workflow_id anyway to allow diagnostic agent to work")
                 # Even if we can't load the full definition, set the workflow_id
                 # so diagnostic checks can still run
                 self.workflow_id = workflow.id
@@ -190,7 +190,7 @@ class PhaseManager:
                 session.commit()
 
                 workflow_id = existing_workflow.id
-                logger.info(f"✅ Updated workflow with new phases folder path")
+                logger.info("✅ Updated workflow with new phases folder path")
             else:
                 # Create new workflow record
                 workflow_id = str(uuid.uuid4())

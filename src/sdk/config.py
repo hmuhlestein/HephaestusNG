@@ -2,7 +2,7 @@
 
 import os
 from dataclasses import dataclass, field
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any
 
 
 @dataclass
@@ -243,7 +243,7 @@ class HephaestusConfig:
 
         # Check thresholds are valid
         if not (0.0 <= self.similarity_threshold <= 1.0):
-            raise ValueError(f"similarity_threshold must be between 0.0 and 1.0")
+            raise ValueError("similarity_threshold must be between 0.0 and 1.0")
 
         if not (0.0 <= self.related_threshold <= 1.0):
-            raise ValueError(f"related_threshold must be between 0.0 and 1.0")
+            raise ValueError("related_threshold must be between 0.0 and 1.0")

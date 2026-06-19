@@ -1,7 +1,6 @@
 """Process lifecycle management for Hephaestus services."""
 
 import os
-import signal
 import subprocess
 import sys
 import time

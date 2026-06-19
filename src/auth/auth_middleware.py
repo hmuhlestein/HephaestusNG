@@ -4,11 +4,10 @@ from typing import Optional, List
 from datetime import datetime
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
-from sqlalchemy.orm import Session
 import logging
 
-from src.core.database import get_db, DatabaseManager
-from src.core.user_models import User, Role, Permission, UserRole, RolePermission, AuthToken
+from src.core.database import DatabaseManager
+from src.core.user_models import User, Role, Permission, UserRole, RolePermission
 from . import verify_access_token
 
 logger = logging.getLogger(__name__)
