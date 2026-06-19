@@ -122,12 +122,35 @@ def stop_workflow(args):
         return 1
 
     if args.all:
+        # First: terminate all active agents
+        try:
+            agents_data = api_get(args, "/api/agents")
+            agents = agents_data if isinstance(agents_data, list) else agents_data.get("agents", []) if agents_data else []
+            active_agents = [a for a in agents if isinstance(a, dict) and a.get("status") in ("working", "starting", "idle")]
+            if active_agents:
+                print(f"Terminating {len(active_agents)} active agent(s)...")
+                for agent in active_agents:
+                    agent_id = agent.get("id", "")
+                    if not agent_id:
+                        continue
+                    try:
+                        result = api_post(args, f"/api/terminate_agent", {"agent_id": agent_id}, timeout=10)
+                        if result is None:
+                            print(f"  {agent_id[:8]}... connection error")
+                        else:
+                            print(f"  {agent_id[:8]}... terminated")
+                    except Exception as e:
+                        print(f"  {agent_id[:8]}... error: {e}")
+        except Exception as e:
+            print(f"Warning: Could not check agents: {e}")
+
+        # Second: stop all active workflows
         data = api_get(args, "/api/workflow-executions?status=active")
         execs = data if isinstance(data, list) else data.get("executions", []) if data else []
         if not execs:
             print("No active workflows.")
             return 0
-        print(f"Stopping {len(execs)} workflows...")
+        print(f"Stopping {len(execs)} workflow(s)...")
         for e in execs:
             eid = e.get("id", "")
             if not eid:
@@ -145,6 +168,20 @@ def stop_workflow(args):
     if not args.workflow_id:
         print("Error: provide a workflow_id or use --all")
         return 1
+
+    # Single workflow stop — also terminate its agents
+    try:
+        agents_data = api_get(args, "/api/agents")
+        agents = agents_data if isinstance(agents_data, list) else agents_data.get("agents", []) if agents_data else []
+        wf_agents = [a for a in agents if isinstance(a, dict) and a.get("status") in ("working", "starting", "idle") and a.get("workflow", {}).get("id") == args.workflow_id]
+        for agent in wf_agents:
+            agent_id = agent.get("id", "")
+            try:
+                api_post(args, f"/api/terminate_agent", {"agent_id": agent_id}, timeout=10)
+            except Exception:
+                pass
+    except Exception:
+        pass
 
     data = api_post(args, f"/api/workflows/{args.workflow_id}/stop", timeout=15)
     if data is None:
