@@ -82,6 +82,12 @@ cd frontend && npm run type-check           # TypeScript check
 - Format Python with Black (line length 88), lint via `flake8`, and type-check with `mypy`; use snake_case modules/functions, PascalCase classes, verb-first async names, and explicit type hints.
 - Frontend code relies on functional components, camelCase hooks/utilities, Tailwind classes, and `npm run type-check` before review.
 
+## Logging Best Practices
+- **Use module-level loggers**: Always use `logger = logging.getLogger(__name__)` at module level. Never create mock/fake logger classes.
+- **No redundant logging**: Don't wrap existing loggers or create logger adapters unless absolutely necessary. Pass the module logger to functions that need it.
+- **No logging in data return paths**: Don't log messages that should be returned as API response data. Use the logger for operational/debug logs, not for returning results to callers.
+- **Functions that need logging should accept a logger parameter**: If a function needs to log, add `logger` as a parameter rather than creating a new logger inside the function.
+
 ## Documentation-First Workflow
 - Consult the relevant entries in `docs/` or `design_docs/` before coding and mirror established patterns.
 - Update or add documentation when behavior changes, keeping `prompts/` and `templates/` aligned with code updates.
