@@ -309,13 +309,13 @@ def api_get(endpoint: str, timeout: int = 5) -> Optional[dict]:
     return None
 
 
-def api_post(endpoint: str, data: dict = None, timeout: int = 5) -> Optional[dict]:
+def api_post(endpoint: str, data: dict = None, timeout: int = 5, headers: dict = None) -> Optional[dict]:
     try:
-        r = requests.post(f"{API_BASE}{endpoint}", json=data, timeout=timeout)
+        r = requests.post(f"{API_BASE}{endpoint}", json=data, timeout=timeout, headers=headers or {})
         if r.status_code == 200:
             return r.json()
         else:
-            print(f"[api_post] {endpoint} returned {r.status_code}")
+            print(f"[api_post] {endpoint} returned {r.status_code}: {r.text[:200]}")
     except Exception as e:
         print(f"[api_post] {endpoint} failed: {e}")
     return None

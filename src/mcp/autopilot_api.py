@@ -709,19 +709,29 @@ async def repair_design(request: dict):
 
 def spawn_repair_review_agent(wf_id: str, filename: str, project: Path, reason: str, logger, actions_taken: list):
     """Spawn a review agent that checks each task, acts, and monitors completion."""
+    from src.autopilot.orchestrator import get_tasks, api_post
     try:
+        logger.info(f"[REPAIR-AGENT] Starting for workflow {wf_id[:8]}, design={filename}")
+        
+        # Get tasks for this workflow
         failed_tasks = get_tasks(status='failed', workflow_id=wf_id)
         pending_tasks = get_tasks(status='pending', workflow_id=wf_id)
         in_progress_tasks = get_tasks(status='in_progress', workflow_id=wf_id)
         done_tasks = get_tasks(status='done', workflow_id=wf_id)
+        
+        logger.info(f"[REPAIR-AGENT] Task counts: done={len(done_tasks)}, failed={len(failed_tasks)}, pending={len(pending_tasks)}, in_progress={len(in_progress_tasks)}")
 
+        # Build task summary for instructions
         task_summary = []
         for t in failed_tasks[:5]:
-            task_summary.append(f"  FAILED: {t.get('id', '')[:8]} - {(t.get('enriched_description') or t.get('raw_description') or '')[:80]}")
+            desc = (t.get('enriched_description') or t.get('raw_description') or '')[:80]
+            task_summary.append(f"  FAILED: {t.get('id', '')[:8]} - {desc}")
         for t in pending_tasks[:5]:
-            task_summary.append(f"  PENDING: {t.get('id', '')[:8]} - {(t.get('enriched_description') or t.get('raw_description') or '')[:80]}")
+            desc = (t.get('enriched_description') or t.get('raw_description') or '')[:80]
+            task_summary.append(f"  PENDING: {t.get('id', '')[:8]} - {desc}")
         for t in in_progress_tasks[:5]:
-            task_summary.append(f"  IN_PROGRESS: {t.get('id', '')[:8]} - {(t.get('enriched_description') or t.get('raw_description') or '')[:80]}")
+            desc = (t.get('enriched_description') or t.get('raw_description') or '')[:80]
+            task_summary.append(f"  IN_PROGRESS: {t.get('id', '')[:8]} - {desc}")
 
         review_instructions = f"""REPAIR AGENT: Design '{filename}' needs systematic repair.
 
@@ -759,63 +769,105 @@ YOUR JOB:
 9. WRITE repair_report.md summarizing actions taken
 10. Mark your task done when ALL tasks are resolved"""
 
-        task_data = api_post("/api/create_task", {
+        # Create the task
+        logger.info(f"[REPAIR-AGENT] Creating task for workflow {wf_id[:8]}")
+        task_data = api_post("/create_task", {
             "task_description": review_instructions,
             "done_definition": "All tasks resolved, branches merged, repair_report.md written",
             "workflow_id": wf_id,
             "phase_id": "repair-review",
-            "priority": "high"
-        })
+            "priority": "high",
+            "ai_agent_id": "sdk-repair-agent"
+        }, headers={"X-Agent-ID": "sdk-repair-agent"})
+        
+        if not task_data:
+            logger.error("[REPAIR-AGENT] api_post /create_task returned None")
+            return
+        
+        if 'detail' in task_data:
+            logger.error(f"[REPAIR-AGENT] /create_task error: {task_data['detail']}")
+            return
+        
+        task_id = task_data.get('task_id')
+        if not task_id:
+            logger.error(f"[REPAIR-AGENT] /create_task returned no task_id: {task_data}")
+            return
+        
+        logger.info(f"[REPAIR-AGENT] Task created: {task_id[:8]}")
 
-        if task_data and task_data.get('task_id'):
-            agent_data = api_post("/api/create_agent_for_task", {
-                "task_id": task_data['task_id'],
-                "workflow_id": wf_id,
-                "phase_id": "repair-review"
-            })
-            if agent_data:
-                actions_taken.append(f"Spawned review agent {agent_data.get('agent_id', '')[:8]} for {wf_id[:8]}")
+        # Create the agent
+        logger.info(f"[REPAIR-AGENT] Creating agent for task {task_id[:8]}")
+        agent_data = api_post("/api/create_agent_for_task", {
+            "task_id": task_id,
+            "workflow_id": wf_id,
+            "phase_id": "repair-review"
+        }, timeout=30)
+        
+        if not agent_data:
+            logger.error("[REPAIR-AGENT] api_post /create_agent_for_task returned None")
+            return
+        
+        if 'detail' in agent_data:
+            logger.error(f"[REPAIR-AGENT] /create_agent_for_task error: {agent_data['detail']}")
+            return
+        
+        agent_id = agent_data.get('agent_id')
+        if not agent_id:
+            logger.error(f"[REPAIR-AGENT] /create_agent_for_task returned no agent_id: {agent_data}")
+            return
+        
+        logger.info(f"[REPAIR-AGENT] Agent created: {agent_id[:8]}")
+        actions_taken.append(f"Spawned review agent {agent_id[:8]} for workflow {wf_id[:8]}")
+        
     except Exception as e:
-        logger.error(f"Failed to spawn review agent: {e}")
+        logger.error(f"[REPAIR-AGENT] Exception: {e}", exc_info=True)
 
 
 def _run_repair(repair_id: str, filename: str, project: Path, logger):
     """Background repair task."""
     from src.core.database import get_db, Workflow
-    from src.autopilot.orchestrator import is_design_fully_complete, attempt_recovery, get_workflow_status, api_post
     import json
     import subprocess
+    import uuid
 
+    logger.info(f"[REPAIR] Starting repair {repair_id} for {filename}")
+    
     findings = []
     actions_taken = []
 
     try:
-        # 1. Create a new workflow for this repair
-        design_name = filename.replace('.md', '').replace('_', ' ').replace('-', ' ')
+        # 1. Create a minimal repair workflow directly in DB
+        logger.info("[REPAIR] Step 1: Creating repair workflow")
+        wf_id = f"repair-{uuid.uuid4().hex[:8]}"
         
-        # Launch a new autopilot workflow for this design
-        workflow_data = api_post("/api/workflow-executions", {
-            "definition_id": "autopilot",
-            "description": f"Repair: {filename}",
-            "launch_params": {
-                "design_document": str(project / 'docs' / 'design-queue' / filename),
-                "project_path": str(project),
-                "repair_mode": True
-            }
-        })
+        with get_db() as db:
+            workflow = Workflow(
+                id=wf_id,
+                name=f"Repair: {filename}",
+                definition_id="autopilot",
+                description=f"Repair: {filename}",
+                phases_folder_path=str(project),
+                status="active",
+                launch_params=json.dumps({
+                    "design_document": str(project / 'docs' / 'design-queue' / filename),
+                    "project_path": str(project),
+                    "repair_mode": True
+                })
+            )
+            db.add(workflow)
+            db.commit()
+            logger.info(f"[REPAIR] Workflow created: {wf_id}")
         
-        if not workflow_data or not workflow_data.get('workflow_id'):
-            findings.append({"type": "error", "message": "Failed to create repair workflow"})
-            return
-        
-        wf_id = workflow_data['workflow_id']
         actions_taken.append(f"Created repair workflow {wf_id[:8]}")
         findings.append({"type": "info", "message": f"Created repair workflow {wf_id[:8]}"})
 
         # 2. Spawn review agent on the new workflow
+        logger.info("[REPAIR] Step 2: Spawning review agent")
         spawn_repair_review_agent(wf_id, filename, project, "Repair initiated", logger, actions_taken)
+        logger.info("[REPAIR] Step 2 complete: spawn_repair_review_agent returned")
         
         # 3. Find any existing workflows for context
+        logger.info("[REPAIR] Step 3: Finding existing workflows for context")
         with get_db() as db:
             workflows = db.query(Workflow).filter(
                 Workflow.definition_id == 'autopilot'
@@ -827,15 +879,17 @@ def _run_repair(repair_id: str, filename: str, project: Path, logger):
                     try:
                         params = json.loads(wf.launch_params) if isinstance(wf.launch_params, str) else wf.launch_params
                         doc = params.get('design_document', '')
-                        if filename in doc or design_name.lower() in doc.lower():
+                        if filename in doc:
                             existing_workflow_ids.append(wf.id)
                     except Exception:
                         pass
 
+            logger.info(f"[REPAIR] Found {len(existing_workflow_ids)} existing workflow(s)")
             if existing_workflow_ids:
                 findings.append({"type": "info", "message": f"Found {len(existing_workflow_ids)} existing workflow(s) for context"})
 
-        # 3. Check for unmerged branches
+        # 4. Check for unmerged branches
+        logger.info("[REPAIR] Step 4: Checking for unmerged branches")
         try:
             result = subprocess.run(
                 ['git', 'branch', '--list', 'agent-*'],
@@ -844,6 +898,8 @@ def _run_repair(repair_id: str, filename: str, project: Path, logger):
             )
             if result.returncode == 0:
                 branches = [b.strip().lstrip('* ') for b in result.stdout.strip().split('\n') if b.strip()]
+                logger.info(f"[REPAIR] Found {len(branches)} unmerged agent branch(es)")
+                
                 if branches:
                     findings.append({
                         "type": "unmerged_branches",
@@ -859,22 +915,29 @@ def _run_repair(repair_id: str, filename: str, project: Path, logger):
                     branch_manager.reload(str(project))
 
                     for branch in branches:
-                        # Extract agent_id from branch name (agent-<uuid>)
                         agent_id = branch.replace('agent-', '')
+                        logger.info(f"[REPAIR] Merging branch {branch} (agent_id={agent_id[:8]})")
                         try:
                             result = branch_manager.merge_to_main(agent_id)
-                            if result.get('status') in ('success', 'conflict_resolved'):
+                            status = result.get('status', 'unknown')
+                            if status in ('success', 'conflict_resolved'):
                                 branch_manager.cleanup_branch(agent_id)
-                                actions_taken.append(f"Merged and cleaned {branch}: {result.get('status')}")
+                                actions_taken.append(f"Merged and cleaned {branch}: {status}")
+                                logger.info(f"[REPAIR] Merged {branch}: {status}")
                             else:
-                                findings.append({"type": "merge_warning", "message": f"Merge returned: {result.get('status')} for {branch}"})
+                                findings.append({"type": "merge_warning", "message": f"Merge returned: {status} for {branch}"})
+                                logger.warning(f"[REPAIR] Merge returned {status} for {branch}")
                         except Exception as e:
-                            logger.error(f"Failed to merge {branch}: {e}")
+                            logger.error(f"[REPAIR] Failed to merge {branch}: {e}")
                             findings.append({"type": "merge_error", "message": f"Failed to merge {branch}: {e}"})
+            else:
+                logger.warning(f"[REPAIR] git branch command failed: {result.stderr}")
         except Exception as e:
+            logger.error(f"[REPAIR] Branch check failed: {e}")
             findings.append({"type": "error", "message": f"Branch check failed: {e}"})
 
         # Store results
+        logger.info("[REPAIR] Step 5: Storing results")
         result = {
             "repair_id": repair_id,
             "filename": filename,
@@ -887,11 +950,12 @@ def _run_repair(repair_id: str, filename: str, project: Path, logger):
             }
         }
 
-        # Save to file for status check
         result_file = Path.home() / ".hephaestus" / "autopilot" / f"repair_{repair_id}.json"
         result_file.write_text(json.dumps(result, indent=2))
+        logger.info(f"[REPAIR] Repair {repair_id} complete. Actions: {len(actions_taken)}, Findings: {len(findings)}")
 
     except Exception as e:
+        logger.error(f"[REPAIR] Exception during repair: {e}", exc_info=True)
         findings.append({"type": "error", "message": str(e)})
         result = {
             "repair_id": repair_id,

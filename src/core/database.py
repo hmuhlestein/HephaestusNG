@@ -321,6 +321,7 @@ class PhaseExecution(Base):
 
 class AgentWorktree(Base):
     """Track git worktree isolation for agents."""
+    # TODO: Rename column worktree_path → branch_path (pending migration)
 
     __tablename__ = "agent_worktrees"
 
