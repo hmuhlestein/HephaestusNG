@@ -70,6 +70,7 @@ class CreateTaskRequest(BaseModel):
     depends_on: Optional[List[str]] = Field(default=None, description="List of task IDs that must complete before this one")
     parallel_group: Optional[str] = Field(default=None, description="Tasks in same group can run in parallel; different groups are sequential")
     max_concurrent: Optional[int] = Field(default=1, description="Max agents working on this task simultaneously")
+    context: Optional[str] = Field(default=None, description="Additional context for the agent (e.g., design document content, requirements summary)")
 
 
 class CreateTaskResponse(BaseModel):
@@ -4863,7 +4864,8 @@ async def list_tools():
                         "ticket_id": {"type": "string", "description": "Associated ticket ID"},
                         "depends_on": {"type": "array", "items": {"type": "string"}, "description": "List of task IDs that must complete before this one. OMIT or set null for sequential execution (one at a time). Set to [] for immediate parallel execution. Set to [task_id, ...] to wait for specific tasks."},
                         "parallel_group": {"type": "string", "description": "Tasks in same group can run in parallel. Different groups are sequential."},
-                        "max_concurrent": {"type": "integer", "description": "Max agents working on this task simultaneously (default: 1)"}
+                        "max_concurrent": {"type": "integer", "description": "Max agents working on this task simultaneously (default: 1)"},
+                        "context": {"type": "string", "description": "Additional context for the agent (e.g., design document content, requirements summary)"},
                     },
                     "required": ["task_description", "done_definition", "workflow_id", "phase_id"]
                 }
