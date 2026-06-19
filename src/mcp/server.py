@@ -3154,7 +3154,7 @@ async def get_ticket_stats_endpoint(
             seven_days_ago = datetime.utcnow() - timedelta(days=7)
             velocity_last_7_days = session.query(func.count(Ticket.id)).filter(
                 Ticket.workflow_id == workflow_id,
-                Ticket.is_resolved == True,
+                Ticket.is_resolved,
                 Ticket.resolved_at >= seven_days_ago
             ).scalar()
 

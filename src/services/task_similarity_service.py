@@ -55,7 +55,7 @@ class TaskSimilarityService:
         try:
             # Build query for existing tasks
             query = session.query(Task).filter(
-                Task.embedding != None,
+                Task.embedding is not None,
                 Task.status.notin_(['failed', 'duplicated'])
             )
 
@@ -66,7 +66,7 @@ class TaskSimilarityService:
                 logger.info(f"Checking for duplicates within phase: {phase_id}")
             else:
                 # If no phase_id, only check tasks without a phase
-                query = query.filter(Task.phase_id == None)
+                query = query.filter(Task.phase_id is None)
                 logger.info("Checking for duplicates among tasks without phase")
 
             existing_tasks = query.all()
@@ -326,7 +326,7 @@ class TaskSimilarityService:
             try:
                 # Get all tasks with embeddings
                 tasks = session.query(Task).filter(
-                    Task.embedding != None,
+                    Task.embedding is not None,
                     Task.status != 'duplicated'
                 ).all()
 

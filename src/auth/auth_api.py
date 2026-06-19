@@ -151,7 +151,7 @@ def check_login_attempts(db: Session, email: str) -> bool:
     cutoff_time = datetime.utcnow() - timedelta(minutes=config.lockout_duration_minutes)
     recent_attempts = db.query(LoginAttempt).filter(
         LoginAttempt.email == email,
-        LoginAttempt.success == False,
+        not LoginAttempt.success,
         LoginAttempt.attempted_at >= cutoff_time
     ).count()
 

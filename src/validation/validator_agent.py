@@ -111,18 +111,17 @@ async def spawn_validator_agent(
             if not task:
                 raise ValueError(f"Task {target_id} not found")
 
-            phase = None
             if task.phase_id:
-                phase = session.query(Phase).filter_by(id=task.phase_id).first()
+                session.query(Phase).filter_by(id=task.phase_id).first()
 
             # Get workspace changes
-            workspace_changes = branch_manager.get_workspace_changes(
+            branch_manager.get_workspace_changes(
                 agent_id=original_agent_id,
                 since_commit=None  # Get all changes
             )
 
             # Get agent claims/results
-            agent_claims = get_agent_results(target_id, session)
+            get_agent_results(target_id, session)
 
             # Build task validation prompt using the new prompt loader
             from src.monitoring.prompt_loader import prompt_loader
@@ -208,7 +207,7 @@ async def spawn_validator_agent(
 
         # Use AgentManager to create agent properly (like normal agents)
         # Pass commit_sha to create worktree from the specific commit
-        validator_agent_obj = await agent_manager.create_agent_for_task(
+        await agent_manager.create_agent_for_task(
             task=validation_task,
             enriched_data={
                 "type": f"{validation_type}_validation",

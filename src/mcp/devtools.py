@@ -321,7 +321,7 @@ class CDPBrowser:
         """)
 
     async def wait_for_selector(self, selector: str, timeout_ms: int = 5000) -> bool:
-        found_event = asyncio.Event()
+        asyncio.Event()
         js_selector = _safe_js_string(selector)
         observer_js = f"""
             (() => {{
