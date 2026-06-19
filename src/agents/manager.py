@@ -88,7 +88,7 @@ class AgentManager:
                 agent_id=agent_id,
                 parent_agent_id=getattr(task, 'created_by_agent_id', None),
             )
-            worktree_path = branch_info["working_directory"]
+            branch_path = branch_info["working_directory"]
             logger.info(f"Created branch {branch_info['branch_name']} for agent {agent_id}")
 
             # Checkout the agent's branch so commits go to the right place
@@ -176,7 +176,7 @@ class AgentManager:
             # 4. Create tmux session IN THE WORKTREE with env vars
             # Use agent_id for unique session names (not task_id which can be reused on restarts)
             session_name = f"{self.config.tmux_session_prefix}_{agent_id[:8]}"
-            tmux_session = self._create_tmux_session(session_name, working_directory=worktree_path, env_vars=env_vars)
+            tmux_session = self._create_tmux_session(session_name, working_directory=branch_path, env_vars=env_vars)
 
             # 5. Launch CLI agent
             cli_agent = get_cli_agent(cli_type)
@@ -268,7 +268,7 @@ class AgentManager:
             logger.info(f"Tmux session: {session_name}")
 
             # Get the initial message with worktree path
-            initial_message = self._format_initial_message(task, agent_id, worktree_path, agent_type, enriched_data)
+            initial_message = self._format_initial_message(task, agent_id, branch_path, agent_type, enriched_data)
             logger.info(f"Initial message length: {len(initial_message)} characters")
 
             # Save the full prompt to /tmp for debugging
@@ -393,13 +393,13 @@ class AgentManager:
         logger.debug(f"Created tmux session: {session_name}")
         return session
 
-    def _format_initial_message(self, task: Task, agent_id: str, worktree_path: str = None, agent_type: str = "phase", enriched_data: dict = None) -> str:
+    def _format_initial_message(self, task: Task, agent_id: str, branch_path: str = None, agent_type: str = "phase", enriched_data: dict = None) -> str:
         """Format the initial message to send to the agent.
 
         Args:
             task: Task to work on
             agent_id: Agent's ID
-            worktree_path: Path to the agent's worktree
+            branch_path: Path to the agent's worktree
             agent_type: Type of agent (phase, validator, result_validator)
 
         Returns:
@@ -427,7 +427,7 @@ class AgentManager:
                     return "You are a task validator agent. Please check the task details for validation instructions."
 
         # Use the actual worktree path for the agent
-        cwd_info = f"Working Directory: {worktree_path}" if worktree_path else ""
+        cwd_info = f"Working Directory: {branch_path}" if branch_path else ""
 
         # Get workflow information for context
         workflow_id = getattr(task, 'workflow_id', None) or ""

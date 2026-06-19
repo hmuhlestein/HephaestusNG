@@ -47,14 +47,14 @@ class Config:
         paths = config.get('paths', {})
         self.database_path = Path(paths.get('database', './hephaestus.db'))
         self.phases_folder = paths.get('phases_folder', './sample-phases')
-        self.worktree_base_path = Path(paths.get('worktree_base', '/tmp/hephaestus_worktrees'))
+        self.branch_base_path = Path(paths.get('worktree_base', '/tmp/hephaestus_worktrees'))
         self.project_root = Path(paths.get('project_root', str(Path.cwd())))
 
         # Git settings
         git = config.get('git', {})
         self.main_repo_path = Path(git.get('main_repo_path', str(Path.cwd())))
         self.base_branch = git.get('base_branch', 'main')  # Base branch/commit for merging
-        self.worktree_branch_prefix = git.get('worktree_branch_prefix', 'agent-')
+        self.branch_prefix = git.get('branch_prefix', 'agent-')
         self.auto_commit = git.get('auto_commit', True)
         self.conflict_resolution_strategy = git.get('conflict_resolution', 'newest_file_wins')
 
@@ -122,16 +122,16 @@ class Config:
         self.similarity_threshold = 0.7
 
         # Worktree settings from original config
-        self.max_worktrees = 50
+        self.max_branches = 50
         self.max_tree_depth = 10
         self.disk_space_threshold_gb = 10
         self.auto_merge_enabled = True
         self.prefer_child_on_tie = True
         self.require_manual_review = False
         self.log_all_resolutions = True
-        self.worktree_auto_cleanup_enabled = True
-        self.worktree_cleanup_interval_hours = 6
-        self.worktree_retention_hours = {
+        self.branch_auto_cleanup_enabled = True
+        self.branch_cleanup_interval_hours = 6
+        self.branch_retention_hours = {
             "merged": 1,
             "failed": 24,
             "abandoned": 6,
@@ -141,7 +141,7 @@ class Config:
         self.checkpoint_interval_minutes = 30
         self.checkpoint_on_error = True
         self.checkpoint_before_child = True
-        self.worktree_archive_prefix = "refs/archive/"
+        self.branch_archive_prefix = "refs/archive/"
         self.archive_after_days = 7
         self.delete_archives_after_days = 30
 
@@ -217,14 +217,14 @@ class Config:
             self.glm_api_token_env = os.getenv("GLM_API_TOKEN_ENV")
 
         # Worktree settings
-        if os.getenv("WORKTREE_BASE_PATH"):
-            self.worktree_base_path = Path(os.getenv("WORKTREE_BASE_PATH"))
+        if os.getenv("BRANCH_BASE_PATH"):
+            self.branch_base_path = Path(os.getenv("BRANCH_BASE_PATH"))
         if os.getenv("MAIN_REPO_PATH"):
             self.main_repo_path = Path(os.getenv("MAIN_REPO_PATH"))
         if os.getenv("GIT_BASE_BRANCH"):
             self.base_branch = os.getenv("GIT_BASE_BRANCH")
-        if os.getenv("WORKTREE_MAX_COUNT"):
-            self.max_worktrees = int(os.getenv("WORKTREE_MAX_COUNT"))
+        if os.getenv("BRANCH_MAX_COUNT"):
+            self.max_branches = int(os.getenv("BRANCH_MAX_COUNT"))
         if os.getenv("WORKTREE_MAX_DEPTH"):
             self.max_tree_depth = int(os.getenv("WORKTREE_MAX_DEPTH"))
         if os.getenv("WORKTREE_DISK_THRESHOLD_GB"):
@@ -241,16 +241,16 @@ class Config:
             self.log_all_resolutions = os.getenv("WORKTREE_LOG_RESOLUTIONS").lower() == "true"
 
         # Worktree cleanup settings
-        if os.getenv("WORKTREE_AUTO_CLEANUP"):
-            self.worktree_auto_cleanup_enabled = os.getenv("WORKTREE_AUTO_CLEANUP").lower() == "true"
-        if os.getenv("WORKTREE_CLEANUP_INTERVAL_HOURS"):
-            self.worktree_cleanup_interval_hours = int(os.getenv("WORKTREE_CLEANUP_INTERVAL_HOURS"))
-        if os.getenv("WORKTREE_RETENTION_MERGED"):
-            self.worktree_retention_hours["merged"] = int(os.getenv("WORKTREE_RETENTION_MERGED"))
-        if os.getenv("WORKTREE_RETENTION_FAILED"):
-            self.worktree_retention_hours["failed"] = int(os.getenv("WORKTREE_RETENTION_FAILED"))
-        if os.getenv("WORKTREE_RETENTION_ABANDONED"):
-            self.worktree_retention_hours["abandoned"] = int(os.getenv("WORKTREE_RETENTION_ABANDONED"))
+        if os.getenv("BRANCH_AUTO_CLEANUP"):
+            self.branch_auto_cleanup_enabled = os.getenv("BRANCH_AUTO_CLEANUP").lower() == "true"
+        if os.getenv("BRANCH_CLEANUP_INTERVAL_HOURS"):
+            self.branch_cleanup_interval_hours = int(os.getenv("BRANCH_CLEANUP_INTERVAL_HOURS"))
+        if os.getenv("BRANCH_RETENTION_MERGED"):
+            self.branch_retention_hours["merged"] = int(os.getenv("BRANCH_RETENTION_MERGED"))
+        if os.getenv("BRANCH_RETENTION_FAILED"):
+            self.branch_retention_hours["failed"] = int(os.getenv("BRANCH_RETENTION_FAILED"))
+        if os.getenv("BRANCH_RETENTION_ABANDONED"):
+            self.branch_retention_hours["abandoned"] = int(os.getenv("BRANCH_RETENTION_ABANDONED"))
 
         # Worktree commit settings
         if os.getenv("WORKTREE_AUTO_CHECKPOINT"):
@@ -263,10 +263,10 @@ class Config:
             self.checkpoint_before_child = os.getenv("WORKTREE_CHECKPOINT_BEFORE_CHILD").lower() == "true"
 
         # Worktree branch settings
-        if os.getenv("WORKTREE_BRANCH_PREFIX"):
-            self.worktree_branch_prefix = os.getenv("WORKTREE_BRANCH_PREFIX")
-        if os.getenv("WORKTREE_ARCHIVE_PREFIX"):
-            self.worktree_archive_prefix = os.getenv("WORKTREE_ARCHIVE_PREFIX")
+        if os.getenv("BRANCH_PREFIX"):
+            self.branch_prefix = os.getenv("BRANCH_PREFIX")
+        if os.getenv("BRANCH_ARCHIVE_PREFIX"):
+            self.branch_archive_prefix = os.getenv("BRANCH_ARCHIVE_PREFIX")
         if os.getenv("WORKTREE_ARCHIVE_AFTER_DAYS"):
             self.archive_after_days = int(os.getenv("WORKTREE_ARCHIVE_AFTER_DAYS"))
         if os.getenv("WORKTREE_DELETE_ARCHIVES_AFTER_DAYS"):
@@ -343,8 +343,8 @@ class Config:
             env["MCP_PORT"] = str(self.mcp_port)
         
         # Worktree settings
-        if self.worktree_base_path:
-            env["WORKTREE_BASE_PATH"] = str(self.worktree_base_path)
+        if self.branch_base_path:
+            env["BRANCH_BASE_PATH"] = str(self.branch_base_path)
         if hasattr(self, 'working_directory') and self.working_directory:
             env["WORKING_DIRECTORY"] = str(self.working_directory)
         

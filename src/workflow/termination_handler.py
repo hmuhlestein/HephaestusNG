@@ -212,15 +212,15 @@ class WorkflowTerminationHandler:
 
         try:
             # 1. Clean up agent worktrees for this workflow
-            from src.core.database import AgentWorktree
+            from src.core.database import AgentBranch
             # Specify the join explicitly using assigned_agent_id
-            worktrees = session.query(AgentWorktree).join(
-                Agent, AgentWorktree.agent_id == Agent.id
+            worktrees = session.query(AgentBranch).join(
+                Agent, AgentBranch.agent_id == Agent.id
             ).join(
                 Task, Agent.id == Task.assigned_agent_id
             ).filter(
                 Task.workflow_id == workflow_id,
-                AgentWorktree.merge_status == "active"
+                AgentBranch.merge_status == "active"
             ).all()
 
             for worktree in worktrees:
@@ -231,7 +231,7 @@ class WorkflowTerminationHandler:
                         "action": "abandon_worktree",
                         "details": f"Abandoned worktree for agent {worktree.agent_id}",
                         "success": True,
-                        "worktree_path": worktree.worktree_path,
+                        "branch_path": worktree.branch_path,
                     })
                     logger.debug(f"Abandoned worktree for agent {worktree.agent_id}")
 

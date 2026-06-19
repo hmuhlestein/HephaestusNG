@@ -53,7 +53,7 @@ class HephaestusConfig:
     # Git Configuration
     main_repo_path: Optional[str] = None
     base_branch: str = "main"  # Base branch/commit for merging (can be branch name or commit SHA)
-    worktree_branch_prefix: str = "agent-"
+    branch_prefix: str = "agent-"
     auto_commit: bool = True
     conflict_resolution: str = "newest_file_wins"
 
@@ -158,7 +158,7 @@ class HephaestusConfig:
 
             # Git Configuration
             "GIT_BASE_BRANCH": self.base_branch,
-            "WORKTREE_BRANCH_PREFIX": self.worktree_branch_prefix,
+            "BRANCH_PREFIX": self.branch_prefix,
             "AUTO_COMMIT": str(self.auto_commit).lower(),
             "CONFLICT_RESOLUTION": self.conflict_resolution,
 
