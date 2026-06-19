@@ -126,10 +126,13 @@ class ClaudeCodeAgent(CLIAgentInterface):
 
         # For GLM models, we use "sonnet" as the CLI flag but env vars are set on tmux session
         # For standard models, use the model name directly
+        mcp_config = os.path.expanduser("~/.config/mcp/mcp.json")
+        mcp_flag = f"--mcp-config {mcp_config}" if os.path.exists(mcp_config) else ""
+        
         if 'GLM' in model.upper():
-            command = f"claude --model sonnet --dangerously-skip-permissions --append-system-prompt \"$(cat {prompt_file})\" --verbose"
+            command = f"claude --model sonnet --dangerously-skip-permissions {mcp_flag} --append-system-prompt \"$(cat {prompt_file})\" --verbose"
         else:
-            command = f"claude --model {model} --dangerously-skip-permissions --append-system-prompt \"$(cat {prompt_file})\" --verbose"
+            command = f"claude --model {model} --dangerously-skip-permissions {mcp_flag} --append-system-prompt \"$(cat {prompt_file})\" --verbose"
 
         return command
 
