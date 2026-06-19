@@ -731,28 +731,33 @@ Completed: {len(done_tasks)} | Failed: {len(failed_tasks)} | Pending: {len(pendi
 Tasks:
 {chr(10).join(task_summary) if task_summary else 'No tasks found'}
 
-YOUR WORKFLOW — check each task, determine action, act, monitor:
-
-1. READ the design doc at {project / 'docs' / 'design-queue' / filename}
-2. For EACH failed task:
+YOUR JOB:
+1. Read the design doc at {project / 'docs' / 'design-queue' / filename}
+2. Check what has been completed so far in the feature folder
+3. Identify what's blocking progress
+4. You have FULL AUTHORITY to:
+   - Create tasks and spawn agents via create_task + create_agent_for_task
+   - Merge branches via MCP tools
+   - Fix code issues directly
+5. For EACH failed task:
    a. Read the error and understand why it failed
    b. Determine: can it be retried? does it need rework? is it blocked?
-   c. If retryable: call update_task_status to reset to 'pending', then create_agent_for_task to relaunch
-   d. If needs rework: create a new task with corrected instructions, spawn agent
+   c. If retryable: reset to pending, spawn agent to relaunch
+   d. If needs rework: create new task with corrected instructions, spawn agent
    e. If blocked: document the blocker and move on
-   f. MONITOR: after spawning, check get_task_status periodically until done or failed
-3. For EACH pending task:
-   a. Check if its dependencies are met (depends_on tasks are done)
+   f. MONITOR: after spawning, check get_task_status until done or failed
+6. For EACH pending task:
+   a. Check if dependencies are met (depends_on tasks are done)
    b. If dependencies met: spawn agent via create_agent_for_task
-   c. If dependencies not met: skip and come back later
+   c. If not met: skip and come back later
    d. MONITOR: check status after spawning
-4. For EACH in_progress task:
+7. For EACH in_progress task:
    a. Check agent output via get_agent_output
    b. If stuck (no progress): nudge agent or terminate and respawn
    c. If progressing: let it continue
-5. MERGE: after all tasks complete, merge branches to main
-6. WRITE repair_report.md summarizing actions taken
-7. Mark your task done when ALL tasks are resolved"""
+8. MERGE: after all tasks complete, merge branches to main
+9. WRITE repair_report.md summarizing actions taken
+10. Mark your task done when ALL tasks are resolved"""
 
         task_data = api_post("/api/create_task", {
             "task_description": review_instructions,
