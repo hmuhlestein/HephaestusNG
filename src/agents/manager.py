@@ -445,7 +445,6 @@ class AgentManager:
 🔑 Your Agent ID: {agent_id}
    ⚠️  CRITICAL: Use this EXACT ID when calling MCP tools (update_task_status, create_task, etc.)
    ⚠️  DO NOT use 'agent-mcp' or any other placeholder - it will fail authorization!
-   ⚠️  For pi CLI: Use mcporter to call MCP tools: mcporter call hephaestus.update_task_status task_id={task.id} agent_id={agent_id} status=done summary="..."
 
 📋 Task ID: {task.id}
 🔄 Workflow ID: {workflow_id if workflow_id else "N/A (standalone task)"}
