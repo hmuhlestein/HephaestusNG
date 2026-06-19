@@ -234,7 +234,7 @@ const RealTimeAgentOutput: React.FC<RealTimeAgentOutputProps> = ({
                   isConnected ? 'bg-green-500 animate-pulse' : 'bg-red-500'
                 }`} />
                 <h3 className="text-lg font-semibold text-gray-800 dark:text-white">
-                  Agent {agent.id.substring(0, 8)} - Output
+                  Agent {agent.id.substring(0, 8)} - {agent.current_task?.phase_info?.name || agent.current_task?.description?.substring(0, 50) || 'Output'}
                 </h3>
                 {isConnected ? (
                   <Wifi className="w-4 h-4 text-green-500" />
