@@ -2,7 +2,6 @@
 
 import json
 import sys
-import time
 import httpx
 from pathlib import Path
 from typing import Optional, Dict, Any, List

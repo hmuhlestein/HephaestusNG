@@ -197,7 +197,7 @@ class BranchManager:
             # Record in database (reusing AgentBranch table for compatibility)
             record = AgentBranch(
                 agent_id=agent_id,
-                branch_path=str(self.config.project_root),  # Main repo, not a worktree
+                worktree_path=str(self.config.project_root),  # Main repo, not a worktree
                 branch_name=branch_name,
                 parent_agent_id=parent_agent_id,
                 parent_commit_sha=parent_commit_sha,

@@ -1,6 +1,5 @@
 """heph restart — Restart services."""
 
-import time
 from src.cli.commands.stop import run as stop_run
 from src.cli.commands.start import run as start_run
 
