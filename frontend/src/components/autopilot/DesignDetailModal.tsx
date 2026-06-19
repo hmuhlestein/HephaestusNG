@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useQuery, useMutation } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   X, FileText, GitBranch, Clock, CheckCircle2, XCircle, AlertTriangle,
@@ -35,6 +35,7 @@ const TASK_STATUS_COLORS: Record<string, string> = {
 };
 
 const DesignDetailModal: React.FC<DesignDetailModalProps> = ({ projectId, filename, onClose, onRerun }) => {
+  const queryClient = useQueryClient();
   const [showContent, setShowContent] = useState(false);
   const [expandedTasks, setExpandedTasks] = useState<Set<string>>(new Set());
 
@@ -86,12 +87,16 @@ const DesignDetailModal: React.FC<DesignDetailModalProps> = ({ projectId, filena
     onSuccess: (data: any) => {
       const repairId = data.repair_id;
       if (repairId) {
-        toast.success(`Repair started (${repairId}). Checking status...`);
+        toast.success(`Repair started (${repairId})`);
+        // Refresh design status to show new workflow/agent
+        queryClient.invalidateQueries({ queryKey: ['design-status', projectId, filename] });
         // Poll for completion
         const poll = async () => {
-          for (let i = 0; i < 30; i++) {
-            await new Promise(r => setTimeout(r, 2000));
+          for (let i = 0; i < 60; i++) {
+            await new Promise(r => setTimeout(r, 3000));
             try {
+              // Refetch design status to show progress
+              await queryClient.invalidateQueries({ queryKey: ['design-status', projectId, filename] });
               const result = await api.get(`/autopilot/queue/repair/${repairId}`);
               const data = result.data || result;
               if (data.status === 'completed') {
@@ -101,7 +106,7 @@ const DesignDetailModal: React.FC<DesignDetailModalProps> = ({ projectId, filena
                 } else {
                   toast.success('Design looks healthy - no repairs needed');
                 }
-                onClose();
+                await queryClient.invalidateQueries({ queryKey: ['design-status', projectId, filename] });
                 return;
               }
             } catch (e) {
@@ -109,12 +114,12 @@ const DesignDetailModal: React.FC<DesignDetailModalProps> = ({ projectId, filena
             }
           }
           toast.success('Repair completed');
-          onClose();
+          await queryClient.invalidateQueries({ queryKey: ['design-status', projectId, filename] });
         };
         poll();
       } else {
         toast.success('Repair started');
-        onClose();
+        queryClient.invalidateQueries({ queryKey: ['design-status', projectId, filename] });
       }
     },
     onError: (e: any) => {
