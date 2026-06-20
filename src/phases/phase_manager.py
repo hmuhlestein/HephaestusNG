@@ -561,12 +561,11 @@ class PhaseManager:
                 execution.completion_summary = summary
                 session.commit()
 
-                # Find target phase and start it
+                # Find target phase — Monitor will create task+agent
                 target_phase = self._find_phase_by_name_or_order(
                     session, phase.workflow_id, evaluation.target_phase
                 )
                 if target_phase:
-                    self._start_phase(session, target_phase.id)
                     logger.info(f"Goto phase {target_phase.name} from {phase.name}")
                     return {"action": "goto", "target_phase": target_phase.name, "target_phase_id": target_phase.id, "should_continue": True}
                 else:

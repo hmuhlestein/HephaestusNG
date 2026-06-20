@@ -1042,6 +1042,7 @@ class MonitoringLoop:
                 session.close()
 
             if not wd:
+                logger.warning(f"[SPEC-GATE] {phase_name}: working_directory is None on workflow {self.phase_manager.workflow_id}, cannot score")
                 return {}
             phase_output = build_phase_output(phase_name, wd)
             logger.info(f"[SPEC-GATE] {phase_name}: {phase_output}")
@@ -1049,119 +1050,6 @@ class MonitoringLoop:
         except Exception as e:
             logger.warning(f"[SPEC-GATE] could not build phase_output for {phase_name}: {e}")
             return {}
-
-    async def _create_next_phase_task(self, current_phase):
-        """Create initial task for next phase and spawn an agent for it.
-
-        Args:
-            current_phase: The current completed phase
-        """
-        session = self.db_manager.get_session()
-        try:
-            from src.core.database import Phase
-            import uuid
-
-            # Find next phase
-            next_phase = session.query(Phase).filter(
-                Phase.workflow_id == current_phase.workflow_id,
-                Phase.order > current_phase.order
-            ).order_by(Phase.order).first()
-
-            if not next_phase:
-                logger.info("No next phase found, workflow may be complete")
-                return
-
-            # Create task for next phase based on its instructions
-            task_description = f"Execute {next_phase.name}: {next_phase.description}"
-            done_definition = " AND ".join(next_phase.done_definitions) if next_phase.done_definitions else "Complete phase objectives"
-
-            task_id = str(uuid.uuid4())
-
-            # Create task
-            task = Task(
-                id=task_id,
-                raw_description=task_description,
-                enriched_description=task_description,
-                done_definition=done_definition,
-                status="pending",
-                priority="high",
-                phase_id=next_phase.id,
-                workflow_id=next_phase.workflow_id,
-                created_by_agent_id="monitor",  # Created by monitor
-            )
-
-            session.add(task)
-
-            # Start the phase execution so the Monitor can track it
-            from src.core.database import PhaseExecution
-            execution = session.query(PhaseExecution).filter_by(phase_id=next_phase.id).first()
-            if execution and execution.status == "pending":
-                execution.status = "in_progress"
-                from datetime import datetime
-                execution.started_at = datetime.utcnow()
-
-            session.commit()
-
-            logger.info(f"Created task for next phase: {next_phase.name} (task_id={task_id[:8]})")
-
-            # Log the action
-            log_entry = AgentLog(
-                agent_id="monitor",
-                log_type="intervention",
-                message=f"Auto-created task for phase {next_phase.name} after {current_phase.name} completion",
-                details={"task_id": task.id, "phase_id": next_phase.id}
-            )
-            session.add(log_entry)
-            session.commit()
-
-            # Create agent for the task so it actually gets worked on
-            try:
-                # Get phase CLI configuration
-                phase_cli_tool = next_phase.cli_tool
-                phase_cli_model = next_phase.cli_model
-                phase_glm_token_env = next_phase.glm_api_token_env
-
-                # Get project context
-                project_context = await self.agent_manager.get_project_context()
-
-                # Create agent
-                agent = await self.agent_manager.create_agent_for_task(
-                    task=task,
-                    enriched_data={"enriched_description": task_description},
-                    memories=[],
-                    project_context=project_context,
-                    working_directory=None,  # Will use workflow's working directory
-                    phase_cli_tool=phase_cli_tool,
-                    phase_cli_model=phase_cli_model,
-                    phase_glm_token_env=phase_glm_token_env,
-                )
-
-                # Update task with assigned agent
-                task.assigned_agent_id = agent.id
-                task.status = "in_progress"
-                from datetime import datetime
-                task.started_at = datetime.utcnow()
-                session.commit()
-
-                logger.info(f"Created agent {agent.id[:8]} for phase {next_phase.name}")
-
-            except Exception as agent_err:
-                logger.error(f"Failed to create agent for task {task_id[:8]}: {agent_err}")
-                # Set task to queued so background_queue_processor can retry agent creation
-                try:
-                    task.status = "queued"
-                    from datetime import datetime
-                    task.queued_at = datetime.utcnow()
-                    session.commit()
-                    logger.info(f"Set task {task_id[:8]} status to queued for background retry")
-                except Exception as queue_err:
-                    logger.error(f"Failed to queue task {task_id[:8]}: {queue_err}")
-
-        except Exception as e:
-            logger.error(f"Failed to create next phase task: {e}")
-            session.rollback()
-        finally:
-            session.close()
 
     async def _create_phase_task_and_agent(
         self, workflow_id: str, phase_id: str, phase_name: str, action: str
