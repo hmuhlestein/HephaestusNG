@@ -576,10 +576,10 @@ async def rerun_design(request: dict):
 
     # Step 3: Clean up branches (non-blocking)
     try:
-        from src.core.branch_manager import BranchManager
+        from src.core.worktree_manager import WorktreeManager
         from src.core.database import DatabaseManager
         db_manager = DatabaseManager()
-        bm = BranchManager(db_manager)
+        bm = WorktreeManager(db_manager)
         # Run cleanup in background thread to not block pipeline start
         import threading
         thread = threading.Thread(
@@ -913,11 +913,11 @@ def _run_repair(repair_id: str, filename: str, project: Path, logger):
                         "branches": branches[:10]
                     })
 
-                    # Use BranchManager for robust merging
-                    from src.core.branch_manager import BranchManager
+                    # Use WorktreeManager for robust merging
+                    from src.core.worktree_manager import WorktreeManager
                     from src.core.database import DatabaseManager
                     db_manager = DatabaseManager()
-                    branch_manager = BranchManager(db_manager)
+                    branch_manager = WorktreeManager(db_manager)
                     branch_manager.reload(str(project))
 
                     for branch in branches:
@@ -2369,12 +2369,12 @@ async def stop_pipeline(clear_state: bool = False):
 @router.post("/cleanup-branches")
 async def cleanup_branches():
     """Clean up all stale agent branches."""
-    from src.core.branch_manager import BranchManager
+    from src.core.worktree_manager import WorktreeManager
     from src.core.database import DatabaseManager
 
     try:
         db_manager = DatabaseManager()
-        branch_manager = BranchManager(db_manager)
+        branch_manager = WorktreeManager(db_manager)
         result = branch_manager.cleanup_all_stale_branches()
         return result
     except Exception as e:

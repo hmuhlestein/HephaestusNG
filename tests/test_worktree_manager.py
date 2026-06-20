@@ -58,6 +58,7 @@ def worktree_manager(test_db, temp_repo, monkeypatch):
     config.prefer_child_on_tie = True
 
     monkeypatch.setattr('src.core.simple_config.get_config', lambda: config)
+    monkeypatch.setattr('src.core.worktree_manager.get_config', lambda: config)
 
     manager = WorktreeManager(test_db)
 
@@ -213,10 +214,10 @@ def test_commit_for_validation(worktree_manager, test_db):
     assert commit_result["files_changed"] == 1
     assert "Ready for validation" in commit_result["message"]
 
-    # Verify commit exists
+    # Verify commit exists (git message carries an [Agent <id>] prefix for traceability)
     worktree_repo = Repo(worktree_path)
     commit = worktree_repo.commit(commit_result["commit_sha"])
-    assert commit.message == commit_result["message"]
+    assert commit_result["message"] in commit.message
 
     # Cleanup
     worktree_manager.cleanup_worktree(agent_id)

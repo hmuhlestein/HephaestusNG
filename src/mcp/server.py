@@ -15,7 +15,7 @@ import asyncio
 
 from src.core.simple_config import get_config
 from src.core.database import DatabaseManager, Task, Agent, Memory, Phase, ValidationReview, AgentResult, WorkflowResult, Workflow, get_db
-from src.core.branch_manager import BranchManager
+from src.core.worktree_manager import WorktreeManager
 from src.memory.vector_store import VectorStoreManager
 from src.agents.manager import AgentManager
 from src.memory.rag import RAGSystem
@@ -568,7 +568,7 @@ class ServerState:
         self.agent_manager: Optional[AgentManager] = None
         self.rag_system: Optional[RAGSystem] = None
         self.phase_manager: Optional[PhaseManager] = None
-        self.branch_manager: Optional[BranchManager] = None
+        self.branch_manager: Optional[WorktreeManager] = None
         self.result_validator_service: Optional[ResultValidatorService] = None
         self.embedding_service: Optional[EmbeddingService] = None
         self.task_similarity_service: Optional[TaskSimilarityService] = None
@@ -609,7 +609,7 @@ class ServerState:
         )
 
         # Initialize worktree manager
-        self.branch_manager = BranchManager(
+        self.branch_manager = WorktreeManager(
             db_manager=self.db_manager
         )
 
