@@ -83,8 +83,14 @@ latency could exceed 5 min before any task registers; if the run dies early with
 **Test-design caveat:** hello-world is right for a *first* run (prove it executes),
 but it's so trivial that QA/validation pass cleanly and the gate's interesting
 paths (`goto development`/`architecture`) never fire. After it's green, do a second
-run with a design that has a **deliberate gap** (e.g. a requirement with no test)
-to confirm the gate actually sends work back.
+run that deterministically forces a **failure signal** so you can watch the gate
+score `< 0.7` and send work back, then reconverge. Don't use "a requirement with
+no test" — the QA phase would just write the test and close the gap. Instead seed
+a **failing test (TDD-style)**: commit a test asserting the target behavior that
+currently fails → QA reports `failed_tests: 1` → gate `goto development` → an agent
+makes it pass → re-QA `continue`. (Alternative: an over-constrained/contradictory
+requirement so product validation honestly reports `unmet_requirements`, forcing
+the same path via the §9.1 hard-floor override.)
 
 ### 4. Finish Tier 2 the designed way (after smoke passes)
 Per §4.4: human-input → `autopilot_interventions` DB table + `asyncio.Condition`
