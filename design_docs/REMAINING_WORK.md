@@ -46,19 +46,45 @@ to assert `DesignEntry.status == DesignStatus.PENDING`. `crackme` test was a
 case-sensitivity bug in the assertion ("execution proof" vs "Execution proof").
 
 ### 3. End-to-end smoke run — highest information value, still never done
-Smoke test repo prepared at `/tmp/heph-smoke-test` with `docs/design-queue/add_hello_world.md`.
+Smoke test repo prepared at `/tmp/heph-smoke-test` (git repo with a base commit —
+required, `git worktree add` fails on a repo with zero commits) and
+`docs/design-queue/add_hello_world.md`.
 Run with: `heph start && heph autopilot start --project-path /tmp/heph-smoke-test`
 
-Confirm:
-- worktrees under `.worktrees/`, `.hephaestus/` context populated;
-- **the Monitor spawns agents** for each phase (the Tier 1 handoff — the biggest
-  "does it actually run" risk);
-- phases advance via the **engine** evaluation only (no double-iteration);
-- `[SPEC-GATE]` logs sane scores after QA/validation;
-- reports land in `<project>/docs/`, get collected, HTML renders via Jinja2;
-- merge-on-success / discard-on-failure behave.
-- **Watch B2:** the new 5-min `hard_error`-on-no-tasks must not trip during a
-  legitimately slow first phase now that the Monitor drives spawning.
+**Make it diagnostic, not pass/fail.** Tail `~/.hephaestus/autopilot/run-*/` and the
+server log; watch the DB `tasks`/`agents` tables.
+
+**Pre-flight:** backend `/health` healthy; vector store (qdrant/turbovec) reachable;
+LLM key set; **the cli agent tool (opencode/pi) installed and on PATH** — agents
+won't launch otherwise.
+
+**Six checkpoints, in failure-order (where it's most likely to break first):**
+1. **Phase-1 agent actually spawns** — *the Tier 1 handoff, #1 risk.* A Phase-1
+   task should appear AND an agent in a worktree. Task stuck `pending` with no
+   agent ⇒ `Monitor._create_next_phase_task` isn't spawning. Confirm `.worktrees/wt_*`
+   exists and `tmux ls` shows a session.
+2. **Worktree context populated** — `ls .worktrees/wt_*/.hephaestus/` holds
+   `design.md` (+ `context.md`, `qa_spec.json`). Empty ⇒ `_gather_worktree_context`
+   isn't reading `launch_params.design_document`.
+3. **Phases advance 1→2→…→10 via the engine**, not re-running Phase 1 (the removed
+   double-loop).
+4. **`[SPEC-GATE]` log line** with a score after qa_validation / product_validation.
+   Missing ⇒ `_build_spec_phase_output` not firing or `working_directory` is None.
+5. **Reports land + merge** — `<project>/docs/` (on `main`) gets
+   `requirements_analysis.md`, `qa_report.md`, `qa_result.json`,
+   `product_validation.json`; HTML renders via Jinja2.
+6. **Merge-on-success / discard-on-failure** — `git worktree list` clean at the
+   end; `git log` shows the merges.
+
+**B2 trap to watch:** the new 5-min `hard_error`-on-no-tasks. Phase-1 spinup + LLM
+latency could exceed 5 min before any task registers; if the run dies early with
+`hard_error`, that's the suspect — confirm a task exists within 5 min of start.
+
+**Test-design caveat:** hello-world is right for a *first* run (prove it executes),
+but it's so trivial that QA/validation pass cleanly and the gate's interesting
+paths (`goto development`/`architecture`) never fire. After it's green, do a second
+run with a design that has a **deliberate gap** (e.g. a requirement with no test)
+to confirm the gate actually sends work back.
 
 ### 4. Finish Tier 2 the designed way (after smoke passes)
 Per §4.4: human-input → `autopilot_interventions` DB table + `asyncio.Condition`
