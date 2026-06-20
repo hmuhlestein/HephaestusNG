@@ -86,7 +86,7 @@ Two stores: file `docs/design-queue/*` and DB `autopilot_designs` (+`queue_order
 ### TIER 5 — Cleanup / decomposition (P6/P7)
 
 1. ~~**Delete root `autopilot.py`**~~ **DONE.** Deleted the orphaned legacy runner (~770 lines).
-2. Template the 250-line inline HTML generator (`generate_html_feature_report`); converge with `report_generator.py`.
+2. ~~Template the 250-line inline HTML generator (`generate_html_feature_report`)~~ **DONE.** Extracted to Jinja2 template (`src/autopilot/templates/feature_report.html`). `report_generator.py` (light theme, phase_9 example) kept as separate simpler report.
 3. Split `autopilot_api.py` (~2560 lines) into queue/project/feature/message/control/intervention routers; split `orchestrator.py` (~2300) and `Autopilot.tsx` (~3200).
 
 ---
