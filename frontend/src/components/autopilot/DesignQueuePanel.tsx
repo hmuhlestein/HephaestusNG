@@ -20,7 +20,7 @@ import {
 import { CSS } from '@dnd-kit/utilities';
 import {
   Plus, Trash2, FileText, Clock, GripVertical, Search, ListOrdered, RefreshCw,
-  CheckCircle2, XCircle, Loader2, Pause, Play
+  CheckCircle2, XCircle, Loader2, Pause, Play, Upload
 } from 'lucide-react';
 import { apiService } from '@/services/api';
 import { Button } from '@/components/ui/button';
@@ -31,10 +31,11 @@ import DesignDetailModal from './DesignDetailModal';
 interface DesignQueuePanelProps {
   projectId: string | null;
   onAddDesign: () => void;
+  onLoadDesign: () => void;
   currentDesign?: string | null;
 }
 
-const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDesign, currentDesign }) => {
+const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDesign, onLoadDesign, currentDesign }) => {
   const queryClient = useQueryClient();
   const [search, setSearch] = useState('');
   const [localOrder, setLocalOrder] = useState<any[] | null>(null);
@@ -217,6 +218,10 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
           <Plus className="w-4 h-4 mr-1" />
           Add Design
         </Button>
+        <Button onClick={onLoadDesign} variant="outline" className="text-violet-600 border-violet-200 hover:bg-violet-50">
+          <Upload className="w-4 h-4 mr-1" />
+          Load Design
+        </Button>
       </div>
       <p className="text-xs text-gray-400">
         Sorted by filename by default. Drag to reorder manually.
@@ -264,6 +269,10 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
           <Button onClick={onAddDesign} variant="outline" className="text-violet-600 border-violet-200 hover:bg-violet-50">
             <Plus className="w-4 h-4 mr-1" />
             Add Design
+          </Button>
+          <Button onClick={onLoadDesign} variant="outline" className="text-violet-600 border-violet-200 hover:bg-violet-50">
+            <Upload className="w-4 h-4 mr-1" />
+            Load Design
           </Button>
         </div>
       )}

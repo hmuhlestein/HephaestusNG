@@ -16,6 +16,7 @@ import FeatureGallery from '@/components/autopilot/FeatureGallery';
 import FeatureDetailModal from '@/components/autopilot/FeatureDetailModal';
 import MessageCenter from '@/components/autopilot/MessageCenter';
 import AddDesignModal from '@/components/autopilot/AddDesignModal';
+import LoadDesignModal from '@/components/autopilot/LoadDesignModal';
 import HumanInputBanner from '@/components/autopilot/HumanInputBanner';
 import { useProject } from '@/context/ProjectContext';
 
@@ -30,6 +31,7 @@ const Autopilot: React.FC = () => {
   );
   const [selectedFeatureId, setSelectedFeatureId] = useState<string | null>(null);
   const [showAddDesign, setShowAddDesign] = useState(false);
+  const [showLoadDesign, setShowLoadDesign] = useState(false);
   const { activeProject } = useProject();
   const projectId = activeProject?.id || null;
 
@@ -187,6 +189,7 @@ const Autopilot: React.FC = () => {
             <DesignQueuePanel 
               projectId={projectId} 
               onAddDesign={() => setShowAddDesign(true)}
+              onLoadDesign={() => setShowLoadDesign(true)}
               currentDesign={status?.current_design}
             />
           )}
@@ -207,6 +210,11 @@ const Autopilot: React.FC = () => {
         open={showAddDesign}
         projectId={projectId}
         onClose={() => setShowAddDesign(false)}
+      />
+      <LoadDesignModal
+        open={showLoadDesign}
+        projectId={projectId}
+        onClose={() => setShowLoadDesign(false)}
       />
     </div>
   );
