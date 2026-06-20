@@ -675,7 +675,9 @@ async def rerun_design(request: dict):
 
 @router.post("/queue/repair")
 async def repair_design(request: dict):
-    """Repair a design: analyze state, merge branches, terminate orphans, report status."""
+    """Repair a design: spin up a recovery workflow and a review agent that checks
+    and fixes stuck/incomplete tasks. (Branch reconciliation is obsolete under
+    per-task worktree isolation — failed worktrees are discarded, never merged.)"""
     import uuid
     import asyncio
     from pathlib import Path
@@ -833,7 +835,6 @@ def _run_repair(repair_id: str, filename: str, project: Path, logger):
     """Background repair task."""
     from src.core.database import get_db, Workflow
     import json
-    import subprocess
     import uuid
 
     logger.info(f"[REPAIR] Starting repair {repair_id} for {filename}")
@@ -894,56 +895,13 @@ def _run_repair(repair_id: str, filename: str, project: Path, logger):
             if existing_workflow_ids:
                 findings.append({"type": "info", "message": f"Found {len(existing_workflow_ids)} existing workflow(s) for context"})
 
-        # 4. Check for unmerged branches
-        logger.info("[REPAIR] Step 4: Checking for unmerged branches")
-        try:
-            result = subprocess.run(
-                ['git', 'branch', '--list', 'agent-*'],
-                capture_output=True, text=True, timeout=10,
-                cwd=str(project)
-            )
-            if result.returncode == 0:
-                branches = [b.strip().lstrip('* ') for b in result.stdout.strip().split('\n') if b.strip()]
-                logger.info(f"[REPAIR] Found {len(branches)} unmerged agent branch(es)")
-                
-                if branches:
-                    findings.append({
-                        "type": "unmerged_branches",
-                        "message": f"{len(branches)} unmerged agent branch(es)",
-                        "branches": branches[:10]
-                    })
+        # NOTE: Repair no longer merges/cleans stray agent branches. Under
+        # per-task worktree isolation a failed agent's worktree is discarded and
+        # never merged, so there are no half-baked branches to reconcile. Repair
+        # is now purely workflow recovery (review agent on the tasks above).
 
-                    # Use WorktreeManager for robust merging
-                    from src.core.worktree_manager import WorktreeManager
-                    from src.core.database import DatabaseManager
-                    db_manager = DatabaseManager()
-                    branch_manager = WorktreeManager(db_manager)
-                    branch_manager.reload(str(project))
-
-                    for branch in branches:
-                        agent_id = branch.replace('agent-', '')
-                        logger.info(f"[REPAIR] Merging branch {branch} (agent_id={agent_id[:8]})")
-                        try:
-                            result = branch_manager.merge_to_main(agent_id)
-                            status = result.get('status', 'unknown')
-                            if status in ('success', 'conflict_resolved'):
-                                branch_manager.cleanup_branch(agent_id)
-                                actions_taken.append(f"Merged and cleaned {branch}: {status}")
-                                logger.info(f"[REPAIR] Merged {branch}: {status}")
-                            else:
-                                findings.append({"type": "merge_warning", "message": f"Merge returned: {status} for {branch}"})
-                                logger.warning(f"[REPAIR] Merge returned {status} for {branch}")
-                        except Exception as e:
-                            logger.error(f"[REPAIR] Failed to merge {branch}: {e}")
-                            findings.append({"type": "merge_error", "message": f"Failed to merge {branch}: {e}"})
-            else:
-                logger.warning(f"[REPAIR] git branch command failed: {result.stderr}")
-        except Exception as e:
-            logger.error(f"[REPAIR] Branch check failed: {e}")
-            findings.append({"type": "error", "message": f"Branch check failed: {e}"})
-
-        # Store results
-        logger.info("[REPAIR] Step 5: Storing results")
+        # 4. Store results
+        logger.info("[REPAIR] Step 4: Storing results")
         result = {
             "repair_id": repair_id,
             "filename": filename,
