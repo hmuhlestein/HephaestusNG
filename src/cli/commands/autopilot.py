@@ -80,9 +80,8 @@ def start_pipeline(args):
             print("Autopilot pipeline started!")
             print(f"Project: {data.get('project', str(project_path))}")
             print()
-            print("Monitor status: heph autopilot status")
-            print("Stop pipeline:  heph autopilot stop")
-            return 0
+            print("Press Ctrl+C to stop.")
+            print()
         else:
             print(f"Error: {resp.status_code} - {resp.text}")
             return 1
@@ -92,6 +91,32 @@ def start_pipeline(args):
     except Exception as e:
         print(f"Error: {e}")
         return 1
+
+    # Block until pipeline stops or user presses Ctrl+C
+    import time
+    try:
+        while True:
+            time.sleep(5)
+            try:
+                status_resp = requests.get(
+                    "http://127.0.0.1:8300/api/autopilot/status",
+                    timeout=5,
+                )
+                if status_resp.status_code == 200:
+                    status = status_resp.json()
+                    if not status.get("running", False):
+                        print("\nPipeline finished.")
+                        return 0
+            except Exception:
+                pass
+    except KeyboardInterrupt:
+        print("\nStopping pipeline...")
+        try:
+            requests.post("http://127.0.0.1:8300/api/autopilot/stop", timeout=30)
+            print("Pipeline stopped.")
+        except Exception as e:
+            print(f"Error stopping: {e}")
+        return 0
 
 
 def stop_pipeline(args):
