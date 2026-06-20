@@ -63,6 +63,8 @@ Removed the auto-launch block (~100 lines) and nudge/auto-kill block (~50 lines)
 - CLI start/stop/status call API (no more direct subprocess spawning)
 - Fixes **B5** (one liveness convention) and **B6** (no duplicate SDK)
 
+**Known limitation (MVP acceptable):** No backend lifecycle integration — the service is a module-level singleton (`get_autopilot_service()`). If the backend restarts, the in-memory pipeline state is lost. Persistent state is still written to `pipeline_state.json` / `events.jsonl` so the next start can resume. A future iteration could register the service with the backend's startup/shutdown hooks and persist state to DB.
+
 **Remaining:**
 1. Replace the human-input file mailbox (`input_request_*.json`) with an `autopilot_interventions` DB table + an `asyncio.Condition`; UI submits via REST. Fixes **B4** (TOCTOU) and **B7** (option vocab `c/s/q/m` vs `c/p/s/q`).
 2. Add `/api/autopilot/stream` (WS/SSE); move UI off interval polling for status/messages/input.
