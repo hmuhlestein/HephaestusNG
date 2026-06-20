@@ -1761,21 +1761,26 @@ def run_single_design(
 
             description = (
                 f"Autopilot: {design_entry.name} - Iteration {iteration}\n"
-                f"Design Document: {design_copy}\n"
-                f"Project Path: {project_path}\n"
-                f"Docs Path: {docs_dir}\n"
-                f"Feature Folder: {feature_folder}\n"
-                f"Context: Building from design document. "
-                f"Generated docs (requirements, architecture, reports) go in: {docs_dir}\n"
-                f"Implementation code (src/, tests/) goes in: {project_path}\n"
+                f"Your working directory is an isolated git worktree (the project root).\n"
+                f"Design Document: ./.hephaestus/design.md (copied into your worktree)\n"
+                f"Project Path: . (your working directory)\n"
+                f"Docs Path: ./docs/ (generated requirements, architecture, reports)\n"
+                f"Implementation code (src/, tests/) goes in your working directory.\n"
+                f"Inputs (design, context, qa_spec) are in ./.hephaestus/.\n"
                 f"Read the design doc carefully, extract requirements, "
                 f"create architecture, implement, review, security check, and QA."
             )
 
+            # design_document is the absolute SOURCE path; the backend (AgentManager)
+            # reads it and copies it into each worktree's .hephaestus/design.md. Agents
+            # only ever read the worktree-relative copy.
             launch_params = {
                 "design_document": str(design_copy),
                 "project_path": str(project_path),
-                "project_context": f"Docs go in: {docs_dir}. Code goes in: {project_path}.",
+                "project_context": (
+                    "Your working directory is the project root. Write code/tests there, "
+                    "generated docs in ./docs/. Read inputs from ./.hephaestus/."
+                ),
             }
 
             wf_status = run_single_workflow(
