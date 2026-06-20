@@ -146,6 +146,26 @@ in `("pending","completed")`. In the new architecture its only job is the
 "is there a next phase?" boolean — `_create_phase_task_and_agent` owns status/task/agent.
 The `== "pending"` gate is the bug.
 
+**Add an integration test for the goto loop (ship with the fix).** This bug was only
+findable by reading the reconvergence path because **no test exercises a real goto** — a
+gap worth closing. Add a test (e.g. `tests/test_goto_reconvergence.py`) that drives
+`PhaseManager.mark_phase_complete` through a goto WITHOUT live agents/LLM:
+- Build a small multi-phase workflow in a `:memory:` DB (3–4 phases) with an
+  `orchestrator_config` of `type: "evaluating"` and an evaluation point that returns
+  `goto` to an earlier phase the first time, `continue` after.
+- Mark phases complete in order until the goto fires; assert the returned
+  `EvaluationResult` dict is `{action: "goto", target_phase_id: <earlier>, should_continue: True}`,
+  and that the earlier phase's `PhaseExecution` goes back to `in_progress`.
+- Then mark the re-run phases complete again and assert the workflow **advances through
+  the later phases** (does NOT `_complete_workflow` early) and only completes after the
+  final phase — i.e. the 3c regression is caught.
+- Patch/stub `agent_manager.create_agent_for_task` so `_create_phase_task_and_agent` runs
+  without spawning real agents (assert it's called for the resolved target each time).
+- Bound it with `max_total_gotos` and assert the loop terminates.
+This is the first **engine-level integration test**; it guards Tier 0 (single authority)
++ the 3b/3c phase-transition fixes against future regressions, complementing the unit
+tests in `tests/test_autopilot_spec.py`.
+
 ### 4. Finish Tier 2 the designed way (after smoke passes)
 Per §4.4: human-input → `autopilot_interventions` DB table + `asyncio.Condition`
 + REST submit (fixes **B4/B7**, removes the `input_request_*.json` mailbox); then
