@@ -15,7 +15,7 @@ This file is the *actionable backlog* of what's left, prioritized, with file/lin
 | Report collection | `_report_path()` + `docs/` sweep in `orchestrator.py` so HTML report / forensics read the merged `<project>/docs/` location. |
 | Repair flow | Slimmed to workflow recovery only (removed redundant branch reconciliation). |
 | Hybrid spec gate (§9.1) | `src/autopilot/spec.py` (floors + agent judgement → score bands), `Monitor._build_spec_phase_output` feeds the engine evaluation points, phase 7/8 emit structured `qa_result.json` / `product_validation.json`. 16 tests. |
-| **Single control authority (Tier 0)** | **DONE.** Removed the `for iteration in range(max_iterations)` outer loop from `run_single_design`. The engine's evaluation points are now the SOLE authority for iteration (goto/retry/continue bounded by `max_total_gotos=10`). `generate_product_validation_report` simplified to read existing results only (no duplicate heuristic). `run_single_design` signature updated to remove `max_iterations` parameter. |
+| **Single control authority (Tier 0)** | **DONE.** Removed the `for iteration in range(max_iterations)` outer loop from `run_single_design`. The engine's evaluation points are now the SOLE authority for iteration (goto/retry/continue bounded by `max_total_gotos`). `generate_product_validation_report` simplified to read existing results only (no duplicate heuristic). `--max-iterations` now maps to engine's `max_total_gotos` via `_update_orchestrator_max_gotos()`. |
 | **B1: stop_pipeline scope** | **DONE.** Removed the block in `autopilot_api.stop_pipeline` that terminated ALL active agents. Now only terminates agents tied to autopilot workflows. |
 | **Tier 5.1: Delete orphaned autopilot.py** | **DONE.** Deleted root `autopilot.py` (~770 lines). No imports or references existed outside the file itself. |
 
@@ -40,11 +40,18 @@ Resolve by either: **(a, preferred)** make `--max-iterations` set
 `max_total_gotos` so the knob keeps working, or **(b)** remove it from the
 CLI/API/argparse and document `max_total_gotos` as the control. Small, isolated.
 
-### TIER 1 — Move scheduling/monitoring out of the orchestrator (P2)
+### ~~TIER 1 — Move scheduling/monitoring out of the orchestrator (P2)~~ ✅ DONE
 
-`run_single_workflow` (orchestrator.py ~1409–1525) re-implements the task scheduler (depends_on / parallel_group / max_concurrent → `/api/create_agent_for_task`) and a nudge/auto-kill loop (~1544–1590).
+Removed the auto-launch block (~100 lines) and nudge/auto-kill block (~50 lines) from `run_single_workflow`. The orchestrator now only monitors and logs.
 
-**Work:** delete the auto-launch block (engine already owns task→agent creation) and route stuck-agent handling through Guardian/Conductor. Acceptance: the orchestrator no longer calls `create_agent_for_task`; concurrency is enforced in one place.
+**Critical fix:** The Monitor's `_create_next_phase_task` previously only created tasks (DB insert) without creating agents — tasks would sit in `pending` forever. Fixed to also call `agent_manager.create_agent_for_task()` so agents are spawned for each phase. This was the hidden dependency that made the auto-launch block appear necessary.
+
+**Agent creation flow (verified):**
+1. `sdk.start_workflow` → server creates Phase 1 task + agent via `create_task` endpoint
+2. Phase 1 agent completes → `update_task_status` marks done
+3. Monitor detects phase complete → `_create_next_phase_task` creates Phase 2 task + agent
+4. Repeat for phases 3–10
+5. Orchestrator polling loop detects workflow completion
 
 ### TIER 2 — In-process AutopilotService + events (Slice E, P3/P5/P6)
 
@@ -108,6 +115,7 @@ Two stores: file `docs/design-queue/*` and DB `autopilot_designs` (+`queue_order
 2. ~~**Tier 0** (single control loop)~~ **DONE.**
 3. ~~**B1** quick fix (scope `stop_pipeline`)~~ **DONE.**
 4. ~~**Tier 5.1** delete root `autopilot.py`~~ **DONE.**
-5. **Tier 1** (move scheduling out of orchestrator) — delete the auto-launch/nudge blocks.
-6. **Tier 2** (in-process service + events) as the larger investment.
+5. ~~**Tier 1** (move scheduling out of orchestrator)~~ **DONE.**
+6. **Tier 2** (in-process AutopilotService + events) — the larger investment.
 7. **B2** fix (authoritative completion from engine).
+8. **Tier 3** (unify the queue).
