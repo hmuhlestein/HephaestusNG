@@ -1,13 +1,9 @@
 """heph autopilot — Autopilot pipeline control."""
 
 import os
-import sys
-import subprocess
 from pathlib import Path
 
 from src.cli.utils import output
-
-HEPHAESTUS_DIR = Path(__file__).parent.parent.parent.parent
 
 
 def register(subparsers):
@@ -45,6 +41,8 @@ def register(subparsers):
 
 
 def start_pipeline(args):
+    import requests
+
     project_path = Path(args.project_path).resolve()
     design_queue = args.design_queue or str(project_path / "docs" / "design-queue")
 
@@ -61,129 +59,86 @@ def start_pipeline(args):
 
     os.makedirs(design_queue, exist_ok=True)
 
-    python = str(HEPHAESTUS_DIR / ".venv" / "bin" / "python")
-    if not Path(python).exists():
-        python = sys.executable
-
-    cmd = [
-        python, "-m", "src.autopilot.orchestrator",
-        "--project-path", str(project_path),
-        "--design-queue", str(design_queue),
-        "--max-iterations", str(args.max_iterations),
-    ]
-    if args.drop_db:
-        cmd.append("--drop-db")
-
     print(f"Project:      {project_path}")
     print(f"Design queue: {design_queue}")
     print(f"Iterations:   {args.max_iterations}")
     print()
-    print("Starting autopilot pipeline (Ctrl+C to stop)...")
-    print()
 
+    # Call the API to start the pipeline (single spawn path)
     try:
-        proc = subprocess.Popen(cmd, cwd=str(HEPHAESTUS_DIR))
-        from src.cli.utils import save_pid
-        save_pid("orchestrator", proc.pid)
-        proc.wait()
-        return proc.returncode or 0
-    except KeyboardInterrupt:
-        print("\nStopped.")
-        proc.terminate()
-        return 0
+        resp = requests.post(
+            "http://127.0.0.1:8300/api/autopilot/start",
+            params={
+                "project_path": str(project_path),
+                "design_queue": str(design_queue),
+                "max_iterations": args.max_iterations,
+            },
+            timeout=10,
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            print("Autopilot pipeline started!")
+            print(f"Project: {data.get('project', str(project_path))}")
+            print()
+            print("Monitor status: heph autopilot status")
+            print("Stop pipeline:  heph autopilot stop")
+            return 0
+        else:
+            print(f"Error: {resp.status_code} - {resp.text}")
+            return 1
+    except requests.exceptions.ConnectionError:
+        print("Error: Backend not running. Start it with: heph start")
+        return 1
+    except Exception as e:
+        print(f"Error: {e}")
+        return 1
 
 
 def stop_pipeline(args):
-    import signal as sig
     import requests
-    from src.cli.utils import read_pid, remove_pid, is_process_running
 
-    # First, try to stop via API (properly pauses workflows and terminates agents)
+    print("Stopping autopilot pipeline...")
+
     try:
-        resp = requests.post("http://127.0.0.1:8300/api/autopilot/stop", json={"clear_state": True}, timeout=10)
+        resp = requests.post(
+            "http://127.0.0.1:8300/api/autopilot/stop",
+            json={"clear_state": False},
+            timeout=30,
+        )
         if resp.status_code == 200:
             data = resp.json()
-            print(f"Autopilot stopped: {data.get('agents_terminated', 0)} agents terminated, workflows paused")
+            agents = data.get("agents_terminated", 0)
+            print(f"Autopilot stopped: {agents} agents terminated")
+            return 0
         else:
-            print(f"API stop returned {resp.status_code}: {resp.text}")
+            print(f"Error: {resp.status_code} - {resp.text}")
+            return 1
     except requests.exceptions.ConnectionError:
-        print("Backend not running, killing orchestrator directly")
+        print("Error: Backend not running.")
+        return 1
     except Exception as e:
-        print(f"API stop failed: {e}")
-
-    # Also terminate any remaining active agents
-    try:
-        resp = requests.get("http://127.0.0.1:8300/api/agents", timeout=5)
-        if resp.status_code == 200:
-            agents = resp.json().get("agents", resp.json()) if isinstance(resp.json(), dict) else resp.json()
-            active = [a for a in agents if isinstance(a, dict) and a.get("status") in ("working", "starting", "idle")]
-            for agent in active:
-                agent_id = agent.get("id", "")
-                try:
-                    requests.post("http://127.0.0.1:8300/api/terminate_agent", json={"agent_id": agent_id}, timeout=5)
-                    print(f"  Terminated agent {agent_id[:8]}")
-                except Exception:
-                    pass
-    except Exception:
-        pass
-
-    # Also kill orchestrator process if still running
-    pid = read_pid("orchestrator")
-    if pid and is_process_running(pid):
-        try:
-            os.kill(pid, sig.SIGTERM)
-            import time
-            for _ in range(5):
-                time.sleep(0.5)
-                if not is_process_running(pid):
-                    break
-            else:
-                if is_process_running(pid):
-                    os.kill(pid, sig.SIGKILL)
-            print(f"Killed orchestrator process (pid {pid})")
-        except OSError as e:
-            print(f"Error killing orchestrator: {e}")
-        finally:
-            remove_pid("orchestrator")
-    else:
-        remove_pid("orchestrator")
-
-    # Clear pipeline state
-    try:
-        from pathlib import Path
-        state_dir = Path.home() / ".hephaestus" / "autopilot"
-        (state_dir / "pipeline_state.json").unlink(missing_ok=True)
-        (state_dir / "orchestrator.pid").unlink(missing_ok=True)
-        (state_dir / "orchestrator_agent_id").unlink(missing_ok=True)
-    except Exception:
-        pass
-
-    return 0
+        print(f"Error: {e}")
+        return 1
 
 
 def pipeline_status(args):
-    # Check if orchestrator is running
-    import subprocess
-    r = subprocess.run(["pgrep", "-f", "orchestrator.py"], capture_output=True, text=True)
-    running = r.returncode == 0
+    import requests
 
-    data = {"running": running}
-    if running:
-        data["pid"] = r.stdout.strip()
-
-    # Check for state file
-    state_files = sorted(Path.home().glob(".hephaestus/autopilot/run-*/state.json"), reverse=True)
-    if state_files:
-        import json
-        try:
-            state = json.loads(state_files[0].read_text())
-            data["latest_run"] = state
-            data["state_file"] = str(state_files[0])
-        except Exception:
-            pass
-
-    output(args, data, _print_pipeline_status)
-    return 0
+    try:
+        resp = requests.get("http://127.0.0.1:8300/api/autopilot/status", timeout=5)
+        if resp.status_code == 200:
+            data = resp.json()
+            output(args, data, _print_pipeline_status)
+            return 0
+        else:
+            print(f"Error: {resp.status_code} - {resp.text}")
+            return 1
+    except requests.exceptions.ConnectionError:
+        print("Error: Backend not running. Start it with: heph start")
+        return 1
+    except Exception as e:
+        print(f"Error: {e}")
+        return 1
 
 
 def _print_pipeline_status(data):
