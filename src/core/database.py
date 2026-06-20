@@ -984,6 +984,7 @@ class DatabaseManager:
 
         # Migrate new columns for existing databases
         self._migrate_task_dependency_columns()
+        self._migrate_autopilot_designs_columns()
 
     def _create_fts5_tables(self):
         """Create FTS5 virtual tables and triggers for ticket search."""
@@ -1168,6 +1169,39 @@ class DatabaseManager:
                 logger.info("Migrated task dependency columns")
         except Exception as e:
             logger.debug(f"Task dependency migration (may already exist): {e}")
+
+    def _migrate_autopilot_designs_columns(self):
+        """Add status/content_hash/feature_folder/completed_at to autopilot_designs for existing databases."""
+        try:
+            with self.engine.connect() as conn:
+                # Add content_hash column
+                try:
+                    conn.execute(text("ALTER TABLE autopilot_designs ADD COLUMN content_hash VARCHAR(64)"))
+                except Exception:
+                    pass  # Column already exists
+
+                # Add status column
+                try:
+                    conn.execute(text("ALTER TABLE autopilot_designs ADD COLUMN status VARCHAR(20) NOT NULL DEFAULT 'pending'"))
+                except Exception:
+                    pass  # Column already exists
+
+                # Add feature_folder column
+                try:
+                    conn.execute(text("ALTER TABLE autopilot_designs ADD COLUMN feature_folder TEXT"))
+                except Exception:
+                    pass  # Column already exists
+
+                # Add completed_at column
+                try:
+                    conn.execute(text("ALTER TABLE autopilot_designs ADD COLUMN completed_at DATETIME"))
+                except Exception:
+                    pass  # Column already exists
+
+                conn.commit()
+                logger.info("Migrated autopilot_designs columns")
+        except Exception as e:
+            logger.debug(f"autopilot_designs migration (may already exist): {e}")
 
     def get_session(self):
         """Get a database session."""
