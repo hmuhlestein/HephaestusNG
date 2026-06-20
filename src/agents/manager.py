@@ -11,7 +11,7 @@ import libtmux
 from src.core.database import DatabaseManager, Agent, Task, AgentLog, BoardConfig, get_db
 from src.interfaces import get_cli_agent, LLMProviderInterface
 from src.core.simple_config import get_config
-from src.core.branch_manager import BranchManager
+from src.core.worktree_manager import WorktreeManager
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +34,7 @@ class AgentManager:
         self.tmux_server = libtmux.Server()
 
         # Branch manager for agent isolation
-        self.branch_manager = BranchManager(db_manager)
+        self.branch_manager = WorktreeManager(db_manager)
 
     async def create_agent_for_task(
         self,
