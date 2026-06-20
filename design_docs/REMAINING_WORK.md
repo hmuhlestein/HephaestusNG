@@ -102,7 +102,7 @@ Two stores: file `docs/design-queue/*` and DB `autopilot_designs` (+`queue_order
 
 ## Worktree follow-ups (small)
 
-- **`.gitignore` redundancy:** `run_single_design` adds `.hephaestus/` to the project's tracked `.gitignore` (orchestrator.py ~815), but `WorktreeManager` already excludes it via `.git/info/exclude`. Pick one (prefer `info/exclude`, keep `.gitignore` pristine).
+- ~~**`.gitignore` redundancy:**~~ **DONE.** Removed `.gitignore` modification from `create_feature_folder`. `.hephaestus/` is excluded via `.git/info/exclude` (managed by `WorktreeManager`), keeping the user's `.gitignore` pristine.
 - **Validator worktrees:** `validator_agent` uses `get_workspace_changes` / `get_agent_branch_path` (now worktree-aware) and `create_agent_for_task(use_existing_worktree=…, commit_sha=…)` — verify validators get a correct worktree/commit under the new model.
 - **First-run state:** if an older DB has agents on `agent-*` branches checked out in the main repo, the first worktree run should be fine (main stays on base branch), but worth a smoke test on a real project.
 
