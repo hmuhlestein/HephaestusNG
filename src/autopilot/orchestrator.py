@@ -1446,12 +1446,10 @@ def run_single_workflow(sdk, workflow_id: str, project_path: str, description: s
                     if state:
                         state.current_workflow_id = None
                     return "completed"
-                elif elapsed > 60:
-                    # No tasks at all after 60s - might be an empty workflow
-                    logger.info(f"No tasks and no agents after {elapsed}s - workflow appears empty")
-                    if state:
-                        state.current_workflow_id = None
-                    return "completed"
+                elif elapsed > 300 and not done:
+                    # No tasks AND no done tasks after 5 minutes — something is wrong
+                    logger.error(f"No tasks exist after {elapsed}s — workflow appears broken")
+                    return "hard_error"
 
             out_of_credits, credit_reason = check_api_credits()
             if out_of_credits:
