@@ -718,18 +718,19 @@ class PhaseManager:
         ).order_by(Phase.order).first()
 
         if next_phase:
-            # Update execution status
+            # Update execution status for pending or completed phases
+            # (completed = re-run after goto reconvergence)
             execution = session.query(PhaseExecution).filter_by(
                 phase_id=next_phase.id
             ).first()
 
-            if execution and execution.status == "pending":
+            if execution and execution.status in ("pending", "completed"):
                 execution.status = "in_progress"
                 execution.started_at = datetime.utcnow()
                 session.commit()
 
                 logger.info(f"Started next phase: {next_phase.name}")
-                return True
+            return True
 
         return False
 
