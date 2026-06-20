@@ -381,6 +381,25 @@ product_requirements/development`, bounded by `max_total_gotos`. The outer
 
 ## 7. Migration Plan (incremental, low-risk)
 
+**Agreed sequencing (2026-06-19):** do **Slice 0 (isolation / worktrees) first**,
+then resume the **hybrid spec gate** (§9.1), then the remaining slices. Rationale:
+the spec gate's "discard failed work" semantics are clean only once failures are
+isolated worktrees rather than half-merged branches.
+
+**Slice 0 — Restore per-task worktree isolation (§9.2).** Steps:
+0.1 Restore upstream `WorktreeManager` into `src/core/worktree_manager.py`
+    (currently a shim); base path → `<project>/.worktrees/`; per-task worktrees.
+    DB models already present — no migration.
+0.2 Add `worktree_base_path` / `worktree_branch_prefix` to `simple_config.py`.
+0.3 Add `.git/info/exclude` management (`.worktrees/`, `.hephaestus/`) and
+    populate `<worktree>/.hephaestus/` inbound context on worktree creation.
+0.4 Audit every out-of-tree path agents are told to read; move that content into
+    `<worktree>/.hephaestus/`; update phase prompts accordingly.
+0.5 Swap the 5 `BranchManager` call sites → `WorktreeManager`, reconciling
+    signatures; point agent launch CWD at the returned worktree path.
+0.6 Merge-on-success / discard-on-failure; restore worktree tests; **delete the
+    Repair flow.**
+
 The redesign is large; ship it as reversible slices, each independently valuable:
 
 1. **Slice A — Stop the bleeding (no behavior change risk).**
@@ -466,3 +485,50 @@ never reads it. So today there is **no machine-checkable gate** — "up to spec"
 *Rationale for the hard floor specifically:* because designs are a sequential
 chain (decision #1), prose-only judgment has no mechanism to stop a regression
 from compounding across the chain. The machine floor is what prevents drift.
+
+### 9.2 Isolation model (resolved: per-task worktrees, in-tree context)
+
+**Finding:** The current "global branch" system (`BranchManager`) isolates agents
+by `checkout`-ing per-agent branches in a **single shared working directory**
+(`config.main_repo_path`). A merge lock serializes merges but **not working-tree
+edits**, so concurrent agents race in one tree; crashed agents leave half-baked
+files that bleed into other branches — which is why the **Repair flow** exists.
+The Repair flow is a symptom of missing isolation, not a fix.
+
+**Root cause of the original worktree removal:** upstream `WorktreeManager`
+placed worktrees at `/tmp/hephaestus_worktrees/wt_<agent_id>` — outside both the
+project and `~/.hephaestus/`. Under opencode's CWD-subtree sandbox, agents
+couldn't reach out-of-tree paths they were told to read. The fix is to remove the
+*coupling* (out-of-tree reads), not the *isolation*.
+
+**Decisions:**
+1. **Restore worktrees, per-task** (one worktree per agent/task) — true isolation
+   for the up-to-3 concurrent agents per phase. The upstream `WorktreeManager`
+   (DB models `AgentWorktree`/`WorktreeCommit`/`MergeConflictResolution` already
+   present) returns each agent's `working_directory` = its worktree.
+2. **Standard placement, in-repo, git-excluded:** worktree base
+   `<project>/.worktrees/wt_<agent_id>/`; ignored via `.git/info/exclude` (shared
+   across linked worktrees) so the user's tracked `.gitignore` is untouched.
+3. **In-tree inbound context — no out-of-tree reads.** Each worktree gets a
+   git-excluded `<worktree>/.hephaestus/` dir the orchestrator populates with the
+   curated slice the agent needs: design doc, `qa_spec.json`, task/context
+   framing, and any prior-phase artifacts not yet committed to `main`. Agents
+   read context from `.hephaestus/` + their checkout; they never reach outside
+   the worktree.
+4. **Namespace cohesion (option B):** the `.hephaestus/` token is used in both
+   `$HOME` (global orchestrator state — unchanged) and per-worktree (inbound
+   context). They are different *scopes* sharing a *brand*, not the same store.
+   `~/.local/` was rejected (collides with the XDG user dir).
+5. **Cross-phase handoff:** merge-on-success → the next phase's worktree branches
+   from updated `main` and sees committed prior outputs; `.hephaestus/` carries
+   the pre-commit/never-commit context. **Failure discards the worktree**
+   (`git worktree remove --force` + drop branch); `main` never sees half-baked
+   files. **This removes the need for the Repair flow** (C4.x / delete).
+
+```
+~/.hephaestus/                      # global orchestrator state (unchanged)
+<project>/
+  .worktrees/wt_<agent_id>/         # worktree base (git-excluded)
+    .hephaestus/                    # per-worktree inbound context (git-excluded)
+    src/ tests/ features/           # real tree — committed & merged on success
+```
