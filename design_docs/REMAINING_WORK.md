@@ -50,6 +50,14 @@ case-sensitivity bug in the assertion ("execution proof" vs "Execution proof").
 Run B (seeded failing test to exercise the gate), with copy-paste observation
 commands and a report template. Summary below.
 
+**Now unblocked.** 3b (phase-transition authority) and 3c (goto reconvergence) are
+fixed and locked by engine-level tests (74 passing), so the orphaned-transition hang
+and the 600s impasse should be **gone**. Expectations this run: **Run A should advance
+1→…→10 and COMPLETE** (no longer stall at phase 3); **Run B should fire `goto
+development`, reconverge through the later phases, and log `[SPEC-GATE]`** — confirming
+with real agents what the goto-loop tests already prove at the engine level. Do **not**
+start Tier 2/3 until Run A completes — this is the gate to everything after it.
+
 Smoke test repo prepared at `/tmp/heph-smoke-test` (git repo with a base commit —
 required, `git worktree add` fails on a repo with zero commits) and
 `docs/design-queue/add_hello_world.md`.
@@ -64,14 +72,15 @@ won't launch otherwise.
 
 **Six checkpoints, in failure-order (where it's most likely to break first):**
 1. **Phase-1 agent actually spawns** — *the Tier 1 handoff, #1 risk.* A Phase-1
-   task should appear AND an agent in a worktree. Task stuck `pending` with no
-   agent ⇒ `Monitor._create_next_phase_task` isn't spawning. Confirm `.worktrees/wt_*`
-   exists and `tmux ls` shows a session.
+   task should appear AND an agent in a worktree. Task stuck `pending` with no agent
+   ⇒ `Monitor._create_phase_task_and_agent` isn't spawning (check its `except → queued`
+   path, `monitor.py:1144`, and whether `background_queue_processor` retried). Confirm
+   `.worktrees/wt_*` exists and `tmux ls` shows a session.
 2. **Worktree context populated** — `ls .worktrees/wt_*/.hephaestus/` holds
    `design.md` (+ `context.md`, `qa_spec.json`). Empty ⇒ `_gather_worktree_context`
    isn't reading `launch_params.design_document`.
-3. **Phases advance 1→2→…→10 via the engine**, not re-running Phase 1 (the removed
-   double-loop).
+3. **Phases advance 1→2→…→10 via the engine AND the workflow COMPLETES** (previously
+   stalled at 3; 3b/3c now fixed). No `_create_next_phase_task`/sequential double-run.
 4. **`[SPEC-GATE]` log line** with a score after qa_validation / product_validation.
    Missing ⇒ `_build_spec_phase_output` not firing or `working_directory` is None.
 5. **Reports land + merge** — `<project>/docs/` (on `main`) gets
@@ -96,75 +105,27 @@ makes it pass → re-QA `continue`. (Alternative: an over-constrained/contradict
 requirement so product validation honestly reports `unmet_requirements`, forcing
 the same path via the §9.1 hard-floor override.)
 
-### 3b. ⛔ BLOCKER from Run A — phase-transition control authority (P1, second instance)
-Run A stalled at **phase 3** (never reached the gated phases, hence no `[SPEC-GATE]` —
-that's a symptom, not a bug; the wiring at `monitor.py:1005` is correct).
+### ~~3b. Phase-transition control authority (P1, second instance)~~ ✅ DONE
+The engine path (`_start_next_phase`/`_start_phase`) only flipped `PhaseExecution`
+status; only `Monitor._create_next_phase_task` created the task+agent, and only for the
+*sequential* next phase — so CONTINUE worked (phases 1→2→3) but GOTO/RETRY orphaned the
+target (pending task, no agent → impasse → 600s → never completes). **Fixed:**
+`mark_phase_complete` now returns the `EvaluationResult` dict (`action`,
+`target_phase_id`, `should_continue`); `Monitor._check_phase_progression` creates the
+task+agent for the **resolved** target via the new `_create_phase_task_and_agent` (sets
+the target `in_progress` for `pending`/`completed`, idempotency-guarded). The
+sequential `_create_next_phase_task` is removed. One authority decides *and* creates.
 
-**Root cause:** the authority that *decides* a phase transition is split from the one
-that *creates the work*:
-- `PhaseManager._start_next_phase` / `_start_phase` (the **engine** path) only flips
-  `PhaseExecution.status = "in_progress"` — it does **not** create a Task or spawn an
-  agent, and PhaseManager has **no `agent_manager`**.
-- The Task + agent are created **only** by `Monitor._create_next_phase_task`, which
-  **hard-codes the sequential next phase** (`order > current.order`).
-
-So **CONTINUE works** (sequential == chosen → phases 1→2→3), but **GOTO/RETRY always
-hang**: the engine flips the target phase to in_progress, nobody creates its task+agent,
-the orchestrator sees a pending task with no agent → impasse → 600s human-input → never
-completes (= Run A remaining issues #2 and #3). The spec gate's whole purpose is to fire
-`goto`, so the gate cannot be validated until this is fixed.
-
-**Fix (engine-is-driver):** whoever decides the transition must own creating the
-task+agent for the *chosen* target. Smallest version: have `mark_phase_complete` return
-the `EvaluationResult` (action + `target_phase`; it currently returns a bool), and in
-`_check_phase_progression` create the task+agent for the **resolved** target (next for
-continue, `target` for goto, same phase for retry) — replacing the unconditional
-sequential `_create_next_phase_task` pre-call. Collapses the two authorities into one.
-
-**Confirm the immediate stall:** `SELECT phase_id,status,assigned_agent_id FROM tasks
-WHERE status IN ('pending','queued')` — a phase task with no `assigned_agent_id` confirms
-the orphaned-transition hang. Also check the `except → queued` path (`monitor.py:1145`)
-and whether `background_queue_processor` actually retried agent creation.
-
-### 3c. ⛔ Goto-reconvergence bug (found reviewing the 3b fix — blocks the gate)
-The 3b fix is otherwise solid (`mark_phase_complete` returns the `EvaluationResult`;
-`Monitor._create_phase_task_and_agent` creates task+agent for the resolved target and
-sets its `PhaseExecution` `in_progress` for status in `("pending","completed")` — handles
-goto/retry correctly). **But `PhaseManager._start_next_phase` returns `True` only when the
-next phase's status is `"pending"`** (`if execution.status == "pending"`).
-
-On a `goto` reconvergence this breaks: after e.g. `goto development` (phase 3), phases 4–6
-are already `"completed"`. When phase 3 re-completes → `CONTINUE` → `_start_next_phase`
-sees phase 4 `"completed"` (not pending) → returns `False` → `mark_phase_complete` calls
-`_complete_workflow` and returns `should_continue=False`. **The workflow completes after
-re-running only phase 3, never re-validating 4→7** — the gate's correction is discarded.
-Run A never hit this (no goto reached); smoke run B (seeded failing test) will.
-
-**Fix (small, localized to `_start_next_phase`):** return `True` whenever a next phase
-**exists by order**, regardless of status (it's being re-run); set `in_progress` for status
-in `("pending","completed")`. In the new architecture its only job is the
-"is there a next phase?" boolean — `_create_phase_task_and_agent` owns status/task/agent.
-The `== "pending"` gate is the bug.
-
-**Add an integration test for the goto loop (ship with the fix).** This bug was only
-findable by reading the reconvergence path because **no test exercises a real goto** — a
-gap worth closing. Add a test (e.g. `tests/test_goto_reconvergence.py`) that drives
-`PhaseManager.mark_phase_complete` through a goto WITHOUT live agents/LLM:
-- Build a small multi-phase workflow in a `:memory:` DB (3–4 phases) with an
-  `orchestrator_config` of `type: "evaluating"` and an evaluation point that returns
-  `goto` to an earlier phase the first time, `continue` after.
-- Mark phases complete in order until the goto fires; assert the returned
-  `EvaluationResult` dict is `{action: "goto", target_phase_id: <earlier>, should_continue: True}`,
-  and that the earlier phase's `PhaseExecution` goes back to `in_progress`.
-- Then mark the re-run phases complete again and assert the workflow **advances through
-  the later phases** (does NOT `_complete_workflow` early) and only completes after the
-  final phase — i.e. the 3c regression is caught.
-- Patch/stub `agent_manager.create_agent_for_task` so `_create_phase_task_and_agent` runs
-  without spawning real agents (assert it's called for the resolved target each time).
-- Bound it with `max_total_gotos` and assert the loop terminates.
-This is the first **engine-level integration test**; it guards Tier 0 (single authority)
-+ the 3b/3c phase-transition fixes against future regressions, complementing the unit
-tests in `tests/test_autopilot_spec.py`.
+### ~~3c. Goto-reconvergence bug~~ ✅ DONE (fixed + tested)
+`_start_next_phase` returned `True` only for a `"pending"` next phase, so after a goto
+(later phases already `"completed"`) it short-circuited to `_complete_workflow` —
+re-running only the goto target and discarding the gate's correction. **Fixed:** it now
+returns `True` whenever a next phase exists by order and sets `in_progress` for
+`("pending","completed")`. **Locked by the first engine-level integration tests**
+(`tests/test_goto_reconvergence.py` — 3 tests, 74 total passing):
+`test_goto_reconvergence` (full P1→P2-fail→goto-P1→reconverge→complete),
+`test_goto_does_not_skip_phases` (the 3c regression guard — all later phases reach
+`completed`), `test_start_next_phase_returns_true_for_completed`.
 
 ### 4. Finish Tier 2 the designed way (after smoke passes)
 Per §4.4: human-input → `autopilot_interventions` DB table + `asyncio.Condition`
