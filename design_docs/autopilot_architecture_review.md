@@ -554,6 +554,37 @@ couldn't reach out-of-tree paths they were told to read. The fix is to remove th
     src/ tests/ features/           # real tree — committed & merged on success
 ```
 
+### 9.3 Design intake (resolved: DB-authoritative, no forced directory)
+
+**Finding:** intake is currently a *forced, hardcoded, in-repo* directory —
+`<project>/docs/design-queue/*.md|txt` (auto-created by the CLI/API, watched by
+mtime + a `queue_order` sidecar) — running in parallel with the
+`autopilot_designs` DB table. This is the dual-store drift of **P4**, and it's
+conceptually backwards: designs are *inputs/specs*, not project artifacts, yet
+they're forced into the code repo (committed or git-excluded) and tangled with the
+code they describe. It also bifurcates the API (`/queue/*` vs
+`/projects/{id}/designs/*`).
+
+**Decision — separate the intake *method* from the *store*:**
+- **The DB (`autopilot_designs`) is the single source of truth** for the queue,
+  including the design content as a row. The worktree's `.hephaestus/design.md` is
+  populated from the DB (the backend already does this from launch params), so a
+  design never needs to live in the project repo.
+- **File-drop is kept as one *optional, configurable* import method** — not the
+  canonical store. It is demoted from "required magic directory" to an importer
+  that upserts into the DB; its location is config, **not** a hardcoded
+  `<project>/docs/design-queue`, and it is not auto-required.
+- **Multiple intake methods all converge on the DB:** API/UI (paste or upload),
+  CLI (`heph autopilot add <file>` reads from anywhere), and the optional watched
+  folder. Ordering is a DB column; the `queue_order` sidecar is removed.
+
+*Migration caution:* do **not** swing to forcing the API/UI instead — that just
+trades one forced path for another and breaks headless/scripted users. Keep
+file-drop available, just pointed at the DB. (Aligns with §10.2: if designs become
+GitHub issues/milestones, the queue is issues and the directory is irrelevant.)
+This is the completion of **Tier 3** (P4), with the "forced in-repo directory"
+framing explicitly killed.
+
 ---
 
 ## 10. Future Direction — Collaborative Review + GitHub-as-Projection

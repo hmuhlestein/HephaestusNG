@@ -224,10 +224,22 @@ Removed the auto-launch block (~100 lines) and nudge/auto-kill block (~50 lines)
 - After processing, design status is updated in DB (completed/failed/skipped)
 - `_sync_project_designs` already existed to import files to DB
 
+**Decision (kill the forced in-repo directory):** the DB (`autopilot_designs`) is the
+**single source of truth** for the queue, content included. **File-drop becomes one
+*optional, configurable* importer** that upserts into the DB — demoted from the required
+magic path `<project>/docs/design-queue` to a config-located, not-auto-created folder.
+Intake methods (API/UI paste-or-upload, `heph autopilot add <file>` from anywhere,
+optional watched folder) all converge on the DB. Designs are inputs/specs, not project
+artifacts, so they no longer have to live in the repo. *Don't* swing to forcing API/UI
+instead — keep file-drop available, just pointed at the DB (breaks headless users
+otherwise). See §9.3 in the architecture review.
+
 **Remaining:**
-- Merge `/queue/*` and `/projects/{id}/designs/*` API endpoints into one resource
-- Retire file-queue calls in `frontend/src/services/api.ts`
-- Remove `queue_order` sidecar file dependency
+- Make the DB authoritative; stop auto-creating/requiring `<project>/docs/design-queue`.
+  File import becomes optional + config-located (default off or explicit path).
+- Merge `/queue/*` and `/projects/{id}/designs/*` API endpoints into one resource.
+- Retire file-queue calls in `frontend/src/services/api.ts`.
+- Remove the `queue_order` sidecar (ordering is a DB column).
 
 ### TIER 4 — Correctness fixes (P8 + bug list)
 
