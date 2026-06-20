@@ -553,3 +553,89 @@ couldn't reach out-of-tree paths they were told to read. The fix is to remove th
     .hephaestus/                    # per-worktree inbound context (git-excluded)
     src/ tests/ features/           # real tree — committed & merged on success
 ```
+
+---
+
+## 10. Future Direction — Collaborative Review + GitHub-as-Projection
+
+**Status:** Exploratory / v2-horizon. Two ideas that compose into a stronger
+"autonomous software team" model. Recorded so the framing survives; **not** to be
+started until the core pipeline is proven end-to-end (see the caution below).
+
+### 10.1 Reviewer steering as evaluation-point roles (not a parent-monitor loop)
+
+The instinct — *a parent agent reviews each completed unit of work, does gap
+analysis, gives guidance, and decides what's next, like a human engineer* — is
+sound and is exactly the engine's **evaluating** model. The hybrid spec gate
+(§9.1) already does this for QA/product-validation: score a structured result →
+`goto/retry/continue`. The future direction is to **generalize that to every
+phase** as a Reviewer/Critic role.
+
+**Build it the robust way — and avoid the trap we already removed (Tier 1):**
+- **Milestone-triggered, not real-time.** Review fires on task/phase *completion*
+  against a **structured artifact** (the `qa_result.json` pattern), not by parsing
+  live tmux output. The real-time "peek + nudge + auto-kill" loop was deleted
+  precisely because it duplicated Guardian/Conductor and fought the engine (P1/P2).
+- **A role at an evaluation point, not a supervisor process.** The reviewer emits
+  findings → feeds the `score` → may spawn targeted fix-tasks. One control
+  authority (the engine).
+- **Budget it.** Per-task LLM review is expensive and prone to over-steering /
+  thrash; reviewers need a ceiling like `max_total_gotos`.
+- **Default async; blocking Q&A is opt-in.** "Ask questions like a human" stalls
+  throughput if synchronous. Default to spawning a follow-up task; reserve
+  blocking review (which routes to the human-in-the-loop intervention system) for
+  an explicit high-assurance mode.
+
+> One-line: generalize the spec gate into *reviewer evaluation points over
+> structured outputs, with budgets* — do **not** rebuild a parent-watches-child loop.
+
+### 10.2 GitHub issues/milestones as a projection + event + human-I/O layer
+
+Using GitHub as the coordination substrate (designs → **milestones**, issues →
+agent status / comms / feature reports, comments → webhooks that trigger
+review/fix runs) solves several backlog items at once: an **events backbone**
+(webhooks → P5), a **human-in-the-loop surface** (B4/B7), a durable **message /
+audit store** (replaces the message center + `input_request_*.json` mailbox),
+**report hosting**, and a natural extension of the phase-9 PR flow. It also lets
+humans and agents collaborate in one familiar UI and builds far less custom IPC.
+
+**The load-bearing constraint: GitHub is a *projection*, never the source of truth
+or the control bus.**
+- **DB stays authoritative** (pipeline state, task graph, scores — per §9). GitHub
+  *mirrors* it and emits events. Otherwise this recreates the dual-store drift of
+  P4 with a third store and worse latency.
+- **Reframe "comment triggers a fix in the *same* worktree."** Under §9.2,
+  worktrees are ephemeral and **discarded** on completion/failure — there is no
+  same worktree to resurrect, nor would stale state be desirable. Correct flow:
+  *comment → webhook → create a fix-task in the DB → fresh worktree branched from
+  the current `main` (which has the merged work) → agent fixes → PR/comment back.*
+  Preserves discard-on-failure; strictly better than reusing a worktree.
+- **Design around the operational realities:**
+  - **Rate limits** (~5000 req/hr + stricter content-creation secondary limits) —
+    coalesce/batch status; don't narrate every step.
+  - **Webhook ingress** needs a public endpoint, or you poll the events API
+    (coarse polling re-enters). Friction for a local tool.
+  - **Offline / no-remote** — today the system runs on a bare `git init` with no
+    remote. Keep GitHub an **optional adapter** with the DB/UI path as fallback.
+  - **Security (first-class concern):** comment-triggered agent execution is an
+    RCE-shaped surface — anyone who can comment can trigger code-modifying runs.
+    Needs an explicit authorization model (who may trigger) and is dangerous on
+    public / many-collaborator repos. Not a follow-up; a gating requirement.
+
+### 10.3 How they compose
+
+The reviewer's gap analysis (10.1) **posts as the issue comment** (10.2): agents
+emit human-readable findings on the design's issue/thread, a human can drop into
+the same thread to steer, and the structured artifact still drives the engine.
+This reframes Tier 2/3: rather than building a bespoke WS/SSE stream + message
+center + intervention table + queue UI, **adopt GitHub for the human-facing parts
+and keep the DB as the engine's truth.**
+
+### 10.4 Sequencing caution (the important part)
+
+Both are **v2-horizon scope**, and the pipeline has **not yet been proven to run
+end-to-end once** (Monitor-driven agent spawn, single-authority iteration, spec
+gate — all unit-verified, not run-verified). Do **not** start either until the
+smoke run passes. Building a sophisticated collaboration layer on an unproven
+engine is how you get a beautiful coordination model over a pipeline that doesn't
+actually execute. **Prove the engine, then layer the collaboration model.**
