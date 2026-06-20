@@ -25,6 +25,7 @@ and produces a validation report for human review.""",
         "User experience flows verified",
         "Edge cases from design doc confirmed handled",
         "product_validation.md created with verdict",
+        "./docs/product_validation.json created with structured verdict + unmet_requirements (gate input)",
         "Validation report includes recommendations for human reviewer",
         "Memory saved with validation outcome",
         "Task marked as done",
@@ -151,6 +152,38 @@ Write product_validation.md:
 [PASS: Feature meets design intent and is ready for human review]
 or
 [NEEDS_WORK: [specific issues that need addressing]]
+
+═══════════════════════════════════════════════════════════════════════
+STEP 6.5: EMIT STRUCTURED VALIDATION RESULT (REQUIRED — drives the pipeline gate)
+═══════════════════════════════════════════════════════════════════════
+
+In addition to product_validation.md, write a machine-readable
+./docs/product_validation.json. The pipeline scores this to decide whether to
+ship, return to development, or return to architecture.
+
+Write ./docs/product_validation.json with EXACTLY this schema:
+
+```json
+{
+  "verdict": "PASS",
+  "unmet_requirements": [],
+  "agent_score": 0.0,
+  "summary": "one-line summary"
+}
+```
+
+Field rules:
+- verdict is one of:
+  - "PASS" — every design requirement is met; ready for human review.
+  - "NEEDS_WORK" — code-level gaps remain (pipeline returns to development).
+  - "ARCHITECTURE" — the implementation's structure cannot satisfy the design
+    (pipeline returns to architecture).
+- unmet_requirements: list each design requirement NOT fully met (empty if PASS).
+  IMPORTANT: if this list is non-empty the gate overrides a "PASS" verdict and
+  returns the work to development — so do not claim PASS with unmet items.
+- agent_score (0.0–1.0): your subjective confidence for what the verdict and
+  requirement list don't capture (only used when the verdict is PASS with no
+  unmet requirements).
 
 ═══════════════════════════════════════════════════════════════════════
 STEP 7: SAVE TO MEMORY

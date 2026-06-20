@@ -28,6 +28,7 @@ QA report with pass/fail status and recommendations.""",
         "Requirements compliance verified",
         "Security fixes validated",
         "qa_report.md created with comprehensive results",
+        "./docs/qa_result.json created with structured pass/fail counts (gate input)",
         "Memory saved with QA findings",
         "Iteration recommendation provided (done/needs_work)",
         "Task marked as done",
@@ -315,6 +316,42 @@ The implementation is complete.
 [Major problems that require significant rework]
 1. [Problem 1]
 2. [Problem 2]
+
+═══════════════════════════════════════════════════════════════════════
+STEP 8.5: EMIT STRUCTURED QA RESULT (REQUIRED — drives the pipeline gate)
+═══════════════════════════════════════════════════════════════════════
+
+In addition to qa_report.md, write a machine-readable ./docs/qa_result.json.
+The pipeline scores this against the project spec to decide whether to continue,
+return to development, or return to architecture. Use REAL numbers from your run.
+
+Write ./docs/qa_result.json with EXACTLY this schema:
+
+```json
+{
+  "failed_tests": 0,
+  "passed_tests": 0,
+  "total_tests": 0,
+  "pass_rate": 100,
+  "critical_issues": 0,
+  "major_issues": 0,
+  "requirements_total": 0,
+  "requirements_met": 0,
+  "agent_score": 0.0,
+  "verdict": "PASS",
+  "summary": "one-line summary"
+}
+```
+
+Field rules:
+- Counts must be integers reflecting actual test/issue counts.
+- pass_rate is a percent (0–100): passed_tests / total_tests * 100.
+- critical_issues = security/data-loss/complete-failure issues (these send the
+  pipeline back to architecture). major issues go in major_issues.
+- agent_score (0.0–1.0) is YOUR subjective quality judgement for things the
+  numbers don't capture (only used when all hard floors pass).
+- verdict is "PASS", "NEEDS_WORK", or "FAIL".
+- Do NOT inflate numbers. The gate enforces hard floors regardless of verdict.
 
 ═══════════════════════════════════════════════════════════════════════
 STEP 9: SAVE TO MEMORY

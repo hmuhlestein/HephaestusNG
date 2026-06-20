@@ -997,14 +997,53 @@ class MonitoringLoop:
                         if self.phase_manager.should_create_next_phase_task(phase.id):
                             await self._create_next_phase_task(phase)
 
+                        # Hybrid spec gate (§9.1): for gated phases (QA / product
+                        # validation) score the agent's structured result against
+                        # the spec and pass it as phase_output, so the engine's
+                        # evaluation point drives goto/retry/continue. Other phases
+                        # pass {} and use the engine's default evaluation.
+                        phase_output = self._build_spec_phase_output(phase.name)
+
                         # Mark phase as complete
                         self.phase_manager.mark_phase_complete(
                             phase.id,
-                            f"Phase completed with {phase_info['tasks']['completed']} tasks"
+                            f"Phase completed with {phase_info['tasks']['completed']} tasks",
+                            phase_output=phase_output,
                         )
 
                 finally:
                     session.close()
+
+    def _build_spec_phase_output(self, phase_name: str) -> dict:
+        """Compute the hybrid spec-gate phase_output for a gated phase.
+
+        Returns {"score": float, "spec_gate": {...}} for QA/product-validation
+        phases (read from the workflow's working directory), else {}.
+        """
+        try:
+            from src.autopilot.spec import build_phase_output, GATED_PHASES
+            if phase_name not in GATED_PHASES:
+                return {}
+
+            from src.core.database import Workflow
+            wd = None
+            session = self.db_manager.get_session()
+            try:
+                wf = session.query(Workflow).filter_by(
+                    id=self.phase_manager.workflow_id
+                ).first()
+                wd = wf.working_directory if wf else None
+            finally:
+                session.close()
+
+            if not wd:
+                return {}
+            phase_output = build_phase_output(phase_name, wd)
+            logger.info(f"[SPEC-GATE] {phase_name}: {phase_output}")
+            return phase_output
+        except Exception as e:
+            logger.warning(f"[SPEC-GATE] could not build phase_output for {phase_name}: {e}")
+            return {}
 
     async def _create_next_phase_task(self, current_phase):
         """Create initial task for next phase.
