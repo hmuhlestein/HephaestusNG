@@ -158,6 +158,23 @@ Removed the auto-launch block (~100 lines) and nudge/auto-kill block (~50 lines)
 1. Replace the human-input file mailbox (`input_request_*.json`) with an `autopilot_interventions` DB table + an `asyncio.Condition`; UI submits via REST. Fixes **B4** (TOCTOU) and **B7** (option vocab `c/s/q/m` vs `c/p/s/q`).
 2. Add `/api/autopilot/stream` (WS/SSE); move UI off interval polling for status/messages/input.
 3. Persist `PipelineState`/messages/events to DB instead of `pipeline_state.json` / `events.jsonl`.
+4. **Split `OrchestratorLogger`** (`orchestrator.py:259`) — it conflates three
+   concerns under one "logger": human logging (`log/info/warning/error`, 138
+   sites — hand-rolled `print` + timestamp + file append), an **event sink**
+   (`event()` → `events.jsonl`, 8 sites), and **state persistence**
+   (`save_state()` → `state.json`, 6 sites). Do it in one pass *with* item 3:
+   - **Logging →** stdlib `logging.getLogger("autopilot.orchestrator")` (optional
+     per-run `FileHandler` for the run artifact). Now that the orchestrator is
+     in-process (Tier 2), the bespoke per-run logger is a subprocess-era vestige.
+   - **`event()` / `save_state()` →** DB/event stream (same work as item 3) —
+     these are not logging.
+   - **Migrate the consumers** (the only readers — contained surface):
+     `autopilot_api.py` `_get_latest_run_dir` / `_read_jsonl_tail` and the
+     status/logs/messages endpoints (lines ~269–300, 1895–1899, 2022), plus the
+     CLI status reader. *Don't remove the files standalone — these consumers
+     break without the DB swap.*
+   - Scope note: this is the **only** instance of the pattern in `src/` (the root
+     `autopilot.py`'s `AutopilotLogger` was already deleted) — a single-pass fix.
 
 ### TIER 3 — Unify the queue (P4) ✅ PARTIAL
 
