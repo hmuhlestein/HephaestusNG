@@ -38,8 +38,11 @@ YOUR MISSION: Implement components according to the architecture
 STEP 1: READ ARCHITECTURE AND GUIDELINES
 ═══════════════════════════════════════════════════════════════════════
 
-CRITICAL PATH RULE: You MUST use the FULL ABSOLUTE PATHS from your task description.
-- NEVER write files to the current working directory or project root.
+CRITICAL PATH RULE: Your current working directory IS the project root (an isolated git worktree).
+- Write ALL code and tests inside your working directory (e.g. ./src, ./tests).
+- "Project Path" = your working directory (.).  "Docs Path" = ./docs/ (create it if missing).
+- Read the design document and prior inputs from ./.hephaestus/ (design.md, context.md, qa_spec.json).
+- Do NOT use absolute paths outside your working directory. Do NOT write into ./.hephaestus/ (it is never merged to main).
 - ALL implementation code goes in "Project Path:" (src/, tests/, etc.).
 - ALL docs/reports go in "Docs Path:" — not the project root.
 - Your task description contains the exact paths — copy them exactly.

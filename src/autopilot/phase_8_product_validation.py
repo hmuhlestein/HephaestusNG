@@ -40,8 +40,11 @@ YOUR MISSION: Verify the implementation matches the original design intent
 STEP 1: RE-READ THE ORIGINAL DESIGN DOCUMENT
 ═══════════════════════════════════════════════════════════════════════
 
-CRITICAL PATH RULE: You MUST use the FULL ABSOLUTE PATHS from your task description.
-- NEVER write files to the current working directory or project root.
+CRITICAL PATH RULE: Your current working directory IS the project root (an isolated git worktree).
+- Write ALL code and tests inside your working directory (e.g. ./src, ./tests).
+- "Project Path" = your working directory (.).  "Docs Path" = ./docs/ (create it if missing).
+- Read the design document and prior inputs from ./.hephaestus/ (design.md, context.md, qa_spec.json).
+- Do NOT use absolute paths outside your working directory. Do NOT write into ./.hephaestus/ (it is never merged to main).
 - ALL docs/reports go in "Docs Path:" (product_validation.md, etc.).
 - Code goes in "Project Path:" (src/, tests/, etc.).
 - Your task description contains the exact paths — copy them exactly.
