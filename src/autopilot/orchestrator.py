@@ -1024,247 +1024,40 @@ def generate_html_feature_report(
     feature_folder: Path,
     logger: OrchestratorLogger,
 ) -> Path:
-    html_path = feature_folder / "feature_report.html"
+    """Generate an HTML feature report using a Jinja2 template."""
+    from jinja2 import Environment, FileSystemLoader
 
-    def esc(s: str) -> str:
-        return html_mod.escape(s)
+    # Set up Jinja2 with the templates directory
+    templates_dir = Path(__file__).parent / "templates"
+    env = Environment(loader=FileSystemLoader(str(templates_dir)), autoescape=True)
+    template = env.get_template("feature_report.html")
 
-    status_text = "VALIDATED" if report.product_validated else "NEEDS REVIEW"
-    qa_text = "PASSED" if report.qa_passed else "FAILED"
-
+    # Prepare template context
     hours = report.total_time_seconds // 3600
     minutes = (report.total_time_seconds % 3600) // 60
     time_str = f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
 
-    files_html = ""
-    for f in report.files_created[:50]:
-        files_html += f"<tr><td><code>{f}</code></td></tr>\n"
-    if len(report.files_created) > 50:
-        files_html += f"<tr><td><em>... and {len(report.files_created) - 50} more files</em></td></tr>\n"
+    context = {
+        "design_name": report.design_name,
+        "design_document": report.design_document,
+        "generated_at": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        "product_validated": report.product_validated,
+        "qa_passed": report.qa_passed,
+        "status_text": "VALIDATED" if report.product_validated else "NEEDS REVIEW",
+        "qa_text": "PASSED" if report.qa_passed else "FAILED",
+        "iterations": report.iterations,
+        "time_str": time_str,
+        "files_count": len(report.files_created),
+        "cost_total": report.cost_total,
+        "cost_breakdown": report.cost_breakdown,
+        "summaries": summaries,
+        "issues_resolved": report.issues_resolved,
+        "outstanding_issues": report.outstanding_issues,
+        "files_created": report.files_created,
+    }
 
-    issues_resolved_html = ""
-    for issue in report.issues_resolved:
-        issues_resolved_html += f'<li style="color:#22c55e">{issue}</li>\n'
-    if not report.issues_resolved:
-        issues_resolved_html = '<li style="color:#6c757d">No issues to resolve</li>'
-
-    outstanding_html = ""
-    for issue in report.outstanding_issues:
-        outstanding_html += f'<li style="color:#dc3545">{issue}</li>\n'
-    if not report.outstanding_issues:
-        outstanding_html = '<li style="color:#22c55e">No outstanding issues</li>'
-
-    html = f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Feature Report: {report.design_name}</title>
-    <style>
-        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
-        body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f172a; color: #e2e8f0; line-height: 1.6; }}
-        .container {{ max-width: 1100px; margin: 0 auto; padding: 40px 24px; }}
-        .header {{ margin-bottom: 40px; }}
-        .header h1 {{ font-size: 28px; font-weight: 700; color: #f8fafc; margin-bottom: 8px; }}
-        .header .subtitle {{ color: #94a3b8; font-size: 14px; }}
-        .status-banner {{ padding: 16px 24px; border-radius: 12px; margin-bottom: 32px; display: flex; align-items: center; gap: 12px; }}
-        .status-banner.validated {{ background: rgba(34,197,94,0.12); border: 1px solid rgba(34,197,94,0.3); }}
-        .status-banner.needs-review {{ background: rgba(220,53,69,0.12); border: 1px solid rgba(220,53,69,0.3); }}
-        .status-dot {{ width: 12px; height: 12px; border-radius: 50%; }}
-        .status-dot.green {{ background: #22c55e; }}
-        .status-dot.red {{ background: #dc3545; }}
-        .stats {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 16px; margin-bottom: 32px; }}
-        .stat {{ background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 20px; text-align: center; }}
-        .stat-value {{ font-size: 28px; font-weight: 700; color: #f8fafc; }}
-        .stat-label {{ font-size: 12px; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.5px; margin-top: 4px; }}
-        .section {{ background: #1e293b; border: 1px solid #334155; border-radius: 12px; margin-bottom: 24px; overflow: hidden; }}
-        .section-header {{ padding: 16px 24px; border-bottom: 1px solid #334155; display: flex; align-items: center; gap: 10px; }}
-        .section-header h2 {{ font-size: 16px; font-weight: 600; color: #f8fafc; }}
-        .section-body {{ padding: 24px; }}
-        .section-body pre {{ background: #0f172a; border: 1px solid #334155; border-radius: 8px; padding: 16px; overflow-x: auto; font-size: 13px; color: #cbd5e1; white-space: pre-wrap; word-wrap: break-word; }}
-        .badge {{ display: inline-block; padding: 2px 10px; border-radius: 6px; font-size: 12px; font-weight: 600; }}
-        .badge.pass {{ background: rgba(34,197,94,0.15); color: #22c55e; }}
-        .badge.fail {{ background: rgba(220,53,69,0.15); color: #dc3545; }}
-        .badge.warn {{ background: rgba(251,191,36,0.15); color: #fbbf24; }}
-        table {{ width: 100%; border-collapse: collapse; }}
-        th, td {{ padding: 10px 12px; text-align: left; border-bottom: 1px solid #334155; font-size: 14px; }}
-        th {{ color: #94a3b8; font-weight: 500; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; }}
-        td code {{ background: #0f172a; padding: 2px 6px; border-radius: 4px; font-size: 13px; }}
-        ul {{ list-style: none; padding: 0; }}
-        li {{ padding: 6px 0; font-size: 14px; border-bottom: 1px solid rgba(51,65,85,0.5); }}
-        li:last-child {{ border-bottom: none; }}
-        .footer {{ text-align: center; padding: 32px 0; color: #475569; font-size: 12px; }}
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="header">
-            <h1>{report.design_name}</h1>
-            <div class="subtitle">
-                Generated {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} &middot;
-                {report.design_document}
-            </div>
-        </div>
-
-        <div class="status-banner {'validated' if report.product_validated else 'needs-review'}">
-            <div class="status-dot {'green' if report.product_validated else 'red'}"></div>
-            <div>
-                <strong>{status_text}</strong> &mdash;
-                Product validation {'passed' if report.product_validated else 'failed'} after {report.iterations} iteration(s)
-            </div>
-        </div>
-
-        <div class="stats">
-            <div class="stat">
-                <div class="stat-value">{report.iterations}</div>
-                <div class="stat-label">Iterations</div>
-            </div>
-            <div class="stat">
-                <div class="stat-value">{time_str}</div>
-                <div class="stat-label">Total Time</div>
-            </div>
-            <div class="stat">
-                <div class="stat-value"><span class="badge {'pass' if report.qa_passed else 'fail'}">{qa_text}</span></div>
-                <div class="stat-label">QA Status</div>
-            </div>
-            <div class="stat">
-                <div class="stat-value"><span class="badge {'pass' if report.product_validated else 'fail'}">{status_text}</span></div>
-                <div class="stat-label">Final Status</div>
-            </div>
-            <div class="stat">
-                <div class="stat-value">{len(report.files_created)}</div>
-                <div class="stat-label">Files Created</div>
-            </div>
-            <div class="stat">
-                <div class="stat-value">${report.cost_total:.4f}</div>
-                <div class="stat-label">LLM Cost</div>
-            </div>
-        </div>
-
-        <div class="section">
-            <div class="section-header">
-                <h2>Requirements</h2>
-            </div>
-            <div class="section-body">
-                <pre>{esc(summaries.get('requirements', 'No requirements document found.'))}</pre>
-            </div>
-        </div>
-
-        <div class="section">
-            <div class="section-header">
-                <h2>Architecture</h2>
-            </div>
-            <div class="section-body">
-                <pre>{esc(summaries.get('architecture', 'No architecture document found.'))}</pre>
-            </div>
-        </div>
-
-        <div class="section">
-            <div class="section-header">
-                <h2>Code Review</h2>
-            </div>
-            <div class="section-body">
-                <pre>{esc(summaries.get('review', 'No review report found.'))}</pre>
-            </div>
-        </div>
-
-        <div class="section">
-            <div class="section-header">
-                <h2>Documentation Review</h2>
-            </div>
-            <div class="section-body">
-                <pre>{esc(summaries.get('doc_review', 'No doc review report found.'))}</pre>
-            </div>
-        </div>
-
-        <div class="section">
-            <div class="section-header">
-                <h2>Security Review</h2>
-            </div>
-            <div class="section-body">
-                <pre>{esc(summaries.get('security', 'No security report found.'))}</pre>
-            </div>
-        </div>
-
-        <div class="section">
-            <div class="section-header">
-                <h2>QA Report</h2>
-            </div>
-            <div class="section-body">
-                <pre>{esc(summaries.get('qa', 'No QA report found.'))}</pre>
-            </div>
-        </div>
-
-        <div class="section">
-            <div class="section-header">
-                <h2>Product Validation</h2>
-            </div>
-            <div class="section-body">
-                <pre>{esc(summaries.get('product_validation', 'No product validation report found.'))}</pre>
-            </div>
-        </div>
-
-        <div class="section">
-            <div class="section-header">
-                <h2>Forensics Analysis</h2>
-            </div>
-            <div class="section-body">
-                <pre>{esc(summaries.get('forensics', 'No forensics report found.'))}</pre>
-            </div>
-        </div>
-
-        <div class="section">
-            <div class="section-header">
-                <h2>Cost Tracking</h2>
-            </div>
-            <div class="section-body">
-                <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:16px;margin-bottom:16px">
-                    <div style="background:#0f172a;padding:16px;border-radius:8px;text-align:center">
-                        <div style="font-size:24px;font-weight:700;color:#22c55e">${report.cost_total:.4f}</div>
-                        <div style="font-size:12px;color:#94a3b8;margin-top:4px">Total LLM Cost</div>
-                    </div>
-                </div>
-                {f'<table><thead><tr><th>Model</th><th>Cost</th></tr></thead><tbody>{"".join(f"<tr><td>{m}</td><td>${c:.6f}</td></tr>" for m, c in report.cost_breakdown.items())}</tbody></table>' if report.cost_breakdown else '<p style="color:#6c757d">No cost data available (LiteLLM proxy not configured or no requests tracked)</p>'}
-            </div>
-        </div>
-
-        <div class="section">
-            <div class="section-header">
-                <h2>Issues Resolved</h2>
-            </div>
-            <div class="section-body">
-                <ul>{issues_resolved_html}</ul>
-            </div>
-        </div>
-
-        <div class="section">
-            <div class="section-header">
-                <h2>Outstanding Issues</h2>
-            </div>
-            <div class="section-body">
-                <ul>{outstanding_html}</ul>
-            </div>
-        </div>
-
-        <div class="section">
-            <div class="section-header">
-                <h2>Files Created ({len(report.files_created)})</h2>
-            </div>
-            <div class="section-body">
-                <table>
-                    <thead><tr><th>File Path</th></tr></thead>
-                    <tbody>{files_html}</tbody>
-                </table>
-            </div>
-        </div>
-
-        <div class="footer">
-            Hephaestus Autopilot &middot; Multi-Agent Workflow Engine
-        </div>
-    </div>
-</body>
-</html>"""
-
+    html = template.render(**context)
+    html_path = feature_folder / "feature_report.html"
     html_path.write_text(html)
     logger.info(f"HTML feature report: {html_path}")
     return html_path
