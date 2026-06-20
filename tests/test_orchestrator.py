@@ -33,6 +33,15 @@ class MockLogger:
     def log(self, msg, level="INFO"):
         self.logs.append((level, msg))
     
+    def info(self, msg):
+        self.logs.append(("INFO", msg))
+    
+    def warning(self, msg):
+        self.logs.append(("WARNING", msg))
+    
+    def error(self, msg):
+        self.logs.append(("ERROR", msg))
+    
     def event(self, name, data):
         self.logs.append(("EVENT", f"{name}: {data}"))
 
