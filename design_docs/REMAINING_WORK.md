@@ -18,6 +18,15 @@ This file is the *actionable backlog* of what's left, prioritized, with file/lin
 | **Single control authority (Tier 0)** | **DONE.** Removed the `for iteration in range(max_iterations)` outer loop from `run_single_design`. The engine's evaluation points are now the SOLE authority for iteration (goto/retry/continue bounded by `max_total_gotos`). `generate_product_validation_report` simplified to read existing results only (no duplicate heuristic). `--max-iterations` now maps to engine's `max_total_gotos` via `_update_orchestrator_max_gotos()`. |
 | **B1: stop_pipeline scope** | **DONE.** Removed the block in `autopilot_api.stop_pipeline` that terminated ALL active agents. Now only terminates agents tied to autopilot workflows. |
 | **Tier 5.1: Delete orphaned autopilot.py** | **DONE.** Deleted root `autopilot.py` (~770 lines). No imports or references existed outside the file itself. |
+| **B2: Empty workflow escape hatch** | **DONE.** Removed 60s false-completion, now returns `hard_error` after 5 minutes if no tasks exist. |
+| **B3: check_api_credits false positives** | **DONE.** Tightened patterns to specific phrases, reduced false positives. |
+| **Tier 1: Scheduling out of orchestrator** | **DONE.** Removed ~150 lines of duplicated scheduler/monitoring. Monitor `_create_next_phase_task` now spawns agents. |
+| **Tier 2 partial: AutopilotService** | **DONE.** In-process service, CLI/API call it, stop event wired. |
+| **Tier 5.2: Jinja2 HTML template** | **DONE.** Extracted ~230 lines to `templates/feature_report.html`. |
+| **Tier 3 partial: DB queue** | **DONE.** `pick_next_design` reads from DB, status updated after processing. Migration added. |
+| **DB migration** | **DONE.** Additive ALTER TABLE for `autopilot_designs` columns. 4 regression tests. |
+| **DesignEntry.status** | **DONE.** PENDING is intentional default, test updated. |
+| **MockLogger methods** | **DONE.** Added `info`, `warning`, `error` methods. |
 
 **Tests:** 28 passing (`tests/test_worktree_manager.py`, `tests/test_worktree_isolation_new.py`, `tests/test_autopilot_spec.py`). Run with `.venv/bin/python -m pytest <file> -p no:libtmux`.
 
@@ -27,29 +36,20 @@ This file is the *actionable backlog* of what's left, prioritized, with file/lin
 
 *One line:* **Land the additive `autopilot_designs` migration and settle the `DesignEntry.status` test, then prove the pipeline end-to-end on a throwaway repo before building more Tier 2/3.**
 
-### 1. DB migration for `autopilot_designs` — FIRST (ship-blocker)
-The Tier 3 change added `status`, `content_hash`, `feature_folder`, `completed_at`
-to the `AutopilotDesign` model, but the live `hephaestus.db` lacks them and
-SQLAlchemy `create_all` never alters existing tables. Because ORM queries select
-all mapped columns, the **first load of any `autopilot_designs` row throws
-`no such column`** — breaking the projects/designs API, not just autopilot.
-- **Do NOT** `drop_all`/`create_all` (wipes real data) or rely on manual ALTER.
-- **Do:** add `_migrate_autopilot_designs_columns()` mirroring the existing
-  `DatabaseManager._migrate_task_dependency_columns()` ([database.py:1145](database.py)) —
-  `ALTER TABLE … ADD COLUMN` wrapped in try/except, called from init.
-- **Acceptance:** the existing DB loads `autopilot_designs` and the
-  projects/designs endpoints work *without recreating the DB*; fresh DB also
-  works. Add a regression test: open a DB missing the columns → run init → query.
+### ~~1. DB migration for `autopilot_designs`~~ ✅ DONE
+Additive ALTER TABLE migration (`_migrate_autopilot_designs_columns`) added to
+`DatabaseManager.create_tables()`. 4 regression tests pass.
 
-### 2. Settle the `DesignEntry.status` regression (not "pre-existing")
-`TestDesignEntry::test_design_entry_creation` fails because this work changed the
-default `None → PENDING`. Decide deliberately: keep `PENDING` (update the test;
-confirm nothing treated `None` as "unstarted") or revert. Likewise actually
-confirm `test_crackme_challenge_config` is unrelated rather than assuming.
+### ~~2. Settle the `DesignEntry.status` regression~~ ✅ DONE
+`PENDING` is the intentional default (means "not yet processed"). Test updated
+to assert `DesignEntry.status == DesignStatus.PENDING`. `crackme` test was a
+case-sensitivity bug in the assertion ("execution proof" vs "Execution proof").
 
 ### 3. End-to-end smoke run — highest information value, still never done
-Run the pipeline on a throwaway git repo with one small design; capture a log and
-confirm:
+Smoke test repo prepared at `/tmp/heph-smoke-test` with `docs/design-queue/add_hello_world.md`.
+Run with: `heph start && heph autopilot start --project-path /tmp/heph-smoke-test`
+
+Confirm:
 - worktrees under `.worktrees/`, `.hephaestus/` context populated;
 - **the Monitor spawns agents** for each phase (the Tier 1 handoff — the biggest
   "does it actually run" risk);
