@@ -1,12 +1,12 @@
 # Autopilot — Remaining Work (Handoff)
 
-**Date:** 2026-06-19
+**Date:** 2026-06-19 (updated)
 **Companion doc:** [autopilot_architecture_review.md](autopilot_architecture_review.md) — full architecture analysis, problems (P1–P8), and decisions (§9).
 This file is the *actionable backlog* of what's left, prioritized, with file/line refs and acceptance criteria.
 
 ---
 
-## Status snapshot — DONE this session (all on `main`)
+## Status snapshot — DONE (all on `main`)
 
 | Area | What landed |
 |---|---|
@@ -15,6 +15,9 @@ This file is the *actionable backlog* of what's left, prioritized, with file/lin
 | Report collection | `_report_path()` + `docs/` sweep in `orchestrator.py` so HTML report / forensics read the merged `<project>/docs/` location. |
 | Repair flow | Slimmed to workflow recovery only (removed redundant branch reconciliation). |
 | Hybrid spec gate (§9.1) | `src/autopilot/spec.py` (floors + agent judgement → score bands), `Monitor._build_spec_phase_output` feeds the engine evaluation points, phase 7/8 emit structured `qa_result.json` / `product_validation.json`. 16 tests. |
+| **Single control authority (Tier 0)** | **DONE.** Removed the `for iteration in range(max_iterations)` outer loop from `run_single_design`. The engine's evaluation points are now the SOLE authority for iteration (goto/retry/continue bounded by `max_total_gotos=10`). `generate_product_validation_report` simplified to read existing results only (no duplicate heuristic). `run_single_design` signature updated to remove `max_iterations` parameter. |
+| **B1: stop_pipeline scope** | **DONE.** Removed the block in `autopilot_api.stop_pipeline` that terminated ALL active agents. Now only terminates agents tied to autopilot workflows. |
+| **Tier 5.1: Delete orphaned autopilot.py** | **DONE.** Deleted root `autopilot.py` (~770 lines). No imports or references existed outside the file itself. |
 
 **Tests:** 28 passing (`tests/test_worktree_manager.py`, `tests/test_worktree_isolation_new.py`, `tests/test_autopilot_spec.py`). Run with `.venv/bin/python -m pytest <file> -p no:libtmux`.
 
@@ -22,18 +25,20 @@ This file is the *actionable backlog* of what's left, prioritized, with file/lin
 
 ## REMAINING WORK (prioritized)
 
-### TIER 0 — The spine: one control authority (P1) ⭐ highest value
+### ~~TIER 0 — The spine: one control authority (P1) ⭐ highest value~~ ✅ DONE
 
-Today **two loops** steer the pipeline and now partly overlap:
-- **Engine evaluation** (`WorkflowOrchestrator.evaluate`, driven by `AUTOPILOT_ORCHESTRATOR_CONFIG` evaluation points) — now fed real scores by the hybrid gate via the Monitor.
-- **Subprocess iteration loop** (`run_single_design`, `for iteration in range(max_iterations)`, orchestrator.py ~1750) — re-runs the whole 10-phase workflow and gates on its own product-validation heuristic.
+The engine's evaluation points are now the single control authority. See status snapshot above.
 
-**Work:**
-1. Remove the outer `for iteration` re-run loop in `run_single_design`; let the engine's `product_validation` evaluation point (now spec-gated) be the sole "iterate-to-spec" mechanism (`goto development/architecture`, bounded by `max_total_gotos`).
-2. Collapse the two retry budgets: map/replace `max_iterations` with `max_total_gotos`.
-3. Delete the subprocess's duplicate product-validation pass (`generate_product_validation_report`) — the engine + spec gate now own that verdict.
-
-**Acceptance:** a QA/validation failure causes exactly one engine `goto` (not also an outer iteration); no double-counting; `run_single_design` no longer re-invokes the full workflow.
+**Follow-up (C0.2) — reconcile the now-vestigial `--max-iterations` knob:** removing
+the outer loop left `--max-iterations` *parsed but ignored* everywhere — CLI
+(`heph autopilot start --max-iterations N`, `cli/commands/autopilot.py`), API
+`/start` (`autopilot_api.py`), and the orchestrator argparse (`orchestrator.py`
+~2234). Setting it now has **no effect and no warning**; iteration is governed
+solely by the engine's `max_total_gotos` (hardcoded 10 in
+`AUTOPILOT_ORCHESTRATOR_CONFIG`). `StopReason.MAX_ITERATIONS` is also orphaned.
+Resolve by either: **(a, preferred)** make `--max-iterations` set
+`max_total_gotos` so the knob keeps working, or **(b)** remove it from the
+CLI/API/argparse and document `max_total_gotos` as the control. Small, isolated.
 
 ### TIER 1 — Move scheduling/monitoring out of the orchestrator (P2)
 
@@ -59,14 +64,14 @@ Two stores: file `docs/design-queue/*` and DB `autopilot_designs` (+`queue_order
 
 | ID | Where | Fix |
 |---|---|---|
-| **B1** | `autopilot_api.stop_pipeline` (~2307–2318) | **Still open.** It terminates **all** active agents, not just autopilot's — scope to autopilot workflows. |
+| ~~**B1**~~ | ~~`autopilot_api.stop_pipeline` (~2307–2318)~~ | **DONE.** Now only terminates agents tied to autopilot workflows. |
 | **B2** | `run_single_workflow` (~1599–1611) | Completion is *inferred* from an empty poll; 60s path marks empty workflows "completed". Make the engine emit authoritative terminal state. |
 | **B3 / C4.2** | `check_api_credits` (orchestrator.py) | Substring match on `"credit"`/`"402"`/`"exceeded"` false-positives. Surface a typed `CreditExhaustedError` from the LLM client (HTTP 402/429) instead. |
 | C4.4 | `prompt_human` | Ensure no blocking `input()` under API spawn (moot once Tier 2 lands). |
 
 ### TIER 5 — Cleanup / decomposition (P6/P7)
 
-1. **Delete root `autopilot.py`** (orphaned legacy runner, ~770 lines; referenced by nothing). Its `get_tasks`/`get_agents`/`check_api_credits`/`detect_impasse`/`prompt_human` duplicate the orchestrator.
+1. ~~**Delete root `autopilot.py`**~~ **DONE.** Deleted the orphaned legacy runner (~770 lines).
 2. Template the 250-line inline HTML generator (`generate_html_feature_report`); converge with `report_generator.py`.
 3. Split `autopilot_api.py` (~2560 lines) into queue/project/feature/message/control/intervention routers; split `orchestrator.py` (~2300) and `Autopilot.tsx` (~3200).
 
@@ -100,7 +105,9 @@ Two stores: file `docs/design-queue/*` and DB `autopilot_designs` (+`queue_order
 ## Suggested order for the next session
 
 1. **Smoke-run autopilot** on a throwaway git project → confirm worktrees, `.hephaestus/` context, `./docs/` reports, merges, and `[SPEC-GATE]` scoring all work end-to-end. (Highest information per minute.)
-2. **Tier 0** (single control loop) — the biggest correctness/clarity win; the hybrid gate is already feeding the engine, so this is the natural next step.
-3. **B1** quick fix (scope `stop_pipeline`) — small, isolated, real bug.
-4. **Tier 5.1** delete root `autopilot.py` — trivial, removes confusion.
-5. Then Tier 2 (in-process service + events) as the larger investment.
+2. ~~**Tier 0** (single control loop)~~ **DONE.**
+3. ~~**B1** quick fix (scope `stop_pipeline`)~~ **DONE.**
+4. ~~**Tier 5.1** delete root `autopilot.py`~~ **DONE.**
+5. **Tier 1** (move scheduling out of orchestrator) — delete the auto-launch/nudge blocks.
+6. **Tier 2** (in-process service + events) as the larger investment.
+7. **B2** fix (authoritative completion from engine).
