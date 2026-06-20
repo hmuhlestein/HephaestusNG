@@ -425,16 +425,44 @@ Not everything needs changing. Preserve:
 
 ---
 
-## 9. Open Questions
+## 9. Resolved Decisions
 
-1. **Multi-design concurrency:** today the loop is strictly one design at a time
-   (it waits for any active workflow). Is parallel design processing a goal? If
-   so, the queue/service must model per-design isolation explicitly.
-2. **Projects vs single-project:** the `autopilot_projects` table implies
-   multi-project; the file queue + CLI assume one project path. Which is the
-   intended top-level scope?
-3. **Engine ownership:** is Autopilot allowed to assume it co-runs in the
-   backend process (enabling the in-process service), or must it be runnable
-   standalone? This decides Slice E's shape.
-4. **Spec definition:** should `qa_spec.json` become first-class
-   (per-design/per-project, stored in DB) rather than a file read opportunistically?
+These were open questions; now settled (2026-06-19):
+
+1. **Multi-design concurrency — NO.** One design at a time, sequentially; each
+   design **builds on the previous one**. The queue is an ordered chain, not a
+   pool. *Implication:* a design that ships with a silent regression poisons
+   everything downstream — this raises the bar for the completion gate (see #4)
+   and makes deterministic floors more important, not less.
+2. **Single project at a time.** One active project. *Implication:* the
+   `autopilot_projects` multi-project machinery can be simplified to a single
+   active-project scope; the spec and queue are per-project.
+3. **Engine is the driver.** Autopilot co-runs with / is driven by the engine —
+   not a standalone subprocess phoning home. This confirms **Slice E** (in-process
+   `AutopilotService`, direct service calls, no `requests`-to-self) and makes
+   **C0.1 (single control loop = engine evaluation)** the spine of the design.
+
+### 9.1 Completion / spec gate (resolved: hybrid)
+
+**Finding:** `qa_spec.json` is **only** consumed by the orphaned root
+`autopilot.py`. The active pipeline (`src/autopilot/orchestrator.py`, phases 7/8)
+never reads it. So today there is **no machine-checkable gate** — "up to spec" is
+`generate_product_validation_report()` grepping the Phase 8 agent's own prose
+`product_validation.md`. The agent is worker and judge with no objective floor.
+
+**Decision — hybrid gate:**
+- A **first-class, DB-backed spec** (per-project) provides **hard floors**: tests
+  must pass, no critical security/correctness issues, required pass rate.
+- An **LLM/Conductor judgment** covers the subjective remainder (UX, fidelity to
+  design intent).
+- The spec becomes the **evaluator behind the `product_validation` evaluation
+  point** in `AUTOPILOT_ORCHESTRATOR_CONFIG`: it produces the `score` that drives
+  `goto/retry/continue`. This *replaces* the prose-grep and unifies the gate with
+  the single control loop (C0.1).
+- Phases 7/8 agents emit **structured JSON**
+  (`{verdict, failed_tests, critical_issues, unmet_requirements[], score}`)
+  instead of markdown-to-be-regexed (supersedes C4.3).
+
+*Rationale for the hard floor specifically:* because designs are a sequential
+chain (decision #1), prose-only judgment has no mechanism to stop a regression
+from compounding across the chain. The machine floor is what prevents drift.
