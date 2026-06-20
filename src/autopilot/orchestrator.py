@@ -864,6 +864,18 @@ def _sweep_stray_files(
     """Move stray docs/reports/scripts from project root into feature docs."""
     docs_dir.mkdir(parents=True, exist_ok=True)
 
+    # ── reports agents wrote to ./docs/ (merged from worktrees) ────
+    # These stay committed in the project repo; copy them into the feature
+    # bundle so the HTML report / forensics can read them in one place.
+    proj_docs = project_path / _REPORT_SUBDIR
+    if proj_docs.is_dir() and proj_docs.resolve() != docs_dir.resolve():
+        for f in proj_docs.iterdir():
+            if f.is_file() and f.suffix in _DOC_EXTENSIONS:
+                dest = docs_dir / f.name
+                if not dest.exists():
+                    shutil.copy2(str(f), str(dest))
+                    logger.info(f"Copied report: docs/{f.name} -> features/.../docs/")
+
     # ── files in project root ──────────────────────────────────────
     for f in project_path.iterdir():
         if not f.is_file():
@@ -926,6 +938,22 @@ def _sweep_stray_files(
                             shutil.move(str(item), str(target))
                             logger.info(f"Moved file from {d_name}/: {rel} -> features/.../docs/{d_name}/")
                 shutil.rmtree(src_dir)
+
+
+_REPORT_SUBDIR = "docs"
+
+
+def _report_path(project_path: Path, filename: str) -> Path:
+    """Locate a report an agent wrote.
+
+    Under worktree isolation agents write reports to ./docs/ (relative to their
+    worktree), which merges to <project>/docs/. Prefer that location; fall back
+    to the project root for older/stray writes.
+    """
+    in_docs = project_path / _REPORT_SUBDIR / filename
+    if in_docs.exists():
+        return in_docs
+    return project_path / filename
 
 
 def collect_report_summaries(project_path: Path) -> Dict[str, str]:
@@ -1234,7 +1262,7 @@ def generate_product_validation_report(
     qa_passed: bool,
     logger: OrchestratorLogger,
 ) -> Tuple[bool, str]:
-    validation_path = project_path / "product_validation.md"
+    validation_path = _report_path(project_path, "product_validation.md")
 
     # If Phase 8 already created a validation report, use it instead of overwriting
     if validation_path.exists():
@@ -1247,8 +1275,8 @@ def generate_product_validation_report(
             pass
 
     # Fallback: generate a basic validation report
-    requirements_path = project_path / "requirements_analysis.md"
-    qa_report_path = project_path / "qa_report.md"
+    requirements_path = _report_path(project_path, "requirements_analysis.md")
+    qa_report_path = _report_path(project_path, "qa_report.md")
 
     requirements_content = ""
     if requirements_path.exists():
@@ -1809,8 +1837,8 @@ def run_single_design(
             logger.info("Running product validation...")
             qa_passed = False
             qa_reports = [
-                project_path / "qa_report.md",
-                project_path / "qa_report.html",
+                _report_path(project_path, "qa_report.md"),
+                _report_path(project_path, "qa_report.html"),
             ]
             pass_patterns = [
                 "overall status: pass",
@@ -1849,8 +1877,8 @@ def run_single_design(
                 break
 
             arch_issue, arch_reason = detect_architectural_issue([
-                str(project_path / "review_report.md"),
-                str(project_path / "security_report.md"),
+                str(_report_path(project_path, "review_report.md")),
+                str(_report_path(project_path, "security_report.md")),
             ])
             if arch_issue:
                 stop_reason = StopReason.ARCHITECTURAL_ISSUE
