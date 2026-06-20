@@ -6,7 +6,7 @@ as **diagnostic**, not pass/fail. Capture evidence at each checkpoint and **repo
 findings — do not silently fix forward**. If a checkpoint fails, stop, record the
 symptom, and map it to the likely cause (each checkpoint lists one).
 
-Companion: [REMAINING_WORK.md](REMAINING_WORK.md) item 3, [autopilot_architecture_review.md](autopilot_architecture_review.md) §9.
+Companion: [autopilot_architecture_review.md](autopilot_architecture_review.md) — §11.2 (next action), §9 (decisions).
 
 Conventions below assume repo root `/Users/hmuhlestein/code/HephaestusNG` (DB:
 `hephaestus.db`) and smoke project `/tmp/heph-smoke-test`.
@@ -128,7 +128,7 @@ For each run, a short summary:
 - Did agents spawn and phases advance? Final `git log --oneline` / `git worktree list` of the smoke repo.
 - The `[SPEC-GATE]` lines observed (and the `qa_result.json` / `product_validation.json` contents).
 - Any `hard_error` / early abort, with timing.
-- Update [REMAINING_WORK.md](REMAINING_WORK.md) item 3 to ✅ (or note the blocker) once Run A is green.
+- Update [autopilot_architecture_review.md](autopilot_architecture_review.md) §11.2 (mark the smoke run done, or record the blocker) once Run A is green.
 
 ---
 
