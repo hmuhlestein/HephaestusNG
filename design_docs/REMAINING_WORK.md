@@ -77,7 +77,7 @@ Two stores: file `docs/design-queue/*` and DB `autopilot_designs` (+`queue_order
 | ID | Where | Fix |
 |---|---|---|
 | ~~**B1**~~ | ~~`autopilot_api.stop_pipeline` (~2307–2318)~~ | **DONE.** Now only terminates agents tied to autopilot workflows. |
-| **B2** | `run_single_workflow` (~1599–1611) | Completion is *inferred* from an empty poll; 60s path marks empty workflows "completed". Make the engine emit authoritative terminal state. |
+| ~~**B2**~~ | ~~`run_single_workflow` (~1599–1611)~~ | **DONE.** Removed 60s empty-workflow escape hatch. Now returns `hard_error` after 5 minutes if no tasks exist. |
 | **B3 / C4.2** | `check_api_credits` (orchestrator.py) | Substring match on `"credit"`/`"402"`/`"exceeded"` false-positives. Surface a typed `CreditExhaustedError` from the LLM client (HTTP 402/429) instead. |
 | C4.4 | `prompt_human` | Ensure no blocking `input()` under API spawn (moot once Tier 2 lands). |
 
