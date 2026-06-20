@@ -173,25 +173,7 @@ def _read_jsonl_tail(path: Path, limit: int = 100) -> List[dict]:
         return []
 
 
-async def _is_orchestrator_running() -> bool:
-    cached = _cached("orchestrator_running", ttl=5.0)
-    if cached is not None:
-        return cached
 
-    pid_file = Path(AUTOPILOT_STATE_DIR) / "orchestrator.pid"
-    if not pid_file.exists():
-        return _store("orchestrator_running", False)
-    try:
-        pid = int(pid_file.read_text().strip())
-        proc = await asyncio.create_subprocess_exec(
-            "ps", "-p", str(pid),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        await proc.wait()
-        return _store("orchestrator_running", proc.returncode == 0)
-    except Exception:
-        return _store("orchestrator_running", False)
 
 
 # ── Pydantic models ──────────────────────────────────────────────
