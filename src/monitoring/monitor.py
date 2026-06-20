@@ -1086,6 +1086,15 @@ class MonitoringLoop:
             )
 
             session.add(task)
+
+            # Start the phase execution so the Monitor can track it
+            from src.core.database import PhaseExecution
+            execution = session.query(PhaseExecution).filter_by(phase_id=next_phase.id).first()
+            if execution and execution.status == "pending":
+                execution.status = "in_progress"
+                from datetime import datetime
+                execution.started_at = datetime.utcnow()
+
             session.commit()
 
             logger.info(f"Created task for next phase: {next_phase.name} (task_id={task_id[:8]})")
