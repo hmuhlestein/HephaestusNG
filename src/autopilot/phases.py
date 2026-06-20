@@ -204,8 +204,8 @@ AUTOPILOT_LAUNCH_TEMPLATE = LaunchTemplate(
     ],
     phase_1_task_prompt="""Phase 1: Product Requirements Extraction
 
-**Design Document:** {design_document}
-**Project Path:** {project_path}
+**Design Document:** ./.hephaestus/design.md (copied into your worktree)
+**Project Path:** . (your current working directory — an isolated git worktree)
 
 ---
 
@@ -226,7 +226,7 @@ Before reading the design document:
 4. Search memory for technology decisions and constraints
 
 ### STEP 1: Read the Design Document
-Read the file at: {design_document}
+Read the file at: ./.hephaestus/design.md
 
 ### STEP 2: Extract Requirements
 - Functional requirements with acceptance criteria
@@ -235,7 +235,7 @@ Read the file at: {design_document}
 - Technology constraints
 
 ### STEP 3: Create Requirements Document
-Write requirements_analysis.md in {project_path}
+Write requirements_analysis.md in ./docs/ (create the directory if needed)
 
 ### STEP 4: Save to Memory
 Save key decisions and project context.
