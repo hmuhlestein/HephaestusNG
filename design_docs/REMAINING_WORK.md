@@ -96,6 +96,36 @@ makes it pass → re-QA `continue`. (Alternative: an over-constrained/contradict
 requirement so product validation honestly reports `unmet_requirements`, forcing
 the same path via the §9.1 hard-floor override.)
 
+### 3b. ⛔ BLOCKER from Run A — phase-transition control authority (P1, second instance)
+Run A stalled at **phase 3** (never reached the gated phases, hence no `[SPEC-GATE]` —
+that's a symptom, not a bug; the wiring at `monitor.py:1005` is correct).
+
+**Root cause:** the authority that *decides* a phase transition is split from the one
+that *creates the work*:
+- `PhaseManager._start_next_phase` / `_start_phase` (the **engine** path) only flips
+  `PhaseExecution.status = "in_progress"` — it does **not** create a Task or spawn an
+  agent, and PhaseManager has **no `agent_manager`**.
+- The Task + agent are created **only** by `Monitor._create_next_phase_task`, which
+  **hard-codes the sequential next phase** (`order > current.order`).
+
+So **CONTINUE works** (sequential == chosen → phases 1→2→3), but **GOTO/RETRY always
+hang**: the engine flips the target phase to in_progress, nobody creates its task+agent,
+the orchestrator sees a pending task with no agent → impasse → 600s human-input → never
+completes (= Run A remaining issues #2 and #3). The spec gate's whole purpose is to fire
+`goto`, so the gate cannot be validated until this is fixed.
+
+**Fix (engine-is-driver):** whoever decides the transition must own creating the
+task+agent for the *chosen* target. Smallest version: have `mark_phase_complete` return
+the `EvaluationResult` (action + `target_phase`; it currently returns a bool), and in
+`_check_phase_progression` create the task+agent for the **resolved** target (next for
+continue, `target` for goto, same phase for retry) — replacing the unconditional
+sequential `_create_next_phase_task` pre-call. Collapses the two authorities into one.
+
+**Confirm the immediate stall:** `SELECT phase_id,status,assigned_agent_id FROM tasks
+WHERE status IN ('pending','queued')` — a phase task with no `assigned_agent_id` confirms
+the orphaned-transition hang. Also check the `except → queued` path (`monitor.py:1145`)
+and whether `background_queue_processor` actually retried agent creation.
+
 ### 4. Finish Tier 2 the designed way (after smoke passes)
 Per §4.4: human-input → `autopilot_interventions` DB table + `asyncio.Condition`
 + REST submit (fixes **B4/B7**, removes the `input_request_*.json` mailbox); then
@@ -109,6 +139,15 @@ file-queue calls in `frontend/src/services/api.ts`, drop the `queue_order`
 sidecar. DB is already the read source — this removes the dual model.
 
 **Defer:** Tier 5.3 module splits, Conductor judgement, per-project spec UI (low-risk, no rush).
+
+**Future — orchestrator logging to file-only via stdlib:** route the orchestrator's
+human-readable logging through `logging.getLogger("autopilot.orchestrator")` with a
+**per-run `FileHandler` only** (no `print`-to-stdout). Now that the orchestrator runs
+in-process (Tier 2), the current `print(..., flush=True)` double-logs — its stdout is
+captured into the backend log *and* hand-written to `orchestrator.log`. File-only via a
+proper handler keeps the useful per-run artifact without the duplication. This is the
+logging half of the `OrchestratorLogger` split (Tier 2 item 4); `event()`/`save_state()`
+go to the DB/event stream there.
 
 ---
 
