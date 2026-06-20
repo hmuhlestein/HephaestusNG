@@ -129,3 +129,33 @@ For each run, a short summary:
 - The `[SPEC-GATE]` lines observed (and the `qa_result.json` / `product_validation.json` contents).
 - Any `hard_error` / early abort, with timing.
 - Update [REMAINING_WORK.md](REMAINING_WORK.md) item 3 to ✅ (or note the blocker) once Run A is green.
+
+---
+
+## Run A Results (2026-06-20)
+
+**Status:** PARTIAL — agents spawn and phases advance, but workflow never completes.
+
+### Checkpoints
+
+| # | Checkpoint | Status | Evidence |
+|---|------------|--------|----------|
+| 1 | Phase-1 agent spawns | ✅ | Agent spawned, worktree `.worktrees/wt_*` created |
+| 2 | Context populated | ✅ | `.hephaestus/design.md` present in worktree |
+| 3 | Phases advance 1→2→… | ⚠️ Partial | Phase 1→2→3 advanced, but execution status tracking was broken |
+| 4 | `[SPEC-GATE]` log | ❌ | No SPEC-GATE logs found |
+| 5 | Reports land + merge | ⚠️ Partial | Reports in `docs/`, but workflow never completed |
+| 6 | Merge/discard | ⚠️ | Worktrees created, but workflow stuck |
+
+### Bugs Found & Fixed
+
+1. **OrchestratorLogger missing methods** — `info()`, `warning()`, `error()` not defined. Added them.
+2. **BrokenPipeError in log()** — `print()` fails when stdout is DEVNULL. Added try/except.
+3. **First phase not started** — `_start_phase()` never called for phase 1. Added to `start_execution()`.
+4. **Subsequent phases not started** — `_create_next_phase_task` didn't update `PhaseExecution.status`. Fixed.
+
+### Remaining Issues
+
+1. **No SPEC-GATE logs** — `_build_spec_phase_output` may not be firing or `working_directory` is None.
+2. **Workflow never completes** — Orchestrator polls forever even when all tasks done. The `completed` status inference from empty poll may not be triggering.
+3. **B2 timing** — The 5-min `hard_error` timeout didn't trigger (tasks were created within 5 min), but the human-input timeout (600s) did fire for a pending task.
