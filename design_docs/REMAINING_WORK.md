@@ -70,9 +70,18 @@ Removed the auto-launch block (~100 lines) and nudge/auto-kill block (~50 lines)
 2. Add `/api/autopilot/stream` (WS/SSE); move UI off interval polling for status/messages/input.
 3. Persist `PipelineState`/messages/events to DB instead of `pipeline_state.json` / `events.jsonl`.
 
-### TIER 3 — Unify the queue (P4)
+### TIER 3 — Unify the queue (P4) ✅ PARTIAL
 
-Two stores: file `docs/design-queue/*` and DB `autopilot_designs` (+`queue_order` sidecar). Collapse to **DB as source of truth**, files become an import source. Merge `/queue/*` and `/projects/{id}/designs/*` into one resource; retire the file-queue calls in `frontend/src/services/api.ts`.
+**Done:**
+- Added `status`, `content_hash`, `feature_folder`, `completed_at` columns to `AutopilotDesign` model
+- `pick_next_design` now reads from DB (autopilot_designs) first, falls back to file scan
+- After processing, design status is updated in DB (completed/failed/skipped)
+- `_sync_project_designs` already existed to import files to DB
+
+**Remaining:**
+- Merge `/queue/*` and `/projects/{id}/designs/*` API endpoints into one resource
+- Retire file-queue calls in `frontend/src/services/api.ts`
+- Remove `queue_order` sidecar file dependency
 
 ### TIER 4 — Correctness fixes (P8 + bug list)
 

@@ -818,6 +818,43 @@ def scan_design_queue(queue_dir: Path, processed_hashes: Set[str]) -> List[Desig
 
 
 def pick_next_design(queue_dir: Path, processed_hashes: Set[str], logger: OrchestratorLogger) -> Optional[DesignEntry]:
+    """Pick the next design to process.
+
+    Reads from DB (autopilot_designs) if available, falls back to file scan.
+    """
+    # Try DB-based queue first
+    try:
+        from src.core.database import AutopilotDesign, AutopilotProject, get_db
+        with get_db() as db:
+            # Find active project
+            project = db.query(AutopilotProject).filter_by(is_active=True).first()
+            if project:
+                # Get next pending design ordered by ordinal
+                design = (
+                    db.query(AutopilotDesign)
+                    .filter_by(project_id=project.id, status="pending")
+                    .order_by(AutopilotDesign.ordinal, AutopilotDesign.filename)
+                    .first()
+                )
+                if design:
+                    # Mark as processing
+                    design.status = "processing"
+                    db.commit()
+
+                    # Construct DesignEntry from DB record
+                    design_path = Path(project.base_dir) / "docs" / "design-queue" / design.filename
+                    if design_path.exists():
+                        entry = DesignEntry(
+                            path=design_path,
+                            name=design.name,
+                            content_hash=design.content_hash or file_hash(design_path),
+                        )
+                        logger.info(f"Selected from DB: {design.name} (ordinal={design.ordinal})")
+                        return entry
+    except Exception as e:
+        logger.warning(f"DB queue read failed, falling back to file scan: {e}")
+
+    # Fallback: file-based queue
     designs = scan_design_queue(queue_dir, processed_hashes)
 
     if not designs:
@@ -1840,6 +1877,24 @@ def run_continuous_pipeline(args) -> None:
                 next_design.status = status
                 processed_hashes.add(next_design.content_hash)
                 processed_file.write_text(json.dumps(list(processed_hashes)))
+
+                # Update DB design status
+                try:
+                    from src.core.database import AutopilotDesign, AutopilotProject, get_db as _get_db
+                    with _get_db() as _db:
+                        _proj = _db.query(AutopilotProject).filter_by(is_active=True).first()
+                        if _proj:
+                            _des = _db.query(AutopilotDesign).filter_by(
+                                project_id=_proj.id, filename=next_design.path.name
+                            ).first()
+                            if _des:
+                                _des.status = status.value if hasattr(status, 'value') else str(status)
+                                _des.feature_folder = str(next_design.feature_folder) if next_design.feature_folder else None
+                                if status == DesignStatus.COMPLETED:
+                                    _des.completed_at = datetime.utcnow()
+                                _db.commit()
+                except Exception as _db_err:
+                    logger.warning(f"Failed to update DB design status: {_db_err}")
 
                 state.designs_processed += 1
                 if status == DesignStatus.COMPLETED:

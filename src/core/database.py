@@ -867,6 +867,10 @@ class AutopilotDesign(Base):
     ordinal = Column(Integer, nullable=False, default=0)
     size_bytes = Column(Integer, nullable=False, default=0)
     extension = Column(String(10), nullable=False, default=".md")
+    content_hash = Column(String(64), nullable=True)  # SHA-256 for dedup
+    status = Column(String(20), nullable=False, default="pending")  # pending, processing, completed, failed
+    feature_folder = Column(Text, nullable=True)  # Path to feature folder after processing
+    completed_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     modified_at = Column(DateTime, default=datetime.utcnow)
 
