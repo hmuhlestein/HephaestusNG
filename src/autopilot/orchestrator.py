@@ -267,9 +267,21 @@ class OrchestratorLogger:
     def log(self, message: str, level: str = "INFO"):
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         line = f"[{timestamp}] [{level}] {message}"
-        print(line, flush=True)
+        try:
+            print(line, flush=True)
+        except OSError:
+            pass  # Broken pipe when running as subprocess with DEVNULL
         with open(self.log_file, "a") as f:
             f.write(line + "\n")
+
+    def info(self, message: str):
+        self.log(message, "INFO")
+
+    def warning(self, message: str):
+        self.log(message, "WARNING")
+
+    def error(self, message: str):
+        self.log(message, "ERROR")
 
     def event(self, event_type: str, data: dict):
         entry = {

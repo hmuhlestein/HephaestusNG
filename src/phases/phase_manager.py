@@ -1087,6 +1087,10 @@ class PhaseManager:
             if not self.workflow_id:
                 self.workflow_id = workflow_id
 
+            # Start the first phase execution so the Monitor can track it
+            if first_phase_id:
+                self._start_phase(session, first_phase_id)
+
             logger.info(f"Started workflow execution: {workflow_id} (definition: {definition_id})")
 
             # Return both workflow_id and initial task info
