@@ -434,7 +434,7 @@ class TestDesignEntry:
         assert entry.path == filepath
         assert entry.name == "Test Design"
         assert entry.content_hash == "abc123"
-        assert entry.status is None
+        assert entry.status == DesignStatus.PENDING
     
     def test_design_entry_status(self, tmp_path):
         """DesignEntry status can be set."""

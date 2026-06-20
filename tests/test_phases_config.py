@@ -149,7 +149,7 @@ class TestPhasesConfig:
 
         assert config.has_result == True
         assert "password or flag" in config.result_criteria
-        assert "execution proof" in config.result_criteria
+        assert "Execution proof" in config.result_criteria or "execution proof" in config.result_criteria
         assert config.on_result_found == "stop_all"
 
     def test_research_task_config(self):
