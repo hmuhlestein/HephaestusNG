@@ -83,15 +83,24 @@ class AgentManager:
         logger.info(f"Creating {cli_type} agent {agent_id} for task {task.id}")
 
         try:
-            # Create branch for agent
+            # Gather inbound context (design doc, qa_spec, project context) to copy
+            # into the worktree's git-excluded .hephaestus/ dir, so the agent never
+            # has to read out-of-tree paths.
+            context_files = self._gather_worktree_context(task)
+
+            # Create an isolated worktree for the agent
             branch_info = self.branch_manager.create_agent_branch(
                 agent_id=agent_id,
                 parent_agent_id=getattr(task, 'created_by_agent_id', None),
+                context_files=context_files,
             )
             branch_path = branch_info["working_directory"]
-            logger.info(f"Created branch {branch_info['branch_name']} for agent {agent_id}")
+            logger.info(
+                f"Created worktree {branch_info['branch_name']} for agent {agent_id} "
+                f"at {branch_path} (context: {sorted(context_files) if context_files else 'none'})"
+            )
 
-            # Checkout the agent's branch so commits go to the right place
+            # No-op under worktree isolation (each agent has its own worktree).
             self.branch_manager.switch_to_branch(branch_info["branch_name"])
 
             # 2. Generate system prompt
@@ -392,6 +401,58 @@ class AgentManager:
 
         logger.debug(f"Created tmux session: {session_name}")
         return session
+
+    def _gather_worktree_context(self, task: Task) -> Dict[str, str]:
+        """Collect inbound context to copy into the worktree's .hephaestus/ dir.
+
+        The backend (unsandboxed) reads out-of-tree inputs — the design document,
+        qa_spec, and project context from the workflow's launch params — and writes
+        them inside the agent's worktree so the agent never reads outside its CWD.
+
+        Returns a {relative_path: content} map written under <worktree>/.hephaestus/.
+        """
+        context: Dict[str, str] = {}
+        try:
+            from src.core.database import Workflow
+            workflow_id = getattr(task, 'workflow_id', None)
+            launch_params = {}
+            if workflow_id:
+                session = self.db_manager.get_session()
+                try:
+                    wf = session.query(Workflow).filter_by(id=workflow_id).first()
+                    if wf and wf.launch_params:
+                        launch_params = wf.launch_params if isinstance(wf.launch_params, dict) else {}
+                finally:
+                    session.close()
+
+            # Design document — the key external input (phase 1 extracts from it,
+            # phase 8 re-validates against it).
+            design_doc = launch_params.get("design_document")
+            if design_doc:
+                p = Path(design_doc)
+                if p.exists() and p.is_file():
+                    try:
+                        context["design.md"] = p.read_text()
+                    except Exception as e:
+                        logger.warning(f"Could not read design document {p}: {e}")
+
+            # Project context (free-form notes from the orchestrator).
+            project_context = launch_params.get("project_context")
+            if project_context:
+                context["context.md"] = str(project_context)
+
+            # Spec gate (hybrid completion gate, §9.1). Per-project file lives in the
+            # global state dir; copied in so QA/validation agents can read it.
+            spec_path = Path.home() / ".hephaestus" / "autopilot" / "qa_spec.json"
+            if spec_path.exists():
+                try:
+                    context["qa_spec.json"] = spec_path.read_text()
+                except Exception:
+                    pass
+        except Exception as e:
+            logger.warning(f"Failed to gather worktree context for task {getattr(task, 'id', '?')}: {e}")
+
+        return context
 
     def _format_initial_message(self, task: Task, agent_id: str, branch_path: str = None, agent_type: str = "phase", enriched_data: dict = None) -> str:
         """Format the initial message to send to the agent.
