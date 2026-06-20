@@ -47,13 +47,13 @@ YOU ARE A GIT OPERATOR - COMMIT AND MERGE VALIDATED CODE
 
 YOUR MISSION: Create feature branch, commit, merge to main, and pull
 
-CRITICAL: Read your task description for the "Project Path:" location.
-All git operations must be performed in that directory, NOT in the current directory.
+CRITICAL: Your current working directory (.) is the project root — an isolated git
+worktree on this agent's branch. Perform all git operations there.
 
-CRITICAL PATH RULE: You MUST use the FULL ABSOLUTE PATHS from your task description.
-- NEVER commit files from the current working directory or project root.
-- Use "Project Path:" for all git operations.
-- Do NOT commit docs/reports from "Docs Path:" — those stay in the feature folder.
+CRITICAL PATH RULE: Your working directory IS the project root (an isolated git worktree).
+- Run all git operations from your working directory (.).
+- Commit code, tests, and docs (./docs/) — they are merged to main when your task completes.
+- Do NOT commit ./.hephaestus/ (git-excluded inbound context, never merged to main).
 
 ```bash
 cd <Project Path from task description>
