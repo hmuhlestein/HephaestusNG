@@ -2021,6 +2021,11 @@ def main():
             db.unlink()
             print(f"Dropped {db}")
 
+    # Ensure DB tables and migrations are applied
+    from src.core.database import DatabaseManager
+    db_manager = DatabaseManager(str(HEPHAESTUS_DIR / "hephaestus.db"))
+    db_manager.create_tables()
+
     # Write our PID
     pid_dir.mkdir(parents=True, exist_ok=True)
     pid_file.write_text(str(os.getpid()))
