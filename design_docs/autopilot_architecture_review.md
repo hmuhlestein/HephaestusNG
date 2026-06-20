@@ -444,6 +444,27 @@ Not everything needs changing. Preserve:
 
 ---
 
+## 8.1 Implementation Notes & Known Limitations
+
+### No backend lifecycle integration (MVP acceptable)
+
+`AutopilotService` is a module-level singleton accessed via `get_autopilot_service()`. It is **not** registered with the backend's startup/shutdown hooks. If the backend process restarts:
+- The in-memory pipeline state (current design, counters) is lost.
+- Persistent state is still written to `pipeline_state.json` / `events.jsonl`, so the next `start()` can resume from the last checkpoint.
+- The service does not automatically restart a pipeline that was running before the restart.
+
+**Future improvement:** Register the service with the backend's lifespan events (`@app.on_event("startup")` / `@app.on_event("shutdown")`) and persist the service's `running` flag + project path to DB so it can auto-resume.
+
+### Pipeline runs in thread executor
+
+`run_continuous_pipeline` is synchronous (blocking). The service runs it via `asyncio.get_event_loop().run_in_executor(None, ...)` which delegates to the default thread pool. This isolates the blocking loop from the async event loop, but:
+- Thread pool exhaustion is possible if many blocking operations compete (unlikely for a single pipeline).
+- Subprocesses spawned by the pipeline (agent CLI tools) inherit the thread's context.
+
+**Future improvement:** Rewrite the pipeline loop as native async, eliminating the thread executor.
+
+---
+
 ## 9. Resolved Decisions
 
 These were open questions; now settled (2026-06-19):
