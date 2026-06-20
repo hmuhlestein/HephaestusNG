@@ -991,11 +991,7 @@ class MonitoringLoop:
 
                     # Check if phase is complete
                     if self.phase_manager.check_phase_completion(phase.id):
-                        logger.info(f"Phase {phase.name} appears complete, checking for next phase tasks")
-
-                        # Check if we should create next phase task
-                        if self.phase_manager.should_create_next_phase_task(phase.id):
-                            await self._create_next_phase_task(phase)
+                        logger.info(f"Phase {phase.name} appears complete, evaluating transition")
 
                         # Hybrid spec gate (§9.1): for gated phases (QA / product
                         # validation) score the agent's structured result against
@@ -1004,12 +1000,21 @@ class MonitoringLoop:
                         # pass {} and use the engine's default evaluation.
                         phase_output = self._build_spec_phase_output(phase.name)
 
-                        # Mark phase as complete
-                        self.phase_manager.mark_phase_complete(
+                        # Mark phase as complete and get evaluation result
+                        result = self.phase_manager.mark_phase_complete(
                             phase.id,
                             f"Phase completed with {phase_info['tasks']['completed']} tasks",
                             phase_output=phase_output,
                         )
+
+                        # Create task+agent for the resolved target phase
+                        if result.get("should_continue") and result.get("target_phase_id"):
+                            await self._create_phase_task_and_agent(
+                                phase.workflow_id,
+                                result["target_phase_id"],
+                                result["target_phase"],
+                                result["action"],
+                            )
 
                 finally:
                     session.close()
@@ -1154,6 +1159,111 @@ class MonitoringLoop:
 
         except Exception as e:
             logger.error(f"Failed to create next phase task: {e}")
+            session.rollback()
+        finally:
+            session.close()
+
+    async def _create_phase_task_and_agent(
+        self, workflow_id: str, phase_id: str, phase_name: str, action: str
+    ):
+        """Create task and agent for a specific phase (used after engine evaluation).
+
+        This replaces the sequential-only _create_next_phase_task with a target-aware
+        version that handles CONTINUE, GOTO, and RETRY.
+
+        Args:
+            workflow_id: Workflow ID
+            phase_id: Target phase UUID
+            phase_name: Target phase name (for logging)
+            action: Engine action ('continue', 'goto', 'retry')
+        """
+        session = self.db_manager.get_session()
+        try:
+            from src.core.database import Phase, Task, PhaseExecution
+            import uuid
+
+            phase = session.query(Phase).filter_by(id=phase_id).first()
+            if not phase:
+                logger.error(f"Target phase not found: {phase_id}")
+                return
+
+            # Check if phase already has an active task
+            existing_task = session.query(Task).filter(
+                Task.phase_id == phase_id,
+                Task.status.in_(["pending", "assigned", "in_progress", "queued"])
+            ).first()
+            if existing_task:
+                logger.info(f"Phase {phase_name} already has active task {existing_task.id[:8]}, skipping creation")
+                return
+
+            # Create task
+            task_id = str(uuid.uuid4())
+            task_description = f"Execute {phase.name}: {phase.description}"
+            done_definition = " AND ".join(phase.done_definitions) if phase.done_definitions else "Complete phase objectives"
+
+            task = Task(
+                id=task_id,
+                raw_description=task_description,
+                enriched_description=task_description,
+                done_definition=done_definition,
+                status="pending",
+                priority="high",
+                phase_id=phase.id,
+                workflow_id=workflow_id,
+                created_by_agent_id="monitor",
+            )
+            session.add(task)
+
+            # Ensure phase execution is in_progress
+            execution = session.query(PhaseExecution).filter_by(phase_id=phase_id).first()
+            if execution and execution.status in ("pending", "completed"):
+                execution.status = "in_progress"
+                from datetime import datetime
+                execution.started_at = datetime.utcnow()
+
+            session.commit()
+
+            logger.info(f"[{action.upper()}] Created task for phase {phase_name} (task_id={task_id[:8]})")
+
+            # Create agent
+            try:
+                phase_cli_tool = phase.cli_tool
+                phase_cli_model = phase.cli_model
+                phase_glm_token_env = phase.glm_api_token_env
+
+                project_context = await self.agent_manager.get_project_context()
+
+                agent = await self.agent_manager.create_agent_for_task(
+                    task=task,
+                    enriched_data={"enriched_description": task_description},
+                    memories=[],
+                    project_context=project_context,
+                    working_directory=None,
+                    phase_cli_tool=phase_cli_tool,
+                    phase_cli_model=phase_cli_model,
+                    phase_glm_token_env=phase_glm_token_env,
+                )
+
+                task.assigned_agent_id = agent.id
+                task.status = "in_progress"
+                from datetime import datetime
+                task.started_at = datetime.utcnow()
+                session.commit()
+
+                logger.info(f"[{action.upper()}] Created agent {agent.id[:8]} for phase {phase_name}")
+
+            except Exception as agent_err:
+                logger.error(f"Failed to create agent for task {task_id[:8]}: {agent_err}")
+                try:
+                    task.status = "queued"
+                    from datetime import datetime
+                    task.queued_at = datetime.utcnow()
+                    session.commit()
+                except Exception:
+                    pass
+
+        except Exception as e:
+            logger.error(f"Failed to create phase task+agent: {e}")
             session.rollback()
         finally:
             session.close()

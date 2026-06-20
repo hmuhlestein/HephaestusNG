@@ -469,8 +469,8 @@ class PhaseManager:
         finally:
             session.close()
 
-    def mark_phase_complete(self, phase_id: str, summary: str = "", phase_output: Dict[str, Any] = None) -> bool:
-        """Mark a phase as complete and optionally evaluate with orchestrator.
+    def mark_phase_complete(self, phase_id: str, summary: str = "", phase_output: Dict[str, Any] = None) -> Dict[str, Any]:
+        """Mark a phase as complete and evaluate with orchestrator.
 
         Args:
             phase_id: Phase ID to mark complete
@@ -478,20 +478,24 @@ class PhaseManager:
             phase_output: Output from the phase for orchestrator evaluation
 
         Returns:
-            True if workflow should continue, False if it should stop/retry
+            Dict with keys:
+                - action: 'continue' | 'goto' | 'retry' | 'fail'
+                - target_phase: phase name/order for goto (None for continue/retry/fail)
+                - target_phase_id: UUID of target phase (None for continue/retry/fail)
+                - should_continue: bool
         """
         session = self.db_manager.get_session()
         try:
             phase = session.query(Phase).filter_by(id=phase_id).first()
             if not phase:
-                return True
+                return {"action": "continue", "target_phase": None, "target_phase_id": None, "should_continue": True}
 
             execution = session.query(PhaseExecution).filter_by(
                 phase_id=phase_id
             ).first()
 
             if not execution:
-                return True
+                return {"action": "continue", "target_phase": None, "target_phase_id": None, "should_continue": True}
 
             # Get orchestrator config
             orchestrator = self._get_orchestrator(session, phase.workflow_id)
@@ -509,7 +513,8 @@ class PhaseManager:
                 next_started = self._start_next_phase(session, phase_id)
                 if not next_started:
                     self._complete_workflow(session)
-                return True
+                    return {"action": "continue", "target_phase": None, "target_phase_id": None, "should_continue": False}
+                return {"action": "continue", "target_phase": None, "target_phase_id": None, "should_continue": True}
 
             # Evaluating mode - use orchestrator to decide flow
             phase_history = self._get_phase_history(session, phase.workflow_id)
@@ -533,7 +538,10 @@ class PhaseManager:
                 next_started = self._start_next_phase(session, phase_id)
                 if not next_started:
                     self._complete_workflow(session)
-                return True
+                    return {"action": "continue", "target_phase": None, "target_phase_id": None, "should_continue": False}
+                # Return the next phase info for the caller to create task+agent
+                next_phase = self._find_next_phase(session, phase_id)
+                return {"action": "continue", "target_phase": next_phase.name if next_phase else None, "target_phase_id": next_phase.id if next_phase else None, "should_continue": True}
 
             elif evaluation.action == OrchestrationAction.RETRY:
                 execution.status = "pending"
@@ -545,7 +553,7 @@ class PhaseManager:
                     f"({evaluation.metadata.get('retry_count', 0)}/"
                     f"{evaluation.metadata.get('max_retries', '?')})"
                 )
-                return True
+                return {"action": "retry", "target_phase": phase.name, "target_phase_id": phase.id, "should_continue": True}
 
             elif evaluation.action == OrchestrationAction.GOTO:
                 execution.status = "completed"
@@ -560,12 +568,14 @@ class PhaseManager:
                 if target_phase:
                     self._start_phase(session, target_phase.id)
                     logger.info(f"Goto phase {target_phase.name} from {phase.name}")
+                    return {"action": "goto", "target_phase": target_phase.name, "target_phase_id": target_phase.id, "should_continue": True}
                 else:
                     logger.warning(f"Target phase not found: {evaluation.target_phase}")
                     next_started = self._start_next_phase(session, phase_id)
                     if not next_started:
                         self._complete_workflow(session)
-                return True
+                        return {"action": "continue", "target_phase": None, "target_phase_id": None, "should_continue": False}
+                    return {"action": "continue", "target_phase": None, "target_phase_id": None, "should_continue": True}
 
             elif evaluation.action == OrchestrationAction.FAIL:
                 execution.status = "failed"
@@ -575,14 +585,14 @@ class PhaseManager:
 
                 logger.error(f"Phase {phase.name} failed: {evaluation.reason}")
                 self._fail_workflow(session, evaluation.reason)
-                return False
+                return {"action": "fail", "target_phase": None, "target_phase_id": None, "should_continue": False}
 
-            return True
+            return {"action": "continue", "target_phase": None, "target_phase_id": None, "should_continue": True}
 
         except Exception as e:
             logger.error(f"Failed to mark phase complete: {e}")
             session.rollback()
-            return True
+            return {"action": "continue", "target_phase": None, "target_phase_id": None, "should_continue": True}
         finally:
             session.close()
 
@@ -677,6 +687,16 @@ class PhaseManager:
                 workflow.status = "failed"
                 session.commit()
                 logger.error(f"Workflow {self.workflow_id} failed: {reason}")
+
+    def _find_next_phase(self, session, current_phase_id: str):
+        """Find the next phase after current one (without starting it)."""
+        current = session.query(Phase).filter_by(id=current_phase_id).first()
+        if not current:
+            return None
+        return session.query(Phase).filter(
+            Phase.workflow_id == current.workflow_id,
+            Phase.order > current.order
+        ).order_by(Phase.order).first()
 
     def _start_next_phase(self, session, current_phase_id: str) -> bool:
         """Start the next phase after current one completes.
