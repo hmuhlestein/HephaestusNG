@@ -53,15 +53,20 @@ Removed the auto-launch block (~100 lines) and nudge/auto-kill block (~50 lines)
 4. Repeat for phases 3–10
 5. Orchestrator polling loop detects workflow completion
 
-### TIER 2 — In-process AutopilotService + events (Slice E, P3/P5/P6)
+### TIER 2 — In-process AutopilotService + events (Slice E, P3/P5/P6) ✅ PARTIAL
 
-Decision (§9 #3): engine is the driver; Autopilot co-runs in the backend.
+**Done:**
+- `AutopilotService` created (`src/autopilot/service.py`) — asyncio task in backend
+- API `start_pipeline` uses service (no more subprocess.Popen)
+- API `stop_pipeline` uses service.stop()
+- API `get_pipeline_status` merges service status with file state
+- CLI start/stop/status call API (no more direct subprocess spawning)
+- Fixes **B5** (one liveness convention) and **B6** (no duplicate SDK)
 
-**Work:**
-1. `AutopilotService` (asyncio task in the backend) owns start/stop/pause/resume; **CLI and API both call it** — remove the 3 spawn paths and 2 PID conventions (`autopilot_api.start_pipeline`, `cli/commands/autopilot.start_pipeline`, direct `-m`). Fixes **B5** (liveness disagreement) and **B6** (subprocess builds a *second* `HephaestusSDK`).
-2. Replace the human-input file mailbox (`input_request_*.json`) with an `autopilot_interventions` DB table + an `asyncio.Condition`; UI submits via REST. Fixes **B4** (TOCTOU) and **B7** (option vocab `c/s/q/m` vs `c/p/s/q`).
-3. Add `/api/autopilot/stream` (WS/SSE); move UI off interval polling for status/messages/input.
-4. Persist `PipelineState`/messages/events to DB instead of `pipeline_state.json` / `events.jsonl`.
+**Remaining:**
+1. Replace the human-input file mailbox (`input_request_*.json`) with an `autopilot_interventions` DB table + an `asyncio.Condition`; UI submits via REST. Fixes **B4** (TOCTOU) and **B7** (option vocab `c/s/q/m` vs `c/p/s/q`).
+2. Add `/api/autopilot/stream` (WS/SSE); move UI off interval polling for status/messages/input.
+3. Persist `PipelineState`/messages/events to DB instead of `pipeline_state.json` / `events.jsonl`.
 
 ### TIER 3 — Unify the queue (P4)
 

@@ -1386,6 +1386,11 @@ def run_single_workflow(sdk, workflow_id: str, project_path: str, description: s
         while True:
             time.sleep(POLL_INTERVAL)
 
+            # Check if in-process service requested a stop
+            if _should_stop():
+                logger.info("Stop requested during workflow execution")
+                return "interrupted"
+
             # Timeout check
             elapsed = int(time.time() - start_time)
             if elapsed > MAX_WORKFLOW_TIME:
@@ -1800,6 +1805,22 @@ def run_single_design(
     return status, report
 
 
+def _should_stop() -> bool:
+    """Check if the pipeline should stop.
+
+    Returns True if the in-process AutopilotService has requested a stop
+    (via the module-level _service_stop_event).
+    """
+    event = globals().get('_service_stop_event')
+    if event is not None:
+        try:
+            # Non-blocking check
+            return event.is_set()
+        except Exception:
+            pass
+    return False
+
+
 def run_continuous_pipeline(args) -> None:
     log_dir = Path.home() / ".hephaestus" / "autopilot" / datetime.now().strftime("run-%Y%m%d-%H%M%S")
     logger = OrchestratorLogger(log_dir)
@@ -1938,6 +1959,11 @@ def run_continuous_pipeline(args) -> None:
 
     try:
         while True:
+            # Check if in-process service requested a stop
+            if _should_stop():
+                logger.info("Stop requested by AutopilotService")
+                break
+
             now = time.time()
 
             if now - last_queue_scan >= DESIGN_QUEUE_SCAN_INTERVAL:
