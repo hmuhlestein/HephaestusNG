@@ -126,6 +126,26 @@ WHERE status IN ('pending','queued')` — a phase task with no `assigned_agent_i
 the orphaned-transition hang. Also check the `except → queued` path (`monitor.py:1145`)
 and whether `background_queue_processor` actually retried agent creation.
 
+### 3c. ⛔ Goto-reconvergence bug (found reviewing the 3b fix — blocks the gate)
+The 3b fix is otherwise solid (`mark_phase_complete` returns the `EvaluationResult`;
+`Monitor._create_phase_task_and_agent` creates task+agent for the resolved target and
+sets its `PhaseExecution` `in_progress` for status in `("pending","completed")` — handles
+goto/retry correctly). **But `PhaseManager._start_next_phase` returns `True` only when the
+next phase's status is `"pending"`** (`if execution.status == "pending"`).
+
+On a `goto` reconvergence this breaks: after e.g. `goto development` (phase 3), phases 4–6
+are already `"completed"`. When phase 3 re-completes → `CONTINUE` → `_start_next_phase`
+sees phase 4 `"completed"` (not pending) → returns `False` → `mark_phase_complete` calls
+`_complete_workflow` and returns `should_continue=False`. **The workflow completes after
+re-running only phase 3, never re-validating 4→7** — the gate's correction is discarded.
+Run A never hit this (no goto reached); smoke run B (seeded failing test) will.
+
+**Fix (small, localized to `_start_next_phase`):** return `True` whenever a next phase
+**exists by order**, regardless of status (it's being re-run); set `in_progress` for status
+in `("pending","completed")`. In the new architecture its only job is the
+"is there a next phase?" boolean — `_create_phase_task_and_agent` owns status/task/agent.
+The `== "pending"` gate is the bug.
+
 ### 4. Finish Tier 2 the designed way (after smoke passes)
 Per §4.4: human-input → `autopilot_interventions` DB table + `asyncio.Condition`
 + REST submit (fixes **B4/B7**, removes the `input_request_*.json` mailbox); then
