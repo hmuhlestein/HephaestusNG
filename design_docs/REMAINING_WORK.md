@@ -45,7 +45,11 @@ Additive ALTER TABLE migration (`_migrate_autopilot_designs_columns`) added to
 to assert `DesignEntry.status == DesignStatus.PENDING`. `crackme` test was a
 case-sensitivity bug in the assertion ("execution proof" vs "Execution proof").
 
-### 3. End-to-end smoke run — highest information value, still never done
+### 3. End-to-end smoke run — ⬅ **THE NEXT STEP** (highest information value, still never done)
+**➡ Follow the runbook: [SMOKE_RUN.md](SMOKE_RUN.md)** — pre-flight, Run A (hello-world),
+Run B (seeded failing test to exercise the gate), with copy-paste observation
+commands and a report template. Summary below.
+
 Smoke test repo prepared at `/tmp/heph-smoke-test` (git repo with a base commit —
 required, `git worktree add` fails on a repo with zero commits) and
 `docs/design-queue/add_hello_world.md`.
