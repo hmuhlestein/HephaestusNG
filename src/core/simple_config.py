@@ -48,6 +48,10 @@ class Config:
         self.database_path = Path(paths.get('database', './hephaestus.db'))
         self.phases_folder = paths.get('phases_folder', './sample-phases')
         self.branch_base_path = Path(paths.get('worktree_base', '/tmp/hephaestus_worktrees'))
+        # Worktree isolation base. None => WorktreeManager computes <repo>/.worktrees
+        # (in-repo, git-excluded). Set an explicit path only to override.
+        _wt_base = paths.get('worktree_base_path')
+        self.worktree_base_path = Path(_wt_base) if _wt_base else None
         self.project_root = Path(paths.get('project_root', str(Path.cwd())))
 
         # Git settings

@@ -244,7 +244,7 @@ async def activate_project(project_id: str):
 
 
 def _apply_active_project(proj):
-    """Apply project path to runtime config and reinitialize BranchManager.
+    """Apply project path to runtime config and reinitialize WorktreeManager.
 
     Validates the path is a valid git repo BEFORE mutating config.
     If reload fails, config is not mutated.
@@ -260,7 +260,7 @@ def _apply_active_project(proj):
         try:
             server_state.branch_manager.reload(new_path)
         except Exception as e:
-            logger.error(f"Failed to reload BranchManager for {new_path}: {e}")
+            logger.error(f"Failed to reload WorktreeManager for {new_path}: {e}")
             raise ValueError(f"Cannot activate project — not a valid git repository: {new_path}")
 
     # Only mutate config after successful reload

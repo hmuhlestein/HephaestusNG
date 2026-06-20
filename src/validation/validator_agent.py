@@ -12,7 +12,7 @@ from src.core.database import (
     Task,
     Phase
 )
-from src.core.branch_manager import BranchManager
+from src.core.worktree_manager import WorktreeManager
 from src.validation.prompt_builder import ValidationPromptBuilder
 from src.agents.manager import AgentManager
 
@@ -76,7 +76,7 @@ async def spawn_validator_agent(
     workflow_id: str,
     commit_sha: str,
     db_manager: DatabaseManager,
-    branch_manager: BranchManager,
+    branch_manager: WorktreeManager,
     agent_manager: AgentManager,
     original_agent_id: str,
     criteria: str = None
