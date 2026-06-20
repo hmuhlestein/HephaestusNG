@@ -552,24 +552,53 @@ def attempt_recovery(workflow_id: str, logger: OrchestratorLogger) -> Tuple[bool
 
 
 def check_api_credits() -> Tuple[bool, str]:
-    credit_errors = [
-        "insufficient funds", "credit", "quota exceeded",
-        "rate limit", "billing", "payment required",
-        "402", "429", "exceeded", "out of credits",
+    """Check if any agents or tasks hit API credit/rate-limit errors.
+
+    Uses specific patterns to avoid false positives on words like
+    "credited", "exceeded expectations", or discussions about HTTP codes.
+    """
+    # Specific phrases that indicate actual credit/rate-limit issues
+    credit_phrases = [
+        "insufficient funds",
+        "quota exceeded",
+        "rate limit exceeded",
+        "rate_limit_exceeded",
+        "payment required",
+        "out of credits",
+        "credit balance",
+        "billing error",
+        "429 too many requests",
+        "402 payment required",
     ]
+    # Error keywords in agent status/error fields (not raw output)
+    credit_keywords_in_error = [
+        "credit", "quota", "billing", "payment",
+    ]
+
     agents = get_agents()
     for agent in agents:
+        # Check agent status error field (more reliable than raw output)
+        agent_error = (agent.get("error", "") or "").lower()
+        agent_status = (agent.get("status", "") or "").lower()
+
+        # Check for explicit error status with credit keywords
+        if agent_status == "error":
+            for keyword in credit_keywords_in_error:
+                if keyword in agent_error:
+                    return True, f"API credit issue in agent {agent.get('id', '')[:8]}: {keyword}"
+
+        # Check output log for specific phrases (not broad keywords)
         output = (agent.get("output_log", "") or "").lower()
-        for err in credit_errors:
-            if err in output:
-                return True, f"API credit issue: {err}"
+        for phrase in credit_phrases:
+            if phrase in output:
+                return True, f"API credit issue: {phrase}"
 
     failed_tasks = get_tasks(status="failed")
     for task in failed_tasks:
         error = (task.get("error", "") or "").lower()
-        for err in credit_errors:
-            if err in error:
-                return True, f"API credit issue in task: {err}"
+        for phrase in credit_phrases:
+            if phrase in error:
+                return True, f"API credit issue in task: {phrase}"
 
     return False, ""
 
