@@ -23,6 +23,59 @@ This file is the *actionable backlog* of what's left, prioritized, with file/lin
 
 ---
 
+## ▶ NEXT-AGENT DIRECTIVE (do these in order)
+
+*One line:* **Land the additive `autopilot_designs` migration and settle the `DesignEntry.status` test, then prove the pipeline end-to-end on a throwaway repo before building more Tier 2/3.**
+
+### 1. DB migration for `autopilot_designs` — FIRST (ship-blocker)
+The Tier 3 change added `status`, `content_hash`, `feature_folder`, `completed_at`
+to the `AutopilotDesign` model, but the live `hephaestus.db` lacks them and
+SQLAlchemy `create_all` never alters existing tables. Because ORM queries select
+all mapped columns, the **first load of any `autopilot_designs` row throws
+`no such column`** — breaking the projects/designs API, not just autopilot.
+- **Do NOT** `drop_all`/`create_all` (wipes real data) or rely on manual ALTER.
+- **Do:** add `_migrate_autopilot_designs_columns()` mirroring the existing
+  `DatabaseManager._migrate_task_dependency_columns()` ([database.py:1145](database.py)) —
+  `ALTER TABLE … ADD COLUMN` wrapped in try/except, called from init.
+- **Acceptance:** the existing DB loads `autopilot_designs` and the
+  projects/designs endpoints work *without recreating the DB*; fresh DB also
+  works. Add a regression test: open a DB missing the columns → run init → query.
+
+### 2. Settle the `DesignEntry.status` regression (not "pre-existing")
+`TestDesignEntry::test_design_entry_creation` fails because this work changed the
+default `None → PENDING`. Decide deliberately: keep `PENDING` (update the test;
+confirm nothing treated `None` as "unstarted") or revert. Likewise actually
+confirm `test_crackme_challenge_config` is unrelated rather than assuming.
+
+### 3. End-to-end smoke run — highest information value, still never done
+Run the pipeline on a throwaway git repo with one small design; capture a log and
+confirm:
+- worktrees under `.worktrees/`, `.hephaestus/` context populated;
+- **the Monitor spawns agents** for each phase (the Tier 1 handoff — the biggest
+  "does it actually run" risk);
+- phases advance via the **engine** evaluation only (no double-iteration);
+- `[SPEC-GATE]` logs sane scores after QA/validation;
+- reports land in `<project>/docs/`, get collected, HTML renders via Jinja2;
+- merge-on-success / discard-on-failure behave.
+- **Watch B2:** the new 5-min `hard_error`-on-no-tasks must not trip during a
+  legitimately slow first phase now that the Monitor drives spawning.
+
+### 4. Finish Tier 2 the designed way (after smoke passes)
+Per §4.4: human-input → `autopilot_interventions` DB table + `asyncio.Condition`
++ REST submit (fixes **B4/B7**, removes the `input_request_*.json` mailbox); then
+`/api/autopilot/stream` (WS/SSE) + DB persistence of `PipelineState`/events. The
+persistence step also closes the "module-singleton, state-lost-on-restart" gap —
+register the service with backend startup/shutdown hooks there.
+
+### 5. Finish Tier 3 (queue unification)
+Merge `/queue/*` and `/projects/{id}/designs/*` into one resource, retire the
+file-queue calls in `frontend/src/services/api.ts`, drop the `queue_order`
+sidecar. DB is already the read source — this removes the dual model.
+
+**Defer:** Tier 5.3 module splits, Conductor judgement, per-project spec UI (low-risk, no rush).
+
+---
+
 ## REMAINING WORK (prioritized)
 
 ### ~~TIER 0 — The spine: one control authority (P1) ⭐ highest value~~ ✅ DONE
