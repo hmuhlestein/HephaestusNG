@@ -840,22 +840,8 @@ def create_feature_folder(project_path: Path, design_name: str, logger: Orchestr
     feature_folder.mkdir(parents=True, exist_ok=True)
     (feature_folder / "docs").mkdir(exist_ok=True)
 
-    # Ensure .hephaestus/ is in .gitignore
-    gitignore = project_path / ".gitignore"
-    hephaestus_entry = ".hephaestus/"
-    try:
-        if gitignore.exists():
-            content = gitignore.read_text()
-            if hephaestus_entry not in content:
-                with open(gitignore, "a") as f:
-                    f.write(f"\n# Hephaestus local data\n{hephaestus_entry}\n")
-                logger.info(f"Added {hephaestus_entry} to .gitignore")
-        else:
-            with open(gitignore, "w") as f:
-                f.write(f"# Hephaestus local data\n{hephaestus_entry}\n")
-            logger.info(f"Created .gitignore with {hephaestus_entry}")
-    except Exception as e:
-        logger.warning(f"Warning: Could not update .gitignore: {e}")
+    # Note: .hephaestus/ is excluded from git via .git/info/exclude
+    # (managed by WorktreeManager). We do NOT modify the user's .gitignore.
 
     logger.info(f"Feature folder: {feature_folder}")
     return feature_folder
