@@ -1046,7 +1046,7 @@ class MonitoringLoop:
             return {}
 
     async def _create_next_phase_task(self, current_phase):
-        """Create initial task for next phase.
+        """Create initial task for next phase and spawn an agent for it.
 
         Args:
             current_phase: The current completed phase
@@ -1070,9 +1070,11 @@ class MonitoringLoop:
             task_description = f"Execute {next_phase.name}: {next_phase.description}"
             done_definition = " AND ".join(next_phase.done_definitions) if next_phase.done_definitions else "Complete phase objectives"
 
+            task_id = str(uuid.uuid4())
+
             # Create task
             task = Task(
-                id=str(uuid.uuid4()),
+                id=task_id,
                 raw_description=task_description,
                 enriched_description=task_description,
                 done_definition=done_definition,
@@ -1086,7 +1088,7 @@ class MonitoringLoop:
             session.add(task)
             session.commit()
 
-            logger.info(f"Created initial task for next phase: {next_phase.name}")
+            logger.info(f"Created task for next phase: {next_phase.name} (task_id={task_id[:8]})")
 
             # Log the action
             log_entry = AgentLog(
@@ -1097,6 +1099,49 @@ class MonitoringLoop:
             )
             session.add(log_entry)
             session.commit()
+
+            # Create agent for the task so it actually gets worked on
+            try:
+                # Get phase CLI configuration
+                phase_cli_tool = next_phase.cli_tool
+                phase_cli_model = next_phase.cli_model
+                phase_glm_token_env = next_phase.glm_api_token_env
+
+                # Get project context
+                project_context = await self.agent_manager.get_project_context()
+
+                # Create agent
+                agent = await self.agent_manager.create_agent_for_task(
+                    task=task,
+                    enriched_data={"enriched_description": task_description},
+                    memories=[],
+                    project_context=project_context,
+                    working_directory=None,  # Will use workflow's working directory
+                    phase_cli_tool=phase_cli_tool,
+                    phase_cli_model=phase_cli_model,
+                    phase_glm_token_env=phase_glm_token_env,
+                )
+
+                # Update task with assigned agent
+                task.assigned_agent_id = agent.id
+                task.status = "in_progress"
+                from datetime import datetime
+                task.started_at = datetime.utcnow()
+                session.commit()
+
+                logger.info(f"Created agent {agent.id[:8]} for phase {next_phase.name}")
+
+            except Exception as agent_err:
+                logger.error(f"Failed to create agent for task {task_id[:8]}: {agent_err}")
+                # Set task to queued so background_queue_processor can retry agent creation
+                try:
+                    task.status = "queued"
+                    from datetime import datetime
+                    task.queued_at = datetime.utcnow()
+                    session.commit()
+                    logger.info(f"Set task {task_id[:8]} status to queued for background retry")
+                except Exception as queue_err:
+                    logger.error(f"Failed to queue task {task_id[:8]}: {queue_err}")
 
         except Exception as e:
             logger.error(f"Failed to create next phase task: {e}")

@@ -2263,21 +2263,7 @@ async def stop_pipeline(clear_state: bool = False):
     except Exception as e:
         logger.error(f"Error cleaning up autopilot agents: {e}")
 
-    # Also terminate any other active agents not tied to autopilot workflows
-    try:
-        with get_db() as db:
-            active_agents = db.query(Agent).filter(Agent.status.in_(['working', 'starting', 'idle'])).all()
-            for agent in active_agents:
-                try:
-                    agent.status = 'terminated'
-                    terminated_count += 1
-                except Exception:
-                    pass
-            db.commit()
-    except Exception as e:
-        logger.error(f"Error terminating remaining agents: {e}")
-
-    # Second: kill orchestrator process
+    # Second: kill orchestrator process (only autopilot agents were terminated above)
     pid_file = Path(AUTOPILOT_STATE_DIR) / "orchestrator.pid"
     agent_id_file = Path(AUTOPILOT_STATE_DIR) / "orchestrator_agent_id"
     orchestrator_pid = None

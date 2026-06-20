@@ -43,7 +43,6 @@ HEARTBEAT_INTERVAL = 300
 MAX_WORKFLOW_TIME = 7200  # 2 hours per workflow execution
 ACTIVE_AGENT_STATUSES = {"working", "idle"}  # Excludes 'created' (not yet started), 'stuck', 'terminated'
 PARENT_PEEK_INTERVAL = int(os.environ.get("HEPH_PEEK_INTERVAL", "60"))  # seconds between parent peeks
-PARENT_STUCK_THRESHOLD = int(os.environ.get("HEPH_STUCK_THRESHOLD", "300"))  # seconds before parent warns about no progress
 
 
 def get_litellm_config() -> Dict[str, str]:
@@ -1262,9 +1261,27 @@ def generate_product_validation_report(
     qa_passed: bool,
     logger: OrchestratorLogger,
 ) -> Tuple[bool, str]:
+    """Read existing product validation results.
+
+    NOTE: The primary validation now happens through the spec gate (spec.py)
+    and the engine's evaluation points. This function is a fallback that reads
+    existing reports for display/summary purposes only.
+    """
     validation_path = _report_path(project_path, "product_validation.md")
 
-    # If Phase 8 already created a validation report, use it instead of overwriting
+    # Read existing structured result from Phase 8 (preferred)
+    structured_path = _report_path(project_path, "product_validation.json")
+    if structured_path.exists():
+        try:
+            result = json.loads(structured_path.read_text())
+            verdict = result.get("verdict", "").upper()
+            meets_spec = verdict == "PASS" and qa_passed
+            logger.info(f"Using structured product_validation.json: verdict={verdict}")
+            return meets_spec, structured_path.read_text()
+        except Exception:
+            pass
+
+    # Fallback: read existing markdown report from Phase 8
     if validation_path.exists():
         try:
             existing = validation_path.read_text()
@@ -1274,80 +1291,47 @@ def generate_product_validation_report(
         except Exception:
             pass
 
-    # Fallback: generate a basic validation report
-    requirements_path = _report_path(project_path, "requirements_analysis.md")
-    qa_report_path = _report_path(project_path, "qa_report.md")
+    # No validation report exists - this shouldn't happen if the workflow completed
+    logger.warning("No product validation report found")
+    return False, "No product validation report generated"
 
-    requirements_content = ""
-    if requirements_path.exists():
-        try:
-            requirements_content = requirements_path.read_text()
-        except Exception:
-            pass
 
-    qa_content = ""
-    if qa_report_path.exists():
-        try:
-            qa_content = qa_report_path.read_text()
-        except Exception:
-            pass
+def _update_orchestrator_max_gotos(max_gotos: int, logger: OrchestratorLogger) -> None:
+    """Update the autopilot workflow definition's max_total_gotos in the DB.
 
+    This makes --max-iterations control the engine's iteration budget.
+    """
     try:
-        design_entry.path.read_text()[:3000]
-    except Exception:
-        pass
-
-    meets_spec = qa_passed
-    validation_notes = []
-
-    if qa_passed:
-        validation_notes.append("All QA tests passed")
-        validation_notes.append("Requirements compliance verified")
-        validation_notes.append("Implementation matches design intent")
-    else:
-        validation_notes.append("QA tests did not fully pass")
-        validation_notes.append("May need iteration to address remaining issues")
-
-    if not requirements_content:
-        meets_spec = False
-        validation_notes.append("WARNING: No requirements_analysis.md found")
-
-    report = f"""# Product Validation Report
-
-## Design: {design_entry.name}
-## Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-## Status: {'PASS' if meets_spec else 'NEEDS_WORK'}
-
-## Validation Summary
-
-{'This design has been validated and meets the original specification.' if meets_spec else 'This design needs additional work before it meets specification.'}
-
-## Criteria Met
-
-""" + "\n".join(f"- {note}" for note in validation_notes) + """
-
-## Requirements Compliance
-
-""" + (requirements_content[:2000] if requirements_content else "[No requirements document found]") + """
-
-## QA Results
-
-""" + (qa_content[:2000] if qa_content else "[No QA report found]") + """
-
-## Recommendation
-
-""" + ("The feature is ready for human review. See the HTML feature report in the features/ folder." if meets_spec else "Additional iterations may be needed. Review the issues and decide whether to continue or adjust the design.") + """
-"""
-
-    validation_path.write_text(report)
-    logger.info(f"Product validation: {validation_path}")
-    return meets_spec, report
+        from src.core.database import WorkflowDefinition, get_db
+        with get_db() as db:
+            defn = db.query(WorkflowDefinition).filter_by(id="autopilot").first()
+            if defn and defn.orchestrator_config:
+                config = dict(defn.orchestrator_config)
+                old_val = config.get("max_total_gotos", 10)
+                config["max_total_gotos"] = max_gotos
+                defn.orchestrator_config = config
+                db.commit()
+                if old_val != max_gotos:
+                    logger.info(f"Updated max_total_gotos: {old_val} -> {max_gotos}")
+    except Exception as e:
+        logger.warning(f"Failed to update max_total_gotos: {e}")
 
 
 def run_single_workflow(sdk, workflow_id: str, project_path: str, description: str,
                         logger: OrchestratorLogger,
                         launch_params: Dict[str, Any] = None,
-                        state: PipelineState = None) -> str:
+                        state: PipelineState = None,
+                        max_iterations: int = 10) -> str:
+    """Run a single workflow execution.
+
+    Args:
+        max_iterations: Maps to the engine's max_total_gotos. Updates the workflow
+            definition's orchestrator_config before launching.
+    """
+    # Update the workflow definition's orchestrator_config with the requested max_iterations.
+    # This makes --max-iterations control the engine's max_total_gotos.
+    _update_orchestrator_max_gotos(max_iterations, logger)
+
     # Check for existing active workflows and stop them
     existing_workflows = get_active_workflows()
     if existing_workflows:
@@ -1370,7 +1354,7 @@ def run_single_workflow(sdk, workflow_id: str, project_path: str, description: s
             except Exception as e:
                 logger.warning(f"  Failed to stop workflow {wf_id[:8]}: {e}")
 
-    logger.info(f"Launching workflow: {workflow_id}")
+    logger.info(f"Launching workflow: {workflow_id} (max_iterations={max_iterations})")
     # Extract design document from launch_params for the event
     design_doc = (launch_params or {}).get("design_document", "")
     design_name = Path(design_doc).stem.replace("_", " ").replace("-", " ") if design_doc else ""
@@ -1397,8 +1381,6 @@ def run_single_workflow(sdk, workflow_id: str, project_path: str, description: s
     stuck_count = 0
     credit_stuck_count = 0
     start_time = time.time()
-    last_done_count = 0
-    last_progress_time = time.time()
 
     try:
         while True:
@@ -1434,122 +1416,9 @@ def run_single_workflow(sdk, workflow_id: str, project_path: str, description: s
                 f"{len(done)} done, {len(failed)} failed"
             )
 
-            # Auto-launch agents for pending tasks (respecting concurrency limit)
-            if pending:
-                # Get max concurrent agents from config
-                config = get_config()
-                max_concurrent = getattr(config, 'max_concurrent_agents', 3)
-
-                # Check if we have capacity to launch more agents
-                if len(active_agents) < max_concurrent:
-                    # Find launchable tasks based on dependencies and parallel groups
-                    # - depends_on: [] → runs immediately (parallel)
-                    # - depends_on: [ids] → runs when all deps complete
-                    # - depends_on: null/omitted → runs sequentially (one at a time)
-                    # - parallel_group: tasks in same group can run together
-                    # - max_concurrent: limit agents per task
-                    launchable = []
-                    sequential_seen = False  # Track if we've seen a sequential task
-
-                    # Get task IDs that already have agents assigned
-                    task_ids_with_agents = set()
-                    for agent in agents:
-                        task_id = agent.get('current_task_id')
-                        if task_id:
-                            task_ids_with_agents.add(task_id)
-
-                    for task in pending:
-                        task_id = task.get('id')
-
-                        # Skip tasks that already have agents assigned
-                        if task_id in task_ids_with_agents:
-                            continue
-
-                        depends_on = task.get('depends_on')  # JSON list of task IDs
-                        task.get('parallel_group')
-                        task.get('max_concurrent', 1)
-
-                        # Parse depends_on if it's a string
-                        if isinstance(depends_on, str):
-                            depends_on = json.loads(depends_on)
-
-                        # Check dependencies
-                        if depends_on is not None:
-                            # Explicit depends_on set (including empty list)
-                            if len(depends_on) == 0:
-                                # Empty list = runs immediately (parallel)
-                                launchable.append(task)
-                            else:
-                                # Check if all deps are done
-                                deps_met = True
-                                for dep_id in depends_on:
-                                    dep_done = any(t.get('id') == dep_id for t in done)
-                                    dep_failed = any(t.get('id') == dep_id for t in failed)
-                                    if not dep_done and not dep_failed:
-                                        deps_met = False
-                                        break
-
-                                if deps_met:
-                                    launchable.append(task)
-                                else:
-                                    logger.info(f"  Task {task_id[:8]} waiting on dependencies: {depends_on}")
-                        else:
-                            # No depends_on specified - sequential
-                            if not sequential_seen:
-                                sequential_seen = True
-                                launchable.append(task)
-                            # else: skip - only one sequential task per cycle
-
-                    # Now filter by parallel_group constraints
-                    # Tasks in the SAME parallel_group can run together
-                    # Tasks in DIFFERENT parallel_groups (or no group) run sequentially
-                    if launchable:
-                        grouped = {}  # group_name -> [tasks]
-                        ungrouped = []
-
-                        for task in launchable:
-                            group = task.get('parallel_group')
-                            if group:
-                                if group not in grouped:
-                                    grouped[group] = []
-                                grouped[group].append(task)
-                            else:
-                                ungrouped.append(task)
-
-                        # Rebuild launchable: all tasks from the first group, then ungrouped
-                        final_launchable = []
-
-                        # Add all tasks from the first parallel group
-                        for group_name, group_tasks in grouped.items():
-                            final_launchable.extend(group_tasks)
-                            break  # Only one group at a time
-
-                        # If no groups, add first ungrouped task
-                        if not final_launchable and ungrouped:
-                            final_launchable.append(ungrouped[0])
-
-                        launchable = final_launchable
-
-                    agents_to_launch = min(len(launchable), max_concurrent - len(active_agents))
-                    if launchable:
-                        logger.info(f"[AUTO-LAUNCH] {len(launchable)} launchable task(s) (of {len(pending)} pending), launching {agents_to_launch} (active: {len(active_agents)}, max: {max_concurrent})")
-
-                    for i, task in enumerate(launchable[:agents_to_launch]):
-                        task_id = task.get('id')
-                        phase_id = task.get('phase_id')
-                        if not task_id:
-                            continue
-                        try:
-                            # Create agent via API
-                            agent_data = api_post("/api/create_agent_for_task", {
-                                "task_id": task_id,
-                                "workflow_id": exec_id,
-                                "phase_id": phase_id,
-                            })
-                            agent_id = agent_data.get('agent_id', 'unknown')
-                            logger.info(f"  Launched agent {agent_id[:8]} for task {task_id[:8]}")
-                        except Exception as e:
-                            logger.error(f"  Failed to launch agent for task {task_id[:8]}: {e}")
+            # Agent scheduling is handled by the server's background_queue_processor.
+            # Stuck-agent detection is handled by Guardian/Conductor.
+            # The orchestrator only monitors and logs.
 
             # Parent peeks at children's output periodically for observability
             if elapsed > 0 and elapsed % PARENT_PEEK_INTERVAL < POLL_INTERVAL:
@@ -1562,60 +1431,6 @@ def run_single_workflow(sdk, workflow_id: str, project_path: str, description: s
                         if lines:
                             preview = ' | '.join(lines[-3:])  # last 3 lines
                             logger.info(f"  [{aid[:8]}] {preview}")
-
-            # Track progress - detect if agents are stuck
-            current_done = len(done)
-            if current_done > last_done_count:
-                last_done_count = current_done
-                last_progress_time = time.time()
-
-            no_progress_seconds = time.time() - last_progress_time
-            if no_progress_seconds > PARENT_STUCK_THRESHOLD and active_agents and not pending:
-                # No progress for threshold time - nudge each agent
-                logger.info(f"[WARN] No task progress for {int(no_progress_seconds)}s - nudging agents:")
-                for agent in active_agents:
-                    aid = agent.get('id', '')
-                    # Peek at output to include in nudge context
-                    output = peek_agent_output(aid, lines=20)
-                    if output:
-                        [l.strip() for l in output.strip().split('\n') if l.strip()][-3:]
-
-                    # Send nudge message via API
-                    nudge_msg = (
-                        f"[PARENT NUDGE] No task progress for {int(no_progress_seconds)}s. "
-                        f"If you're done writing files, call update_task_status NOW to mark your task complete. "
-                        f"Do NOT exit to the command line. Do NOT print a summary and stop. "
-                        f"If stuck, create a sub-task or ask for help."
-                    )
-
-                    try:
-                        api_post(f"/api/agents/{aid}/message", {"message": nudge_msg})
-                        logger.info(f"  Nudged {aid[:8]}")
-                    except Exception as e:
-                        logger.info(f"  Failed to nudge {aid[:8]}: {e}")
-
-                # Auto-kill agents stuck for 2x the threshold
-                # Only kill agents that show no activity (not actively streaming)
-                if no_progress_seconds > PARENT_STUCK_THRESHOLD * 2:
-                    logger.info(f"[AUTO-KILL] Stuck for {int(no_progress_seconds)}s - checking agents:")
-                    killed_any = False
-                    for agent in active_agents:
-                        aid = agent.get('id', '')
-                        # Peek at output - if agent is actively streaming, don't kill
-                        output = peek_agent_output(aid, lines=5)
-                        if output and any(kw in output.lower() for kw in ['→', '←', 'edit', 'write', 'create', 'reading']):
-                            logger.info(f"  {aid[:8]}: actively working - skipping")
-                            continue
-                        try:
-                            api_post(f"/api/agents/{aid}/terminate")
-                            logger.info(f"  {aid[:8]}: terminated (no active output)")
-                            killed_any = True
-                        except Exception as e:
-                            logger.info(f"  {aid[:8]}: failed to terminate: {e}")
-                    if killed_any:
-                        return "timeout"
-
-                last_progress_time = time.time()  # Reset so we don't spam
 
             wf_state = wf_status.get("status", "")
             if wf_state in ("completed", "failed"):
@@ -1698,10 +1513,20 @@ def run_single_design(
     sdk,
     design_entry: DesignEntry,
     project_path: Path,
-    max_iterations: int,
     logger: OrchestratorLogger,
     state: Optional[PipelineState] = None,
+    max_iterations: int = 10,
 ) -> Tuple[DesignStatus, FeatureReport]:
+    """Run a single design through the autopilot pipeline.
+
+    The engine's evaluation points (goto/retry/continue) are the SOLE authority
+    for iteration. This function runs the workflow once; the engine handles
+    retries via `max_total_gotos` in AUTOPILOT_ORCHESTRATOR_CONFIG.
+
+    Args:
+        max_iterations: Maps to the engine's max_total_gotos. Controls how many
+            times the engine can goto/retry phases before giving up. Default 10.
+    """
     # project_path: where implementation code lives (the actual project)
     # docs_dir: where generated docs/reports go (inside feature folder)
     project_path.mkdir(parents=True, exist_ok=True)
@@ -1756,7 +1581,9 @@ def run_single_design(
         "docs_dir": str(docs_dir),
         "feature_folder": str(feature_folder),
         "started_at": design_entry.started_at,
+        "control_model": "engine_evaluation_points",
         "max_iterations": max_iterations,
+        "max_gotos": max_iterations,  # max_iterations maps to engine's max_total_gotos
         "phases": [
             {"id": 1, "name": "product_requirements", "output": "requirements_analysis.md"},
             {"id": 2, "name": "architecture_design", "output": "architecture.md"},
@@ -1775,121 +1602,100 @@ def run_single_design(
     logger.info(f"Initial pipeline metrics: {metrics_path}")
 
     try:
-        for iteration in range(1, max_iterations + 1):
-            iter_start = time.time()
+        # Single workflow run — the engine's evaluation points handle all iteration.
+        # If product_validation scores < 0.7, the engine does goto development/architecture
+        # bounded by max_total_gotos (default 10) in AUTOPILOT_ORCHESTRATOR_CONFIG.
+        logger.info("")
+        logger.info("-" * 60)
+        logger.info(f"DESIGN: {design_entry.name} | Single run (engine-controlled iteration)")
+        logger.info("-" * 60)
 
-            # Update state with current iteration
-            if state:
-                state.current_iteration = iteration
+        description = (
+            f"Autopilot: {design_entry.name}\n"
+            f"Your working directory is an isolated git worktree (the project root).\n"
+            f"Design Document: ./.hephaestus/design.md (copied into your worktree)\n"
+            f"Project Path: . (your working directory)\n"
+            f"Docs Path: ./docs/ (generated requirements, architecture, reports)\n"
+            f"Implementation code (src/, tests/) goes in your working directory.\n"
+            f"Inputs (design, context, qa_spec) are in ./.hephaestus/.\n"
+            f"Read the design doc carefully, extract requirements, "
+            f"create architecture, implement, review, security check, and QA."
+        )
 
+        # design_document is the absolute SOURCE path; the backend (AgentManager)
+        # reads it and copies it into each worktree's .hephaestus/design.md. Agents
+        # only ever read the worktree-relative copy.
+        launch_params = {
+            "design_document": str(design_copy),
+            "project_path": str(project_path),
+            "project_context": (
+                "Your working directory is the project root. Write code/tests there, "
+                "generated docs in ./docs/. Read inputs from ./.hephaestus/."
+            ),
+        }
+
+        wf_status = run_single_workflow(
+            sdk, "autopilot", str(project_path), description, logger,
+            launch_params=launch_params,
+            state=state,
+            max_iterations=max_iterations,
+        )
+
+        report.iterations = 1  # Single run; engine handles iteration via gotos
+
+        if wf_status == "interrupted":
+            stop_reason = StopReason.USER_INTERRUPT
+        elif wf_status == "hard_error":
+            stop_reason = StopReason.HARD_ERROR
+        elif wf_status == "skipped":
+            logger.info("Design skipped by user")
+            stop_reason = StopReason.USER_SKIP
+        elif wf_status == "timeout":
+            stop_reason = StopReason.MAX_ITERATIONS
+        elif wf_status == "completed":
+            # Workflow completed — read spec gate results from structured files.
+            # The engine's evaluation points already drove iteration via gotos;
+            # we just need to determine if the final state passed the gate.
             logger.info("")
-            logger.info("-" * 60)
-            logger.info(f"DESIGN: {design_entry.name} | ITERATION {iteration}/{max_iterations}")
-            logger.info("-" * 60)
+            logger.info("Workflow completed. Reading spec gate results...")
 
-            description = (
-                f"Autopilot: {design_entry.name} - Iteration {iteration}\n"
-                f"Your working directory is an isolated git worktree (the project root).\n"
-                f"Design Document: ./.hephaestus/design.md (copied into your worktree)\n"
-                f"Project Path: . (your working directory)\n"
-                f"Docs Path: ./docs/ (generated requirements, architecture, reports)\n"
-                f"Implementation code (src/, tests/) goes in your working directory.\n"
-                f"Inputs (design, context, qa_spec) are in ./.hephaestus/.\n"
-                f"Read the design doc carefully, extract requirements, "
-                f"create architecture, implement, review, security check, and QA."
-            )
+            from src.autopilot.spec import load_spec, read_result, score_qa, score_product_validation
 
-            # design_document is the absolute SOURCE path; the backend (AgentManager)
-            # reads it and copies it into each worktree's .hephaestus/design.md. Agents
-            # only ever read the worktree-relative copy.
-            launch_params = {
-                "design_document": str(design_copy),
-                "project_path": str(project_path),
-                "project_context": (
-                    "Your working directory is the project root. Write code/tests there, "
-                    "generated docs in ./docs/. Read inputs from ./.hephaestus/."
-                ),
-            }
+            spec = load_spec()
 
-            wf_status = run_single_workflow(
-                sdk, "autopilot", str(project_path), description, logger,
-                launch_params=launch_params,
-                state=state,
-            )
+            # Check QA result
+            qa_result = read_result(project_path, "qa_result.json")
+            if qa_result:
+                qa_score, qa_meta = score_qa(qa_result, spec)
+                report.qa_passed = qa_score >= 0.7
+                logger.info(f"QA gate: score={qa_score:.2f}, band={qa_meta.get('band', 'unknown')}")
+            else:
+                # Fallback: check for qa_report.md existence as a weak signal
+                qa_report = _report_path(project_path, "qa_report.md")
+                report.qa_passed = qa_report.exists()
 
-            int(time.time() - iter_start)
-            report.iterations = iteration
+            # Check product validation result
+            pv_result = read_result(project_path, "product_validation.json")
+            if pv_result:
+                pv_score, pv_meta = score_product_validation(pv_result, spec)
+                report.product_validated = pv_score >= 0.7
+                logger.info(f"Product validation gate: score={pv_score:.2f}, band={pv_meta.get('band', 'unknown')}")
+            else:
+                # Fallback: check for product_validation.md existence
+                pv_report = _report_path(project_path, "product_validation.md")
+                report.product_validated = pv_report.exists()
 
-            if wf_status == "interrupted":
-                stop_reason = StopReason.USER_INTERRUPT
-                break
-
-            if wf_status == "hard_error":
-                stop_reason = StopReason.HARD_ERROR
-                break
-
-            if wf_status == "skipped":
-                logger.info("Design skipped by user")
-                stop_reason = StopReason.USER_SKIP
-                break
-
-            logger.info("")
-            logger.info("Running product validation...")
-            qa_passed = False
-            qa_reports = [
-                _report_path(project_path, "qa_report.md"),
-                _report_path(project_path, "qa_report.html"),
-            ]
-            pass_patterns = [
-                "overall status: pass",
-                "overall status:** pass",
-                "recommendation: done",
-                "recommendation:** done",
-                "recommendation: **done",
-                "all tests pass",
-                "all tests passed",
-                "qa passed",
-            ]
-            for qp in qa_reports:
-                if qp.exists():
-                    try:
-                        content = qp.read_text().lower()
-                        for pattern in pass_patterns:
-                            if pattern in content:
-                                qa_passed = True
-                                break
-                        if qa_passed:
-                            break
-                    except Exception:
-                        pass
-
-            product_validated, validation_report = generate_product_validation_report(
-                project_path, design_entry, qa_passed, logger
-            )
-
-            report.qa_passed = qa_passed
-            report.product_validated = product_validated
-
-            if product_validated:
-                logger.info("")
+            if report.product_validated:
                 logger.info(f"DESIGN VALIDATED: {design_entry.name}")
                 stop_reason = StopReason.COMPLETED
-                break
-
-            arch_issue, arch_reason = detect_architectural_issue([
-                str(_report_path(project_path, "review_report.md")),
-                str(_report_path(project_path, "security_report.md")),
-            ])
-            if arch_issue:
-                stop_reason = StopReason.ARCHITECTURAL_ISSUE
-                logger.error(f"Architectural issue: {arch_reason}")
-                break
-
-            if iteration < max_iterations:
-                logger.info(f"Iteration {iteration} incomplete, starting {iteration + 1}...")
             else:
-                logger.info(f"Max iterations ({max_iterations}) reached")
+                # Engine exhausted gotos without passing the gate
                 stop_reason = StopReason.MAX_ITERATIONS
+                logger.info(f"Design did not pass validation gate after engine-controlled iterations")
+        else:
+            # Unknown status
+            stop_reason = StopReason.HARD_ERROR
+            logger.warning(f"Unexpected workflow status: {wf_status}")
 
     except KeyboardInterrupt:
         stop_reason = StopReason.USER_INTERRUPT
@@ -2022,7 +1828,7 @@ def run_continuous_pipeline(args) -> None:
     logger.info("=" * 70)
     logger.info(f"Design Queue: {args.design_queue}")
     logger.info(f"Project Root: {args.project_path}")
-    logger.info(f"Max Iterations per Design: {args.max_iterations}")
+    logger.info(f"Control Model: Engine evaluation points (max_total_gotos={args.max_iterations})")
     logger.info(f"Poll Interval: {DESIGN_QUEUE_SCAN_INTERVAL}s")
     logger.info(f"Run ID: {state.run_id}")
     logger.info(f"Logs: {log_dir}")
@@ -2195,7 +2001,8 @@ def run_continuous_pipeline(args) -> None:
                 persistent_state.save(state, processed_hashes)
 
                 status, feature_report = run_single_design(
-                    sdk, next_design, project_path, args.max_iterations, logger, state
+                    sdk, next_design, project_path, logger, state,
+                    max_iterations=args.max_iterations,
                 )
 
                 next_design.status = status
