@@ -670,3 +670,63 @@ gate — all unit-verified, not run-verified). Do **not** start either until the
 smoke run passes. Building a sophisticated collaboration layer on an unproven
 engine is how you get a beautiful coordination model over a pipeline that doesn't
 actually execute. **Prove the engine, then layer the collaboration model.**
+
+---
+
+## 11. Status & Remaining Work (live backlog)
+
+This section is the actionable backlog (consolidated from the former
+`REMAINING_WORK.md`). Run tests with `.venv/bin/python -m pytest <file> -p no:libtmux`.
+
+### 11.1 Done (all on `main`)
+
+| Area | What landed |
+|---|---|
+| Worktree isolation core | `src/core/worktree_manager.py` (`WorktreeManager`, per-task worktrees, `.git/info/exclude` + `<worktree>/.hephaestus/`, merge-on-success / discard-on-failure). `branch_manager.py` deleted, alias removed. `worktree_base_path` config. |
+| Agent worktree wiring | `AgentManager._gather_worktree_context` copies design doc / project context / `qa_spec.json` into each worktree's `.hephaestus/`. All 10 phase prompts + `phases.py` template + `run_single_design` description use worktree-relative paths. `.gitignore` no longer modified (uses `info/exclude`). |
+| Report collection | `_report_path()` + `docs/` sweep so HTML report / forensics read merged `<project>/docs/`. |
+| Repair flow | Slimmed to workflow recovery only (branch reconciliation removed). |
+| Hybrid spec gate (§9.1) | `src/autopilot/spec.py` (floors + judgement → score bands); `Monitor._build_spec_phase_output` feeds the engine; phases 7/8 emit `qa_result.json` / `product_validation.json`. |
+| Tier 0 — single control authority (P1) | Outer `for iteration` loop removed; engine evaluation is sole iteration authority (`max_total_gotos`). `--max-iterations` maps to `max_total_gotos` (**C0.2 done**). |
+| Tier 1 — scheduling out of orchestrator (P2) | ~150 lines of duplicated scheduler/nudge removed; Monitor owns agent spawn. |
+| 3b — phase-transition authority | `mark_phase_complete` returns the `EvaluationResult`; `Monitor._create_phase_task_and_agent` creates task+agent for the resolved target (continue/goto/retry). |
+| 3c — goto reconvergence | `_start_next_phase` returns True for any next phase by order; `in_progress` for `pending`/`completed`. Locked by `tests/test_goto_reconvergence.py` (first engine-level integration tests). |
+| Tier 2 (partial) | `AutopilotService` in-process; CLI/API call it (B5/B6 fixed). |
+| Tier 3 (partial) | DB queue: `pick_next_design` reads DB first; status updated; additive `autopilot_designs` migration (`_migrate_autopilot_designs_columns`). |
+| Tier 5.1 / 5.2 | Root `autopilot.py` deleted; HTML report → Jinja2 `templates/feature_report.html`. |
+| Bugs | **B1** (stop_pipeline scoped), **B2** (no 60s false-complete; `hard_error` after 5 min no-tasks), **B3** (credit detection tightened), DB migration on direct invocation, `DesignEntry.status` default, MockLogger. |
+
+**Tests:** 74 passing.
+
+### 11.2 ⬅ NEXT ACTION — end-to-end smoke run (the gate to everything after)
+
+**Follow the runbook: [SMOKE_RUN.md](SMOKE_RUN.md).** The pipeline has never been run
+end-to-end. 3b/3c are fixed and locked by engine-level tests, so **Run A should now
+advance 1→…→10 and COMPLETE** (no phase-3 stall / 600s impasse), and **Run B** (seeded
+failing test) should fire `goto development`, reconverge, and log `[SPEC-GATE]` — with
+real agents confirming what the goto-loop tests prove at the engine level. **Do not start
+the Tier 2/3 remainder until Run A completes.**
+
+### 11.3 Remaining (prioritized, after the smoke run)
+
+**Tier 2 — finish in-process service + events (P3/P5/P6):**
+1. Human-input → `autopilot_interventions` DB table + `asyncio.Condition`; UI submits via REST (fixes **B4** TOCTOU, **B7** option-vocab; removes `input_request_*.json`).
+2. `/api/autopilot/stream` (WS/SSE); move UI off interval polling.
+3. Persist `PipelineState`/messages/events to DB (not `pipeline_state.json` / `events.jsonl`); register the service with backend startup/shutdown hooks (closes the module-singleton, state-lost-on-restart gap).
+4. **Split `OrchestratorLogger`** (`orchestrator.py:259`) — conflates logging (138 sites), an event sink (`event()`→`events.jsonl`), and state (`save_state()`→`state.json`). Logging → stdlib `logging.getLogger("autopilot.orchestrator")` with a **per-run `FileHandler` only** (the in-process `print(...)` currently double-logs); `event()`/`save_state()` → DB/event stream (item 3). Migrate the only consumers: `autopilot_api.py` `_get_latest_run_dir`/`_read_jsonl_tail` + status/logs/messages endpoints, and CLI status. *Don't remove the files standalone.* Only instance of the pattern in `src/`.
+
+**Tier 3 — unify the queue / design intake (P4):** see **§9.3** — DB-authoritative; kill the forced `<project>/docs/design-queue`; file-drop becomes one optional config-located importer; merge `/queue/*` + `/projects/{id}/designs/*`; retire frontend file-queue calls; drop the `queue_order` sidecar.
+
+**Tier 4 — C4.4:** ensure `prompt_human` has no blocking `input()` under API spawn (moot once Tier 2 #1 lands).
+
+**Tier 5.3 — decomposition:** split `autopilot_api.py` (~2560), `orchestrator.py` (~2300), `Autopilot.tsx` (~3200).
+
+**Spec-gate follow-ups (§9.1):** real-run validation (phases 7/8 actually emit the JSON; `[SPEC-GATE]` scores sane); per-project spec in DB + UI (`spec.py:load_spec` already takes a path); optional Conductor judgement instead of agent self-grading; verify the autopilot definition keeps `orchestrator_config.type == "evaluating"`.
+
+**Worktree follow-ups (small):** verify validators get a correct worktree/commit (`validator_agent` + `create_agent_for_task(use_existing_worktree=…, commit_sha=…)`); first-run smoke on a repo with legacy `agent-*` branches.
+
+**Defer (v2-horizon):** §10 (collaborative review + GitHub-as-projection); module splits; Conductor judgement; per-project spec UI.
+
+### 11.4 Test / infra notes
+- `.venv` lacked pytest; `pytest` 9.x is incompatible with the `libtmux` plugin → always `-p no:libtmux`. Consider pinning `pytest<9` or disabling the plugin in `pyproject.toml`/`conftest.py`.
+- Test fixtures must patch `get_config` **in the consumer's namespace** (e.g. `src.core.worktree_manager.get_config`), not just `src.core.simple_config.get_config`, or tests silently use the real config / real repo.
