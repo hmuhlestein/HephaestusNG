@@ -275,12 +275,17 @@ class MessageItem(BaseModel):
 
 @router.get("/status", response_model=PipelineStatus)
 async def get_pipeline_status():
+    from src.autopilot.service import get_autopilot_service
+
     cached = _cached("status", ttl=2.0)
     if cached is not None:
         return cached
 
+    service = get_autopilot_service()
+    service_status = service.status()
+
     run_dir = _get_latest_run_dir()
-    running = await _is_orchestrator_running()
+    running = service_status.get("running", False)
 
     state = _cached("state", ttl=2.0)
     if state is None:
@@ -325,14 +330,15 @@ async def get_pipeline_status():
     except Exception:
         active_agents = 0
 
+    # Merge service status with file-based state
     result = PipelineStatus(
         running=running,
-        current_design=state.get("current_design"),
+        current_design=service_status.get("current_design") or state.get("current_design"),
         current_workflow_id=state.get("current_workflow_id"),
-        designs_processed=state.get("designs_processed", 0),
-        designs_succeeded=state.get("designs_succeeded", 0),
-        designs_failed=state.get("designs_failed", 0),
-        total_elapsed=state.get("total_elapsed", 0),
+        designs_processed=service_status.get("designs_processed", 0) or state.get("designs_processed", 0),
+        designs_succeeded=service_status.get("designs_succeeded", 0) or state.get("designs_succeeded", 0),
+        designs_failed=service_status.get("designs_failed", 0) or state.get("designs_failed", 0),
+        total_elapsed=service_status.get("elapsed_seconds", 0) or state.get("total_elapsed", 0),
         queue_depth=queue_depth,
         last_event=last_event,
         active_agents=active_agents,
@@ -2151,77 +2157,27 @@ async def dismiss_human_input(request_id: str):
 @router.post("/start")
 async def start_pipeline(project_path: str, design_queue: str = "", max_iterations: int = 3):
     """Start the autopilot pipeline."""
-    import subprocess
-    from dotenv import load_dotenv
+    from src.autopilot.service import get_autopilot_service
 
-    running = await _is_orchestrator_running()
-    if running:
+    service = get_autopilot_service()
+    if service.running:
         raise HTTPException(409, "Pipeline is already running.")
 
-    project = Path(project_path).resolve()
-    if not project.exists():
-        raise HTTPException(400, f"Project path does not exist: {project}")
-
-    dq = design_queue or str(project / "docs" / "design-queue")
-    os.makedirs(dq, exist_ok=True)
-
-    # Find python
-    venv_python = Path(__file__).parent.parent.parent.parent / ".venv" / "bin" / "python"
-    python = str(venv_python) if venv_python.exists() else "python"
-
-    # Load .env file for API keys
-    env_file = Path(__file__).parent.parent.parent.parent / ".env"
-    if env_file.exists():
-        load_dotenv(env_file, override=False)
-
-    # Build environment with loaded vars
-    env = os.environ.copy()
-
-    cmd = [
-        python, "-m", "src.autopilot.orchestrator",
-        "--project-path", str(project),
-        "--design-queue", dq,
-        "--max-iterations", str(max_iterations),
-    ]
-
-    proc = subprocess.Popen(
-        cmd,
-        cwd=str(Path(__file__).parent.parent.parent.parent),
-        env=env,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-
-    pid_dir = Path(AUTOPILOT_STATE_DIR)
-    pid_dir.mkdir(parents=True, exist_ok=True)
-    (pid_dir / "orchestrator.pid").write_text(str(proc.pid))
-
-    # Create orchestrator agent record in DB
     try:
-        from src.core.database import Agent, get_db
-        import uuid as _uuid
-        with get_db() as _db:
-            # First: terminate any orphaned orchestrator agents from previous runs
-            _db.query(Agent).filter_by(agent_type='orchestrator', status='working').update({'status': 'terminated'})
-            _db.commit()
-            
-            orchestrator_agent = Agent(
-                id=str(_uuid.uuid4()),
-                system_prompt=f"Autopilot orchestrator managing pipeline for {project_path}",
-                status="working",
-                cli_type="orchestrator",
-                agent_type="orchestrator",
-                tmux_session_name=None,  # No tmux session for orchestrator
-            )
-            _db.add(orchestrator_agent)
-            _db.commit()
-            # Store agent ID for status updates
-            (pid_dir / "orchestrator_agent_id").write_text(orchestrator_agent.id)
+        result = await service.start(
+            project_path=project_path,
+            design_queue=design_queue,
+            max_iterations=max_iterations,
+        )
+        _invalidate("status")
+        return result
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except RuntimeError as e:
+        raise HTTPException(409, str(e))
     except Exception as e:
-        logger.warning(f"Failed to create orchestrator agent record: {e}")
-
-    _invalidate("status")
-    return {"started": True, "pid": proc.pid}
+        logger.error(f"Failed to start pipeline: {e}")
+        raise HTTPException(500, str(e))
 
 
 @router.post("/stop")
@@ -2231,22 +2187,24 @@ async def stop_pipeline(clear_state: bool = False):
     Args:
         clear_state: If True, clear persistent pipeline state (fresh start next time)
     """
-    import signal
+    from src.autopilot.service import get_autopilot_service
     from src.core.database import Agent, Task, get_db
 
-    # First: terminate all active autopilot agents and pause workflows (before killing orchestrator)
+    service = get_autopilot_service()
+
+    # Stop the service (this stops the pipeline task)
+    result = await service.stop()
+
+    # Terminate autopilot agents and pause workflows
     terminated_count = 0
     try:
         with get_db() as db:
-            # Find autopilot workflows
             from src.core.database import Workflow
             autopilot_wf_ids = [wf.id for wf in db.query(Workflow).filter_by(definition_id='autopilot').filter(Workflow.status.in_(['active', 'running'])).all()]
             
             if autopilot_wf_ids:
-                # Find tasks in those workflows
                 task_ids = [t.id for t in db.query(Task).filter(Task.workflow_id.in_(autopilot_wf_ids)).filter(Task.status.in_(['pending', 'queued', 'assigned', 'in_progress'])).all()]
                 
-                # Find and terminate agents working on those tasks
                 if task_ids:
                     agents = db.query(Agent).filter(Agent.current_task_id.in_(task_ids)).filter(Agent.status.in_(['working', 'starting', 'idle'])).all()
                     for agent in agents:
@@ -2256,49 +2214,10 @@ async def stop_pipeline(clear_state: bool = False):
                         except Exception:
                             pass
                 
-                # Mark all autopilot workflows as paused (user stopped them)
                 db.query(Workflow).filter(Workflow.id.in_(autopilot_wf_ids)).update({Workflow.status: 'paused'})
-                
                 db.commit()
     except Exception as e:
         logger.error(f"Error cleaning up autopilot agents: {e}")
-
-    # Second: kill orchestrator process (only autopilot agents were terminated above)
-    pid_file = Path(AUTOPILOT_STATE_DIR) / "orchestrator.pid"
-    agent_id_file = Path(AUTOPILOT_STATE_DIR) / "orchestrator_agent_id"
-    orchestrator_pid = None
-    if pid_file.exists():
-        try:
-            orchestrator_pid = int(pid_file.read_text().strip())
-            os.kill(orchestrator_pid, signal.SIGTERM)
-        except (ProcessLookupError, ValueError):
-            pass
-        pid_file.unlink(missing_ok=True)
-
-    # Mark orchestrator agent as terminated
-    if agent_id_file.exists():
-        try:
-            agent_id = agent_id_file.read_text().strip()
-            with get_db() as db:
-                db.query(Agent).filter_by(id=agent_id).update({'status': 'terminated'})
-                db.commit()
-        except Exception:
-            pass
-        agent_id_file.unlink(missing_ok=True)
-
-    # Wait for graceful shutdown
-    if orchestrator_pid:
-        for _ in range(50):
-            await asyncio.sleep(0.1)
-            try:
-                os.kill(orchestrator_pid, 0)
-            except OSError:
-                break
-        else:
-            try:
-                os.kill(orchestrator_pid, signal.SIGKILL)
-            except OSError:
-                pass
 
     # Clear persistent state if requested
     if clear_state:
@@ -2307,7 +2226,7 @@ async def stop_pipeline(clear_state: bool = False):
         logger.info("Cleared persistent pipeline state")
 
     _invalidate("status")
-    return {"stopped": True, "pid": orchestrator_pid, "agents_terminated": terminated_count, "state_cleared": clear_state}
+    return {"stopped": True, "agents_terminated": terminated_count, "state_cleared": clear_state, **result}
 
 
 @router.post("/cleanup-branches")
