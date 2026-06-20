@@ -800,44 +800,6 @@ class PhaseManager:
         finally:
             session.close()
 
-    def should_create_next_phase_task(self, phase_id: str) -> bool:
-        """Check if we should auto-create a task for the next phase.
-
-        Args:
-            phase_id: Current phase ID
-
-        Returns:
-            True if next phase task should be created
-        """
-        if not self.check_phase_completion(phase_id):
-            return False
-
-        session = self.db_manager.get_session()
-        try:
-            current_phase = session.query(Phase).filter_by(id=phase_id).first()
-            if not current_phase:
-                return False
-
-            # Check if next phase exists
-            next_phase = session.query(Phase).filter(
-                Phase.workflow_id == current_phase.workflow_id,
-                Phase.order > current_phase.order
-            ).order_by(Phase.order).first()
-
-            if not next_phase:
-                return False
-
-            # Check if next phase already has tasks
-            existing_tasks = session.query(Task).filter_by(
-                phase_id=next_phase.id
-            ).count()
-
-            # Create task if next phase has no tasks
-            return existing_tasks == 0
-
-        finally:
-            session.close()
-
     def get_workflow_config(self, workflow_id: str) -> PhasesConfig:
         """Get phases configuration for a workflow.
 
