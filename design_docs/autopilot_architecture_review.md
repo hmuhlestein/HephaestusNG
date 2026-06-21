@@ -585,6 +585,30 @@ GitHub issues/milestones, the queue is issues and the directory is irrelevant.)
 This is the completion of **Tier 3** (P4), with the "forced in-repo directory"
 framing explicitly killed.
 
+### 9.4 Human-in-the-loop is impasse-only (autonomy by default)
+
+**Decision:** the pipeline runs **autonomously by default** — *never* force a human
+step in the normal flow. The human is an **escalation on genuine impasse**, not a
+routine arbiter between agents or a gate every design must pass.
+
+- **All review layers run without a human:** self-review (§11.3), the dedicated
+  review phases, the spec-gate floor (§9.1), the one architecture-gate design
+  review (§10.1). They emit scores/findings; the **engine** decides
+  goto/retry/continue. A gate sending work back, a review finding issues that get
+  fixed, normal goto/retry within budget — **none of these involve a human.**
+- **Impasse = the bounded autonomy is genuinely exhausted**, specifically:
+  `max_total_gotos` hit without passing the gate; a hard error (crashed/
+  unrecoverable agents); an external blocker (API credits, auth); or no progress
+  after the recovery attempts. *Only then* is the human asked.
+- **Corollary:** human review/comments (§10.2, GitHub) are an *optional* surface a
+  human may use when they choose — not a step the pipeline blocks on. "Blocking
+  review that asks the human a question" is **opt-in, high-assurance mode only**,
+  never the default. The §10.3 "human can drop into the thread" is opportunistic,
+  not required.
+
+This keeps the autonomy that is the product's whole point: the human is the
+exception handler for when the engine can't converge, not part of the happy path.
+
 ---
 
 ## 10. Future Direction — Collaborative Review + GitHub-as-Projection
