@@ -593,32 +593,44 @@ framing explicitly killed.
 "autonomous software team" model. Recorded so the framing survives; **not** to be
 started until the core pipeline is proven end-to-end (see the caution below).
 
-### 10.1 Reviewer steering as evaluation-point roles (not a parent-monitor loop)
+### 10.1 Reviewer steering — DECISION: do **not** add a general reviewer
 
-The instinct — *a parent agent reviews each completed unit of work, does gap
-analysis, gives guidance, and decides what's next, like a human engineer* — is
-sound and is exactly the engine's **evaluating** model. The hybrid spec gate
-(§9.1) already does this for QA/product-validation: score a structured result →
-`goto/retry/continue`. The future direction is to **generalize that to every
-phase** as a Reviewer/Critic role.
+The instinct — *a reviewer checks each completed unit of work and decides what's
+next, like a human engineer* — is sound, but **generalizing a reviewer/critic to
+every phase boundary is rejected.** The system already has heavy, *specific*
+review and a generic layer on top is redundant, costly, and thrash-prone:
+- **Five dedicated review phases already do the review** (adversarial_review,
+  doc_review, security_review, qa_validation, product_validation — they fix, not
+  just report). `product_validation` (phase 8) is already the cross-cutting
+  "did we build the right thing vs. the original design" check.
+- **The spec gate (§9.1)** is the independent machine floor at the two gates that
+  matter; **self-review at handoff (§11.3)** covers warm-context gap-catching.
+- A *generic* critic with no specific rubric is the lowest-yield kind (vague
+  findings, second-guessing), would roughly **double LLM calls** (Run A was
+  already 55 min), and adds over-steering risk with no hard floor. The valuable
+  reviews are the specific ones (security vs OWASP, QA vs tests, product vs design).
 
-**Build it the robust way — and avoid the trap we already removed (Tier 1):**
-- **Milestone-triggered, not real-time.** Review fires on task/phase *completion*
-  against a **structured artifact** (the `qa_result.json` pattern), not by parsing
-  live tmux output. The real-time "peek + nudge + auto-kill" loop was deleted
-  precisely because it duplicated Guardian/Conductor and fought the engine (P1/P2).
-- **A role at an evaluation point, not a supervisor process.** The reviewer emits
-  findings → feeds the `score` → may spawn targeted fix-tasks. One control
-  authority (the engine).
-- **Budget it.** Per-task LLM review is expensive and prone to over-steering /
-  thrash; reviewers need a ceiling like `max_total_gotos`.
-- **Default async; blocking Q&A is opt-in.** "Ask questions like a human" stalls
-  throughput if synchronous. Default to spawning a follow-up task; reserve
-  blocking review (which routes to the human-in-the-loop intervention system) for
-  an explicit high-assurance mode.
+**The one targeted insertion that *does* pay off — the architecture gate.** A bad
+design is currently not caught until `product_validation` (phase 8), after dev,
+reviews, and QA built on it — the most expensive place to discover it. The
+orchestrator config already has an evaluation point after `architecture_design`
+(`score<0.4 → goto requirements`), but it's **heuristic-scored**. Upgrade *that
+one point* to a real review: the **architect scores its own design against the
+requirements** before development starts (this is where the "architect-as-mentor"
+idea belongs — one design-fidelity check at the cheapest catch point, **not** a
+persistent everywhere-reviewer).
 
-> One-line: generalize the spec gate into *reviewer evaluation points over
-> structured outputs, with budgets* — do **not** rebuild a parent-watches-child loop.
+**What to do instead of a general reviewer:** keep the spec gate as the floor; add
+self-review at handoff (§11.3); **sharpen the existing review phases** (e.g. feed
+`architecture.md` into `product_validation`'s rubric; have review phases emit
+structured findings) — better prompts beat more layers; and add the single
+architecture-gate review above. The kernel worth preserving from this idea —
+*review → structured score → engine decides, budgeted* — is **already realized**
+by the spec gate; it does not need generalizing.
+
+> One-line: don't build a general reviewer. Dedicated phases + spec gate +
+> self-review suffice; the only added review is one design check at the
+> architecture gate. Do **not** rebuild a parent-watches-child loop.
 
 ### 10.2 GitHub issues/milestones as a projection + event + human-I/O layer
 
@@ -655,12 +667,14 @@ or the control bus.**
 
 ### 10.3 How they compose
 
-The reviewer's gap analysis (10.1) **posts as the issue comment** (10.2): agents
-emit human-readable findings on the design's issue/thread, a human can drop into
-the same thread to steer, and the structured artifact still drives the engine.
-This reframes Tier 2/3: rather than building a bespoke WS/SSE stream + message
-center + intervention table + queue UI, **adopt GitHub for the human-facing parts
-and keep the DB as the engine's truth.**
+Findings from the *existing* review phases + spec gate (and the one
+architecture-gate review, §10.1) **post as the issue comment** (10.2): agents emit
+human-readable findings on the design's issue/thread, a human can drop into the
+same thread to steer, and the structured artifact still drives the engine. (Note:
+this is *not* a new general reviewer — §10.1 rejects that — it's surfacing the
+review the pipeline already does.) This reframes Tier 2/3: rather than building a
+bespoke WS/SSE stream + message center + intervention table + queue UI, **adopt
+GitHub for the human-facing parts and keep the DB as the engine's truth.**
 
 ### 10.4 Sequencing caution (the important part)
 
