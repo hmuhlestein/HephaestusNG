@@ -33,8 +33,8 @@ const AddDesignModal: React.FC<AddDesignModalProps> = ({ open, projectId, onClos
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['autopilot-project-designs', projectId] });
-      queryClient.invalidateQueries({ queryKey: ['autopilot-projects'] });
-      queryClient.invalidateQueries({ queryKey: ['autopilot-status'] });
+      queryClient.invalidateQueries({ queryKey: ['projects'] });
+      queryClient.invalidateQueries({ queryKey: ['autopilot-status', projectId] });
       toast.success(`"${name}" added to queue`);
       setName('');
       setContent('');

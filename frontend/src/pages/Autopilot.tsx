@@ -49,9 +49,10 @@ const Autopilot: React.FC = () => {
   }, [urlTab]);
 
   const { data: status, refetch: refetchStatus } = useQuery({
-    queryKey: ['autopilot-status'],
+    queryKey: ['autopilot-status', projectId],
     queryFn: () => apiService.getAutopilotStatus(),
     refetchInterval: 3000,  // Poll every 3 seconds
+    enabled: !!projectId,
   });
 
   const togglePipeline = useMutation({
@@ -69,15 +70,17 @@ const Autopilot: React.FC = () => {
   });
 
   const { data: messages } = useQuery({
-    queryKey: ['autopilot-messages'],
+    queryKey: ['autopilot-messages', projectId],
     queryFn: () => apiService.getAutopilotMessages(500),
     refetchInterval: 15000,
+    enabled: !!projectId,
   });
 
   const { data: agentData } = useQuery({
-    queryKey: ['agents'],
+    queryKey: ['agents', projectId],
     queryFn: () => fetch('/api/agents?status=all&per_page=100').then(r => r.json()),
     refetchInterval: 5000,
+    enabled: !!projectId,
   });
   const agents = agentData?.agents || [];
 
@@ -132,7 +135,7 @@ const Autopilot: React.FC = () => {
       </div>
 
       {/* Human Input Banner (shows when pipeline needs input) */}
-      <HumanInputBanner onOpenMessages={() => setActiveTab('messages')} />
+      <HumanInputBanner onOpenMessages={() => setActiveTab('messages')} projectId={projectId} />
 
       {/* Pipeline Status Hero */}
       <PipelineStatusCard
@@ -183,6 +186,7 @@ const Autopilot: React.FC = () => {
               stuckAgents={stuckAgents}
               onGoToQueue={() => setActiveTab('queue')}
               onGoToFeatures={() => setActiveTab('features')}
+              projectId={projectId}
             />
           )}
           {activeTab === 'queue' && (
@@ -194,10 +198,10 @@ const Autopilot: React.FC = () => {
             />
           )}
           {activeTab === 'features' && (
-            <FeatureGallery onSelectFeature={setSelectedFeatureId} />
+            <FeatureGallery onSelectFeature={setSelectedFeatureId} projectId={projectId} />
           )}
-          {activeTab === 'messages' && <MessageCenter />}
-          {activeTab === 'logs' && <LogsPanel />}
+          {activeTab === 'messages' && <MessageCenter projectId={projectId} />}
+          {activeTab === 'logs' && <LogsPanel projectId={projectId} />}
         </motion.div>
       </AnimatePresence>
 
@@ -280,15 +284,18 @@ const OverviewTab: React.FC<{
   stuckAgents: any[];
   onGoToQueue: () => void;
   onGoToFeatures: () => void;
-}> = ({ status, activeAgents, stuckAgents, onGoToQueue, onGoToFeatures }) => {
+  projectId: string | null;
+}> = ({ status, activeAgents, stuckAgents, onGoToQueue, onGoToFeatures, projectId }) => {
   const { data: features } = useQuery({
-    queryKey: ['autopilot-features'],
+    queryKey: ['autopilot-features', projectId],
     queryFn: () => apiService.getAutopilotFeatures(),
+    enabled: !!projectId,
   });
 
   const { data: queue } = useQuery({
-    queryKey: ['autopilot-queue'],
+    queryKey: ['autopilot-queue', projectId],
     queryFn: () => apiService.getAutopilotQueue(),
+    enabled: !!projectId,
   });
 
   const recentFeatures = (features || []).slice(0, 3);
@@ -415,11 +422,12 @@ const OverviewTab: React.FC<{
 
 // ── Logs Panel ───────────────────────────────────────────────
 
-const LogsPanel: React.FC = () => {
+const LogsPanel: React.FC<{ projectId: string | null }> = ({ projectId }) => {
   const { data, isLoading } = useQuery({
-    queryKey: ['autopilot-logs'],
+    queryKey: ['autopilot-logs', projectId],
     queryFn: () => apiService.getAutopilotLogs(200),
     refetchInterval: 15000,
+    enabled: !!projectId,
   });
 
   const logs = data?.lines || [];

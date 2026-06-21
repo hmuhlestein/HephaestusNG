@@ -514,6 +514,16 @@ class MonitoringLoop:
         except Exception as e:
             logger.error(f"Error cleaning up orphaned tmux sessions: {e}")
 
+        # Auto-discover active workflow if phase_manager has no workflow_id
+        if self.phase_manager and not self.phase_manager.workflow_id:
+            logger.info("[AUTO-DISCOVER] phase_manager.workflow_id is None, checking for active workflows...")
+            try:
+                wf_id = self.phase_manager.load_active_workflow()
+                if wf_id:
+                    logger.info(f"[AUTO-DISCOVER] ✅ Loaded active workflow: {wf_id[:8]}...")
+            except Exception as e:
+                logger.warning(f"[AUTO-DISCOVER] Failed to load active workflow: {e}")
+
         # Check phase progression if workflow is active
         if self.phase_manager and self.phase_manager.workflow_id:
             try:
@@ -974,6 +984,48 @@ class MonitoringLoop:
             return
 
         phases = workflow_status.get("phases", [])
+
+        # Find the most recently completed phase whose next phase is still pending.
+        # This handles the case where Phase N completed but Phase N+1 was never
+        # promoted to in_progress (e.g., after a workflow restart or race condition).
+        completed_phases = [p for p in phases if p["status"] == "completed"]
+        pending_phases = [p for p in phases if p["status"] == "pending"]
+
+        if completed_phases and pending_phases:
+            # The highest-order completed phase that has a pending successor
+            completed_phases.sort(key=lambda p: p["order"])
+            last_completed = completed_phases[-1]
+            has_pending_successor = any(
+                p["order"] == last_completed["order"] + 1 for p in pending_phases
+            )
+            if has_pending_successor:
+                session = self.db_manager.get_session()
+                try:
+                    from src.core.database import Phase
+                    # Find the completed phase and re-evaluate transition via engine
+                    completed_phase = session.query(Phase).filter_by(
+                        workflow_id=self.phase_manager.workflow_id,
+                        order=last_completed["order"]
+                    ).first()
+                    if completed_phase:
+                        logger.info(f"[PHASE-PROGRESSION] Phase {completed_phase.name} (order {completed_phase.order}) completed, "
+                                    f"but next phase is pending. Re-evaluating transition.")
+                        phase_output = self._build_spec_phase_output(completed_phase.name)
+                        result = self.phase_manager.mark_phase_complete(
+                            completed_phase.id,
+                            f"Phase completed with {last_completed['tasks']['completed']} tasks",
+                            phase_output=phase_output,
+                        )
+                        if result.get("should_continue") and result.get("target_phase_id"):
+                            logger.info(f"[PHASE-PROGRESSION] Engine decision: {result.get('action')} -> {result.get('target_phase')}")
+                            await self._create_phase_task_and_agent(
+                                completed_phase.workflow_id,
+                                result["target_phase_id"],
+                                result["target_phase"],
+                                result["action"],
+                            )
+                finally:
+                    session.close()
 
         for phase_info in phases:
             if phase_info["status"] == "in_progress":

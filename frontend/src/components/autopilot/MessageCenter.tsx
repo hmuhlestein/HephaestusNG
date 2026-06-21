@@ -43,7 +43,11 @@ const designStatusConfig: Record<string, { icon: React.ElementType; color: strin
   validating: { icon: AlertTriangle, color: 'text-amber-600', bg: 'bg-amber-100', label: 'Design Validating' },
 };
 
-const MessageCenter: React.FC = () => {
+interface MessageCenterProps {
+  projectId: string | null;
+}
+
+const MessageCenter: React.FC<MessageCenterProps> = ({ projectId }) => {
   const queryClient = useQueryClient();
   const [selectedFeature, setSelectedFeature] = useState<string | null>(null);
   const [showInputModal, setShowInputModal] = useState(false);
@@ -53,9 +57,10 @@ const MessageCenter: React.FC = () => {
   
   // Fetch archived message IDs from DB
   const { data: archivedData, refetch: refetchArchived } = useQuery({
-    queryKey: ['autopilot-archived-messages'],
+    queryKey: ['autopilot-archived-messages', projectId],
     queryFn: () => apiService.getAutopilotArchivedMessages(),
     refetchInterval: 30000,
+    enabled: !!projectId,
   });
   const archivedIds = new Set(archivedData?.archived_ids || []);
   
@@ -95,15 +100,17 @@ const MessageCenter: React.FC = () => {
   };
   
   const { data: messages, isLoading } = useQuery({
-    queryKey: ['autopilot-messages'],
+    queryKey: ['autopilot-messages', projectId],
     queryFn: () => apiService.getAutopilotMessages(100),
     refetchInterval: 15000,
+    enabled: !!projectId,
   });
 
   const { data: inputRequest } = useQuery({
-    queryKey: ['autopilot-input'],
+    queryKey: ['autopilot-input', projectId],
     queryFn: () => apiService.getAutopilotInput(),
     refetchInterval: 5000,
+    enabled: !!projectId,
   });
 
   const submitMutation = useMutation({

@@ -56,11 +56,16 @@ export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const activateMutation = useMutation({
     mutationFn: (projectId: string) => apiService.activateProject(projectId),
     onSuccess: () => {
+      // Invalidate all project-scoped query families (prefix match catches [key, projectId] variants)
       queryClient.invalidateQueries({ queryKey: ['projects'] });
-      queryClient.invalidateQueries({ queryKey: ['autopilot-projects'] });
       queryClient.invalidateQueries({ queryKey: ['autopilot-status'] });
       queryClient.invalidateQueries({ queryKey: ['autopilot-queue'] });
       queryClient.invalidateQueries({ queryKey: ['autopilot-features'] });
+      queryClient.invalidateQueries({ queryKey: ['autopilot-messages'] });
+      queryClient.invalidateQueries({ queryKey: ['autopilot-logs'] });
+      queryClient.invalidateQueries({ queryKey: ['autopilot-input'] });
+      queryClient.invalidateQueries({ queryKey: ['autopilot-archived-messages'] });
+      queryClient.invalidateQueries({ queryKey: ['autopilot-project-designs'] });
       queryClient.invalidateQueries({ queryKey: ['workflow-definitions'] });
       queryClient.invalidateQueries({ queryKey: ['workflow-executions'] });
       queryClient.invalidateQueries({ queryKey: ['tasks'] });

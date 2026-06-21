@@ -105,7 +105,7 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['autopilot-project-designs', projectId] });
-      queryClient.invalidateQueries({ queryKey: ['autopilot-projects'] });
+      queryClient.invalidateQueries({ queryKey: ['projects'] });
       toast.success('Design removed');
     },
     onError: (error: any) => {
@@ -285,8 +285,8 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
           onClose={() => setDetailFile(null)}
           onRerun={() => {
             queryClient.invalidateQueries({ queryKey: ['autopilot-project-designs', projectId] });
-            queryClient.invalidateQueries({ queryKey: ['autopilot-projects'] });
-            queryClient.invalidateQueries({ queryKey: ['autopilot-status'] });
+            queryClient.invalidateQueries({ queryKey: ['projects'] });
+            queryClient.invalidateQueries({ queryKey: ['autopilot-status', projectId] });
             setDetailFile(null);
           }}
         />

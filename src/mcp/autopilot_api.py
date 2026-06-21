@@ -23,18 +23,50 @@ router = APIRouter(prefix="/api/autopilot", tags=["Autopilot"])
 
 DESIGN_QUEUE_DIR = ""
 FEATURES_DIR = ""
+_active_project_id_cache: Optional[str] = None  # Track which project the cached dirs belong to
 
 ALLOWED_EXTENSIONS = {".md", ".txt"}
+
+
+def _get_active_project_id() -> Optional[str]:
+    """Get the current active project ID from the database."""
+    from src.core.database import AutopilotProject, get_db
+    with get_db() as db:
+        proj = db.query(AutopilotProject).filter_by(is_active=True).first()
+        return proj.id if proj else None
+
+
+def _invalidate_project_dirs():
+    """Invalidate cached project directories so they are recomputed.
+    
+    Call this whenever the active project changes.
+    """
+    global DESIGN_QUEUE_DIR, FEATURES_DIR, _active_project_id_cache
+    DESIGN_QUEUE_DIR = ""
+    FEATURES_DIR = ""
+    _active_project_id_cache = None
+    _invalidate("queue", "features", "status")
 
 
 def _get_effective_queue_dir() -> str:
     """Get the effective design queue directory.
     
+    Automatically invalidates the cache when the active project changes.
+    
     Raises:
         FileNotFoundError: If queue directory doesn't exist
         RuntimeError: If no active project configured
     """
-    global DESIGN_QUEUE_DIR
+    global DESIGN_QUEUE_DIR, _active_project_id_cache
+    
+    # Check if the active project has changed since we last cached
+    current_project_id = _get_active_project_id()
+    if current_project_id != _active_project_id_cache:
+        # Project changed — invalidate cached dirs
+        DESIGN_QUEUE_DIR = ""
+        FEATURES_DIR = ""
+        _active_project_id_cache = current_project_id
+    
     if DESIGN_QUEUE_DIR:
         if not Path(DESIGN_QUEUE_DIR).exists():
             raise FileNotFoundError(f"Design queue directory does not exist: {DESIGN_QUEUE_DIR}")
@@ -58,11 +90,22 @@ def _get_effective_queue_dir() -> str:
 def _get_effective_features_dir() -> str:
     """Get the effective features directory.
     
+    Automatically invalidates the cache when the active project changes.
+    
     Raises:
         FileNotFoundError: If features directory doesn't exist
         RuntimeError: If no active project configured
     """
-    global FEATURES_DIR
+    global FEATURES_DIR, _active_project_id_cache
+    
+    # Check if the active project has changed since we last cached
+    current_project_id = _get_active_project_id()
+    if current_project_id != _active_project_id_cache:
+        # Project changed — invalidate cached dirs
+        DESIGN_QUEUE_DIR = ""
+        FEATURES_DIR = ""
+        _active_project_id_cache = current_project_id
+    
     if FEATURES_DIR:
         if not Path(FEATURES_DIR).exists():
             raise FileNotFoundError(f"Features directory does not exist: {FEATURES_DIR}")
@@ -2400,8 +2443,9 @@ def configure_autopilot_api(
     design_queue_dir: str = "",
     features_dir: str = "",
 ):
-    global DESIGN_QUEUE_DIR, FEATURES_DIR
+    global DESIGN_QUEUE_DIR, FEATURES_DIR, _active_project_id_cache
     DESIGN_QUEUE_DIR = design_queue_dir or os.getenv("DESIGN_QUEUE_DIR", "")
     FEATURES_DIR = features_dir or os.getenv("FEATURES_DIR", "")
+    _active_project_id_cache = None  # Reset so next request rechecks active project
     _invalidate("queue", "features", "status")
     logger.info(f"Autopilot API configured: queue={DESIGN_QUEUE_DIR}, features={FEATURES_DIR}")

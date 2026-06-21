@@ -7,15 +7,17 @@ import toast from 'react-hot-toast';
 
 interface HumanInputBannerProps {
   onOpenMessages?: () => void;
+  projectId: string | null;
 }
 
-const HumanInputBanner: React.FC<HumanInputBannerProps> = ({ onOpenMessages }) => {
+const HumanInputBanner: React.FC<HumanInputBannerProps> = ({ onOpenMessages, projectId }) => {
   const queryClient = useQueryClient();
 
   const { data: inputRequest } = useQuery({
-    queryKey: ['autopilot-input'],
+    queryKey: ['autopilot-input', projectId],
     queryFn: () => apiService.getAutopilotInput(),
     refetchInterval: 5000,
+    enabled: !!projectId,
   });
 
   const submitMutation = useMutation({

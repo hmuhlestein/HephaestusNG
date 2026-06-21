@@ -11,19 +11,21 @@ import { formatDistanceToNow } from 'date-fns';
 
 interface FeatureGalleryProps {
   onSelectFeature: (featureId: string) => void;
+  projectId: string | null;
 }
 
 type ViewMode = 'grid' | 'list';
 type StatusFilter = 'all' | 'validated' | 'needs_review' | 'failed';
 
-const FeatureGallery: React.FC<FeatureGalleryProps> = ({ onSelectFeature }) => {
+const FeatureGallery: React.FC<FeatureGalleryProps> = ({ onSelectFeature, projectId }) => {
   const [viewMode, setViewMode] = useState<ViewMode>('grid');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
   const [search, setSearch] = useState('');
 
   const { data: features, isLoading } = useQuery({
-    queryKey: ['autopilot-features'],
+    queryKey: ['autopilot-features', projectId],
     queryFn: () => apiService.getAutopilotFeatures(),
+    enabled: !!projectId,
   });
 
   const filtered = (features || []).filter((f: any) => {
