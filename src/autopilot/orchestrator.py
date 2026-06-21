@@ -348,7 +348,7 @@ def get_tasks(status: str = None, workflow_id: str = None) -> list:
 def get_agents(workflow_id: str = None) -> list:
     """Get agents, optionally filtered by workflow_id via their assigned tasks."""
     # Get ALL agents (not paginated) for internal use
-    data = api_get("/api/agents?status=all&per_page=1000")
+    data = api_get("/api/agents?status=all&per_page=100")
     if data is None:
         return []
     agents = data if isinstance(data, list) else data.get("agents", [])
@@ -648,8 +648,9 @@ def detect_impasse(agents: list, pending_tasks: list, in_progress_tasks: list, e
     active_agents = [a for a in agents if a.get("status") in ACTIVE_AGENT_STATUSES]
 
     # If there are pending tasks but no active agents, something is wrong
-    # But give a 60 second grace period for agents to start
-    if not active_agents and pending_tasks and elapsed_seconds > 60:
+    # But give a 300 second grace period for agents to start (monitor needs
+    # time to detect phase completion, evaluate, create task, then spawn agent)
+    if not active_agents and pending_tasks and elapsed_seconds > 300:
         return True, f"No active agents but {len(pending_tasks)} tasks pending"
 
     # Check for agents that have been working too long without progress
@@ -1304,7 +1305,30 @@ def run_single_workflow(sdk, workflow_id: str, project_path: str, description: s
             if not active_agents and not pending and not in_progress and not non_terminal:
                 # All agents done, no more work to do
                 if done:
-                    logger.info(f"Workflow complete: {len(done)} tasks done, no agents active")
+                    # Verify all phases are completed before declaring workflow done.
+                    # This prevents premature completion when the monitor hasn't yet
+                    # created the next phase's task.
+                    try:
+                        from src.core.database import PhaseExecution, Phase
+                        from src.core.database import DatabaseManager
+                        _db = DatabaseManager()
+                        _session = _db.get_session()
+                        try:
+                            pending_phases = _session.query(PhaseExecution).filter(
+                                PhaseExecution.workflow_execution_id == exec_id,
+                                PhaseExecution.status.in_(["pending", "in_progress"])
+                            ).count()
+                            if pending_phases > 0:
+                                logger.info(f"{len(done)} tasks done but {pending_phases} phases still pending/in_progress — waiting")
+                                # Don't declare complete yet; monitor will create next task
+                                time.sleep(POLL_INTERVAL)
+                                continue
+                        finally:
+                            _session.close()
+                    except Exception as e:
+                        logger.warning(f"Could not check phase status: {e}")
+
+                    logger.info(f"Workflow complete: {len(done)} tasks done, no agents active, all phases done")
                     if state:
                         state.current_workflow_id = None
                     return "completed"
@@ -1350,6 +1374,9 @@ def run_single_workflow(sdk, workflow_id: str, project_path: str, description: s
                                 except Exception:
                                     pass
                         return "skipped"
+                    else:
+                        # "c" (continue) or timeout — reset stuck count and keep watching
+                        stuck_count = 0
             else:
                 stuck_count = 0
 
@@ -1840,9 +1867,34 @@ def run_continuous_pipeline(args) -> None:
 
                     # Also check previous workflow is fully complete (all phases done, branches merged)
                     if state.current_workflow_id:
+                        # First check if workflow still exists in DB
+                        try:
+                            wf_check = get_workflow_status(state.current_workflow_id)
+                            wf_check_status = wf_check.get('status', '')
+                            if not wf_check_status:
+                                # Workflow no longer exists in DB — clear stale state
+                                logger.info(f"Previous workflow {state.current_workflow_id[:8]} no longer exists in DB, clearing stale state")
+                                state.current_workflow_id = None
+                                continue
+                        except Exception:
+                            logger.info(f"Previous workflow {state.current_workflow_id[:8]} could not be checked, clearing stale state")
+                            state.current_workflow_id = None
+                            continue
+
                         is_complete, reason = is_design_fully_complete(state.current_workflow_id, logger)
                         if not is_complete:
                             logger.info(f"Previous workflow not yet complete: {reason}")
+
+                            # Track recovery attempts to prevent infinite loops
+                            if not hasattr(state, '_recovery_attempts'):
+                                state._recovery_attempts = 0
+                            state._recovery_attempts += 1
+
+                            if state._recovery_attempts > 5:
+                                logger.warning(f"Recovery failed after {state._recovery_attempts} attempts, abandoning workflow {state.current_workflow_id[:8]}")
+                                state.current_workflow_id = None
+                                state._recovery_attempts = 0
+                                continue
 
                             # Attempt recovery
                             success, recovery_msg = attempt_recovery(state.current_workflow_id, logger)

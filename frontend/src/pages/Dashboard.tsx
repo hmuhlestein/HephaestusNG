@@ -13,6 +13,7 @@ import BlockedTasksView from '@/components/BlockedTasksView';
 import ExecutionSelector from '@/components/ExecutionSelector';
 import LaunchWorkflowModal from '@/components/LaunchWorkflowModal';
 import { Button } from '@/components/ui/button';
+import { useProject } from '@/context/ProjectContext';
 
 const StatCard: React.FC<{
   title: string;
@@ -79,6 +80,8 @@ const Dashboard: React.FC = () => {
   const { subscribe } = useWebSocket();
   const { selectedExecutionId, selectedExecution, refetch: refreshExecutions } = useWorkflow();
   const navigate = useNavigate();
+  const { activeProject } = useProject();
+  const projectId = activeProject?.id || null;
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['dashboard-stats', selectedExecutionId],
@@ -88,9 +91,10 @@ const Dashboard: React.FC = () => {
   });
 
   const { data: autopilotInput } = useQuery({
-    queryKey: ['autopilot-input'],
+    queryKey: ['autopilot-input', projectId],
     queryFn: () => apiService.getAutopilotInput(),
     refetchInterval: 5000,
+    enabled: !!projectId,
   });
 
   const { data: blockedTasks } = useQuery({

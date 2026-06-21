@@ -21,14 +21,15 @@ const ProjectSelector: React.FC<ProjectSelectorProps> = ({ projectId, onProjectC
   const ref = useRef<HTMLDivElement>(null);
 
   const { data: projects, isLoading } = useQuery({
-    queryKey: ['autopilot-projects'],
-    queryFn: () => apiService.getAutopilotProjects(),
+    queryKey: ['projects'],
+    queryFn: () => apiService.getProjects(),
+    refetchInterval: 30000,
   });
 
   const createMutation = useMutation({
-    mutationFn: () => apiService.createAutopilotProject(newName, newPath, !projects?.length),
+    mutationFn: () => apiService.createProject(newName, newPath, !projects?.length),
     onSuccess: (proj: any) => {
-      queryClient.invalidateQueries({ queryKey: ['autopilot-projects'] });
+      queryClient.invalidateQueries({ queryKey: ['projects'] });
       onProjectChange(proj.id);
       setShowAdd(false);
       setNewName('');
@@ -41,9 +42,9 @@ const ProjectSelector: React.FC<ProjectSelectorProps> = ({ projectId, onProjectC
   });
 
   const deleteMutation = useMutation({
-    mutationFn: (id: string) => apiService.deleteAutopilotProject(id),
+    mutationFn: (id: string) => apiService.deleteProject(id),
     onSuccess: (_, deletedId) => {
-      queryClient.invalidateQueries({ queryKey: ['autopilot-projects'] });
+      queryClient.invalidateQueries({ queryKey: ['projects'] });
       if (projectId === deletedId) {
         onProjectChange('');
       }
@@ -57,7 +58,7 @@ const ProjectSelector: React.FC<ProjectSelectorProps> = ({ projectId, onProjectC
   const syncMutation = useMutation({
     mutationFn: (id: string) => apiService.syncAutopilotProject(id),
     onSuccess: (designs: any[]) => {
-      queryClient.invalidateQueries({ queryKey: ['autopilot-projects'] });
+      queryClient.invalidateQueries({ queryKey: ['projects'] });
       queryClient.invalidateQueries({ queryKey: ['autopilot-project-designs'] });
       toast.success(`Synced ${designs.length} designs`);
     },

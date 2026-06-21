@@ -46,8 +46,8 @@ const LoadDesignModal: React.FC<LoadDesignModalProps> = ({ open, projectId, onCl
     },
     onSuccess: (results) => {
       queryClient.invalidateQueries({ queryKey: ['autopilot-project-designs', projectId] });
-      queryClient.invalidateQueries({ queryKey: ['autopilot-projects'] });
-      queryClient.invalidateQueries({ queryKey: ['autopilot-status'] });
+      queryClient.invalidateQueries({ queryKey: ['projects'] });
+      queryClient.invalidateQueries({ queryKey: ['autopilot-status', projectId] });
       toast.success(`${results.length} design(s) added to queue`);
       onClose();
     },
