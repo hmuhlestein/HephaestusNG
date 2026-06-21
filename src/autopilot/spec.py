@@ -150,7 +150,8 @@ def read_result(working_directory: Any, filename: str) -> Optional[Dict[str, Any
     """Read a structured result file an agent wrote.
 
     Agents write to ./docs/ (merged from their worktree to <project>/docs/);
-    fall back to the project root, then to worktrees.
+    fall back to the project root. Does NOT iterate worktrees (too slow for
+    per-turn calls — the merge should bring files to <project>/docs/).
     """
     base = Path(working_directory)
     for candidate in (base / "docs" / filename, base / filename):
@@ -159,17 +160,6 @@ def read_result(working_directory: Any, filename: str) -> Optional[Dict[str, Any
                 return json.loads(candidate.read_text())
             except Exception:
                 return None
-
-    # Fallback: check worktrees (merge may not have happened yet)
-    worktrees_dir = base / ".worktrees"
-    if worktrees_dir.exists():
-        for wt in sorted(worktrees_dir.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True):
-            for candidate in (wt / "docs" / filename, wt / filename):
-                if candidate.exists():
-                    try:
-                        return json.loads(candidate.read_text())
-                    except Exception:
-                        continue
     return None
 
 
