@@ -996,12 +996,25 @@ def _report_path(project_path: Path, filename: str) -> Path:
 
     Under worktree isolation agents write reports to ./docs/ (relative to their
     worktree), which merges to <project>/docs/. Prefer that location; fall back
-    to the project root for older/stray writes.
+    to the project root, then to worktrees.
     """
     in_docs = project_path / _REPORT_SUBDIR / filename
     if in_docs.exists():
         return in_docs
-    return project_path / filename
+    in_root = project_path / filename
+    if in_root.exists():
+        return in_root
+    # Fallback: check worktrees (merge may not have happened yet)
+    worktrees_dir = project_path / ".worktrees"
+    if worktrees_dir.exists():
+        for wt in sorted(worktrees_dir.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True):
+            wt_file = wt / "docs" / filename
+            if wt_file.exists():
+                return wt_file
+            wt_root = wt / filename
+            if wt_root.exists():
+                return wt_root
+    return in_docs  # Return expected path even if not found (for error messages)
 
 
 def collect_report_summaries(project_path: Path) -> Dict[str, str]:
