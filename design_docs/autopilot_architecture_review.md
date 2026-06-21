@@ -708,28 +708,35 @@ the run (root cause of the prior impasses: `per_page=1000` → silent 422 → al
 agents; plus workflow_id auto-discover, completed→pending gap detection, all-phases-done
 completion check, bounded recovery loop).
 
-**Three real follow-ups before Run B is meaningful:**
-1. **SPEC-GATE never logged** (no `[SPEC-GATE]` line of any kind). Phase names match
-   `GATED_PHASES` exactly, so it's **not** a name mismatch — `_build_spec_phase_output`
-   is returning at the `GATED_PHASES` guard, i.e. it's **not being called for completed
-   `qa_validation`/`product_validation`**. Prime suspect: the during-run fixes added a
-   *second* completion path, so gated phases complete via a site that doesn't call the
-   spec gate (two call sites now: monitor.py:1013 & :1053, plus the all-phases-done
-   check). **Fix:** log each completion site, find which path 7/8 take, add the spec-gate
-   call there — better, **unify the completion paths** (the "multiple authorities doing
-   completion" smell again). This blocks Run B's purpose (gate-driven goto can't be
-   observed until the gate fires).
-2. **Orchestrator exits via impasse, not normal completion.** Mostly downstream of #3
-   (the dev re-run timed out → workflow never reached `completed`). Verify the orchestrator
-   treats `workflow.status == "completed"` (set by `_complete_workflow`) as **authoritative**
-   and exits normally; only fall to impasse/timeout when genuinely stuck (B2-adjacent).
-3. **Dev agent 30+ min (model latency, not a bug).** `xiaomi/mimo-v2.5` makes smoke runs
-   impractical (55 min for "add a calculator") and *caused* #2's timeout. Use a faster
-   model for smoke/iteration — correctness unaffected, but removes the spurious-timeout
-   confound and makes the observe loop viable.
+**Follow-ups before Run B is meaningful:**
+1. **Faster model — the actual precondition (was mislabeled the #1 bug).** `xiaomi/mimo-v2.5`
+   takes 30+ min for the dev phase (55 min total for "add a calculator"). In Run A the goto
+   at `adversarial_review` (phase 4) → `development` then **timed out**, so the run almost
+   certainly never reached phases 7/8. Switch to a fast model so the pipeline can actually
+   *reach* the gated phases; otherwise Run B re-hits the same goto→dev→timeout wall.
+2. **SPEC-GATE not logged — likely a symptom of #1, not a bypass.** The wiring is correct:
+   **both** completion paths call `_build_spec_phase_output` (monitor.py:1013 & :1053) and
+   there is no third bypassing path in `monitor.py`. Zero `[SPEC-GATE]` lines is consistent
+   with **the gated phases never completing** (the run timed out at the dev re-run before
+   reaching phase 7). *Verify, don't assume:* if phase 7 completes in Run B and there is
+   **still** no `[SPEC-GATE]` line, *then* instrument each completion site and unify the
+   paths. Also confirm the qa phase worktree **merges on `done`** — `spec.py:read_result`
+   reads `<project>/docs/` only (no worktree scan), so `qa_result.json` must reach main.
+3. **Orchestrator exits via impasse, not normal completion.** Mostly downstream of #1 (the
+   timed-out re-run → workflow never reached `completed`). Verify the orchestrator treats
+   `workflow.status == "completed"` (set by `_complete_workflow`) as **authoritative** and
+   exits normally; fall to impasse/timeout only when genuinely stuck (B2-adjacent).
 
-**Then Run B** (seeded failing test) to prove the *spec-gate-driven* goto (QA failing →
-`goto development`) once #1 is fixed. Do not start the Tier 2/3 remainder until Run B is green.
+**Run B watch-chain** (seeded failing test, after switching models): reach + complete
+`qa_validation` → `[SPEC-GATE] qa_validation` logs → `qa_result.json` `failed_tests ≥ 1`
+→ score `< 0.7` → `goto development` → reconverge → `continue`. Do not start the Tier 2/3
+remainder until Run B is green.
+
+**Also fixed since Run A** (8 commits): `per_page=1000`→0-agents (impasse root cause),
+workflow_id auto-discover, completed→pending gap detection, all-phases-done completion
+check, bounded recovery (5 attempts), tmux viewer (50k history), merge failures (186/186:
+abort stale merges), `read_result`/`_report_path` reverted (worktree iteration too slow).
+74 tests passing.
 
 ### 11.3 Remaining (prioritized, after the smoke run)
 
