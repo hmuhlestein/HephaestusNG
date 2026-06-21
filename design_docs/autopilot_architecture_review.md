@@ -749,6 +749,35 @@ completion check, bounded recovery loop).
 
 **Worktree follow-ups (small):** verify validators get a correct worktree/commit (`validator_agent` + `create_agent_for_task(use_existing_worktree=…, commit_sha=…)`); first-run smoke on a repo with legacy `agent-*` branches.
 
+**Near-term enhancement — one-shot intra-agent self-review at completion.** Empirically,
+a dev agent asked to "find your own gaps and fix them" right after it thinks it's done
+catches a lot, because it has *peak, warm context* — cheaper and higher-yield than a cold
+review agent rebuilding context. Implement as a deterministic, bounded self-review gate at
+the agent's own completion moment:
+- **Hook the completion signal**, not `send_message`: in the `/update_task_status` handler
+  (`server.py:1794`), when a change-producing phase's agent first sets `status="done"`.
+- **One-shot flag (mandatory), set *before* the message** so a crash can't re-trigger:
+  reuse the existing `tasks.review_done` (or add `self_review_done`). On first `done`: set
+  the flag, *don't* complete, `send_message_to_agent` a focused checklist, return
+  "not done yet — do this, then mark done again." Second `done` → complete normally.
+- **Checklist, not "review for gaps"**: re-read design/requirements; every requirement
+  implemented; edge cases + error handling; tests exist for new code and pass; no
+  TODOs/stubs/dead code; record changes in `completion_notes`.
+- **Scope via phase config (`self_review: true`)** — development and the "fix" phases
+  (adversarial/security/doc review); skip pure-reporting phases (requirements, qa,
+  product-validation, forensics). Opt-in, not hardcoded.
+- **Distinct from, and complementary to, the two review mechanisms** — it is *not* §10.1's
+  reviewer evaluation point (a separate critic at phase boundaries, cold context) and *not*
+  the §9.1 spec gate (the independent hard-floor at QA). Self-review is a cheap warm-context
+  *pre-filter* that reduces how often the gate sends work back (fewer `goto development`
+  round-trips → less of the cost/latency Run A exposed); the gate stays as the independent
+  floor. Do **not** let self-review replace it. Also **not** the removed Tier-1 nudge loop
+  (that was real-time output parsing; this is one deterministic message at one event).
+- **Add telemetry**: log when self-review fires and diff the tree before/after the second
+  `done`, to measure whether one pass is the right number.
+- **Sequencing:** after the SPEC-GATE fix + Run B (a self-review pass on a pipeline that
+  can't reach the gate doesn't help). Small; the phase-config toggle makes per-phase rollout safe.
+
 **Defer (v2-horizon):** §10 (collaborative review + GitHub-as-projection); module splits; Conductor judgement; per-project spec UI.
 
 ### 11.4 Test / infra notes
