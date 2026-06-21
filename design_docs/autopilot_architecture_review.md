@@ -698,14 +698,38 @@ This section is the actionable backlog (consolidated from the former
 
 **Tests:** 74 passing.
 
-### 11.2 ⬅ NEXT ACTION — end-to-end smoke run (the gate to everything after)
+### 11.2 Smoke run — Run A ✅ (goto reconvergence proven); Run B + 3 follow-ups next
 
-**Follow the runbook: [SMOKE_RUN.md](SMOKE_RUN.md).** The pipeline has never been run
-end-to-end. 3b/3c are fixed and locked by engine-level tests, so **Run A should now
-advance 1→…→10 and COMPLETE** (no phase-3 stall / 600s impasse), and **Run B** (seeded
-failing test) should fire `goto development`, reconverge, and log `[SPEC-GATE]` — with
-real agents confirming what the goto-loop tests prove at the engine level. **Do not start
-the Tier 2/3 remainder until Run A completes.**
+**Run A (2026-06-20) succeeded** (runbook: [SMOKE_RUN.md](SMOKE_RUN.md)): 9/10 phases,
+**goto reconvergence proven end-to-end with real agents** (`adversarial_review → goto
+development`), real code produced (`calculator.py` + 26 passing tests). The 3b/3c
+architecture is validated in practice, not just unit tests. 5 further bugs fixed during
+the run (root cause of the prior impasses: `per_page=1000` → silent 422 → always 0
+agents; plus workflow_id auto-discover, completed→pending gap detection, all-phases-done
+completion check, bounded recovery loop).
+
+**Three real follow-ups before Run B is meaningful:**
+1. **SPEC-GATE never logged** (no `[SPEC-GATE]` line of any kind). Phase names match
+   `GATED_PHASES` exactly, so it's **not** a name mismatch — `_build_spec_phase_output`
+   is returning at the `GATED_PHASES` guard, i.e. it's **not being called for completed
+   `qa_validation`/`product_validation`**. Prime suspect: the during-run fixes added a
+   *second* completion path, so gated phases complete via a site that doesn't call the
+   spec gate (two call sites now: monitor.py:1013 & :1053, plus the all-phases-done
+   check). **Fix:** log each completion site, find which path 7/8 take, add the spec-gate
+   call there — better, **unify the completion paths** (the "multiple authorities doing
+   completion" smell again). This blocks Run B's purpose (gate-driven goto can't be
+   observed until the gate fires).
+2. **Orchestrator exits via impasse, not normal completion.** Mostly downstream of #3
+   (the dev re-run timed out → workflow never reached `completed`). Verify the orchestrator
+   treats `workflow.status == "completed"` (set by `_complete_workflow`) as **authoritative**
+   and exits normally; only fall to impasse/timeout when genuinely stuck (B2-adjacent).
+3. **Dev agent 30+ min (model latency, not a bug).** `xiaomi/mimo-v2.5` makes smoke runs
+   impractical (55 min for "add a calculator") and *caused* #2's timeout. Use a faster
+   model for smoke/iteration — correctness unaffected, but removes the spurious-timeout
+   confound and makes the observe loop viable.
+
+**Then Run B** (seeded failing test) to prove the *spec-gate-driven* goto (QA failing →
+`goto development`) once #1 is fixed. Do not start the Tier 2/3 remainder until Run B is green.
 
 ### 11.3 Remaining (prioritized, after the smoke run)
 
