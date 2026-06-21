@@ -397,6 +397,13 @@ class AgentManager:
 
         session = self.tmux_server.new_session(**session_kwargs)
 
+        # Set a large scrollback history so the UI viewer can show full agent output.
+        # Default tmux history (2000) is too small for long prompts + agent work.
+        try:
+            session.set_option("history-limit", "50000")
+        except Exception:
+            pass  # Non-critical
+
         # Note: env_vars are exported in the shell before launching the agent
         # (see create_agent_for_task and restart_agent methods)
 
@@ -1249,7 +1256,9 @@ REMEMBER:
 
             logger.debug(f"Successfully got tmux session: {tmux_session}")
             pane = tmux_session.attached_window.attached_pane
-            output = pane.cmd("capture-pane", "-p", f"-S -{lines}").stdout
+            # Capture ALL available scrollback — no fixed line limit.
+            # The history-limit is set to 50000 on session creation.
+            output = pane.cmd("capture-pane", "-p", "-S", "-").stdout
 
             return "\n".join(output) if output else ""
 
