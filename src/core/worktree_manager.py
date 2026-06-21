@@ -429,6 +429,20 @@ class WorktreeManager:
             # Ensure main repo is on the base branch and clean
             if self.main_repo.active_branch.name != target_branch:
                 self.main_repo.heads[target_branch].checkout()
+
+            # Abort any in-progress merge from a previous failed attempt
+            try:
+                self.main_repo.git.merge("--abort")
+            except GitCommandError:
+                pass  # No merge in progress
+
+            # Hard reset to clean state — previous failed merges leave conflicts
+            try:
+                self.main_repo.git.reset("--hard", "HEAD")
+                self.main_repo.git.clean("-fd")
+            except GitCommandError:
+                pass
+
             if self.main_repo.is_dirty() or self.main_repo.untracked_files:
                 try:
                     self.main_repo.git.stash("push", "-u", "-m", f"Auto-stash before merge for {agent_id}")
@@ -443,7 +457,8 @@ class WorktreeManager:
                 status = "success"
                 logger.info(f"[WORKTREE:{agent_id}] Merge completed (no conflicts)")
             except GitCommandError as e:
-                if "CONFLICT" in str(e):
+                err_str = str(e)
+                if "CONFLICT" in err_str or "unresolved conflict" in err_str:
                     logger.info(f"[WORKTREE:{agent_id}] Conflicts detected, resolving (newest-file-wins)")
                     conflicts_resolved = self._resolve_conflicts(agent_id, session, self.main_repo)
                     self.main_repo.git.commit(
@@ -452,6 +467,7 @@ class WorktreeManager:
                     merge_commit_sha = self.main_repo.head.commit.hexsha
                     status = "conflict_resolved"
                 else:
+                    logger.error(f"[WORKTREE:{agent_id}] Merge failed: {e}")
                     raise
 
             record.merge_status = "merged"

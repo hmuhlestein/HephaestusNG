@@ -503,48 +503,32 @@ def attempt_recovery(workflow_id: str, logger: OrchestratorLogger) -> Tuple[bool
         except Exception as e:
             logger.error(f"  Failed to retry task {task_id[:8]}: {e}")
 
-    # 2. Merge unmerged agent branches
+    # 2. Clean stale merge state if repo is dirty (do NOT merge branches here —
+    #    the WorktreeManager handles merges in update_task_status. Raw git merge
+    #    corrupts the repo because attempt_recovery runs from the orchestrator's
+    #    thread, not the agent's worktree context.)
     try:
         project_path = os.getenv("PROJECT_PATH", "/Users/hmuhlestein/code/sotto")
-        result = subprocess.run(
-            ["git", "branch", "--list", "agent-*"],
-            capture_output=True, text=True, timeout=10,
-            cwd=project_path
+        # Check if repo needs cleanup
+        status_result = subprocess.run(
+            ["git", "status", "--porcelain"],
+            capture_output=True, text=True, timeout=10, cwd=project_path
         )
-        if result.returncode == 0:
-            branches = [b.strip().lstrip('* ') for b in result.stdout.strip().split('\n') if b.strip()]
-            for branch in branches:
-                logger.info(f"  Merging branch: {branch}")
-                try:
-                    # Checkout branch and merge to main
-                    subprocess.run(["git", "checkout", branch], capture_output=True, timeout=10, cwd=project_path)
-                    merge_result = subprocess.run(
-                        ["git", "checkout", "main"],
-                        capture_output=True, text=True, timeout=10, cwd=project_path
-                    )
-                    merge_result = subprocess.run(
-                        ["git", "merge", branch, "--no-edit"],
-                        capture_output=True, text=True, timeout=30, cwd=project_path
-                    )
-                    if merge_result.returncode == 0:
-                        logger.info(f"  Merged {branch} to main")
-                        # Delete the branch
-                        subprocess.run(["git", "branch", "-d", branch], capture_output=True, timeout=10, cwd=project_path)
-                        recovered.append(f"merged {branch}")
-                    else:
-                        # Conflict - use theirs (newest file wins)
-                        logger.warning(f"  Merge conflict on {branch} - using theirs")
-                        subprocess.run(["git", "checkout", "--theirs", "."], capture_output=True, timeout=10, cwd=project_path)
-                        subprocess.run(["git", "add", "."], capture_output=True, timeout=10, cwd=project_path)
-                        subprocess.run(["git", "commit", "-m", f"Merge {branch} with conflict resolution"], capture_output=True, timeout=10, cwd=project_path)
-                        subprocess.run(["git", "branch", "-d", branch], capture_output=True, timeout=10, cwd=project_path)
-                        recovered.append(f"merged {branch} (conflict resolved)")
-                except Exception as e:
-                    logger.warning(f"  Failed to merge {branch}: {e}")
-                    # Switch back to main
-                    subprocess.run(["git", "checkout", "main"], capture_output=True, timeout=10, cwd=project_path)
+        is_dirty = bool(status_result.stdout.strip())
+        merge_in_progress = Path(project_path, ".git", "MERGE_HEAD").exists()
+
+        if is_dirty or merge_in_progress:
+            # Abort any in-progress merge that's blocking the repo
+            subprocess.run(["git", "merge", "--abort"], capture_output=True, timeout=10, cwd=project_path)
+            # Ensure we're on main
+            subprocess.run(["git", "checkout", "main"], capture_output=True, timeout=10, cwd=project_path)
+            # Clean untracked files that accumulate from failed merges
+            subprocess.run(["git", "clean", "-fd"], capture_output=True, timeout=10, cwd=project_path)
+            # Reset any staged but uncommitted changes
+            subprocess.run(["git", "reset", "--hard", "HEAD"], capture_output=True, timeout=10, cwd=project_path)
+            recovered.append("cleaned repo state")
     except Exception as e:
-        logger.warning(f"  Branch merge check failed: {e}")
+        logger.warning(f"  Failed to clean repo state: {e}")
 
     # 3. Terminate stale agents
     agents = get_agents(workflow_id=workflow_id)
