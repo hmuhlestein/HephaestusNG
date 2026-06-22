@@ -47,6 +47,13 @@ rm -rf ~/.hephaestus/autopilot/state.json
 rm -rf ~/.hephaestus/autopilot/input_*.json
 rm -rf /tmp/hephaestus_worktrees/*
 
+# Clean project worktrees and agent branches
+for wt in $(git -C "$PROJECT_PATH" worktree list --porcelain 2>/dev/null | grep '^worktree ' | awk '{print $2}' | tail -n +2); do
+    git -C "$PROJECT_PATH" worktree remove --force "$wt" 2>/dev/null || rm -rf "$wt"
+done
+git -C "$PROJECT_PATH" worktree prune 2>/dev/null || true
+git -C "$PROJECT_PATH" branch 2>/dev/null | grep 'agent-' | xargs -I{} git -C "$PROJECT_PATH" branch -D {} 2>/dev/null || true
+
 sqlite3 "$DB" "
     DELETE FROM tasks;
     DELETE FROM phase_executions;
@@ -97,7 +104,7 @@ curl -s -X POST "http://127.0.0.1:8300/api/autopilot/start?project_path=$PROJECT
 
 # ─── Monitor ─────────────────────────────────────────────────────────
 POLL_INTERVAL=30
-MAX_POLLS=30  # 15 minutes
+MAX_POLLS=60  # 30 minutes
 STALE_COUNT=0
 MAX_STALE=6  # 3 minutes of no progress → check deeper
 
@@ -157,6 +164,21 @@ for i in $(seq 1 $MAX_POLLS); do
     fi
 
     echo "[$E s] run=$R agents=$A done=$DONE | $P | $S"
+
+    # Diagnostics every 2 min
+    if (( E % 120 == 0 )); then
+        FAILED=$(sqlite3 "$DB" "SELECT count(*) FROM tasks WHERE status='failed'" 2>/dev/null)
+        echo "  [diag] failed_tasks=$FAILED"
+        # Show last error from server
+        LAST_ERR=$(grep -h "Failed to create agent\|Marked task.*failed" hephaestus_server.log 2>/dev/null | tail -1 || true)
+        [[ -n "$LAST_ERR" ]] && echo "  [diag] $LAST_ERR"
+        # Show what agent is doing
+        AGENT_ID=$(sqlite3 "$DB" "SELECT substr(id,1,8) FROM agents WHERE agent_type='phase' AND status='working' ORDER BY rowid DESC LIMIT 1" 2>/dev/null)
+        if [[ -n "$AGENT_ID" ]]; then
+            AGENT_OUT=$(tmux capture-pane -t "agent_${AGENT_ID}_r" -p -S -5 2>/dev/null | tail -3 | tr '\n' ' ' | head -c 200 || true)
+            [[ -n "$AGENT_OUT" ]] && echo "  [agent] $AGENT_OUT"
+        fi
+    fi
 
     # Pipeline finished
     if [[ "$R" == "False" ]] && [[ $i -gt 4 ]]; then

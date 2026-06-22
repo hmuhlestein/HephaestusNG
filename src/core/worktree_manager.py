@@ -266,6 +266,10 @@ class WorktreeManager:
                     logger.info(f"[WORKTREE] Branch exists, recreating from {parent_commit_sha[:8]}")
                     self.main_repo.git.branch("-D", branch_name)
                     self.main_repo.git.branch(branch_name, parent_commit_sha)
+                elif "not a valid branch point" in str(e) or "not a valid object name" in str(e):
+                    logger.warning(f"[WORKTREE] Commit {parent_commit_sha[:8]} not found, falling back to main HEAD")
+                    parent_commit_sha = self.main_repo.head.commit.hexsha
+                    self.main_repo.git.branch(branch_name, parent_commit_sha)
                 else:
                     raise
 
