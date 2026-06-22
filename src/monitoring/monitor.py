@@ -657,11 +657,25 @@ class MonitoringLoop:
                     if s.get('needs_steering') and s.get('steering_type') in ('stuck', 'idle')
                 )
                 if consecutive_stuck >= self.config.max_ignored_steering:
-                    logger.warning(
-                        f"Agent {agent.id[:8]} ignored steering {consecutive_stuck} times. "
-                        f"Auto-restarting..."
-                    )
-                    await self._auto_restart_agent(agent)
+                    # Check if agent has recent activity before restarting
+                    if agent.last_activity:
+                        idle_seconds = (datetime.utcnow() - agent.last_activity).total_seconds()
+                        if idle_seconds < 300:
+                            logger.info(
+                                f"Agent {agent.id[:8]} marked stuck but was active {idle_seconds:.0f}s ago — not restarting"
+                            )
+                        else:
+                            logger.warning(
+                                f"Agent {agent.id[:8]} ignored steering {consecutive_stuck} times. "
+                                f"Auto-restarting..."
+                            )
+                            await self._auto_restart_agent(agent)
+                    else:
+                        logger.warning(
+                            f"Agent {agent.id[:8]} ignored steering {consecutive_stuck} times. "
+                            f"Auto-restarting..."
+                        )
+                        await self._auto_restart_agent(agent)
 
             # Update agent health based on trajectory alignment
             await self._update_agent_health_from_trajectory(agent, analysis)
