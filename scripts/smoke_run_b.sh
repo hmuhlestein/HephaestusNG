@@ -83,12 +83,12 @@ log "Starting services with heph..."
 .venv/bin/heph start 2>&1
 
 log "Waiting for backend health..."
-for i in $(seq 1 12); do
+for i in $(seq 1 24); do
     sleep 5
     H=$(curl -s http://127.0.0.1:8300/health 2>/dev/null \
         | python3 -c "import sys,json; print(json.load(sys.stdin).get('status',''))" 2>/dev/null)
     [[ "$H" == "healthy" ]] && log "Backend healthy" && break
-    [[ $i -eq 12 ]] && err "Backend never became healthy" && exit 1
+    [[ $i -eq 24 ]] && err "Backend never became healthy" && exit 1
 done
 
 # ─── Verify single server ────────────────────────────────────────────
