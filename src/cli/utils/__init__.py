@@ -112,6 +112,32 @@ def is_process_running(pid: int) -> bool:
         return False
 
 
+def is_monitor_running() -> bool:
+    """Check if a monitor process is actually running (not just a reused PID)."""
+    import subprocess
+    try:
+        result = subprocess.run(
+            ["pgrep", "-f", "run_monitor.py"],
+            capture_output=True, text=True, timeout=5
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
+def is_backend_running() -> bool:
+    """Check if a backend process is actually running (not just a reused PID)."""
+    import subprocess
+    try:
+        result = subprocess.run(
+            ["pgrep", "-f", "run_server.py"],
+            capture_output=True, text=True, timeout=5
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
 def truncate(s: str, max_len: int = 80) -> str:
     """Truncate string to max length."""
     if not s:
