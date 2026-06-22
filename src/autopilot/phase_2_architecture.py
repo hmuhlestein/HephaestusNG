@@ -10,6 +10,7 @@ from src.sdk.models import Phase
 PHASE_2_ARCHITECTURE = Phase(
     id=2,
     name="architecture_design",
+    cli_model="xiaomi/mimo-v2.5-pro",
     description="""Create detailed technical architecture and task breakdown.
 
 Reads requirements_analysis.md from Phase 1, designs the system architecture,

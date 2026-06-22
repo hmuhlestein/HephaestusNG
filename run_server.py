@@ -47,7 +47,8 @@ def main():
             "src.mcp.server:app",
             host=config.mcp_host,
             port=config.mcp_port,
-            reload=config.debug,
+            reload=False,
+            workers=1,
             log_level="info" if not config.debug else "debug",
         )
     except KeyboardInterrupt:
