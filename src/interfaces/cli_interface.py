@@ -492,7 +492,7 @@ class PiAgent(CLIAgentInterface):
 
             # Load agent file as system prompt via shell expansion (not @file syntax)
             # Pass task info as initial message via -p
-            command = f'pi --append-system-prompt "$(cat {agent_file})" -p "$(cat {prompt_file})" --model {model} --approve --no-context-files --no-session'
+            command = f'pi --append-system-prompt "$(cat {agent_file})" -p "$(cat {prompt_file})" --model {model} --approve --no-context-files'
         else:
             # Fallback: inject full prompt from file (no agent file available)
             task_id = kwargs.get('task_id', 'default')
@@ -500,7 +500,7 @@ class PiAgent(CLIAgentInterface):
             with open(prompt_file, 'w') as f:
                 f.write(system_prompt)
             os.chmod(prompt_file, 0o644)
-            command = f'pi --append-system-prompt "$(cat {prompt_file})" --model {model} --approve --no-context-files --no-session'
+            command = f'pi --append-system-prompt "$(cat {prompt_file})" --model {model} --approve --no-context-files'
 
         return command
 
