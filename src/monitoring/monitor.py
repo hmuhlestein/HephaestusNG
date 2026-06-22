@@ -594,6 +594,11 @@ class MonitoringLoop:
 
             # Special handling for agents with missing tmux sessions
             if agent.tmux_session_name and not self.agent_manager.tmux_server.has_session(agent.tmux_session_name):
+                # Check if task is already done before restarting
+                task = session.query(Task).filter_by(id=agent.current_task_id).first()
+                if task and task.status == 'done':
+                    logger.info(f"Agent {agent.id} has missing tmux session but task {task.id[:8]} is done — not restarting")
+                    return None
                 logger.warning(f"Agent {agent.id} has missing tmux session {agent.tmux_session_name}, recreating")
                 await self._handle_missing_tmux_session(agent)
                 return None
@@ -610,6 +615,11 @@ class MonitoringLoop:
 
             # DETECT: Agent exited to command line (shows $, %, >>>, bquote>)
             if self.guardian.detect_agent_exited(tmux_output):
+                # Check if task is already done before restarting
+                task = session.query(Task).filter_by(id=agent.current_task_id).first()
+                if task and task.status == 'done':
+                    logger.info(f"Agent {agent.id[:8]} exited but task {task.id[:8]} is done — not restarting")
+                    return None
                 logger.warning(
                     f"Agent {agent.id[:8]} exited to command line — restarting"
                 )
