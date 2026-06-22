@@ -124,15 +124,24 @@ class ClaudeCodeAgent(CLIAgentInterface):
         # Get configured model - use passed model or fall back to global config
         model = kwargs.get('model') or getattr(config, 'cli_model', 'sonnet')
 
+        # Reasoning budget: map the unified thinking_level onto claude --effort
+        # (low|medium|high — 3 levels vs pi's 6). Bounds per-turn reasoning so agents
+        # don't inherit a verbose default. Per-phase override → global config → medium.
+        _effort_map = {"off": "low", "minimal": "low", "low": "low",
+                       "medium": "medium", "high": "high", "xhigh": "high"}
+        _thinking = str(kwargs.get('thinking_level') or getattr(config, 'cli_thinking_level', 'medium')).lower().strip()
+        effort = _effort_map.get(_thinking)
+        effort_flag = f" --effort {effort}" if effort else ""
+
         # For GLM models, we use "sonnet" as the CLI flag but env vars are set on tmux session
         # For standard models, use the model name directly
         mcp_config = os.path.expanduser("~/.config/mcp/mcp.json")
         mcp_flag = f"--mcp-config {mcp_config}" if os.path.exists(mcp_config) else ""
-        
+
         if 'GLM' in model.upper():
-            command = f"claude --model sonnet --dangerously-skip-permissions {mcp_flag} --append-system-prompt \"$(cat {prompt_file})\" --verbose"
+            command = f"claude --model sonnet{effort_flag} --dangerously-skip-permissions {mcp_flag} --append-system-prompt \"$(cat {prompt_file})\" --verbose"
         else:
-            command = f"claude --model {model} --dangerously-skip-permissions {mcp_flag} --append-system-prompt \"$(cat {prompt_file})\" --verbose"
+            command = f"claude --model {model}{effort_flag} --dangerously-skip-permissions {mcp_flag} --append-system-prompt \"$(cat {prompt_file})\" --verbose"
 
         return command
 
