@@ -6,7 +6,7 @@ import time
 import subprocess
 from pathlib import Path
 
-from src.cli.utils import check_backend, save_pid, read_pid, is_process_running
+from src.cli.utils import check_backend, save_pid, read_pid, is_process_running, is_monitor_running, is_backend_running
 
 HEPHAESTUS_DIR = Path(__file__).parent.parent.parent.parent
 
@@ -29,7 +29,7 @@ def run(args):
     frontend_pid = read_pid("frontend")
     frontend_running = frontend_pid and is_process_running(frontend_pid)
     monitor_pid = read_pid("monitor")
-    monitor_running = monitor_pid and is_process_running(monitor_pid)
+    monitor_running = is_monitor_running()
 
     # Frontend (start first so output shows it first)
     if not args.backend_only and not args.no_frontend:
