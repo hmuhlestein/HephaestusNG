@@ -51,6 +51,7 @@ class AgentManager:
         phase_cli_tool: Optional[str] = None,
         phase_cli_model: Optional[str] = None,
         phase_glm_token_env: Optional[str] = None,
+        phase_thinking_level: Optional[str] = None,
     ) -> Agent:
         """Create an agent for a specific task.
 
@@ -208,10 +209,14 @@ class AgentManager:
                 finally:
                     session.close()
 
+            # Per-turn reasoning budget: per-phase override → global config → "medium"
+            thinking_level = phase_thinking_level or getattr(self.config, 'cli_thinking_level', 'medium')
+
             launch_command = cli_agent.get_launch_command(
                 system_prompt=system_prompt,
                 task_id=task.id,
                 model=model,  # Pass phase-specific or global model
+                thinking_level=thinking_level,
                 phase_name=phase_name,
                 agent_id=agent_id,
                 workflow_id=task.workflow_id,

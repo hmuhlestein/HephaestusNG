@@ -994,6 +994,7 @@ class PhaseManager:
                     cli_tool=phase_config.get("cli_tool"),
                     cli_model=phase_config.get("cli_model"),
                     glm_api_token_env=phase_config.get("glm_api_token_env"),
+                    thinking_level=phase_config.get("thinking_level"),
                 )
                 session.add(phase)
 

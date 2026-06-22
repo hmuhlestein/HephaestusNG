@@ -35,6 +35,7 @@ class Phase:
     cli_tool: Optional[str] = None           # "claude", "opencode", "droid", "codex", "pi", "swarm"
     cli_model: Optional[str] = None          # "sonnet", "opus", "haiku", "GLM-4.6", etc.
     glm_api_token_env: Optional[str] = None  # Environment variable name for GLM token
+    thinking_level: Optional[str] = None     # pi reasoning budget: off|minimal|low|medium|high|xhigh
 
     def to_yaml_dict(self) -> Dict[str, Any]:
         """Convert Phase to YAML-compatible dictionary."""
@@ -72,6 +73,8 @@ class Phase:
 
         if self.glm_api_token_env:
             data["glm_api_token_env"] = self.glm_api_token_env
+        if self.thinking_level:
+            data["thinking_level"] = self.thinking_level
 
         return data
 

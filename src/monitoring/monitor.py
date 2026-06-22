@@ -1170,6 +1170,7 @@ class MonitoringLoop:
                 phase_cli_tool = phase.cli_tool
                 phase_cli_model = phase.cli_model
                 phase_glm_token_env = phase.glm_api_token_env
+                phase_thinking_level = getattr(phase, 'thinking_level', None)
 
                 project_context = await self.agent_manager.get_project_context()
 
@@ -1182,6 +1183,7 @@ class MonitoringLoop:
                     phase_cli_tool=phase_cli_tool,
                     phase_cli_model=phase_cli_model,
                     phase_glm_token_env=phase_glm_token_env,
+                    phase_thinking_level=phase_thinking_level,
                 )
 
                 task.assigned_agent_id = agent.id
