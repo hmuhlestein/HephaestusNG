@@ -169,13 +169,15 @@ for i in $(seq 1 $MAX_POLLS); do
     if (( E % 120 == 0 )); then
         FAILED=$(sqlite3 "$DB" "SELECT count(*) FROM tasks WHERE status='failed'" 2>/dev/null)
         echo "  [diag] failed_tasks=$FAILED"
-        # Show last error from server
-        LAST_ERR=$(grep -h "Failed to create agent\|Marked task.*failed" hephaestus_server.log 2>/dev/null | tail -1 || true)
+        # Show last error from current run only (filter by current timestamp)
+        NOW=$(date +%Y-%m-%d)
+        LAST_ERR=$(grep "$NOW" hephaestus_server.log 2>/dev/null | grep -h "Failed to create agent\|Marked task.*failed" | tail -1 || true)
         [[ -n "$LAST_ERR" ]] && echo "  [diag] $LAST_ERR"
         # Show what agent is doing
         AGENT_ID=$(sqlite3 "$DB" "SELECT substr(id,1,8) FROM agents WHERE agent_type='phase' AND status='working' ORDER BY rowid DESC LIMIT 1" 2>/dev/null)
         if [[ -n "$AGENT_ID" ]]; then
-            AGENT_OUT=$(tmux capture-pane -t "agent_${AGENT_ID}_r" -p -S -5 2>/dev/null | tail -3 | tr '\n' ' ' | head -c 200 || true)
+            AGENT_OUT=$(tmux capture-pane -t "agent_${AGENT_ID}" -p -S -5 2>/dev/null | tail -3 | tr '\n' ' ' | head -c 200 || true)
+            [[ -z "$AGENT_OUT" ]] && AGENT_OUT=$(tmux capture-pane -t "agent_${AGENT_ID}_r" -p -S -5 2>/dev/null | tail -3 | tr '\n' ' ' | head -c 200 || true)
             [[ -n "$AGENT_OUT" ]] && echo "  [agent] $AGENT_OUT"
         fi
     fi

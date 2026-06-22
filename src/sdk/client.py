@@ -5,9 +5,12 @@ import yaml
 import tempfile
 import shutil
 import requests
+import logging
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 from datetime import datetime
+
+logger = logging.getLogger(__name__)
 
 from src.sdk.models import (
     Phase, TaskStatus, WorkflowConfig, WorkflowDefinition, WorkflowExecution
@@ -332,7 +335,7 @@ class HephaestusSDK:
                     "Please ensure Qdrant is running (e.g., docker run -p 6333:6333 qdrant/qdrant)"
                 )
         else:
-            print(f"[Hephaestus] Using {self.config.vector_store_backend} vector store (skipping Qdrant check)")
+            logger.info(f"Using {self.config.vector_store_backend} vector store (skipping Qdrant check)")
 
         # Check if backend is already running (e.g., when orchestrator runs inside the backend)
         backend_already_running = self._check_backend_health()
@@ -341,30 +344,30 @@ class HephaestusSDK:
         self.process_manager = ProcessManager(self.config, self.log_dir)
 
         # Print log directory
-        print(f"\nLogs: {self.log_dir}/")
-        print("  → backend.log")
-        print("  → monitor.log\n")
+        logger.info(f"Logs: {self.log_dir}/")
+        logger.info("  → backend.log")
+        logger.info("  → monitor.log")
 
         # Spawn processes only if not already running
         if backend_already_running:
-            print("[Hephaestus] ✓ Backend already running, skipping spawn")
+            logger.info("Backend already running, skipping spawn")
         else:
-            print("[Hephaestus] Starting backend process...")
+            logger.info("Starting backend process...")
             self.process_manager.spawn_backend()
 
-        print("[Hephaestus] Starting monitor process...")
+        logger.info("Starting monitor process...")
         if backend_already_running:
-            print("[Hephaestus] ✓ Assuming monitor already running (backend was pre-existing)")
+            logger.info("Assuming monitor already running (backend was pre-existing)")
         else:
             self.process_manager.spawn_monitor()
 
         # Poll backend health
-        print("[Hephaestus] Waiting for services to become healthy...")
+        logger.info("Waiting for services to become healthy...")
         start_time = time.time()
 
         while time.time() - start_time < timeout:
             if self._check_backend_health():
-                print("[Hephaestus] ✓ Backend is healthy")
+                logger.info("Backend is healthy")
                 break
 
             time.sleep(0.5)
@@ -379,7 +382,7 @@ class HephaestusSDK:
 
         # Verify monitor process is running
         if backend_already_running:
-            print("[Hephaestus] ✓ Skipping monitor check (backend was pre-existing)")
+            logger.info("Skipping monitor check (backend was pre-existing)")
         elif not self.process_manager.is_process_alive("monitor"):
             self.process_manager.shutdown_all()
             raise HephaestusStartupError(
@@ -387,7 +390,7 @@ class HephaestusSDK:
                 f"Check logs at: {self.log_dir}/monitor.log"
             )
 
-        print("[Hephaestus] ✓ Monitor is running")
+        logger.info("Monitor is running")
 
         # Register workflow definitions with backend
         self._register_workflow_definitions()
