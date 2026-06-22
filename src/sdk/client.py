@@ -334,6 +334,9 @@ class HephaestusSDK:
         else:
             print(f"[Hephaestus] Using {self.config.vector_store_backend} vector store (skipping Qdrant check)")
 
+        # Check if backend is already running (e.g., when orchestrator runs inside the backend)
+        backend_already_running = self._check_backend_health()
+
         # Create process manager
         self.process_manager = ProcessManager(self.config, self.log_dir)
 
@@ -342,12 +345,18 @@ class HephaestusSDK:
         print("  → backend.log")
         print("  → monitor.log\n")
 
-        # Spawn processes
-        print("[Hephaestus] Starting backend process...")
-        self.process_manager.spawn_backend()
+        # Spawn processes only if not already running
+        if backend_already_running:
+            print("[Hephaestus] ✓ Backend already running, skipping spawn")
+        else:
+            print("[Hephaestus] Starting backend process...")
+            self.process_manager.spawn_backend()
 
         print("[Hephaestus] Starting monitor process...")
-        self.process_manager.spawn_monitor()
+        if backend_already_running:
+            print("[Hephaestus] ✓ Assuming monitor already running (backend was pre-existing)")
+        else:
+            self.process_manager.spawn_monitor()
 
         # Poll backend health
         print("[Hephaestus] Waiting for services to become healthy...")
@@ -361,14 +370,17 @@ class HephaestusSDK:
             time.sleep(0.5)
         else:
             # Timeout
-            self.process_manager.shutdown_all()
+            if not backend_already_running:
+                self.process_manager.shutdown_all()
             raise HephaestusStartupError(
                 f"Backend did not become healthy within {timeout} seconds. "
                 f"Check logs at: {self.log_dir}/backend.log"
             )
 
         # Verify monitor process is running
-        if not self.process_manager.is_process_alive("monitor"):
+        if backend_already_running:
+            print("[Hephaestus] ✓ Skipping monitor check (backend was pre-existing)")
+        elif not self.process_manager.is_process_alive("monitor"):
             self.process_manager.shutdown_all()
             raise HephaestusStartupError(
                 f"Monitor process failed to start. "
