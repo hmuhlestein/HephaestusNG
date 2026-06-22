@@ -45,6 +45,7 @@ class Agent(Base):
     current_task_id = Column(String, ForeignKey("tasks.id"))
     last_activity = Column(DateTime, default=datetime.utcnow)
     health_check_failures = Column(Integer, default=0)
+    cli_model = Column(String, nullable=True)  # Per-agent model override
 
     # Validation-related fields
     agent_type = Column(
@@ -1202,6 +1203,18 @@ class DatabaseManager:
                 logger.info("Migrated autopilot_designs columns")
         except Exception as e:
             logger.debug(f"autopilot_designs migration (may already exist): {e}")
+
+        # Add cli_model to agents table if missing
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                try:
+                    conn.execute("ALTER TABLE agents ADD COLUMN cli_model TEXT")
+                except sqlite3.OperationalError:
+                    pass  # Column already exists
+                conn.commit()
+                logger.info("Migrated agents.cli_model column")
+        except Exception as e:
+            logger.debug(f"agents.cli_model migration (may already exist): {e}")
 
     def get_session(self):
         """Get a database session."""
