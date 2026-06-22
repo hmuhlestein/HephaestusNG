@@ -77,6 +77,9 @@ class Config:
         agents = config.get('agents', {})
         self.default_cli_tool = agents.get('default_cli_tool', DEFAULT_CLI_TOOL)
         self.cli_model = agents.get('cli_model', 'sonnet')
+        # Per-turn reasoning budget for pi agents (off|minimal|low|medium|high|xhigh).
+        # Bounds rumination; per-phase `thinking_level` overrides this.
+        self.cli_thinking_level = agents.get('cli_thinking_level', 'medium')
         self.glm_api_token_env = agents.get('glm_api_token_env', 'GLM_API_TOKEN')
         self.tmux_session_prefix = agents.get('tmux_session_prefix', 'agent')
         self.agent_health_check_interval = agents.get('health_check_interval', 60)
@@ -217,6 +220,8 @@ class Config:
             self.default_cli_tool = os.getenv("DEFAULT_CLI_TOOL")
         if os.getenv("CLI_MODEL"):
             self.cli_model = os.getenv("CLI_MODEL")
+        if os.getenv("CLI_THINKING_LEVEL"):
+            self.cli_thinking_level = os.getenv("CLI_THINKING_LEVEL")
         if os.getenv("GLM_API_TOKEN_ENV"):
             self.glm_api_token_env = os.getenv("GLM_API_TOKEN_ENV")
 

@@ -447,6 +447,14 @@ class PiAgent(CLIAgentInterface):
         # Get configured model (pi uses --model flag)
         model = kwargs.get('model') or getattr(config, 'cli_model', 'anthropic/claude-sonnet-4')
 
+        # Thinking budget (pi --thinking off|minimal|low|medium|high|xhigh). Bounds
+        # per-turn reasoning depth so agents don't inherit a verbose model default
+        # and rathole. Per-phase override → global config → "medium".
+        _valid_thinking = {"off", "minimal", "low", "medium", "high", "xhigh"}
+        thinking = kwargs.get('thinking_level') or getattr(config, 'cli_thinking_level', 'medium')
+        thinking = str(thinking).lower().strip()
+        thinking_flag = f' --thinking {thinking}' if thinking in _valid_thinking else ''
+
         if agent_file and os.path.exists(agent_file):
             # For pi: reference the agent file directly — don't inject the full phase text
             # The agent file already contains description, done_definitions, additional_notes
@@ -492,7 +500,7 @@ class PiAgent(CLIAgentInterface):
 
             # Load agent file as system prompt via shell expansion (not @file syntax)
             # Pass task info as initial message via -p
-            command = f'pi --append-system-prompt "$(cat {agent_file})" -p "$(cat {prompt_file})" --model {model} --approve --no-context-files'
+            command = f'pi --append-system-prompt "$(cat {agent_file})" -p "$(cat {prompt_file})" --model {model}{thinking_flag} --approve --no-context-files'
         else:
             # Fallback: inject full prompt from file (no agent file available)
             task_id = kwargs.get('task_id', 'default')
@@ -500,7 +508,7 @@ class PiAgent(CLIAgentInterface):
             with open(prompt_file, 'w') as f:
                 f.write(system_prompt)
             os.chmod(prompt_file, 0o644)
-            command = f'pi --append-system-prompt "$(cat {prompt_file})" --model {model} --approve --no-context-files'
+            command = f'pi --append-system-prompt "$(cat {prompt_file})" --model {model}{thinking_flag} --approve --no-context-files'
 
         return command
 

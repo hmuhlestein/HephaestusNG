@@ -291,6 +291,7 @@ class Phase(Base):
     cli_tool = Column(String, nullable=True)           # "claude", "opencode", "droid", "codex", "pi", "swarm"
     cli_model = Column(String, nullable=True)          # "sonnet", "opus", "haiku", "GLM-4.6", etc.
     glm_api_token_env = Column(String, nullable=True)  # Environment variable name for GLM token
+    thinking_level = Column(String, nullable=True)     # pi reasoning budget: off|minimal|low|medium|high|xhigh
 
     # Relationships
     workflow = relationship("Workflow", back_populates="phases")
@@ -1203,6 +1204,17 @@ class DatabaseManager:
                 logger.info("Migrated autopilot_designs columns")
         except Exception as e:
             logger.debug(f"autopilot_designs migration (may already exist): {e}")
+
+        # Add thinking_level to phases for existing databases
+        try:
+            with self.engine.connect() as conn:
+                try:
+                    conn.execute(text("ALTER TABLE phases ADD COLUMN thinking_level VARCHAR"))
+                except Exception:
+                    pass  # Column already exists
+                conn.commit()
+        except Exception as e:
+            logger.debug(f"phases.thinking_level migration (may already exist): {e}")
 
         # Add cli_model to agents table if missing
         try:
