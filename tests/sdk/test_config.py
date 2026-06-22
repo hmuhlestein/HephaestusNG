@@ -99,7 +99,7 @@ def test_config_auto_sets_model():
 
     config = HephaestusConfig(llm_provider="openai")
 
-    assert config.llm_model == "gpt-4-turbo-preview"
+    assert config.llm_model == "gpt-5"
 
     del os.environ["OPENAI_API_KEY"]
 

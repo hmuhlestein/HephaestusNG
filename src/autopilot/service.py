@@ -45,7 +45,10 @@ class AutopilotService:
 
     @property
     def running(self) -> bool:
-        return self._running and self._task is not None and not self._task.done()
+        task_done = self._task.done() if self._task else 'N/A'
+        r = self._running and self._task is not None and not self._task.done()
+        logger.warning(f"[SERVICE] running check: _running={self._running}, _task={self._task is not None}, done={task_done}, result={r}")
+        return r
 
     async def start(
         self,
@@ -194,6 +197,8 @@ class AutopilotService:
             logger.error(f"Pipeline error: {e}", exc_info=True)
             self._error = str(e)
         finally:
+            import traceback
+            logger.warning(f"[SERVICE] Pipeline task finished. _running was {self._running}. Traceback: {traceback.format_stack()[-3:]}")
             self._running = False
             logger.info("Pipeline task finished")
 
@@ -213,6 +218,7 @@ class AutopilotService:
         except KeyboardInterrupt:
             logger.info("Pipeline interrupted")
         finally:
+            logger.warning(f"[SERVICE] _run_pipeline_sync finally: _running={self._running}")
             self._running = False
 
 

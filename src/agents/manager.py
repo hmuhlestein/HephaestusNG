@@ -248,6 +248,7 @@ class AgentManager:
                 system_prompt=system_prompt,
                 status="working",
                 cli_type=cli_type,
+                cli_model=model,
                 tmux_session_name=session_name,
                 current_task_id=task.id,
                 last_activity=datetime.utcnow(),
@@ -512,7 +513,7 @@ class AgentManager:
         base_message = f"""
 === TASK ASSIGNMENT ===
 🔑 Your Agent ID: {agent_id}
-   ⚠️  CRITICAL: Use this EXACT ID when calling MCP tools (update_task_status, create_task, etc.)
+   ⚠️  CRITICAL: Use this EXACT ID when calling MCP tools (hephaestus_update_task_status, hephaestus_create_task, etc.)
    ⚠️  DO NOT use 'agent-mcp' or any other placeholder - it will fail authorization!
 
 📋 Task ID: {task.id}
@@ -595,7 +596,7 @@ COMPLETION CRITERIA:
 
 This is the final deliverable this entire workflow is working toward. All phases and tasks should contribute to achieving this goal.
 
-NOTE: Having a workflow-level goal does NOT mean you skip update_task_status. You must still mark your individual task as done when you complete it. The workflow result submission is ONLY for when someone achieves the final goal."""
+NOTE: Having a workflow-level goal does NOT mean you skip hephaestus_update_task_status. You must still mark your individual task as done when you complete it. The workflow result submission is ONLY for when someone achieves the final goal."""
             except Exception as e:
                 logger.warning(f"Could not get workflow result criteria: {e}")
 
@@ -610,35 +611,35 @@ IMPORTANT INSTRUCTIONS:
    
    🔑 REMEMBER: When calling these tools, always use agent_id="{agent_id}"
    
-   - update_task_status: Mark your task as done when completed (with task_id: {task.id})
-   - save_memory: Save discoveries for other agents (USE THIS LIBERALLY - see Memory Guidelines below)
-   - create_task: Create sub-tasks if you need to break down complex work
-   - search_memory: Search past memories when you need specific information (see Memory Search below)"""
+   - hephaestus_update_task_status: Mark your task as done when completed (with task_id: {task.id})
+   - hephaestus_save_memory: Save discoveries for other agents (USE THIS LIBERALLY - see Memory Guidelines below)
+   - hephaestus_create_task: Create sub-tasks if you need to break down complex work
+   - hephaestus_search_memory: Search past memories when you need specific information (see Memory Search below)"""
 
         # Add phase-specific instructions if in a workflow
         if hasattr(task, 'phase_id') and task.phase_id:
             base_message += """
    - When creating tasks, specify the phase number (1, 2, 3...) for the phase you want
-   - Example: create_task(description="...", done_definition="...", phase=1) for Planning phase
-   - Example: create_task(description="...", done_definition="...", phase=2) for Implementation phase"""
+   - Example: hephaestus_create_task(description="...", done_definition="...", phase=1) for Planning phase
+   - Example: hephaestus_create_task(description="...", done_definition="...", phase=2) for Implementation phase"""
 
         base_message += f"""
-   - get_tasks: Check the status of other tasks in the system
-   - broadcast_message: Send a message to ALL active agents in the system
-   - send_message: Send a direct message to a SPECIFIC agent
+   - hephaestus_get_tasks: Check the status of other tasks in the system
+   - hephaestus_broadcast_message: Send a message to ALL active agents in the system
+   - hephaestus_send_message: Send a direct message to a SPECIFIC agent
 
 **Agent Communication**:
 You can communicate with other agents working in the system using these tools:
 
-- **broadcast_message(message, sender_agent_id)**: Use when you have information ALL agents should know,
+- **hephaestus_broadcast_message(message, sender_agent_id)**: Use when you have information ALL agents should know,
   or when asking for help but don't know who to ask specifically.
   Examples:
   • "I found a critical bug in module X that affects everyone"
   • "Does anyone have information about how authentication works?"
   • "I've completed the database schema - all agents can now use it"
 
-- **send_message(message, sender_agent_id, recipient_agent_id)**: Use when you want to communicate
-  with a specific agent. First use get_agent_status() to see active agents and their tasks.
+- **hephaestus_send_message(message, sender_agent_id, recipient_agent_id)**: Use when you want to communicate
+  with a specific agent. First use hephaestus_get_agent_status() to see active agents and their tasks.
   Examples:
   • "I need the API specs you were working on"
   • "Your task conflicts with mine - can we coordinate?"
@@ -651,7 +652,7 @@ Messages you receive from other agents will appear with prefixes:
 When another agent sends you a message, consider responding if you have helpful information or can assist.
 
 3. **CRITICAL - TASK COMPLETION**: When you complete YOUR ASSIGNED TASK:
-   - You MUST ALWAYS use update_task_status to mark your task as "done"
+   - You MUST ALWAYS use hephaestus_update_task_status to mark your task as "done"
    - Set status to "done"
    - Include a summary of what you accomplished
    - Your task_id is: {task.id}
@@ -659,23 +660,23 @@ When another agent sends you a message, consider responding if you have helpful 
    - This is REQUIRED for every task, regardless of workflow type
 
 4. **OPTIONAL - WORKFLOW RESULT SUBMISSION**: Only if you have achieved the ENTIRE workflow's final goal:
-   - Use submit_result ONLY when you have the complete solution for the ENTIRE WORKFLOW
+   - Use hephaestus_submit_result ONLY when you have the complete solution for the ENTIRE WORKFLOW
    - This is SEPARATE from task completion - you still need to mark your task as done first
-   - submit_result(markdown_file_path="path/to/result.md", agent_id="{agent_id}",
+   - hephaestus_submit_result(markdown_file_path="path/to/result.md", agent_id="{agent_id}",
                      explanation="Brief description", evidence=["proof1", "proof2"])
    - This is for the final workflow deliverable (e.g., the cracked password, the complete report, etc.)
    - Do NOT use this for intermediate task results
    - The result will be automatically validated before workflow completion
 
 5. If you encounter issues you cannot resolve:
-   - Use update_task_status with status "failed"
+   - Use hephaestus_update_task_status with status "failed"
    - Include a clear failure_reason explaining what went wrong
    - Your task_id is: {task.id}
    - Your agent_id is: {agent_id}
 
 6. **MEMORY GUIDELINES** - Sharing Knowledge with Other Agents:
 
-   **When to SAVE memories (save_memory):**
+   **When to SAVE memories (hephaestus_save_memory):**
    Save memories LIBERALLY throughout your work - don't wait until the end! Other agents benefit from:
    • Error solutions: Fixed a bug? Save it immediately (type: error_fix)
    • Discoveries: Found how something works? Save it (type: discovery)
@@ -703,7 +704,7 @@ When another agent sends you a message, consider responding if you have helpful 
    - Save memories AS YOU GO, not just at task completion
    - Be specific in memory content (include error messages, file paths, exact solutions)
    - Use search_memory before reinventing the wheel
-   - Include tags and related_files in save_memory for better searchability"""
+   - Include tags and related_files in hephaestus_save_memory for better searchability"""
 
         # Add phase transition instructions if available
         if hasattr(task, 'phase_id') and task.phase_id:
@@ -722,8 +723,8 @@ When another agent sends you a message, consider responding if you have helpful 
 Begin working on your task now.
 
 REMEMBER:
-- When you complete YOUR TASK → use update_task_status(status="done")
-- Only if you solve the ENTIRE WORKFLOW → also use submit_result()
+- When you complete YOUR TASK → use hephaestus_update_task_status(status="done")
+- Only if you solve the ENTIRE WORKFLOW → also use hephaestus_submit_result()
 - These are TWO SEPARATE actions - task completion is always required!
 """
 
@@ -1039,7 +1040,7 @@ REMEMBER:
 
             # Prepare environment variables for GLM if needed
             env_vars = None
-            model = getattr(self.config, 'cli_model', 'sonnet')
+            model = agent.cli_model or getattr(self.config, 'cli_model', 'sonnet')
             if 'GLM' in model.upper():
                 import os
                 token_env_var = getattr(self.config, 'glm_api_token_env', 'GLM_API_TOKEN')
@@ -1121,9 +1122,18 @@ REMEMBER:
                 finally:
                     restart_session.close()
 
+            # Prepend restart context to system prompt so pi sees it immediately
+            restart_system_prompt = (
+                f"⚠️ RESTART: You were restarted because: {reason}. "
+                f"Continue working on task {task.id}. "
+                f"Do NOT re-read files you already analyzed. Pick up where you left off.\n\n"
+                f"{agent.system_prompt}"
+            )
+
             launch_command = cli_agent.get_launch_command(
-                system_prompt=agent.system_prompt,
+                system_prompt=restart_system_prompt,
                 task_id=task.id,
+                model=model,
                 phase_name=restart_phase_name,
                 agent_id=agent_id,
                 workflow_id=task.workflow_id,
@@ -1159,11 +1169,6 @@ REMEMBER:
             session.add(log_entry)
 
             session.commit()
-
-            # Send task reminder after restart
-            await asyncio.sleep(3)
-            reminder = f"You were restarted. Continue working on task {task.id}: {task.enriched_description[:200]}"
-            pane.send_keys(cli_agent.format_message(reminder))
 
             logger.info(f"Agent {agent_id} restarted successfully")
 

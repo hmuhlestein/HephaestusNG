@@ -130,7 +130,7 @@ def test_must_provide_either_phases_dir_or_phases():
     os.environ["ANTHROPIC_API_KEY"] = "test-key"
 
     try:
-        with pytest.raises(ValueError, match="Either phases_dir or phases must be provided"):
+        with pytest.raises(ValueError, match="Either workflow_definitions, phases_dir, or phases must be provided"):
             HephaestusSDK()
 
     finally:

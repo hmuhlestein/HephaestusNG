@@ -312,6 +312,25 @@ async def get_pipeline_status():
     run_dir = _get_latest_run_dir()
     running = service_status.get("running", False)
 
+    # Fallback: if service says not running, check DB for active workflows+agents
+    # (handles case where server process changed but pipeline is still active)
+    if not running:
+        try:
+            from src.core.database import get_db, Workflow, Agent
+            with get_db() as db:
+                active_wf = db.query(Workflow).filter(
+                    Workflow.status.in_(["active", "paused"])
+                ).first()
+                if active_wf:
+                    active_agents = db.query(Agent).filter(
+                        Agent.agent_type == "phase",
+                        Agent.status.in_(["working", "idle", "starting"])
+                    ).count()
+                    if active_agents > 0:
+                        running = True
+        except Exception:
+            pass
+
     state = _cached("state", ttl=2.0)
     if state is None:
         # Try run-specific state first, then persistent state
