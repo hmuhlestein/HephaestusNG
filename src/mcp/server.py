@@ -1860,7 +1860,7 @@ async def update_task_status(
                 if agent:
                     from src.core.worktree_manager import WorktreeManager
                     wt_mgr = WorktreeManager(db_manager=server_state.db_manager)
-                    wt_path = wt_mgr.get_worktree_path(agent_id)
+                    wt_path = wt_mgr.worktree_base / f"wt_{agent_id}"
                     if wt_path:
                         # Check worktree docs/ and root
                         for candidate in [wt_path / "docs" / declared_output, wt_path / declared_output]:
