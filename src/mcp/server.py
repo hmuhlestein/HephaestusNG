@@ -1859,9 +1859,7 @@ async def update_task_status(
                 found = False
                 if agent:
                     from src.core.worktree_manager import WorktreeManager
-                    from src.core.simple_config import get_config
-                    config = get_config()
-                    wt_mgr = WorktreeManager(config, task.workflow_id)
+                    wt_mgr = WorktreeManager(db_manager=server_state.db_manager)
                     wt_path = wt_mgr.get_worktree_path(agent_id)
                     if wt_path:
                         # Check worktree docs/ and root
