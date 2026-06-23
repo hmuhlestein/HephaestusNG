@@ -865,3 +865,47 @@ the agent's own completion moment:
 ### 11.4 Test / infra notes
 - `.venv` lacked pytest; `pytest` 9.x is incompatible with the `libtmux` plugin → always `-p no:libtmux`. Consider pinning `pytest<9` or disabling the plugin in `pyproject.toml`/`conftest.py`.
 - Test fixtures must patch `get_config` **in the consumer's namespace** (e.g. `src.core.worktree_manager.get_config`), not just `src.core.simple_config.get_config`, or tests silently use the real config / real repo.
+
+---
+
+## 12. Future Direction — Concurrent Designs (dependency DAG)
+
+**Status:** v2-horizon. Supersedes §9 #1 (sequential one-at-a-time) *when built* —
+recorded now, explicitly **not** near-term scope.
+
+**Today:** §9 #1 chose **sequential, one design at a time** (the queue is an ordered
+chain), and the orchestrator enforces it — `run_continuous_pipeline` waits on
+`get_active_workflows()` before picking the next design. So concurrent designs are
+blocked by decision, not accident.
+
+**The expensive enabler is already done.** The hard part of running workflows
+concurrently is *isolation*, which §9.2 built: per-task worktrees, serialized merges
+(merge lock), discard-on-failure. The data model is already **per-workflow** (each
+design = its own workflow/phases/tasks/feature folder), so multiple could coexist. The
+blockers are **not** isolation — they're (1) the orchestrator's single-loop and (2) the
+flat "chain" queue with no dependency info.
+
+**Design when built — a design dependency DAG.** Each design declares
+`depends_on: [designs]`:
+- **Independent designs** (no pending shared ancestor) run **concurrently up to a cap**
+  (`max_concurrent_designs`, atop the existing `max_concurrent_agents`).
+- **Dependent designs** wait for predecessors to merge (the "builds on previous"
+  behavior, when wanted).
+- **Subsumes both models:** today's sequential chain = "each design depends on the
+  previous"; full parallel = "no deps."
+- **Stay current:** when an independent design merges to `main`, in-flight designs run
+  `merge_main_into_branch` (already supported) to pick up the new `main` before their
+  own merge — so concurrent designs don't build against stale state.
+
+**The real risk — "independent" is a human claim that's hard to verify.** Two "independent"
+designs can still edit the same file (silent newest-file-wins clobber on merge) or one
+builds against a `main` about to change under it. So: **opt-in, conservative default**
+(sequential unless marked parallel), and ideally have the **architecture phase detect
+file-overlap** between concurrent designs and downgrade colliding ones to sequential —
+turning "independent" from a trusted assertion into a checked one (same spirit as the
+spec-gate hard floors: don't trust a claim you can verify).
+
+**Sequencing:** the pipeline isn't proven for *one* design yet (Run B red — gate not
+firing, abandoned-phase skip; §11.2). Building concurrent designs on an engine whose
+single-design quality mechanism doesn't fire is the §10.4 mistake. **Prove one design
+end-to-end, then add the DAG.**
