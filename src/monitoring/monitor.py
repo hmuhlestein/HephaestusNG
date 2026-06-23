@@ -1095,6 +1095,52 @@ class MonitoringLoop:
                 finally:
                     session.close()
 
+        # 3c-bis. Fire gate for completed gated phases that the monitor missed.
+        # The in_progress loop above won't catch phases that already flipped to
+        # completed. And _check_phase_progression only fires when the next phase
+        # is pending (not in_progress). This catches the gap: if a gated phase
+        # completed and the gate hasn't fired yet, fire it now.
+        from src.autopilot.spec import GATED_PHASES
+        for phase_info in phases:
+            if phase_info["status"] == "completed" and phase_info["name"] in GATED_PHASES:
+                session = self.db_manager.get_session()
+                try:
+                    from src.core.database import Phase, PhaseExecution
+                    phase = session.query(Phase).filter_by(
+                        workflow_id=self.phase_manager.workflow_id,
+                        order=phase_info["order"]
+                    ).first()
+                    if not phase:
+                        continue
+                    execution = session.query(PhaseExecution).filter_by(phase_id=phase.id).first()
+                    if execution and execution.status == "completed":
+                        # Phase already marked complete — check if we logged the gate
+                        if not hasattr(self, '_gated_phases_fired'):
+                            self._gated_phases_fired = set()
+                        if phase.id not in self._gated_phases_fired:
+                            phase_output = self._build_spec_phase_output(phase.name)
+                            if phase_output:  # Non-empty = gated phase has output
+                                logger.info(f"[SPEC-GATE] {phase.name}: gate fired from completion path (missed by monitor)")
+                                self._gated_phases_fired.add(phase.id)
+                                # Re-evaluate: if score < 0.7, engine will GOTO dev
+                                result = self.phase_manager.mark_phase_complete(
+                                    phase.id,
+                                    f"Phase completed (gate fired from completion path)",
+                                    phase_output=phase_output,
+                                )
+                                if result.get("action") == "goto" and result.get("target_phase_id"):
+                                    logger.info(f"[SPEC-GATE] {phase.name}: GOTO {result.get('target_phase')} (score too low)")
+                                    await self._create_phase_task_and_agent(
+                                        phase.workflow_id,
+                                        result["target_phase_id"],
+                                        result["target_phase"],
+                                        result["action"],
+                                    )
+                                elif result.get("action") == "continue":
+                                    logger.info(f"[SPEC-GATE] {phase.name}: PASSED (score >= 0.7)")
+                finally:
+                    session.close()
+
     def _build_spec_phase_output(self, phase_name: str) -> dict:
         """Compute the hybrid spec-gate phase_output for a gated phase.
 
