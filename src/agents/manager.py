@@ -90,6 +90,15 @@ class AgentManager:
             # has to read out-of-tree paths.
             context_files = self._gather_worktree_context(task)
 
+            # Reload WorktreeManager with the workflow's working directory so
+            # worktrees go under the correct repo (not the global main_repo_path).
+            if task.workflow_id:
+                from src.core.database import Workflow
+                with self.db_manager.get_session() as session:
+                    wf = session.query(Workflow).filter_by(id=task.workflow_id).first()
+                    if wf and wf.working_directory:
+                        self.branch_manager.reload(Path(wf.working_directory))
+
             # Create an isolated worktree for the agent
             branch_info = self.branch_manager.create_agent_branch(
                 agent_id=agent_id,
