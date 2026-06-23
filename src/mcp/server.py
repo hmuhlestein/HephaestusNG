@@ -1046,7 +1046,11 @@ async def process_queue():
             try:
                 task = session.query(Task).filter_by(id=next_task.id).first()
                 if task:
-                    task.enriched_description = enriched_task["enriched_description"]
+                    enriched_desc = enriched_task["enriched_description"]
+                    if isinstance(enriched_desc, dict):
+                        import json
+                        enriched_desc = json.dumps(enriched_desc, indent=2)
+                    task.enriched_description = enriched_desc
                     task.estimated_complexity = enriched_task.get("estimated_complexity", 5)
                     logger.info("[QUEUE_ENRICHMENT] ✓ Set enriched_description and estimated_complexity")
 
@@ -1081,7 +1085,11 @@ async def process_queue():
                     logger.info("[QUEUE_ENRICHMENT] ✓ Database commit successful")
 
                     # Store enriched_task dict for passing to create_agent_for_task
-                    next_task.enriched_description = enriched_task["enriched_description"]
+                    next_enriched_desc = enriched_task["enriched_description"]
+                    if isinstance(enriched_desc, dict):
+                        import json
+                        enriched_desc = json.dumps(enriched_desc, indent=2)
+                    task.enriched_description = enriched_desc
                     next_task._enriched_task_dict = enriched_task  # Store full dict
                     logger.info("[QUEUE_ENRICHMENT] ✓ Stored full enriched_task dict for agent creation")
                     logger.info(f"[QUEUE_ENRICHMENT] ========== ENRICHMENT PIPELINE COMPLETE FOR TASK {next_task.id} ==========")
@@ -1557,7 +1565,11 @@ async def create_task(
                 session = server_state.db_manager.get_session()
                 task = session.query(Task).filter_by(id=task_id).first()
                 if task:
-                    task.enriched_description = enriched_task["enriched_description"]
+                    enriched_desc = enriched_task["enriched_description"]
+                    if isinstance(enriched_desc, dict):
+                        import json
+                        enriched_desc = json.dumps(enriched_desc, indent=2)
+                    task.enriched_description = enriched_desc
                     task.phase_id = phase_id
                     # Prioritize request.workflow_id for multi-workflow support, fallback to phase context
                     task.workflow_id = request.workflow_id or workflow_id
