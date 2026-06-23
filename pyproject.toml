@@ -56,6 +56,17 @@ warn_return_any = true
 warn_unused_configs = true
 ignore_missing_imports = true
 
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "T20"]  # pycodestyle, pyflakes, isort, naming, print
+
+[tool.ruff.lint.per-file-ignores]
+"src/cli/*" = ["T20"]   # CLI tools print to stdout intentionally
+"tests/*" = ["T20"]     # tests print debug output
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
