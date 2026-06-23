@@ -609,6 +609,42 @@ routine arbiter between agents or a gate every design must pass.
 This keeps the autonomy that is the product's whole point: the human is the
 exception handler for when the engine can't converge, not part of the happy path.
 
+### 9.5 Mechanical code checks = linter hard-floor, not an agent
+
+**Decision:** mechanically-checkable code rules (print-vs-logging, imports-at-top,
+import sorting, naming, formatting) are enforced by a **linter as a hard floor**,
+**not** by an LLM review agent. An LLM for these is the wrong tool — slower,
+token-costly, non-deterministic (misses some, invents others) — when a linter does
+it exhaustively in milliseconds. Same principle as the §9.1 spec floors and the
+§10.1 general-reviewer rejection: *machine-checkable → machine floor.*
+
+- **Now (Python):** the dev phase (and the fix phases) run `ruff check --fix .` +
+  `ruff format .` and must reach **zero errors** before `done` (a done-definition
+  hard floor, same class as "tests pass"). `phase_4` already runs `ruff check`.
+  Hephaestus's own `pyproject.toml` enables `E,F,I,N,T20` (with `T20` ignored for
+  `src/cli/*` and `tests/*`, which print intentionally). The AGENTS.md "Logging
+  Best Practices" / naming conventions are the source rules; the linter enforces
+  the mechanical subset.
+- **Generalization (language-agnostic, intended direction):** the autopilot builds
+  arbitrary software, so the pipeline must **not** maintain a per-language linter
+  list. The floor is generic — *"the project's own configured lint / format /
+  typecheck command passes with zero errors"* (`make lint`, `npm run lint`, `ruff
+  check`, `cargo clippy`, `gofmt`, …) — exactly like CI. The language-specific
+  choice lives in **one place: the architecture phase (2)**, which picks the stack
+  and configures + records the canonical check commands (a `Makefile`
+  lint/format/typecheck target or the manifest scripts). Dev/fix phases run *that*
+  command; if none exists yet, the agent (which knows the stack it built) sets up
+  the language-standard tooling. Push the language knowledge to the agent + the
+  architecture decision; keep the pipeline a generic "run the declared check."
+- **Semantic quality** (code smells, meaningful-vs-swallowed error handling,
+  misleading names) is **already** the `adversarial_review` phase (4) — that's
+  where LLM *judgment* belongs. A dedicated "style agent" is redundant with
+  adversarial_review for judgment and strictly worse than the linter for mechanics.
+
+*Recurring rule:* if a check is mechanical, it's a **tool wired as a hard floor**;
+if it's judgment, it's an **existing phase**. A new agent for a checkable thing is
+the anti-pattern.
+
 ---
 
 ## 10. Future Direction — Collaborative Review + GitHub-as-Projection
