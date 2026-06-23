@@ -1846,6 +1846,36 @@ async def update_task_status(
         if request.status == "done" and not task.has_results:
             logger.warning(f"Task {request.task_id} completed without formal results reported")
 
+        # 3b. Validate QA output — reject hallucinated completions
+        if request.status == "done" and task.phase_id:
+            phase = session.query(Phase).filter_by(id=task.phase_id).first()
+            if phase and phase.name == "qa_validation":
+                # Verify qa_result.json exists in the agent's worktree
+                agent = session.query(Agent).filter_by(id=agent_id).first()
+                if agent:
+                    from src.core.worktree_manager import WorktreeManager
+                    from src.core.simple_config import get_config
+                    config = get_config()
+                    wt_mgr = WorktreeManager(config, task.workflow_id)
+                    wt_path = wt_mgr.get_worktree_path(agent_id)
+                    if wt_path:
+                        qa_result = wt_path / "docs" / "qa_result.json"
+                        if not qa_result.exists():
+                            # Also check feature folder
+                            feature_dir = Path(config.project_root) / ".hephaestus" / "features"
+                            if feature_dir.exists():
+                                for d in sorted(feature_dir.iterdir(), reverse=True):
+                                    candidate = d / "docs" / "qa_result.json"
+                                    if candidate.exists():
+                                        qa_result = candidate
+                                        break
+                            if not qa_result.exists():
+                                logger.warning(f"QA agent {agent_id[:8]} claimed done but qa_result.json not found — rejecting")
+                                task.status = "failed"
+                                task.failure_reason = "QA agent claimed completion but qa_result.json was not created. Possible hallucination."
+                                session.commit()
+                                return {"status": "failed", "message": "QA output validation failed: qa_result.json not found"}
+
         # 4. Check if task has validation enabled
         validation_spawned = False
         if request.status == "done" and task.validation_enabled:
