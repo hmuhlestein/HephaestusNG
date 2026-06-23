@@ -670,7 +670,8 @@ class WorktreeManager:
     def _write_file_content(self, repo_dir: str, file_path: str, content: str):
         full_path = Path(repo_dir) / file_path
         full_path.parent.mkdir(parents=True, exist_ok=True)
-        full_path.write_text(content)
+        # Sanitize surrogate characters from garbled tmux output
+        full_path.write_text(content.encode('utf-8', errors='replace').decode('utf-8'))
 
     def get_workspace_changes(self, agent_id: str, since_commit: Optional[str] = None) -> Dict[str, Any]:
         """Get the diff for an agent's changes within its worktree."""
