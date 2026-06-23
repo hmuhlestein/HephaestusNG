@@ -772,45 +772,46 @@ This section is the actionable backlog (consolidated from the former
 
 **Tests:** 74 passing.
 
-### 11.2 Smoke run — Run A ✅ (goto reconvergence proven); Run B + 3 follow-ups next
+### 11.2 Smoke run — Run A ✅ (goto proven); Run B ❌ (gate not firing + abandoned-phase skip)
 
-**Run A (2026-06-20) succeeded** (runbook: [SMOKE_RUN.md](SMOKE_RUN.md)): 9/10 phases,
-**goto reconvergence proven end-to-end with real agents** (`adversarial_review → goto
-development`), real code produced (`calculator.py` + 26 passing tests). The 3b/3c
-architecture is validated in practice, not just unit tests. 5 further bugs fixed during
-the run (root cause of the prior impasses: `per_page=1000` → silent 422 → always 0
-agents; plus workflow_id auto-discover, completed→pending gap detection, all-phases-done
-completion check, bounded recovery loop).
+**Run A (2026-06-20) succeeded:** 9/10 phases, **goto reconvergence proven end-to-end**
+(`adversarial_review → goto development`), real code produced (`calculator.py` + 26
+tests). The 3b/3c architecture is validated in practice.
 
-**Follow-ups before Run B is meaningful:**
-1. **Faster model — the actual precondition (was mislabeled the #1 bug).** `xiaomi/mimo-v2.5`
-   takes 30+ min for the dev phase (55 min total for "add a calculator"). In Run A the goto
-   at `adversarial_review` (phase 4) → `development` then **timed out**, so the run almost
-   certainly never reached phases 7/8. Switch to a fast model so the pipeline can actually
-   *reach* the gated phases; otherwise Run B re-hits the same goto→dev→timeout wall.
-2. **SPEC-GATE not logged — likely a symptom of #1, not a bypass.** The wiring is correct:
-   **both** completion paths call `_build_spec_phase_output` (monitor.py:1013 & :1053) and
-   there is no third bypassing path in `monitor.py`. Zero `[SPEC-GATE]` lines is consistent
-   with **the gated phases never completing** (the run timed out at the dev re-run before
-   reaching phase 7). *Verify, don't assume:* if phase 7 completes in Run B and there is
-   **still** no `[SPEC-GATE]` line, *then* instrument each completion site and unify the
-   paths. Also confirm the qa phase worktree **merges on `done`** — `spec.py:read_result`
-   reads `<project>/docs/` only (no worktree scan), so `qa_result.json` must reach main.
-3. **Orchestrator exits via impasse, not normal completion.** Mostly downstream of #1 (the
-   timed-out re-run → workflow never reached `completed`). Verify the orchestrator treats
-   `workflow.status == "completed"` (set by `_complete_workflow`) as **authoritative** and
-   exits normally; fall to impasse/timeout only when genuinely stuck (B2-adjacent).
+**Run B (with a fast model) — NOT green.** Pipeline *infrastructure* is solid (21 tasks,
+0 failures, MCP tool naming through pi's adapter, 9-phase progression, bounded recovery
+stopped at 6 attempts). But the two things Run B exists to validate both failed:
 
-**Run B watch-chain** (seeded failing test, after switching models): reach + complete
-`qa_validation` → `[SPEC-GATE] qa_validation` logs → `qa_result.json` `failed_tests ≥ 1`
-→ score `< 0.7` → `goto development` → reconverge → `continue`. Do not start the Tier 2/3
-remainder until Run B is green.
+1. **⛔ Spec gate never fired — confirmed a real bypass (not the earlier "symptom of
+   timeout" theory).** The seeded failing test was in place, but the **QA agent
+   hallucinated**: marked `qa_validation` done with **no `qa_result.json`, no
+   `failed_tests`, no `[SPEC-GATE]` log, no GOTO** — and the pipeline continued to
+   product_validation. This is decisive: if the gate were firing, missing
+   `qa_result.json` → `read_result` `None` → `score_qa(None)` = **0.5 (`result_missing`)**
+   → `< 0.7` → **`goto development`**. That safety net is exactly what didn't happen, so
+   **`_build_spec_phase_output` is not being called on qa_validation completion.** Two
+   fixes, complementary:
+   - **(primary) Make the gate fire on phases 7/8.** Instrument every completion path,
+     find which one completes qa_validation, ensure it calls `_build_spec_phase_output`.
+     With the gate live, a missing/hallucinated result self-corrects (0.5 → goto dev).
+   - **Output-existence completion floor (general, not QA-special-cased).** In
+     `update_task_status`, reject `done` for any output-producing phase whose **declared
+     output artifact is missing** (qa→`qa_result.json`, product→`product_validation.json`,
+     architecture→`architecture.md`, …); message the agent to produce it. Mechanical →
+     hard floor (same class as ruff/tests). Catches the hallucination at the source.
 
-**Also fixed since Run A** (8 commits): `per_page=1000`→0-agents (impasse root cause),
-workflow_id auto-discover, completed→pending gap detection, all-phases-done completion
-check, bounded recovery (5 attempts), tmux viewer (50k history), merge failures (186/186:
-abort stale merges), `read_result`/`_report_path` reverted (worktree iteration too slow).
-74 tests passing.
+2. **⛔ Abandoned-phase policy violation (§9.4).** `security_review` (phase 6) was
+   abandoned after 6 recovery attempts and the pipeline **continued to completion** (ran
+   7→10, reported "9/10 / 0 failures"). A required phase silently skipped — *security
+   review*, no less. **Fix:** bounded-recovery exhaustion on a required phase → stop
+   advancing, mark the workflow **impasse** (→ human, §9.4); do **not** continue
+   downstream or report success. Separately diagnose *why* phase 6 stuck (6 attempts is a
+   lot — agent/prompt/phase-6-specific tool call?), but the policy fix is the priority.
+
+**Run B is green only when:** `qa_validation` completes → `[SPEC-GATE]` logs a score →
+the seeded test drives `failed_tests ≥ 1` → `goto development` → reconverge → `continue`,
+**and** an abandoned required phase escalates to impasse rather than skipping. Do not
+start the Tier 2/3 remainder until then.
 
 ### 11.3 Remaining (prioritized, after the smoke run)
 
