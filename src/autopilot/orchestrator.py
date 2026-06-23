@@ -1875,7 +1875,18 @@ def run_continuous_pipeline(args) -> None:
                             state._recovery_attempts += 1
 
                             if state._recovery_attempts > 5:
-                                logger.warning(f"Recovery failed after {state._recovery_attempts} attempts, abandoning workflow {state.current_workflow_id[:8]}")
+                                logger.warning(f"Recovery failed after {state._recovery_attempts} attempts, escalating to impasse for workflow {state.current_workflow_id[:8]}")
+                                # Mark workflow as failed — required phase was abandoned
+                                try:
+                                    from src.core.database import get_db, Workflow
+                                    with get_db() as db:
+                                        wf = db.query(Workflow).filter_by(id=state.current_workflow_id).first()
+                                        if wf:
+                                            wf.status = "failed"
+                                            db.commit()
+                                            logger.warning(f"Workflow {state.current_workflow_id[:8]} marked as failed (abandoned phase)")
+                                except Exception as e:
+                                    logger.error(f"Failed to mark workflow as failed: {e}")
                                 state.current_workflow_id = None
                                 state._recovery_attempts = 0
                                 continue
