@@ -31,6 +31,15 @@ DEFAULT_SPEC: Dict[str, Any] = {
 # Phases gated by the hybrid spec (engine evaluation point keys).
 GATED_PHASES = ("qa_validation", "product_validation")
 
+# Declared output artifacts per phase — used as completion hard floors.
+# If a phase declares an output, update_task_status rejects 'done' when
+# the artifact is missing (catches hallucinated completions at the source).
+PHASE_OUTPUT_ARTIFACTS = {
+    "architecture_design": "architecture.md",
+    "qa_validation": "qa_result.json",
+    "product_validation": "product_validation.json",
+}
+
 # Score anchors for the three bands.
 _ARCH = 0.25       # < 0.3  -> goto architecture
 _DEV = 0.5         # < 0.7  -> goto development

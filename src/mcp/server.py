@@ -1846,12 +1846,17 @@ async def update_task_status(
         if request.status == "done" and not task.has_results:
             logger.warning(f"Task {request.task_id} completed without formal results reported")
 
-        # 3b. Validate QA output — reject hallucinated completions
+        # 3b. Output-existence hard floor — reject done when declared output artifact is missing.
+        # General, not phase-special-cased: drives off PHASE_OUTPUT_ARTIFACTS in spec.py.
+        # Same class as ruff/tests: mechanical check, hard floor.
         if request.status == "done" and task.phase_id:
+            from src.autopilot.spec import PHASE_OUTPUT_ARTIFACTS
             phase = session.query(Phase).filter_by(id=task.phase_id).first()
-            if phase and phase.name == "qa_validation":
-                # Verify qa_result.json exists in the agent's worktree
+            if phase and phase.name in PHASE_OUTPUT_ARTIFACTS:
+                declared_output = PHASE_OUTPUT_ARTIFACTS[phase.name]
+                # Search for the artifact in the agent's worktree and feature folder
                 agent = session.query(Agent).filter_by(id=agent_id).first()
+                found = False
                 if agent:
                     from src.core.worktree_manager import WorktreeManager
                     from src.core.simple_config import get_config
@@ -1859,22 +1864,49 @@ async def update_task_status(
                     wt_mgr = WorktreeManager(config, task.workflow_id)
                     wt_path = wt_mgr.get_worktree_path(agent_id)
                     if wt_path:
-                        qa_result = wt_path / "docs" / "qa_result.json"
-                        if not qa_result.exists():
-                            # Also check feature folder
-                            feature_dir = Path(config.project_root) / ".hephaestus" / "features"
-                            if feature_dir.exists():
-                                for d in sorted(feature_dir.iterdir(), reverse=True):
-                                    candidate = d / "docs" / "qa_result.json"
-                                    if candidate.exists():
-                                        qa_result = candidate
-                                        break
-                            if not qa_result.exists():
-                                logger.warning(f"QA agent {agent_id[:8]} claimed done but qa_result.json not found — rejecting")
-                                task.status = "failed"
-                                task.failure_reason = "QA agent claimed completion but qa_result.json was not created. Possible hallucination."
-                                session.commit()
-                                return {"status": "failed", "message": "QA output validation failed: qa_result.json not found"}
+                        # Check worktree docs/ and root
+                        for candidate in [wt_path / "docs" / declared_output, wt_path / declared_output]:
+                            if candidate.exists():
+                                found = True
+                                break
+                    if not found:
+                        # Check feature folder
+                        feature_dir = Path(config.project_root) / ".hephaestus" / "features"
+                        if feature_dir.exists():
+                            for d in sorted(feature_dir.iterdir(), reverse=True):
+                                candidate = d / "docs" / declared_output
+                                if candidate.exists():
+                                    found = True
+                                    break
+                if not found:
+                    logger.warning(f"Agent {agent_id[:8]} claimed done on {phase.name} but {declared_output} not found — rejecting")
+                    task.status = "failed"
+                    task.failure_reason = f"Agent claimed completion but {declared_output} was not created."
+                    session.commit()
+                    return {"status": "failed", "message": f"Output validation failed: {declared_output} not found"}
+
+        # 3c. Spec gate firing — when a gated phase task completes and the phase
+        # is now complete, trigger the gate immediately (don't wait for monitor poll).
+        # The monitor's _check_phase_progression only fires when the next phase is
+        # pending — if it's already in_progress, the gate is missed. Fix: fire from
+        # the completion path itself.
+        if request.status == "done" and task.phase_id:
+            from src.autopilot.spec import GATED_PHASES, build_phase_output
+            phase = session.query(Phase).filter_by(id=task.phase_id).first()
+            if phase and phase.name in GATED_PHASES:
+                incomplete = session.query(Task).filter_by(phase_id=phase.id).filter(
+                    Task.status.in_(["pending", "assigned", "in_progress", "failed"])
+                ).count()
+                if incomplete == 0:
+                    # Phase complete — fire the gate now
+                    from src.core.database import Workflow
+                    wf = session.query(Workflow).filter_by(id=task.workflow_id).first()
+                    if wf and wf.working_directory:
+                        phase_output = build_phase_output(phase.name, Path(wf.working_directory))
+                        logger.info(f"[SPEC-GATE] {phase.name}: gate fired from completion path, phase_output={phase_output}")
+                        # The monitor's _check_phases will also call mark_phase_complete
+                        # with this phase_output on its next poll. But log here so we
+                        # know the gate fired even if the monitor misses it.
 
         # 4. Check if task has validation enabled
         validation_spawned = False
