@@ -2923,9 +2923,19 @@ async def create_ticket_endpoint(
         # Re-raise HTTPException without modification to preserve status code
         raise
     except ValueError as e:
-        logger.error(f"[TICKET_CREATE] ❌ ValueError: {e}")
-        logger.error("[TICKET_CREATE] ========== FAILED (ValueError) ==========")
-        raise HTTPException(status_code=400, detail=str(e))
+        logger.warning(f"[TICKET_CREATE] ⚠️ ValueError (non-fatal): {e}")
+        # Return a warning response instead of crashing the agent
+        return CreateTicketResponse(
+            ticket_id="",
+            workflow_id=workflow_id if 'workflow_id' in dir() else "",
+            agent_id=agent_id,
+            title=request.title,
+            ticket_type=request.ticket_type,
+            priority=request.priority,
+            status="skipped",
+            description=f"Ticket creation skipped: {e}",
+            created_at="",
+        )
     except Exception as e:
         logger.error(f"[TICKET_CREATE] ❌ Unexpected error: {type(e).__name__}: {e}")
         logger.error("[TICKET_CREATE] ========== FAILED (Exception) ==========")
