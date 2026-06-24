@@ -1,15 +1,27 @@
-"""Abstract interface for CLI AI agents."""
+"""Abstract interface for CLI AI agents.
+
+This module defines a polymorphic interface for CLI AI tools. Each CLI tool
+(Claude Code, OpenCode, Pi, Droid, Codex) implements the abstract methods,
+and the agent manager uses the interface without knowing which tool is running.
+
+To add a new CLI tool: subclass CLIAgentInterface and register in CLI_AGENTS.
+"""
 
 from abc import ABC, abstractmethod
 from typing import List, Optional, Dict, Any
 import re
+import os
 import logging
 
 logger = logging.getLogger(__name__)
 
 
 class CLIAgentInterface(ABC):
-    """Abstract interface for CLI AI agents."""
+    """Abstract interface for CLI AI agents.
+
+    Subclasses must implement all abstract methods. The agent manager
+    calls these methods without knowing which CLI tool is running.
+    """
 
     @abstractmethod
     def get_launch_command(self, system_prompt: str, **kwargs) -> str:
@@ -66,75 +78,164 @@ class CLIAgentInterface(ABC):
         """
         pass
 
-    def is_healthy(self, output: str) -> bool:
-        """Check if the agent appears healthy based on output.
+    # ── Shared helpers ───────────────────────────────────────────────────
+
+    def _save_prompt_to_file(self, prompt: str, prefix: str, task_id: str) -> str:
+        """Save prompt to a temp file and make it readable.
 
         Args:
-            output: Recent output from the agent
+            prompt: Prompt text to save
+            prefix: Filename prefix (e.g., 'pi_prompt', 'claude_prompt')
+            task_id: Task ID for unique filename
 
         Returns:
-            True if healthy, False otherwise
+            Path to the saved file
         """
+        prompt_file = f'/tmp/{prefix}_{task_id}.txt'
+        with open(prompt_file, 'w') as f:
+            f.write(prompt)
+        os.chmod(prompt_file, 0o644)
+        return prompt_file
+
+    def _get_model(self, kwargs: dict, config: Any, default: str = 'sonnet') -> str:
+        """Get model from kwargs or config.
+
+        Args:
+            kwargs: Keyword arguments (may contain 'model')
+            config: Config object (may have 'cli_model')
+            default: Default model if nothing else found
+
+        Returns:
+            Model name string
+        """
+        return kwargs.get('model') or getattr(config, 'cli_model', default)
+
+    def _extract_id(self, text: str, prefix: str) -> Optional[str]:
+        """Extract an ID value from text like 'IDs: Agent=xxx | Task=yyy'.
+
+        Args:
+            text: Text to search
+            prefix: Prefix before the ID (e.g., 'Agent=', 'Task=')
+
+        Returns:
+            Extracted ID or None
+        """
+        match = re.search(rf'{prefix}\s*(\S+)', text)
+        return match.group(1) if match else None
+
+    def _extract_ids_from_prompt(self, system_prompt: str) -> Dict[str, Optional[str]]:
+        """Extract all standard IDs from a system prompt.
+
+        Looks for patterns like 'Agent=xxx', 'Task=yyy', 'Workflow=zzz', 'Phase=www'.
+
+        Returns:
+            Dict with keys: agent_id, task_id, workflow_id, phase_id
+        """
+        return {
+            'agent_id': self._extract_id(system_prompt, 'Agent='),
+            'task_id': self._extract_id(system_prompt, 'Task='),
+            'workflow_id': self._extract_id(system_prompt, 'Workflow='),
+            'phase_id': self._extract_id(system_prompt, 'Phase='),
+        }
+
+    def _build_ids_line(self, ids: Dict[str, Optional[str]]) -> str:
+        """Build an 'IDs: Agent=xxx Task=yyy ...' line from extracted IDs.
+
+        Args:
+            ids: Dict from _extract_ids_from_prompt
+
+        Returns:
+            IDs line string (empty if no IDs found)
+        """
+        parts = []
+        for key in ['agent_id', 'task_id', 'workflow_id', 'phase_id']:
+            val = ids.get(key)
+            if val:
+                label = key.replace('_id', '').title()
+                parts.append(f'{label}={val}')
+        return 'IDs: ' + ' '.join(parts) if parts else ''
+
+    def _build_user_prompt(self, system_prompt: str, **kwargs) -> str:
+        """Build a minimal user prompt from system prompt.
+
+        Extracts task-specific sections and IDs. Falls back to full
+        prompt if no task section is found.
+
+        Args:
+            system_prompt: Full system prompt
+            **kwargs: May contain agent_id, task_id, workflow_id, phase_id
+
+        Returns:
+            Minimal user prompt string
+        """
+        # Extract task section from system prompt
+        task_lines = []
+        in_task_section = False
+        for line in system_prompt.split('\n'):
+            if line.startswith('=== TASK ===') or line.startswith('═══ TASK ═══'):
+                in_task_section = True
+            elif (line.startswith('=== ') or line.startswith('═══ ')) and in_task_section:
+                in_task_section = False
+            elif in_task_section:
+                task_lines.append(line)
+
+        task_text = '\n'.join(task_lines).strip()
+
+        # Build IDs line
+        ids = self._extract_ids_from_prompt(system_prompt)
+        # Override with kwargs
+        for key in ['agent_id', 'task_id', 'workflow_id', 'phase_id']:
+            if key in kwargs and kwargs[key]:
+                ids[key] = kwargs[key]
+        ids_line = self._build_ids_line(ids)
+
+        # Build prompt
+        parts = []
+        if task_text:
+            parts.append(task_text)
+        if ids_line:
+            parts.append(ids_line)
+
+        return '\n'.join(parts) if parts else system_prompt
+
+    # ── Health / stuck checks (shared) ───────────────────────────────────
+
+    def is_healthy(self, output: str) -> bool:
+        """Check if the agent appears healthy based on output."""
         pattern = self.get_health_check_pattern()
         return bool(re.search(pattern, output, re.MULTILINE | re.IGNORECASE))
 
     def is_stuck(self, output: str) -> bool:
-        """Check if the agent appears stuck.
-
-        Args:
-            output: Recent output from the agent
-
-        Returns:
-            True if stuck, False otherwise
-        """
+        """Check if the agent appears stuck."""
         for pattern in self.get_stuck_patterns():
             if re.search(pattern, output, re.MULTILINE | re.IGNORECASE):
                 return True
         return False
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# Concrete implementations
+# ═══════════════════════════════════════════════════════════════════════════
+
+
 class ClaudeCodeAgent(CLIAgentInterface):
     """Implementation for Claude Code CLI."""
 
     def get_launch_command(self, system_prompt: str, **kwargs) -> str:
-        """Generate launch command for Claude Code.
-
-        Args:
-            system_prompt: System prompt to use
-            **kwargs: Additional parameters including:
-                - model: Optional model override (falls back to global config)
-                - task_id: Task ID for temp file naming
-        """
-        import os
         from src.core.simple_config import get_config
-
         config = get_config()
 
-        # Save prompt to a temp file first to avoid shell escaping issues
         task_id = kwargs.get('task_id', 'default')
-        prompt_file = f"/tmp/hep_prompt_{task_id}.txt"
+        prompt_file = self._save_prompt_to_file(system_prompt, 'claude_prompt', task_id)
+        model = self._get_model(kwargs, config, 'sonnet')
 
-        # Write the system prompt to file directly (safer than echo)
-        with open(prompt_file, 'w') as f:
-            f.write(system_prompt)
-
-        # Make sure the file is readable
-        os.chmod(prompt_file, 0o644)
-
-        # Get configured model - use passed model or fall back to global config
-        model = kwargs.get('model') or getattr(config, 'cli_model', 'sonnet')
-
-        # Reasoning budget: map the unified thinking_level onto claude --effort
-        # (low|medium|high — 3 levels vs pi's 6). Bounds per-turn reasoning so agents
-        # don't inherit a verbose default. Per-phase override → global config → medium.
-        _effort_map = {"off": "low", "minimal": "low", "low": "low",
-                       "medium": "medium", "high": "high", "xhigh": "high"}
-        _thinking = str(kwargs.get('thinking_level') or getattr(config, 'cli_thinking_level', 'medium')).lower().strip()
-        effort = _effort_map.get(_thinking)
+        # Reasoning budget
+        effort_map = {"off": "low", "minimal": "low", "low": "low",
+                      "medium": "medium", "high": "high", "xhigh": "high"}
+        thinking = str(kwargs.get('thinking_level') or getattr(config, 'cli_thinking_level', 'medium')).lower().strip()
+        effort = effort_map.get(thinking)
         effort_flag = f" --effort {effort}" if effort else ""
 
-        # For GLM models, we use "sonnet" as the CLI flag but env vars are set on tmux session
-        # For standard models, use the model name directly
         mcp_config = os.path.expanduser("~/.config/mcp/mcp.json")
         mcp_flag = f"--mcp-config {mcp_config}" if os.path.exists(mcp_config) else ""
 
@@ -146,36 +247,24 @@ class ClaudeCodeAgent(CLIAgentInterface):
         return command
 
     def get_health_check_pattern(self) -> str:
-        """Return health check pattern for Claude Code."""
         return r"(Assistant:|Human:|›)"
 
     def format_message(self, message: str) -> str:
-        """Format message for Claude Code."""
-        # Claude Code accepts plain text messages
         return message
 
     def get_stuck_patterns(self) -> List[str]:
-        """Return stuck patterns for Claude Code."""
         return [
-            r"rate limit exceeded",
-            r"waiting for user input",
-            r"API error",
-            r"connection timeout",
-            r"Error:.*API",
-            r"Failed to connect",
-            r"Maximum retries exceeded",
+            r"rate limit exceeded", r"waiting for user input",
+            r"API error", r"connection timeout",
+            r"Error:.*API", r"Failed to connect", r"Maximum retries exceeded",
         ]
 
     def parse_output(self, output: str) -> Dict[str, Any]:
-        """Parse Claude Code output."""
         lines = output.strip().split('\n')
         last_message = ""
         is_waiting = False
-
-        # Look for the last assistant message
         for i in range(len(lines) - 1, -1, -1):
             if "Assistant:" in lines[i]:
-                # Get all lines after "Assistant:" until next prompt
                 message_lines = []
                 for j in range(i + 1, len(lines)):
                     if "Human:" in lines[j] or "›" in lines[j]:
@@ -183,98 +272,45 @@ class ClaudeCodeAgent(CLIAgentInterface):
                     message_lines.append(lines[j])
                 last_message = "\n".join(message_lines).strip()
                 break
-
-        # Check if waiting for input
         if lines and ("›" in lines[-1] or "Human:" in lines[-1]):
             is_waiting = True
-
-        return {
-            "last_message": last_message,
-            "is_waiting": is_waiting,
-            "total_lines": len(lines),
-        }
+        return {"last_message": last_message, "is_waiting": is_waiting, "total_lines": len(lines)}
 
 
 class OpenCodeAgent(CLIAgentInterface):
-    """Implementation for OpenCode CLI (open-source alternative to Claude Code).
-
-    OpenCode supports the -p flag to pre-load a prompt, but doesn't auto-submit it.
-    We save the prompt to a temp file, launch with -p "$(cat file)", then send Enter
-    after 5 seconds to submit the prompt.
-    """
+    """Implementation for OpenCode CLI."""
 
     def get_launch_command(self, system_prompt: str, **kwargs) -> str:
-        """Generate launch command for OpenCode.
-
-        OpenCode's -p flag adds the prompt but doesn't auto-submit.
-        We'll save the prompt to a temp file and use -p "$(cat file)" to load it.
-        The calling code will send Enter after 5 seconds to submit.
-        """
-        import os
         from src.core.simple_config import get_config
-
         config = get_config()
 
-        # Save prompt to a temp file
         task_id = kwargs.get('task_id', 'default')
-        prompt_file = f"/tmp/opencode_prompt_{task_id}.txt"
+        prompt_file = self._save_prompt_to_file(system_prompt, 'opencode_prompt', task_id)
+        model = self._get_model(kwargs, config, 'anthropic/claude-sonnet-4')
 
-        # Write the system prompt to file
-        with open(prompt_file, 'w') as f:
-            f.write(system_prompt)
-
-        # Make sure the file is readable
-        os.chmod(prompt_file, 0o644)
-
-        # Get configured model (OpenCode uses provider/model format)
-        model = getattr(config, 'cli_model', 'anthropic/claude-sonnet-4')
-
-        # OpenCode command with -p flag to load the prompt
-        # The prompt will be added to the input but not submitted
-        command = f"opencode run \"$(cat {prompt_file})\" --model {model}"
-
-        return command
+        return f"opencode run \"$(cat {prompt_file})\" --model {model}"
 
     def get_health_check_pattern(self) -> str:
-        """Return health check pattern for OpenCode.
-
-        OpenCode uses a prompt indicator in its TUI.
-        """
         return r"(›|>|opencode>)"
 
     def format_message(self, message: str) -> str:
-        """Format message for OpenCode.
-
-        OpenCode accepts plain text messages in its TUI.
-        """
         return message
 
     def get_stuck_patterns(self) -> List[str]:
-        """Return stuck patterns for OpenCode."""
         return [
-            r"rate limit exceeded",
-            r"rate limit",
-            r"API error",
-            r"connection timeout",
-            r"Error:.*API",
-            r"Failed to connect",
-            r"Maximum retries exceeded",
-            r"authentication failed",
-            r"invalid API key",
+            r"rate limit exceeded", r"rate limit", r"API error",
+            r"connection timeout", r"Error:.*API", r"Failed to connect",
+            r"Maximum retries exceeded", r"authentication failed", r"invalid API key",
         ]
 
     def parse_output(self, output: str) -> Dict[str, Any]:
-        """Parse OpenCode output."""
         lines = output.strip().split('\n')
         last_message = ""
         is_waiting = False
-
-        # Look for the last response before a prompt indicator
         for i in range(len(lines) - 1, -1, -1):
             line = lines[i]
             if "›" in line or ">" in line or "opencode>" in line:
                 is_waiting = True
-                # Get all lines after the previous prompt as the response
                 message_lines = []
                 for j in range(i - 1, -1, -1):
                     if "›" in lines[j] or ">" in lines[j] or "opencode>" in lines[j]:
@@ -282,70 +318,36 @@ class OpenCodeAgent(CLIAgentInterface):
                     message_lines.insert(0, lines[j])
                 last_message = "\n".join(message_lines).strip()
                 break
-
-        return {
-            "last_message": last_message,
-            "is_waiting": is_waiting,
-            "total_lines": len(lines),
-        }
+        return {"last_message": last_message, "is_waiting": is_waiting, "total_lines": len(lines)}
 
 
 class DroidAgent(CLIAgentInterface):
-    """Implementation for Droid CLI.
-
-    Droid doesn't support system prompts or command-line flags.
-    We launch it with just 'droid', wait for initialization, then send the prompt
-    in batches similar to Claude Code to avoid tmux buffer issues.
-    """
+    """Implementation for Droid CLI."""
 
     def get_launch_command(self, system_prompt: str, **kwargs) -> str:
-        """Generate launch command for Droid.
-
-        Droid doesn't accept any flags - just launch 'droid'.
-        The prompt will be sent in batches after initialization.
-        """
         return "droid"
 
     def get_health_check_pattern(self) -> str:
-        """Return health check pattern for Droid.
-
-        Droid uses a prompt indicator in its TUI.
-        """
         return r"(›|>|droid>)"
 
     def format_message(self, message: str) -> str:
-        """Format message for Droid.
-
-        Droid accepts plain text messages in its TUI.
-        """
         return message
 
     def get_stuck_patterns(self) -> List[str]:
-        """Return stuck patterns for Droid."""
         return [
-            r"rate limit exceeded",
-            r"rate limit",
-            r"API error",
-            r"connection timeout",
-            r"Error:.*API",
-            r"Failed to connect",
-            r"Maximum retries exceeded",
-            r"authentication failed",
-            r"invalid API key",
+            r"rate limit exceeded", r"rate limit", r"API error",
+            r"connection timeout", r"Error:.*API", r"Failed to connect",
+            r"Maximum retries exceeded", r"authentication failed", r"invalid API key",
         ]
 
     def parse_output(self, output: str) -> Dict[str, Any]:
-        """Parse Droid output."""
         lines = output.strip().split('\n')
         last_message = ""
         is_waiting = False
-
-        # Look for the last response before a prompt indicator
         for i in range(len(lines) - 1, -1, -1):
             line = lines[i]
             if "›" in line or ">" in line or "droid>" in line:
                 is_waiting = True
-                # Get all lines after the previous prompt as the response
                 message_lines = []
                 for j in range(i - 1, -1, -1):
                     if "›" in lines[j] or ">" in lines[j] or "droid>" in lines[j]:
@@ -353,60 +355,36 @@ class DroidAgent(CLIAgentInterface):
                     message_lines.insert(0, lines[j])
                 last_message = "\n".join(message_lines).strip()
                 break
-
-        return {
-            "last_message": last_message,
-            "is_waiting": is_waiting,
-            "total_lines": len(lines),
-        }
+        return {"last_message": last_message, "is_waiting": is_waiting, "total_lines": len(lines)}
 
 
 class CodexAgent(CLIAgentInterface):
     """Implementation for Codex CLI."""
 
     def get_launch_command(self, system_prompt: str, **kwargs) -> str:
-        """Generate launch command for Codex.
-
-        Note: System prompt is not passed via command line to avoid escaping issues
-        with large prompts. The prompt will be sent after launch via the initial message.
-        """
-        # Just launch codex in interactive mode
-        # System prompt will be sent after initialization
         return "codex --dangerously-bypass-approvals-and-sandbox"
 
     def get_health_check_pattern(self) -> str:
-        """Return health check pattern for Codex."""
         return r"(>|codex>|Ready)"
 
     def format_message(self, message: str) -> str:
-        """Format message for Codex."""
-        # Codex uses command format
         if not message.startswith("/"):
             return f"/task {message}"
         return message
 
     def get_stuck_patterns(self) -> List[str]:
-        """Return stuck patterns for Codex."""
         return [
-            r"error:",
-            r"connection failed",
-            r"timeout",
-            r"invalid response",
-            r"Authentication failed",
-            r"Rate limit",
+            r"error:", r"connection failed", r"timeout",
+            r"invalid response", r"Authentication failed", r"Rate limit",
         ]
 
     def parse_output(self, output: str) -> Dict[str, Any]:
-        """Parse Codex output."""
         lines = output.strip().split('\n')
         last_response = ""
         is_ready = False
-
-        # Look for the last response
         for i in range(len(lines) - 1, -1, -1):
             if ">" in lines[i]:
                 is_ready = True
-                # Get previous lines as response
                 if i > 0:
                     response_lines = []
                     for j in range(i - 1, -1, -1):
@@ -415,160 +393,73 @@ class CodexAgent(CLIAgentInterface):
                         response_lines.insert(0, lines[j])
                     last_response = "\n".join(response_lines).strip()
                 break
-
-        return {
-            "last_response": last_response,
-            "is_ready": is_ready,
-            "total_lines": len(lines),
-        }
+        return {"last_response": last_response, "is_ready": is_ready, "total_lines": len(lines)}
 
 
 class PiAgent(CLIAgentInterface):
     """Implementation for pi coding agent CLI.
 
-    Pi is an AI coding assistant with read, bash, edit, write tools.
-    It supports --append-system-prompt to load system prompts from files,
-    and -p/--print for non-interactive mode.
-
-    For Hephaestus, we launch pi interactively with --append-system-prompt
-    pointing to a file, then send the initial message via tmux.
+    Pi supports --append-system-prompt to load system prompts from files.
+    For Hephaestus, we launch pi interactively (no --print/-p) so it stays
+    running and can call MCP tools. The initial message is sent via tmux.
     """
 
     def get_launch_command(self, system_prompt: str, **kwargs) -> str:
-        """Generate launch command for pi.
-
-        Pi's --append-system-prompt flag appends text or file contents to the system prompt.
-        If a Hephaestus pi agent file exists for this phase, we reference it directly
-        instead of injecting the full phase text (which is already in the agent file).
-        """
-        import os
         from src.core.simple_config import get_config
-
         config = get_config()
 
-        # Check if a Hephaestus pi agent file exists for this phase
+        # Check for pi agent file for this phase
         phase_name = kwargs.get('phase_name', '')
         pi_agents_dir = os.path.expanduser('~/.pi/agent/agents')
-        # Phase names use underscores (architecture_design), agent files use hyphens (architecture-design)
         agent_name = phase_name.replace('_', '-') if phase_name else None
         agent_file = os.path.join(pi_agents_dir, f'hephaestus-{agent_name}.md') if agent_name else None
 
-        # Get configured model (pi uses --model flag)
-        model = kwargs.get('model') or getattr(config, 'cli_model', 'anthropic/claude-sonnet-4')
+        model = self._get_model(kwargs, config, 'openrouter/xiaomi/mimo-v2.5')
 
-        # Thinking budget (pi --thinking off|minimal|low|medium|high|xhigh). Bounds
-        # per-turn reasoning depth so agents don't inherit a verbose model default
-        # and rathole. Per-phase override → global config → "medium".
-        _valid_thinking = {"off", "minimal", "low", "medium", "high", "xhigh"}
+        # Thinking budget
+        valid_thinking = {"off", "minimal", "low", "medium", "high", "xhigh"}
         thinking = kwargs.get('thinking_level') or getattr(config, 'cli_thinking_level', 'medium')
         thinking = str(thinking).lower().strip()
-        thinking_flag = f' --thinking {thinking}' if thinking in _valid_thinking else ''
+        thinking_flag = f' --thinking {thinking}' if thinking in valid_thinking else ''
 
         if agent_file and os.path.exists(agent_file):
-            # For pi: reference the agent file directly — don't inject the full phase text
-            # The agent file already contains description, done_definitions, additional_notes
-            # Extract only task-specific info from system_prompt to pass as user prompt
-            file_task_id = kwargs.get('task_id', 'default')
-            
-            # Extract task-specific sections from the system prompt
-            task_lines = []
-            in_task_section = False
-            for line in system_prompt.split('\n'):
-                if line.startswith('=== TASK ===') or line.startswith('═══ TASK ═══'):
-                    in_task_section = True
-                elif (line.startswith('=== ') or line.startswith('═══ ')) and in_task_section:
-                    in_task_section = False
-                elif in_task_section:
-                    task_lines.append(line)
-            
-            # Build minimal user prompt with just task info and IDs
-            user_parts = []
-            task_text = '\n'.join(task_lines).strip()
-            if task_text:
-                user_parts.append(task_text)
-            # IDs (critical for MCP tools)
-            agent_id = kwargs.get('agent_id') or self._extract_id(system_prompt, 'Agent=')
-            wf_id = kwargs.get('workflow_id') or self._extract_id(system_prompt, 'Workflow=')
-            id_task = kwargs.get('task_id') or self._extract_id(system_prompt, 'Task=')
-            phase_id = kwargs.get('phase_id') or self._extract_id(system_prompt, 'Phase=')
-            if agent_id or id_task or wf_id:
-                ids_line = 'IDs:'
-                if agent_id: ids_line += f' Agent={agent_id}'
-                if id_task: ids_line += f' Task={id_task}'
-                if wf_id: ids_line += f' Workflow={wf_id}'
-                if phase_id: ids_line += f' Phase={phase_id}'
-                user_parts.append(ids_line)
-            
-            user_prompt = '\n'.join(user_parts) if user_parts else system_prompt
-            
-            # Save user prompt to file for pi -p flag
-            # Save prompt to file for reference (initial message sent via tmux)
-            prompt_file = f'/tmp/pi_prompt_{file_task_id}.txt'
-            with open(prompt_file, 'w') as f:
-                f.write(user_prompt)
-            os.chmod(prompt_file, 0o644)
+            # Agent file contains full phase instructions — don't inject full system_prompt.
+            # Extract only task-specific info for the initial user message.
+            task_id = kwargs.get('task_id', 'default')
+            user_prompt = self._build_user_prompt(system_prompt, **kwargs)
+            self._save_prompt_to_file(user_prompt, 'pi_prompt', task_id)
 
-            # Launch pi interactively (no -p/--print) so it stays running
-            # and can call MCP tools after processing.
-            # Initial message is sent via tmux by agent manager.
+            # Launch interactively (no -p/--print). Initial message sent via tmux.
             command = f'pi --append-system-prompt "$(cat {agent_file})" --model {model}{thinking_flag} --approve --no-context-files'
         else:
-            # Fallback: inject full prompt from file (no agent file available)
+            # Fallback: inject full prompt from file
             task_id = kwargs.get('task_id', 'default')
-            prompt_file = f'/tmp/pi_prompt_{task_id}.txt'
-            with open(prompt_file, 'w') as f:
-                f.write(system_prompt)
-            os.chmod(prompt_file, 0o644)
+            prompt_file = self._save_prompt_to_file(system_prompt, 'pi_prompt', task_id)
             command = f'pi --append-system-prompt "$(cat {prompt_file})" --model {model}{thinking_flag} --approve --no-context-files'
 
         return command
 
-    def _extract_id(self, text: str, prefix: str) -> Optional[str]:
-        """Extract an ID value from text like 'IDs: Agent=xxx | Task=yyy'."""
-        import re
-        match = re.search(rf'{prefix}\s*(\S+)', text)
-        return match.group(1) if match else None
-
     def get_health_check_pattern(self) -> str:
-        """Return health check pattern for pi.
-
-        Pi uses a prompt indicator in its TUI.
-        """
         return r"(›|>|pi>)"
 
     def format_message(self, message: str) -> str:
-        """Format message for pi.
-
-        Pi accepts plain text messages in its TUI.
-        """
         return message
 
     def get_stuck_patterns(self) -> List[str]:
-        """Return stuck patterns for pi."""
         return [
-            r"rate limit exceeded",
-            r"rate limit",
-            r"API error",
-            r"connection timeout",
-            r"Error:.*API",
-            r"Failed to connect",
-            r"Maximum retries exceeded",
-            r"authentication failed",
-            r"invalid API key",
+            r"rate limit exceeded", r"rate limit", r"API error",
+            r"connection timeout", r"Error:.*API", r"Failed to connect",
+            r"Maximum retries exceeded", r"authentication failed", r"invalid API key",
         ]
 
     def parse_output(self, output: str) -> Dict[str, Any]:
-        """Parse pi output."""
         lines = output.strip().split('\n')
         last_message = ""
         is_waiting = False
-
-        # Look for the last response before a prompt indicator
         for i in range(len(lines) - 1, -1, -1):
             line = lines[i]
             if "›" in line or ">" in line or "pi>" in line:
                 is_waiting = True
-                # Get all lines after the previous prompt as the response
                 message_lines = []
                 for j in range(i - 1, -1, -1):
                     if "›" in lines[j] or ">" in lines[j] or "pi>" in lines[j]:
@@ -576,51 +467,28 @@ class PiAgent(CLIAgentInterface):
                     message_lines.insert(0, lines[j])
                 last_message = "\n".join(message_lines).strip()
                 break
-
-        return {
-            "last_message": last_message,
-            "is_waiting": is_waiting,
-            "total_lines": len(lines),
-        }
+        return {"last_message": last_message, "is_waiting": is_waiting, "total_lines": len(lines)}
 
 
 class SwarmCodeAgent(CLIAgentInterface):
     """Implementation for SwarmCode CLI (hypothetical advanced agent)."""
 
     def get_launch_command(self, system_prompt: str, **kwargs) -> str:
-        """Generate launch command for SwarmCode."""
         escaped_prompt = system_prompt.replace("'", "'\"'\"'")
-        command = "swarmcode --autonomous"
-
-        if system_prompt:
-            prompt_file = f"/tmp/hep_prompt_{kwargs.get('task_id', 'default')}.txt"
-            command = f"echo '{escaped_prompt}' > {prompt_file} && swarmcode --autonomous --context {prompt_file}"
-
-        return command
+        prompt_file = f"/tmp/hep_prompt_{kwargs.get('task_id', 'default')}.txt"
+        return f"echo '{escaped_prompt}' > {prompt_file} && swarmcode --autonomous --context {prompt_file}"
 
     def get_health_check_pattern(self) -> str:
-        """Return health check pattern for SwarmCode."""
         return r"(SWARM>|Ready|Processing)"
 
     def format_message(self, message: str) -> str:
-        """Format message for SwarmCode."""
         return f"TASK: {message}"
 
     def get_stuck_patterns(self) -> List[str]:
-        """Return stuck patterns for SwarmCode."""
-        return [
-            r"BLOCKED:",
-            r"WAITING FOR INPUT",
-            r"ERROR:",
-            r"DEADLOCK DETECTED",
-        ]
+        return [r"BLOCKED:", r"WAITING FOR INPUT", r"ERROR:", r"DEADLOCK DETECTED"]
 
     def parse_output(self, output: str) -> Dict[str, Any]:
-        """Parse SwarmCode output."""
-        return {
-            "output": output,
-            "status": "processing",
-        }
+        return {"output": output, "status": "processing"}
 
 
 # Registry for available CLI agents
@@ -638,7 +506,7 @@ def get_cli_agent(agent_type: str) -> CLIAgentInterface:
     """Get a CLI agent instance by type.
 
     Args:
-        agent_type: Type of CLI agent (claude, opencode, codex, etc.)
+        agent_type: Type of CLI agent (claude, opencode, pi, etc.)
 
     Returns:
         CLI agent instance
@@ -648,5 +516,4 @@ def get_cli_agent(agent_type: str) -> CLIAgentInterface:
     """
     if agent_type not in CLI_AGENTS:
         raise ValueError(f"Unsupported CLI agent type: {agent_type}. Available: {list(CLI_AGENTS.keys())}")
-
     return CLI_AGENTS[agent_type]()
