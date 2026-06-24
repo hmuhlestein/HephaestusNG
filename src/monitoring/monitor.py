@@ -582,6 +582,7 @@ class MonitoringLoop:
         Returns:
             Guardian analysis result or None if failed
         """
+        session = self.db_manager.get_session()
         try:
             # Skip agents that are too young (grace period for spin-up)
             agent_age_seconds = (datetime.utcnow() - agent.created_at).total_seconds()
@@ -685,6 +686,8 @@ class MonitoringLoop:
         except Exception as e:
             logger.error(f"Guardian analysis failed for agent {agent.id}: {e}")
             return None
+        finally:
+            session.close()
 
     async def _auto_restart_agent(self, agent: Agent) -> None:
         """Kill a stuck agent's tmux session and mark it for restart."""
