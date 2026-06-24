@@ -1695,7 +1695,7 @@ The sub-task ID is: {sub_task_id}"""
 # Run the MCP server
 if __name__ == "__main__":
     print("🚀 Starting Claude MCP Client for Hephaestus...")
-    print("📡 Connecting to Hephaestus server at http://localhost:8300")
+    print(f"📡 Connecting to Hephaestus server at {HEPHAESTUS_URL}")
     print("✨ Available tools:")
     print("\n📋 Task Management:")
     print("  - health_check: Check server status")
