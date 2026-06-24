@@ -593,6 +593,12 @@ class MonitoringLoop:
                 )
                 return None
 
+            # The orchestrator runs in-process (AutopilotService), not as a tmux
+            # agent — never health-check or "recreate" it for a missing tmux session
+            # (that was a 60s phantom-restart loop after the Tier 2 in-process move).
+            if agent.agent_type == 'orchestrator':
+                return None
+
             # Special handling for agents with missing tmux sessions
             if agent.tmux_session_name and not self.agent_manager.tmux_server.has_session(agent.tmux_session_name):
                 # Check if task is already done before restarting
