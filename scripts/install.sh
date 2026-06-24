@@ -286,6 +286,31 @@ if [ "$DEV_MODE" = true ]; then
     fi
 fi
 
+# ─── 4.5. Embedding model (pre-download) ──────────────────────────
+# FastEmbed downloads its model (~90MB) on first use, which otherwise causes a
+# multi-minute stall the first time the pipeline generates an embedding. Warm it
+# up here so the first run is fast.
+
+header "Embedding model"
+
+EMBED_BACKEND="${EMBEDDING_BACKEND:-fastembed}"
+if [ "$EMBED_BACKEND" = "fastembed" ]; then
+    FE_MODEL="${FASTEMBED_MODEL:-BAAI/bge-small-en-v1.5}"
+    if "$PYTHON" -c "
+from langchain_community.embeddings import FastEmbedEmbeddings
+import sys
+# Cached models load instantly; first run downloads ~90MB.
+sys.stderr.write('  downloading/caching $FE_MODEL (one-time)...\n')
+FastEmbedEmbeddings(model_name='$FE_MODEL').embed_query('warmup')
+" 2>/dev/null; then
+        ok "Embedding model cached ($FE_MODEL)"
+    else
+        warn "FastEmbed pre-download failed — it will download on first use (one-time delay)"
+    fi
+else
+    ok "Embedding backend: $EMBED_BACKEND (no pre-download needed)"
+fi
+
 # ─── 5. heph CLI ──────────────────────────────────────────────────
 
 header "heph CLI"
