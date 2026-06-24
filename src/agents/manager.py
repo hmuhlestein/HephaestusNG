@@ -1116,7 +1116,19 @@ REMEMBER:
             # Create new tmux session with env vars
             # Use agent_id for unique session names (not task_id which can be reused on restarts)
             new_session_name = f"{self.config.tmux_session_prefix}_{agent_id[:8]}_r"
-            tmux_session = self._create_tmux_session(new_session_name, env_vars=env_vars)
+            # Determine working directory from worktree or workflow
+            restart_wd = None
+            if task.workflow_id:
+                from src.core.database import Workflow
+                restart_sess = self.db_manager.get_session()
+                try:
+                    wf = restart_sess.query(Workflow).filter_by(id=task.workflow_id).first()
+                    if wf and wf.working_directory:
+                        self.branch_manager.reload(Path(wf.working_directory))
+                        restart_wd = str(self.branch_manager.worktree_base / f"wt_{agent_id}")
+                finally:
+                    restart_sess.close()
+            tmux_session = self._create_tmux_session(new_session_name, working_directory=restart_wd, env_vars=env_vars)
 
             # Relaunch agent
             cli_agent = get_cli_agent(agent.cli_type)
