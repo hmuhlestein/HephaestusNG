@@ -1036,6 +1036,14 @@ async def process_queue():
                 context=context_strings,
                 phase_context=phase_context_str if phase_context_str else None,
             )
+            # Normalize: ensure enriched_description is always a string
+            import json as _json
+            _raw_desc = enriched_task.get("enriched_description")
+            if _raw_desc is None:
+                _raw_desc = next_task.raw_description
+            elif isinstance(_raw_desc, dict):
+                _raw_desc = _json.dumps(_raw_desc, indent=2)
+            enriched_task["enriched_description"] = str(_raw_desc)
             logger.info("[QUEUE_ENRICHMENT] ✓ LLM enrichment complete!")
             logger.info(f"[QUEUE_ENRICHMENT] Enriched description: {enriched_task['enriched_description'][:200]}")
             logger.info(f"[QUEUE_ENRICHMENT] Estimated complexity: {enriched_task.get('estimated_complexity', 'N/A')}")
@@ -1560,6 +1568,15 @@ async def create_task(
                     context=context_strings,
                     phase_context=phase_context_str if phase_context_str else None,
                 )
+
+                # 5b. Normalize enriched_task: ensure enriched_description is always a string
+                import json as _json
+                _raw_desc = enriched_task.get("enriched_description")
+                if _raw_desc is None:
+                    _raw_desc = request.task_description
+                elif isinstance(_raw_desc, dict):
+                    _raw_desc = _json.dumps(_raw_desc, indent=2)
+                enriched_task["enriched_description"] = str(_raw_desc)
 
                 # 6. Update task with enriched data
                 session = server_state.db_manager.get_session()
