@@ -627,6 +627,18 @@ class MonitoringLoop:
                 await self._handle_missing_tmux_session(agent)
                 return None
 
+            # Detect garbled TUI output (pi rendering corruption)
+            if self.guardian.detect_garbled_output(tmux_output):
+                task = session.query(Task).filter_by(id=agent.current_task_id).first()
+                if task and task.status == 'done':
+                    logger.info(f"Agent {agent.id[:8]} garbled but task done — not restarting")
+                    return None
+                logger.warning(
+                    f"Agent {agent.id[:8]} has garbled TUI output — restarting"
+                )
+                await self._handle_missing_tmux_session(agent)
+                return None
+
             # Get past summaries for this agent
             past_summaries = self._get_past_summaries_for_agent(agent.id)
 
@@ -1317,6 +1329,32 @@ class MonitoringLoop:
 
         # Store for API access
         self._health_findings = result["findings"]
+
+        # Task stuck detection: tasks in_progress > 10min with no active agent
+        try:
+            session = self.db_manager.get_session()
+            from src.core.database import Task, Agent
+            from datetime import datetime, timedelta
+            stale_cutoff = datetime.utcnow() - timedelta(minutes=10)
+            stuck_tasks = session.query(Task).filter(
+                Task.status == "in_progress",
+                Task.started_at < stale_cutoff,
+                Task.started_at.isnot(None),
+            ).all()
+            for task in stuck_tasks:
+                # Check if agent is still active
+                agent = session.query(Agent).filter_by(
+                    id=task.assigned_agent_id, status="working"
+                ).first() if task.assigned_agent_id else None
+                if not agent:
+                    logger.warning(f"[HEALTH] Task {task.id[:8]} stuck in_progress for >10min with no active agent — marking failed")
+                    task.status = "failed"
+                    task.failure_reason = "Task stuck: no active agent for >10 minutes"
+                    session.commit()
+        except Exception as e:
+            logger.error(f"Error in task stuck detection: {e}")
+        finally:
+            session.close()
 
     async def _cleanup_orphaned_tmux_sessions(self):
         """Clean up tmux sessions that don't have corresponding active agents.

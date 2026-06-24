@@ -369,6 +369,32 @@ class Guardian:
                 return True
         return False
 
+    def detect_garbled_output(self, tmux_output: str) -> bool:
+        """Detect garbled/repeating TUI output (pi rendering corruption).
+        
+        Looks for short repeating substrings that indicate terminal rendering
+        failure, e.g. 'king Your working Your workedYour working...'
+        """
+        if not tmux_output or len(tmux_output) < 100:
+            return False
+        # Check for a short string repeated many times
+        text = tmux_output[-500:]  # Last 500 chars
+        for window in [5, 8, 10, 15, 20]:
+            if len(text) < window * 3:
+                continue
+            # Check if any window-sized substring repeats
+            seen = {}
+            for i in range(len(text) - window):
+                chunk = text[i:i+window]
+                if chunk in seen:
+                    seen[chunk] += 1
+                else:
+                    seen[chunk] = 1
+            # If any chunk repeats 5+ times, it's garbled
+            if any(v >= 5 for v in seen.values()):
+                return True
+        return False
+
     def _record_steering(self, agent_id: str, steering_type: str, message: str):
         """Record steering in history."""
         if agent_id not in self.steering_history:
