@@ -120,6 +120,18 @@ class LangChainLLMClient:
                 else:
                     logger.warning("Google AI embedding configuration incomplete (key missing)")
 
+        elif embedding_provider in ("fastembed", "local", "openrouter"):
+            # OpenRouter (and most chat-only providers) have no embeddings API.
+            # Use the python-only FastEmbed backend — no API key, no Qdrant/server.
+            # Default bge-small = 384-dim, matching the vector store dimension.
+            try:
+                from langchain_community.embeddings import FastEmbedEmbeddings
+                fe_model = os.getenv("FASTEMBED_MODEL", "BAAI/bge-small-en-v1.5")
+                self._embedding_model = FastEmbedEmbeddings(model_name=fe_model)
+                logger.info(f"  ✓ Embedding model initialized: FastEmbed {fe_model} (python-only, no API key)")
+            except Exception as e:
+                logger.warning(f"FastEmbed embedding init failed: {e}")
+
         if not self._embedding_model:
             logger.warning(f"Embedding model not initialized for provider: {embedding_provider}")
 
