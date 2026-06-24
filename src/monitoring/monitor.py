@@ -634,8 +634,18 @@ class MonitoringLoop:
                 await self._handle_missing_tmux_session(agent)
                 return None
 
-            # Detect garbled TUI output (pi rendering corruption)
-            if self.guardian.detect_garbled_output(tmux_output):
+            # Detect garbled TUI output (CLI rendering corruption)
+            # Get TUI status patterns from the active CLI interface
+            tui_patterns = None
+            try:
+                from src.core.simple_config import get_config
+                from src.interfaces.cli_interface import get_cli_agent
+                config = get_config()
+                cli_agent = get_cli_agent(getattr(config, 'cli_agent_type', 'pi'))
+                tui_patterns = cli_agent.get_tui_status_patterns()
+            except Exception:
+                pass  # No CLI agent configured — use no patterns (strictest check)
+            if self.guardian.detect_garbled_output(tmux_output, tui_patterns=tui_patterns):
                 task = session.query(Task).filter_by(id=agent.current_task_id).first()
                 if task and task.status == 'done':
                     logger.info(f"Agent {agent.id[:8]} garbled but task done — not restarting")
