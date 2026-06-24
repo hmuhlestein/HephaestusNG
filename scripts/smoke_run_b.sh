@@ -182,6 +182,42 @@ for i in $(seq 1 $MAX_POLLS); do
         fi
     fi
 
+    # Log analysis every 5 min
+    if (( E % 300 == 0 )) && [[ $i -gt 1 ]]; then
+        echo ""
+        echo "  === LOG ANALYSIS (t=${E}s) ==="
+        NOW=$(date +%Y-%m-%d)
+        # 1. Server errors
+        ERR_COUNT=$(grep "$NOW" hephaestus_server.log 2>/dev/null | grep -c "ERROR" || true)
+        echo "  [logs] server_errors=$ERR_COUNT"
+        # 2. Monitor restarts
+        RESTARTS=$(grep "$NOW" ~/.hephaestus/logs/monitor.log 2>/dev/null | grep -c "restarted successfully" || true)
+        echo "  [logs] agent_restarts=$RESTARTS"
+        # 3. Garbled/exited detection
+        GARBLED=$(grep "$NOW" ~/.hephaestus/logs/monitor.log 2>/dev/null | grep -c "garbled\|exited to command" || true)
+        echo "  [logs] garbled_exited=$GARBLED"
+        # 4. MCP connection
+        MCP_FAIL=$(grep "$NOW" hephaestus_server.log 2>/dev/null | grep -c "Failed to process task" || true)
+        echo "  [logs] mcp_task_failures=$MCP_FAIL"
+        # 5. Task status
+        TASK_DONE=$(sqlite3 "$DB" "SELECT count(*) FROM tasks WHERE status='done'" 2>/dev/null)
+        TASK_FAIL=$(sqlite3 "$DB" "SELECT count(*) FROM tasks WHERE status='failed'" 2>/dev/null)
+        TASK_STUCK=$(sqlite3 "$DB" "SELECT count(*) FROM tasks WHERE status='in_progress' AND started_at < datetime('now', '-10 minutes')" 2>/dev/null)
+        echo "  [tasks] done=$TASK_DONE failed=$TASK_FAIL stuck=$TASK_STUCK"
+        # 6. Phase progression
+        PHASE_DONE=$(sqlite3 "$DB" "SELECT count(*) FROM phase_executions WHERE status='completed'" 2>/dev/null)
+        PHASE_FAIL=$(sqlite3 "$DB" "SELECT count(*) FROM phase_executions WHERE status='failed'" 2>/dev/null)
+        echo "  [phases] done=$PHASE_DONE failed=$PHASE_FAIL"
+        # 7. Monitor alive?
+        MON_ALIVE=$(ps aux | grep run_monitor | grep -v grep | wc -l | tr -d ' ')
+        echo "  [monitor] alive=$MON_ALIVE"
+        # 8. Server alive?
+        SRV_ALIVE=$(curl -s http://127.0.0.1:8300/health 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('status',''))" 2>/dev/null || echo "dead")
+        echo "  [server] status=$SRV_ALIVE"
+        echo "  === END LOG ANALYSIS ==="
+        echo ""
+    fi
+
     # Pipeline finished
     if [[ "$R" == "False" ]] && [[ $i -gt 4 ]]; then
         log "Pipeline stopped"

@@ -372,33 +372,35 @@ class Guardian:
     def detect_garbled_output(self, tmux_output: str) -> bool:
         """Detect garbled/repeating TUI output (pi rendering corruption).
         
-        Looks for short repeating substrings that indicate terminal rendering
-        failure. Excludes known pi status bar patterns.
+        Only flags output that is clearly corrupted — not pi's normal
+        status bar rendering.
         """
-        if not tmux_output or len(tmux_output) < 100:
+        if not tmux_output or len(tmux_output) < 200:
             return False
-        # Known pi TUI status patterns — these are NOT garbled
-        pi_status_patterns = ['Your working', 'Your worked', 'king Your', 'worki', 'workin']
-        text = tmux_output[-500:]  # Last 500 chars
-        # Strip known pi status patterns before checking
+        # pi status bar patterns — NOT garbled
+        pi_patterns = ['Your working', 'Your worked', 'king Your', 
+                       'worki', 'workin', 'MCP:', 'openrouter',
+                       '/.worktrees/', 'model.*medium', '%']
+        text = tmux_output[-500:]
+        # Strip known pi patterns
         clean = text
-        for pat in pi_status_patterns:
-            clean = clean.replace(pat, '')
+        for pat in pi_patterns:
+            import re
+            clean = re.sub(pat, '', clean, flags=re.IGNORECASE)
         clean = clean.strip()
-        if len(clean) < 50:
-            return False  # Mostly pi status — not garbled
-        # Check for a short string repeated many times in cleaned text
-        for window in [5, 8, 10, 15, 20]:
-            if len(clean) < window * 3:
+        # If most of the output is pi status, it's not garbled
+        if len(clean) < 100:
+            return False
+        # Only flag if there's a clear repeating pattern (3+ char substring repeated 8+ times)
+        for window in [3, 4, 5]:
+            if len(clean) < window * 8:
                 continue
             seen = {}
             for i in range(len(clean) - window):
                 chunk = clean[i:i+window]
-                if chunk in seen:
-                    seen[chunk] += 1
-                else:
-                    seen[chunk] = 1
-            if any(v >= 5 for v in seen.values()):
+                if chunk.isalpha() and len(chunk) >= 3:
+                    seen[chunk] = seen.get(chunk, 0) + 1
+            if any(v >= 8 for v in seen.values()):
                 return True
         return False
 
