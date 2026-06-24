@@ -11,6 +11,11 @@ DB="hephaestus.db"
 KEEP=false
 [[ "${1:-}" == "--keep" ]] && KEEP=true
 
+# ─── Capture all output to a timestamped log file ─────────────────────
+LOG_FILE="${SMOKE_LOG:-/tmp/smoke_run_b_$(date +%Y%m%d_%H%M%S).log}"
+exec > >(tee -a "$LOG_FILE") 2>&1
+echo "Logging run to $LOG_FILE"
+
 # ─── Colors ───────────────────────────────────────────────────────────
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
 
@@ -33,6 +38,7 @@ fi
 # ─── Stop everything ──────────────────────────────────────────────────
 log "Stopping all services..."
 pkill -9 -f run_server.py 2>/dev/null || true
+pkill -9 -f "uvicorn src.mcp.server" 2>/dev/null || true   # heph/stray server runs as uvicorn, not run_server.py
 pkill -9 -f run_monitor.py 2>/dev/null || true
 pkill -9 -f "heph autopilot" 2>/dev/null || true
 pkill -9 -f "pi.*approve" 2>/dev/null || true
@@ -92,9 +98,17 @@ for i in $(seq 1 24); do
 done
 
 # ─── Verify single server ────────────────────────────────────────────
-SERVER_COUNT=$(ps aux | grep run_server | grep -v grep | wc -l | tr -d ' ')
+# NOTE: the server may run as `run_server.py` OR `uvicorn src.mcp.server:app`.
+# Match both, and disable pipefail/errexit locally so a zero-match grep (exit 1)
+# cannot kill the script here (this was silently aborting the run before pipeline start).
+set +o pipefail
+SERVER_COUNT=$(ps aux | grep -E "run_server\.py|src\.mcp\.server" | grep -v grep | wc -l | tr -d ' ')
+set -o pipefail
+SERVER_COUNT=${SERVER_COUNT:-0}
 if [[ "$SERVER_COUNT" -gt 1 ]]; then
     warn "Multiple server processes detected ($SERVER_COUNT) — DB fallback will handle it"
+elif [[ "$SERVER_COUNT" -eq 0 ]]; then
+    warn "No server process matched — backend health passed, continuing anyway"
 fi
 
 # ─── Start pipeline ──────────────────────────────────────────────────
@@ -208,9 +222,11 @@ for i in $(seq 1 $MAX_POLLS); do
         PHASE_DONE=$(sqlite3 "$DB" "SELECT count(*) FROM phase_executions WHERE status='completed'" 2>/dev/null)
         PHASE_FAIL=$(sqlite3 "$DB" "SELECT count(*) FROM phase_executions WHERE status='failed'" 2>/dev/null)
         echo "  [phases] done=$PHASE_DONE failed=$PHASE_FAIL"
-        # 7. Monitor alive?
+        # 7. Monitor alive? (guard pipefail/errexit: zero-match grep exits 1)
+        set +o pipefail
         MON_ALIVE=$(ps aux | grep run_monitor | grep -v grep | wc -l | tr -d ' ')
-        echo "  [monitor] alive=$MON_ALIVE"
+        set -o pipefail
+        echo "  [monitor] alive=${MON_ALIVE:-0}"
         # 8. Server alive?
         SRV_ALIVE=$(curl -s http://127.0.0.1:8300/health 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('status',''))" 2>/dev/null || echo "dead")
         echo "  [server] status=$SRV_ALIVE"
