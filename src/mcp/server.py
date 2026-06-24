@@ -16,7 +16,7 @@ import asyncio
 from src.core.simple_config import get_config
 from src.core.database import DatabaseManager, Task, Agent, Memory, Phase, ValidationReview, AgentResult, WorkflowResult, Workflow, get_db
 from src.core.worktree_manager import WorktreeManager
-from src.memory.vector_store import VectorStoreManager
+from src.memory.store_factory import create_vector_store, VectorStoreProtocol
 from src.agents.manager import AgentManager
 from src.memory.rag import RAGSystem
 from src.mcp.api import create_frontend_routes
@@ -563,7 +563,7 @@ class ServerState:
 
     def __init__(self):
         self.db_manager: Optional[DatabaseManager] = None
-        self.vector_store: Optional[VectorStoreManager] = None
+        self.vector_store: Optional[VectorStoreProtocol] = None
         self.llm_provider = None
         self.agent_manager: Optional[AgentManager] = None
         self.rag_system: Optional[RAGSystem] = None
@@ -592,11 +592,12 @@ class ServerState:
         # Load active project from DB and apply to config BEFORE creating managers
         self._load_active_project(config)
 
-        # Initialize vector store
-        self.vector_store = VectorStoreManager(
-            qdrant_url=config.qdrant_url,
-            collection_prefix=config.qdrant_collection_prefix,
-        )
+        # Initialize vector store via the backend factory (turbovec python-only by
+        # default per VECTOR_STORE_BACKEND / config). Do NOT hardcode the Qdrant
+        # VectorStoreManager — that ignored the config and produced
+        # 'QdrantClient has no attribute search' / connection-refused errors when
+        # Qdrant wasn't running.
+        self.vector_store = create_vector_store()
 
         # Initialize LLM provider using get_llm_provider()
         # This automatically handles multi-provider config or falls back to legacy single-provider
