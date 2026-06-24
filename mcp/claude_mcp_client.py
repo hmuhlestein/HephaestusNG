@@ -4,6 +4,8 @@ Claude MCP Client for Hephaestus
 This client connects to the Hephaestus server running on port 8300
 """
 
+import os
+
 from fastmcp import FastMCP
 import httpx
 import asyncio
@@ -11,8 +13,12 @@ import asyncio
 # Initialize MCP client
 mcp = FastMCP("hephaestus-client")
 
-# Hephaestus server URL
-HEPHAESTUS_URL = "http://localhost:8300"
+# Hephaestus server URL. Use 127.0.0.1, NOT localhost — on macOS localhost
+# resolves to IPv6 ::1 first, but the server binds IPv4 (0.0.0.0), so
+# `localhost:8300` fails ("Cannot connect") while 127.0.0.1 works. This broke
+# every MCP tool call (agents couldn't update_task_status → phases never
+# completed). Env-overridable for non-local deployments.
+HEPHAESTUS_URL = os.environ.get("HEPHAESTUS_URL", "http://127.0.0.1:8300")
 DEFAULT_AGENT_ID = "main-session-agent"
 
 @mcp.tool()
