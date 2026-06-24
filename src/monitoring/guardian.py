@@ -373,24 +373,31 @@ class Guardian:
         """Detect garbled/repeating TUI output (pi rendering corruption).
         
         Looks for short repeating substrings that indicate terminal rendering
-        failure, e.g. 'king Your working Your workedYour working...'
+        failure. Excludes known pi status bar patterns.
         """
         if not tmux_output or len(tmux_output) < 100:
             return False
-        # Check for a short string repeated many times
+        # Known pi TUI status patterns — these are NOT garbled
+        pi_status_patterns = ['Your working', 'Your worked', 'king Your', 'worki', 'workin']
         text = tmux_output[-500:]  # Last 500 chars
+        # Strip known pi status patterns before checking
+        clean = text
+        for pat in pi_status_patterns:
+            clean = clean.replace(pat, '')
+        clean = clean.strip()
+        if len(clean) < 50:
+            return False  # Mostly pi status — not garbled
+        # Check for a short string repeated many times in cleaned text
         for window in [5, 8, 10, 15, 20]:
-            if len(text) < window * 3:
+            if len(clean) < window * 3:
                 continue
-            # Check if any window-sized substring repeats
             seen = {}
-            for i in range(len(text) - window):
-                chunk = text[i:i+window]
+            for i in range(len(clean) - window):
+                chunk = clean[i:i+window]
                 if chunk in seen:
                     seen[chunk] += 1
                 else:
                     seen[chunk] = 1
-            # If any chunk repeats 5+ times, it's garbled
             if any(v >= 5 for v in seen.values()):
                 return True
         return False
