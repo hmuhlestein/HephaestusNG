@@ -198,6 +198,17 @@ class CLIAgentInterface(ABC):
 
         return '\n'.join(parts) if parts else system_prompt
 
+    def get_tui_status_patterns(self) -> List[str]:
+        """Return patterns that are normal TUI status bar rendering.
+
+        These patterns are stripped before checking for garbled output.
+        Override in subclasses to provide CLI-specific patterns.
+
+        Returns:
+            List of regex patterns that are NOT garbled output
+        """
+        return []
+
     # ── Health / stuck checks (shared) ───────────────────────────────────
 
     def is_healthy(self, output: str) -> bool:
@@ -438,6 +449,14 @@ class PiAgent(CLIAgentInterface):
             command = f'pi --append-system-prompt "$(cat {prompt_file})" --model {model}{thinking_flag} --approve --no-context-files'
 
         return command
+
+    def get_tui_status_patterns(self) -> List[str]:
+        """Pi TUI status bar patterns that look like garbled output but aren't."""
+        return [
+            'Your working', 'Your worked', 'king Your',
+            'worki', 'workin', 'MCP:', 'openrouter',
+            '/.worktrees/', 'model.*medium', '%',
+        ]
 
     def get_health_check_pattern(self) -> str:
         return r"(›|>|pi>)"

@@ -369,26 +369,29 @@ class Guardian:
                 return True
         return False
 
-    def detect_garbled_output(self, tmux_output: str) -> bool:
-        """Detect garbled/repeating TUI output (pi rendering corruption).
+    def detect_garbled_output(self, tmux_output: str, tui_patterns: Optional[List[str]] = None) -> bool:
+        """Detect garbled/repeating TUI output.
         
-        Only flags output that is clearly corrupted — not pi's normal
-        status bar rendering.
+        Only flags output that is clearly corrupted — not the CLI tool's
+        normal status bar rendering.
+        
+        Args:
+            tmux_output: Raw tmux capture-pane output
+            tui_patterns: Optional list of regex patterns that are normal
+                         TUI status (from CLIAgentInterface.get_tui_status_patterns).
+                         Stripped before checking for garbling.
         """
         if not tmux_output or len(tmux_output) < 200:
             return False
-        # pi status bar patterns — NOT garbled
-        pi_patterns = ['Your working', 'Your worked', 'king Your', 
-                       'worki', 'workin', 'MCP:', 'openrouter',
-                       '/.worktrees/', 'model.*medium', '%']
         text = tmux_output[-500:]
-        # Strip known pi patterns
+        # Strip known TUI status patterns (CLI-specific)
         clean = text
-        for pat in pi_patterns:
-            import re
-            clean = re.sub(pat, '', clean, flags=re.IGNORECASE)
+        if tui_patterns:
+            for pat in tui_patterns:
+                import re
+                clean = re.sub(pat, '', clean, flags=re.IGNORECASE)
         clean = clean.strip()
-        # If most of the output is pi status, it's not garbled
+        # If most of the output is TUI status, it's not garbled
         if len(clean) < 100:
             return False
         # Only flag if there's a clear repeating pattern (3+ char substring repeated 8+ times)
