@@ -1030,6 +1030,23 @@ REMEMBER:
                 logger.warning(f"Agent {agent_id} not found")
                 return
 
+            # Restart loop protection: max 3 restarts per agent
+            if agent.restart_count >= 3:
+                logger.warning(f"Agent {agent_id[:8]} exceeded max restarts ({agent.restart_count}), terminating")
+                agent.status = "terminated"
+                session.commit()
+                # Mark task as failed so pipeline can recover
+                task = session.query(Task).filter_by(id=agent.current_task_id).first()
+                if task and task.status not in ("done", "failed"):
+                    task.status = "failed"
+                    task.failure_reason = f"Agent exceeded max restarts ({agent.restart_count})"
+                    session.commit()
+                return
+
+            agent.restart_count = (agent.restart_count or 0) + 1
+            agent.health_check_failures = 0
+            session.commit()
+
             # Get task info
             task = session.query(Task).filter_by(id=agent.current_task_id).first()
             if not task:

@@ -45,6 +45,7 @@ class Agent(Base):
     current_task_id = Column(String, ForeignKey("tasks.id"))
     last_activity = Column(DateTime, default=datetime.utcnow)
     health_check_failures = Column(Integer, default=0)
+    restart_count = Column(Integer, default=0)  # Tracks restart attempts
     cli_model = Column(String, nullable=True)  # Per-agent model override
 
     # Validation-related fields
