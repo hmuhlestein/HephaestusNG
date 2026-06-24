@@ -597,6 +597,7 @@ class MonitoringLoop:
             # agent — never health-check or "recreate" it for a missing tmux session
             # (that was a 60s phantom-restart loop after the Tier 2 in-process move).
             if agent.agent_type == 'orchestrator':
+                logger.debug(f"Skipping orchestrator agent {agent.id[:8]} (runs in-process)")
                 return None
 
             # Special handling for agents with missing tmux sessions
