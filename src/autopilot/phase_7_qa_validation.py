@@ -98,7 +98,7 @@ Follow TESTING.md instructions EXACTLY to start the application:
 # Follow the exact command documented in TESTING.md
 
 # After starting, verify it's running:
-curl -s http://localhost:8300/health || echo "Backend not running"
+curl -s http://127.0.0.1:8300/health || echo "Backend not running"  # 127.0.0.1, not localhost (localhost→IPv6 ::1 fails; server binds IPv4)
 
 # Check test dependencies
 python -m pytest --version || echo "pytest not installed"
