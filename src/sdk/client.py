@@ -357,7 +357,13 @@ class HephaestusSDK:
 
         logger.info("Starting monitor process...")
         if backend_already_running:
-            logger.info("Assuming monitor already running (backend was pre-existing)")
+            # Don't assume monitor is running — check and spawn if needed
+            from src.cli.utils import is_monitor_running
+            if is_monitor_running():
+                logger.info("Monitor already running")
+            else:
+                logger.info("Monitor not running, spawning...")
+                self.process_manager.spawn_monitor()
         else:
             self.process_manager.spawn_monitor()
 
