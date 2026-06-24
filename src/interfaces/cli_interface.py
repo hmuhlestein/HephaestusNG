@@ -502,14 +502,16 @@ class PiAgent(CLIAgentInterface):
             user_prompt = '\n'.join(user_parts) if user_parts else system_prompt
             
             # Save user prompt to file for pi -p flag
+            # Save prompt to file for reference (initial message sent via tmux)
             prompt_file = f'/tmp/pi_prompt_{file_task_id}.txt'
             with open(prompt_file, 'w') as f:
                 f.write(user_prompt)
             os.chmod(prompt_file, 0o644)
 
-            # Load agent file as system prompt via shell expansion (not @file syntax)
-            # Pass task info as initial message via -p
-            command = f'pi --append-system-prompt "$(cat {agent_file})" --print "$(cat {prompt_file})" --model {model}{thinking_flag} --approve --no-context-files'
+            # Launch pi interactively (no -p/--print) so it stays running
+            # and can call MCP tools after processing.
+            # Initial message is sent via tmux by agent manager.
+            command = f'pi --append-system-prompt "$(cat {agent_file})" --model {model}{thinking_flag} --approve --no-context-files'
         else:
             # Fallback: inject full prompt from file (no agent file available)
             task_id = kwargs.get('task_id', 'default')
