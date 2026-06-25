@@ -75,6 +75,10 @@ rm -rf ~/.hephaestus/autopilot/state.json
 rm -rf ~/.hephaestus/autopilot/input_*.json
 rm -rf /tmp/hephaestus_worktrees/*
 
+# Clear logs so analysis counts are per-run only
+> hephaestus_server.log 2>/dev/null || true
+> ~/.hephaestus/logs/monitor.log 2>/dev/null || true
+
 sqlite3 "$DB" "
     DELETE FROM tasks;
     DELETE FROM phase_executions;
