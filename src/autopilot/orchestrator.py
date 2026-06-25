@@ -1243,7 +1243,7 @@ def run_single_workflow(sdk, workflow_id: str, project_path: str, description: s
         design_branch_name = feature_branch
         logger.info(f"Created shared worktree: {design_worktree_path} (branch: {feature_branch})")
     except Exception as e:
-        logger.warning(f"Failed to create shared worktree, using project path: {e}", exc_info=True)
+        logger.warning(f"Failed to create shared worktree, using project path: {e}")
         design_worktree_path = project_path
 
     try:
