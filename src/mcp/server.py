@@ -2127,6 +2127,7 @@ async def update_task_status(
 async def _get_project_id_for_agent(agent_id: str) -> Optional[str]:
     """Resolve project_id from agent's workflow working_directory."""
     try:
+        from src.core.database import AutopilotProject
         session = server_state.db_manager.get_session()
         try:
             agent = session.query(Agent).filter_by(id=agent_id).first()
