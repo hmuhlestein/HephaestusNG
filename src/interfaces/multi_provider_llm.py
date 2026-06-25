@@ -55,6 +55,10 @@ class MultiProviderLLM(LLMProviderInterface):
             phase_context=phase_context
         )
 
+    async def classify_complexity(self, design_text: str) -> str:
+        """Rate a design's implementation complexity: 'low' | 'medium' | 'high'."""
+        return await self.client.classify_complexity(design_text)
+
     async def resolve_ticket_clarification(
         self,
         ticket_id: str,

@@ -252,6 +252,31 @@ class AgentManager:
             # Per-turn reasoning budget: per-phase override → global config → "medium"
             thinking_level = phase_thinking_level or getattr(self.config, 'cli_thinking_level', 'medium')
 
+            # Complexity-adaptive reasoning: a phase's base budget expresses INTENT
+            # (mechanical=low, reasoning=high). Scale the *reasoning* phases down to the
+            # design's actual complexity so a trivial design (a calculator) doesn't get
+            # 'high' thinking → over-engineering (e.g. 400+ tickets). Classified once per
+            # workflow via a single fast LLM call; mechanical phases keep their low budget.
+            try:
+                if thinking_level in ("high", "medium") and getattr(task, "workflow_id", None):
+                    if not hasattr(self, "_complexity_cache"):
+                        self._complexity_cache = {}
+                    complexity = self._complexity_cache.get(task.workflow_id)
+                    if complexity is None:
+                        design_text = (enriched_data or {}).get("enriched_description") \
+                            or task.enriched_description or task.raw_description or ""
+                        complexity = await self.llm_provider.classify_complexity(design_text)
+                        self._complexity_cache[task.workflow_id] = complexity
+                    # low complexity → low thinking; medium → medium; high → keep phase base
+                    if complexity == "low":
+                        thinking_level = "low"
+                    elif complexity == "medium" and thinking_level == "high":
+                        thinking_level = "medium"
+                    logger.info(f"[COMPLEXITY] phase budget {phase_thinking_level} → {thinking_level} "
+                                f"(design complexity={complexity}) for agent {agent_id[:8]}")
+            except Exception as e:
+                logger.debug(f"[COMPLEXITY] adaptive thinking skipped: {e}")
+
             launch_command = cli_agent.get_launch_command(
                 system_prompt=system_prompt,
                 task_id=task.id,

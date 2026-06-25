@@ -305,6 +305,39 @@ class LangChainLLMClient:
         model_key = f"{component_name}_{assignment.provider}_{assignment.model}"
         return self._models.get(model_key)
 
+    async def classify_complexity(self, design_text: str) -> str:
+        """One fast LLM call: rate a design's implementation complexity as
+        'low' | 'medium' | 'high'. Used to size agent reasoning budget + decomposition
+        to the actual scope (so a calculator isn't treated like a multi-service system).
+        Reuses the fast, reasoning-capped task_enrichment model. Defaults to 'medium'."""
+        try:
+            from langchain_core.messages import SystemMessage, HumanMessage
+            model = self._get_model_for_component(ComponentType.TASK_ENRICHMENT)
+            if model is None:
+                return "medium"
+            prompt = (
+                "Rate the IMPLEMENTATION complexity of the software design below as exactly "
+                "one word: low, medium, or high.\n"
+                "- low: a single small module/function or trivial utility (e.g. a calculator, a parser)\n"
+                "- medium: a handful of components working together\n"
+                "- high: a real multi-service / multi-subsystem system\n\n"
+                f"DESIGN:\n{(design_text or '')[:4000]}\n\n"
+                "Answer with ONE word only (low, medium, or high):"
+            )
+            resp = await model.ainvoke([
+                SystemMessage(content="You are a concise software complexity classifier."),
+                HumanMessage(content=prompt),
+            ])
+            text = (getattr(resp, "content", None) or str(resp)).strip().lower()
+            for level in ("high", "medium", "low"):  # check high/medium before low (substring)
+                if level in text:
+                    logger.info(f"[COMPLEXITY] classified design as '{level}'")
+                    return level
+            return "medium"
+        except Exception as e:
+            logger.warning(f"[COMPLEXITY] classification failed, defaulting to medium: {e}")
+            return "medium"
+
     async def enrich_task(
         self,
         task_description: str,
