@@ -83,6 +83,8 @@ rm -rf /tmp/hephaestus_worktrees/*
 > hephaestus_server.log 2>/dev/null || true
 > ~/.hephaestus/logs/monitor.log 2>/dev/null || true
 > logs/monitor.log 2>/dev/null || true  # run_monitor.py writes here (98MB+)
+> logs/monitor_crash.log 2>/dev/null || true
+> logs/monitor_fault.log 2>/dev/null || true
 
 sqlite3 "$DB" "
     DELETE FROM tasks;

@@ -8,6 +8,7 @@ LLM-powered interventions including nudging, restarting, and recreating agents.
 """
 
 import asyncio
+import faulthandler
 import logging
 import os
 import signal
@@ -174,6 +175,12 @@ async def main():
 if __name__ == "__main__":
     # Ensure logs directory exists
     Path("logs").mkdir(exist_ok=True)
+
+    # Enable faulthandler — dumps traceback to file on fatal signals
+    fault_log = open("logs/monitor_fault.log", "a")
+    faulthandler.enable(file=fault_log, all_threads=True)
+    # Also dump traceback if process is alive after 600s (stuck detection)
+    faulthandler.dump_traceback_later(600, repeat=True, file=fault_log, exit=False)
 
     # Write PID file so heph stop can find us
     pid_dir = Path.home() / ".hephaestus" / "pids"
