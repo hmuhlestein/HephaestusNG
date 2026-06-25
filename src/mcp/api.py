@@ -800,26 +800,22 @@ class FrontendAPI:
                     # Parse the related_task_ids if it's a JSON string
                     related_data = task.related_task_ids if isinstance(task.related_task_ids, list) else json.loads(task.related_task_ids)
 
-                    # Import embedding service to calculate similarities if needed
-                    from src.services.embedding_service import EmbeddingService
-                    embedding_service = None
+                    # Backfill similarity scores for old-format related_data (plain ids,
+                    # no scores) by cosine over the already-stored task embeddings. Use the
+                    # embedding class's shared (static) cosine — no hardcoded math, no
+                    # OpenAI dependency, no model load.
+                    from src.memory.embedding_factory import EmbeddingProvider
                     task_embedding = None
 
                     # Check if we need to calculate similarities (old format without scores)
-                    needs_similarity_calculation = False
-                    if related_data and len(related_data) > 0:
-                        if not isinstance(related_data[0], dict):
-                            needs_similarity_calculation = True
-
+                    needs_similarity_calculation = (
+                        bool(related_data) and not isinstance(related_data[0], dict)
+                    )
                     if needs_similarity_calculation and task.embedding:
                         try:
-                            from src.core.simple_config import get_config
-                            config = get_config()
-                            embedding_service = EmbeddingService(config)
-                            # Parse the task's embedding
                             task_embedding = task.embedding if isinstance(task.embedding, list) else json.loads(task.embedding)
                         except Exception as e:
-                            logger.warning(f"Could not initialize embedding service for similarity calculation: {e}")
+                            logger.warning(f"Could not parse task embedding for similarity calculation: {e}")
 
                     for item in related_data:
                         # Handle both new format (dict with id and similarity) and old format (just string id)
@@ -834,10 +830,10 @@ class FrontendAPI:
                         related_task = session.query(Task).filter_by(id=task_id).first()
 
                         # Try to calculate similarity for old format
-                        if isinstance(item, str) and embedding_service and task_embedding and related_task and related_task.embedding:
+                        if isinstance(item, str) and task_embedding and related_task and related_task.embedding:
                             try:
                                 related_embedding = related_task.embedding if isinstance(related_task.embedding, list) else json.loads(related_task.embedding)
-                                similarity = embedding_service.calculate_cosine_similarity(task_embedding, related_embedding)
+                                similarity = EmbeddingProvider.calculate_cosine_similarity(task_embedding, related_embedding)
                             except Exception as e:
                                 logger.debug(f"Could not calculate similarity for task {task_id}: {e}")
                                 similarity = 0.0

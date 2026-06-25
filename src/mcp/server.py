@@ -633,19 +633,23 @@ class ServerState:
             phase_manager=self.phase_manager,
         )
 
-        # Initialize embedding and similarity services (only if OpenAI is configured and dedup enabled)
-        if config.openai_api_key and config.task_dedup_enabled:
-            self.embedding_service = EmbeddingService(config.openai_api_key)
-            self.task_similarity_service = TaskSimilarityService(
-                self.db_manager,
-                self.embedding_service
-            )
-            logger.info("Task deduplication service initialized")
+        # Initialize embedding and similarity services for task dedup using the
+        # configurable embedding provider (fastembed by default — no OpenAI key needed).
+        # Previously this was gated on config.openai_api_key, which silently disabled
+        # dedup for python-only (openrouter) setups even though it's enabled by config.
+        if config.task_dedup_enabled:
+            try:
+                from src.memory.embedding_factory import create_embedding_provider
+                self.embedding_service = create_embedding_provider()
+                self.task_similarity_service = TaskSimilarityService(
+                    self.db_manager,
+                    self.embedding_service
+                )
+                logger.info("Task deduplication service initialized (embedding via configurable provider)")
+            except Exception as e:
+                logger.warning(f"Task deduplication disabled — embedding provider init failed: {e}")
         else:
-            if not config.openai_api_key:
-                logger.warning("OpenAI API key not configured - task deduplication disabled")
-            if not config.task_dedup_enabled:
-                logger.info("Task deduplication disabled by configuration")
+            logger.info("Task deduplication disabled by configuration")
 
         # Initialize queue service
         self.queue_service = QueueService(
