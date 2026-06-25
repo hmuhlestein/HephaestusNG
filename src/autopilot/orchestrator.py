@@ -1313,6 +1313,24 @@ def run_single_workflow(sdk, workflow_id: str, project_path: str, description: s
                         logger.warning(f"Could not check phase status: {e}")
 
                     logger.info(f"Workflow complete: {len(done)} tasks done, no agents active, all phases done")
+
+                    # Final merge: merge all agent branches to main
+                    try:
+                        from src.mcp.server import server_state
+                        if hasattr(server_state, '_completed_agent_branches') and server_state._completed_agent_branches:
+                            branches = server_state._completed_agent_branches
+                            logger.info(f"Final merge: merging {len(branches)} agent branches to main")
+                            for entry in branches:
+                                try:
+                                    result = server_state.branch_manager.merge_to_main(entry['agent_id'])
+                                    logger.info(f"  Merged {entry['branch']}: {result.get('status', 'unknown')}")
+                                except Exception as e:
+                                    logger.warning(f"  Failed to merge {entry['branch']}: {e}")
+                            server_state._completed_agent_branches = []
+                            logger.info("Final merge complete")
+                    except Exception as e:
+                        logger.warning(f"Final merge failed: {e}")
+
                     if state:
                         state.current_workflow_id = None
                     return "completed"

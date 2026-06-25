@@ -2093,21 +2093,37 @@ async def update_task_status(
 
             session.commit()
 
-            # If task completed successfully without validation, merge to parent
+            # If task completed successfully, commit in the agent's worktree
+            # (don't merge to main yet — merge at pipeline end)
             merge_commit_sha = None
             if request.status == "done" and hasattr(server_state, 'branch_manager'):
                 try:
-                    merge_result = server_state.branch_manager.merge_to_parent(agent_id)
-                    merge_commit_sha = merge_result.get("commit_sha") if isinstance(merge_result, dict) else None
-                    logger.info(f"Merged completed work to parent: {merge_result}")
-                    # Clean up the branch after successful merge
-                    try:
-                        server_state.branch_manager.cleanup_branch(agent_id)
-                        logger.info(f"Cleaned up branch for agent {agent_id[:8]}")
-                    except Exception as e:
-                        logger.warning(f"Failed to cleanup branch: {e}")
+                    # Commit the work in the agent's worktree only
+                    record = server_state.branch_manager._agent_record(session, agent_id)
+                    if record and record.worktree_path:
+                        from pathlib import Path as _P
+                        wt_repo = Repo(record.worktree_path)
+                        wt_repo.git.add("-A")
+                        if wt_repo.is_dirty() or wt_repo.untracked_files:
+                            wt_repo.git.commit(
+                                "-m", f"[Agent {agent_id[:8]}] Phase {task.phase_id[:8] if task.phase_id else 'unknown'}: task completed",
+                                "--no-verify"
+                            )
+                            merge_commit_sha = wt_repo.head.commit.hexsha
+                            logger.info(f"Committed work in worktree for agent {agent_id[:8]}: {merge_commit_sha[:8]}")
+
+                    # Track this agent's branch for final merge
+                    if not hasattr(server_state, '_completed_agent_branches'):
+                        server_state._completed_agent_branches = []
+                    if record:
+                        server_state._completed_agent_branches.append({
+                            'agent_id': agent_id,
+                            'branch': record.branch_name,
+                            'phase': task.phase_id,
+                        })
+                        logger.info(f"Tracked branch {record.branch_name} for final merge ({len(server_state._completed_agent_branches)} total)")
                 except Exception as e:
-                    logger.warning(f"Failed to merge completed work to parent: {e}")
+                    logger.warning(f"Failed to commit in worktree for agent {agent_id[:8]}: {e}")
 
                 # Auto-link commit to ticket if task has ticket_id
                 if task.ticket_id and merge_commit_sha:
@@ -2501,13 +2517,31 @@ async def give_validation_review(
 
             session.commit()
 
-            # Merge agent's work to parent (if using worktrees)
+            # Commit validated work in the agent's worktree (don't merge to main yet)
             if hasattr(server_state, 'branch_manager') and original_agent_id:
                 try:
-                    merge_result = server_state.branch_manager.merge_to_parent(original_agent_id)
-                    logger.info(f"Merged validated work: {merge_result}")
+                    record = server_state.branch_manager._agent_record(session, original_agent_id)
+                    if record and record.worktree_path:
+                        wt_repo = Repo(record.worktree_path)
+                        wt_repo.git.add("-A")
+                        if wt_repo.is_dirty() or wt_repo.untracked_files:
+                            wt_repo.git.commit(
+                                "-m", f"[Agent {original_agent_id[:8]}] Validated work completed",
+                                "--no-verify"
+                            )
+                            logger.info(f"Committed validated work in worktree for {original_agent_id[:8]}")
+
+                    # Track for final merge
+                    if not hasattr(server_state, '_completed_agent_branches'):
+                        server_state._completed_agent_branches = []
+                    if record:
+                        server_state._completed_agent_branches.append({
+                            'agent_id': original_agent_id,
+                            'branch': record.branch_name,
+                            'phase': 'validated',
+                        })
                 except Exception as e:
-                    logger.warning(f"Failed to merge validated work: {e}")
+                    logger.warning(f"Failed to commit validated work: {e}")
 
             # Terminate both original and validator agents, then process queue
             async def terminate_both_and_process_queue():
