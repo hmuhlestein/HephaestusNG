@@ -1257,6 +1257,7 @@ async def process_queue():
         phase_cli_tool = None
         phase_cli_model = None
         phase_glm_token_env = None
+        phase_thinking_level = None
         logger.info(f"[QUEUE_AGENT_CREATE] Task phase_id: {task_for_agent.phase_id}")
         if task_for_agent.phase_id:
             phase_session = server_state.db_manager.get_session()
@@ -1268,6 +1269,7 @@ async def process_queue():
                     phase_cli_tool = phase.cli_tool
                     phase_cli_model = phase.cli_model
                     phase_glm_token_env = phase.glm_api_token_env
+                    phase_thinking_level = phase.thinking_level  # per-phase pi reasoning budget
                 else:
                     logger.warning(f"[QUEUE_AGENT_CREATE] Phase not found in database for phase_id: {task_for_agent.phase_id}")
             finally:
@@ -1285,6 +1287,7 @@ async def process_queue():
             phase_cli_tool=phase_cli_tool,
             phase_cli_model=phase_cli_model,
             phase_glm_token_env=phase_glm_token_env,
+            phase_thinking_level=phase_thinking_level,
         )
 
         logger.info(f"[QUEUE_AGENT_CREATE] ✓✓✓ AGENT CREATED SUCCESSFULLY: {agent.id} for task {next_task.id} ✓✓✓")
@@ -1768,6 +1771,7 @@ async def create_task(
                     phase_cli_tool = None
                     phase_cli_model = None
                     phase_glm_token_env = None
+                    phase_thinking_level = None
                     if temp_task.phase_id:
                         session = server_state.db_manager.get_session()
                         try:
@@ -1776,6 +1780,7 @@ async def create_task(
                                 phase_cli_tool = phase.cli_tool
                                 phase_cli_model = phase.cli_model
                                 phase_glm_token_env = phase.glm_api_token_env
+                                phase_thinking_level = phase.thinking_level  # per-phase pi reasoning budget
                         finally:
                             session.close()
 
@@ -1788,6 +1793,7 @@ async def create_task(
                         phase_cli_tool=phase_cli_tool,
                         phase_cli_model=phase_cli_model,
                         phase_glm_token_env=phase_glm_token_env,
+                        phase_thinking_level=phase_thinking_level,
                     )
 
                     # Store agent ID immediately (before session issues)
