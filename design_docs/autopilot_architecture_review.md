@@ -469,11 +469,13 @@ Not everything needs changing. Preserve:
 
 These were open questions; now settled (2026-06-19):
 
-1. **Multi-design concurrency — NO.** One design at a time, sequentially; each
-   design **builds on the previous one**. The queue is an ordered chain, not a
+1. **Multi-design concurrency — NO (for now).** One design at a time, sequentially;
+   each design **builds on the previous one**. The queue is an ordered chain, not a
    pool. *Implication:* a design that ships with a silent regression poisons
    everything downstream — this raises the bar for the completion gate (see #4)
-   and makes deterministic floors more important, not less.
+   and makes deterministic floors more important, not less. *(When concurrency is
+   eventually enabled, the git substrate is designed in §9.6 — per-design
+   integration worktrees; the sequential default is the N=1 special case.)*
 2. **Single project at a time.** One active project. *Implication:* the
    `autopilot_projects` multi-project machinery can be simplified to a single
    active-project scope; the spec and queue are per-project.
@@ -540,11 +542,13 @@ couldn't reach out-of-tree paths they were told to read. The fix is to remove th
    `$HOME` (global orchestrator state — unchanged) and per-worktree (inbound
    context). They are different *scopes* sharing a *brand*, not the same store.
    `~/.local/` was rejected (collides with the XDG user dir).
-5. **Cross-phase handoff:** merge-on-success → the next phase's worktree branches
-   from updated `main` and sees committed prior outputs; `.hephaestus/` carries
-   the pre-commit/never-commit context. **Failure discards the worktree**
-   (`git worktree remove --force` + drop branch); `main` never sees half-baked
-   files. **This removes the need for the Repair flow** (C4.x / delete).
+5. **Cross-phase handoff** *(integration target refined by §9.6 — read that for
+   the concurrent/atomic model)*: merge-on-success → the next phase's worktree
+   branches from the **design's integration branch** (not `main`; see §9.6) and
+   sees committed prior outputs; `.hephaestus/` carries the pre-commit/never-commit
+   context. **Failure discards the worktree** (`git worktree remove --force` + drop
+   branch); the integration branch / `main` never sees half-baked files. **This
+   removes the need for the Repair flow** (C4.x / delete).
 
 ```
 ~/.hephaestus/                      # global orchestrator state (unchanged)
@@ -644,6 +648,74 @@ it exhaustively in milliseconds. Same principle as the §9.1 spec floors and the
 *Recurring rule:* if a check is mechanical, it's a **tool wired as a hard floor**;
 if it's judgment, it's an **existing phase**. A new agent for a checkable thing is
 the anti-pattern.
+
+---
+
+### 9.6 Integration model — per-design integration worktree (resolved)
+
+**Supersedes §9.2 decision 5** (the "merge-on-success → next phase branches from
+updated `main`" handoff). §9.2 isolates *agents within a phase*; this section
+fixes the integration target *across phases and across concurrent designs*.
+
+**Finding:** Today `target_branch = config.base_branch`, which defaults to `main`
+([`worktree_manager.py:412`](../src/core/worktree_manager.py#L412),
+[`simple_config.py:60`](../src/core/simple_config.py#L60)), and `merge_to_main`
+**checks out the target branch in the single shared main repo working tree**
+([`worktree_manager.py:434`](../src/core/worktree_manager.py#L434)) before merging.
+Two consequences:
+- **No pipeline-level atomicity.** Each phase lands on `main` as it completes, so
+  a failure at phase 6 leaves phases 1–5 (incl. unvalidated phase-3 dev code) on
+  `main`. "Discard on failure" only protects *within* a phase, and phase 9
+  (`git_commit_push`) is rendered redundant — `main` was already written 8 times.
+- **A single shared checkout cannot go concurrent.** A working tree is on one
+  branch at a time; with multiple designs running, every integration contends
+  over that one checkout. A global per-run *branch* only renames the contention.
+
+**Decision: each design runs against its own long-lived integration worktree.**
+1. **Per-design integration worktree (the "primary").** At design start, cut
+   `autopilot/run-<designId>` from `main` and create a persistent worktree
+   `<project>/.worktrees/run-<designId>/` checked out on it. This is the design's
+   accumulation point; it is **not** ephemeral (unlike the per-task worktrees).
+2. **Each task commits into that single integration worktree on completion.** When
+   a phase/task finishes, its work is committed and merged **into the design's
+   integration worktree** (its run branch) — never into `main`. The next phase's
+   ephemeral worktree branches from the run branch and sees all accumulated
+   prior-phase commits. `base_branch` for a design's phase worktrees = its run
+   branch, not `main`.
+3. **`main` is touched only at the end, per design.** On full success (at phase 9
+   `git_commit_push`), merge or PR `autopilot/run-<designId>` → `main`. On
+   failure, discard the run branch + integration worktree; **`main` never saw the
+   half-baked work** → true pipeline-level atomicity.
+4. **Concurrency falls out for free.** Designs A and B each merge their phases
+   into their own integration worktree on their own branch — zero contention.
+   The merge lock (`.git/.hephaestus_merge_lock`) now guards **only** the final
+   run-branch → `main` merges, which is exactly where serialization belongs.
+5. **Cross-design conflicts surface at the final merge (the genuinely hard part).**
+   Isolation during the run is trivial; integration is not. When two designs
+   edited the same files, the second `run-X → main` conflicts. Policy: **auto-merge
+   when clean; on conflict, open a PR** (fits phase 9's `git_commit_push` and gives
+   a review surface) **or escalate to impasse** (§9.4) — **never force-merge.**
+6. **N = 1 is the same model.** With one design, the integration worktree *is* the
+   per-run branch; there is no second code path. The single-design and
+   concurrent-design cases are unified.
+
+```
+<project>/                          # real repo, on main — UNTOUCHED during all runs
+  .worktrees/
+    run-A/                          # integration worktree, branch autopilot/run-A (design A)
+    run-B/                          # integration worktree, branch autopilot/run-B (design B)
+    wt_<A-phase1-agent>/            # ephemeral phase worktree, branched from run-A → merges into run-A
+    wt_<A-phase2-agent>/            # ephemeral, branched from run-A (sees phase-1 commits)
+    wt_<B-phase1-agent>/            # ephemeral, branched from run-B
+  # end of each design: run-X → main (serialized; auto-merge if clean, else PR / impasse)
+```
+
+**Implementation is mostly plumbing** (target is already `config.base_branch`, not
+hardcoded): create the run branch + integration worktree at design start and point
+the design's phase worktrees at it; route phase merges into the integration
+worktree instead of the main checkout; add the final run-branch → `main` step at
+phase 9 with the conflict policy above; discard run branch + worktree on failure.
+This is the substrate the deferred **concurrent-designs DAG** item (§11.3) needs.
 
 ---
 
