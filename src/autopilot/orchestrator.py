@@ -1323,7 +1323,7 @@ def run_single_workflow(sdk, workflow_id: str, project_path: str, description: s
                             logger.info(f"  [{aid[:8]}] {preview}")
 
             wf_state = wf_status.get("status", "")
-            if wf_state in ("completed", "failed"):
+            if wf_state in ("completed", "failed", "paused"):
                 logger.info(f"Workflow {wf_state}: {exec_id}")
                 return wf_state
 
