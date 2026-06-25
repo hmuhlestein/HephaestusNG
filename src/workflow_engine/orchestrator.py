@@ -325,8 +325,17 @@ class WorkflowOrchestrator:
         self,
         phase_output: Dict[str, Any]
     ) -> Tuple[float, Dict[str, Any]]:
-        """Default evaluation - check for basic success/failure."""
-        score = 0.5
+        """Default evaluation - check for basic success/failure.
+
+        Reaching evaluation means the phase's tasks COMPLETED. With no explicit
+        failure/error signal and no real evaluator, that's a pass — so the baseline is
+        a passing score, not 0.5. (At 0.5 every non-gated phase tripped the
+        `score < 0.6 -> retry` band and burned max_retries re-runs before continuing.)
+        Real failures still drop it: status=failed -> 0.1 (goto), errors -> -0.3
+        (which lands in the retry band), and gated phases supply a real score that
+        overrides this default.
+        """
+        score = 0.75  # completed, no failure signal => pass
         metadata = {}
 
         # Check if phase reported success
