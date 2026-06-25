@@ -10,6 +10,7 @@ from src.sdk.models import Phase
 PHASE_2_ARCHITECTURE = Phase(
     id=2,
     name="architecture_design",
+    thinking_level="high",  # deep design reasoning pays off here
     cli_model="xiaomi/mimo-v2.5",
     description="""Create detailed technical architecture and task breakdown.
 

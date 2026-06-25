@@ -14,6 +14,7 @@ from src.sdk.models import Phase
 PHASE_10_FORENSICS = Phase(
     id=10,
     name="forensics_analysis",
+    thinking_level="low",  # summarize/record, not deep reasoning
     description="""Analyze all agent outputs and identify improvements for future pipeline runs.
 
 After the feature is committed and shipped, this phase reviews every artifact

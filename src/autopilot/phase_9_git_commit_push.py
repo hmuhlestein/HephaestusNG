@@ -10,6 +10,7 @@ from src.sdk.models import Phase
 PHASE_9_GIT_COMMIT_PUSH = Phase(
     id=9,
     name="git_commit_push",
+    thinking_level="minimal",  # pure mechanical git work
     description="""Commit validated code to git on a feature branch, merge to main, and pull.
 
 After product validation passes, this phase:

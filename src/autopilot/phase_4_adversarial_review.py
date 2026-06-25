@@ -11,6 +11,7 @@ from src.sdk.models import Phase
 PHASE_4_ADVERSARIAL_REVIEW = Phase(
     id=4,
     name="adversarial_review",
+    thinking_level="medium",  # review judgment
     description="""Perform adversarial code review and document findings.
 
 Reviews all code from Phase 3 with a critical perspective.
