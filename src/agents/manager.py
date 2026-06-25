@@ -90,29 +90,40 @@ class AgentManager:
             # has to read out-of-tree paths.
             context_files = self._gather_worktree_context(task)
 
-            # Reload WorktreeManager with the workflow's working directory so
-            # worktrees go under the correct repo (not the global main_repo_path).
+            # Check if workflow has a shared worktree (all phases use same worktree)
+            shared_worktree = None
             if task.workflow_id:
                 from src.core.database import Workflow
                 with self.db_manager.get_session() as session:
                     wf = session.query(Workflow).filter_by(id=task.workflow_id).first()
                     if wf and wf.working_directory:
-                        self.branch_manager.reload(Path(wf.working_directory))
+                        wt_base = self.branch_manager.worktree_base
+                        if str(wt_base) in wf.working_directory or '.worktrees/' in wf.working_directory:
+                            shared_worktree = wf.working_directory
+                            self.branch_manager.reload(Path(wf.working_directory))
 
-            # Create an isolated worktree for the agent
-            branch_info = self.branch_manager.create_agent_branch(
-                agent_id=agent_id,
-                parent_agent_id=getattr(task, 'created_by_agent_id', None),
-                context_files=context_files,
-            )
-            branch_path = branch_info["working_directory"]
-            logger.info(
-                f"Created worktree {branch_info['branch_name']} for agent {agent_id} "
-                f"at {branch_path} (context: {sorted(context_files) if context_files else 'none'})"
-            )
-
-            # No-op under worktree isolation (each agent has its own worktree).
-            self.branch_manager.switch_to_branch(branch_info["branch_name"])
+            if shared_worktree:
+                # Use the shared worktree — all phases commit here
+                branch_path = shared_worktree
+                branch_name = f"shared-{task.workflow_id[:8]}"
+                logger.info(
+                    f"Using shared worktree for agent {agent_id} "
+                    f"at {branch_path} (all phases commit here)"
+                )
+            else:
+                # Create an isolated worktree for the agent (legacy path)
+                branch_info = self.branch_manager.create_agent_branch(
+                    agent_id=agent_id,
+                    parent_agent_id=getattr(task, 'created_by_agent_id', None),
+                    context_files=context_files,
+                )
+                branch_path = branch_info["working_directory"]
+                branch_name = branch_info["branch_name"]
+                logger.info(
+                    f"Created worktree {branch_name} for agent {agent_id} "
+                    f"at {branch_path} (context: {sorted(context_files) if context_files else 'none'})"
+                )
+                self.branch_manager.switch_to_branch(branch_name)
 
             # 2. Generate system prompt
             system_prompt = await self.llm_provider.generate_agent_prompt(
