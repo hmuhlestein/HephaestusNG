@@ -1,5 +1,6 @@
 """Guardian monitoring system with trajectory thinking for individual agents."""
 
+import asyncio
 import logging
 from typing import Dict, Any, List, Optional
 from datetime import datetime, timedelta
@@ -131,19 +132,33 @@ class Guardian:
             logger.info(f"Phase Info: {'Present' if phase_info else 'None'}")
             logger.info("=" * 60)
 
-            analysis = await self.llm_provider.analyze_agent_trajectory(
-                agent_output=tmux_output,
-                accumulated_context=accumulated_context,
-                past_summaries=past_summaries,
-                task_info={
-                    "description": task.enriched_description or task.raw_description,
-                    "done_definition": task.done_definition,
-                    "task_id": task.id,
-                    "agent_id": agent.id,
-                    "phase_info": phase_info,  # NEW: Pass phase information
-                },
-                last_message_marker=last_message_marker,
-            )
+            # Hard timeout so a slow/over-streaming model (mimo can stream a reasoning
+            # trace for minutes and still fail to parse) can NEVER freeze the monitor
+            # loop. On timeout we fall back to the benign default analysis.
+            GUARDIAN_LLM_TIMEOUT = 90
+            try:
+                analysis = await asyncio.wait_for(
+                    self.llm_provider.analyze_agent_trajectory(
+                        agent_output=tmux_output,
+                        accumulated_context=accumulated_context,
+                        past_summaries=past_summaries,
+                        task_info={
+                            "description": task.enriched_description or task.raw_description,
+                            "done_definition": task.done_definition,
+                            "task_id": task.id,
+                            "agent_id": agent.id,
+                            "phase_info": phase_info,  # NEW: Pass phase information
+                        },
+                        last_message_marker=last_message_marker,
+                    ),
+                    timeout=GUARDIAN_LLM_TIMEOUT,
+                )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    f"Guardian analysis timed out (>{GUARDIAN_LLM_TIMEOUT}s) for agent {agent.id} "
+                    f"— using default analysis (model over-streamed the structured call)"
+                )
+                return self._get_default_analysis(agent)
 
             # Log what we got back from GPT-5
             logger.info("=" * 60)
