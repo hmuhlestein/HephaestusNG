@@ -26,6 +26,10 @@ class ModelAssignment(BaseModel):
     openrouter_provider: Optional[str] = None
     temperature: float = 0.7
     max_tokens: int = 4000
+    # OpenRouter reasoning cap for reasoning models (mimo etc.): "low" | "medium" |
+    # "high" | "off". Utility calls (enrich/guardian/conductor/prompts) don't need
+    # deep reasoning; capping it avoids multi-minute reasoning streams per call.
+    reasoning_effort: Optional[str] = None
 
 
 class ProviderConfig(BaseModel):
@@ -200,22 +204,30 @@ class LangChainLLMClient:
                 # OpenRouter uses the model name directly
                 model_name = assignment.model
 
-                # Build provider routing parameter for OpenRouter using extra_body
-                # extra_body allows passing custom parameters to OpenRouter's API
+                # Build extra_body for OpenRouter: provider routing + reasoning cap.
+                # extra_body passes custom params through to OpenRouter without the
+                # OpenAI SDK rejecting them.
                 model_kwargs = {}
+                extra_body = {}
                 if assignment.openrouter_provider:
                     # Capitalize provider name (e.g., "cerebras" -> "Cerebras")
                     provider_name = assignment.openrouter_provider.capitalize()
-
-                    # OpenRouter provider routing via extra_body
-                    # This passes custom parameters through to OpenRouter without the OpenAI SDK rejecting them
-                    model_kwargs["extra_body"] = {
-                        "provider": {
-                            "order": [provider_name],
-                            "allow_fallbacks": False  # Force only the specified provider
-                        }
+                    extra_body["provider"] = {
+                        "order": [provider_name],
+                        "allow_fallbacks": False  # Force only the specified provider
                     }
                     logger.info(f"OpenRouter configured with provider routing: {provider_name} (order: [{provider_name}], fallbacks: disabled)")
+                if assignment.reasoning_effort:
+                    # Cap reasoning for reasoning models. "off" disables it entirely;
+                    # otherwise pass the effort level. (Ignored harmlessly by models
+                    # that don't support reasoning.)
+                    if assignment.reasoning_effort.lower() == "off":
+                        extra_body["reasoning"] = {"enabled": False}
+                    else:
+                        extra_body["reasoning"] = {"effort": assignment.reasoning_effort.lower()}
+                    logger.info(f"OpenRouter reasoning capped: {assignment.reasoning_effort} for {assignment.model}")
+                if extra_body:
+                    model_kwargs["extra_body"] = extra_body
 
                 # Use config base_url, then env var, then default
                 base_url = provider_config.base_url or os.getenv('OPENROUTER_BASE_URL') or "https://openrouter.ai/api/v1"

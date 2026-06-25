@@ -33,6 +33,10 @@ class ModelAssignment(BaseModel):
     openrouter_provider: Optional[str] = None
     temperature: float = 0.7
     max_tokens: int = 4000
+    # OpenRouter reasoning cap for reasoning models (mimo etc.): "low" | "medium" |
+    # "high" | "off". This is the class actually parsed from hephaestus_config.yaml
+    # and consumed (duck-typed) by LangChainLLMClient._create_model.
+    reasoning_effort: Optional[str] = None
 
 
 class MultiProviderLLMConfig(BaseModel):
