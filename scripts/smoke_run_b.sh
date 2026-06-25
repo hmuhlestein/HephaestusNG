@@ -48,12 +48,16 @@ sleep 3
 log "Resetting test repo to smoke-baseline..."
 cd "$PROJECT_PATH"
 
-# Remove all worktrees and agent branches
+# Remove all worktrees and agent/feature branches
 for wt in $(git worktree list --porcelain 2>/dev/null | grep '^worktree ' | awk '{print $2}' | tail -n +2); do
     git worktree remove --force "$wt" 2>/dev/null || rm -rf "$wt"
 done
 git worktree prune 2>/dev/null || true
-git branch 2>/dev/null | grep 'agent-' | xargs -I{} git branch -D {} 2>/dev/null || true
+# git worktree prune clears git's admin entries but leaves the .worktrees/ dirs on
+# disk; nuke them so the shared/per-task worktrees always start fresh.
+rm -rf "$PROJECT_PATH/.worktrees/"* 2>/dev/null || true
+# Delete agent-* and feature/* branches (shared-worktree scheme uses feature/<design>)
+git branch 2>/dev/null | sed 's/[*+]//' | tr -d ' ' | grep -E '^(agent-|feature/)' | xargs -I{} git branch -D {} 2>/dev/null || true
 
 # Reset to clean baseline
 if git rev-parse smoke-baseline >/dev/null 2>&1; then
