@@ -1277,6 +1277,34 @@ class MonitoringLoop:
                     logger.info(f"Phase {phase_name} execution already in_progress with completed task {done_task.id[:8]} — skipping duplicate (continue)")
                     return
 
+            # Bound re-entry (retry/goto). The engine can decide 'retry'/'goto' for a
+            # phase on every monitor cycle; without a cap that creates an unbounded pile
+            # of phase tasks and the phase never advances (observed: architecture_design
+            # retried each cycle, accumulating tasks). Count only monitor-created phase
+            # tasks (agent sub-tasks share the phase_id but aren't re-entries). Per the
+            # bounded-recovery principle, stop after MAX_PHASE_ATTEMPTS.
+            MAX_PHASE_ATTEMPTS = 3
+            if action in ("retry", "goto"):
+                monitor_attempts = session.query(Task).filter(
+                    Task.phase_id == phase_id,
+                    Task.created_by_agent_id == "monitor",
+                ).count()
+                if monitor_attempts >= MAX_PHASE_ATTEMPTS:
+                    logger.warning(
+                        f"[PHASE-PROGRESSION] Phase {phase_name} hit the {action} bound "
+                        f"({monitor_attempts}/{MAX_PHASE_ATTEMPTS} monitor attempts) — pausing the "
+                        f"workflow for human review (impasse, §9.4) instead of looping forever."
+                    )
+                    # Bounded-recovery exhaustion on a phase → impasse, not silent
+                    # continue (§9.4 / §11.2). Pause the run so a human can Resume/Rerun
+                    # from the UI rather than accumulating phase tasks indefinitely.
+                    from src.core.database import Workflow
+                    wf = session.query(Workflow).filter_by(id=workflow_id).first()
+                    if wf and wf.status == "active":
+                        wf.status = "paused"
+                        session.commit()
+                    return
+
             # Create task
             task_id = str(uuid.uuid4())
             task_description = f"Execute {phase.name}: {phase.description}"
