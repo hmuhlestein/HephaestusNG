@@ -1213,7 +1213,7 @@ def run_single_workflow(sdk, workflow_id: str, project_path: str, description: s
     try:
         from src.core.simple_config import get_config
         from src.core.worktree_manager import WorktreeManager
-        from src.core.database import DbManager
+        from src.core.database import DatabaseManager as DbManager
 
         cfg = get_config()
         db = DbManager(cfg)
@@ -1363,7 +1363,7 @@ def run_single_workflow(sdk, workflow_id: str, project_path: str, description: s
                         if design_branch:
                             from src.core.simple_config import get_config
                             from src.core.worktree_manager import WorktreeManager
-                            from src.core.database import DbManager
+                            from src.core.database import DatabaseManager as DbManager
                             cfg = get_config()
                             db = DbManager(cfg)
                             wt_mgr = WorktreeManager(db_manager=db)
