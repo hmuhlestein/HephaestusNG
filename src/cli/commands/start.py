@@ -158,8 +158,10 @@ def _start_backend(python: str, port: int, reload: bool) -> bool:
             cmd,
             cwd=str(HEPHAESTUS_DIR),
             env=env,
+            stdin=subprocess.DEVNULL,
             stdout=log_file,
             stderr=subprocess.STDOUT,
+            start_new_session=True,  # detach into own session — survives launcher/shell exit
         )
         save_pid("backend", proc.pid)
         return True
@@ -176,8 +178,10 @@ def _start_monitor(python: str) -> bool:
         proc = subprocess.Popen(
             [python, str(HEPHAESTUS_DIR / "run_monitor.py")],
             cwd=str(HEPHAESTUS_DIR),
+            stdin=subprocess.DEVNULL,
             stdout=log_file,
             stderr=subprocess.STDOUT,
+            start_new_session=True,  # detach into own session — survives launcher/shell exit (else reaped by SIGKILL)
         )
         save_pid("monitor", proc.pid)
         return True
@@ -222,6 +226,7 @@ def _start_frontend() -> bool:
             stdin=subprocess.DEVNULL,
             stdout=log_file,
             stderr=subprocess.STDOUT,
+            start_new_session=True,  # detach into own session — survives launcher/shell exit
         )
         save_pid("frontend", proc.pid)
         return True
