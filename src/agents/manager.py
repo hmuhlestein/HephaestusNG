@@ -958,6 +958,19 @@ REMEMBER:
                 logger.warning(f"Agent {agent_id} not found")
                 return
 
+            # Preserve any uncommitted work before teardown so a kill/restart is
+            # non-destructive — a resume then continues from the committed branch
+            # state instead of losing in-flight work. No-op if already clean/merged.
+            try:
+                wip = self.branch_manager.commit_changes(
+                    agent_id, f"[WIP] Auto-saved on terminate of agent {agent_id[:8]}"
+                )
+                if isinstance(wip, dict) and wip.get("files_changed"):
+                    logger.info(f"[TERMINATE] Saved WIP for agent {agent_id[:8]}: "
+                                f"{wip['commit_sha'][:8]} ({wip['files_changed']} file(s))")
+            except Exception as e:
+                logger.debug(f"[TERMINATE] WIP commit skipped for {agent_id[:8]}: {e}")
+
             # Capture pane PIDs and final output BEFORE killing the tmux session
             pane_pids = []
             final_output = ""

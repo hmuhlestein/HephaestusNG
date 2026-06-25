@@ -720,6 +720,74 @@ class ServerState:
 server_state = ServerState()
 
 
+def _tmux_session_alive(session_name: str) -> bool:
+    """True if the named tmux session currently exists."""
+    if not session_name:
+        return False
+    try:
+        import subprocess
+        r = subprocess.run(["tmux", "has-session", "-t", session_name],
+                           capture_output=True, timeout=3)
+        return r.returncode == 0
+    except Exception:
+        return False
+
+
+async def _resume_interrupted_workflows():
+    """Re-drive workflows that were mid-flight when the server last stopped.
+
+    Completed phases are durable (committed to the integration branch) and the DB
+    records exactly where each run is. The volatile part is the in-flight agent: its
+    tmux session dies with the server. On startup we find phase agents that still
+    think they're working but whose tmux is gone, and restart them — restart_agent
+    re-attaches to the agent's existing worktree branch (prior commits + context
+    intact) with a 'continue where you left off' prompt. WIP is preserved because
+    terminate_agent auto-commits, and the worktree dir survives a crash regardless.
+    """
+    from src.core.database import Workflow, Task, Agent
+    session = server_state.db_manager.get_session()
+    try:
+        active = session.query(Workflow).filter(
+            Workflow.status.in_(["active", "paused"])
+        ).all()
+        if not active:
+            return
+        if not getattr(server_state, "agent_manager", None):
+            logger.warning("[RESUME] agent_manager not ready — skipping resume scan")
+            return
+
+        resumed = 0
+        for wf in active:
+            # Only tasks that still need work — a 'done' task advances via the
+            # monitor's phase-completion check, not by restarting its old agent.
+            task_ids = [t.id for t in session.query(Task).filter(
+                Task.workflow_id == wf.id,
+                Task.status.in_(["pending", "assigned", "in_progress", "queued"]),
+            ).all()]
+            if not task_ids:
+                continue
+            orphans = session.query(Agent).filter(
+                Agent.current_task_id.in_(task_ids),
+                Agent.agent_type == "phase",
+                Agent.status.in_(["working", "idle", "starting"]),
+            ).all()
+            for agent in orphans:
+                if _tmux_session_alive(agent.tmux_session_name):
+                    continue  # still alive (e.g., only the monitor restarted) — leave it
+                logger.info(f"[RESUME] Workflow {wf.id[:8]}: restarting orphaned phase agent "
+                            f"{agent.id[:8]} (dead tmux session) to continue from committed state")
+                try:
+                    await server_state.agent_manager.restart_agent(
+                        agent.id, reason="server restarted — resuming interrupted work"
+                    )
+                    resumed += 1
+                except Exception as e:
+                    logger.warning(f"[RESUME] Failed to restart agent {agent.id[:8]}: {e}")
+        if resumed:
+            logger.info(f"[RESUME] Resumed {resumed} interrupted phase agent(s) across "
+                        f"{len(active)} active workflow(s)")
+    finally:
+        session.close()
 
 
 @app.on_event("startup")
@@ -890,6 +958,13 @@ async def startup_event():
     logger.info("Starting background queue processor...")
     server_state.background_queue_processor_task = asyncio.create_task(background_queue_processor())
     logger.info("Background queue processor task created")
+
+    # Resume any workflows that were mid-flight when the server last stopped
+    # (crash / laptop sleep / manual restart) so real work isn't stranded.
+    try:
+        await _resume_interrupted_workflows()
+    except Exception as e:
+        logger.error(f"[RESUME] resume scan failed: {e}")
 
     logger.info("Server started successfully")
 
