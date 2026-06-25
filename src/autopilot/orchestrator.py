@@ -13,6 +13,7 @@ Designed to run for days/weeks, processing designs as they arrive.
 
 import os
 import sys
+import git as _git
 import time
 import json
 import shutil
@@ -1206,16 +1207,54 @@ def run_single_workflow(sdk, workflow_id: str, project_path: str, description: s
         "design": design_name or design_doc,
     })
 
+    # Create a shared worktree for this design (all phases commit here)
+    design_worktree_path = None
+    design_branch_name = None
+    try:
+        from src.core.simple_config import get_config
+        from src.core.worktree_manager import WorktreeManager
+        from src.core.database import DbManager
+
+        cfg = get_config()
+        db = DbManager(cfg)
+        wt_mgr = WorktreeManager(db_manager=db)
+
+        # Create feature branch from main
+        import git as _git
+        # Use design_entry name if available, otherwise derive from design_doc
+        _design_label = design_name.replace(' ', '-').lower() if design_name else 'design'
+        feature_branch = f"feature/{_design_label}"
+        # Ensure branch name is unique (append short hash if needed)
+        try:
+            wt_mgr.main_repo.git.branch(feature_branch)
+        except _git.exc.GitCommandError:
+            # Branch exists — use it (idempotent)
+            pass
+
+        # Create worktree for the feature branch
+        wt_path = wt_mgr.worktree_base / f"wt_{feature_branch}"
+        if not wt_path.exists():
+            wt_mgr.main_repo.git.worktree("add", str(wt_path), feature_branch)
+        design_worktree_path = str(wt_path)
+        design_branch_name = feature_branch
+        logger.info(f"Created shared worktree: {design_worktree_path} (branch: {feature_branch})")
+    except Exception as e:
+        logger.warning(f"Failed to create shared worktree, using project path: {e}")
+        design_worktree_path = project_path
+
     try:
         exec_id = sdk.start_workflow(
             definition_id=workflow_id,
             description=description,
-            working_directory=project_path,
+            working_directory=design_worktree_path or project_path,
             launch_params=launch_params or {},
         )
         logger.info(f"Workflow launched: {exec_id}")
         if state:
             state.current_workflow_id = exec_id
+            # Store branch name for final merge
+            state._design_branch = design_branch_name
+            state._design_worktree = design_worktree_path
     except Exception as e:
         logger.error(f"Failed to launch workflow {workflow_id}: {e}")
         return "failed"
@@ -1314,20 +1353,50 @@ def run_single_workflow(sdk, workflow_id: str, project_path: str, description: s
 
                     logger.info(f"Workflow complete: {len(done)} tasks done, no agents active, all phases done")
 
-                    # Final merge: merge all agent branches to main
+                    # Final merge: merge the shared design branch into main
                     try:
-                        from src.mcp.server import server_state
-                        if hasattr(server_state, '_completed_agent_branches') and server_state._completed_agent_branches:
-                            branches = server_state._completed_agent_branches
-                            logger.info(f"Final merge: merging {len(branches)} agent branches to main")
-                            for entry in branches:
-                                try:
-                                    result = server_state.branch_manager.merge_to_main(entry['agent_id'])
-                                    logger.info(f"  Merged {entry['branch']}: {result.get('status', 'unknown')}")
-                                except Exception as e:
-                                    logger.warning(f"  Failed to merge {entry['branch']}: {e}")
-                            server_state._completed_agent_branches = []
-                            logger.info("Final merge complete")
+                        design_branch = getattr(state, '_design_branch', None)
+                        if design_branch:
+                            from src.core.simple_config import get_config
+                            from src.core.worktree_manager import WorktreeManager
+                            from src.core.database import DbManager
+                            cfg = get_config()
+                            db = DbManager(cfg)
+                            wt_mgr = WorktreeManager(db_manager=db)
+
+                            # Ensure main is clean
+                            wt_mgr.main_repo.heads[wt_mgr.config.base_branch].checkout()
+                            try:
+                                wt_mgr.main_repo.git.merge("--abort")
+                            except Exception:
+                                pass
+                            wt_mgr.main_repo.git.reset("--hard", "HEAD")
+                            wt_mgr.main_repo.git.clean("-fd")
+
+                            # Merge the design branch
+                            try:
+                                result = wt_mgr.main_repo.git.merge(
+                                    design_branch, no_ff=True,
+                                    m=f"Merge design branch {design_branch} into main"
+                                )
+                                merge_sha = wt_mgr.main_repo.head.commit.hexsha
+                                logger.info(f"Final merge complete: {design_branch} -> main ({merge_sha[:8]})")
+                            except _git.exc.GitCommandError as e:
+                                if "CONFLICT" in str(e):
+                                    logger.warning(f"Merge conflict on {design_branch} -> main, aborting")
+                                    wt_mgr.main_repo.git.merge("--abort")
+                                    # Create PR instead
+                                    logger.info(f"Conflict detected — branch {design_branch} preserved for manual merge/PR")
+                                else:
+                                    raise
+
+                            # Clean up worktree
+                            try:
+                                wt_mgr.main_repo.git.worktree("remove", str(wt_mgr.worktree_base / f"wt_{design_branch}"), "--force")
+                            except Exception:
+                                pass
+                        else:
+                            logger.info("No design branch tracked — skipping final merge")
                     except Exception as e:
                         logger.warning(f"Final merge failed: {e}")
 
