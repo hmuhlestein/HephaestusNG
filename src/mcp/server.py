@@ -922,6 +922,23 @@ def verify_agent_id(agent_id: str = Header(None, alias="X-Agent-ID")) -> str:
     return agent_id
 
 
+def _touch_agent_activity(agent_id: str) -> None:
+    """Update agent's last_activity timestamp (best-effort, never raises)."""
+    try:
+        session = server_state.db_manager.get_session()
+        try:
+            from src.core.database import Agent
+            agent = session.query(Agent).filter_by(id=agent_id).first()
+            if agent:
+                from datetime import datetime
+                agent.last_activity = datetime.utcnow()
+                session.commit()
+        finally:
+            session.close()
+    except Exception:
+        pass  # non-critical
+
+
 async def process_queue():
     """Process the next queued task by creating an agent for it.
 
@@ -1344,6 +1361,7 @@ async def create_task(
     agent_id: str = Header(..., alias="X-Agent-ID"),
 ):
     """Create a new task with automatic enrichment and agent assignment."""
+    _touch_agent_activity(agent_id)
     logger.info(f"Creating task from agent {agent_id}: {request.task_description[:100]}...")
 
     try:
@@ -1862,6 +1880,7 @@ async def update_task_status(
     agent_id: str = Header(..., alias="X-Agent-ID"),
 ):
     """Update task status when complete or failed."""
+    _touch_agent_activity(agent_id)
     logger.info(f"Updating task {request.task_id} status to {request.status}")
 
     try:
@@ -2189,6 +2208,7 @@ async def save_memory(
     agent_id: str = Header(..., alias="X-Agent-ID"),
 ):
     """Store important discoveries and learnings."""
+    _touch_agent_activity(agent_id)
     logger.info(f"Saving memory from agent {agent_id}: {request.memory_content[:100]}...")
 
     try:
