@@ -6,7 +6,7 @@ import WorkflowStats from './WorkflowStats';
 import PhaseList from './PhaseList';
 import { useNavigate } from 'react-router-dom';
 import { useWorkflow } from '@/context/WorkflowContext';
-import { ExternalLink, Layers, Play, Pause, Trash2 } from 'lucide-react';
+import { ExternalLink, Layers, Play, Pause, Trash2, RotateCw } from 'lucide-react';
 
 const statusColors: Record<string, string> = {
   active: 'bg-green-500',
@@ -52,8 +52,10 @@ export default function WorkflowCard({
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['workflow-executions'] }),
   });
 
-  const resumeMutation = useMutation({
-    mutationFn: () => apiService.resumeWorkflow(execution.id),
+  // Recover = non-destructive resume: reactivates the run and restarts any orphaned
+  // phase agent on its existing worktree, continuing from the last committed phase.
+  const recoverMutation = useMutation({
+    mutationFn: () => apiService.recoverWorkflow(execution.id),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['workflow-executions'] }),
   });
 
@@ -67,9 +69,9 @@ export default function WorkflowCard({
     await stopMutation.mutateAsync();
   };
 
-  const handleResume = async (e: React.MouseEvent) => {
+  const handleRecover = async (e: React.MouseEvent) => {
     e.stopPropagation();
-    await resumeMutation.mutateAsync();
+    await recoverMutation.mutateAsync();
   };
 
   const handleCancel = async (e: React.MouseEvent) => {
@@ -131,12 +133,22 @@ export default function WorkflowCard({
             )}
             {execution.status === 'paused' && (
               <button
-                onClick={handleResume}
-                disabled={resumeMutation.isPending}
+                onClick={handleRecover}
+                disabled={recoverMutation.isPending}
                 className="p-1.5 bg-green-500 hover:bg-green-600 text-white rounded transition-colors disabled:opacity-50"
-                title="Resume workflow"
+                title="Resume — continue from the last committed phase"
               >
                 <Play className="w-3 h-3" />
+              </button>
+            )}
+            {(execution.status === 'active' || execution.status === 'failed') && (
+              <button
+                onClick={handleRecover}
+                disabled={recoverMutation.isPending}
+                className="p-1.5 bg-emerald-500 hover:bg-emerald-600 text-white rounded transition-colors disabled:opacity-50"
+                title="Recover — restart a stalled/interrupted run from its last committed phase"
+              >
+                <RotateCw className={`w-3 h-3 ${recoverMutation.isPending ? 'animate-spin' : ''}`} />
               </button>
             )}
             {(execution.status === 'active' || execution.status === 'paused') && (
