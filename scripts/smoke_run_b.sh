@@ -44,6 +44,28 @@ pkill -9 -f "heph autopilot" 2>/dev/null || true
 pkill -9 -f "pi.*approve" 2>/dev/null || true
 sleep 3
 
+# ─── Reset test repo to clean baseline ──────────────────────────────
+log "Resetting test repo to smoke-baseline..."
+cd "$PROJECT_PATH"
+
+# Remove all worktrees and agent branches
+for wt in $(git worktree list --porcelain 2>/dev/null | grep '^worktree ' | awk '{print $2}' | tail -n +2); do
+    git worktree remove --force "$wt" 2>/dev/null || rm -rf "$wt"
+done
+git worktree prune 2>/dev/null || true
+git branch 2>/dev/null | grep 'agent-' | xargs -I{} git branch -D {} 2>/dev/null || true
+
+# Reset to clean baseline
+if git rev-parse smoke-baseline >/dev/null 2>&1; then
+    git checkout main 2>/dev/null || git checkout main-temp 2>/dev/null || true
+    git reset --hard smoke-baseline
+    git clean -fd 2>/dev/null || true
+    log "Reset to smoke-baseline (clean docs, no stale outputs)"
+else
+    warn "smoke-baseline tag not found — skipping repo reset"
+fi
+cd - >/dev/null
+
 # ─── Clean state ──────────────────────────────────────────────────────
 log "Cleaning state..."
 rm -rf ~/.hephaestus/autopilot/run-*
@@ -52,13 +74,6 @@ rm -rf ~/.hephaestus/autopilot/processed_designs.json
 rm -rf ~/.hephaestus/autopilot/state.json
 rm -rf ~/.hephaestus/autopilot/input_*.json
 rm -rf /tmp/hephaestus_worktrees/*
-
-# Clean project worktrees and agent branches
-for wt in $(git -C "$PROJECT_PATH" worktree list --porcelain 2>/dev/null | grep '^worktree ' | awk '{print $2}' | tail -n +2); do
-    git -C "$PROJECT_PATH" worktree remove --force "$wt" 2>/dev/null || rm -rf "$wt"
-done
-git -C "$PROJECT_PATH" worktree prune 2>/dev/null || true
-git -C "$PROJECT_PATH" branch 2>/dev/null | grep 'agent-' | xargs -I{} git -C "$PROJECT_PATH" branch -D {} 2>/dev/null || true
 
 sqlite3 "$DB" "
     DELETE FROM tasks;
