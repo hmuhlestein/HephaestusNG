@@ -263,15 +263,25 @@ class AgentManager:
                         self._complexity_cache = {}
                     complexity = self._complexity_cache.get(task.workflow_id)
                     if complexity is None:
-                        # Classify from the actual DESIGN, not the phase task prompt. The
-                        # design is copied into the worktree at .hephaestus/design.md;
-                        # fall back to the task text only if it's missing.
+                        # Classify from the actual DESIGN, not the phase task prompt.
+                        # Source priority (whatever exists in the worktree): the original
+                        # design doc → injected design → phase-1 requirements. Fall back to
+                        # the task text only if none are present.
                         design_text = ""
                         try:
                             from pathlib import Path as _P
                             if working_directory:
-                                for _cand in (".hephaestus/design.md", ".hephaestus/design_document.md"):
-                                    _p = _P(working_directory) / _cand
+                                wd = _P(working_directory)
+                                cands = []
+                                dq = wd / "docs" / "design-queue"
+                                if dq.is_dir():
+                                    cands += sorted(dq.glob("*.md"))
+                                cands += [
+                                    wd / ".hephaestus" / "design.md",
+                                    wd / ".hephaestus" / "design_document.md",
+                                    wd / "docs" / "requirements_analysis.md",
+                                ]
+                                for _p in cands:
                                     if _p.is_file():
                                         design_text = _p.read_text()[:6000]
                                         break
