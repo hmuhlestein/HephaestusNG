@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   X, FileText, GitBranch, Clock, CheckCircle2, XCircle, AlertTriangle,
-  Loader2, RotateCcw, ChevronDown, ChevronRight, ExternalLink, Play
+  Loader2, RotateCcw, ChevronDown, ChevronRight, ExternalLink, Play, Pause, Square
 } from 'lucide-react';
 import { apiService, api } from '@/services/api';
 import { Button } from '@/components/ui/button';
@@ -62,6 +62,37 @@ const DesignDetailModal: React.FC<DesignDetailModalProps> = ({ projectId, filena
     onError: (e: any) => {
       toast.error(e?.response?.data?.detail || e?.message || 'Failed to rerun');
     },
+  });
+
+  // Pause: terminate the running agents (WIP auto-committed) and mark the run paused
+  // so it can be Resumed later. Targets the design's active workflow.
+  const pauseMutation = useMutation({
+    mutationFn: () => {
+      const wfs = (status?.workflows || []) as any[];
+      const wf = wfs.find((w) => w.status === 'active') || wfs[0];
+      if (!wf?.id) throw new Error('No active run to pause');
+      return apiService.pauseWorkflow(wf.id);
+    },
+    onSuccess: () => {
+      toast.success('Run paused — Resume to continue from the last committed phase');
+      queryClient.invalidateQueries({ queryKey: ['design-status', projectId, filename] });
+    },
+    onError: (e: any) => toast.error(e?.response?.data?.detail || e?.message || 'Failed to pause'),
+  });
+
+  // Stop: terminate agents and end the run (marked failed). Use Rerun to start over.
+  const stopMutation = useMutation({
+    mutationFn: () => {
+      const wfs = (status?.workflows || []) as any[];
+      const wf = wfs.find((w) => ['active', 'paused'].includes(w.status)) || wfs[0];
+      if (!wf?.id) throw new Error('No running run to stop');
+      return apiService.cancelWorkflow(wf.id);
+    },
+    onSuccess: () => {
+      toast.success('Run stopped');
+      queryClient.invalidateQueries({ queryKey: ['design-status', projectId, filename] });
+    },
+    onError: (e: any) => toast.error(e?.response?.data?.detail || e?.message || 'Failed to stop'),
   });
 
   // Resume: non-destructive recovery of an interrupted run. Restarts the orphaned
@@ -311,6 +342,34 @@ const DesignDetailModal: React.FC<DesignDetailModalProps> = ({ projectId, filena
             <div className="flex items-center gap-2">
               {onRerun && (
                 <>
+                  <Button
+                    onClick={() => pauseMutation.mutate()}
+                    disabled={pauseMutation.isPending}
+                    variant="outline"
+                    className="text-yellow-600 border-yellow-200 hover:bg-yellow-50"
+                    title="Pause this run — agents stop (work is committed), Resume later"
+                  >
+                    {pauseMutation.isPending ? (
+                      <Loader2 className="w-4 h-4 mr-1 animate-spin" />
+                    ) : (
+                      <Pause className="w-4 h-4 mr-1" />
+                    )}
+                    Pause
+                  </Button>
+                  <Button
+                    onClick={() => stopMutation.mutate()}
+                    disabled={stopMutation.isPending}
+                    variant="outline"
+                    className="text-red-600 border-red-200 hover:bg-red-50"
+                    title="Stop this run and terminate its agents"
+                  >
+                    {stopMutation.isPending ? (
+                      <Loader2 className="w-4 h-4 mr-1 animate-spin" />
+                    ) : (
+                      <Square className="w-4 h-4 mr-1" />
+                    )}
+                    Stop
+                  </Button>
                   <Button
                     onClick={() => recoverMutation.mutate()}
                     disabled={recoverMutation.isPending}
