@@ -10,6 +10,7 @@ from src.sdk.models import Phase
 PHASE_3_DEVELOPMENT = Phase(
     id=3,
     name="development",
+    thinking_level="high",  # the core coding work — reasoning is the value
     description="""Implement all components according to the architecture.
 
 Reads architecture.md from Phase 2, implements each component following

@@ -11,6 +11,7 @@ from src.sdk.models import Phase
 PHASE_1_PRODUCT_REQUIREMENTS = Phase(
     id=1,
     name="product_requirements",
+    thinking_level="low",  # structured extraction, not deep design
     description="""Extract structured requirements from design documents with full project context.
 
 Reads the design document, understands the larger project vision by examining

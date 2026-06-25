@@ -11,6 +11,7 @@ from src.sdk.models import Phase
 PHASE_8_PRODUCT_VALIDATION = Phase(
     id=8,
     name="product_validation",
+    thinking_level="medium",  # validate against requirements
     description="""Validate that the implementation meets the original design intent.
 
 After QA testing passes, this phase performs a final product-level validation.

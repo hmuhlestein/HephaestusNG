@@ -11,6 +11,7 @@ from src.sdk.models import Phase
 PHASE_5_DOC_REVIEW = Phase(
     id=5,
     name="doc_review",
+    thinking_level="low",  # mostly mechanical checking
     description="""Review and fix all project documentation for accuracy, completeness, and quality.
 
 Compares documentation against the actual implementation, fixes inaccuracies,

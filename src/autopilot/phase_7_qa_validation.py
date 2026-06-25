@@ -11,6 +11,7 @@ from src.sdk.models import Phase
 PHASE_7_QA_VALIDATION = Phase(
     id=7,
     name="qa_validation",
+    thinking_level="medium",  # run tests + reason about failures
     description="""Run comprehensive QA tests and validate the implementation.
 
 Executes unit tests, integration tests, and end-to-end validation.

@@ -217,6 +217,7 @@ class PhaseManager:
                         next_steps=phase_def.next_steps,
                         working_directory=phase_def.working_directory,
                         validation=phase_def.validation,  # Add validation config
+                        thinking_level=getattr(phase_def, 'thinking_level', None),  # per-phase pi reasoning budget
                     )
                     session.add(phase)
 

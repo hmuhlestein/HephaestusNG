@@ -11,6 +11,7 @@ from src.sdk.models import Phase
 PHASE_6_SECURITY_REVIEW = Phase(
     id=6,
     name="security_review",
+    thinking_level="high",  # deep adversarial reasoning finds real issues
     description="""Perform focused security review and fix vulnerabilities found.
 
 Analyzes the codebase for security vulnerabilities, authentication issues,
