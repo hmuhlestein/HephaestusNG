@@ -263,8 +263,23 @@ class AgentManager:
                         self._complexity_cache = {}
                     complexity = self._complexity_cache.get(task.workflow_id)
                     if complexity is None:
-                        design_text = (enriched_data or {}).get("enriched_description") \
-                            or task.enriched_description or task.raw_description or ""
+                        # Classify from the actual DESIGN, not the phase task prompt. The
+                        # design is copied into the worktree at .hephaestus/design.md;
+                        # fall back to the task text only if it's missing.
+                        design_text = ""
+                        try:
+                            from pathlib import Path as _P
+                            if working_directory:
+                                for _cand in (".hephaestus/design.md", ".hephaestus/design_document.md"):
+                                    _p = _P(working_directory) / _cand
+                                    if _p.is_file():
+                                        design_text = _p.read_text()[:6000]
+                                        break
+                        except Exception:
+                            pass
+                        if not design_text:
+                            design_text = (enriched_data or {}).get("enriched_description") \
+                                or task.enriched_description or task.raw_description or ""
                         complexity = await self.llm_provider.classify_complexity(design_text)
                         self._complexity_cache[task.workflow_id] = complexity
                     # low complexity → low thinking; medium → medium; high → keep phase base

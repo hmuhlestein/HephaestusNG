@@ -92,9 +92,13 @@ sqlite3 "$DB" "
     DELETE FROM phases;
     DELETE FROM workflows;
     DELETE FROM agents WHERE agent_type IN ('phase', 'orchestrator');
+    DELETE FROM ticket_comments;
+    DELETE FROM tickets;
     UPDATE autopilot_designs SET status='pending', completed_at=NULL
     WHERE project_id='proj-06a3e0670328';
 " 2>/dev/null
+# Rebuild the ticket FTS index (ignore if the virtual table isn't present)
+sqlite3 "$DB" "DELETE FROM ticket_fts;" 2>/dev/null || true
 
 # ─── Verify seeded test ──────────────────────────────────────────────
 if [[ ! -f "$PROJECT_PATH/tests/test_compute.py" ]]; then
