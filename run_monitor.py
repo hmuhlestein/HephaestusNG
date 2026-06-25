@@ -117,8 +117,9 @@ async def setup_monitoring_system():
 
 def signal_handler(signum, frame):
     """Handle shutdown signals gracefully."""
-    logger.info(f"Received signal {signum}, initiating graceful shutdown...")
-
+    logger.critical(f"RECEIVED SIGNAL {signum} — shutting down")
+    import traceback
+    logger.critical(f"Stack trace at signal time:\n{''.join(traceback.format_stack(frame))}")
     if monitoring_loop:
         asyncio.create_task(monitoring_loop.stop())
     else:
@@ -136,6 +137,9 @@ async def main():
     # Set up signal handlers for graceful shutdown
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
+    signal.signal(signal.SIGHUP, signal_handler)
+    signal.signal(signal.SIGQUIT, signal_handler)
+    signal.signal(signal.SIGALRM, signal_handler)
 
     try:
         # Setup monitoring system
