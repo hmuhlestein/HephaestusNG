@@ -1397,6 +1397,38 @@ REMEMBER:
         finally:
             session.close()
 
+    async def send_recovery_keystrokes(self, agent_id: str) -> bool:
+        """Send the CLI's mechanical recovery keystrokes (e.g. Esc for pi) to break a
+        stuck/looping TUI. Generic + polymorphic via CLIAgentInterface.recovery_keystrokes()
+        — the monitor stays harness-agnostic. Returns True if keys were sent."""
+        session = self.db_manager.get_session()
+        try:
+            agent = session.query(Agent).filter_by(id=agent_id).first()
+            if not agent or not agent.tmux_session_name:
+                return False
+            if not self.tmux_server.has_session(agent.tmux_session_name):
+                return False
+            keys = get_cli_agent(agent.cli_type).recovery_keystrokes()
+            if not keys:
+                return False
+            tmux_session = next(
+                (s for s in self.tmux_server.sessions if s.name == agent.tmux_session_name), None
+            )
+            if not tmux_session:
+                return False
+            pane = tmux_session.attached_window.attached_pane
+            for k in keys:
+                # literal=False so tmux interprets key names like "Escape"
+                pane.send_keys(k, enter=False, literal=False)
+                await asyncio.sleep(0.3)
+            logger.info(f"[RECOVERY] Sent {keys} to agent {agent_id[:8]} ({agent.cli_type}) to break stuck TUI")
+            return True
+        except Exception as e:
+            logger.warning(f"[RECOVERY] Failed to send recovery keys to {agent_id[:8]}: {e}")
+            return False
+        finally:
+            session.close()
+
     async def send_message_to_agent(self, agent_id: str, message: str):
         """Send a message to an agent's tmux session.
 

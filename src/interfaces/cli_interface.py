@@ -78,6 +78,13 @@ class CLIAgentInterface(ABC):
         """
         pass
 
+    def recovery_keystrokes(self) -> List[str]:
+        """tmux key names to break this CLI out of a stuck/looping TUI before a nudge
+        message is sent (e.g. ['Escape']). Empty = no mechanical keystroke recovery for
+        this CLI. Concrete with a safe default so the monitor stays harness-agnostic;
+        override per CLI (polymorphic)."""
+        return []
+
     # ── Shared helpers ───────────────────────────────────────────────────
 
     def _save_prompt_to_file(self, prompt: str, prefix: str, task_id: str) -> str:
@@ -470,6 +477,11 @@ class PiAgent(CLIAgentInterface):
             r"connection timeout", r"Error:.*API", r"Failed to connect",
             r"Maximum retries exceeded", r"authentication failed", r"invalid API key",
         ]
+
+    def recovery_keystrokes(self) -> List[str]:
+        # pi (mimo) can fall into a thought loop that never exits; Esc interrupts the
+        # current generation so a follow-up nudge message is actually read.
+        return ["Escape"]
 
     def parse_output(self, output: str) -> Dict[str, Any]:
         lines = output.strip().split('\n')
