@@ -2,6 +2,8 @@
 
 import asyncio
 import logging
+import time
+from pathlib import Path
 from typing import Dict, Any, Optional, List
 from datetime import datetime, timedelta
 from enum import Enum
@@ -441,9 +443,13 @@ class MonitoringLoop:
 
         while self.running:
             try:
+                # Write heartbeat file so external watchdogs can verify we're alive
+                heartbeat = Path.home() / ".hephaestus" / "logs" / "monitor_heartbeat"
+                heartbeat.write_text(str(time.time()))
+
                 await self._monitoring_cycle()
             except Exception as e:
-                logger.error(f"Error in monitoring cycle: {e}")
+                logger.error(f"Error in monitoring cycle: {e}", exc_info=True)
 
             # Wait for next cycle
             await asyncio.sleep(self.config.monitoring_interval_seconds)
