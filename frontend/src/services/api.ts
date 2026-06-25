@@ -87,6 +87,18 @@ export const apiService = {
     return data;
   },
 
+  // Recover an interrupted run (crash / sleep / restart): restarts orphaned phase
+  // agents on their existing worktree so the run continues from the committed state.
+  // Omit workflowId to recover all interrupted runs.
+  recoverWorkflow: async (
+    workflowId?: string
+  ): Promise<{ recovered: boolean; resumed_agents: number; workflows: string[] }> => {
+    const { data } = await api.post('/autopilot/recover', null, {
+      params: workflowId ? { workflow_id: workflowId } : {},
+    });
+    return data;
+  },
+
   pauseWorkflow: async (workflowId: string): Promise<{ status: string }> => {
     const { data } = await api.post(`/workflow-executions/${workflowId}/stop`);
     return data;

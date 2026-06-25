@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   X, FileText, GitBranch, Clock, CheckCircle2, XCircle, AlertTriangle,
-  Loader2, RotateCcw, ChevronDown, ChevronRight, ExternalLink, Wrench
+  Loader2, RotateCcw, ChevronDown, ChevronRight, ExternalLink, Play
 } from 'lucide-react';
 import { apiService, api } from '@/services/api';
 import { Button } from '@/components/ui/button';
@@ -75,55 +75,26 @@ const DesignDetailModal: React.FC<DesignDetailModalProps> = ({ projectId, filena
     },
   });
 
-  const repairMutation = useMutation({
-    mutationFn: async () => {
-      const project = await apiService.getActiveProject();
-      if (!project) throw new Error('No active project');
-      return api.post('/autopilot/queue/repair', {
-        filename,
-        project_path: project.base_dir,
-      });
+  // Resume: non-destructive recovery of an interrupted run. Restarts the orphaned
+  // phase agent on its existing worktree (prior commits + context intact) so the
+  // run continues from the last committed phase — unlike Requeue/Rerun which start
+  // the design over. Targets this design's most recent interrupted workflow.
+  const recoverMutation = useMutation({
+    mutationFn: () => {
+      const wfs = (status?.workflows || []) as any[];
+      const wf = wfs.find((w) => ['active', 'paused', 'failed'].includes(w.status)) || wfs[0];
+      return apiService.recoverWorkflow(wf?.id);
     },
-    onSuccess: (data: any) => {
-      const repairId = data.repair_id;
-      if (repairId) {
-        toast.success(`Repair started (${repairId})`);
-        // Refresh design status to show new workflow/agent
-        queryClient.invalidateQueries({ queryKey: ['design-status', projectId, filename] });
-        // Poll for completion
-        const poll = async () => {
-          for (let i = 0; i < 60; i++) {
-            await new Promise(r => setTimeout(r, 3000));
-            try {
-              // Refetch design status to show progress
-              await queryClient.invalidateQueries({ queryKey: ['design-status', projectId, filename] });
-              const result = await api.get(`/autopilot/queue/repair/${repairId}`);
-              const data = result.data || result;
-              if (data.status === 'completed') {
-                const actions = data.actions_taken || [];
-                if (actions.length > 0) {
-                  toast.success(`Repaired: ${actions.join(', ')}`);
-                } else {
-                  toast.success('Design looks healthy - no repairs needed');
-                }
-                await queryClient.invalidateQueries({ queryKey: ['design-status', projectId, filename] });
-                return;
-              }
-            } catch (e) {
-              // continue polling
-            }
-          }
-          toast.success('Repair completed');
-          await queryClient.invalidateQueries({ queryKey: ['design-status', projectId, filename] });
-        };
-        poll();
-      } else {
-        toast.success('Repair started');
-        queryClient.invalidateQueries({ queryKey: ['design-status', projectId, filename] });
-      }
+    onSuccess: (data) => {
+      toast.success(
+        data.resumed_agents > 0
+          ? `Resumed ${data.resumed_agents} agent(s) from last checkpoint`
+          : 'Run reactivated — continuing from last committed phase'
+      );
+      queryClient.invalidateQueries({ queryKey: ['design-status', projectId, filename] });
     },
     onError: (e: any) => {
-      toast.error(e?.response?.data?.detail || 'Failed to repair');
+      toast.error(e?.response?.data?.detail || 'Failed to resume');
     },
   });
 
@@ -352,17 +323,18 @@ const DesignDetailModal: React.FC<DesignDetailModalProps> = ({ projectId, filena
               {onRerun && (
                 <>
                   <Button
-                    onClick={() => repairMutation.mutate()}
-                    disabled={repairMutation.isPending}
+                    onClick={() => recoverMutation.mutate()}
+                    disabled={recoverMutation.isPending}
                     variant="outline"
                     className="text-emerald-600 border-emerald-200 hover:bg-emerald-50"
+                    title="Continue this run from the last committed phase (non-destructive)"
                   >
-                    {repairMutation.isPending ? (
+                    {recoverMutation.isPending ? (
                       <Loader2 className="w-4 h-4 mr-1 animate-spin" />
                     ) : (
-                      <Wrench className="w-4 h-4 mr-1" />
+                      <Play className="w-4 h-4 mr-1" />
                     )}
-                    Repair
+                    Resume
                   </Button>
                   <Button
                     onClick={() => requeueMutation.mutate()}

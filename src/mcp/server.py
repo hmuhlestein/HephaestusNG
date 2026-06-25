@@ -733,28 +733,46 @@ def _tmux_session_alive(session_name: str) -> bool:
         return False
 
 
-async def _resume_interrupted_workflows():
+async def _resume_interrupted_workflows(workflow_id: Optional[str] = None, reactivate: bool = False):
     """Re-drive workflows that were mid-flight when the server last stopped.
 
     Completed phases are durable (committed to the integration branch) and the DB
     records exactly where each run is. The volatile part is the in-flight agent: its
-    tmux session dies with the server. On startup we find phase agents that still
-    think they're working but whose tmux is gone, and restart them — restart_agent
-    re-attaches to the agent's existing worktree branch (prior commits + context
-    intact) with a 'continue where you left off' prompt. WIP is preserved because
-    terminate_agent auto-commits, and the worktree dir survives a crash regardless.
+    tmux session dies with the server. We find phase agents that still think they're
+    working but whose tmux is gone, and restart them — restart_agent re-attaches to
+    the agent's existing worktree branch (prior commits + context intact) with a
+    'continue where you left off' prompt. WIP is preserved because terminate_agent
+    auto-commits, and the worktree dir survives a crash regardless.
+
+    Runs on startup (all interrupted workflows) and on demand via the recover
+    endpoint (optionally scoped to one workflow_id; reactivate=True flips a
+    paused/failed workflow back to active first — the UI "Retry" path).
+
+    Returns {"resumed": int, "workflows": [ids]}.
     """
     from src.core.database import Workflow, Task, Agent
     session = server_state.db_manager.get_session()
+    result = {"resumed": 0, "workflows": []}
     try:
-        active = session.query(Workflow).filter(
-            Workflow.status.in_(["active", "paused"])
-        ).all()
-        if not active:
-            return
         if not getattr(server_state, "agent_manager", None):
             logger.warning("[RESUME] agent_manager not ready — skipping resume scan")
-            return
+            return result
+
+        statuses = ["active", "paused"] + (["failed"] if reactivate else [])
+        q = session.query(Workflow).filter(Workflow.status.in_(statuses))
+        if workflow_id:
+            q = q.filter(Workflow.id == workflow_id)
+        active = q.all()
+        if not active:
+            return result
+
+        # On-demand retry can flip a paused/failed workflow back to active so the
+        # monitor re-drives it (and the scan below restarts any orphaned agents).
+        if reactivate:
+            for wf in active:
+                if wf.status in ("paused", "failed"):
+                    wf.status = "active"
+            session.commit()
 
         resumed = 0
         for wf in active:
@@ -783,9 +801,12 @@ async def _resume_interrupted_workflows():
                     resumed += 1
                 except Exception as e:
                     logger.warning(f"[RESUME] Failed to restart agent {agent.id[:8]}: {e}")
+        result["resumed"] = resumed
+        result["workflows"] = [wf.id for wf in active]
         if resumed:
             logger.info(f"[RESUME] Resumed {resumed} interrupted phase agent(s) across "
-                        f"{len(active)} active workflow(s)")
+                        f"{len(active)} workflow(s)")
+        return result
     finally:
         session.close()
 
@@ -5703,6 +5724,30 @@ async def resume_workflow(workflow_id: str, request: Request):
         return {"status": "active", "workflow_id": workflow_id}
     finally:
         session.close()
+
+
+@app.post("/api/autopilot/recover")
+async def recover_workflows(workflow_id: Optional[str] = None):
+    """Recover interrupted runs on demand (the UI 'Retry' action).
+
+    Re-drives workflows whose in-flight phase agent died (crash / sleep / restart):
+    restarts each orphaned agent on its existing worktree branch so the run continues
+    from the last committed state. With workflow_id, scopes to that run and flips a
+    paused/failed workflow back to 'active' first. Without it, recovers all
+    interrupted active/paused workflows.
+    """
+    try:
+        summary = await _resume_interrupted_workflows(
+            workflow_id=workflow_id, reactivate=bool(workflow_id)
+        )
+        return {
+            "recovered": True,
+            "resumed_agents": summary.get("resumed", 0),
+            "workflows": summary.get("workflows", []),
+        }
+    except Exception as e:
+        logger.error(f"[RECOVER] on-demand recovery failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/api/workflow-executions/{workflow_id}/cancel")
