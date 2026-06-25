@@ -1238,6 +1238,24 @@ class MonitoringLoop:
                 logger.info(f"Phase {phase_name} already has active task {existing_task.id[:8]}, skipping creation")
                 return
 
+            execution = session.query(PhaseExecution).filter_by(phase_id=phase_id).first()
+
+            # Idempotency for forward 'continue': the first continue into a phase sets
+            # its execution to 'in_progress' (below). A duplicate continue therefore
+            # finds the execution already 'in_progress' with the phase's task already
+            # 'done' — skip it. The active-task guard above misses this because the
+            # prior task is already 'done', not active. A goto/retry re-enters from
+            # 'completed'/'pending' (not 'in_progress') and uses action != 'continue',
+            # so legitimate re-runs still proceed.
+            if action == "continue" and execution and execution.status == "in_progress":
+                done_task = session.query(Task).filter(
+                    Task.phase_id == phase_id,
+                    Task.status == "done",
+                ).first()
+                if done_task:
+                    logger.info(f"Phase {phase_name} execution already in_progress with completed task {done_task.id[:8]} — skipping duplicate (continue)")
+                    return
+
             # Create task
             task_id = str(uuid.uuid4())
             task_description = f"Execute {phase.name}: {phase.description}"
@@ -1256,8 +1274,7 @@ class MonitoringLoop:
             )
             session.add(task)
 
-            # Ensure phase execution is in_progress
-            execution = session.query(PhaseExecution).filter_by(phase_id=phase_id).first()
+            # Ensure phase execution is in_progress (reuse `execution` from above)
             if execution and execution.status in ("pending", "completed"):
                 execution.status = "in_progress"
                 from datetime import datetime
