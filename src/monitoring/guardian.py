@@ -321,7 +321,10 @@ class Guardian:
             )
             return
 
-        # Format and send
+        # Break a possible thought-loop first (Esc for pi, polymorphic per CLI), then
+        # send the steering message so it's actually read rather than queued behind a
+        # never-ending generation.
+        await self.agent_manager.send_recovery_keystrokes(agent.id)
         formatted_message = f"\n[GUARDIAN - LAST RESORT]: {message}\n"
         await self.agent_manager.send_message_to_agent(agent.id, formatted_message)
         self._record_steering(agent.id, steering_type, message)

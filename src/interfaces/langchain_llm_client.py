@@ -238,6 +238,7 @@ class LangChainLLMClient:
                     max_tokens=assignment.max_tokens,
                     openai_api_key=api_key,
                     base_url=base_url,
+                    max_retries=1,  # one retry only — slow/over-streaming models shouldn't retry-loop for minutes
                     default_headers={
                         "HTTP-Referer": "https://github.com/Ido-Levi/Hephaestus",
                         "X-Title": "Hephaestus - Semi Structured Agentic Framework"

@@ -459,6 +459,57 @@ class MonitoringLoop:
         logger.info("Stopping monitoring loop")
         self.running = False
 
+    async def _mechanical_recovery_for_agent(self, agent):
+        """Cheap, no-LLM stuck detection + keystroke recovery (the CLI/keystroke-level
+        monitor). If an agent's substantive TUI output is frozen for FROZEN_SECONDS
+        (a pi/mimo thought-loop that never exits), send the CLI's recovery keystrokes
+        (Esc, polymorphic via CLIAgentInterface) + a short nudge. Bounded by MAX_RECOV;
+        beyond that the Guardian / restart path takes over.
+        """
+        FROZEN_SECONDS = 300   # >a normal turn; a real loop stays frozen indefinitely
+        MAX_RECOV = 2
+        try:
+            import re
+            if not hasattr(self, "_stuck_state"):
+                self._stuck_state = {}
+            out = self.agent_manager.get_agent_output(agent.id, lines=40)
+            if not out:
+                return
+            # Drop volatile lines (status bar %/tokens/$/MCP/time, spinner glyphs) so a
+            # live spinner or ticking cost doesn't masquerade as real progress.
+            sig = "\n".join(
+                ln for ln in out.splitlines()
+                if not re.search(r"%/[\d.]+M|\$[\d.]+|MCP:|Took |[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏⣿]", ln)
+            ).strip()
+            now = time.time()
+            st = self._stuck_state.setdefault(agent.id, {"sig": None, "since": None, "recov": 0})
+            if sig and sig == st["sig"]:
+                if st["since"] is None:
+                    st["since"] = now
+            else:
+                # Output changed → real progress; reset everything.
+                st["sig"] = sig
+                st["since"] = None
+                st["recov"] = 0
+                return
+            frozen_for = now - st["since"] if st["since"] else 0
+            if frozen_for >= FROZEN_SECONDS and st["recov"] < MAX_RECOV:
+                st["recov"] += 1
+                st["since"] = now  # restart the window after an attempt
+                logger.warning(
+                    f"[MECH-RECOVERY] Agent {agent.id[:8]} ({agent.cli_type}) output frozen "
+                    f"{int(frozen_for)}s — recovery attempt {st['recov']}/{MAX_RECOV} (keys + nudge)"
+                )
+                if await self.agent_manager.send_recovery_keystrokes(agent.id):
+                    await self.agent_manager.send_message_to_agent(
+                        agent.id,
+                        "You appear stuck or looping. Stop, state your single next concrete "
+                        "action in one line, then do it. If blocked, save a memory and call "
+                        "update_task_status.",
+                    )
+        except Exception as e:
+            logger.debug(f"[MECH-RECOVERY] check failed for {agent.id[:8]}: {e}")
+
     async def _monitoring_cycle(self):
         """Execute one monitoring cycle with trajectory monitoring."""
         logger.debug("Starting trajectory monitoring cycle")
@@ -473,6 +524,13 @@ class MonitoringLoop:
         # Get all active agents
         agents = self.agent_manager.get_active_agents()
         logger.info(f"Trajectory monitoring {len(agents)} active agents")
+
+        # Phase 0: cheap mechanical keystroke recovery (no LLM). Detects a TUI whose
+        # substantive output is frozen for minutes (e.g. a pi/mimo thought-loop) and
+        # sends the CLI's recovery keystrokes (Esc, polymorphic) + a nudge — before
+        # the expensive Guardian even runs.
+        for agent in agents:
+            await self._mechanical_recovery_for_agent(agent)
 
         # Phase 1: Guardian Analysis (Parallel)
         guardian_summaries = []
