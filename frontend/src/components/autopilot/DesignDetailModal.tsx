@@ -64,21 +64,10 @@ const DesignDetailModal: React.FC<DesignDetailModalProps> = ({ projectId, filena
     },
   });
 
-  const requeueMutation = useMutation({
-    mutationFn: () => apiService.requeueAutopilotDesign(filename),
-    onSuccess: (data) => {
-      toast.success(`Design moved to front of queue${data.paused_workflows > 0 ? ` (${data.paused_workflows} workflow(s) paused)` : ''}`);
-      onClose();
-    },
-    onError: (e: any) => {
-      toast.error(e?.response?.data?.detail || 'Failed to requeue');
-    },
-  });
-
   // Resume: non-destructive recovery of an interrupted run. Restarts the orphaned
   // phase agent on its existing worktree (prior commits + context intact) so the
-  // run continues from the last committed phase — unlike Requeue/Rerun which start
-  // the design over. Targets this design's most recent interrupted workflow.
+  // run continues from the last committed phase — unlike Rerun, which starts the
+  // design over from scratch. Targets this design's most recent interrupted workflow.
   const recoverMutation = useMutation({
     mutationFn: () => {
       const wfs = (status?.workflows || []) as any[];
@@ -335,19 +324,6 @@ const DesignDetailModal: React.FC<DesignDetailModalProps> = ({ projectId, filena
                       <Play className="w-4 h-4 mr-1" />
                     )}
                     Resume
-                  </Button>
-                  <Button
-                    onClick={() => requeueMutation.mutate()}
-                    disabled={requeueMutation.isPending}
-                    variant="outline"
-                    className="text-amber-600 border-amber-200 hover:bg-amber-50"
-                  >
-                    {requeueMutation.isPending ? (
-                      <Loader2 className="w-4 h-4 mr-1 animate-spin" />
-                    ) : (
-                      <RotateCcw className="w-4 h-4 mr-1" />
-                    )}
-                    Requeue
                   </Button>
                   <Button
                     onClick={() => rerunMutation.mutate()}
