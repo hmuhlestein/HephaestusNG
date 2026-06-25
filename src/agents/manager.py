@@ -1243,11 +1243,18 @@ REMEMBER:
             # Launch the CLI (pi/claude/etc.) in the fresh session
             pane.send_keys(launch_command, enter=True)
 
-            # Capture values needed for prompt delivery before commit expires the ORM objects
+            # Build the resume message NOW, while the ORM objects are still attached.
+            # It MUST carry the agent-id header (via _format_initial_message → "🔑 Your
+            # Agent ID:") — otherwise the agent has no agent_id and uses the task_id in
+            # MCP calls, so update_task_status/submit_result fail ("Agent not found").
             restart_cli_type = agent.cli_type
             restart_task_id = task.id
-            restart_task_desc = task.enriched_description or task.raw_description
-            restart_done_def = task.done_definition
+            restart_message = (
+                f"⚠️ You were restarted ({reason}). Your prior work is committed in this "
+                f"worktree — do NOT redo it; run `git log` / `git status` and inspect existing "
+                f"files first, then continue toward completion.\n\n"
+                + self._format_initial_message(task, agent_id, agent_type=(agent.agent_type or "phase"))
+            )
 
             # Update agent record
             agent.tmux_session_name = new_session_name
@@ -1272,13 +1279,6 @@ REMEMBER:
             try:
                 await asyncio.sleep(25)  # let the CLI boot before typing into it
                 if self.tmux_server.has_session(new_session_name):
-                    restart_message = (
-                        f"⚠️ You were restarted ({reason}). Continue task {restart_task_id} — do NOT "
-                        f"redo work already committed in this worktree. Check `git log`/`git status` and "
-                        f"existing files first, then continue toward completion.\n\n"
-                        f"Task: {restart_task_desc}\n"
-                        f"Done when: {restart_done_def}"
-                    )
                     await self._send_initial_prompt_with_retry(
                         pane=pane,
                         cli_agent=cli_agent,
