@@ -1285,14 +1285,18 @@ class MonitoringLoop:
             # bounded-recovery principle, stop after MAX_PHASE_ATTEMPTS.
             MAX_PHASE_ATTEMPTS = 3
             if action in ("retry", "goto"):
-                monitor_attempts = session.query(Task).filter(
+                # Only count retry/goto tasks — successful 'continue' tasks are
+                # forward progress, not re-entries, and shouldn't count toward
+                # the retry bound.
+                monitor_retries = session.query(Task).filter(
                     Task.phase_id == phase_id,
                     Task.created_by_agent_id == "monitor",
+                    Task.action.in_(["retry", "goto"]),
                 ).count()
-                if monitor_attempts >= MAX_PHASE_ATTEMPTS:
+                if monitor_retries >= MAX_PHASE_ATTEMPTS:
                     logger.warning(
                         f"[PHASE-PROGRESSION] Phase {phase_name} hit the {action} bound "
-                        f"({monitor_attempts}/{MAX_PHASE_ATTEMPTS} monitor attempts) — pausing the "
+                        f"({monitor_retries}/{MAX_PHASE_ATTEMPTS} retry/goto attempts) — pausing the "
                         f"workflow for human review (impasse, §9.4) instead of looping forever."
                     )
                     # Bounded-recovery exhaustion on a phase → impasse, not silent
@@ -1320,6 +1324,7 @@ class MonitoringLoop:
                 phase_id=phase.id,
                 workflow_id=workflow_id,
                 created_by_agent_id="monitor",
+                action=action,
             )
             session.add(task)
 

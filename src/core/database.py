@@ -101,6 +101,7 @@ class Task(Base):
     completion_notes = Column(Text)
     failure_reason = Column(Text)
     estimated_complexity = Column(Integer)
+    action = Column(String, default="")  # Engine action: 'continue', 'retry', 'goto'
 
     # Validation-related fields
     review_done = Column(Boolean, default=False)
