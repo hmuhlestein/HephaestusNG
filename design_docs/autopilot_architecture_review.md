@@ -719,6 +719,46 @@ This is the substrate the deferred **concurrent-designs DAG** item (§11.3) need
 
 ---
 
+### 9.7 Data model — Design is the top-level entity, above Workflow (resolved)
+
+**Finding:** This NG fork introduced **Design** (`autopilot_designs`) as a new concept
+that sits above the original **Workflow** (a single execution of the 10-phase pipeline).
+But the two are **not linked by an explicit FK** — a Workflow has no `design_id`; the
+connection is implicit (the design doc that spawned the run). That looseness is why
+lower entities can't trace up: tickets scope to `workflow_id` only, so there's no path
+back to the design, and stale tickets accumulate with no design scope to clean by
+(observed: ~473 tickets leaking across runs).
+
+**Decision: keep Design isolated *above* Workflow, and make the link explicit.**
+
+| | **Design** (`autopilot_designs`) | **Workflow** (execution) |
+| --- | --- | --- |
+| Is | the durable *intent* ("build a calculator") | one *attempt* to build it |
+| Lifecycle | queued → processing → done/failed; persists | per-run; owns phases/tasks/tickets/agents |
+| Cardinality | **1 Design : N Workflows** (every Rerun = a new Workflow) | 1 : N phases/tasks/tickets/agents |
+
+Why above-and-isolated (do **not** merge them):
+1. **Rerun vs Resume are clean:** *Rerun* = a new Workflow under the same Design; *Resume*
+   = continue the existing Workflow (the UI buttons map directly onto this split).
+2. **Design-level status & dedup** — the queue reasons about Designs, not executions (§9.3).
+3. **Concurrent designs (§9.6):** each Design owns its integration worktree/branch;
+   Workflows are the executions inside it. Design-above-Workflow is the natural parent.
+4. **Traceability & cleanup:** ticket/task/agent → Workflow → Design.
+
+**Concrete change:** add a `design_id` FK on `Workflow`, making the hierarchy real:
+
+```
+Design ──1:N──> Workflow ──1:N──> { phases, tasks, tickets, agents }
+```
+
+Then: rerun creates a new Workflow with the same `design_id`; "tickets tied to the
+design" = `ticket → workflow.design_id`; clearing/reruns scope by design; and §9.6
+per-design worktrees have a clean key. Backfill existing workflows' `design_id` from
+the design doc/content hash. (Implementation is a deliberate schema change — tracked
+separately; the FK + backfill, not the loose implicit link.)
+
+---
+
 ## 10. Future Direction — Collaborative Review + GitHub-as-Projection
 
 **Status:** Exploratory / v2-horizon. Two ideas that compose into a stronger

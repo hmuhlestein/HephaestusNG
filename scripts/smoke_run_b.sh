@@ -87,18 +87,17 @@ rm -rf /tmp/hephaestus_worktrees/*
 > logs/monitor_fault.log 2>/dev/null || true
 
 sqlite3 "$DB" "
+    PRAGMA trusted_schema=ON;  -- allow tickets_fts_* triggers (touch the FTS vtable) to run from the CLI
     DELETE FROM tasks;
     DELETE FROM phase_executions;
     DELETE FROM phases;
     DELETE FROM workflows;
     DELETE FROM agents WHERE agent_type IN ('phase', 'orchestrator');
     DELETE FROM ticket_comments;
-    DELETE FROM tickets;
+    DELETE FROM tickets;  -- tickets_fts_delete trigger keeps ticket_fts in sync
     UPDATE autopilot_designs SET status='pending', completed_at=NULL
     WHERE project_id='proj-06a3e0670328';
 " 2>/dev/null
-# Rebuild the ticket FTS index (ignore if the virtual table isn't present)
-sqlite3 "$DB" "DELETE FROM ticket_fts;" 2>/dev/null || true
 
 # ─── Verify seeded test ──────────────────────────────────────────────
 if [[ ! -f "$PROJECT_PATH/tests/test_compute.py" ]]; then
