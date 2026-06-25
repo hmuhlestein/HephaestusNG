@@ -97,8 +97,8 @@ class AgentManager:
                 with self.db_manager.get_session() as session:
                     wf = session.query(Workflow).filter_by(id=task.workflow_id).first()
                     if wf and wf.working_directory:
-                        wt_base = self.branch_manager.worktree_base
-                        if str(wt_base) in wf.working_directory or '.worktrees/' in wf.working_directory:
+                        # If working_directory contains '.worktrees/', it's a shared worktree
+                        if '.worktrees/' in wf.working_directory:
                             shared_worktree = wf.working_directory
                             self.branch_manager.reload(Path(wf.working_directory))
 

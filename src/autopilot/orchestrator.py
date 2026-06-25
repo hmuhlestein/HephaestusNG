@@ -1234,7 +1234,9 @@ def run_single_workflow(sdk, workflow_id: str, project_path: str, description: s
             pass
 
         # Create worktree for the feature branch
-        wt_path = wt_mgr.worktree_base / f"wt_{feature_branch}"
+        # Use flattened name for worktree path (branch name has / which creates subdirs)
+        safe_branch = feature_branch.replace('/', '-')
+        wt_path = wt_mgr.worktree_base / f"wt_{safe_branch}"
         if not wt_path.exists():
             wt_mgr.main_repo.git.worktree("add", str(wt_path), feature_branch)
         design_worktree_path = str(wt_path)
@@ -1365,6 +1367,7 @@ def run_single_workflow(sdk, workflow_id: str, project_path: str, description: s
                             cfg = get_config()
                             db = DbManager(cfg)
                             wt_mgr = WorktreeManager(db_manager=db)
+                            wt_mgr.reload(Path(project_path))
 
                             # Ensure main is clean
                             wt_mgr.main_repo.heads[wt_mgr.config.base_branch].checkout()
@@ -1394,7 +1397,8 @@ def run_single_workflow(sdk, workflow_id: str, project_path: str, description: s
 
                             # Clean up worktree
                             try:
-                                wt_mgr.main_repo.git.worktree("remove", str(wt_mgr.worktree_base / f"wt_{design_branch}"), "--force")
+                                safe_branch = design_branch.replace('/', '-')
+                                wt_mgr.main_repo.git.worktree("remove", str(wt_mgr.worktree_base / f"wt_{safe_branch}"), "--force")
                             except Exception:
                                 pass
                         else:
