@@ -28,6 +28,21 @@ class EmbeddingProvider(ABC):
     @abstractmethod
     def get_dim(self) -> int: ...
 
+    @staticmethod
+    def calculate_cosine_similarity(vec1: List[float], vec2: List[float]) -> float:
+        """Cosine similarity between two embedding vectors (-1..1). Concrete + static on
+        the base so every provider shares one implementation, callers never hardcode the
+        math, and it works without instantiating (loading) an embedding model."""
+        import numpy as np
+        if not vec1 or not vec2 or len(vec1) != len(vec2):
+            return 0.0
+        a = np.array(vec1, dtype=np.float32)
+        b = np.array(vec2, dtype=np.float32)
+        na, nb = np.linalg.norm(a), np.linalg.norm(b)
+        if na == 0 or nb == 0:
+            return 0.0
+        return float(np.clip(np.dot(a, b) / (na * nb), -1.0, 1.0))
+
 
 class OpenAIEmbeddingProvider(EmbeddingProvider):
     def __init__(self, model: str = "text-embedding-3-large", api_key: Optional[str] = None):

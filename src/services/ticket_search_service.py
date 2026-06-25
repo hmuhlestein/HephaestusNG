@@ -7,49 +7,54 @@ from typing import List, Dict, Any, Optional
 from datetime import datetime
 import logging
 
-from qdrant_client import QdrantClient
-from qdrant_client.models import PointStruct, Filter, FieldCondition, MatchValue, MatchAny
 from sqlalchemy.sql import text
 
 from src.core.database import get_db, Ticket, TicketComment
-from src.services.embedding_service import EmbeddingService
+from src.memory.store_factory import create_vector_store
+from src.memory.embedding_factory import create_embedding_provider
 
 logger = logging.getLogger(__name__)
+
+# Configurable vector store collection for tickets (turbovec key, 384-dim).
+TICKET_COLLECTION = "ticket_embeddings"
 
 
 class TicketSearchService:
     """Service for comprehensive ticket search (semantic + keyword)."""
 
-    # Qdrant client singleton
-    _qdrant_client = None
-    _embedding_service = None
+    # Configurable backends (python-only by default: turbovec + fastembed), shared
+    # with the rest of the system instead of the old hardcoded Qdrant + OpenAI stack.
+    _vector_store = None
+    _embedding_provider = None
 
     @classmethod
-    def _get_qdrant_client(cls) -> QdrantClient:
-        """Get or create Qdrant client."""
-        if cls._qdrant_client is None:
-            qdrant_url = os.getenv("QDRANT_URL", "http://localhost:6333")
-            cls._qdrant_client = QdrantClient(url=qdrant_url)
-        return cls._qdrant_client
+    def _get_vector_store(cls):
+        """Get or create the configurable vector store (turbovec by default)."""
+        if cls._vector_store is None:
+            cls._vector_store = create_vector_store()
+        return cls._vector_store
 
     @classmethod
-    def _get_embedding_service(cls) -> EmbeddingService:
-        """Get or create embedding service."""
-        if cls._embedding_service is None:
-            openai_api_key = os.getenv("OPENAI_API_KEY")
-            if not openai_api_key:
-                raise ValueError("OPENAI_API_KEY environment variable not set")
-            cls._embedding_service = EmbeddingService(openai_api_key)
-        return cls._embedding_service
+    def _get_embedding_provider(cls):
+        """Get or create the configurable embedding provider (fastembed by default)."""
+        if cls._embedding_provider is None:
+            cls._embedding_provider = create_embedding_provider()
+        return cls._embedding_provider
+
+    @staticmethod
+    def _ticket_text(title: str, description: str, tags: List[str]) -> str:
+        """Compose the text embedded for a ticket."""
+        tag_str = " ".join(tags) if tags else ""
+        return f"{title}\n\n{description}\n\n{tag_str}".strip()
 
     @staticmethod
     async def semantic_search(
         query_text: str, workflow_id: str, limit: int = 10, filters: Optional[Dict[str, Any]] = None
     ) -> List[Dict[str, Any]]:
         """
-        Semantic search using Qdrant vector similarity.
+        Semantic search using the configurable vector store (turbovec).
 
-        Gracefully degrades to keyword search if Qdrant is unavailable.
+        Gracefully degrades to keyword search if the vector store is unavailable.
 
         Args:
             query_text: Natural language search query
@@ -61,101 +66,62 @@ class TicketSearchService:
             List of ticket search results with relevance scores
         """
         try:
-            # Generate embedding for query
-            embedding_service = TicketSearchService._get_embedding_service()
-            query_embedding = await embedding_service.generate_query_embedding(query_text)
+            # Generate query embedding via the configurable provider (fastembed)
+            provider = TicketSearchService._get_embedding_provider()
+            query_embedding = await provider.generate_embedding(query_text)
 
-            # Build Qdrant filter
-            filter_conditions = [
-                FieldCondition(key="workflow_id", match=MatchValue(value=workflow_id))
-            ]
-
-            # Add optional filters
-            if filters:
-                if "status" in filters:
-                    if isinstance(filters["status"], list):
-                        filter_conditions.append(
-                            FieldCondition(key="status", match=MatchAny(any=filters["status"]))
-                        )
-                    else:
-                        filter_conditions.append(
-                            FieldCondition(key="status", match=MatchValue(value=filters["status"]))
-                        )
-
-                if "priority" in filters:
-                    if isinstance(filters["priority"], list):
-                        filter_conditions.append(
-                            FieldCondition(key="priority", match=MatchAny(any=filters["priority"]))
-                        )
-                    else:
-                        filter_conditions.append(
-                            FieldCondition(
-                                key="priority", match=MatchValue(value=filters["priority"])
-                            )
-                        )
-
-                if "ticket_type" in filters:
-                    if isinstance(filters["ticket_type"], list):
-                        filter_conditions.append(
-                            FieldCondition(
-                                key="ticket_type", match=MatchAny(any=filters["ticket_type"])
-                            )
-                        )
-                    else:
-                        filter_conditions.append(
-                            FieldCondition(
-                                key="ticket_type", match=MatchValue(value=filters["ticket_type"])
-                            )
-                        )
-
-                if "assigned_agent_id" in filters:
-                    filter_conditions.append(
-                        FieldCondition(
-                            key="assigned_agent_id",
-                            match=MatchValue(value=filters["assigned_agent_id"]),
-                        )
-                    )
-
-                if "is_blocked" in filters:
-                    filter_conditions.append(
-                        FieldCondition(
-                            key="is_blocked", match=MatchValue(value=filters["is_blocked"])
-                        )
-                    )
-
-            qdrant_filter = Filter(must=filter_conditions)
-
-            # Execute vector search
-            qdrant_client = TicketSearchService._get_qdrant_client()
-            search_results = qdrant_client.search(
-                collection_name="hephaestus_ticket_embeddings",
+            # Vector search via the configurable store (turbovec). Scope to the workflow
+            # in the store; apply the richer (list/equality) filters in Python below.
+            store = TicketSearchService._get_vector_store()
+            hits = await store.search(
+                collection=TICKET_COLLECTION,
                 query_vector=query_embedding,
-                query_filter=qdrant_filter,
-                limit=limit,
-                score_threshold=0.3,  # Lower threshold for better recall (cosine similarity)
+                limit=limit * 3,  # over-fetch to survive post-filtering
+                filters={"workflow_id": workflow_id},
+                score_threshold=0.3,  # better recall on cosine similarity
             )
 
-            # Format results
+            def _passes(meta: Dict[str, Any]) -> bool:
+                if not filters:
+                    return True
+                for key in ("status", "priority", "ticket_type"):
+                    if key in filters:
+                        want, val = filters[key], meta.get(key)
+                        if isinstance(want, list):
+                            if val not in want:
+                                return False
+                        elif val != want:
+                            return False
+                if "assigned_agent_id" in filters and meta.get("assigned_agent_id") != filters["assigned_agent_id"]:
+                    return False
+                if "is_blocked" in filters and meta.get("is_blocked") != filters["is_blocked"]:
+                    return False
+                return True
+
             results = []
-            for result in search_results:
+            for hit in hits:
+                meta = hit.get("metadata", {})
+                if meta.get("workflow_id") != workflow_id or not _passes(meta):
+                    continue
+                desc = meta.get("description", "") or ""
                 results.append(
                     {
-                        "ticket_id": result.payload["ticket_id"],
-                        "title": result.payload["title"],
-                        "description": result.payload["description"],
-                        "status": result.payload["status"],
-                        "priority": result.payload["priority"],
-                        "ticket_type": result.payload["ticket_type"],
-                        "relevance_score": result.score,
+                        "ticket_id": meta.get("ticket_id", hit.get("id")),
+                        "title": meta.get("title", ""),
+                        "description": desc,
+                        "status": meta.get("status"),
+                        "priority": meta.get("priority"),
+                        "ticket_type": meta.get("ticket_type"),
+                        "relevance_score": hit.get("score", 0.0),
                         "matched_in": ["semantic"],
-                        "preview": result.payload["description"][:200] + "..."
-                        if len(result.payload["description"]) > 200
-                        else result.payload["description"],
-                        "created_at": result.payload["created_at"],
-                        "assigned_agent_id": result.payload.get("assigned_agent_id"),
-                        "tags": result.payload.get("tags", []),
+                        "preview": (desc[:200] + "...") if len(desc) > 200 else desc,
+                        "created_at": meta.get("created_at"),
+                        "assigned_agent_id": meta.get("assigned_agent_id"),
+                        "tags": meta.get("tags", []),
                     }
                 )
+                if len(results) >= limit:
+                    break
 
             logger.info(f"Semantic search returned {len(results)} results")
             return results
@@ -393,47 +359,45 @@ class TicketSearchService:
                     return []
 
                 query_embedding = ticket.embedding
+                ticket_workflow_id = ticket.workflow_id
 
-            # Search in Qdrant for similar tickets (exclude this ticket)
-            qdrant_client = TicketSearchService._get_qdrant_client()
-
-            # Build filter to exclude this ticket
-            filter_conditions = [
-                FieldCondition(key="workflow_id", match=MatchValue(value=ticket.workflow_id))
-            ]
-
-            search_results = qdrant_client.search(
-                collection_name="hephaestus_ticket_embeddings",
+            # Search the configurable store for similar tickets (exclude this ticket)
+            store = TicketSearchService._get_vector_store()
+            hits = await store.search(
+                collection=TICKET_COLLECTION,
                 query_vector=query_embedding,
-                query_filter=Filter(must=filter_conditions),
                 limit=limit + 1,  # +1 because we'll filter out the query ticket
+                filters={"workflow_id": ticket_workflow_id},
             )
 
             # Format results and classify relation type
             results = []
-            for result in search_results:
+            for hit in hits:
+                meta = hit.get("metadata", {})
+                hid = meta.get("ticket_id", hit.get("id"))
                 # Skip the query ticket itself
-                if result.payload["ticket_id"] == ticket_id:
+                if hid == ticket_id:
                     continue
 
+                score = hit.get("score", 0.0)
                 # Classify relation type based on similarity score
-                if result.score >= 0.9:
+                if score >= 0.9:
                     relation_type = "duplicate"
-                elif result.score >= 0.7:
+                elif score >= 0.7:
                     relation_type = "related"
-                elif result.score >= 0.5:
+                elif score >= 0.5:
                     relation_type = "similar"
                 else:
                     continue  # Skip low similarity
 
                 results.append(
                     {
-                        "ticket_id": result.payload["ticket_id"],
-                        "title": result.payload["title"],
-                        "similarity_score": result.score,
+                        "ticket_id": hid,
+                        "title": meta.get("title", ""),
+                        "similarity_score": score,
                         "relation_type": relation_type,
-                        "status": result.payload["status"],
-                        "priority": result.payload["priority"],
+                        "status": meta.get("status"),
+                        "priority": meta.get("priority"),
                     }
                 )
 
@@ -462,22 +426,22 @@ class TicketSearchService:
         is_blocked: bool,
     ) -> str:
         """
-        Index ticket in Qdrant vector store.
+        Index ticket in the configurable vector store (turbovec).
 
         Args:
             All ticket metadata for payload
 
         Returns:
-            Embedding ID (Qdrant point ID)
+            Embedding ID (the ticket_id key in the vector store)
         """
         try:
-            # Generate embedding
-            embedding_service = TicketSearchService._get_embedding_service()
-            embedding = await embedding_service.generate_ticket_embedding(
-                title=title, description=description, tags=tags
+            # Generate embedding via the configurable provider (fastembed)
+            provider = TicketSearchService._get_embedding_provider()
+            embedding = await provider.generate_embedding(
+                TicketSearchService._ticket_text(title, description, tags)
             )
 
-            # Prepare payload
+            # Prepare payload (stored as vector metadata)
             payload = {
                 "ticket_id": ticket_id,
                 "workflow_id": workflow_id,
@@ -495,18 +459,18 @@ class TicketSearchService:
                 "is_blocked": is_blocked,
             }
 
-            # Store in Qdrant
-            qdrant_client = TicketSearchService._get_qdrant_client()
+            # Store in the configurable vector store (turbovec), keyed by ticket_id
+            store = TicketSearchService._get_vector_store()
+            await store.store_memory(
+                collection=TICKET_COLLECTION,
+                memory_id=ticket_id,
+                embedding=embedding,
+                content=description,
+                metadata=payload,
+            )
 
-            # Use ticket_id as the point ID
-            # Strip "ticket-" prefix to get pure UUID for Qdrant (Qdrant only accepts UUIDs without prefix)
-            point_id = ticket_id.replace("ticket-", "")
-            point = PointStruct(id=point_id, vector=embedding, payload=payload)
-
-            qdrant_client.upsert(collection_name="hephaestus_ticket_embeddings", points=[point])
-
-            logger.info(f"Indexed ticket {ticket_id} in Qdrant with point_id {point_id}")
-            return point_id
+            logger.info(f"Indexed ticket {ticket_id} in {TICKET_COLLECTION}")
+            return ticket_id
 
         except Exception as e:
             logger.error(f"Failed to index ticket {ticket_id}: {e}")
@@ -557,14 +521,11 @@ class TicketSearchService:
                 assigned_agent_id = ticket.assigned_agent_id
                 is_blocked = bool(ticket.blocked_by_ticket_ids and len(ticket.blocked_by_ticket_ids) > 0)
 
-            # Generate new embedding
-            embedding_service = TicketSearchService._get_embedding_service()
-            embedding = await embedding_service.generate_ticket_embedding(
-                title=title, description=description, tags=tags
+            # Generate new embedding via the configurable provider (fastembed)
+            provider = TicketSearchService._get_embedding_provider()
+            embedding = await provider.generate_embedding(
+                TicketSearchService._ticket_text(title, description, tags)
             )
-
-            # Update in Qdrant
-            qdrant_client = TicketSearchService._get_qdrant_client()
 
             payload = {
                 "ticket_id": ticket_id,
@@ -583,22 +544,26 @@ class TicketSearchService:
                 "is_blocked": is_blocked,
             }
 
-            # Strip "ticket-" prefix to get pure UUID for Qdrant
-            point_id = ticket_id.replace("ticket-", "")
-            point = PointStruct(id=point_id, vector=embedding, payload=payload)
-
-            qdrant_client.upsert(collection_name="hephaestus_ticket_embeddings", points=[point])
+            # Update in the configurable vector store (turbovec)
+            store = TicketSearchService._get_vector_store()
+            await store.store_memory(
+                collection=TICKET_COLLECTION,
+                memory_id=ticket_id,
+                embedding=embedding,
+                content=description,
+                metadata=payload,
+            )
 
             # Update ticket record in database
             with get_db() as db:
                 ticket = db.query(Ticket).filter_by(id=ticket_id).first()
                 ticket.embedding = embedding
-                ticket.embedding_id = point_id
+                ticket.embedding_id = ticket_id
                 ticket.updated_at = datetime.utcnow()
                 db.commit()
 
-            logger.info(f"Reindexed ticket {ticket_id} with point_id {point_id}")
-            return point_id
+            logger.info(f"Reindexed ticket {ticket_id} in {TICKET_COLLECTION}")
+            return ticket_id
 
         except Exception as e:
             logger.error(f"Failed to reindex ticket {ticket_id}: {e}")
