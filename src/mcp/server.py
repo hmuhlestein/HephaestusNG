@@ -1447,7 +1447,9 @@ async def create_task(
                         return CreateTaskResponse(
                             task_id=existing.id,
                             enriched_description=existing.enriched_description or existing.raw_description,
-                            assigned_agent_id=existing.assigned_agent_id or "unassigned"
+                            assigned_agent_id=existing.assigned_agent_id or "unassigned",
+                            estimated_completion_time=30,
+                            status="queued"
                         )
                 finally:
                     if _s.is_active:
@@ -1934,32 +1936,35 @@ async def update_task_status(
         # General, not phase-special-cased: drives off PHASE_OUTPUT_ARTIFACTS in spec.py.
         # Same class as ruff/tests: mechanical check, hard floor.
         if request.status == "done" and task.phase_id:
+            from pathlib import Path as _Path
             from src.autopilot.spec import PHASE_OUTPUT_ARTIFACTS
             phase = session.query(Phase).filter_by(id=task.phase_id).first()
             if phase and phase.name in PHASE_OUTPUT_ARTIFACTS:
                 declared_output = PHASE_OUTPUT_ARTIFACTS[phase.name]
-                # Search for the artifact in the agent's worktree and feature folder
+                # Search for the artifact in the shared worktree (or feature folder)
                 agent = session.query(Agent).filter_by(id=agent_id).first()
                 found = False
-                if agent:
-                    from src.core.worktree_manager import WorktreeManager
-                    wt_mgr = WorktreeManager(db_manager=server_state.db_manager)
-                    wt_path = wt_mgr.worktree_base / f"wt_{agent_id}"
-                    if wt_path:
-                        # Check worktree docs/ and root
-                        for candidate in [wt_path / "docs" / declared_output, wt_path / declared_output]:
+                # 1. Check the workflow's shared worktree
+                if task.workflow_id:
+                    from src.core.database import Workflow as _WF
+                    wf = session.query(_WF).filter_by(id=task.workflow_id).first()
+                    if wf and wf.working_directory:
+                        for candidate in [
+                            _Path(wf.working_directory) / "docs" / declared_output,
+                            _Path(wf.working_directory) / declared_output,
+                        ]:
                             if candidate.exists():
                                 found = True
                                 break
-                    if not found:
-                        # Check feature folder
-                        feature_dir = Path(config.project_root) / ".hephaestus" / "features"
-                        if feature_dir.exists():
-                            for d in sorted(feature_dir.iterdir(), reverse=True):
-                                candidate = d / "docs" / declared_output
-                                if candidate.exists():
-                                    found = True
-                                    break
+                # 2. Check feature folder
+                if not found:
+                    feature_dir = _Path(config.project_root) / ".hephaestus" / "features"
+                    if feature_dir.exists():
+                        for d in sorted(feature_dir.iterdir(), reverse=True):
+                            candidate = d / "docs" / declared_output
+                            if candidate.exists():
+                                found = True
+                                break
                 if not found:
                     logger.warning(f"Agent {agent_id[:8]} claimed done on {phase.name} but {declared_output} not found — rejecting")
                     task.status = "failed"
@@ -1984,7 +1989,8 @@ async def update_task_status(
                     from src.core.database import Workflow
                     wf = session.query(Workflow).filter_by(id=task.workflow_id).first()
                     if wf and wf.working_directory:
-                        phase_output = build_phase_output(phase.name, Path(wf.working_directory))
+                        from pathlib import Path as _P
+                        phase_output = build_phase_output(phase.name, _P(wf.working_directory))
                         logger.info(f"[SPEC-GATE] {phase.name}: gate fired from completion path, phase_output={phase_output}")
                         # The monitor's _check_phases will also call mark_phase_complete
                         # with this phase_output on its next poll. But log here so we
