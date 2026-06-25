@@ -82,6 +82,7 @@ rm -rf /tmp/hephaestus_worktrees/*
 # Clear logs so analysis counts are per-run only
 > hephaestus_server.log 2>/dev/null || true
 > ~/.hephaestus/logs/monitor.log 2>/dev/null || true
+> logs/monitor.log 2>/dev/null || true  # run_monitor.py writes here (98MB+)
 
 sqlite3 "$DB" "
     DELETE FROM tasks;
@@ -250,6 +251,18 @@ for i in $(seq 1 $MAX_POLLS); do
         MON_ALIVE=$(ps aux | grep run_monitor | grep -v grep | wc -l | tr -d ' ')
         set -o pipefail
         echo "  [monitor] alive=${MON_ALIVE:-0}"
+        # 7b. Monitor heartbeat (last cycle timestamp)
+        if [[ -f ~/.hephaestus/logs/monitor_heartbeat ]]; then
+            HB=$(cat ~/.hephaestus/logs/monitor_heartbeat 2>/dev/null)
+            NOW_EPOCH=$(date +%s)
+            AGE=$((NOW_EPOCH - ${HB%.*}))
+            echo "  [monitor] heartbeat ${AGE}s ago"
+            if (( AGE > 120 )); then
+                echo "  [monitor] ⚠️  HEARTBEAT STALE — monitor may be dead!"
+            fi
+        else
+            echo "  [monitor] no heartbeat file"
+        fi
         # 8. Server alive?
         SRV_ALIVE=$(curl -s http://127.0.0.1:8300/health 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('status',''))" 2>/dev/null || echo "dead")
         echo "  [server] status=$SRV_ALIVE"
