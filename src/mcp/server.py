@@ -1400,6 +1400,41 @@ async def create_task(
                            f"Agent {agent_id} must provide a valid phase_id."
                 )
 
+            # Dedup: don't create duplicate tasks for the same phase
+            dedup_phase_id = request.phase_id
+            if not dedup_phase_id and request.phase_order:
+                # Resolve phase_order to phase_id
+                from src.core.database import Phase as PhaseModel
+                _s = server_state.db_manager.get_session()
+                try:
+                    _phase = _s.query(PhaseModel).filter_by(
+                        workflow_id=request.workflow_id, order=request.phase_order
+                    ).first()
+                    if _phase:
+                        dedup_phase_id = _phase.id
+                finally:
+                    _s.close()
+            if dedup_phase_id:
+                _s = server_state.db_manager.get_session()
+                try:
+                    from src.core.database import Task as TaskModel
+                    existing = _s.query(TaskModel).filter(
+                        TaskModel.phase_id == dedup_phase_id,
+                        TaskModel.workflow_id == request.workflow_id,
+                        TaskModel.status.in_(["pending", "assigned", "in_progress", "queued"])
+                    ).first()
+                    if existing:
+                        logger.info(f"[CREATE_TASK] Dedup: phase already has active task {existing.id[:8]}, returning it")
+                        _s.close()
+                        return CreateTaskResponse(
+                            task_id=existing.id,
+                            enriched_description=existing.enriched_description or existing.raw_description,
+                            assigned_agent_id=existing.assigned_agent_id or "unassigned"
+                        )
+                finally:
+                    if _s.is_active:
+                        _s.close()
+
         # Create initial task in database with pending status
         session = server_state.db_manager.get_session()
         task = Task(
