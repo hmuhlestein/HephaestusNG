@@ -1218,6 +1218,8 @@ def run_single_workflow(sdk, workflow_id: str, project_path: str, description: s
         cfg = get_config()
         db = DbManager(cfg)
         wt_mgr = WorktreeManager(db_manager=db)
+        # Reload to point at the actual project repo (not config.main_repo_path)
+        wt_mgr.reload(Path(project_path))
 
         # Create feature branch from main
         import git as _git
@@ -1239,7 +1241,7 @@ def run_single_workflow(sdk, workflow_id: str, project_path: str, description: s
         design_branch_name = feature_branch
         logger.info(f"Created shared worktree: {design_worktree_path} (branch: {feature_branch})")
     except Exception as e:
-        logger.warning(f"Failed to create shared worktree, using project path: {e}")
+        logger.warning(f"Failed to create shared worktree, using project path: {e}", exc_info=True)
         design_worktree_path = project_path
 
     try:
