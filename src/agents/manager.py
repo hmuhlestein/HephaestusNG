@@ -1181,8 +1181,9 @@ REMEMBER:
             # Relaunch agent
             cli_agent = get_cli_agent(agent.cli_type)
 
-            # Resolve phase_name for pi agent file lookup
+            # Resolve phase_name + per-phase thinking budget for the relaunch
             restart_phase_name = None
+            restart_thinking_level = None
             if task.phase_id:
                 from src.core.database import Phase
                 restart_session = self.db_manager.get_session()
@@ -1193,6 +1194,7 @@ REMEMBER:
                         restart_phase = restart_session.query(Phase).filter_by(id=task.phase_id).first()
                     if restart_phase:
                         restart_phase_name = restart_phase.name
+                        restart_thinking_level = restart_phase.thinking_level  # preserve budget across restart
                 finally:
                     restart_session.close()
 
@@ -1212,6 +1214,7 @@ REMEMBER:
                 agent_id=agent_id,
                 workflow_id=task.workflow_id,
                 phase_id=task.phase_id,
+                thinking_level=restart_thinking_level,
             )
 
             pane = tmux_session.attached_window.attached_pane
