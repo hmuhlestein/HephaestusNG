@@ -321,11 +321,32 @@ Please try a different approach, considering:
             }
 
             project_context = await self.agent_manager.get_project_context()
+
+            # Preserve the task's phase CLI/thinking config on recovery — otherwise a
+            # restarted phase agent silently reverts to the default tool/model/budget.
+            phase_cli_tool = phase_cli_model = phase_glm_token_env = phase_thinking_level = None
+            if task.phase_id:
+                from src.core.database import Phase
+                ps = self.db_manager.get_session()
+                try:
+                    ph = ps.query(Phase).filter_by(id=task.phase_id).first()
+                    if ph:
+                        phase_cli_tool = ph.cli_tool
+                        phase_cli_model = ph.cli_model
+                        phase_glm_token_env = ph.glm_api_token_env
+                        phase_thinking_level = ph.thinking_level
+                finally:
+                    ps.close()
+
             new_agent = await self.agent_manager.create_agent_for_task(
                 task=task,
                 enriched_data=enriched_data,
                 memories=memories,
                 project_context=f"{project_context}\n\n{failure_context}",
+                phase_cli_tool=phase_cli_tool,
+                phase_cli_model=phase_cli_model,
+                phase_glm_token_env=phase_glm_token_env,
+                phase_thinking_level=phase_thinking_level,
             )
 
             logger.info(f"Created new agent {new_agent.id} to replace {agent.id}")

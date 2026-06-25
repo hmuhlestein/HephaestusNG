@@ -4086,6 +4086,7 @@ async def bump_task_priority_endpoint(
             phase_cli_tool = None
             phase_cli_model = None
             phase_glm_token_env = None
+            phase_thinking_level = None
             if task.phase_id:
                 from src.core.database import Phase
                 phase = session.query(Phase).filter_by(id=task.phase_id).first()
@@ -4096,6 +4097,7 @@ async def bump_task_priority_endpoint(
                     phase_cli_tool = phase.cli_tool
                     phase_cli_model = phase.cli_model
                     phase_glm_token_env = phase.glm_api_token_env
+                    phase_thinking_level = phase.thinking_level  # per-phase pi reasoning budget
             if not working_directory:
                 working_directory = os.getcwd()
 
@@ -4112,6 +4114,7 @@ async def bump_task_priority_endpoint(
             phase_cli_tool=phase_cli_tool,
             phase_cli_model=phase_cli_model,
             phase_glm_token_env=phase_glm_token_env,
+            phase_thinking_level=phase_thinking_level,
         )
 
         # Update task status
