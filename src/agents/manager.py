@@ -79,6 +79,26 @@ class AgentManager:
             raise ValueError("task is REQUIRED for create_agent_for_task — cannot create agent without a task")
 
         agent_id = str(uuid.uuid4())
+
+        # Centralized phase-config fallback: if the caller didn't supply the phase's
+        # CLI/thinking config, derive it from task.phase_id here. This guarantees every
+        # call site (create_task paths, recovery, API endpoint, monitor transitions)
+        # gets the per-phase tool/model/glm/thinking_level without each having to
+        # remember to fetch and forward it.
+        if task.phase_id and (phase_cli_tool is None and phase_cli_model is None
+                              and phase_glm_token_env is None and phase_thinking_level is None):
+            try:
+                from src.core.database import Phase
+                with self.db_manager.get_session() as _ps:
+                    _ph = _ps.query(Phase).filter_by(id=task.phase_id).first()
+                    if _ph:
+                        phase_cli_tool = _ph.cli_tool
+                        phase_cli_model = _ph.cli_model
+                        phase_glm_token_env = _ph.glm_api_token_env
+                        phase_thinking_level = _ph.thinking_level
+            except Exception as e:
+                logger.warning(f"Could not derive phase config for task {task.id}: {e}")
+
         # Use phase config with fallback to global defaults
         cli_type = phase_cli_tool or cli_type or self.config.default_cli_tool
 
