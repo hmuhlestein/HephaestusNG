@@ -1240,8 +1240,14 @@ REMEMBER:
                 # Brief pause to ensure exports complete
                 await asyncio.sleep(0.5)
 
-            # Now send the claude launch command
+            # Launch the CLI (pi/claude/etc.) in the fresh session
             pane.send_keys(launch_command, enter=True)
+
+            # Capture values needed for prompt delivery before commit expires the ORM objects
+            restart_cli_type = agent.cli_type
+            restart_task_id = task.id
+            restart_task_desc = task.enriched_description or task.raw_description
+            restart_done_def = task.done_definition
 
             # Update agent record
             agent.tmux_session_name = new_session_name
@@ -1259,6 +1265,34 @@ REMEMBER:
             session.add(log_entry)
 
             session.commit()
+
+            # Deliver the 'continue' message. Launching the CLI alone leaves pi idle at
+            # its welcome screen (the resumed-agent-stuck bug) — mirror the normal create
+            # path: wait for the CLI to initialize, then send the task as the first turn.
+            try:
+                await asyncio.sleep(25)  # let the CLI boot before typing into it
+                if self.tmux_server.has_session(new_session_name):
+                    restart_message = (
+                        f"⚠️ You were restarted ({reason}). Continue task {restart_task_id} — do NOT "
+                        f"redo work already committed in this worktree. Check `git log`/`git status` and "
+                        f"existing files first, then continue toward completion.\n\n"
+                        f"Task: {restart_task_desc}\n"
+                        f"Done when: {restart_done_def}"
+                    )
+                    await self._send_initial_prompt_with_retry(
+                        pane=pane,
+                        cli_agent=cli_agent,
+                        cli_type=restart_cli_type,
+                        initial_message=restart_message,
+                        agent_id=agent_id,
+                        task_id=restart_task_id,
+                        max_retries=3,
+                    )
+                    logger.info(f"[RESTART] Delivered continue-prompt to agent {agent_id} ({restart_cli_type})")
+                else:
+                    logger.error(f"[RESTART] Session {new_session_name} died before prompt delivery")
+            except Exception as e:
+                logger.error(f"[RESTART] Failed to deliver continue-prompt to agent {agent_id}: {e}")
 
             logger.info(f"Agent {agent_id} restarted successfully")
 
