@@ -9,8 +9,10 @@ LLM-powered interventions including nudging, restarting, and recreating agents.
 
 import asyncio
 import logging
+import os
 import signal
 import sys
+from datetime import datetime
 from pathlib import Path
 
 # Add src to path
@@ -169,11 +171,30 @@ if __name__ == "__main__":
     # Ensure logs directory exists
     Path("logs").mkdir(exist_ok=True)
 
+    # Write PID file so heph stop can find us
+    pid_dir = Path.home() / ".hephaestus" / "pids"
+    pid_dir.mkdir(parents=True, exist_ok=True)
+    (pid_dir / "monitor.pid").write_text(str(os.getpid()))
+
+    import traceback
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
         logger.info("Service interrupted by user")
         sys.exit(0)
-    except Exception as e:
-        logger.error(f"Service failed: {e}")
+    except SystemExit:
+        raise
+    except BaseException as e:
+        # Catch EVERYTHING including non-Exception types
+        logger.critical(f"FATAL: {type(e).__name__}: {e}")
+        logger.critical(traceback.format_exc())
+        # Write crash to separate file for diagnosis
+        crash_path = Path("logs/monitor_crash.log")
+        with open(crash_path, "a") as f:
+            f.write(f"\n\n{'='*60}\n")
+            f.write(f"CRASH at {datetime.utcnow()}\n")
+            f.write(f"PID: {os.getpid()}\n")
+            f.write(f"Type: {type(e).__name__}\n")
+            f.write(f"Error: {e}\n")
+            f.write(traceback.format_exc())
         sys.exit(1)
