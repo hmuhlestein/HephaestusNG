@@ -1945,6 +1945,40 @@ async def download_feature_report(feature_id: str):
     )
 
 
+@router.get("/features/{feature_id}/logs")
+async def list_feature_logs(feature_id: str):
+    """List available tmux phase logs for a feature run."""
+    try:
+        effective_dir = _get_effective_features_dir()
+    except (FileNotFoundError, RuntimeError) as e:
+        raise HTTPException(404, str(e))
+    tmux_dir = _safe_path(effective_dir, feature_id, "tmux")
+    if not tmux_dir.exists():
+        return {"logs": []}
+    logs = []
+    for f in sorted(tmux_dir.glob("*.log")):
+        stat = f.stat()
+        logs.append({
+            "name": f.name,
+            "size_bytes": stat.st_size,
+            "modified": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
+        })
+    return {"logs": logs}
+
+
+@router.get("/features/{feature_id}/logs/{log_name}")
+async def get_feature_log(feature_id: str, log_name: str):
+    """Return the content of a single tmux phase log."""
+    try:
+        effective_dir = _get_effective_features_dir()
+    except (FileNotFoundError, RuntimeError) as e:
+        raise HTTPException(404, str(e))
+    log_path = _safe_path(effective_dir, feature_id, "tmux", log_name)
+    if not log_path.exists() or log_path.suffix != ".log":
+        raise HTTPException(404, f"Log '{log_name}' not found")
+    return {"name": log_name, "content": log_path.read_text(errors="replace")}
+
+
 # ── Message Center ───────────────────────────────────────────────
 
 @router.get("/messages", response_model=List[MessageItem])

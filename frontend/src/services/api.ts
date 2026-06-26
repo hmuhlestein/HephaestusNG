@@ -651,6 +651,16 @@ export const apiService = {
     return data;
   },
 
+  getAutopilotFeatureLogs: async (featureId: string): Promise<{ logs: Array<{ name: string; size_bytes: number; modified: string }> }> => {
+    const { data } = await api.get(`/autopilot/features/${encodeURIComponent(featureId)}/logs`);
+    return data;
+  },
+
+  getAutopilotFeatureLog: async (featureId: string, logName: string): Promise<{ name: string; content: string }> => {
+    const { data } = await api.get(`/autopilot/features/${encodeURIComponent(featureId)}/logs/${encodeURIComponent(logName)}`);
+    return data;
+  },
+
   getAutopilotMessages: async (limit: number = 50): Promise<any[]> => {
     const { data } = await api.get(`/autopilot/messages?limit=${limit}`);
     return data;
