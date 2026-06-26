@@ -61,7 +61,7 @@ class TestAgentOutputCapture:
         # Create mock tmux session
         mock_tmux_session = Mock()
         mock_pane = Mock()
-        mock_pane.capture_pane.return_value = test_output_lines
+        mock_pane.cmd.return_value = Mock(stdout=test_output_lines)
         mock_tmux_session.attached_window.attached_pane = mock_pane
 
         # Setup database session mock
@@ -79,8 +79,8 @@ class TestAgentOutputCapture:
         # Execute
         await agent_manager.terminate_agent(agent_id)
 
-        # Verify output was captured via capture_pane()
-        mock_pane.capture_pane.assert_called_once()
+        # Verify output was captured via cmd("capture-pane", ...)
+        mock_pane.cmd.assert_called()
 
         # Verify agent status was updated
         assert mock_agent.status == "terminated"

@@ -156,7 +156,7 @@ async def test_agent_manager_with_worktree_integration(agent_manager, test_db):
     assert Path(worktree.worktree_path).exists()
 
     # Cleanup
-    await agent_manager.terminate_agent(agent.id, merge_work=False)
+    await agent_manager.terminate_agent(agent.id)
     session.close()
 
 
@@ -224,7 +224,6 @@ async def test_parent_child_agent_integration(agent_manager, test_db):
         enriched_data={},
         memories=[],
         project_context="Test context",
-        parent_agent_id=parent_agent.id
     )
     session.close()
 
@@ -237,8 +236,8 @@ async def test_parent_child_agent_integration(agent_manager, test_db):
     assert "Important findings" in child_parent_file.read_text()
 
     # Cleanup
-    await agent_manager.terminate_agent(parent_agent.id, merge_work=False)
-    await agent_manager.terminate_agent(child_agent.id, merge_work=False)
+    await agent_manager.terminate_agent(parent_agent.id)
+    await agent_manager.terminate_agent(child_agent.id)
     session.close()
 
 
@@ -286,7 +285,7 @@ async def test_agent_termination_with_merge(agent_manager, test_db, worktree_man
     session.close()
 
     # Terminate with merge
-    await agent_manager.terminate_agent(agent.id, merge_work=True)
+    await agent_manager.terminate_agent(agent.id)
 
     # Verify merge happened - check if the file exists in main branch
     main_repo = Repo(worktree_manager.main_repo.working_dir)
@@ -561,7 +560,6 @@ def test_child_merge_with_active_parent_worktree(worktree_manager, test_db):
     # Create child worktree based on parent
     child_result = worktree_manager.create_agent_worktree(
         agent_id=child_id,
-        parent_agent_id=parent_id
     )
     child_path = Path(child_result["working_directory"])
     child_branch = child_result["branch_name"]
@@ -666,7 +664,6 @@ def test_child_creation_with_detached_parent_head(worktree_manager, test_db):
         # This should handle detached HEAD gracefully
         child_result = worktree_manager.create_agent_worktree(
             agent_id=child_id,
-            parent_agent_id=parent_id
         )
         print(f"✓ Successfully created child despite parent's detached HEAD")
         assert child_result["working_directory"] is not None
@@ -739,7 +736,6 @@ def test_detached_head_after_child_merge(worktree_manager, test_db):
     # Create child worktree from parent
     child1_result = worktree_manager.create_agent_worktree(
         agent_id=child1_id,
-        parent_agent_id=parent_id
     )
     child1_path = Path(child1_result["working_directory"])
 
@@ -783,7 +779,6 @@ def test_detached_head_after_child_merge(worktree_manager, test_db):
         # This should NOT raise TypeError about detached HEAD
         child2_result = worktree_manager.create_agent_worktree(
             agent_id=child2_id,
-            parent_agent_id=parent_id
         )
         print(f"✓ Successfully created second child without detached HEAD error")
         assert child2_result["working_directory"] is not None
