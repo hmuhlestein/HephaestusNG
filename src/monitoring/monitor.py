@@ -1153,6 +1153,14 @@ class MonitoringLoop:
         if not workflow_status or "error" in workflow_status:
             return
 
+        # Don't advance a paused/failed workflow — it's awaiting human intervention.
+        # (Paused = impasse from MAX_PHASE_ATTEMPTS exhaustion or a manual pause.)
+        # A human Resume sets wf.status back to "active"; only then does progression resume.
+        wf_db_status = workflow_status.get("workflow_status", "active")
+        if wf_db_status != "active":
+            logger.debug(f"[PHASE-PROGRESSION] Workflow is {wf_db_status} — skipping phase advancement")
+            return
+
         phases = workflow_status.get("phases", [])
 
         # Find the most recently completed phase whose next phase is still pending.
