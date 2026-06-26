@@ -119,25 +119,8 @@ class AgentManager:
                     if wf and wf.working_directory:
                         # If working_directory contains '.worktrees/', it's a shared worktree
                         if '.worktrees/' in wf.working_directory:
-                            wt_path = Path(wf.working_directory)
-                            if wt_path.is_dir():
-                                try:
-                                    self.branch_manager.reload(wt_path)
-                                    shared_worktree = wf.working_directory
-                                except (ValueError, Exception) as _wt_err:
-                                    # Directory exists but is no longer a valid git repo
-                                    # (e.g. worktree was pruned but the directory lingered).
-                                    # Fall back to a fresh worktree from the current main.
-                                    logger.info(
-                                        f"Shared worktree {wt_path} is not a valid git repo "
-                                        f"({_wt_err}) — falling back to fresh worktree from main"
-                                    )
-                            else:
-                                # Worktree directory was fully removed.
-                                logger.info(
-                                    f"Shared worktree {wt_path} no longer exists — "
-                                    "falling back to fresh worktree from main"
-                                )
+                            shared_worktree = wf.working_directory
+                            self.branch_manager.reload(Path(wf.working_directory))
 
             if shared_worktree:
                 # Use the shared worktree — all phases commit here
