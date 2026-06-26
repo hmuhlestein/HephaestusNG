@@ -1436,8 +1436,14 @@ class MonitoringLoop:
         """
         session = self.db_manager.get_session()
         try:
-            from src.core.database import Phase, Task, PhaseExecution
+            from src.core.database import Phase, Task, PhaseExecution, Workflow
             import uuid
+
+            # Bail immediately if the workflow is no longer active.
+            wf_check = session.query(Workflow).filter_by(id=workflow_id).first()
+            if not wf_check or wf_check.status not in ("active", "paused"):
+                logger.debug(f"[PHASE-TASK] Workflow {workflow_id[:8]} is {getattr(wf_check, 'status', 'missing')} — skipping task creation for {phase_name}")
+                return
 
             phase = session.query(Phase).filter_by(id=phase_id).first()
             if not phase:
