@@ -1412,7 +1412,8 @@ class MonitoringLoop:
             if not wd:
                 return
 
-            tmux_dir = _P(wd) / "docs" / "tmux"
+            # .hephaestus/ is git-excluded — run artifacts never get committed
+            tmux_dir = _P(wd) / ".hephaestus" / "tmux"
             tmux_dir.mkdir(parents=True, exist_ok=True)
             log_file = tmux_dir / f"{phase_name}_{agent_id[:8]}.log"
             log_file.write_text(tmux_output)

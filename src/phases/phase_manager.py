@@ -759,27 +759,31 @@ class PhaseManager:
             self._populate_feature_folder(session, workflow)
 
     def _populate_feature_folder(self, session, workflow) -> None:
-        """Create .hephaestus/features/<dir>/ and copy all docs artifacts into it."""
+        """Create .hephaestus/features/<dir>/ and copy all run artifacts into it."""
         try:
             from pathlib import Path as _P
             import shutil as _shutil
             from datetime import datetime as _dt
 
             wt_path = workflow.working_directory if workflow.working_directory else None
-            if not wt_path or not _P(wt_path).is_dir():
-                logger.debug("[FEATURE-FOLDER] No valid worktree path — skipping")
+            if not wt_path:
+                logger.debug("[FEATURE-FOLDER] No worktree path — skipping")
                 return
 
+            # Derive the real project root from the worktree path.
+            # git_commit_push may have deleted the worktree; read from the merged
+            # project root (main branch) instead.
             project_path = _P(wt_path)
-            # Derive project base: the real repo root (parent of .worktrees if applicable)
             if ".worktrees" in str(project_path):
-                # .worktrees/<wt_name> lives inside the real project root
                 base = project_path
                 while base.name != ".worktrees" and base.parent != base:
                     base = base.parent
                 project_path = base.parent if base.name == ".worktrees" else project_path
 
-            # Derive a clean feature name from the workflow name or design
+            if not project_path.is_dir():
+                logger.warning(f"[FEATURE-FOLDER] Project root {project_path} not found")
+                return
+
             design_name = (workflow.name or "feature").replace(" ", "_").replace("/", "_")
             safe_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in design_name)[:40]
             timestamp = _dt.utcnow().strftime("%Y%m%d_%H%M%S")
@@ -787,36 +791,53 @@ class PhaseManager:
             docs_dir = feature_dir / "docs"
             docs_dir.mkdir(parents=True, exist_ok=True)
 
-            # Copy everything from the worktree's docs/ directory
-            wt_docs = _P(wt_path if ".worktrees" not in str(workflow.working_directory) else workflow.working_directory) / "docs"
             _DOC_EXTENSIONS = {".md", ".json", ".txt", ".log", ".csv", ".html"}
-            if wt_docs.is_dir():
-                for f in wt_docs.iterdir():
-                    if f.is_file() and f.suffix in _DOC_EXTENSIONS:
-                        dest = docs_dir / f.name
+
+            # 1. Production artifacts from docs/ (committed, on main after merge)
+            proj_docs = project_path / "docs"
+            if proj_docs.is_dir():
+                for f in proj_docs.rglob("*"):
+                    if f.is_file() and f.suffix in _DOC_EXTENSIONS and "tmux" not in f.parts:
+                        rel = f.relative_to(proj_docs)
+                        dest = docs_dir / rel
+                        dest.parent.mkdir(parents=True, exist_ok=True)
                         if not dest.exists():
                             _shutil.copy2(str(f), str(dest))
-                            logger.info(f"[FEATURE-FOLDER] Copied {f.name} → features/.../docs/")
 
-            # Also grab feature_report.html from worktree root if present
-            for candidate in [_P(workflow.working_directory) / "feature_report.html",
-                               _P(workflow.working_directory) / "docs" / "feature_report.html"]:
-                if candidate.is_file() and not (feature_dir / "feature_report.html").exists():
-                    _shutil.copy2(str(candidate), str(feature_dir / "feature_report.html"))
-                    logger.info("[FEATURE-FOLDER] Copied feature_report.html → features root")
+            # 2. feature_report.html → feature dir root (where UI expects it)
+            for candidate in [docs_dir / "feature_report.html",
+                               project_path / "docs" / "feature_report.html"]:
+                if candidate.is_file():
+                    dest = feature_dir / "feature_report.html"
+                    if not dest.exists():
+                        _shutil.copy2(str(candidate), str(dest))
                     break
 
-            # Update autopilot_designs.feature_folder so the UI can link the design to this run
+            # 3. Tmux logs from .hephaestus/tmux/ (git-excluded, local only)
+            #    Try the worktree first (forensics runs before merge removes it),
+            #    fall back to project root .hephaestus/ if worktree is gone.
+            for tmux_base in [_P(wt_path), project_path]:
+                tmux_src = tmux_base / ".hephaestus" / "tmux"
+                if tmux_src.is_dir():
+                    tmux_dest = feature_dir / "tmux"
+                    tmux_dest.mkdir(exist_ok=True)
+                    for f in tmux_src.glob("*.log"):
+                        dest = tmux_dest / f.name
+                        if not dest.exists():
+                            _shutil.copy2(str(f), str(dest))
+                            logger.info(f"[FEATURE-FOLDER] Copied tmux log {f.name}")
+                    break
+
+            # 4. Link design → feature folder in DB
             from src.core.database import AutopilotDesign as _AD
             if workflow.design_id:
                 design = session.query(_AD).filter_by(id=workflow.design_id).first()
                 if design:
                     design.feature_folder = str(feature_dir)
                     design.status = "completed"
-                    from datetime import datetime as _dt2
-                    design.completed_at = _dt2.utcnow()
+                    design.completed_at = _dt.utcnow()
                     session.commit()
-                    logger.info(f"[FEATURE-FOLDER] Design {design.id[:8]} linked to {feature_dir.name}")
+                    logger.info(f"[FEATURE-FOLDER] Design {design.id[:8]} → {feature_dir.name}")
 
             logger.info(f"[FEATURE-FOLDER] Created {feature_dir}")
         except Exception as e:
