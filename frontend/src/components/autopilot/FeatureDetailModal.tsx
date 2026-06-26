@@ -3,7 +3,8 @@ import { useQuery } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   X, Download, ExternalLink, FileText, CheckCircle2, XCircle, AlertTriangle,
-  Clock, DollarSign, Layers, Shield, Beaker, BookOpen, Code, Microscope, Copy
+  Clock, DollarSign, Layers, Shield, Beaker, BookOpen, Code, Microscope, Copy,
+  Terminal
 } from 'lucide-react';
 import { apiService } from '@/services/api';
 import { StatusBadge, StatusIcon, formatTime } from '@/pages/Autopilot';
@@ -13,11 +14,12 @@ interface FeatureDetailModalProps {
   onClose: () => void;
 }
 
-type DetailTab = 'overview' | 'report' | 'docs';
+type DetailTab = 'overview' | 'report' | 'docs' | 'logs';
 
 const FeatureDetailModal: React.FC<FeatureDetailModalProps> = ({ featureId, onClose }) => {
   const [activeTab, setActiveTab] = useState<DetailTab>('overview');
   const [selectedDoc, setSelectedDoc] = useState<string | null>(null);
+  const [selectedLog, setSelectedLog] = useState<string | null>(null);
 
   const { data: detail, isLoading } = useQuery({
     queryKey: ['autopilot-feature', featureId],
@@ -35,6 +37,18 @@ const FeatureDetailModal: React.FC<FeatureDetailModalProps> = ({ featureId, onCl
     queryKey: ['autopilot-doc', featureId, selectedDoc],
     queryFn: () => apiService.getAutopilotFeatureDoc(featureId!, selectedDoc!),
     enabled: !!featureId && !!selectedDoc,
+  });
+
+  const { data: logsIndex } = useQuery({
+    queryKey: ['autopilot-feature-logs', featureId],
+    queryFn: () => apiService.getAutopilotFeatureLogs(featureId!),
+    enabled: !!featureId && activeTab === 'logs',
+  });
+
+  const { data: logContent } = useQuery({
+    queryKey: ['autopilot-log', featureId, selectedLog],
+    queryFn: () => apiService.getAutopilotFeatureLog(featureId!, selectedLog!),
+    enabled: !!featureId && !!selectedLog,
   });
 
   if (!featureId) return null;
@@ -112,17 +126,22 @@ const FeatureDetailModal: React.FC<FeatureDetailModalProps> = ({ featureId, onCl
 
             {/* Tab Nav */}
             <div className="px-6 border-b flex gap-1">
-              {(['overview', 'report', 'docs'] as DetailTab[]).map((tab) => (
+              {([
+                { id: 'overview', label: 'Overview' },
+                { id: 'report',   label: 'Report' },
+                { id: 'docs',     label: 'Docs' },
+                { id: 'logs',     label: 'Phase Logs' },
+              ] as { id: DetailTab; label: string }[]).map(({ id, label }) => (
                 <button
-                  key={tab}
-                  onClick={() => setActiveTab(tab)}
-                  className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors capitalize ${
-                    activeTab === tab
+                  key={id}
+                  onClick={() => setActiveTab(id)}
+                  className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${
+                    activeTab === id
                       ? 'border-violet-500 text-violet-600'
                       : 'border-transparent text-gray-500 hover:text-gray-700'
                   }`}
                 >
-                  {tab}
+                  {label}
                 </button>
               ))}
             </div>
@@ -137,12 +156,19 @@ const FeatureDetailModal: React.FC<FeatureDetailModalProps> = ({ featureId, onCl
                 <OverviewTab detail={detail} phaseIcons={phaseIcons} phaseLabels={phaseLabels} />
               ) : activeTab === 'report' ? (
                 <ReportTab html={reportHtml} featureId={featureId} />
-              ) : (
+              ) : activeTab === 'docs' ? (
                 <DocsTab
                   detail={detail}
                   selectedDoc={selectedDoc}
                   docContent={doc}
                   onSelectDoc={setSelectedDoc}
+                />
+              ) : (
+                <LogsTab
+                  logs={logsIndex?.logs ?? []}
+                  selectedLog={selectedLog}
+                  logContent={logContent}
+                  onSelectLog={setSelectedLog}
                 />
               )}
             </div>
@@ -325,6 +351,85 @@ const DocsTab: React.FC<{
       ) : (
         <div className="flex items-center justify-center h-full text-gray-400 text-sm">
           Select a document to view
+        </div>
+      )}
+    </div>
+  </div>
+);
+
+// ── Logs Tab ───────────────────────────────────────────────────
+
+function stripAnsi(str: string): string {
+  // eslint-disable-next-line no-control-regex
+  return str.replace(/\x1b\[[0-9;]*[mGKHF]/g, '');
+}
+
+function phaseLabel(filename: string): string {
+  // e.g. "development_a1b2c3d4.log" → "development · a1b2c3d4"
+  const base = filename.replace(/\.log$/, '');
+  const lastUnderscore = base.lastIndexOf('_');
+  if (lastUnderscore === -1) return base;
+  return base.slice(0, lastUnderscore).replace(/_/g, ' ') + ' · ' + base.slice(lastUnderscore + 1);
+}
+
+const LogsTab: React.FC<{
+  logs: Array<{ name: string; size_bytes: number; modified: string }>;
+  selectedLog: string | null;
+  logContent: { name: string; content: string } | undefined;
+  onSelectLog: (name: string) => void;
+}> = ({ logs, selectedLog, logContent, onSelectLog }) => (
+  <div className="flex h-[600px]">
+    {/* File list */}
+    <div className="w-64 border-r overflow-y-auto bg-gray-900">
+      <div className="p-3">
+        <h4 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2 px-1">Phase Logs</h4>
+        {logs.length === 0 ? (
+          <p className="text-xs text-gray-500 px-1 italic">No logs available</p>
+        ) : logs.map((log) => (
+          <button
+            key={log.name}
+            onClick={() => onSelectLog(log.name)}
+            className={`w-full text-left px-3 py-2 rounded-lg text-xs mb-1 transition-colors flex items-start gap-2 ${
+              selectedLog === log.name
+                ? 'bg-violet-800 text-violet-100'
+                : 'text-gray-300 hover:bg-gray-800'
+            }`}
+          >
+            <Terminal className="w-3 h-3 flex-shrink-0 mt-0.5 text-gray-500" />
+            <div className="min-w-0">
+              <div className="truncate font-mono">{phaseLabel(log.name)}</div>
+              <div className="text-gray-500 text-[10px]">
+                {(log.size_bytes / 1024).toFixed(1)} KB
+              </div>
+            </div>
+          </button>
+        ))}
+      </div>
+    </div>
+
+    {/* Content */}
+    <div className="flex-1 overflow-hidden flex flex-col bg-gray-950">
+      {selectedLog && logContent ? (
+        <>
+          <div className="flex items-center justify-between px-4 py-2 border-b border-gray-800 bg-gray-900">
+            <span className="text-xs font-mono text-gray-300">{phaseLabel(logContent.name)}</span>
+            <button
+              onClick={() => navigator.clipboard.writeText(stripAnsi(logContent.content))}
+              className="text-xs text-gray-500 hover:text-gray-300 flex items-center gap-1 transition-colors"
+            >
+              <Copy className="w-3 h-3" /> Copy
+            </button>
+          </div>
+          <pre className="flex-1 overflow-y-auto p-4 text-xs text-green-300 font-mono leading-relaxed whitespace-pre-wrap break-all">
+            {stripAnsi(logContent.content)}
+          </pre>
+        </>
+      ) : (
+        <div className="flex items-center justify-center h-full">
+          <div className="text-center text-gray-600">
+            <Terminal className="w-10 h-10 mx-auto mb-2 opacity-30" />
+            <p className="text-sm">Select a phase log to view</p>
+          </div>
         </div>
       )}
     </div>
