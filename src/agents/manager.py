@@ -1124,11 +1124,17 @@ REMEMBER:
                                                 tmux_dir
                                                 / f"{_phase.name}_{agent_id[:8]}.log"
                                             )
-                                            log_file.write_text(full_scrollback)
+                                            from src.interfaces.cli_interface import get_cli_agent
+                                            try:
+                                                _cli = get_cli_agent(agent.cli_type)
+                                                clean_scrollback = _cli.strip_tui_chrome(full_scrollback)
+                                            except Exception:
+                                                clean_scrollback = full_scrollback
+                                            log_file.write_text(clean_scrollback)
                                             logger.info(
                                                 f"[TMUX-LOG] Final capture for "
                                                 f"{_phase.name}/{agent_id[:8]}: "
-                                                f"{len(full_scrollback)} chars → {log_file.name}"
+                                                f"{len(clean_scrollback)} chars → {log_file.name}"
                                             )
                                     except Exception as _te:
                                         logger.debug(
@@ -1554,8 +1560,14 @@ REMEMBER:
             # Capture ALL available scrollback — no fixed line limit.
             # The history-limit is set to 50000 on session creation.
             output = pane.cmd("capture-pane", "-p", "-S", "-").stdout
+            text = "\n".join(output) if output else ""
 
-            return "\n".join(output) if output else ""
+            from src.interfaces.cli_interface import get_cli_agent
+            try:
+                text = get_cli_agent(agent.cli_type).strip_tui_chrome(text)
+            except Exception:
+                pass
+            return text
 
         except Exception as e:
             logger.error(f"Failed to get agent output for {agent_id}: {e}")

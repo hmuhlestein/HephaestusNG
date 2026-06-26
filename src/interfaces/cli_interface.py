@@ -230,6 +230,24 @@ class CLIAgentInterface(ABC):
         """
         return []
 
+    def strip_tui_chrome(self, text: str) -> str:
+        """Remove CLI-specific TUI chrome from captured terminal output.
+
+        tmux capture-pane snapshots include the TUI frame at the time of
+        capture: status bars, spinners, decorative separators, tilde-fill
+        lines, etc.  These are visual artifacts, not log content.
+
+        Default: return text unchanged (most CLIs produce plain output).
+        Override per CLI to strip that CLI's specific frame chrome.
+
+        Args:
+            text: Raw captured text (already ANSI-stripped by capture-pane).
+
+        Returns:
+            Text with trailing TUI frame chrome removed.
+        """
+        return text
+
     # ── Health / stuck checks (shared) ───────────────────────────────────
 
     def is_healthy(self, output: str) -> bool:
@@ -495,6 +513,39 @@ class PiAgent(CLIAgentInterface):
             'worki', 'workin', 'MCP:', 'openrouter',
             '/.worktrees/', 'model.*medium', '%',
         ]
+
+    # Braille spinner frames used by the pi TUI progress indicator.
+    _PI_SPINNERS = frozenset('⠀⠁⠂⠃⠄⠅⠆⠇⠈⠉⠊⠋⠌⠍⠎⠏⠐⠑⠒⠓⠔⠕⠖⠗⠘⠙⠚⠛⠜⠝⠞⠟'
+                             '⠠⠡⠢⠣⠤⠥⠦⠧⠨⠩⠪⠫⠬⠭⠮⠯⠰⠱⠲⠳⠴⠵⠶⠷⠸⠹⠺⠻⠼⠽⠾⠿')
+
+    def strip_tui_chrome(self, text: str) -> str:
+        """Strip the pi TUI frame from the tail of a capture-pane snapshot.
+
+        pi renders a persistent status bar at the bottom of the terminal:
+          ────────────────────────────────────────────────────────────────
+          ~   (tilde filler lines for unused screen rows)
+          ↑221k ↓9.0k R1.2M CH99.6% $0.037  xiaomi/mimo-v2.5 • high
+          MCP: 1/1 servers
+        Spinner frames (⠦ Working…) also appear just before the bar.
+
+        We walk backwards discarding these lines until we hit real content.
+        """
+        lines = text.split('\n')
+        end = len(lines)
+        while end > 0:
+            stripped = lines[end - 1].strip()
+            if (
+                stripped == ''
+                or stripped == '~'
+                or re.match(r'^─+$', stripped)
+                or stripped.startswith('MCP:')
+                or re.search(r'↑\d+[km].*↓\d+', stripped, re.IGNORECASE)
+                or (stripped and stripped[0] in self._PI_SPINNERS)
+            ):
+                end -= 1
+            else:
+                break
+        return '\n'.join(lines[:end])
 
     def get_health_check_pattern(self) -> str:
         return r"(›|>|pi>)"
