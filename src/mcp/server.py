@@ -1983,89 +1983,6 @@ async def validate_agent_id(agent_id: str):
         }
 
 
-def _write_feature_report(session, workflow_id: str, wt_path) -> None:
-    """Generate docs/feature_report.html summarising the completed pipeline run."""
-    from pathlib import Path as _P
-    from datetime import timezone
-    from src.core.database import Phase, PhaseExecution, Task as _Task, Workflow as _WF
-
-    wf = session.query(_WF).filter_by(id=workflow_id).first()
-    phases = (
-        session.query(Phase)
-        .filter_by(workflow_id=workflow_id)
-        .order_by(Phase.order)
-        .all()
-    )
-    phase_execs = {
-        pe.phase_id: pe
-        for pe in session.query(PhaseExecution).filter_by(workflow_execution_id=workflow_id).all()
-    }
-    tasks_by_phase: dict = {}
-    for t in session.query(_Task).filter_by(workflow_id=workflow_id).all():
-        tasks_by_phase.setdefault(t.phase_id, []).append(t)
-
-    feature_name = (wf.name if wf and wf.name else workflow_id[:8])
-    started = wf.created_at.strftime("%Y-%m-%d %H:%M UTC") if wf and wf.created_at else "—"
-
-    STATUS_COLOR = {
-        "completed": "#22c55e", "done": "#22c55e",
-        "failed": "#ef4444", "in_progress": "#f59e0b",
-        "pending": "#94a3b8",
-    }
-
-    def badge(status: str) -> str:
-        color = STATUS_COLOR.get(status, "#94a3b8")
-        return f'<span style="background:{color};color:#fff;padding:2px 8px;border-radius:4px;font-size:0.8em">{status}</span>'
-
-    rows = []
-    for phase in phases:
-        pe = phase_execs.get(phase.id)
-        pe_status = pe.status if pe else "pending"
-        phase_tasks = tasks_by_phase.get(phase.id, [])
-        task_html = ""
-        for t in phase_tasks:
-            summary = (t.completion_notes or "").strip().replace("<", "&lt;").replace(">", "&gt;")
-            task_html += (
-                f'<li style="margin:4px 0">{badge(t.status)} '
-                f'<small style="color:#64748b">{t.id[:8]}</small> '
-                f'{summary[:200] or t.raw_description[:120]}</li>'
-            )
-        rows.append(f"""
-        <tr>
-          <td style="padding:8px;font-weight:600">{phase.name}</td>
-          <td style="padding:8px">{badge(pe_status)}</td>
-          <td style="padding:8px"><ul style="margin:0;padding-left:16px">{task_html}</ul></td>
-        </tr>""")
-
-    html = f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<title>Feature Report — {feature_name}</title>
-<style>
-  body {{ font-family: system-ui, sans-serif; max-width: 900px; margin: 40px auto; color: #1e293b; }}
-  h1 {{ font-size: 1.6em; margin-bottom: 4px; }}
-  .meta {{ color: #64748b; margin-bottom: 24px; font-size: 0.9em; }}
-  table {{ width: 100%; border-collapse: collapse; }}
-  tr:nth-child(even) {{ background: #f8fafc; }}
-  th {{ text-align: left; padding: 8px; background: #1e293b; color: #fff; }}
-</style>
-</head>
-<body>
-<h1>&#128196; Feature Report: {feature_name}</h1>
-<p class="meta">Pipeline started {started} &nbsp;|&nbsp; Workflow {workflow_id[:8]}</p>
-<table>
-  <thead><tr><th>Phase</th><th>Status</th><th>Tasks</th></tr></thead>
-  <tbody>{''.join(rows)}</tbody>
-</table>
-</body>
-</html>"""
-
-    out = _P(wt_path) / "docs" / "feature_report.html"
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(html)
-
-
 @app.post("/update_task_status", response_model=UpdateTaskStatusResponse)
 async def update_task_status(
     request: UpdateTaskStatusRequest,
@@ -2312,15 +2229,6 @@ async def update_task_status(
                     if wt_path and _P(wt_path).is_dir():
                         phase_obj = session.query(Phase).filter_by(id=task.phase_id).first() if task.phase_id else None
                         phase_label = phase_obj.name if phase_obj else (task.phase_id[:8] if task.phase_id else "unknown")
-
-                        # Generate HTML feature report when forensics completes (last phase
-                        # before git_commit_push removes the worktree).
-                        if phase_obj and phase_obj.name == "forensics_analysis":
-                            try:
-                                _write_feature_report(session, task.workflow_id, _P(wt_path))
-                                logger.info(f"[REPORT] Feature report written to {wt_path}/docs/feature_report.html")
-                            except Exception as _re:
-                                logger.warning(f"[REPORT] Failed to write feature report: {_re}")
 
                         wt_repo = Repo(wt_path)
                         wt_repo.git.add("-A")
