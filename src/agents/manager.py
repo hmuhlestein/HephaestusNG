@@ -1481,6 +1481,10 @@ REMEMBER:
                 logger.warning(f"Agent {agent_id} not found")
                 return ""
 
+            # Orchestrator agents always read from their log file regardless of status.
+            if agent.agent_type == "orchestrator":
+                return self._get_orchestrator_output(agent, lines)
+
             # Check if agent is terminated - if so, retrieve from AgentLog
             if agent.status == "terminated":
                 logger.debug(f"Agent {agent_id} is terminated, retrieving stored output")
@@ -1558,6 +1562,29 @@ REMEMBER:
             return ""
         finally:
             session.close()
+
+    def _get_orchestrator_output(self, agent, lines: int) -> str:
+        """Return the orchestrator's run log as human-readable text."""
+        from pathlib import Path as _P
+        # Log dir is stored as "LOG_DIR:<path>" in system_prompt.
+        log_dir: _P | None = None
+        if agent.system_prompt and agent.system_prompt.startswith("LOG_DIR:"):
+            log_dir = _P(agent.system_prompt[len("LOG_DIR:"):].strip())
+        if log_dir is None or not log_dir.exists():
+            # Fall back: latest run-* directory under ~/.hephaestus/autopilot/
+            base = _P.home() / ".hephaestus" / "autopilot"
+            candidates = sorted(base.glob("run-*"), reverse=True)
+            log_dir = candidates[0] if candidates else None
+        if log_dir is None:
+            return "Orchestrator log not found."
+        log_file = log_dir / "orchestrator.log"
+        if not log_file.exists():
+            return f"Orchestrator log not found at {log_file}."
+        text = log_file.read_text(errors="replace")
+        if lines and lines > 0:
+            text_lines = text.splitlines()
+            text = "\n".join(text_lines[-lines:])
+        return text
 
     async def send_recovery_keystrokes(self, agent_id: str) -> bool:
         """Send the CLI's mechanical recovery keystrokes (e.g. Esc for pi) to break a

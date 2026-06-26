@@ -1890,7 +1890,7 @@ def run_continuous_pipeline(args) -> None:
         try:
             orchestrator_agent = Agent(
                 id=f"orchestrator-{uuid.uuid4().hex[:8]}",
-                system_prompt="Autopilot Orchestrator - manages the 10-phase pipeline",
+                system_prompt=f"LOG_DIR:{log_dir}",
                 status="working",
                 cli_type=cli_tool,
                 agent_type="orchestrator",
