@@ -116,8 +116,10 @@ Autopilot validated: $(date -u +%Y-%m-%d)"
 gh pr merge --merge --delete-branch
 ```
 
-`--delete-branch` removes the REMOTE branch after merge. The LOCAL worktree
-is kept in place — do not attempt to remove it.
+`--delete-branch` removes only the REMOTE branch after merge.
+STOP after this command. Do NOT delete the local branch (`git branch -d`).
+The local branch is checked out by the active worktree and cannot be deleted —
+attempting to delete it will prompt you to remove the worktree, which you MUST NOT do.
 
 If `gh` is unavailable, fall back to local merge from the main repo.
 From the worktree you can push to remote but cannot checkout the main branch.
@@ -167,6 +169,9 @@ DO:
 DO NOT:
 - Run `git checkout main` — impossible from a worktree
 - Run `git worktree remove` — the worktree must stay for the UI
+- Run `git branch -d feature/...` or any local branch deletion — the branch is
+  checked out by the worktree; deleting it requires removing the worktree first,
+  which breaks the UI. Leave all local branches as-is after merge.
 - Create a new feature branch — you are already on one
 - Commit secrets or API keys
 - Force push without explicit instructions

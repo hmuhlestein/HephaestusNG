@@ -1098,7 +1098,7 @@ REMEMBER:
                                 )
                                 final_output = "\n".join(full_scrollback.splitlines()[-50:])
 
-                                # Write complete scrollback to docs/tmux/ for forensics.
+                                # Write complete scrollback to .hephaestus/tmux/ (git-excluded run artifact).
                                 _task = session.query(Task).filter_by(
                                     id=agent.current_task_id
                                 ).first()
@@ -1117,7 +1117,7 @@ REMEMBER:
                                         ).first()
                                         if _phase and _wf and _wf.working_directory:
                                             tmux_dir = (
-                                                _P(_wf.working_directory) / "docs" / "tmux"
+                                                _P(_wf.working_directory) / ".hephaestus" / "tmux"
                                             )
                                             tmux_dir.mkdir(parents=True, exist_ok=True)
                                             log_file = (
