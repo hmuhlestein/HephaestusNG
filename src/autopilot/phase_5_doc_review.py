@@ -30,6 +30,7 @@ the post-review state of the code.""",
         "Inconsistencies between docs and code corrected",
         "Documentation gaps identified and filled",
         "doc_review_report.md created with findings and fixes applied",
+        "feature_report.html written to Docs Path (AI-authored HTML feature summary for the UI)",
         "Memory saved with documentation findings",
         "Task marked as done",
     ],
@@ -279,7 +280,30 @@ Write doc_review_report.md with:
 - [What documentation was done well]
 
 ═══════════════════════════════════════════════════════════════════════
-STEP 9: FIX ALL DOCUMENTATION ISSUES (MANDATORY)
+STEP 9: WRITE HTML FEATURE REPORT (MANDATORY)
+═══════════════════════════════════════════════════════════════════════
+
+Write `<Docs Path>/feature_report.html` — a polished, human-readable HTML
+summary of what was built. This is what stakeholders see in the UI.
+
+You have read ALL the artifacts. Use that knowledge to write something
+genuinely useful: not a status table, but a clear narrative. Include:
+
+- **What it does**: one paragraph plain-English description of the feature
+- **Why it was built**: the original problem / design motivation
+- **How it works**: key technical decisions, module structure, data flow
+- **Quality signals**: test coverage, security findings, doc quality
+- **What changed**: any architectural pivots from adversarial review
+- **Known limitations or follow-up work** (from forensics if available)
+
+The HTML must be self-contained (no external CSS/JS). Use inline styles.
+Keep it professional — dark header, clean card layout, readable typography.
+Write it as if presenting to a technical lead who wasn't in the room.
+
+Save to: `<Docs Path>/feature_report.html`
+
+═══════════════════════════════════════════════════════════════════════
+STEP 10: FIX ALL DOCUMENTATION ISSUES (MANDATORY)
 ═══════════════════════════════════════════════════════════════════════
 
 For EVERY documentation issue you find, you MUST fix it:
@@ -293,7 +317,7 @@ For EVERY documentation issue you find, you MUST fix it:
 DO NOT just report issues - FIX THEM. You have write access to all files.
 
 ═══════════════════════════════════════════════════════════════════════
-STEP 10: SAVE TO MEMORY
+STEP 11: SAVE TO MEMORY
 ═══════════════════════════════════════════════════════════════════════
 
 Save documentation findings to memory:

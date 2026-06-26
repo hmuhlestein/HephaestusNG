@@ -897,7 +897,7 @@ def copy_design_document(design_entry: DesignEntry, feature_folder: Path) -> Pat
 # in the root) every stray artifact into docs_dir so that nothing is
 # lost and the project root stays clean.
 
-_DOC_EXTENSIONS = {".md", ".json", ".txt", ".log", ".csv"}
+_DOC_EXTENSIONS = {".md", ".json", ".txt", ".log", ".csv", ".html"}
 _SKIP_ROOT_FILES = {
     "README.md", "AGENTS.md", "CHANGELOG.md", "LICENSE",
     "package.json", "tsconfig.json", "pyproject.toml", "poetry.lock",

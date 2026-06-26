@@ -756,6 +756,71 @@ class PhaseManager:
             workflow.status = "completed"
             session.commit()
             logger.info(f"Workflow {self.workflow_id} completed (all phases done)")
+            self._populate_feature_folder(session, workflow)
+
+    def _populate_feature_folder(self, session, workflow) -> None:
+        """Create .hephaestus/features/<dir>/ and copy all docs artifacts into it."""
+        try:
+            from pathlib import Path as _P
+            import shutil as _shutil
+            from datetime import datetime as _dt
+
+            wt_path = workflow.working_directory if workflow.working_directory else None
+            if not wt_path or not _P(wt_path).is_dir():
+                logger.debug("[FEATURE-FOLDER] No valid worktree path — skipping")
+                return
+
+            project_path = _P(wt_path)
+            # Derive project base: the real repo root (parent of .worktrees if applicable)
+            if ".worktrees" in str(project_path):
+                # .worktrees/<wt_name> lives inside the real project root
+                base = project_path
+                while base.name != ".worktrees" and base.parent != base:
+                    base = base.parent
+                project_path = base.parent if base.name == ".worktrees" else project_path
+
+            # Derive a clean feature name from the workflow name or design
+            design_name = (workflow.name or "feature").replace(" ", "_").replace("/", "_")
+            safe_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in design_name)[:40]
+            timestamp = _dt.utcnow().strftime("%Y%m%d_%H%M%S")
+            feature_dir = project_path / ".hephaestus" / "features" / f"{timestamp}_{safe_name}"
+            docs_dir = feature_dir / "docs"
+            docs_dir.mkdir(parents=True, exist_ok=True)
+
+            # Copy everything from the worktree's docs/ directory
+            wt_docs = _P(wt_path if ".worktrees" not in str(workflow.working_directory) else workflow.working_directory) / "docs"
+            _DOC_EXTENSIONS = {".md", ".json", ".txt", ".log", ".csv", ".html"}
+            if wt_docs.is_dir():
+                for f in wt_docs.iterdir():
+                    if f.is_file() and f.suffix in _DOC_EXTENSIONS:
+                        dest = docs_dir / f.name
+                        if not dest.exists():
+                            _shutil.copy2(str(f), str(dest))
+                            logger.info(f"[FEATURE-FOLDER] Copied {f.name} → features/.../docs/")
+
+            # Also grab feature_report.html from worktree root if present
+            for candidate in [_P(workflow.working_directory) / "feature_report.html",
+                               _P(workflow.working_directory) / "docs" / "feature_report.html"]:
+                if candidate.is_file() and not (feature_dir / "feature_report.html").exists():
+                    _shutil.copy2(str(candidate), str(feature_dir / "feature_report.html"))
+                    logger.info("[FEATURE-FOLDER] Copied feature_report.html → features root")
+                    break
+
+            # Update autopilot_designs.feature_folder so the UI can link the design to this run
+            from src.core.database import AutopilotDesign as _AD
+            if workflow.design_id:
+                design = session.query(_AD).filter_by(id=workflow.design_id).first()
+                if design:
+                    design.feature_folder = str(feature_dir)
+                    design.status = "completed"
+                    from datetime import datetime as _dt2
+                    design.completed_at = _dt2.utcnow()
+                    session.commit()
+                    logger.info(f"[FEATURE-FOLDER] Design {design.id[:8]} linked to {feature_dir.name}")
+
+            logger.info(f"[FEATURE-FOLDER] Created {feature_dir}")
+        except Exception as e:
+            logger.warning(f"[FEATURE-FOLDER] Failed to populate feature folder: {e}")
 
     def get_workflow_status(self) -> Dict[str, Any]:
         """Get current workflow status.
