@@ -90,7 +90,7 @@ def get_session_id(project_id: str, design_slug: str, phase_name: str) -> str:
 AUTOPILOT_ORCHESTRATOR_CONFIG = {
     "type": "evaluating",  # Use evaluation-based flow control
     "max_phase_retries": 2,
-    "max_total_gotos": 10,  # Safety limit: max 10 GOTO operations per design
+    "max_total_gotos": 30,  # Safety limit: max 30 GOTO operations per design
     "evaluation_points": [
         # After architecture design - check quality, can retry or continue
         {
@@ -114,7 +114,8 @@ AUTOPILOT_ORCHESTRATOR_CONFIG = {
             "max_retries": 0,
         },
         # After adversarial review - loops back to development for fixes,
-        # then continues to QA. Max retries prevents infinite loops.
+        # then continues to QA. High max_retries lets the architect keep
+        # pushing until the code is genuinely clean.
         {
             "after_phase": "adversarial_review",
             "evaluator": "heuristic",
@@ -123,7 +124,7 @@ AUTOPILOT_ORCHESTRATOR_CONFIG = {
                 {"if": "score < 0.6", "action": "goto", "target": "development", "reason": "Code issues found, returning to development"},
                 {"if": "score >= 0.6", "action": "continue", "reason": "Adversarial review passed"},
             ],
-            "max_retries": 2,
+            "max_retries": 15,
         },
         # After doc review - can jump to architecture or development
         {
