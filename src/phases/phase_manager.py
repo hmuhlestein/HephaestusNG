@@ -716,6 +716,13 @@ class PhaseManager:
         if not current_phase:
             return False
 
+        # Don't advance phases on a completed workflow — stale mark_phase_complete
+        # calls from the spec-gate or 3a path can fire after _complete_workflow runs.
+        workflow = session.query(Workflow).filter_by(id=current_phase.workflow_id).first()
+        if not workflow or workflow.status not in ("active", "paused"):
+            logger.debug(f"[PHASE] _start_next_phase skipped — workflow is {getattr(workflow, 'status', 'missing')}")
+            return False
+
         # Find next phase
         next_phase = session.query(Phase).filter(
             Phase.workflow_id == current_phase.workflow_id,
