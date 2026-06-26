@@ -145,6 +145,59 @@ for i in $(seq 1 $MAX); do
 
     echo "[${E}s] run=$R agents=$AGENTS done=$DONE failed=$FAIL | $P"
 
+    # Diagnostics every 2 min
+    if (( E % 120 == 0 )); then
+        TASK_FAIL=$(q "SELECT count(*) FROM tasks WHERE status='failed'")
+        echo "  [diag] failed_tasks=$TASK_FAIL"
+        NOW=$(date +%Y-%m-%d)
+        LAST_ERR=$(grep "$NOW" hephaestus_server.log 2>/dev/null | grep -h "Failed to create agent\|Marked task.*failed" | tail -1 || true)
+        [[ -n "$LAST_ERR" ]] && echo "  [diag] $LAST_ERR"
+        AGENT_ID=$(q "SELECT substr(id,1,8) FROM agents WHERE agent_type='phase' AND status='working' ORDER BY rowid DESC LIMIT 1")
+        if [[ -n "$AGENT_ID" ]]; then
+            AGENT_OUT=$(tmux capture-pane -t "agent_${AGENT_ID}" -p -S -5 2>/dev/null | tail -3 | tr '\n' ' ' | head -c 200 || true)
+            [[ -z "$AGENT_OUT" ]] && AGENT_OUT=$(tmux capture-pane -t "agent_${AGENT_ID}_r" -p -S -5 2>/dev/null | tail -3 | tr '\n' ' ' | head -c 200 || true)
+            [[ -n "$AGENT_OUT" ]] && echo "  [agent] $AGENT_OUT"
+        fi
+    fi
+
+    # Log analysis every 5 min
+    if (( E % 300 == 0 )) && [[ $i -gt 1 ]]; then
+        echo ""
+        echo "  === LOG ANALYSIS (t=${E}s) ==="
+        NOW=$(date +%Y-%m-%d)
+        ERR_COUNT=$(grep "$NOW" hephaestus_server.log 2>/dev/null | grep -c "ERROR" || true)
+        echo "  [logs] server_errors=$ERR_COUNT"
+        RESTARTS=$(grep "$NOW" ~/.hephaestus/logs/monitor.log 2>/dev/null | grep -c "restarted successfully" || true)
+        echo "  [logs] agent_restarts=$RESTARTS"
+        GARBLED=$(grep "$NOW" ~/.hephaestus/logs/monitor.log 2>/dev/null | grep -c "garbled\|exited to command" || true)
+        echo "  [logs] garbled_exited=$GARBLED"
+        MCP_FAIL=$(grep "$NOW" hephaestus_server.log 2>/dev/null | grep -c "Failed to process task" || true)
+        echo "  [logs] mcp_task_failures=$MCP_FAIL"
+        TASK_DONE=$(q "SELECT count(*) FROM tasks WHERE status='done'")
+        TASK_FAIL=$(q "SELECT count(*) FROM tasks WHERE status='failed'")
+        TASK_STUCK=$(q "SELECT count(*) FROM tasks WHERE status='in_progress' AND started_at < datetime('now', '-10 minutes')")
+        echo "  [tasks] done=$TASK_DONE failed=$TASK_FAIL stuck=$TASK_STUCK"
+        PHASE_DONE=$(q "SELECT count(*) FROM phase_executions WHERE status='completed'")
+        PHASE_FAIL=$(q "SELECT count(*) FROM phase_executions WHERE status='failed'")
+        echo "  [phases] done=$PHASE_DONE failed=$PHASE_FAIL"
+        set +o pipefail
+        MON_ALIVE=$(ps aux | grep run_monitor | grep -v grep | wc -l | tr -d ' ')
+        set -o pipefail
+        echo "  [monitor] alive=${MON_ALIVE:-0}"
+        if [[ -f ~/.hephaestus/logs/monitor_heartbeat ]]; then
+            HB=$(cat ~/.hephaestus/logs/monitor_heartbeat 2>/dev/null)
+            AGE=$(( $(date +%s) - ${HB%.*} ))
+            echo "  [monitor] heartbeat ${AGE}s ago"
+            (( AGE > 120 )) && echo "  [monitor] WARNING: heartbeat stale — monitor may be dead!"
+        else
+            echo "  [monitor] no heartbeat file"
+        fi
+        SRV=$(curl -s http://127.0.0.1:8300/health 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('status',''))" 2>/dev/null || echo "dead")
+        echo "  [server] status=$SRV"
+        echo "  === END LOG ANALYSIS ==="
+        echo ""
+    fi
+
     [[ "$R" == "False" ]] && [[ $i -gt 4 ]] && log "Pipeline stopped" && break
     [[ "$DONE" == "10" ]] && log "All 10 phases complete!" && break
 done
