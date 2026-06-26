@@ -42,7 +42,8 @@ class TestTicketIDValidationSimple:
             "done_definition": "Task completed successfully",
             "ai_agent_id": "main-session-agent",
             "phase_id": "1",
-            "priority": "medium"
+            "priority": "medium",
+            "workflow_id": "test-workflow"
         }
 
         response = requests.post(
@@ -72,7 +73,8 @@ class TestTicketIDValidationSimple:
             "done_definition": "Task completed successfully",
             "ai_agent_id": "test-mcp-agent",  # MCP agent, not SDK
             "phase_id": "1",
-            "priority": "medium"
+            "priority": "medium",
+            "workflow_id": "test-workflow"
             # NO ticket_id provided
         }
 
@@ -114,7 +116,8 @@ class TestTicketIDValidationSimple:
                 "done_definition": "Task completed successfully",
                 "ai_agent_id": agent_id,
                 "phase_id": "1",
-                "priority": "medium"
+                "priority": "medium",
+            "workflow_id": "test-workflow"
             }
 
             response = requests.post(

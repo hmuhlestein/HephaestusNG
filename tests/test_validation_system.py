@@ -246,7 +246,8 @@ class TestValidatorAgent:
             commit_sha="abc123",
             workspace_changes=workspace_changes,
             agent_claims="Done",
-            iteration=1
+            iteration=1,
+            validator_agent_id="validator-123"
         )
 
         assert "task123" in prompt
@@ -267,17 +268,10 @@ class TestValidatorAgent:
         task.raw_description = "Test"
         task.enriched_description = "Test enhanced"
         task.done_definition = "Done"
+        task.last_validation_feedback = None
 
         phase = Mock()
         phase.validation = {"criteria": []}
-
-        # Setup query chain for task and phase
-        query_mock = Mock()
-        query_mock.filter_by.return_value = query_mock
-
-        # First call returns task, second returns phase
-        query_mock.first.side_effect = [task, phase, task]  # Added third for get_agent_results
-        session.query.return_value = query_mock
 
         # Mock worktree manager
         mock_worktree = Mock()
@@ -287,36 +281,27 @@ class TestValidatorAgent:
             "files_deleted": [],
             "detailed_diff": ""
         }
-
-        # Mock AgentWorktree class and db_manager
-        from src.core.database import AgentWorktree
-        mock_worktree.AgentWorktree = AgentWorktree
-
-        # Setup mock for worktree query
-        wt_session = Mock()
-        wt_query = Mock()
-        wt_query.filter_by.return_value = wt_query
-        wt_query.first.return_value = Mock(worktree_path="/tmp/wt_agent123")
-        wt_session.query.return_value = wt_query
-
-        mock_worktree.db_manager = Mock()
-        mock_worktree.db_manager.get_session.return_value = wt_session
+        mock_worktree.get_agent_branch_path.return_value = "/tmp/wt_agent123"
 
         # Mock agent manager
-        mock_agent_manager = Mock()
+        mock_agent_manager = AsyncMock()
 
-        with patch('src.validation.validator_agent.spawn_validator_tmux_session', new_callable=AsyncMock):
+        with patch('src.validation.validator_agent.get_agent_results', return_value="Agent did X"), \
+             patch('src.validation.validator_agent.spawn_validator_tmux_session', new_callable=AsyncMock), \
+             patch('src.monitoring.prompt_loader.prompt_loader.format_task_validation_prompt', return_value="Validation prompt"):
             validator_id = await spawn_validator_agent(
-                task_id="task123",
+                validation_type="task",
+                target_id="task123",
+                workflow_id="wf-123",
                 commit_sha="abc123",
                 db_manager=mock_db_manager,
-                worktree_manager=mock_worktree,
-                agent_manager=mock_agent_manager
+                branch_manager=mock_worktree,
+                agent_manager=mock_agent_manager,
+                original_agent_id="agent-123"
             )
 
-        assert validator_id.startswith("validator-")
+        assert validator_id.startswith("task-validator-")
         session.add.assert_called()
-        session.commit.assert_called()
 
     def test_send_feedback_to_agent(self):
         """Test sending feedback to agent."""

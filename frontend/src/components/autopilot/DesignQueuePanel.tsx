@@ -47,8 +47,24 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
     queryKey: ['autopilot-project-designs', projectId],
     queryFn: () => projectId ? apiService.getAutopilotProjectDesigns(projectId) : Promise.resolve([]),
     enabled: !!projectId,
-    refetchInterval: 30000,
+    refetchInterval: 5000,
   });
+
+  // Periodically reload designs from disk every 30 seconds
+  useEffect(() => {
+    if (!projectId) return;
+    const interval = setInterval(async () => {
+      try {
+        const data = await apiService.reloadAutopilotProjectDesigns(projectId);
+        setLocalOrder(data);
+        queryClient.setQueryData(['autopilot-project-designs', projectId], data);
+      } catch {
+        // Silently ignore reload failures during periodic refresh
+      }
+    }, 30000);
+    return () => clearInterval(interval);
+  }, [projectId, queryClient]);
+
 
   // Fetch status for each design
   useEffect(() => {
@@ -73,6 +89,10 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
     };
     
     fetchStatuses();
+    
+    // Periodically refresh statuses every 10 seconds
+    const statusInterval = setInterval(fetchStatuses, 10000);
+    return () => clearInterval(statusInterval);
   }, [projectId, designs]);
 
   const items = localOrder ?? designs ?? [];

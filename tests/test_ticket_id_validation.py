@@ -68,7 +68,8 @@ class TestTicketIDValidation:
             "done_definition": "Task completed successfully",
             "ai_agent_id": "main-session-agent",
             "phase_id": "1",
-            "priority": "medium"
+            "priority": "medium",
+            "workflow_id": self.workflow_id or "test-workflow"
         }
 
         response = requests.post(

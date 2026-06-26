@@ -417,12 +417,12 @@ async def test_get_ticket_full_details(db_manager, test_workflow, test_agent, te
     details = await TicketService.get_ticket(ticket["ticket_id"])
 
     assert details is not None
-    assert details["ticket_id"] == ticket["ticket_id"]
-    assert details["title"] == "Test ticket"
-    assert details["description"] == "Test description"
+    assert details["ticket"]["ticket_id"] == ticket["ticket_id"]
+    assert details["ticket"]["title"] == "Test ticket"
+    assert details["ticket"]["description"] == "Test description"
     assert len(details["comments"]) >= 1
     assert len(details["history"]) >= 1  # Should have creation history
-    assert details["tags"] == ["test"]
+    assert details["ticket"]["tags"] == ["test"]
 
 
 @pytest.mark.asyncio
