@@ -23,6 +23,20 @@ class CLIAgentInterface(ABC):
     calls these methods without knowing which CLI tool is running.
     """
 
+    def get_session_args(self, session_id: str) -> str:
+        """Return the CLI-specific flag to resume/create a named session.
+
+        Each CLI agent overrides this to inject its own session-resume args.
+        Empty string = no session persistence for this CLI.
+
+        Args:
+            session_id: Deterministic session identifier (e.g. 'hephaestus-proj-design-architect')
+
+        Returns:
+            CLI-specific args string (e.g. '--session-id hephaestus-...') or empty.
+        """
+        return ""
+
     @abstractmethod
     def get_launch_command(self, system_prompt: str, **kwargs) -> str:
         """Generate the launch command for the CLI tool.
@@ -422,6 +436,19 @@ class PiAgent(CLIAgentInterface):
     running and can call MCP tools. The initial message is sent via tmux.
     """
 
+    def get_session_args(self, session_id: str) -> str:
+        """Pi uses --session-id to resume or create a named session.
+
+        This preserves full conversational context across phases and gotos.
+        The same session ID for a role (architect, developer) means the agent
+        picks up where it left off with all prior reasoning intact.
+
+        Pi handles storage internally — we just pass the ID.
+        """
+        if session_id:
+            return f'--session-id {session_id}'
+        return '--no-session'
+
     def get_launch_command(self, system_prompt: str, **kwargs) -> str:
         from src.core.simple_config import get_config
         config = get_config()
@@ -447,13 +474,17 @@ class PiAgent(CLIAgentInterface):
             user_prompt = self._build_user_prompt(system_prompt, **kwargs)
             self._save_prompt_to_file(user_prompt, 'pi_prompt', task_id)
 
+            # Session persistence — preserves conversational context across phases/gotos.
+            session_args = self.get_session_args(kwargs.get('session_id', ''))
+
             # Launch interactively (no -p/--print). Initial message sent via tmux.
-            command = f'pi --append-system-prompt "$(cat {agent_file})" --model {model}{thinking_flag} --approve --no-context-files'
+            command = f'pi --append-system-prompt "$(cat {agent_file})" --model {model}{thinking_flag} --approve --no-context-files {session_args}'
         else:
             # Fallback: inject full prompt from file
             task_id = kwargs.get('task_id', 'default')
             prompt_file = self._save_prompt_to_file(system_prompt, 'pi_prompt', task_id)
-            command = f'pi --append-system-prompt "$(cat {prompt_file})" --model {model}{thinking_flag} --approve --no-context-files'
+            session_args = self.get_session_args(kwargs.get('session_id', ''))
+            command = f'pi --append-system-prompt "$(cat {prompt_file})" --model {model}{thinking_flag} --approve --no-context-files {session_args}'
 
         return command
 

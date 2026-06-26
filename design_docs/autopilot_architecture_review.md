@@ -792,6 +792,36 @@ requirements** before development starts (this is where the "architect-as-mentor
 idea belongs — one design-fidelity check at the cheapest catch point, **not** a
 persistent everywhere-reviewer).
 
+**Architect as adversarial reviewer of developer code (§10.1.1).** The generic
+adversarial reviewer (phase 4) is the lowest-yield review — cold context, no
+specific rubric, rebuilds understanding from scratch. Replace it with the
+**architect agent re-invoked after development** (phase 3), retaining its warm
+design context. The architect knows *why* decisions were made, what trade-offs
+were accepted, and what invariants must hold — making it the ideal reviewer to
+catch deviations, over-engineering, and design violations. Implementation:
+- **Re-invoke the architect** (same agent type, same model) after development
+  completes. Pass `architecture.md`, `requirements_analysis.md`, and the
+  developer's code as context. The architect's in-memory context is captured
+  in `architecture.md`; passing it along gives the reviewer the design rationale
+  without keeping the original agent alive across phases.
+- **Phase prompt** instructs the architect to review the implementation against
+  the architecture: check component boundaries, interface contracts, data flow,
+  naming conventions, and design patterns. Classify findings as BLOCKER (must
+  fix — architecture violated), FIX (should fix — design deviation), or DEFER
+  (nice to have).
+- **Evaluation points** after this phase: `score < 0.3 → goto architecture`
+  (design fundamentally wrong), `score < 0.7 → goto development` (code needs
+  fixes), `score >= 0.7 → continue`. This replaces the existing adversarial
+  review evaluation.
+- **Scope:** replace the generic adversarial_review phase entirely. The
+  architect-led review subsumes the generic critic's job (find bugs, design
+  flaws) while adding design-specific value (architecture compliance, design
+  invariant violations). Dedicated review phases (security, doc, QA, product)
+  remain as specific-rubric reviewers.
+- **Cost delta:** zero additional LLM calls (replaces the generic reviewer 1:1);
+  the architect re-invocation is the same cost as the current adversarial
+  review but yields higher-quality findings due to warm context.
+
 **What to do instead of a general reviewer:** keep the spec gate as the floor; add
 self-review at handoff (§11.3); **sharpen the existing review phases** (e.g. feed
 `architecture.md` into `product_validation`'s rubric; have review phases emit
@@ -942,6 +972,19 @@ start the Tier 2/3 remainder until then.
 **Spec-gate follow-ups (§9.1):** real-run validation (phases 7/8 actually emit the JSON; `[SPEC-GATE]` scores sane); per-project spec in DB + UI (`spec.py:load_spec` already takes a path); optional Conductor judgement instead of agent self-grading; verify the autopilot definition keeps `orchestrator_config.type == "evaluating"`.
 
 **Worktree follow-ups (small):** verify validators get a correct worktree/commit (`validator_agent` + `create_agent_for_task(use_existing_worktree=…, commit_sha=…)`); first-run smoke on a repo with legacy `agent-*` branches.
+
+**Architect-as-adversarial-reviewer (§10.1.1):** replace the generic adversarial
+review phase (phase 4) with the architect agent re-invoked after development.
+The architect has warm design context (`architecture.md` + `requirements_analysis.md`)
+and can catch design violations, architecture deviations, and over-engineering that
+a cold generic reviewer misses. Implementation:
+- Update `phase_4_adversarial_review.py` prompt to instruct the agent to act as the
+  architect reviewing implementation against the design.
+- Agent spawning for phase 4 should pass `architecture.md` and `requirements_analysis.md`
+  as context (read from `.hephaestus/` in the shared worktree).
+- Update evaluation points: `score < 0.3 → goto architecture_design`,
+  `score < 0.7 → goto development`, `score >= 0.7 → continue`.
+- Zero additional LLM calls (replaces the generic reviewer 1:1).
 
 **Near-term enhancement — one-shot intra-agent self-review at completion.** Empirically,
 a dev agent asked to "find your own gaps and fix them" right after it thinks it's done

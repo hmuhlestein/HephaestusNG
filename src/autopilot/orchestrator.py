@@ -82,6 +82,7 @@ class DesignEntry:
     name: str
     content_hash: str
     status: DesignStatus = DesignStatus.PENDING
+    db_id: Optional[str] = None  # autopilot_designs.id — links Workflow back to Design (§9.7)
     project_path: Optional[Path] = None
     feature_folder: Optional[Path] = None
     error: Optional[str] = None
@@ -846,6 +847,7 @@ def pick_next_design(queue_dir: Path, processed_hashes: Set[str], logger: Orches
                             path=design_path,
                             name=design.name,
                             content_hash=design.content_hash or file_hash(design_path),
+                            db_id=design.id,
                         )
                         logger.info(f"Selected from DB: {design.name} (ordinal={design.ordinal})")
                         return entry
@@ -1164,7 +1166,8 @@ def run_single_workflow(sdk, workflow_id: str, project_path: str, description: s
                         logger: OrchestratorLogger,
                         launch_params: Dict[str, Any] = None,
                         state: PipelineState = None,
-                        max_iterations: int = 10) -> str:
+                        max_iterations: int = 10,
+                        design_id: Optional[str] = None) -> str:
     """Run a single workflow execution.
 
     Args:
@@ -1252,6 +1255,7 @@ def run_single_workflow(sdk, workflow_id: str, project_path: str, description: s
             description=description,
             working_directory=design_worktree_path or project_path,
             launch_params=launch_params or {},
+            design_id=design_id,
         )
         logger.info(f"Workflow launched: {exec_id}")
         if state:
@@ -1586,12 +1590,20 @@ def run_single_design(
             f"create architecture, implement, review, security check, and QA."
         )
 
+        # Session ID components for persistent agent sessions (§10.1.1).
+        # The agent manager uses these to generate deterministic session IDs
+        # so pi agents resume with full conversational context on gotos.
+        _project_slug = Path(project_path).name.lower().replace(' ', '-')[:30]
+        _design_slug = design_entry.name.lower().replace(' ', '-')[:30]
+
         # design_document is the absolute SOURCE path; the backend (AgentManager)
         # reads it and copies it into each worktree's .hephaestus/design.md. Agents
         # only ever read the worktree-relative copy.
         launch_params = {
             "design_document": str(design_copy),
             "project_path": str(project_path),
+            "project_id": _project_slug,
+            "design_slug": _design_slug,
             "project_context": (
                 "Your working directory is the project root. Write code/tests there, "
                 "generated docs in ./docs/. Read inputs from ./.hephaestus/."
@@ -1603,6 +1615,7 @@ def run_single_design(
             launch_params=launch_params,
             state=state,
             max_iterations=max_iterations,
+            design_id=design_entry.db_id,
         )
 
         report.iterations = 1  # Single run; engine handles iteration via gotos

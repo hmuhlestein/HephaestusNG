@@ -252,6 +252,9 @@ class Workflow(Base):
     # Link to workflow definition
     definition_id = Column(String, ForeignKey("workflow_definitions.id"))
 
+    # Link to the autopilot design that spawned this execution (1 Design : N Workflows)
+    design_id = Column(String, ForeignKey("autopilot_designs.id"), nullable=True)
+
     # Working directory for this execution (can override default)
     working_directory = Column(String)
 
@@ -265,6 +268,7 @@ class Workflow(Base):
 
     # Relationships
     definition = relationship("WorkflowDefinition", back_populates="executions")
+    design = relationship("AutopilotDesign", foreign_keys=[design_id], backref="workflows")
     phases = relationship("Phase", back_populates="workflow", order_by="Phase.order")
     result = relationship("WorkflowResult", foreign_keys=[result_id])
     all_results = relationship("WorkflowResult", foreign_keys="WorkflowResult.workflow_id")
@@ -1217,6 +1221,17 @@ class DatabaseManager:
                 conn.commit()
         except Exception as e:
             logger.debug(f"phases.thinking_level migration (may already exist): {e}")
+
+        # Add design_id FK to workflows for existing databases (§9.7)
+        try:
+            with self.engine.connect() as conn:
+                try:
+                    conn.execute(text("ALTER TABLE workflows ADD COLUMN design_id VARCHAR REFERENCES autopilot_designs(id)"))
+                except Exception:
+                    pass  # Column already exists
+                conn.commit()
+        except Exception as e:
+            logger.debug(f"workflows.design_id migration (may already exist): {e}")
 
         # Add cli_model to agents table if missing
         try:

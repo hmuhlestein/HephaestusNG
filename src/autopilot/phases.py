@@ -20,6 +20,9 @@ Designed to run continuously, picking designs from a queue and processing
 them through the full pipeline until complete.
 """
 
+import hashlib
+import re
+from pathlib import Path
 from src.autopilot.phase_1_product_requirements import PHASE_1_PRODUCT_REQUIREMENTS
 from src.autopilot.phase_2_architecture import PHASE_2_ARCHITECTURE
 from src.autopilot.phase_3_development import PHASE_3_DEVELOPMENT
@@ -45,6 +48,42 @@ AUTOPILOT_PHASES = [
     PHASE_9_GIT_COMMIT_PUSH,
     PHASE_10_FORENSICS,
 ]
+
+# Session role mapping — determines which phases share a persistent session.
+# Phases with the same session_role reuse the same pi session, preserving
+# full conversational context across gotos and the architect review (§10.1.1).
+# Key = phase name, Value = session role slug.
+SESSION_ROLES = {
+    "product_requirements": "product-requirements",
+    "architecture_design": "architect",
+    "development": "developer",
+    "adversarial_review": "architect",  # reuses architect session (§10.1.1)
+    "doc_review": "doc-reviewer",
+    "security_review": "security-reviewer",
+    "qa_validation": "qa",
+    "product_validation": "product-requirements",  # reuses requirements session
+    "git_commit_push": "git",
+    "forensics_analysis": "forensics",
+}
+
+
+def get_session_id(project_id: str, design_slug: str, phase_name: str) -> str:
+    """Generate a deterministic session ID for a phase.
+
+    Same project + design + role = same session. This means:
+    - Goto back to development → developer session resumes with full memory.
+    - Architect re-invoked for adversarial review → architect session resumes.
+    - Any phase retry → same session, agent picks up where it left off.
+
+    Pi handles storage internally — we just pass the ID via --session-id.
+    """
+    role = SESSION_ROLES.get(phase_name, phase_name)
+    safe = lambda s: re.sub(r'[^a-z0-9\-_]', '', s.lower().replace(' ', '-'))[:30]
+    # Stable hash suffix prevents collisions between similar names
+    # e.g. 'my-proj-add-calc' vs 'my-proj-add-calculator'
+    raw = f"{project_id}:{design_slug}:{role}"
+    h = hashlib.sha256(raw.encode()).hexdigest()[:8]
+    return f"hephaestus-{safe(project_id)}-{safe(design_slug)}-{safe(role)}-{h}"
 
 # Orchestrator config for the autopilot workflow
 # Defines evaluation points and flow control logic
@@ -74,7 +113,8 @@ AUTOPILOT_ORCHESTRATOR_CONFIG = {
             ],
             "max_retries": 0,
         },
-        # After adversarial review - can jump to architecture or development
+        # After adversarial review - loops back to development for fixes,
+        # then continues to QA. Max retries prevents infinite loops.
         {
             "after_phase": "adversarial_review",
             "evaluator": "heuristic",
