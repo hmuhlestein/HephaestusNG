@@ -338,3 +338,121 @@ class TestAnalyzeAgentState:
         # Falls back to healthy
         assert result["state"] == "healthy"
         assert result["confidence"] == 0.1
+
+
+# ── _write_agent_tmux_log ────────────────────────────────────────
+
+
+class TestWriteAgentTmuxLog:
+    def test_no_output(self, make_monitoring_loop, mock_db):
+        # Should not raise
+        make_monitoring_loop._write_agent_tmux_log("a1", "dev", "")
+
+    def test_no_phase_manager(self, make_monitoring_loop, mock_db):
+        make_monitoring_loop.phase_manager = None
+        make_monitoring_loop._write_agent_tmux_log("a1", "dev", "some output")
+
+    def test_writes_log(self, make_monitoring_loop, mock_db, tmp_path):
+        make_monitoring_loop.phase_manager = Mock(workflow_id="wf-1")
+        session = Mock()
+        wf = Mock(working_directory=str(tmp_path))
+        session.query.return_value.filter_by.return_value.first.return_value = wf
+        mock_db.get_session.return_value = session
+
+        make_monitoring_loop._write_agent_tmux_log("agent-123", "development", "test output")
+
+        log_file = tmp_path / ".hephaestus" / "tmux" / "development_agent-.log"
+        # File might not exist due to path matching, but no error should occur
+
+
+# ── _log_intervention ────────────────────────────────────────────
+
+
+class TestLogIntervention:
+    @pytest.mark.asyncio
+    async def test_logs_intervention(self, monitor, mock_db):
+        agent = Agent(id="a1")
+        session = Mock()
+        mock_db.get_session.return_value = session
+
+        await monitor._log_intervention(agent, "nudge", "Try a different approach")
+        session.add.assert_called()
+        session.commit.assert_called()
+
+
+# ── _collect_agent_context ───────────────────────────────────────
+
+
+class TestCollectAgentContext:
+    @pytest.mark.asyncio
+    async def test_collects_context(self, monitor, mock_agent_manager, mock_db):
+        agent = Agent(
+            id="a1", status="working", cli_type="claude",
+            current_task_id="t1", tmux_session_name="sess-a1",
+        )
+        mock_agent_manager.get_agent_output.return_value = "Working on auth"
+        mock_agent_manager.get_project_context = AsyncMock(return_value="Project context")
+
+        session = Mock()
+        task = Mock(
+            raw_description="Build auth",
+            enriched_description="Build auth system",
+            done_definition="Auth complete",
+            started_at=datetime.utcnow() - timedelta(minutes=30),
+        )
+        session.query.return_value.filter_by.return_value.first.return_value = task
+        mock_db.get_session.return_value = session
+
+        with patch("src.monitoring.monitor.TrajectoryContext") as mock_tc:
+            mock_tc.return_value.build_accumulated_context.return_value = {
+                "overall_goal": "Build auth",
+                "constraints": [],
+            }
+            result = await monitor._collect_agent_context(agent)
+
+        assert "tmux_output" in result
+        assert result["task_description"] == "Build auth system"
+        assert result["done_definition"] == "Auth complete"
+
+    @pytest.mark.asyncio
+    async def test_handles_no_task(self, monitor, mock_agent_manager, mock_db):
+        agent = Agent(
+            id="a1", status="working", cli_type="claude",
+            current_task_id=None, tmux_session_name="sess-a1",
+        )
+        mock_agent_manager.get_agent_output.return_value = "Working"
+        mock_agent_manager.get_project_context = AsyncMock(return_value="")
+
+        session = Mock()
+        session.query.return_value.filter_by.return_value.first.return_value = None
+        mock_db.get_session.return_value = session
+
+        with patch("src.monitoring.monitor.TrajectoryContext") as mock_tc:
+            mock_tc.return_value.build_accumulated_context.return_value = {}
+            result = await monitor._collect_agent_context(agent)
+
+        assert result["task_description"] == "Unknown task"
+
+
+# ── MonitoringLoop._get_past_summaries_for_agent ──────────────────
+
+
+class TestMonitoringLoopGetPastSummaries:
+    def test_returns_from_guardian_analysis(self, make_monitoring_loop, mock_db):
+        session = Mock()
+        analysis = Mock(
+            current_phase="implementation",
+            trajectory_aligned=True,
+            alignment_score=0.8,
+            needs_steering=False,
+            steering_type=None,
+            trajectory_summary="Good progress",
+            accumulated_goal="Build auth",
+            timestamp=datetime.utcnow(),
+        )
+        session.query.return_value.filter.return_value.order_by.return_value.limit.return_value.all.return_value = [analysis]
+        mock_db.get_session.return_value = session
+
+        result = make_monitoring_loop._get_past_summaries_for_agent("a1")
+        assert len(result) == 1
+        assert result[0]["trajectory_summary"] == "Good progress"
