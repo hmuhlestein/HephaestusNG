@@ -512,6 +512,48 @@ IDs: Agent={task.get('agent_id', 'unknown')} | Task={task.get('id', 'unknown')}"
                     return fallback.model_dump()
                 await asyncio.sleep(1)  # Brief delay before retry
 
+    async def review_qa_report(
+        self,
+        qa_report: str,
+        prd_content: str,
+        phase_intent: str,
+        spec: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Review a QA report against PRD and phase intent."""
+        prompt = f"""You are a QA reviewer evaluating whether a project's output meets its requirements.
+
+## PRD
+{prd_content[:4000]}
+
+## Phase Intent
+{phase_intent}
+
+## Acceptance Criteria
+{json.dumps(spec, indent=2)}
+
+## QA Report
+{qa_report[:6000]}
+
+Based on the QA report, evaluate whether this output meets the PRD requirements.
+Respond with JSON: {{"up_to_spec": true/false, "pass_rate": float, "failed_count": int,
+"critical_issues": [], "reasoning": "string", "recommendations": []}}
+"""
+        try:
+            response = await self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": "You are a senior QA engineer."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.3,
+                response_format={"type": "json_object"}
+            )
+            import json
+            return json.loads(response.choices[0].message.content)
+        except Exception as e:
+            logger.error(f"review_qa_report failed: {e}")
+            return {"up_to_spec": False, "reasoning": f"LLM review failed: {e}"}
+
     def get_model_name(self) -> str:
         """Get model name."""
         return self.model
@@ -697,6 +739,26 @@ IDs: Agent={task.get('agent_id', 'unknown')} | Task={task.get('id', 'unknown')}"
             "coordination_needs": [],
             "system_summary": "Using default coherence analysis"
         }
+
+    async def review_qa_report(
+        self,
+        qa_report: str,
+        prd_content: str,
+        phase_intent: str,
+        spec: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Review a QA report against PRD and phase intent."""
+        try:
+            response = await self.client.messages.create(
+                model=self.model,
+                max_tokens=2000,
+                messages=[{"role": "user", "content": f"Review this QA report against PRD. Report: {qa_report[:4000]} PRD: {prd_content[:2000]} Phase: {phase_intent} Respond with JSON: {{\"up_to_spec\": true/false, \"pass_rate\": float, \"failed_count\": int, \"critical_issues\": [], \"reasoning\": \"string\", \"recommendations\": []}}"}]
+            )
+            import json
+            return json.loads(response.content[0].text)
+        except Exception as e:
+            logger.error(f"review_qa_report failed: {e}")
+            return {"up_to_spec": False, "reasoning": f"LLM review failed: {e}"}
 
     def get_model_name(self) -> str:
         """Get model name."""
