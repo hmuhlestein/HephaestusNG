@@ -507,6 +507,35 @@ class MonitoringLoop:
                         "action in one line, then do it. If blocked, save a memory and call "
                         "update_task_status.",
                     )
+            elif frozen_for >= FROZEN_SECONDS and st["recov"] >= MAX_RECOV:
+                # All recovery attempts exhausted and agent is still frozen.
+                # Fail the task so the monitor's retry-bound path handles it
+                # (MAX_PHASE_ATTEMPTS → impasse if exceeded). §9.4 / §11.2 fix #2.
+                logger.warning(
+                    f"[MECH-RECOVERY] Agent {agent.id[:8]} frozen {int(frozen_for)}s after "
+                    f"{MAX_RECOV} recovery attempts — abandoning: fail task, terminate agent"
+                )
+                session = self.db_manager.get_session()
+                try:
+                    from src.core.database import Task as _Task
+                    stuck_task = session.query(_Task).filter_by(
+                        assigned_agent_id=agent.id, status="in_progress"
+                    ).first()
+                    if stuck_task:
+                        stuck_task.status = "failed"
+                        stuck_task.failure_reason = (
+                            f"Agent output frozen {int(frozen_for)}s; "
+                            f"{MAX_RECOV} recovery attempts exhausted"
+                        )
+                        session.commit()
+                        logger.info(
+                            f"[MECH-RECOVERY] Task {stuck_task.id[:8]} marked failed; "
+                            f"phase will be retried (MAX_PHASE_ATTEMPTS bound)"
+                        )
+                finally:
+                    session.close()
+                await self.agent_manager.terminate_agent(agent.id)
+                self._stuck_state.pop(agent.id, None)
         except Exception as e:
             logger.debug(f"[MECH-RECOVERY] check failed for {agent.id[:8]}: {e}")
 
@@ -1207,6 +1236,32 @@ class MonitoringLoop:
                                 result["target_phase_id"],
                                 result["target_phase"],
                                 result["action"],
+                            )
+                    else:
+                        # Phase not complete — check for the stalled-phase pattern:
+                        # all tasks failed (output floor or agent crash), no active tasks.
+                        # Without this, the phase hangs forever when an agent exits after
+                        # getting a rejected update_task_status (§11.2 fix #1).
+                        from src.core.database import Task as _T
+                        active_tasks = session.query(_T).filter(
+                            _T.phase_id == phase.id,
+                            _T.status.in_(["pending", "assigned", "in_progress",
+                                           "under_review", "validation_in_progress"]),
+                        ).count()
+                        failed_tasks = session.query(_T).filter_by(
+                            phase_id=phase.id, status="failed"
+                        ).count()
+                        done_tasks = session.query(_T).filter_by(
+                            phase_id=phase.id, status="done"
+                        ).count()
+                        if active_tasks == 0 and failed_tasks > 0 and done_tasks == 0:
+                            logger.warning(
+                                f"[PHASE-PROGRESSION] Phase {phase.name} stalled: "
+                                f"{failed_tasks} failed task(s), no active tasks — "
+                                f"creating retry (bounded by MAX_PHASE_ATTEMPTS)"
+                            )
+                            await self._create_phase_task_and_agent(
+                                phase.workflow_id, phase.id, phase.name, "retry"
                             )
 
                 finally:
