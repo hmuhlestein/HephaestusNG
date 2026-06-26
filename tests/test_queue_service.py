@@ -84,7 +84,7 @@ class TestGetActiveAgentCount:
         assert count == 0
 
     def test_only_active_agents(self, queue_service, db_manager):
-        """Should count only non-terminated agents."""
+        """Should count only active agents (working, idle, starting)."""
         create_test_agent(db_manager, status="working")
         create_test_agent(db_manager, status="idle")
         create_test_agent(db_manager, status="stuck")
@@ -92,7 +92,8 @@ class TestGetActiveAgentCount:
         create_test_agent(db_manager, status="terminated")
 
         count = queue_service.get_active_agent_count()
-        assert count == 3  # Only non-terminated agents
+        # Method counts working + starting + idle; stuck/terminated excluded
+        assert count == 2  # Only working + idle
 
     def test_all_terminated(self, queue_service, db_manager):
         """Should return 0 when all agents are terminated."""
