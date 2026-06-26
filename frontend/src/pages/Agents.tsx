@@ -12,6 +12,14 @@ import SendMessageDialog from '@/components/SendMessageDialog';
 import { useWebSocket } from '@/context/WebSocketContext';
 import { formatDistanceToNow } from 'date-fns';
 
+function agentTitle(agent: Agent): string {
+  if (agent.agent_type === 'orchestrator') return 'Autopilot Orchestrator';
+  const shortId = agent.id.substring(0, 8);
+  const label = (agent.current_task?.phase_info?.name ?? agent.agent_type)
+    ?.replace(/_/g, ' ');
+  return label ? `${shortId} — ${label}` : shortId;
+}
+
 const AgentCard: React.FC<{
   agent: Agent;
   onClick: () => void;
@@ -63,9 +71,7 @@ const AgentCard: React.FC<{
           <Bot className="w-6 h-6 text-gray-600 mr-2" />
           <div>
             <p className="font-semibold text-gray-800">
-              {agent.agent_type === 'orchestrator' 
-                ? 'Autopilot Orchestrator'
-                : agent.id.substring(0, 8)}{agent.current_task?.phase_info?.name ? ` — ${agent.current_task.phase_info.name.replace(/_/g, ' ')}` : ''}
+              {agentTitle(agent)}
             </p>
             <p className="text-xs text-gray-500">{agent.agent_type === 'orchestrator' ? 'orchestrator' : agent.cli_type}</p>
             {agent.workflow && (
