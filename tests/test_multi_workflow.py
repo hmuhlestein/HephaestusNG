@@ -484,6 +484,11 @@ class TestSDKModels:
 class TestSDKClientMultiWorkflow:
     """Test SDK client multi-workflow initialization and methods."""
 
+    @pytest.fixture(autouse=True)
+    def mock_anthropic_key(self, monkeypatch):
+        """Set fake Anthropic API key so config validation passes."""
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-fake-key-for-testing")
+
     def test_sdk_init_with_workflow_definitions(self):
         """Test SDK initialization with multiple workflow definitions."""
         from src.sdk.client import HephaestusSDK
