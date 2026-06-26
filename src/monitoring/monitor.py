@@ -735,6 +735,19 @@ class MonitoringLoop:
                 logger.warning(f"No output from agent {agent.id}")
                 return None
 
+            # Persist scrollback to docs/tmux/ so the forensics agent can read it.
+            # Use the session already open in this try block to avoid a second round-trip.
+            if agent.current_task_id:
+                try:
+                    from src.core.database import Phase as _Phase
+                    _task = session.query(Task).filter_by(id=agent.current_task_id).first()
+                    if _task and _task.phase_id:
+                        _phase = session.query(_Phase).filter_by(id=_task.phase_id).first()
+                        if _phase:
+                            self._write_agent_tmux_log(agent.id, _phase.name, tmux_output)
+                except Exception:
+                    pass  # non-fatal; don't interrupt the monitoring cycle
+
             # DETECT: Agent exited to command line (shows $, %, >>>, bquote>)
             if self.guardian.detect_agent_exited(tmux_output):
                 # Check if task is already done before restarting
@@ -1352,6 +1365,38 @@ class MonitoringLoop:
         except Exception as e:
             logger.warning(f"[SPEC-GATE] could not build phase_output for {phase_name}: {e}")
             return {}
+
+    def _write_agent_tmux_log(self, agent_id: str, phase_name: str, tmux_output: str) -> None:
+        """Write the agent's full tmux scrollback to docs/tmux/<phase>_<agent_id>.log.
+
+        Called on every monitor cycle — overwrites so the file always contains
+        the complete captured session up to the most recent poll. The forensics
+        phase reads these files for a full picture of what each agent did.
+        """
+        if not tmux_output or not self.phase_manager or not self.phase_manager.workflow_id:
+            return
+        try:
+            from pathlib import Path as _P
+            from src.core.database import Workflow as _Workflow
+            session = self.db_manager.get_session()
+            try:
+                wf = session.query(_Workflow).filter_by(
+                    id=self.phase_manager.workflow_id
+                ).first()
+                wd = wf.working_directory if wf else None
+            finally:
+                session.close()
+
+            if not wd:
+                return
+
+            tmux_dir = _P(wd) / "docs" / "tmux"
+            tmux_dir.mkdir(parents=True, exist_ok=True)
+            log_file = tmux_dir / f"{phase_name}_{agent_id[:8]}.log"
+            log_file.write_text(tmux_output)
+            logger.debug(f"[TMUX-LOG] {phase_name}/{agent_id[:8]}: wrote {len(tmux_output)} chars")
+        except Exception as e:
+            logger.debug(f"[TMUX-LOG] Failed to write log for {agent_id[:8]}: {e}")
 
     async def _create_phase_task_and_agent(
         self, workflow_id: str, phase_id: str, phase_name: str, action: str
