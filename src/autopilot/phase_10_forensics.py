@@ -25,6 +25,7 @@ methodology refinements, and patterns that could reduce iterations.""",
         "pipeline_metrics.json read for timing and iteration data",
         "All phase prompts read from phase_prompts/ directory",
         "All phase artifacts read and compared against prompts",
+        "All tmux session logs read from docs/tmux/ (full agent output per phase)",
         "Agent logs fetched via API (/api/agents/{id}/logs)",
         "Guardian analysis reviewed for trajectory alignment",
         "Agent performance assessed per phase",
@@ -111,10 +112,32 @@ For each output, compare what was produced against:
 2. The original design document (the source of truth)
 
 ═══════════════════════════════════════════════════════════════════════
-STEP 3b: READ AGENT LOGS (GUARDIAN ANALYSIS + TMUX OUTPUT)
+STEP 3b: READ FULL AGENT TMUX LOGS (RAW SESSION OUTPUT)
 ═══════════════════════════════════════════════════════════════════════
 
-Fetch agent logs from the API to understand what happened during execution:
+The monitoring loop captured each agent's complete tmux scrollback to:
+
+    <Docs Path>/tmux/<phase_name>_<agent_id>.log
+
+List and read every file in `<Docs Path>/tmux/`. These are the raw
+session transcripts — every tool call, every thought, every output the
+agent produced. This is much richer than the artifacts alone because it
+shows WHERE the agent got confused, WHAT it tried before settling on the
+final answer, and HOW LONG each step took.
+
+For each tmux log file, look for:
+- Tool call sequences (what did the agent call, in what order?)
+- Retry loops (did the agent get the same error repeatedly?)
+- Hesitation / reversal (did the agent start one approach then abandon it?)
+- Time gaps (long pauses in output indicate a stuck/thinking phase)
+- Hallucinated completions (claimed "done" before the work was actually done)
+- Over-engineering (agent solved a harder problem than required)
+
+═══════════════════════════════════════════════════════════════════════
+STEP 3c: READ GUARDIAN / API LOGS
+═══════════════════════════════════════════════════════════════════════
+
+Fetch agent logs from the API to understand Guardian steering decisions:
 
 ```python
 # Get all agents from the workflow
@@ -288,7 +311,8 @@ RULES
 DO:
 - Read pipeline_metrics.json for real numbers (don't guess)
 - Read phase_prompts/ for real prompt text (don't paraphrase from memory)
-- Cite specific lines from artifacts as evidence
+- Read docs/tmux/*.log for the raw agent session transcripts
+- Cite specific lines from artifacts AND tmux logs as evidence
 - Propose concrete prompt rewrites with before/after text
 - Scope memory entries with the feature name
 - Skip phases that performed well (one-line acknowledgment)

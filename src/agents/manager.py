@@ -1092,8 +1092,48 @@ REMEMBER:
                         for tmux_sess in self.tmux_server.sessions:
                             if tmux_sess.name == agent.tmux_session_name:
                                 pane = tmux_sess.attached_window.attached_pane
-                                final_output = pane.capture_pane()[-50:]
-                                final_output = '\n'.join(final_output)
+                                # Full scrollback for the tmux log; 50-line slice for AgentLog.
+                                full_scrollback = "\n".join(
+                                    pane.cmd("capture-pane", "-p", "-S", "-").stdout
+                                )
+                                final_output = "\n".join(full_scrollback.splitlines()[-50:])
+
+                                # Write complete scrollback to docs/tmux/ for forensics.
+                                _task = session.query(Task).filter_by(
+                                    id=agent.current_task_id
+                                ).first()
+                                if _task and _task.phase_id and _task.workflow_id:
+                                    try:
+                                        from src.core.database import (
+                                            Phase as _Phase,
+                                            Workflow as _WF,
+                                        )
+                                        from pathlib import Path as _P
+                                        _phase = session.query(_Phase).filter_by(
+                                            id=_task.phase_id
+                                        ).first()
+                                        _wf = session.query(_WF).filter_by(
+                                            id=_task.workflow_id
+                                        ).first()
+                                        if _phase and _wf and _wf.working_directory:
+                                            tmux_dir = (
+                                                _P(_wf.working_directory) / "docs" / "tmux"
+                                            )
+                                            tmux_dir.mkdir(parents=True, exist_ok=True)
+                                            log_file = (
+                                                tmux_dir
+                                                / f"{_phase.name}_{agent_id[:8]}.log"
+                                            )
+                                            log_file.write_text(full_scrollback)
+                                            logger.info(
+                                                f"[TMUX-LOG] Final capture for "
+                                                f"{_phase.name}/{agent_id[:8]}: "
+                                                f"{len(full_scrollback)} chars → {log_file.name}"
+                                            )
+                                    except Exception as _te:
+                                        logger.debug(
+                                            f"[TMUX-LOG] Final capture write failed: {_te}"
+                                        )
                                 break
                 except Exception as e:
                     logger.debug(f"Could not capture output before terminate: {e}")
