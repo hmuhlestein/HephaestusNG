@@ -97,7 +97,7 @@ sqlite3 "$DB" "
     DELETE FROM ticket_comments;
     DELETE FROM tickets;
     UPDATE autopilot_designs SET status='pending', completed_at=NULL
-    WHERE project_id='proj-06a3e0670328';
+    WHERE project_id='proj-3c562e7de665';
 " 2>/dev/null
 
 # ─── Start services ───────────────────────────────────────────────────
