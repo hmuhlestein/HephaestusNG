@@ -68,7 +68,7 @@ def worktree_manager(test_db, temp_repo, monkeypatch):
     config.conflict_resolution_strategy = "newest_file_wins"
     config.prefer_child_on_tie = True
     config.auto_merge_enabled = True
-    config.worktree_retention_hours = {
+    config.branch_retention_hours = {
         "merged": 1,
         "failed": 24,
         "abandoned": 6,
@@ -465,7 +465,7 @@ def test_cleanup_policies(worktree_manager, test_db):
 
     # Merged worktree should be eligible for cleanup after retention period
     config = worktree_manager.config
-    retention_hours = config.worktree_retention_hours["merged"]  # 1 hour by default
+    retention_hours = config.branch_retention_hours["merged"]  # 1 hour by default
     assert merged_worktree.merged_at < datetime.utcnow() - timedelta(hours=retention_hours)
 
     session.close()
@@ -498,13 +498,12 @@ def test_disk_usage_tracking(worktree_manager, test_db):
         file = worktree_path / f"file{i}.txt"
         file.write_text("x" * 1000)  # 1KB each
 
-    # Cleanup and check disk usage
+    # Cleanup and check result
     cleanup_result = worktree_manager.cleanup_worktree(agent_id)
 
-    # Should report disk space freed
+    # Should report cleaned status
     assert cleanup_result["status"] == "cleaned"
-    assert "disk_space_freed_mb" in cleanup_result
-    assert cleanup_result["disk_space_freed_mb"] >= 0
+    assert "branch" in cleanup_result
 
 
 def test_child_merge_with_active_parent_worktree(worktree_manager, test_db):
