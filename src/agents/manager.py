@@ -119,8 +119,17 @@ class AgentManager:
                     if wf and wf.working_directory:
                         # If working_directory contains '.worktrees/', it's a shared worktree
                         if '.worktrees/' in wf.working_directory:
-                            shared_worktree = wf.working_directory
-                            self.branch_manager.reload(Path(wf.working_directory))
+                            wt_path = Path(wf.working_directory)
+                            if wt_path.is_dir():
+                                shared_worktree = wf.working_directory
+                                self.branch_manager.reload(wt_path)
+                            else:
+                                # Worktree was removed (e.g. by git_commit_push phase merge+cleanup).
+                                # Fall back to a fresh worktree from the current main.
+                                logger.info(
+                                    f"Shared worktree {wt_path} no longer exists — "
+                                    "falling back to fresh worktree from main"
+                                )
 
             if shared_worktree:
                 # Use the shared worktree — all phases commit here
