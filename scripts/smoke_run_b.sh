@@ -1,111 +1,58 @@
 #!/usr/bin/env bash
-# Run B smoke test: proves spec-gate-driven goto with real agents.
+# Smoke test B: run the full 10-phase autopilot pipeline end-to-end.
 # Usage: ./scripts/smoke_run_b.sh [--keep]
-#   --keep  Don't clean up after run (for debugging)
-
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-PROJECT_PATH="/tmp/heph-smoke-test"
+PROJECT_PATH="/private/tmp/heph-smoke-test"
 DB="hephaestus.db"
 KEEP=false
 [[ "${1:-}" == "--keep" ]] && KEEP=true
 
-# ─── Capture all output to a timestamped log file ─────────────────────
 LOG_FILE="${SMOKE_LOG:-/tmp/smoke_run_b_$(date +%Y%m%d_%H%M%S).log}"
 exec > >(tee -a "$LOG_FILE") 2>&1
-echo "Logging run to $LOG_FILE"
+echo "Log: $LOG_FILE"
 
-# ─── Colors ───────────────────────────────────────────────────────────
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
-
 log()  { echo -e "${GREEN}[$(date +%H:%M:%S)]${NC} $*"; }
 warn() { echo -e "${YELLOW}[$(date +%H:%M:%S)]${NC} $*"; }
 err()  { echo -e "${RED}[$(date +%H:%M:%S)]${NC} $*" >&2; }
 
 # ─── Preflight ────────────────────────────────────────────────────────
-if [[ ! -d "$PROJECT_PATH/.git" ]]; then
-    err "Smoke test repo not found at $PROJECT_PATH"
-    err "Run: mkdir -p $PROJECT_PATH && cd $PROJECT_PATH && git init"
-    exit 1
-fi
+[[ -d "$PROJECT_PATH/.git" ]] || { err "No repo at $PROJECT_PATH"; exit 1; }
+[[ -f "$PROJECT_PATH/docs/design-queue/add_calculator.md" ]] || { err "Design doc missing"; exit 1; }
 
-if [[ ! -f "$PROJECT_PATH/docs/design-queue/add_calculator.md" ]]; then
-    err "Design doc missing: $PROJECT_PATH/docs/design-queue/add_calculator.md"
-    exit 1
-fi
-
-# ─── Stop everything ──────────────────────────────────────────────────
-log "Stopping all services..."
+# ─── Stop services ────────────────────────────────────────────────────
+log "Stopping services..."
 pkill -9 -f run_server.py 2>/dev/null || true
-pkill -9 -f "uvicorn src.mcp.server" 2>/dev/null || true   # heph/stray server runs as uvicorn, not run_server.py
+pkill -9 -f "uvicorn src.mcp.server" 2>/dev/null || true
 pkill -9 -f run_monitor.py 2>/dev/null || true
 pkill -9 -f "heph autopilot" 2>/dev/null || true
-pkill -9 -f "pi.*approve" 2>/dev/null || true
-sleep 3
+sleep 2
 
-# ─── Reset test repo to clean baseline ──────────────────────────────
-log "Resetting test repo to smoke-baseline..."
+# ─── Reset test repo ──────────────────────────────────────────────────
+log "Resetting test repo..."
 cd "$PROJECT_PATH"
-
-# Remove all worktrees and agent/feature branches
 for wt in $(git worktree list --porcelain 2>/dev/null | grep '^worktree ' | awk '{print $2}' | tail -n +2); do
     git worktree remove --force "$wt" 2>/dev/null || rm -rf "$wt"
 done
 git worktree prune 2>/dev/null || true
-# git worktree prune clears git's admin entries but leaves the .worktrees/ dirs on
-# disk; nuke them so the shared/per-task worktrees always start fresh.
-rm -rf "$PROJECT_PATH/.worktrees/"* 2>/dev/null || true
-# Delete agent-* and feature/* branches (shared-worktree scheme uses feature/<design>)
+rm -rf "$PROJECT_PATH/.worktrees/"*
 git branch 2>/dev/null | sed 's/[*+]//' | tr -d ' ' | grep -E '^(agent-|feature/)' | xargs -I{} git branch -D {} 2>/dev/null || true
-
-# Reset to clean baseline
 if git rev-parse smoke-baseline >/dev/null 2>&1; then
-    git checkout main 2>/dev/null || git checkout main-temp 2>/dev/null || true
+    git checkout main 2>/dev/null || true
     git reset --hard smoke-baseline
     git clean -fd 2>/dev/null || true
-    log "Reset to smoke-baseline (clean docs, no stale outputs)"
+    log "Reset to smoke-baseline"
 else
     warn "smoke-baseline tag not found — skipping repo reset"
 fi
 cd - >/dev/null
 
-# ─── Clean state ──────────────────────────────────────────────────────
-log "Cleaning state..."
-rm -rf ~/.hephaestus/autopilot/run-*
-rm -rf ~/.hephaestus/autopilot/pipeline_state.json
-rm -rf ~/.hephaestus/autopilot/processed_designs.json
-rm -rf ~/.hephaestus/autopilot/state.json
-rm -rf ~/.hephaestus/autopilot/input_*.json
-rm -rf /tmp/hephaestus_worktrees/*
-
-# Clear logs so analysis counts are per-run only
-> hephaestus_server.log 2>/dev/null || true
-> ~/.hephaestus/logs/monitor.log 2>/dev/null || true
-> logs/monitor.log 2>/dev/null || true  # run_monitor.py writes here (98MB+)
-> logs/monitor_crash.log 2>/dev/null || true
-> logs/monitor_fault.log 2>/dev/null || true
-
-sqlite3 "$DB" "
-    PRAGMA trusted_schema=ON;  -- allow tickets_fts_* triggers (touch the FTS vtable) to run from the CLI
-    DELETE FROM tasks;
-    DELETE FROM phase_executions;
-    DELETE FROM phases;
-    DELETE FROM workflows;
-    DELETE FROM agents WHERE agent_type IN ('phase', 'orchestrator');
-    DELETE FROM ticket_comments;
-    DELETE FROM tickets;  -- tickets_fts_delete trigger keeps ticket_fts in sync
-    UPDATE autopilot_designs SET status='pending', completed_at=NULL
-    WHERE project_id='proj-06a3e0670328';
-" 2>/dev/null
-
-# ─── Verify seeded test ──────────────────────────────────────────────
+# Ensure seeded failing test exists
 if [[ ! -f "$PROJECT_PATH/tests/test_compute.py" ]]; then
-    warn "Seeded failing test missing, creating..."
     mkdir -p "$PROJECT_PATH/tests"
     cat > "$PROJECT_PATH/tests/test_compute.py" << 'PYTEST'
-"""Seeded failing test — asserts a function that doesn't exist yet.
-QA should report failed_tests >= 1, gate should send work back to development."""
 from calculator import compute
 
 def test_compute_returns_42():
@@ -113,11 +60,34 @@ def test_compute_returns_42():
 PYTEST
 fi
 
-# ─── Start services ──────────────────────────────────────────────────
-log "Starting services with heph..."
+# ─── Reset DB + state ─────────────────────────────────────────────────
+log "Clearing state..."
+rm -rf ~/.hephaestus/autopilot/run-* ~/.hephaestus/autopilot/pipeline_state.json \
+       ~/.hephaestus/autopilot/processed_designs.json \
+       ~/.hephaestus/autopilot/state.json ~/.hephaestus/autopilot/input_*.json \
+       /tmp/hephaestus_worktrees/*
+> hephaestus_server.log 2>/dev/null || true
+> ~/.hephaestus/logs/monitor.log 2>/dev/null || true
+> logs/monitor.log 2>/dev/null || true
+
+sqlite3 "$DB" "
+    PRAGMA trusted_schema=ON;
+    DELETE FROM tasks;
+    DELETE FROM phase_executions;
+    DELETE FROM phases;
+    DELETE FROM workflows;
+    DELETE FROM agents WHERE agent_type IN ('phase', 'orchestrator');
+    DELETE FROM ticket_comments;
+    DELETE FROM tickets;
+    UPDATE autopilot_designs SET status='pending', completed_at=NULL
+    WHERE project_id='proj-06a3e0670328';
+" 2>/dev/null
+
+# ─── Start services ───────────────────────────────────────────────────
+log "Starting services..."
 .venv/bin/heph start 2>&1
 
-log "Waiting for backend health..."
+log "Waiting for backend..."
 for i in $(seq 1 24); do
     sleep 5
     H=$(curl -s http://127.0.0.1:8300/health 2>/dev/null \
@@ -126,205 +96,62 @@ for i in $(seq 1 24); do
     [[ $i -eq 24 ]] && err "Backend never became healthy" && exit 1
 done
 
-# ─── Verify single server ────────────────────────────────────────────
-# NOTE: the server may run as `run_server.py` OR `uvicorn src.mcp.server:app`.
-# Match both, and disable pipefail/errexit locally so a zero-match grep (exit 1)
-# cannot kill the script here (this was silently aborting the run before pipeline start).
-set +o pipefail
-SERVER_COUNT=$(ps aux | grep -E "run_server\.py|src\.mcp\.server" | grep -v grep | wc -l | tr -d ' ')
-set -o pipefail
-SERVER_COUNT=${SERVER_COUNT:-0}
-if [[ "$SERVER_COUNT" -gt 1 ]]; then
-    warn "Multiple server processes detected ($SERVER_COUNT) — DB fallback will handle it"
-elif [[ "$SERVER_COUNT" -eq 0 ]]; then
-    warn "No server process matched — backend health passed, continuing anyway"
-fi
-
-# ─── Start pipeline ──────────────────────────────────────────────────
-log "Starting autopilot pipeline..."
+# ─── Start pipeline ───────────────────────────────────────────────────
+log "Starting pipeline..."
 curl -s -X POST "http://127.0.0.1:8300/api/autopilot/start?project_path=$PROJECT_PATH&max_iterations=3" \
     | python3 -m json.tool 2>/dev/null || { err "Failed to start pipeline"; exit 1; }
 
-# ─── Monitor ─────────────────────────────────────────────────────────
-POLL_INTERVAL=30
-MAX_POLLS=60  # 30 minutes
-STALE_COUNT=0
-MAX_STALE=6  # 3 minutes of no progress → check deeper
+# ─── Poll loop ────────────────────────────────────────────────────────
+POLL=30; MAX=$((60 * 30 / POLL))  # 30-minute cap
 
-get_phases() {
-    sqlite3 "$DB" "
-        SELECT p.name || ':' || pe.status
-        FROM phase_executions pe
-        JOIN phases p ON pe.phase_id = p.id
-        WHERE pe.workflow_execution_id = (
-            SELECT id FROM workflows
-            WHERE status IN ('active','paused')
-            ORDER BY rowid DESC LIMIT 1
-        )
-        ORDER BY p.\"order\"
-    " 2>/dev/null | tr '\n' ' '
+q() { sqlite3 "$DB" "$1" 2>/dev/null; }
+
+phases() {
+    q "SELECT p.name || ':' || pe.status
+       FROM phase_executions pe JOIN phases p ON pe.phase_id = p.id
+       WHERE pe.workflow_execution_id = (
+           SELECT id FROM workflows WHERE status IN ('active','paused')
+           ORDER BY rowid DESC LIMIT 1
+       ) ORDER BY p.\"order\"" | tr '\n' ' '
 }
 
-get_agent_count() {
-    sqlite3 "$DB" "
-        SELECT count(*) FROM agents
-        WHERE agent_type='phase'
-        AND status IN ('working','idle','starting')
-    " 2>/dev/null
-}
-
-get_completed_count() {
-    sqlite3 "$DB" "
-        SELECT count(*) FROM phase_executions pe
-        WHERE pe.workflow_execution_id = (
-            SELECT id FROM workflows
-            WHERE status IN ('active','paused','completed')
-            ORDER BY rowid DESC LIMIT 1
-        )
-        AND pe.status = 'completed'
-    " 2>/dev/null
-}
-
-prev_phases=""
-for i in $(seq 1 $MAX_POLLS); do
-    sleep $POLL_INTERVAL
-    E=$((i * POLL_INTERVAL))
+for i in $(seq 1 $MAX); do
+    sleep $POLL
+    E=$((i * POLL))
 
     R=$(curl -s http://127.0.0.1:8300/api/autopilot/status 2>/dev/null \
         | python3 -c "import sys,json; print(json.load(sys.stdin).get('running','?'))" 2>/dev/null)
-    P=$(get_phases)
-    A=$(get_agent_count)
-    DONE=$(get_completed_count)
-    S=$(grep -h "SPEC-GATE\|GOTO\|PHASE-PROGRESSION\|Created agent for phase\|hephaestus_update_task_status" \
-        hephaestus_server.log 2>/dev/null | tail -1 || true)
+    P=$(phases)
+    DONE=$(q "SELECT count(*) FROM phase_executions WHERE status='completed'")
+    FAIL=$(q "SELECT count(*) FROM tasks WHERE status='failed'")
+    AGENTS=$(q "SELECT count(*) FROM agents WHERE agent_type='phase' AND status IN ('working','idle','starting')")
 
-    # Detect progress
-    if [[ "$P" == "$prev_phases" ]]; then
-        STALE_COUNT=$((STALE_COUNT + 1))
-    else
-        STALE_COUNT=0
-        prev_phases="$P"
-    fi
+    echo "[${E}s] run=$R agents=$AGENTS done=$DONE failed=$FAIL | $P"
 
-    echo "[$E s] run=$R agents=$A done=$DONE | $P | $S"
-
-    # Diagnostics every 2 min
-    if (( E % 120 == 0 )); then
-        FAILED=$(sqlite3 "$DB" "SELECT count(*) FROM tasks WHERE status='failed'" 2>/dev/null)
-        echo "  [diag] failed_tasks=$FAILED"
-        # Show last error from current run only (filter by current timestamp)
-        NOW=$(date +%Y-%m-%d)
-        LAST_ERR=$(grep "$NOW" hephaestus_server.log 2>/dev/null | grep -h "Failed to create agent\|Marked task.*failed" | tail -1 || true)
-        [[ -n "$LAST_ERR" ]] && echo "  [diag] $LAST_ERR"
-        # Show what agent is doing
-        AGENT_ID=$(sqlite3 "$DB" "SELECT substr(id,1,8) FROM agents WHERE agent_type='phase' AND status='working' ORDER BY rowid DESC LIMIT 1" 2>/dev/null)
-        if [[ -n "$AGENT_ID" ]]; then
-            AGENT_OUT=$(tmux capture-pane -t "agent_${AGENT_ID}" -p -S -5 2>/dev/null | tail -3 | tr '\n' ' ' | head -c 200 || true)
-            [[ -z "$AGENT_OUT" ]] && AGENT_OUT=$(tmux capture-pane -t "agent_${AGENT_ID}_r" -p -S -5 2>/dev/null | tail -3 | tr '\n' ' ' | head -c 200 || true)
-            [[ -n "$AGENT_OUT" ]] && echo "  [agent] $AGENT_OUT"
-        fi
-    fi
-
-    # Log analysis every 5 min
-    if (( E % 300 == 0 )) && [[ $i -gt 1 ]]; then
-        echo ""
-        echo "  === LOG ANALYSIS (t=${E}s) ==="
-        NOW=$(date +%Y-%m-%d)
-        # 1. Server errors
-        ERR_COUNT=$(grep "$NOW" hephaestus_server.log 2>/dev/null | grep -c "ERROR" || true)
-        echo "  [logs] server_errors=$ERR_COUNT"
-        # 2. Monitor restarts
-        RESTARTS=$(grep "$NOW" ~/.hephaestus/logs/monitor.log 2>/dev/null | grep -c "restarted successfully" || true)
-        echo "  [logs] agent_restarts=$RESTARTS"
-        # 3. Garbled/exited detection
-        GARBLED=$(grep "$NOW" ~/.hephaestus/logs/monitor.log 2>/dev/null | grep -c "garbled\|exited to command" || true)
-        echo "  [logs] garbled_exited=$GARBLED"
-        # 4. MCP connection
-        MCP_FAIL=$(grep "$NOW" hephaestus_server.log 2>/dev/null | grep -c "Failed to process task" || true)
-        echo "  [logs] mcp_task_failures=$MCP_FAIL"
-        # 5. Task status
-        TASK_DONE=$(sqlite3 "$DB" "SELECT count(*) FROM tasks WHERE status='done'" 2>/dev/null)
-        TASK_FAIL=$(sqlite3 "$DB" "SELECT count(*) FROM tasks WHERE status='failed'" 2>/dev/null)
-        TASK_STUCK=$(sqlite3 "$DB" "SELECT count(*) FROM tasks WHERE status='in_progress' AND started_at < datetime('now', '-10 minutes')" 2>/dev/null)
-        echo "  [tasks] done=$TASK_DONE failed=$TASK_FAIL stuck=$TASK_STUCK"
-        # 6. Phase progression
-        PHASE_DONE=$(sqlite3 "$DB" "SELECT count(*) FROM phase_executions WHERE status='completed'" 2>/dev/null)
-        PHASE_FAIL=$(sqlite3 "$DB" "SELECT count(*) FROM phase_executions WHERE status='failed'" 2>/dev/null)
-        echo "  [phases] done=$PHASE_DONE failed=$PHASE_FAIL"
-        # 7. Monitor alive? (guard pipefail/errexit: zero-match grep exits 1)
-        set +o pipefail
-        MON_ALIVE=$(ps aux | grep run_monitor | grep -v grep | wc -l | tr -d ' ')
-        set -o pipefail
-        echo "  [monitor] alive=${MON_ALIVE:-0}"
-        # 7b. Monitor heartbeat (last cycle timestamp)
-        if [[ -f ~/.hephaestus/logs/monitor_heartbeat ]]; then
-            HB=$(cat ~/.hephaestus/logs/monitor_heartbeat 2>/dev/null)
-            NOW_EPOCH=$(date +%s)
-            AGE=$((NOW_EPOCH - ${HB%.*}))
-            echo "  [monitor] heartbeat ${AGE}s ago"
-            if (( AGE > 120 )); then
-                echo "  [monitor] ⚠️  HEARTBEAT STALE — monitor may be dead!"
-            fi
-        else
-            echo "  [monitor] no heartbeat file"
-        fi
-        # 8. Server alive?
-        SRV_ALIVE=$(curl -s http://127.0.0.1:8300/health 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('status',''))" 2>/dev/null || echo "dead")
-        echo "  [server] status=$SRV_ALIVE"
-        echo "  === END LOG ANALYSIS ==="
-        echo ""
-    fi
-
-    # Pipeline finished
-    if [[ "$R" == "False" ]] && [[ $i -gt 4 ]]; then
-        log "Pipeline stopped"
-        break
-    fi
-
-    # All phases done
-    if [[ "$DONE" == "10" ]]; then
-        log "All 10 phases completed!"
-        break
-    fi
+    [[ "$R" == "False" ]] && [[ $i -gt 4 ]] && log "Pipeline stopped" && break
+    [[ "$DONE" == "10" ]] && log "All 10 phases complete!" && break
 done
 
-# ─── Final report ────────────────────────────────────────────────────
+# ─── Final report ─────────────────────────────────────────────────────
 echo ""
-echo "═══════════════════════════════════════════════════════"
-echo "                    RUN B RESULTS"
-echo "═══════════════════════════════════════════════════════"
-echo ""
-
-echo "Phase Status:"
-sqlite3 "$DB" "
-    SELECT '  ' || p.name || ': ' || pe.status
-    FROM phase_executions pe
-    JOIN phases p ON pe.phase_id = p.id
-    WHERE pe.workflow_execution_id = (
-        SELECT id FROM workflows ORDER BY rowid DESC LIMIT 1
-    )
-    ORDER BY p.\"order\"
-" 2>/dev/null
+echo "═══════════════════════════════════════════════════"
+echo "                  RUN B RESULTS"
+echo "═══════════════════════════════════════════════════"
+q "SELECT '  ' || p.name || ': ' || pe.status
+   FROM phase_executions pe JOIN phases p ON pe.phase_id = p.id
+   WHERE pe.workflow_execution_id = (SELECT id FROM workflows ORDER BY rowid DESC LIMIT 1)
+   ORDER BY p.\"order\""
 
 echo ""
-echo "SPEC-GATE / GOTO Events:"
-grep -h "SPEC-GATE\|GOTO\|score\|failed_tests\|mark_phase_complete" \
-    hephaestus_server.log 2>/dev/null | tail -10 | sed 's/^/  /' || echo "  (none)"
+echo "GOTO / SPEC-GATE events:"
+grep -h "SPEC-GATE\|GOTO\|mark_phase_complete" hephaestus_server.log 2>/dev/null \
+    | tail -10 | sed 's/^/  /' || echo "  (none)"
 
 echo ""
-echo "Orchestrator Log (last 10 lines):"
 RUN_DIR=$(ls -dt ~/.hephaestus/autopilot/run-* 2>/dev/null | head -1)
-if [[ -n "$RUN_DIR" ]]; then
-    tail -10 "$RUN_DIR/orchestrator.log" 2>/dev/null | sed 's/^/  /'
-fi
+[[ -n "$RUN_DIR" ]] && echo "Orchestrator (last 10):" && tail -10 "$RUN_DIR/orchestrator.log" 2>/dev/null | sed 's/^/  /'
 
-echo ""
-echo "═══════════════════════════════════════════════════════"
+echo "═══════════════════════════════════════════════════"
 
-# ─── Cleanup ─────────────────────────────────────────────────────────
-if [[ "$KEEP" == false ]]; then
-    log "Cleaning up..."
-    pkill -9 -f "pi.*approve" 2>/dev/null || true
-fi
-
+$KEEP || pkill -9 -f "pi.*approve" 2>/dev/null || true
 log "Done."
