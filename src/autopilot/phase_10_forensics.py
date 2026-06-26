@@ -25,7 +25,7 @@ methodology refinements, and patterns that could reduce iterations.""",
         "pipeline_metrics.json read for timing and iteration data",
         "All phase prompts read from phase_prompts/ directory",
         "All phase artifacts read and compared against prompts",
-        "All tmux session logs read from docs/tmux/ (full agent output per phase)",
+        "All tmux session logs read from .hephaestus/tmux/ (full agent output per phase)",
         "Agent logs fetched via API (/api/agents/{id}/logs)",
         "Guardian analysis reviewed for trajectory alignment",
         "Agent performance assessed per phase",
@@ -117,9 +117,10 @@ STEP 3b: READ FULL AGENT TMUX LOGS (RAW SESSION OUTPUT)
 
 The monitoring loop captured each agent's complete tmux scrollback to:
 
-    <Docs Path>/tmux/<phase_name>_<agent_id>.log
+    <Project Path>/.hephaestus/tmux/<phase_name>_<agent_id>.log
 
-List and read every file in `<Docs Path>/tmux/`. These are the raw
+These are git-excluded run artifacts — they live in .hephaestus/, not docs/.
+List and read every file in `<Project Path>/.hephaestus/tmux/`. These are the raw
 session transcripts — every tool call, every thought, every output the
 agent produced. This is much richer than the artifacts alone because it
 shows WHERE the agent got confused, WHAT it tried before settling on the
@@ -311,7 +312,7 @@ RULES
 DO:
 - Read pipeline_metrics.json for real numbers (don't guess)
 - Read phase_prompts/ for real prompt text (don't paraphrase from memory)
-- Read docs/tmux/*.log for the raw agent session transcripts
+- Read .hephaestus/tmux/*.log for the raw agent session transcripts
 - Cite specific lines from artifacts AND tmux logs as evidence
 - Propose concrete prompt rewrites with before/after text
 - Scope memory entries with the feature name
