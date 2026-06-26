@@ -2206,37 +2206,42 @@ async def update_task_status(
 
             session.commit()
 
-            # If task completed successfully, commit in the agent's worktree
-            # (don't merge to main yet — merge at pipeline end)
+            # Commit in the shared worktree when a task completes successfully.
             merge_commit_sha = None
-            if request.status == "done" and hasattr(server_state, 'branch_manager'):
+            if request.status == "done":
                 try:
-                    # Commit the work in the agent's worktree only
-                    record = server_state.branch_manager._agent_record(session, agent_id)
-                    if record and record.worktree_path:
-                        from pathlib import Path as _P
-                        wt_repo = Repo(record.worktree_path)
+                    from pathlib import Path as _P
+                    wt_path = None
+
+                    # Shared-worktree path (normal autopilot): use the workflow's directory.
+                    if task.workflow_id:
+                        from src.core.database import Workflow as _WF
+                        wf_row = session.query(_WF).filter_by(id=task.workflow_id).first()
+                        if wf_row and wf_row.working_directory:
+                            wt_path = wf_row.working_directory
+
+                    # Legacy per-agent worktree fallback.
+                    if not wt_path and hasattr(server_state, 'branch_manager'):
+                        record = server_state.branch_manager._agent_record(session, agent_id)
+                        if record and record.worktree_path:
+                            wt_path = record.worktree_path
+
+                    if wt_path and _P(wt_path).is_dir():
+                        wt_repo = Repo(wt_path)
                         wt_repo.git.add("-A")
-                        if wt_repo.is_dirty() or wt_repo.untracked_files:
+                        if wt_repo.is_dirty(index=True) or wt_repo.untracked_files:
+                            phase_obj = session.query(Phase).filter_by(id=task.phase_id).first() if task.phase_id else None
+                            phase_label = phase_obj.name if phase_obj else (task.phase_id[:8] if task.phase_id else "unknown")
                             wt_repo.git.commit(
-                                "-m", f"[Agent {agent_id[:8]}] Phase {task.phase_id[:8] if task.phase_id else 'unknown'}: task completed",
+                                "-m", f"phase({phase_label}): task {task.id[:8]} done",
                                 "--no-verify"
                             )
                             merge_commit_sha = wt_repo.head.commit.hexsha
-                            logger.info(f"Committed work in worktree for agent {agent_id[:8]}: {merge_commit_sha[:8]}")
-
-                    # Track this agent's branch for final merge
-                    if not hasattr(server_state, '_completed_agent_branches'):
-                        server_state._completed_agent_branches = []
-                    if record:
-                        server_state._completed_agent_branches.append({
-                            'agent_id': agent_id,
-                            'branch': record.branch_name,
-                            'phase': task.phase_id,
-                        })
-                        logger.info(f"Tracked branch {record.branch_name} for final merge ({len(server_state._completed_agent_branches)} total)")
+                            logger.info(f"[COMMIT] phase({phase_label}) agent {agent_id[:8]}: {merge_commit_sha[:8]}")
+                        else:
+                            logger.debug(f"[COMMIT] phase agent {agent_id[:8]}: nothing to commit")
                 except Exception as e:
-                    logger.warning(f"Failed to commit in worktree for agent {agent_id[:8]}: {e}")
+                    logger.warning(f"Failed to commit after task done for agent {agent_id[:8]}: {e}")
 
                 # Auto-link commit to ticket if task has ticket_id
                 if task.ticket_id and merge_commit_sha:
