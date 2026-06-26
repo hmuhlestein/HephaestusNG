@@ -1378,6 +1378,40 @@ class MonitoringLoop:
                 logger.info(f"Phase {phase_name} already has active task {existing_task.id[:8]}, skipping creation")
                 return
 
+            # Guard against the timing gap: task is done but its agent cleanup is
+            # still in flight (tmux session alive, agent row still "working").
+            # Without this, the monitor would spawn a second agent while the first is
+            # still running — causing 2-3 agents competing on the same phase.
+            # Primary: check the agents table directly (covers any action).
+            from src.core.database import Agent as _Agent
+            active_phase_agent = (
+                session.query(_Agent)
+                .filter(_Agent.status.in_(["working", "idle", "starting"]))
+                .join(Task, Task.assigned_agent_id == _Agent.id)
+                .filter(Task.phase_id == phase_id)
+                .first()
+            )
+            if active_phase_agent:
+                logger.info(
+                    f"Phase {phase_name} has active agent {active_phase_agent.id[:8]} "
+                    f"(task done but cleanup pending) — skipping creation"
+                )
+                return
+
+            # Backstop: in-memory per-phase cooldown (30 s) catches cases where the
+            # agent row is already cleaned up but a second monitor path fires in the
+            # same cycle before the first task is committed.
+            if not hasattr(self, "_phase_last_created"):
+                self._phase_last_created: dict = {}
+            last_t = self._phase_last_created.get(phase_id, 0.0)
+            if time.time() - last_t < 30:
+                logger.info(
+                    f"Phase {phase_name} task created {int(time.time() - last_t)}s ago — "
+                    f"skipping (30 s cooldown)"
+                )
+                return
+            self._phase_last_created[phase_id] = time.time()
+
             execution = session.query(PhaseExecution).filter_by(phase_id=phase_id).first()
 
             # Idempotency for forward 'continue': the first continue into a phase sets
