@@ -20,7 +20,7 @@ err()  { echo -e "${RED}[$(date +%H:%M:%S)]${NC} $*" >&2; }
 
 # ─── Preflight ────────────────────────────────────────────────────────
 [[ -d "$PROJECT_PATH/.git" ]] || { err "No repo at $PROJECT_PATH"; exit 1; }
-[[ -f "$PROJECT_PATH/docs/design-queue/add_calculator.md" ]] || { err "Design doc missing"; exit 1; }
+[[ -d "$PROJECT_PATH/docs" ]] || { err "No docs/ dir at $PROJECT_PATH — check smoke-baseline"; exit 1; }
 
 # ─── Stop services ────────────────────────────────────────────────────
 log "Stopping services..."
@@ -49,16 +49,33 @@ else
 fi
 cd - >/dev/null
 
-# Ensure seeded failing test exists
-if [[ ! -f "$PROJECT_PATH/tests/test_compute.py" ]]; then
-    mkdir -p "$PROJECT_PATH/tests"
-    cat > "$PROJECT_PATH/tests/test_compute.py" << 'PYTEST'
-from calculator import compute
+# Write canonical design doc and seeded failing test (overwrite each run)
+mkdir -p "$PROJECT_PATH/docs/design-queue" "$PROJECT_PATH/tests"
 
-def test_compute_returns_42():
-    assert compute() == 42
+cat > "$PROJECT_PATH/docs/design-queue/add_calculator.md" << 'DESIGN'
+# Feature: add()
+
+Add an `add(a, b)` function that returns the sum of two numbers.
+
+## Requirements
+- Module named `calculator` with a single function `add(a, b)`
+- `add(a, b)` returns `a + b`
+
+## Test
+```python
+from calculator import add
+
+def test_add():
+    assert add(2, 3) == 5
+```
+DESIGN
+
+cat > "$PROJECT_PATH/tests/test_calculator.py" << 'PYTEST'
+from calculator import add
+
+def test_add():
+    assert add(2, 3) == 5
 PYTEST
-fi
 
 # ─── Reset DB + state ─────────────────────────────────────────────────
 log "Clearing state..."
