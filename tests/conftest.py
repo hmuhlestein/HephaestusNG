@@ -255,3 +255,200 @@ def event_loop():
     loop = asyncio.new_event_loop()
     yield loop
     loop.close()
+"""Shared mock infrastructure for testing API endpoints without a server.
+
+Provides fixture factories for:
+- Database sessions (in-memory SQLite)
+- Autopilot service (mocked pipeline)
+- File system (temp directories for queue/state/features)
+- FastAPI TestClient with all dependencies overridden
+"""
+
+import pytest
+import json
+import os
+import tempfile
+from pathlib import Path
+from datetime import datetime
+from unittest.mock import Mock, AsyncMock, patch, MagicMock
+from typing import Generator
+
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker, Session
+from sqlalchemy.pool import StaticPool
+
+from src.core.database import Base, get_db, DatabaseManager
+
+
+# ── In-memory database ────────────────────────────────────────────
+
+
+@pytest.fixture
+def db_session() -> Generator[Session, None, None]:
+    """Create an in-memory SQLite session with all tables."""
+    engine = create_engine(
+        "sqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    session = SessionLocal()
+    try:
+        yield session
+    finally:
+        session.close()
+
+
+@pytest.fixture
+def db_manager(db_session) -> DatabaseManager:
+    """Create a DatabaseManager backed by in-memory SQLite."""
+    manager = Mock(spec=DatabaseManager)
+    manager.get_session.return_value = db_session
+    return manager
+
+
+# ── Autopilot service mock ────────────────────────────────────────
+
+
+@pytest.fixture
+def mock_autopilot_service():
+    """Create a mock AutopilotService with configurable state."""
+    service = Mock()
+    service.running = False
+    service._project_path = None
+    service._current_design = None
+    service._designs_processed = 0
+    service._designs_succeeded = 0
+    service._designs_failed = 0
+    service._error = None
+    service._start_time = None
+
+    def status():
+        return {
+            "running": service.running,
+            "project_path": service._project_path,
+            "current_design": service._current_design,
+            "designs_processed": service._designs_processed,
+            "designs_succeeded": service._designs_succeeded,
+            "designs_failed": service._designs_failed,
+            "elapsed_seconds": 0,
+            "error": service._error,
+        }
+
+    service.status = status
+    service.start = AsyncMock()
+    service.stop = AsyncMock()
+    return service
+
+
+# ── Filesystem fixtures ───────────────────────────────────────────
+
+
+@pytest.fixture
+def autopilot_dirs(tmp_path):
+    """Create temp directories mimicking the autopilot project structure."""
+    state_dir = tmp_path / "state"
+    queue_dir = tmp_path / "queue"
+    features_dir = tmp_path / "features"
+    designs_dir = tmp_path / "designs"
+    state_dir.mkdir()
+    queue_dir.mkdir()
+    features_dir.mkdir()
+    designs_dir.mkdir()
+
+    # Write a default state.json
+    (state_dir / "state.json").write_text(json.dumps({
+        "designs_processed": 0,
+        "designs_succeeded": 0,
+        "designs_failed": 0,
+    }))
+
+    return {
+        "root": tmp_path,
+        "state": state_dir,
+        "queue": queue_dir,
+        "features": features_dir,
+        "designs": designs_dir,
+    }
+
+
+@pytest.fixture
+def sample_design_file(autopilot_dirs):
+    """Create a sample design file in the queue."""
+    design = autopilot_dirs["queue"] / "add_calculator.md"
+    design.write_text(
+        "# Add Calculator Feature\n\n"
+        "## Requirements\n"
+        "- Create a calculator that adds two numbers\n"
+        "- Return the sum\n\n"
+        "## Acceptance Criteria\n"
+        "- Given two numbers, when added, returns the correct sum\n"
+    )
+    return design
+
+
+# ── FastAPI app with overrides ─────────────────────────────────────
+
+
+@pytest.fixture
+def mock_app(autopilot_dirs, mock_autopilot_service):
+    """Create a FastAPI app with all dependencies mocked."""
+    from fastapi import FastAPI
+    from src.mcp import autopilot_api as api_mod
+
+    app = FastAPI()
+
+    # Patch module-level variables
+    api_mod.DESIGN_QUEUE_DIR = str(autopilot_dirs["queue"])
+    api_mod.FEATURES_DIR = str(autopilot_dirs["features"])
+    api_mod.STATE_DIR = str(autopilot_dirs["state"])
+
+    # Include the router
+    app.include_router(api_mod.router)
+
+    return app
+
+
+@pytest.fixture
+def client(autopilot_dirs):
+    """Create a TestClient with mocked dependencies."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from src.mcp import autopilot_api as api_mod
+
+    app = FastAPI()
+
+    # Patch module-level variables
+    api_mod.DESIGN_QUEUE_DIR = str(autopilot_dirs["queue"])
+    api_mod.FEATURES_DIR = str(autopilot_dirs["features"])
+    api_mod.STATE_DIR = str(autopilot_dirs["state"])
+
+    # Include the router
+    app.include_router(api_mod.router)
+
+    with patch("src.core.database.get_db") as mock_get_db:
+        mock_session = Mock()
+        # Set up query chain to return proper types
+        mock_query = Mock()
+        mock_query.filter.return_value.first.return_value = None
+        mock_query.filter.return_value.count.return_value = 0
+        mock_query.filter.return_value.all.return_value = []
+        mock_session.query.return_value = mock_query
+        mock_get_db.return_value.__enter__ = Mock(return_value=mock_session)
+        mock_get_db.return_value.__exit__ = Mock(return_value=False)
+        with patch("src.autopilot.service.get_autopilot_service") as mock_svc:
+            mock_svc.return_value = Mock(
+                running=False,
+                status=Mock(return_value={
+                    "running": False,
+                    "designs_processed": 0,
+                    "designs_succeeded": 0,
+                    "designs_failed": 0,
+                    "current_design": None,
+                    "elapsed_seconds": 0,
+                    "error": None,
+                }),
+            )
+            with patch("src.mcp.autopilot_api._get_active_project_id", return_value=None):
+                yield TestClient(app)
