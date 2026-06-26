@@ -154,7 +154,7 @@ class TestAgentManagerValidatorPrompts:
             message = manager._format_initial_message(
                 task=mock_task,
                 agent_id="validator-123",
-                worktree_path="/tmp/worktree",
+                branch_path="/tmp/worktree",
                 agent_type="result_validator",
                 enriched_data=enriched_data
             )
@@ -195,7 +195,7 @@ class TestAgentManagerValidatorPrompts:
             message = manager._format_initial_message(
                 task=mock_task,
                 agent_id="validator-456",
-                worktree_path="/tmp/worktree",
+                branch_path="/tmp/worktree",
                 agent_type="validator",
                 enriched_data=enriched_data
             )
@@ -239,7 +239,7 @@ class TestAgentManagerValidatorPrompts:
             message = manager._format_initial_message(
                 task=mock_task,
                 agent_id="agent-789",
-                worktree_path="/tmp/worktree",
+                branch_path="/tmp/worktree",
                 agent_type="phase",
                 enriched_data=enriched_data
             )
@@ -277,7 +277,7 @@ class TestAgentManagerValidatorPrompts:
             message = manager._format_initial_message(
                 task=mock_task,
                 agent_id="validator-999",
-                worktree_path="/tmp/worktree",
+                branch_path="/tmp/worktree",
                 agent_type="result_validator",
                 enriched_data=enriched_data
             )

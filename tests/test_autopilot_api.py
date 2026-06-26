@@ -47,13 +47,18 @@ def autopilot_dirs(tmp_path):
 
 
 @pytest.fixture
-def client(autopilot_dirs):
+def client(autopilot_dirs, monkeypatch):
     from fastapi.testclient import TestClient
     from fastapi import FastAPI
+    from src.mcp import autopilot_api
     from src.mcp.autopilot_api import router
 
     app = FastAPI()
     app.include_router(router)
+
+    # Mock _get_active_project_id to return None (no DB needed)
+    monkeypatch.setattr(autopilot_api, '_get_active_project_id', lambda: None)
+
     return TestClient(app)
 
 

@@ -75,7 +75,7 @@ class TestAgentWorkflowContext:
         message = agent_manager._format_initial_message(
             task=task,
             agent_id=agent_id,
-            worktree_path="/test/project"
+            branch_path="/test/project"
         )
 
         # Verify workflow_id is in the message
@@ -92,7 +92,7 @@ class TestAgentWorkflowContext:
         message = agent_manager._format_initial_message(
             task=task,
             agent_id=agent_id,
-            worktree_path="/test/project"
+            branch_path="/test/project"
         )
 
         # Verify agent_id is in the message
@@ -109,7 +109,7 @@ class TestAgentWorkflowContext:
         message = agent_manager._format_initial_message(
             task=task,
             agent_id=agent_id,
-            worktree_path="/test/project"
+            branch_path="/test/project"
         )
 
         # Should instruct agent about workflow_id usage
@@ -131,7 +131,7 @@ class TestAgentWorkflowContext:
         message = agent_manager._format_initial_message(
             task=task,
             agent_id=agent_id,
-            worktree_path="/test/project"
+            branch_path="/test/project"
         )
 
         # Verify task description is included
@@ -148,7 +148,7 @@ class TestAgentWorkflowContext:
         message = agent_manager._format_initial_message(
             task=task,
             agent_id=agent_id,
-            worktree_path=worktree_path
+            branch_path=worktree_path
         )
 
         # Verify working directory is included
@@ -167,7 +167,7 @@ class TestAgentWorkflowContext:
         message = agent_manager._format_initial_message(
             task=task,
             agent_id=agent_id,
-            worktree_path="/test/project"
+            branch_path="/test/project"
         )
 
         # Should still have agent_id
@@ -189,7 +189,7 @@ class TestAgentWorkflowContext:
         message = agent_manager._format_initial_message(
             task=task,
             agent_id=agent_id,
-            worktree_path="/test/project",
+            branch_path="/test/project",
             agent_type="validator",
             enriched_data=enriched_data
         )
@@ -211,7 +211,7 @@ class TestAgentWorkflowContext:
         message = agent_manager._format_initial_message(
             task=task,
             agent_id=agent_id,
-            worktree_path="/test/project",
+            branch_path="/test/project",
             agent_type="result_validator",
             enriched_data=enriched_data
         )
@@ -233,7 +233,7 @@ class TestAgentWorkflowContext:
         message = agent_manager._format_initial_message(
             task=task,
             agent_id=agent_id,
-            worktree_path="/test/project",
+            branch_path="/test/project",
             agent_type="diagnostic",
             enriched_data=enriched_data
         )
@@ -252,7 +252,7 @@ class TestAgentWorkflowContext:
         message = agent_manager._format_initial_message(
             task=task,
             agent_id=agent_id,
-            worktree_path="/test/project",
+            branch_path="/test/project",
             agent_type="validator",
             enriched_data=None
         )
@@ -273,7 +273,7 @@ class TestAgentWorkflowContext:
         message = agent_manager._format_initial_message(
             task=task,
             agent_id=agent_id,
-            worktree_path="/test/project",
+            branch_path="/test/project",
             agent_type="phase"
         )
 
@@ -293,7 +293,7 @@ class TestAgentWorkflowContext:
         message = agent_manager._format_initial_message(
             task=task,
             agent_id=agent_id,
-            worktree_path="/test/project"
+            branch_path="/test/project"
         )
 
         # Should mention MCP tools
@@ -338,7 +338,7 @@ class TestAgentManagerWithPhaseContext:
             message = agent_manager._format_initial_message(
                 task=task,
                 agent_id=agent_id,
-                worktree_path="/test/project"
+                branch_path="/test/project"
             )
 
             # Should include workflow context section
@@ -370,7 +370,7 @@ class TestAgentManagerWithPhaseContext:
             message = agent_manager._format_initial_message(
                 task=task,
                 agent_id=agent_id,
-                worktree_path="/test/project"
+                branch_path="/test/project"
             )
 
             # Should include workflow_id at minimum
@@ -408,7 +408,7 @@ class TestWorkflowContextFormats:
         message = agent_manager._format_initial_message(
             task=task,
             agent_id=agent_id,
-            worktree_path="/project/worktree"
+            branch_path="/project/worktree"
         )
 
         # Verify all key elements are present
@@ -433,7 +433,7 @@ class TestWorkflowContextFormats:
         message = agent_manager._format_initial_message(
             task=task,
             agent_id=agent_id,
-            worktree_path="/test/project"
+            branch_path="/test/project"
         )
 
         # Task ID should be in message
@@ -454,7 +454,7 @@ class TestWorkflowContextFormats:
         message = agent_manager._format_initial_message(
             task=task,
             agent_id=agent_id,
-            worktree_path="/test/project"
+            branch_path="/test/project"
         )
 
         # Phase ID should be in message
