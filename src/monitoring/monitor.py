@@ -1192,13 +1192,35 @@ class MonitoringLoop:
             if has_pending_successor:
                 session = self.db_manager.get_session()
                 try:
-                    from src.core.database import Phase
+                    from src.core.database import Phase, Task as _T2
                     # Find the completed phase and re-evaluate transition via engine
                     completed_phase = session.query(Phase).filter_by(
                         workflow_id=self.phase_manager.workflow_id,
                         order=last_completed["order"]
                     ).first()
                     if completed_phase:
+                        # Find the pending successor phase
+                        successor_phase = session.query(Phase).filter_by(
+                            workflow_id=self.phase_manager.workflow_id,
+                            order=last_completed["order"] + 1,
+                        ).first()
+                        # Skip re-evaluation if the successor already has any tasks
+                        # (failed counts — the transition fired but the task didn't
+                        # survive). Re-triggering mark_phase_complete here would call
+                        # the engine a second time and could produce a spurious retry
+                        # of the already-completed phase.
+                        if successor_phase:
+                            existing_tasks = session.query(_T2).filter_by(
+                                phase_id=successor_phase.id
+                            ).count()
+                            if existing_tasks > 0:
+                                logger.debug(
+                                    f"[PHASE-PROGRESSION] {completed_phase.name} completed, "
+                                    f"{successor_phase.name} has {existing_tasks} task(s) — "
+                                    "transition already fired, skipping re-evaluation"
+                                )
+                                session.close()
+                                continue
                         logger.info(f"[PHASE-PROGRESSION] Phase {completed_phase.name} (order {completed_phase.order}) completed, "
                                     f"but next phase is pending. Re-evaluating transition.")
                         phase_output = self._build_spec_phase_output(completed_phase.name)
