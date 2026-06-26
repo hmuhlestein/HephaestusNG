@@ -759,7 +759,11 @@ class PhaseManager:
             self._populate_feature_folder(session, workflow)
 
     def _populate_feature_folder(self, session, workflow) -> None:
-        """Create .hephaestus/features/<dir>/ and copy all run artifacts into it."""
+        """Create .hephaestus/features/<dir>/ and copy all run artifacts into it.
+
+        The worktree is intentionally kept after git_commit_push merges so both
+        committed docs/ and git-excluded .hephaestus/tmux/ logs are available here.
+        """
         try:
             from pathlib import Path as _P
             import shutil as _shutil
@@ -770,10 +774,10 @@ class PhaseManager:
                 logger.debug("[FEATURE-FOLDER] No worktree path — skipping")
                 return
 
-            # Derive the real project root from the worktree path.
-            # git_commit_push may have deleted the worktree; read from the merged
-            # project root (main branch) instead.
-            project_path = _P(wt_path)
+            wt = _P(wt_path)
+
+            # Derive the real project root for the features output dir.
+            project_path = wt
             if ".worktrees" in str(project_path):
                 base = project_path
                 while base.name != ".worktrees" and base.parent != base:
@@ -793,12 +797,13 @@ class PhaseManager:
 
             _DOC_EXTENSIONS = {".md", ".json", ".txt", ".log", ".csv", ".html"}
 
-            # 1. Production artifacts from docs/ (committed, on main after merge)
-            proj_docs = project_path / "docs"
-            if proj_docs.is_dir():
-                for f in proj_docs.rglob("*"):
+            # 1. Production artifacts from worktree's docs/ (merged to main but
+            #    the worktree copy is canonical and complete here).
+            wt_docs = wt / "docs"
+            if wt_docs.is_dir():
+                for f in wt_docs.rglob("*"):
                     if f.is_file() and f.suffix in _DOC_EXTENSIONS and "tmux" not in f.parts:
-                        rel = f.relative_to(proj_docs)
+                        rel = f.relative_to(wt_docs)
                         dest = docs_dir / rel
                         dest.parent.mkdir(parents=True, exist_ok=True)
                         if not dest.exists():
@@ -806,27 +811,23 @@ class PhaseManager:
 
             # 2. feature_report.html → feature dir root (where UI expects it)
             for candidate in [docs_dir / "feature_report.html",
-                               project_path / "docs" / "feature_report.html"]:
+                               wt_docs / "feature_report.html"]:
                 if candidate.is_file():
                     dest = feature_dir / "feature_report.html"
                     if not dest.exists():
                         _shutil.copy2(str(candidate), str(dest))
                     break
 
-            # 3. Tmux logs from .hephaestus/tmux/ (git-excluded, local only)
-            #    Try the worktree first (forensics runs before merge removes it),
-            #    fall back to project root .hephaestus/ if worktree is gone.
-            for tmux_base in [_P(wt_path), project_path]:
-                tmux_src = tmux_base / ".hephaestus" / "tmux"
-                if tmux_src.is_dir():
-                    tmux_dest = feature_dir / "tmux"
-                    tmux_dest.mkdir(exist_ok=True)
-                    for f in tmux_src.glob("*.log"):
-                        dest = tmux_dest / f.name
-                        if not dest.exists():
-                            _shutil.copy2(str(f), str(dest))
-                            logger.info(f"[FEATURE-FOLDER] Copied tmux log {f.name}")
-                    break
+            # 3. Tmux logs — git-excluded, live in worktree's .hephaestus/tmux/
+            tmux_src = wt / ".hephaestus" / "tmux"
+            if tmux_src.is_dir():
+                tmux_dest = feature_dir / "tmux"
+                tmux_dest.mkdir(exist_ok=True)
+                for f in tmux_src.glob("*.log"):
+                    dest = tmux_dest / f.name
+                    if not dest.exists():
+                        _shutil.copy2(str(f), str(dest))
+                        logger.info(f"[FEATURE-FOLDER] Copied tmux log {f.name}")
 
             # 4. Link design → feature folder in DB
             from src.core.database import AutopilotDesign as _AD
