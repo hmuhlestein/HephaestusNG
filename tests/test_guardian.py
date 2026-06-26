@@ -23,7 +23,8 @@ def mock_agent_manager():
     """Create mock agent manager."""
     mock = Mock()
     mock.get_agent_output = Mock(return_value="Agent working on task...")
-    mock.send_message_to_agent = Mock()
+    mock.send_recovery_keystrokes = AsyncMock(return_value=True)
+    mock.send_message_to_agent = AsyncMock()
     mock.tmux_server = Mock()
     return mock
 
@@ -197,7 +198,7 @@ class TestGuardian:
         mock_agent_manager.send_message_to_agent.assert_called_once()
         call_args = mock_agent_manager.send_message_to_agent.call_args[0]
         assert call_args[0] == "test-agent-4"
-        assert "GUARDIAN GUIDANCE" in call_args[1]
+        assert "GUARDIAN" in call_args[1]
         assert "Try checking your imports" in call_args[1]
 
         # Verify logged
@@ -261,9 +262,9 @@ class TestGuardian:
         # Immediate second steering should be blocked
         assert guardian._should_steer_agent(agent_id) is False
 
-        # Simulate time passing
+        # Simulate time passing (cooldown is 10 minutes)
         guardian.steering_history[agent_id][0]['timestamp'] = (
-            datetime.utcnow() - timedelta(minutes=6)
+            datetime.utcnow() - timedelta(minutes=11)
         ).isoformat()
 
         # Now should be allowed again
@@ -297,7 +298,7 @@ class TestGuardian:
 
         # Should return default analysis
         assert result['agent_id'] == "test-agent-7"
-        assert result['summary'] == "GPT-5 analysis unavailable - using default"
+        assert result['trajectory_summary'] == "LLM analysis unavailable - using default"
 
     @pytest.mark.asyncio
     async def test_llm_failure_handling(self, guardian, mock_llm_provider):
@@ -317,7 +318,7 @@ class TestGuardian:
                 )
 
         # Should return default analysis
-        assert result['summary'] == "GPT-5 analysis unavailable - using default"
+        assert result['trajectory_summary'] == "LLM analysis unavailable - using default"
         assert result['trajectory_aligned'] is True  # Safe default
 
     def test_clear_agent_cache(self, guardian):

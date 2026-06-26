@@ -347,7 +347,7 @@ class TestAgentManagerWithPhaseContext:
     def test_workflow_description_in_context(self, db_manager, mock_llm_provider, initialized_phase_manager):
         """Test that workflow description is included in context."""
         # Start a workflow with description
-        workflow_id = initialized_phase_manager.start_execution(
+        workflow_id, _ = initialized_phase_manager.start_execution(
             definition_id="test-workflow",
             description="Build a URL shortener with analytics",
             working_directory="/project"
