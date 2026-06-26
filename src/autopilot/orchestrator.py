@@ -1561,8 +1561,8 @@ def run_single_design(
             {"id": 6, "name": "security_review", "output": "security_report.md"},
             {"id": 7, "name": "qa_validation", "output": "qa_report.md"},
             {"id": 8, "name": "product_validation", "output": "product_validation.md"},
-            {"id": 9, "name": "git_commit_push", "output": "git history"},
-            {"id": 10, "name": "forensics_analysis", "output": "forensics_report.md"},
+            {"id": 9, "name": "forensics_analysis", "output": "forensics_report.md"},
+            {"id": 10, "name": "git_commit_push", "output": "git history"},
         ],
     }
     metrics_path = docs_dir / "pipeline_metrics.json"
@@ -1717,8 +1717,8 @@ def run_single_design(
             {"id": 6, "name": "security_review", "output": "security_report.md"},
             {"id": 7, "name": "qa_validation", "output": "qa_report.md"},
             {"id": 8, "name": "product_validation", "output": "product_validation.md"},
-            {"id": 9, "name": "git_commit_push", "output": "git history"},
-            {"id": 10, "name": "forensics_analysis", "output": "forensics_report.md"},
+            {"id": 9, "name": "forensics_analysis", "output": "forensics_report.md"},
+            {"id": 10, "name": "git_commit_push", "output": "git history"},
         ],
     }
     metrics_path = docs_dir / "pipeline_metrics.json"
