@@ -289,7 +289,12 @@ class WorkflowOrchestrator:
         conditions: List[Dict[str, Any]]
     ) -> Tuple[float, Dict[str, Any]]:
         """Simple heuristic evaluation based on output content."""
-        score = 0.5  # Default neutral score
+        # Start at 0.75 (passing), not 0.5 (neutral). At 0.5 every non-gated
+        # phase with empty phase_output={} tripped the score<0.6 retry band and
+        # burned max_retries re-runs before continuing — same issue that was
+        # fixed in _default_evaluate. Only drop below the retry threshold when
+        # there are explicit failure signals.
+        score = 0.75
         metadata = {}
 
         # Check for common success indicators
