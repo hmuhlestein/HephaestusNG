@@ -179,7 +179,7 @@ AUTOPILOT_ORCHESTRATOR_CONFIG = {
             ],
             "max_retries": 0,
         },
-        # Git commit is the final phase — merges to main and removes the worktree
+        # Git commit is the final phase — merges to main; worktree is kept for UI
         {
             "after_phase": "git_commit_push",
             "evaluator": "heuristic",

@@ -1399,12 +1399,7 @@ def run_single_workflow(sdk, workflow_id: str, project_path: str, description: s
                                 else:
                                     raise
 
-                            # Clean up worktree
-                            try:
-                                safe_branch = design_branch.replace('/', '-')
-                                wt_mgr.main_repo.git.worktree("remove", str(wt_mgr.worktree_base / f"wt_{safe_branch}"), "--force")
-                            except Exception:
-                                pass
+                            # Worktree is intentionally kept — UI references artifacts there
                         else:
                             logger.info("No design branch tracked — skipping final merge")
                     except Exception as e:
