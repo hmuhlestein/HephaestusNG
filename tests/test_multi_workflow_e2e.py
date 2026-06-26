@@ -92,8 +92,8 @@ class TestMultiWorkflowE2E:
         manager = multi_definition_phase_manager
 
         # Start two different workflows
-        wf1_id = manager.start_execution("test-workflow", "Build URL Shortener")
-        wf2_id = manager.start_execution("bugfix-workflow", "Fix Auth Bug #123")
+        wf1_id, _ = manager.start_execution("test-workflow", "Build URL Shortener")
+        wf2_id, _ = manager.start_execution("bugfix-workflow", "Fix Auth Bug #123")
 
         # Verify IDs are different
         assert wf1_id != wf2_id
@@ -116,8 +116,8 @@ class TestMultiWorkflowE2E:
         manager = multi_definition_phase_manager
 
         # Start two workflows from the same definition
-        wf1_id = manager.start_execution("test-workflow", "Project A - URL Shortener")
-        wf2_id = manager.start_execution("test-workflow", "Project B - Chat App")
+        wf1_id, _ = manager.start_execution("test-workflow", "Project A - URL Shortener")
+        wf2_id, _ = manager.start_execution("test-workflow", "Project B - Chat App")
 
         # Verify IDs are different
         assert wf1_id != wf2_id
@@ -138,8 +138,8 @@ class TestMultiWorkflowE2E:
         manager = multi_definition_phase_manager
 
         # Start two workflows
-        wf1_id = manager.start_execution("test-workflow", "Project 1")
-        wf2_id = manager.start_execution("test-workflow", "Project 2")
+        wf1_id, _ = manager.start_execution("test-workflow", "Project 1")
+        wf2_id, _ = manager.start_execution("test-workflow", "Project 2")
 
         # Create tasks in each workflow
         session = db_manager.get_session()
@@ -236,7 +236,7 @@ class TestMultiWorkflowE2E:
         """Test that starting execution creates phases in database."""
         manager = multi_definition_phase_manager
 
-        workflow_id = manager.start_execution(
+        workflow_id, _ = manager.start_execution(
             definition_id="test-workflow",
             description="Test phases creation",
         )

@@ -219,7 +219,7 @@ class TestPhaseManager:
         )
 
         # Start execution
-        workflow_id = self.phase_manager.start_execution(
+        workflow_id, _ = self.phase_manager.start_execution(
             definition_id="exec-test",
             description="Test execution",
             working_directory="/project/path",
@@ -244,7 +244,7 @@ class TestPhaseManager:
         )
 
         # Start execution
-        workflow_id = self.phase_manager.start_execution(
+        workflow_id, _ = self.phase_manager.start_execution(
             definition_id="phases-test",
             description="Test phases",
         )
@@ -262,7 +262,7 @@ class TestPhaseManager:
             definition_id="get-test",
             name="Get Test",
         )
-        workflow_id = self.phase_manager.start_execution(
+        workflow_id, _ = self.phase_manager.start_execution(
             definition_id="get-test",
             description="Get test execution",
         )
@@ -320,7 +320,7 @@ class TestPhaseManager:
                 {"order": 1, "name": "Phase 1", "description": "Test", "done_definitions": []},
             ],
         )
-        workflow_id = self.phase_manager.start_execution(
+        workflow_id, _ = self.phase_manager.start_execution(
             definition_id="stats-test",
             description="Stats test",
         )
@@ -354,9 +354,9 @@ class TestPhaseManager:
         )
 
         # Start executions from both
-        wf_a1 = self.phase_manager.start_execution("def-a", "Execution A1")
-        wf_a2 = self.phase_manager.start_execution("def-a", "Execution A2")
-        wf_b1 = self.phase_manager.start_execution("def-b", "Execution B1")
+        wf_a1, _ = self.phase_manager.start_execution("def-a", "Execution A1")
+        wf_a2, _ = self.phase_manager.start_execution("def-a", "Execution A2")
+        wf_b1, _ = self.phase_manager.start_execution("def-b", "Execution B1")
 
         # Verify all are tracked
         assert len(self.phase_manager.active_executions) == 3
@@ -371,7 +371,7 @@ class TestPhaseManager:
             definition_id="load-test",
             name="Load Test",
         )
-        workflow_id = self.phase_manager.start_execution(
+        workflow_id, _ = self.phase_manager.start_execution(
             definition_id="load-test",
             description="Test loading",
         )

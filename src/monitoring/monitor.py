@@ -1220,7 +1220,7 @@ class MonitoringLoop:
                                     "transition already fired, skipping re-evaluation"
                                 )
                                 session.close()
-                                continue
+                                return
                         logger.info(f"[PHASE-PROGRESSION] Phase {completed_phase.name} (order {completed_phase.order}) completed, "
                                     f"but next phase is pending. Re-evaluating transition.")
                         phase_output = self._build_spec_phase_output(completed_phase.name)
