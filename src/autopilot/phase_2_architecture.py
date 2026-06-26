@@ -122,16 +122,24 @@ For each component, define:
 - Error handling flows
 
 ### Directory Structure and File Layout
-List the EXACT paths for every file the developer must create. Default to `src/` layout:
+List the EXACT paths for every file the developer must create. Default to `src/` layout
+organized by functional area:
 
-  src/calculator.py      # source module
+  src/calculator/
+    __init__.py          # re-exports the public API (e.g. `from .core import compute`)
+    core.py              # core logic
+    utils.py             # helpers (only if needed)
   conftest.py            # adds src/ to sys.path so tests can import without prefix
-  tests/test_compute.py  # existing test — do NOT modify
+  tests/
+    test_compute.py      # existing test — do NOT modify
   docs/architecture.md   # this document
 
-Source files belong in `src/`, NOT at the project root. If conftest.py is needed
-to make test imports work (see Step 1 analysis), include it in the file list.
-Never leave file paths ambiguous — "the module" is not a path; `src/calculator.py` is.
+Rules:
+- Source files belong in `src/<feature>/`, NOT at the project root or directly in `src/`.
+- Group by functional domain: one subdirectory per logical component.
+- For trivial single-function features, `src/<name>/__init__.py` + one impl file is enough.
+- If conftest.py is needed to make test imports work (see Step 1), include it.
+- Never leave file paths ambiguous — "the module" is not a path; `src/calculator/core.py` is.
 
 ### Infrastructure
 - Build configuration
