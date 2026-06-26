@@ -415,7 +415,9 @@ class TestValidationFlowWithInheritance:
 
         # Mock spawn_validator_agent from the correct module
         with patch('src.validation.validator_agent.spawn_validator_agent') as mock_spawn:
-            mock_spawn.return_value = asyncio.coroutine(lambda: "validator-id")()
+            async def mock_spawn_func():
+                return "validator-id"
+            mock_spawn.return_value = mock_spawn_func()
 
             with patch('src.mcp.server.server_state') as mock_state:
                 mock_state.db_manager = test_db

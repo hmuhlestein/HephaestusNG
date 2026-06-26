@@ -239,7 +239,7 @@ def initialized_phase_manager(db_manager, test_workflow_definition):
 @pytest.fixture
 def workflow_with_execution(initialized_phase_manager):
     """Create a phase manager with a started workflow execution."""
-    workflow_id = initialized_phase_manager.start_execution(
+    workflow_id, _ = initialized_phase_manager.start_execution(
         definition_id="test-workflow",
         description="Test execution for integration tests",
         working_directory="/tmp/test-project",
