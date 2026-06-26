@@ -44,8 +44,8 @@ class TestTaskDeduplicationFlow:
             yield server_state
 
     @pytest.fixture
-    def client(self):
-        """Create test client."""
+    def client(self, initialized_server):
+        """Create test client. Depends on initialized_server to ensure mocks are active before startup."""
         return TestClient(app)
 
     @pytest.fixture
