@@ -448,11 +448,15 @@ class PhaseManager:
             if not phase:
                 return False
 
-            # Check if all tasks in phase are complete
+            # Check if all tasks in phase are complete.
+            # "failed" is intentionally excluded: failed is a terminal state, and
+            # a phase that has some done + some failed tasks (but no active tasks)
+            # should still advance. The stalled-phase handler in the monitor covers
+            # the all-failed (done_tasks == 0) case separately.
             incomplete_tasks = session.query(Task).filter_by(
                 phase_id=phase_id
             ).filter(
-                Task.status.in_(["pending", "assigned", "in_progress", "failed"])
+                Task.status.in_(["pending", "assigned", "in_progress"])
             ).count()
 
             if incomplete_tasks > 0:
