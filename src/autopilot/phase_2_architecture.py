@@ -82,15 +82,26 @@ Read requirements_analysis.md from Phase 1. Understand:
 Also read the original design document to understand the overall vision.
 This context will be passed to developers via the 'context' field in create_task.
 
-CRITICAL — CHECK EXISTING TEST FILES FOR IMPORT PATHS:
+CRITICAL — CHECK EXISTING TEST FILES AND ESTABLISH FILE LAYOUT:
 Run: find . -name "test_*.py" -o -name "*_test.py" | head -20
-Then read each test file and note its import statements (e.g. `from calculator import compute`
-vs `from src.calculator import compute`). These imports determine WHERE the implementation
-files MUST be placed. Your architecture MUST match the import paths the tests use.
+Read each test file and note its import statements. Then:
 
-Example: if tests say `from calculator import compute`, then `calculator.py` must be at
-the project root — NOT in `src/`, `lib/`, or any subdirectory. Document this explicitly
-in your architecture.md under "Directory Structure".
+1. If tests already import with a `src.` prefix (`from src.calculator import compute`)
+   → source goes in `src/<module>.py`, no extra config needed.
+
+2. If tests import without a prefix (`from calculator import compute`) AND no conftest.py
+   exists yet → use `src/` layout PLUS create `conftest.py` at the project root:
+     ```python
+     import sys, pathlib
+     sys.path.insert(0, str(pathlib.Path(__file__).parent / "src"))
+     ```
+   This lets tests import `from calculator import compute` while keeping source in `src/`.
+
+3. If a `pyproject.toml` or `setup.cfg` already configures the layout → follow it.
+
+DEFAULT: always prefer `src/<module>.py` over placing source at the project root.
+Never scatter `.py` source files directly in the project root alongside `README.md`,
+`pyproject.toml`, etc. Document the chosen layout explicitly in architecture.md.
 
 ═══════════════════════════════════════════════════════════════════════
 STEP 2: DESIGN SYSTEM ARCHITECTURE
@@ -111,14 +122,16 @@ For each component, define:
 - Error handling flows
 
 ### Directory Structure and File Layout
-List the EXACT paths for every file the developer must create, e.g.:
+List the EXACT paths for every file the developer must create. Default to `src/` layout:
 
-  calculator.py          # project root (required: `from calculator import compute`)
+  src/calculator.py      # source module
+  conftest.py            # adds src/ to sys.path so tests can import without prefix
   tests/test_compute.py  # existing test — do NOT modify
   docs/architecture.md   # this document
 
-The placement must be consistent with existing test import paths (checked in Step 1).
-Never leave file paths ambiguous — "the module" is not a path; `./calculator.py` is.
+Source files belong in `src/`, NOT at the project root. If conftest.py is needed
+to make test imports work (see Step 1 analysis), include it in the file list.
+Never leave file paths ambiguous — "the module" is not a path; `src/calculator.py` is.
 
 ### Infrastructure
 - Build configuration
