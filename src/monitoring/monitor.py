@@ -1875,7 +1875,15 @@ class MonitoringLoop:
                                                        reason=f"Phase completed {time_since_completion:.0f}s ago, cooling down")
                     return
 
-            # Step 3: Check if we have a validated result
+            # Step 3: Check if workflow is already marked complete/failed
+            from src.core.database import Workflow as _WF
+            wf_row = session.query(_WF).filter_by(id=workflow_id).first()
+            if wf_row and wf_row.status in ('completed', 'failed', 'cancelled'):
+                logger.info(f"[DIAGNOSTIC MONITOR] ❌ Workflow is {wf_row.status} — no diagnostic needed")
+                self._log_diagnostic_status_report(conditions, trigger=False,
+                                                   reason=f"Workflow status is {wf_row.status}")
+                return
+
             validated_result = session.query(WorkflowResult).filter(
                 WorkflowResult.workflow_id == workflow_id,
                 WorkflowResult.status == 'validated'

@@ -885,7 +885,10 @@ def create_feature_folder(project_path: Path, design_name: str, logger: Orchestr
 
 
 def copy_design_document(design_entry: DesignEntry, feature_folder: Path) -> Path:
-    dest = feature_folder / "docs" / design_entry.path.name
+    # Store in .hephaestus/ context, not docs/, so the design doc doesn't
+    # appear as a pipeline artifact in the UI's docs listing.
+    dest = feature_folder / ".hephaestus" / design_entry.path.name
+    dest.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(design_entry.path, dest)
     return dest
 
@@ -1595,7 +1598,7 @@ def run_single_design(
         # reads it and copies it into each worktree's .hephaestus/design.md. Agents
         # only ever read the worktree-relative copy.
         launch_params = {
-            "design_document": str(design_copy),
+            "design_document": str(design_entry.path),  # source path, not the features copy
             "project_path": str(project_path),
             "project_id": _project_slug,
             "design_slug": _design_slug,
