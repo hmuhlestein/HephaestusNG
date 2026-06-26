@@ -302,6 +302,30 @@ class AgentManager:
             except Exception as e:
                 logger.debug(f"[COMPLEXITY] adaptive thinking skipped: {e}")
 
+            # Generate deterministic session ID for persistent agent sessions.
+            # Same project + design + role = same session across gotos (§10.1.1).
+            session_id = ""
+            if task.workflow_id:
+                try:
+                    _s = self.db_manager.get_session()
+                    try:
+                        from src.core.database import Workflow
+                        _wf = _s.query(Workflow).filter_by(id=task.workflow_id).first()
+                        if _wf and _wf.launch_params:
+                            _lp = _wf.launch_params if isinstance(_wf.launch_params, dict) else {}
+                            _pid = _lp.get("project_id", "")
+                            _dsl = _lp.get("design_slug", "")
+                            if _pid and _dsl and phase_name:
+                                from src.autopilot.phases import get_session_id
+                                session_id = get_session_id(_pid, _dsl, phase_name)
+                    finally:
+                        _s.close()
+                except Exception as e:
+                    logger.debug(f"[SESSION] Could not generate session ID: {e}")
+
+            if session_id:
+                logger.info(f"[SESSION] Using session ID: {session_id} for phase {phase_name}")
+
             launch_command = cli_agent.get_launch_command(
                 system_prompt=system_prompt,
                 task_id=task.id,
@@ -311,6 +335,7 @@ class AgentManager:
                 agent_id=agent_id,
                 workflow_id=task.workflow_id,
                 phase_id=task.phase_id,
+                session_id=session_id,
             )
 
             # Send launch command to tmux
@@ -553,6 +578,32 @@ class AgentManager:
                     context["qa_spec.json"] = spec_path.read_text()
                 except Exception:
                     pass
+
+            # Architecture context for architect-as-adversarial-reviewer (§10.1.1).
+            # When the architect is re-invoked for phase 4, it needs access to the
+            # architecture.md and requirements_analysis.md from previous phases.
+            # These are in the shared worktree's docs/ directory.
+            if workflow_id:
+                session2 = self.db_manager.get_session()
+                try:
+                    wf2 = session2.query(Workflow).filter_by(id=workflow_id).first()
+                    if wf2 and wf2.working_directory:
+                        worktree_docs = Path(wf2.working_directory) / "docs"
+                        if worktree_docs.exists():
+                            arch_path = worktree_docs / "architecture.md"
+                            if arch_path.exists():
+                                try:
+                                    context["architecture.md"] = arch_path.read_text()
+                                except Exception:
+                                    pass
+                            req_path = worktree_docs / "requirements_analysis.md"
+                            if req_path.exists():
+                                try:
+                                    context["requirements_analysis.md"] = req_path.read_text()
+                                except Exception:
+                                    pass
+                finally:
+                    session2.close()
         except Exception as e:
             logger.warning(f"Failed to gather worktree context for task {getattr(task, 'id', '?')}: {e}")
 
@@ -1269,6 +1320,26 @@ REMEMBER:
                 f"{agent.system_prompt}"
             )
 
+            # Generate session ID for restart — same session, agent picks up where it left off.
+            session_id = ""
+            if task.workflow_id:
+                try:
+                    _s = self.db_manager.get_session()
+                    try:
+                        from src.core.database import Workflow
+                        _wf = _s.query(Workflow).filter_by(id=task.workflow_id).first()
+                        if _wf and _wf.launch_params:
+                            _lp = _wf.launch_params if isinstance(_wf.launch_params, dict) else {}
+                            _pid = _lp.get("project_id", "")
+                            _dsl = _lp.get("design_slug", "")
+                            if _pid and _dsl and restart_phase_name:
+                                from src.autopilot.phases import get_session_id
+                                session_id = get_session_id(_pid, _dsl, restart_phase_name)
+                    finally:
+                        _s.close()
+                except Exception as e:
+                    logger.debug(f"[SESSION] Could not generate session ID for restart: {e}")
+
             launch_command = cli_agent.get_launch_command(
                 system_prompt=restart_system_prompt,
                 task_id=task.id,
@@ -1278,6 +1349,7 @@ REMEMBER:
                 workflow_id=task.workflow_id,
                 phase_id=task.phase_id,
                 thinking_level=restart_thinking_level,
+                session_id=session_id,
             )
 
             pane = tmux_session.attached_window.attached_pane

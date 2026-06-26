@@ -894,7 +894,8 @@ class PhaseManager:
 
     def start_execution(self, definition_id: str, description: str,
                        working_directory: str = None,
-                       launch_params: Dict[str, Any] = None) -> str:
+                       launch_params: Dict[str, Any] = None,
+                       design_id: str = None) -> str:
         """Start a new workflow execution from a definition.
 
         Args:
@@ -922,6 +923,7 @@ class PhaseManager:
                 name=db_definition.name,
                 description=description,
                 definition_id=definition_id,
+                design_id=design_id,
                 phases_folder_path=working_directory or ".",  # Store working dir
                 working_directory=working_directory,
                 launch_params=launch_params,  # Store launch params for reference

@@ -499,6 +499,7 @@ class StartWorkflowRequest(BaseModel):
     description: str = Field(..., description="Description/name of this workflow execution")
     working_directory: Optional[str] = Field(default=None, description="Working directory for the workflow")
     launch_params: Optional[Dict[str, Any]] = Field(default=None, description="Parameters from launch template to substitute into phases")
+    design_id: Optional[str] = Field(default=None, description="autopilot_designs.id that spawned this execution (§9.7)")
 
 
 class PendingReviewCountResponse(BaseModel):
@@ -5533,7 +5534,8 @@ async def start_workflow_execution(request: StartWorkflowRequest):
             definition_id=request.definition_id,
             description=request.description,
             working_directory=request.working_directory,
-            launch_params=request.launch_params
+            launch_params=request.launch_params,
+            design_id=request.design_id,
         )
 
         # Handle both old (just workflow_id) and new (tuple) return formats
