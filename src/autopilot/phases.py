@@ -45,8 +45,8 @@ AUTOPILOT_PHASES = [
     PHASE_6_SECURITY_REVIEW,
     PHASE_7_QA_VALIDATION,
     PHASE_8_PRODUCT_VALIDATION,
-    PHASE_9_GIT_COMMIT_PUSH,
-    PHASE_10_FORENSICS,
+    PHASE_10_FORENSICS,       # forensics runs before commit so worktree is still valid
+    PHASE_9_GIT_COMMIT_PUSH,  # commit/merge last — removes the worktree
 ]
 
 # Session role mapping — determines which phases share a persistent session.
@@ -169,21 +169,21 @@ AUTOPILOT_ORCHESTRATOR_CONFIG = {
             ],
             "max_retries": 2,
         },
-        # After git commit - always continue to forensics (forensics always runs)
-        {
-            "after_phase": "git_commit_push",
-            "evaluator": "heuristic",
-            "conditions": [
-                {"if": "score >= 0.0", "action": "continue", "reason": "Git commit complete, proceeding to forensics"},
-            ],
-            "max_retries": 0,
-        },
-        # Forensics always runs - no conditions needed, just continue
+        # Forensics runs before commit — worktree is still valid at this point
         {
             "after_phase": "forensics_analysis",
             "evaluator": "heuristic",
             "conditions": [
-                {"if": "score >= 0.0", "action": "continue", "reason": "Forensics complete"},
+                {"if": "score >= 0.0", "action": "continue", "reason": "Forensics complete, proceeding to commit"},
+            ],
+            "max_retries": 0,
+        },
+        # Git commit is the final phase — merges to main and removes the worktree
+        {
+            "after_phase": "git_commit_push",
+            "evaluator": "heuristic",
+            "conditions": [
+                {"if": "score >= 0.0", "action": "continue", "reason": "Git commit complete"},
             ],
             "max_retries": 0,
         },
