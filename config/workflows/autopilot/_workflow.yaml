@@ -1,6 +1,10 @@
 default_model: xiaomi/mimo-v2.5
 default_thinking_level: low
 
+# Execution order by phase id — may differ from natural id order.
+# forensics (10) runs before git_commit_push (9) so the worktree is still valid.
+execution_order: [1, 2, 3, 4, 5, 6, 7, 8, 10, 9]
+
 session_roles:
   product_requirements: product-requirements
   architecture_design: architect
@@ -214,3 +218,47 @@ launch_template:
       type: textarea
       required: false
       description: "Optional: Additional context about the larger project vision"
+  phase_1_task_prompt: |
+    Phase 1: Product Requirements Extraction
+
+    **Design Document:** ./.hephaestus/design.md (copied into your worktree)
+    **Project Path:** . (your current working directory — an isolated git worktree)
+
+    ---
+
+    ## Additional Context
+    {project_context}
+
+    ---
+
+    ## Your Task
+
+    You are extracting requirements from the design document.
+
+    ### STEP 0: Gather Project Context
+    Before reading the design document:
+    1. Check for existing requirements_analysis.md, architecture.md
+    2. Look in features/ directory for previously completed features
+    3. Read existing source code to understand the current system
+    4. Search memory for technology decisions and constraints
+
+    ### STEP 1: Read the Design Document
+    Read the file at: ./.hephaestus/design.md
+
+    ### STEP 2: Extract Requirements
+    - Functional requirements with acceptance criteria
+    - Non-functional requirements
+    - Integration points with existing system
+    - Technology constraints
+
+    ### STEP 3: Create Requirements Document
+    Write requirements_analysis.md in ./docs/ (create the directory if needed)
+
+    ### STEP 4: Save to Memory
+    Save key decisions and project context.
+
+    ### STEP 5: Create Phase 2 Task
+    Create a Phase 2 task with full requirements and context.
+
+    ### STEP 6: Mark Done
+    Mark your task as done.

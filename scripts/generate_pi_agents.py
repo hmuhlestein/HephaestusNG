@@ -2,8 +2,8 @@
 """
 Generate pi agent files from the autopilot YAML config.
 
-Reads config/phases/autopilot.yaml for phase metadata and uses descriptions
-from the YAML directly. Generates pi agent .md files in the agents/pi/ directory.
+Reads config/workflows/autopilot/_workflow.yaml and per-phase YAMLs,
+generates pi agent .md files in the agents/pi/ directory.
 """
 
 import importlib

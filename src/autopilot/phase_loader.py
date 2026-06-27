@@ -1,15 +1,45 @@
 """Load autopilot phase config from YAML and assemble Phase objects."""
+import logging
 from pathlib import Path
 
 import yaml
 
 from src.sdk.models import LaunchParameter, LaunchTemplate, Phase, WorkflowConfig
 
+logger = logging.getLogger(__name__)
+
 _WORKFLOWS_PATH = Path(__file__).parent.parent.parent / "config" / "workflows"
 
 
 def load_autopilot_config(workflow_name: str = "autopilot", config_dir: Path = None) -> dict:
     base = config_dir or _WORKFLOWS_PATH / workflow_name
+
+    # Validate YAML configs before loading
+    try:
+        from src.workflow_engine.config_validator import validate_single_workflow
+        errors = validate_single_workflow(base)
+        if errors:
+            err_msgs = []
+            for e in errors:
+                severity = e["severity"]
+                msg = f"[{severity.upper()}] {e['file']}: {e['message']}"
+                err_msgs.append(msg)
+                if severity == "error":
+                    logger.error(msg)
+                else:
+                    logger.warning(msg)
+            # Raise on errors (not warnings) to fail fast on broken configs
+            real_errors = [e for e in errors if e["severity"] == "error"]
+            if real_errors:
+                raise ValueError(
+                    f"Workflow '{workflow_name}' has {len(real_errors)} config error(s):\n"
+                    + "\n".join(err_msgs)
+                )
+    except ImportError:
+        logger.debug("config_validator not available, skipping validation")
+    except Exception as e:
+        logger.warning(f"Config validation failed for '{workflow_name}': {e}")
+
     # Load shared config
     cfg = yaml.safe_load((base / "_workflow.yaml").read_text())
     # Load per-phase files
@@ -63,7 +93,18 @@ def load_workflow_config(cfg: dict) -> WorkflowConfig:
     )
 
 
-def load_launch_template(cfg: dict, phase_1_task_prompt: str) -> LaunchTemplate:
+def load_launch_template(cfg: dict) -> LaunchTemplate:
     lt = cfg["launch_template"]
     params = [LaunchParameter(**p) for p in lt["parameters"]]
-    return LaunchTemplate(parameters=params, phase_1_task_prompt=phase_1_task_prompt)
+    prompt = lt.get("phase_1_task_prompt", "")
+    return LaunchTemplate(parameters=params, phase_1_task_prompt=prompt)
+
+
+def build_phase_list(cfg: dict) -> list:
+    """Return Phase objects in execution order from cfg."""
+    phases_by_id = {
+        pc["id"]: build_phase(pc, cfg.get("default_model", "xiaomi/mimo-v2.5"), cfg.get("default_thinking_level", "low"))
+        for pc in cfg["phases"]
+    }
+    order = cfg.get("execution_order") or sorted(phases_by_id)
+    return [phases_by_id[i] for i in order]

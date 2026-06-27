@@ -24,7 +24,7 @@ import hashlib
 import re
 
 from src.autopilot.phase_loader import (
-    build_phase,
+    build_phase_list,
     load_autopilot_config,
     load_launch_template,
     load_workflow_config,
@@ -32,17 +32,6 @@ from src.autopilot.phase_loader import (
 
 # Load config once at module level
 _cfg = load_autopilot_config()
-_default_model = _cfg.get("default_model", "xiaomi/mimo-v2.5")
-_default_thinking = _cfg.get("default_thinking_level", "low")
-
-# Index phase configs by id for easy lookup
-_phase_cfgs = {pc["id"]: pc for pc in _cfg["phases"]}
-
-# Build all Phase objects — additional_notes is now read from YAML phase_cfg
-_phases_by_id = {
-    pc["id"]: build_phase(pc, _default_model, _default_thinking)
-    for pc in _cfg["phases"]
-}
 
 # Session role mapping — loaded from YAML.
 # Phases with the same session_role reuse the same pi session, preserving
@@ -76,68 +65,10 @@ AUTOPILOT_ORCHESTRATOR_CONFIG = _cfg["orchestrator"]
 # Workflow config — assembled from YAML
 AUTOPILOT_WORKFLOW_CONFIG = load_workflow_config(_cfg)
 
-# Launch template — parameters from YAML, phase_1_task_prompt stays in Python (it's a prompt)
-_phase_1_task_prompt = """Phase 1: Product Requirements Extraction
+AUTOPILOT_LAUNCH_TEMPLATE = load_launch_template(_cfg)
 
-**Design Document:** ./.hephaestus/design.md (copied into your worktree)
-**Project Path:** . (your current working directory — an isolated git worktree)
-
----
-
-## Additional Context
-{project_context}
-
----
-
-## Your Task
-
-You are extracting requirements from the design document.
-
-### STEP 0: Gather Project Context
-Before reading the design document:
-1. Check for existing requirements_analysis.md, architecture.md
-2. Look in features/ directory for previously completed features
-3. Read existing source code to understand the current system
-4. Search memory for technology decisions and constraints
-
-### STEP 1: Read the Design Document
-Read the file at: ./.hephaestus/design.md
-
-### STEP 2: Extract Requirements
-- Functional requirements with acceptance criteria
-- Non-functional requirements
-- Integration points with existing system
-- Technology constraints
-
-### STEP 3: Create Requirements Document
-Write requirements_analysis.md in ./docs/ (create the directory if needed)
-
-### STEP 4: Save to Memory
-Save key decisions and project context.
-
-### STEP 5: Create Phase 2 Task
-Create a Phase 2 task with full requirements and context.
-
-### STEP 6: Mark Done
-Mark your task as done.
-"""
-
-AUTOPILOT_LAUNCH_TEMPLATE = load_launch_template(_cfg, _phase_1_task_prompt)
-
-# Preserve the forensics-before-git ordering:
-# forensics (id=10) runs before git commit (id=9) so the worktree is still valid.
-AUTOPILOT_PHASES = [
-    _phases_by_id[1],
-    _phases_by_id[2],
-    _phases_by_id[3],
-    _phases_by_id[4],
-    _phases_by_id[5],
-    _phases_by_id[6],
-    _phases_by_id[7],
-    _phases_by_id[8],
-    _phases_by_id[10],  # forensics runs before commit so worktree is still valid
-    _phases_by_id[9],   # commit/merge last — removes the worktree
-]
+# Execution order defined in _workflow.yaml (execution_order field).
+AUTOPILOT_PHASES = build_phase_list(_cfg)
 
 __all__ = [
     "AUTOPILOT_PHASES",
