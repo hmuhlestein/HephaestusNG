@@ -311,6 +311,43 @@ else
     ok "Embedding backend: $EMBED_BACKEND (no pre-download needed)"
 fi
 
+# ─── 4.7. Security tools ──────────────────────────────────────────
+# bandit — Python static security scanner, no Docker required.
+# ash (AWS automated-security-helper) — optional; requires Docker.
+
+header "Security tools"
+
+# bandit is in requirements.txt and installed via uv above; just verify
+if "$PYTHON" -m bandit --version >/dev/null 2>&1; then
+    ok "bandit $("$PYTHON" -m bandit --version 2>&1 | head -1)"
+else
+    log "Installing bandit..."
+    if [ "$PKG_MGR" = "uv" ]; then
+        uv pip install bandit --quiet --python "$PYTHON" 2>&1 | tail -2 \
+          && ok "bandit installed" \
+          || warn "bandit install failed — security phase will skip static scan"
+    else
+        "$VENV_DIR/bin/pip" install bandit --quiet 2>&1 | tail -2 \
+          && ok "bandit installed" \
+          || warn "bandit install failed — security phase will skip static scan"
+    fi
+fi
+
+# ash — clone from GitHub if Docker is available (it requires Docker at runtime)
+ASH_DIR="$PREFIX/ash"
+if command -v ash >/dev/null 2>&1 || [ -x "$ASH_DIR/ash" ]; then
+    ok "ash already available"
+elif command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+    log "Docker detected — cloning automated-security-helper..."
+    git clone --quiet --depth 1 \
+        https://github.com/awslabs/automated-security-helper.git "$ASH_DIR" 2>/dev/null \
+      && ln -sf "$ASH_DIR/ash" "$VENV_DIR/bin/ash" \
+      && ok "ash cloned → $ASH_DIR" \
+      || warn "ash clone failed — security phase will rely on bandit only"
+else
+    ok "ash skipped (Docker not running — bandit covers static analysis)"
+fi
+
 # ─── 5. heph CLI ──────────────────────────────────────────────────
 
 header "heph CLI"

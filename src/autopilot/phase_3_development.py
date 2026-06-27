@@ -52,6 +52,10 @@ Read:
 - Your task description for "Docs Path:" and "Project Path:" locations
 - AGENTS.md - Coding style, naming conventions, test commands, commit format
 - architecture.md (from Docs Path) - Component interfaces and contracts
+- pyproject.toml (if present) — check `requires-python` or `python_requires` before writing
+  type hints: `X | Y` union syntax requires Python ≥ 3.10; `list[str]` / `dict[k,v]`
+  builtins require ≥ 3.9. Use `Union[X, Y]` / `Optional[X]` / `List[str]` from `typing`
+  if the project targets an earlier version.
 
 Write implementation code (src/, tests/) to the "Project Path" location.
 
