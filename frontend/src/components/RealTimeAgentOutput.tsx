@@ -345,7 +345,7 @@ const RealTimeAgentOutput: React.FC<RealTimeAgentOutputProps> = ({
               onScroll={handleScroll}
               onMouseDown={handleMouseDown}
               onMouseUp={handleMouseUp}
-              className="absolute inset-0 p-6 overflow-auto font-mono text-xs bg-gray-900 text-green-400 whitespace-pre-wrap selection:bg-blue-500 selection:text-white"
+              className="absolute inset-0 p-6 overflow-auto font-mono text-xs bg-gray-900 text-green-400 whitespace-pre selection:bg-blue-500 selection:text-white"
               style={{
                 lineHeight: '1.4',
                 fontFamily: 'Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace'

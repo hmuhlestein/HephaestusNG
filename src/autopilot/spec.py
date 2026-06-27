@@ -84,9 +84,9 @@ def score_qa(result: Optional[Dict[str, Any]], spec: Dict[str, Any]) -> Tuple[fl
         return _DEV, {"gate": "qa", "reason": "no qa_result.json found", "result_missing": True}
 
     spec = spec or DEFAULT_SPEC
-    failed = int(result.get("failed_tests", 0) or 0)
-    passed = int(result.get("passed_tests", 0) or 0)
-    total = int(result.get("total_tests", passed + failed) or 0)
+    failed = int(result.get("failed_tests") or result.get("tests_failed") or 0)
+    passed = int(result.get("passed_tests") or result.get("tests_passed") or 0)
+    total = int(result.get("total_tests") or result.get("tests_run") or (passed + failed) or 0)
     critical = int(result.get("critical_issues", 0) or 0)
 
     pass_rate = result.get("pass_rate")

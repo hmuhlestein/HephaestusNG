@@ -49,33 +49,154 @@ else
 fi
 cd - >/dev/null
 
+# Remove stale seeded test from baseline (test_compute.py is from a prior design)
+rm -f "$PROJECT_PATH/tests/test_compute.py"
+
 # Write canonical design doc and seeded failing test (overwrite each run)
 mkdir -p "$PROJECT_PATH/docs/design-queue" "$PROJECT_PATH/tests"
 
 cat > "$PROJECT_PATH/docs/design-queue/add_calculator.md" << 'DESIGN'
 # Feature: add()
 
-Add an `add(a, b)` function that returns the sum of two numbers.
+Add an `add(a, b)` function that returns the sum of two numbers, with
+structured logging so every call is traceable.
 
 ## Requirements
 - Module named `calculator` with a single function `add(a, b)`
 - `add(a, b)` returns `a + b`
+- Every call to `add()` must be logged using Python's `logging` module at
+  INFO level: `"add called: a=<a>, b=<b>, result=<result>"`
+- Log output goes to both stdout and a file `calculator.log` in the working
+  directory using a FileHandler + StreamHandler on the `calculator` logger
+- Logger name is `"calculator"` (not root logger)
+- A runnable entry-point script `run_calculator.py` in the project root that:
+  - Calls `add(2, 3)` and prints the result
+  - Can be run with `python run_calculator.py`
+  - Exits 0 on success
+
+## File Layout
+```
+calculator.py        # the module
+run_calculator.py    # entry-point script
+tests/
+  test_calculator.py # test suite (provided below — do not modify)
+calculator.log       # written at runtime by the logger
+```
 
 ## Test
 ```python
+# tests/test_calculator.py — use exactly this file, do not add other test files
+import logging
 from calculator import add
 
 def test_add():
     assert add(2, 3) == 5
+
+def test_add_negative():
+    assert add(-1, 1) == 0
+
+def test_add_logging(caplog):
+    with caplog.at_level(logging.INFO, logger="calculator"):
+        result = add(10, 20)
+    assert result == 30
+    assert "add called" in caplog.text
 ```
+
+## Acceptance Criteria
+- `python run_calculator.py` exits 0, prints a log line to stdout, and writes
+  to `calculator.log`
+- `python -m pytest -p no:libtmux -v` runs and all 3 tests pass
+- `calculator.log` contains at least one line matching
+  `add called: a=<n>, b=<n>, result=<n>`
 DESIGN
 
 cat > "$PROJECT_PATH/tests/test_calculator.py" << 'PYTEST'
+import logging
 from calculator import add
 
 def test_add():
     assert add(2, 3) == 5
+
+def test_add_negative():
+    assert add(-1, 1) == 0
+
+def test_add_logging(caplog):
+    with caplog.at_level(logging.INFO, logger="calculator"):
+        result = add(10, 20)
+    assert result == 30
+    assert "add called" in caplog.text
 PYTEST
+
+cat > "$PROJECT_PATH/TESTING.md" << 'TESTING'
+# Testing Guide: Calculator
+
+## How to Run the Application
+
+```bash
+# Run the entry-point script (must exist at project root)
+python run_calculator.py
+# Expected: log line printed to stdout AND exit code 0
+
+# View the log file written by the module
+cat calculator.log
+```
+
+## How to Run Tests
+
+```bash
+# ALWAYS use -p no:libtmux (dev-environment plugin conflict — not a code bug)
+python -m pytest -p no:libtmux -v 2>&1 | tee docs/test_results.txt
+
+# With visible log output
+python -m pytest -p no:libtmux -v --log-cli-level=INFO 2>&1 | tee docs/test_results_verbose.txt
+```
+
+## Log Locations
+
+| Log | Path | Contents |
+|-----|------|----------|
+| Calculator runtime log | `./calculator.log` | INFO lines for every add() call |
+| Test run output | `./docs/test_results.txt` | Full pytest output |
+
+## Known Issues / Workarounds
+
+- **libtmux pytest plugin**: always pass `-p no:libtmux` to pytest.
+- **git index.lock**: run `rm -f .git/index.lock` then retry git commands.
+
+## Smoke Test (Quick Validation)
+
+```bash
+# 1. Run the entry-point
+python run_calculator.py
+echo "Exit code: $?"
+
+# 2. Verify calculator.log was written
+python -c "
+import os, sys
+assert os.path.exists('calculator.log'), 'FAIL: calculator.log not written'
+lines = open('calculator.log').readlines()
+assert any('add called' in l for l in lines), 'FAIL: no log line found'
+print('calculator.log OK')
+"
+
+# 3. Run the tests
+python -m pytest -p no:libtmux -v
+```
+
+## Test Coverage Requirements
+
+- `test_add`: basic sum — must pass
+- `test_add_negative`: negative numbers — must pass
+- `test_add_logging`: verifies structured log output — must pass
+
+## Acceptance Criteria
+
+All of the following must be true before QA can pass:
+1. `python run_calculator.py` exits 0 and prints a log line to stdout
+2. `calculator.log` exists and contains at least one line matching
+   `add called: a=<n>, b=<n>, result=<n>`
+3. `python -m pytest -p no:libtmux -v` exits 0 (all 3 tests green)
+TESTING
 
 # ─── Reset DB + state ─────────────────────────────────────────────────
 log "Clearing state..."
@@ -119,7 +240,7 @@ curl -s -X POST "http://127.0.0.1:8300/api/autopilot/start?project_path=$PROJECT
     | python3 -m json.tool 2>/dev/null || { err "Failed to start pipeline"; exit 1; }
 
 # ─── Poll loop ────────────────────────────────────────────────────────
-POLL=30; MAX=$((60 * 30 / POLL))  # 30-minute cap
+POLL=30; MAX=$((60 * 120 / POLL))  # 2-hour cap
 
 q() { sqlite3 "$DB" "$1" 2>/dev/null; }
 

@@ -897,6 +897,70 @@ def pick_next_design(queue_dir: Path, processed_hashes: Set[str], logger: Orches
     return next_design
 
 
+def _assess_run_health(
+    project_path: Path,
+    _exec_id: str,
+    orchestrator_log_path: Path,
+    logger: "OrchestratorLogger",
+) -> dict:
+    """Assess run health by checking orchestrator log and tmux logs for problems."""
+    health: dict = {
+        "clean": True,
+        "goto_count": 0,
+        "error_count": 0,
+        "goto_events": [],
+        "tmux_errors": [],
+        "warnings": [],
+    }
+
+    # Count GOTOs from orchestrator log — informational only, not an error signal
+    if orchestrator_log_path and orchestrator_log_path.exists():
+        try:
+            lines = orchestrator_log_path.read_text(errors="replace").splitlines()
+            goto_lines = [l for l in lines if "[GOTO]" in l]
+            decision_lines = [l for l in lines if "DECISION POINT" in l]
+            health["goto_count"] = len(goto_lines)
+            health["goto_events"] = goto_lines[-10:]
+            health["decision_points"] = [l.strip() for l in decision_lines]
+            # GOTOs are normal iteration — do NOT set clean=False for them
+        except Exception as e:
+            health["warnings"].append(f"Could not read orchestrator log: {e}")
+
+    # Grep tmux logs for error patterns
+    error_patterns = ["ERROR", "Traceback", "FAILED", "ModuleNotFoundError",
+                      "ImportError", "AssertionError", "pytest.*FAILED", "exit code 1"]
+    tmux_dir = project_path / ".hephaestus" / "tmux"
+    total_errors = 0
+    if tmux_dir.is_dir():
+        for log_file in sorted(tmux_dir.glob("*.log")):
+            try:
+                text = log_file.read_text(errors="replace")
+                hits = [l.strip() for l in text.splitlines()
+                        if any(p in l for p in error_patterns)]
+                if hits:
+                    total_errors += len(hits)
+                    health["tmux_errors"].append({
+                        "file": log_file.name,
+                        "count": len(hits),
+                        "samples": hits[:3],
+                    })
+            except Exception:
+                pass
+    health["error_count"] = total_errors
+    if total_errors > 0:
+        health["clean"] = False
+
+    if health["clean"]:
+        logger.info("Run health: CLEAN (no GOTOs, no tmux errors)")
+    else:
+        logger.info(
+            f"Run health: PROBLEMS DETECTED — "
+            f"gotos={health['goto_count']} tmux_errors={health['error_count']}"
+        )
+
+    return health
+
+
 def create_feature_folder(project_path: Path, design_name: str, logger: OrchestratorLogger) -> Path:
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     safe_name = design_name.lower().replace(" ", "_")[:40]
@@ -1301,6 +1365,41 @@ def run_single_workflow(sdk, workflow_id: str, project_path: str, description: s
     stuck_count = 0
     credit_stuck_count = 0
     start_time = time.time()
+    _last_phase_states: dict = {}  # phase_name -> status, for transition detection
+    _last_agent_states: dict = {}  # agent_id -> (status, phase_label), for spawn/terminate detection
+
+    def _log_phase_transitions(exec_id: str) -> None:
+        """Log any phase status changes since last poll, including GOTOs."""
+        nonlocal _last_phase_states
+        try:
+            from src.core.database import PhaseExecution, Phase, DatabaseManager as _DbM
+            _db = _DbM()
+            _s = _db.get_session()
+            try:
+                rows = (
+                    _s.query(Phase.name, PhaseExecution.status)
+                    .join(PhaseExecution, PhaseExecution.phase_id == Phase.id)
+                    .filter(PhaseExecution.workflow_execution_id == exec_id)
+                    .order_by(Phase.order)
+                    .all()
+                )
+                current = {name: status for name, status in rows}
+                for name, status in current.items():
+                    prev = _last_phase_states.get(name)
+                    if prev is None:
+                        continue  # first observation, no transition yet
+                    if status == prev:
+                        continue
+                    # Detect GOTO: a previously completed phase rewound to in_progress
+                    if prev == "completed" and status == "in_progress":
+                        logger.info(f"  [GOTO] {name}: completed → in_progress (rewound by earlier phase)")
+                    else:
+                        logger.info(f"  [TRANSITION] {name}: {prev} → {status}")
+                _last_phase_states = current
+            finally:
+                _s.close()
+        except Exception as _e:
+            logger.warning(f"Phase transition check failed: {_e}")
 
     try:
         while True:
@@ -1334,6 +1433,23 @@ def run_single_workflow(sdk, workflow_id: str, project_path: str, description: s
             needs_work = get_tasks(status="needs_work", workflow_id=exec_id)
             blocked = get_tasks(status="blocked", workflow_id=exec_id)
             non_terminal = assigned + queued + under_review + validation + needs_work + blocked
+
+            _log_phase_transitions(exec_id)
+
+            # Log agent spawns and terminations
+            current_agent_states = {
+                a["id"]: (a.get("status", ""), a.get("agent_type", ""))
+                for a in agents
+            }
+            for aid, (status, atype) in current_agent_states.items():
+                prev_status, _ = _last_agent_states.get(aid, (None, None))
+                if prev_status is None and status in ACTIVE_AGENT_STATUSES:
+                    logger.info(f"  [AGENT SPAWN] {aid[:8]} ({atype}) status={status}")
+                elif prev_status in ACTIVE_AGENT_STATUSES and status == "terminated":
+                    logger.info(f"  [AGENT DONE]  {aid[:8]} ({atype}) terminated")
+                elif prev_status is not None and prev_status != status:
+                    logger.info(f"  [AGENT]       {aid[:8]} ({atype}): {prev_status} → {status}")
+            _last_agent_states = current_agent_states
 
             logger.info(
                 f"[{workflow_id}] [{elapsed}s] Agents: {len(active_agents)} active | "
@@ -1610,7 +1726,10 @@ def run_single_design(
             f"Your working directory is an isolated git worktree (the project root).\n"
             f"Design Document: ./.hephaestus/design.md (copied into your worktree)\n"
             f"Project Path: . (your working directory)\n"
+            f"Project Root (absolute): {project_path}\n"
             f"Docs Path: ./docs/ (generated requirements, architecture, reports)\n"
+            f"Feature Folder: {feature_folder}\n"
+            f"Docs Path (absolute): {docs_dir}\n"
             f"Implementation code (src/, tests/) goes in your working directory.\n"
             f"Inputs (design, context, qa_spec) are in ./.hephaestus/.\n"
             f"Read the design doc carefully, extract requirements, "
@@ -1707,6 +1826,13 @@ def run_single_design(
 
     # Organize: copy stray docs from project root into feature docs (don't move - iteration loop needs them)
     _sweep_stray_files(project_path, feature_folder, docs_dir, logger)
+
+    # Assess run health and write run_health.json for forensics agent
+    _orch_log = getattr(logger, 'log_file', None)
+    run_health = _assess_run_health(project_path, "", _orch_log, logger)
+    run_health_path = docs_dir / "run_health.json"
+    run_health_path.write_text(json.dumps(run_health, indent=2, default=str))
+    logger.info(f"Run health written: {run_health_path}")
 
     # Collect summaries from the correct locations (docs in features, code in builds)
     summaries = collect_report_summaries(docs_dir)
