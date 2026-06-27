@@ -312,40 +312,34 @@ else
 fi
 
 # ─── 4.7. Security tools ──────────────────────────────────────────
-# bandit — Python static security scanner, no Docker required.
-# ash (AWS automated-security-helper) — optional; requires Docker.
+# ash (AWS automated-security-helper) via uvx — local mode, no Docker required.
+# https://github.com/awslabs/automated-security-helper
 
 header "Security tools"
 
-# bandit is in requirements.txt and installed via uv above; just verify
-if "$PYTHON" -m bandit --version >/dev/null 2>&1; then
-    ok "bandit $("$PYTHON" -m bandit --version 2>&1 | head -1)"
+ASH_WRAPPER="$VENV_DIR/bin/ash"
+if [ -x "$ASH_WRAPPER" ]; then
+    ok "ash wrapper already installed"
 else
-    log "Installing bandit..."
-    if [ "$PKG_MGR" = "uv" ]; then
-        uv pip install bandit --quiet --python "$PYTHON" 2>&1 | tail -2 \
-          && ok "bandit installed" \
-          || warn "bandit install failed — security phase will skip static scan"
-    else
-        "$VENV_DIR/bin/pip" install bandit --quiet 2>&1 | tail -2 \
-          && ok "bandit installed" \
-          || warn "bandit install failed — security phase will skip static scan"
+    _install_ash=true
+    if [ -t 0 ]; then
+        printf "${BLUE}[heph]${NC} Install AWS automated-security-helper (ash) for the security review phase? [Y/n] "
+        read -r _ash_reply </dev/tty
+        case "${_ash_reply:-Y}" in
+            [Nn]*) _install_ash=false ;;
+        esac
     fi
-fi
 
-# ash — clone from GitHub if Docker is available (it requires Docker at runtime)
-ASH_DIR="$PREFIX/ash"
-if command -v ash >/dev/null 2>&1 || [ -x "$ASH_DIR/ash" ]; then
-    ok "ash already available"
-elif command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
-    log "Docker detected — cloning automated-security-helper..."
-    git clone --quiet --depth 1 \
-        https://github.com/awslabs/automated-security-helper.git "$ASH_DIR" 2>/dev/null \
-      && ln -sf "$ASH_DIR/ash" "$VENV_DIR/bin/ash" \
-      && ok "ash cloned → $ASH_DIR" \
-      || warn "ash clone failed — security phase will rely on bandit only"
-else
-    ok "ash skipped (Docker not running — bandit covers static analysis)"
+    if $_install_ash; then
+        log "Installing ash wrapper (uvx local mode)..."
+        printf '#!/bin/sh\nexec uvx "git+https://github.com/awslabs/automated-security-helper.git@v3.5.4" "$@"\n' \
+            > "$ASH_WRAPPER" \
+          && chmod +x "$ASH_WRAPPER" \
+          && ok "ash wrapper installed → $ASH_WRAPPER" \
+          || warn "ash wrapper install failed — security phase will skip automated scan"
+    else
+        ok "ash skipped — security phase will note it as unavailable"
+    fi
 fi
 
 # ─── 5. heph CLI ──────────────────────────────────────────────────
