@@ -292,7 +292,7 @@ const Memories: React.FC = () => {
           <h1 className="text-3xl font-bold text-gray-800">Memories</h1>
           <p className="text-gray-600 mt-1">
             {selectedExecution ? (
-              <>Memories for: {selectedExecution.description || selectedExecution.definition_name}</>
+              <>Memories for: {selectedExecution.definition_name || selectedExecution.description?.split('\n')[0]}</>
             ) : (
               'Shared knowledge base from all agents'
             )}

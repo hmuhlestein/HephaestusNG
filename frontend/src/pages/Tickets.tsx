@@ -96,7 +96,7 @@ const Tickets: React.FC = () => {
               className="flex items-center px-4 py-2 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors shadow-sm min-w-[200px]"
             >
               <span className="flex-1 text-left text-sm text-gray-700 truncate">
-                {selectedWorkflow?.description || selectedWorkflow?.definition_name || 'Select Workflow'}
+                {selectedWorkflow?.definition_name || selectedWorkflow?.description?.split('\n')[0] || 'Select Workflow'}
               </span>
               <ChevronDown className={`w-4 h-4 ml-2 text-gray-500 transition-transform ${showWorkflowDropdown ? 'rotate-180' : ''}`} />
             </button>
@@ -118,7 +118,7 @@ const Tickets: React.FC = () => {
                       }`}
                     >
                       <div className="text-sm font-medium text-gray-800 truncate">
-                        {execution.description || execution.definition_name || 'Unnamed Workflow'}
+                        {execution.definition_name || execution.description?.split('\n')[0] || 'Unnamed Workflow'}
                       </div>
                       <div className="text-xs text-gray-500 flex items-center gap-2 mt-1">
                         <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${

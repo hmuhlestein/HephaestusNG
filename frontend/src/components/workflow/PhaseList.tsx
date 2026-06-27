@@ -6,12 +6,14 @@ interface PhaseListProps {
   phases: any[];
   expandedPhaseId: string | null;
   onTogglePhase: (phaseId: string) => void;
+  onViewAgent?: (agentId: string) => void;
 }
 
 export default function PhaseList({
   phases,
   expandedPhaseId,
   onTogglePhase,
+  onViewAgent,
 }: PhaseListProps) {
   if (!phases || phases.length === 0) {
     return (
@@ -33,7 +35,7 @@ export default function PhaseList({
           />
           {expandedPhaseId === phase.id && (
             <div className="mt-2 ml-4">
-              <PhaseDetailPanel phaseId={phase.id} />
+              <PhaseDetailPanel phaseId={phase.id} onViewAgent={onViewAgent} />
             </div>
           )}
         </div>

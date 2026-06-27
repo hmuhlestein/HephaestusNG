@@ -33,6 +33,7 @@ interface WorkflowCardProps {
   expandedPhaseId: string | null;
   onTogglePhase: (phaseId: string) => void;
   isSelected: boolean;
+  onViewAgent?: (agentId: string) => void;
 }
 
 export default function WorkflowCard({
@@ -42,6 +43,7 @@ export default function WorkflowCard({
   expandedPhaseId,
   onTogglePhase,
   isSelected,
+  onViewAgent,
 }: WorkflowCardProps) {
   const navigate = useNavigate();
   const { selectExecution } = useWorkflow();
@@ -166,7 +168,7 @@ export default function WorkflowCard({
 
         {/* Title */}
         <h3 className="text-lg font-semibold text-gray-800 mb-2 truncate">
-          {execution.description || execution.definition_name}
+          {execution.description?.split('\n')[0] || execution.definition_name}
         </h3>
 
         {/* Stats */}
@@ -194,6 +196,7 @@ export default function WorkflowCard({
             phases={phases}
             expandedPhaseId={expandedPhaseId}
             onTogglePhase={onTogglePhase}
+            onViewAgent={onViewAgent}
           />
 
           {/* Go to Overview */}
