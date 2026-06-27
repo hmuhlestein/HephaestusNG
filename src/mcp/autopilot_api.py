@@ -15,7 +15,7 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import HTMLResponse, FileResponse
 from pydantic import BaseModel
 
-from src.core.constants import AUTOPILOT_STATE_DIR
+from src.core.constants import AUTOPILOT_STATE_DIR, CONTEXT_DIR_NAME, DESIGN_SUBDIR
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +79,7 @@ def _get_effective_queue_dir() -> str:
         if not proj or not proj.base_dir:
             raise RuntimeError("No active project configured. Set DESIGN_QUEUE_DIR or activate a project.")
         
-        queue_dir = Path(proj.base_dir) / "docs" / "design"
+        queue_dir = Path(proj.base_dir) / DESIGN_SUBDIR
         if not queue_dir.exists():
             raise FileNotFoundError(f"Design queue directory does not exist: {queue_dir}. Create it and add design documents.")
         
@@ -118,7 +118,7 @@ def _get_effective_features_dir() -> str:
         if not proj or not proj.base_dir:
             raise RuntimeError("No active project configured. Set FEATURES_DIR or activate a project.")
         
-        features_dir = Path(proj.base_dir) / ".hephaestus" / "features"
+        features_dir = Path(proj.base_dir) / CONTEXT_DIR_NAME / "features"
         if not features_dir.exists():
             raise FileNotFoundError(f"Features directory does not exist: {features_dir}. Run the autopilot pipeline first.")
         
@@ -571,7 +571,7 @@ async def rerun_design(request: dict):
         raise HTTPException(400, f"Project path does not exist: {project_path}")
 
     # Validate design exists in queue
-    queue_dir = project / "docs" / "design"
+    queue_dir = project / DESIGN_SUBDIR
     design_path = queue_dir / filename
     if not design_path.exists():
         raise HTTPException(404, f"Design not found in queue: {filename}")
@@ -800,7 +800,7 @@ Tasks:
 {chr(10).join(task_summary) if task_summary else 'No tasks found'}
 
 YOUR JOB:
-1. Read the design doc at {project / 'docs' / 'design' / filename} (READ ONLY - do not modify)
+1. Read the design doc at {project / DESIGN_SUBDIR / filename} (READ ONLY - do not modify)
 2. Check what has been completed so far in the feature folder
 3. Identify what's blocking progress
 4. You have FULL AUTHORITY to:
@@ -906,7 +906,7 @@ def _run_repair(repair_id: str, filename: str, project: Path, logger):
                 phases_folder_path=str(project),
                 status="active",
                 launch_params=json.dumps({
-                    "design_document": str(project / 'docs' / 'design' / filename),
+                    "design_document": str(project / DESIGN_SUBDIR / filename),
                     "project_path": str(project),
                     "repair_mode": True
                 })
@@ -964,7 +964,7 @@ def _run_repair(repair_id: str, filename: str, project: Path, logger):
             }
         }
 
-        result_file = Path.home() / ".hephaestus" / "autopilot" / f"repair_{repair_id}.json"
+        result_file = Path(AUTOPILOT_STATE_DIR) / f"repair_{repair_id}.json"
         result_file.write_text(json.dumps(result, indent=2))
         logger.info(f"[REPAIR] Repair {repair_id} complete. Actions: {len(actions_taken)}, Findings: {len(findings)}")
 
@@ -978,7 +978,7 @@ def _run_repair(repair_id: str, filename: str, project: Path, logger):
             "actions_taken": actions_taken,
             "summary": {"error": str(e)}
         }
-        result_file = Path.home() / ".hephaestus" / "autopilot" / f"repair_{repair_id}.json"
+        result_file = Path(AUTOPILOT_STATE_DIR) / f"repair_{repair_id}.json"
         result_file.write_text(json.dumps(result, indent=2))
 
 
@@ -986,7 +986,7 @@ def _run_repair(repair_id: str, filename: str, project: Path, logger):
 async def get_repair_status(repair_id: str):
     """Get repair status and results."""
     logger.info(f"[REPAIR] Status check for {repair_id}")
-    result_file = Path.home() / ".hephaestus" / "autopilot" / f"repair_{repair_id}.json"
+    result_file = Path(AUTOPILOT_STATE_DIR) / f"repair_{repair_id}.json"
     if not result_file.exists():
         logger.info(f"[REPAIR] {repair_id} still running (no result file yet)")
         return {"repair_id": repair_id, "status": "running", "message": "Repair still in progress..."}
@@ -1069,7 +1069,6 @@ import uuid
 import hashlib
 import asyncio as _asyncio
 
-DESIGN_SUBDIR = "docs/design"
 _ORDINAL_RE = re.compile(r"^(\d+)[-_]")
 
 
@@ -1736,7 +1735,7 @@ async def get_project_design_status(project_id: str, filename: str):
         feature_folder = None
         for wf in matching_workflows:
             if wf.working_directory:
-                features_dir = Path(wf.working_directory) / ".hephaestus" / "features"
+                features_dir = Path(wf.working_directory) / CONTEXT_DIR_NAME / "features"
                 if features_dir.exists():
                     for d in sorted(features_dir.iterdir(), reverse=True):
                         if d.is_dir() and filename.replace(".md", "").lower() in d.name.lower():

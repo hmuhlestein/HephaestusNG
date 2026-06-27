@@ -12,6 +12,7 @@ from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
+from src.core.constants import HEPHAESTUS_LOGS_DIR
 from src.sdk.models import (
     Phase, TaskStatus, WorkflowConfig, WorkflowDefinition, WorkflowExecution
 )
@@ -267,7 +268,7 @@ class HephaestusSDK:
             # Default: ~/.hephaestus/logs/session-{timestamp}/
             home = Path.home()
             timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-            log_path = home / ".hephaestus" / "logs" / f"session-{timestamp}"
+            log_path = Path(HEPHAESTUS_LOGS_DIR) / f"session-{timestamp}"
 
         log_path.mkdir(parents=True, exist_ok=True)
         return log_path

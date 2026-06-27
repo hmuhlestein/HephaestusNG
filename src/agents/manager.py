@@ -13,6 +13,7 @@ from src.core.database import DatabaseManager, Agent, Task, AgentLog, BoardConfi
 from src.interfaces import get_cli_agent, LLMProviderInterface
 from src.core.simple_config import get_config
 from src.core.worktree_manager import WorktreeManager
+from src.core.constants import AUTOPILOT_STATE_DIR, CONTEXT_DIR_NAME, DESIGN_SUBDIR
 
 logger = logging.getLogger(__name__)
 
@@ -273,12 +274,12 @@ class AgentManager:
                             if working_directory:
                                 wd = _P(working_directory)
                                 cands = []
-                                dq = wd / "docs" / "design"
+                                dq = wd / DESIGN_SUBDIR
                                 if dq.is_dir():
                                     cands += sorted(dq.glob("*.md"))
                                 cands += [
-                                    wd / ".hephaestus" / "design.md",
-                                    wd / ".hephaestus" / "design_document.md",
+                                    wd / CONTEXT_DIR_NAME / "design.md",
+                                    wd / CONTEXT_DIR_NAME / "design_document.md",
                                     wd / "docs" / "requirements_analysis.md",
                                 ]
                                 for _p in cands:
@@ -580,7 +581,7 @@ class AgentManager:
 
             # Spec gate (hybrid completion gate, §9.1). Per-project file lives in the
             # global state dir; copied in so QA/validation agents can read it.
-            spec_path = Path.home() / ".hephaestus" / "autopilot" / "qa_spec.json"
+            spec_path = Path(AUTOPILOT_STATE_DIR) / "qa_spec.json"
             if spec_path.exists():
                 try:
                     context["qa_spec.json"] = spec_path.read_text()
@@ -1125,7 +1126,7 @@ REMEMBER:
                                         ).first()
                                         if _phase and _wf and _wf.working_directory:
                                             tmux_dir = (
-                                                _P(_wf.working_directory) / ".hephaestus" / "tmux"
+                                                _P(_wf.working_directory) / CONTEXT_DIR_NAME / "tmux"
                                             )
                                             tmux_dir.mkdir(parents=True, exist_ok=True)
                                             log_file = (
@@ -1592,7 +1593,7 @@ REMEMBER:
             log_dir = _P(agent.system_prompt[len("LOG_DIR:"):].strip())
         if log_dir is None or not log_dir.exists():
             # Fall back: latest run-* directory under ~/.hephaestus/autopilot/
-            base = _P.home() / ".hephaestus" / "autopilot"
+            base = _P(AUTOPILOT_STATE_DIR)
             candidates = sorted(base.glob("run-*"), reverse=True)
             log_dir = candidates[0] if candidates else None
         if log_dir is None:

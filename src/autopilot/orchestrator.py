@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 HEPHAESTUS_DIR = Path(__file__).parent.parent.parent
 API_BASE = os.environ.get("HEPHAESTUS_API_BASE", "http://127.0.0.1:8300")
 
-from src.core.constants import AUTOPILOT_STATE_DIR
+from src.core.constants import AUTOPILOT_STATE_DIR, CONTEXT_DIR_NAME, WORKTREES_SUBDIR, DESIGN_SUBDIR
 from src.core.simple_config import get_config
 
 POLL_INTERVAL = 15
@@ -869,7 +869,7 @@ def pick_next_design(queue_dir: Path, processed_hashes: Set[str], logger: Orches
                     db.commit()
 
                     # Construct DesignEntry from DB record
-                    design_path = Path(project.base_dir) / "docs" / "design" / design.filename
+                    design_path = Path(project.base_dir) / DESIGN_SUBDIR / design.filename
                     if design_path.exists():
                         entry = DesignEntry(
                             path=design_path,
@@ -929,7 +929,7 @@ def _assess_run_health(
     # Grep tmux logs for error patterns
     error_patterns = ["ERROR", "Traceback", "FAILED", "ModuleNotFoundError",
                       "ImportError", "AssertionError", "pytest.*FAILED", "exit code 1"]
-    tmux_dir = project_path / ".hephaestus" / "tmux"
+    tmux_dir = project_path / CONTEXT_DIR_NAME / "tmux"
     total_errors = 0
     if tmux_dir.is_dir():
         for log_file in sorted(tmux_dir.glob("*.log")):
@@ -965,7 +965,7 @@ def create_feature_folder(project_path: Path, design_name: str, logger: Orchestr
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     safe_name = design_name.lower().replace(" ", "_")[:40]
     # Features go in .hephaestus/features/ to keep project root clean
-    feature_folder = project_path / ".hephaestus" / "features" / f"{timestamp}_{safe_name}"
+    feature_folder = project_path / CONTEXT_DIR_NAME / "features" / f"{timestamp}_{safe_name}"
     feature_folder.mkdir(parents=True, exist_ok=True)
     (feature_folder / "docs").mkdir(exist_ok=True)
 
@@ -979,7 +979,7 @@ def create_feature_folder(project_path: Path, design_name: str, logger: Orchestr
 def copy_design_document(design_entry: DesignEntry, feature_folder: Path) -> Path:
     # Store in .hephaestus/ context, not docs/, so the design doc doesn't
     # appear as a pipeline artifact in the UI's docs listing.
-    dest = feature_folder / ".hephaestus" / design_entry.path.name
+    dest = feature_folder / CONTEXT_DIR_NAME / design_entry.path.name
     dest.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(design_entry.path, dest)
     return dest
@@ -1341,7 +1341,7 @@ def run_single_workflow(sdk, workflow_id: str, project_path: str, description: s
         design_branch_name = feature_branch
         logger.info(f"Created shared worktree: {design_worktree_path} (branch: {feature_branch})")
         # Copy design doc into worktree as .hephaestus/design.md so all phases can read it
-        wt_heph = wt_path / ".hephaestus"
+        wt_heph = wt_path / CONTEXT_DIR_NAME
         wt_heph.mkdir(parents=True, exist_ok=True)
         if "design_document" in (launch_params or {}):
             _dd = Path(launch_params["design_document"])
@@ -1954,7 +1954,7 @@ def _should_stop() -> bool:
 
 
 def run_continuous_pipeline(args) -> None:
-    log_dir = Path.home() / ".hephaestus" / "autopilot" / datetime.now().strftime("run-%Y%m%d-%H%M%S")
+    log_dir = Path(AUTOPILOT_STATE_DIR) / datetime.now().strftime("run-%Y%m%d-%H%M%S")
     logger = OrchestratorLogger(log_dir)
 
     # Load persistent state from previous runs
@@ -2342,7 +2342,7 @@ def main():
 
     # Default design queue to <project-path>/docs/design
     if not args.design_queue:
-        args.design_queue = str(Path(args.project_path) / "docs" / "design")
+        args.design_queue = str(Path(args.project_path) / DESIGN_SUBDIR)
 
     if args.drop_db:
         db = HEPHAESTUS_DIR / "hephaestus.db"

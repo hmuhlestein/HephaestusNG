@@ -6,7 +6,9 @@ import httpx
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 
-PID_DIR = Path.home() / ".hephaestus" / "pids"
+from src.core.constants import HEPHAESTUS_PIDS_DIR
+
+PID_DIR = Path(HEPHAESTUS_PIDS_DIR)
 
 
 def api_get(args, endpoint: str, timeout: int = 5) -> Optional[Dict]:

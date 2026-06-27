@@ -36,16 +36,14 @@ from src.core.database import (
     MergeConflictResolution,
 )
 from src.core.simple_config import get_config
+from src.core.constants import CONTEXT_DIR_NAME, WORKTREES_SUBDIR
 
 logger = logging.getLogger(__name__)
 
 # Directories that must never be tracked or merged into main. Written to
 # .git/info/exclude (shared across all linked worktrees) so the user's tracked
 # .gitignore is left untouched.
-EXCLUDE_ENTRIES = (".worktrees/", ".hephaestus/")
-
-# Per-worktree inbound context directory (inside each worktree, git-excluded).
-CONTEXT_DIR_NAME = ".hephaestus"
+EXCLUDE_ENTRIES = (f"{WORKTREES_SUBDIR}/", f"{CONTEXT_DIR_NAME}/")
 
 
 class MergeStatus(Enum):
@@ -137,7 +135,7 @@ class WorktreeManager:
         override = getattr(self.config, "worktree_base_path", None)
         if override:
             return Path(override)
-        return Path(self.config.main_repo_path) / ".worktrees"
+        return Path(self.config.main_repo_path) / WORKTREES_SUBDIR
 
     def _worktree_path_for(self, agent_id: str) -> Path:
         return self.worktree_base / f"wt_{agent_id}"
