@@ -22,16 +22,19 @@ them through the full pipeline until complete.
 
 import hashlib
 import re
+from pathlib import Path
 
-from src.autopilot.phase_loader import (
+from src.workflow_engine.yaml_loader import (
     build_phase_list,
-    load_autopilot_config,
     load_launch_template,
     load_workflow_config,
+    load_workflow_from_dir,
 )
 
+_WORKFLOW_DIR = Path(__file__).parent.parent.parent / "config" / "workflows" / "autopilot"
+
 # Load config once at module level
-_cfg = load_autopilot_config()
+_cfg = load_workflow_from_dir(_WORKFLOW_DIR)
 
 # Session role mapping — loaded from YAML.
 # Phases with the same session_role reuse the same pi session, preserving
