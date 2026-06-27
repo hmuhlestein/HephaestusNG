@@ -199,8 +199,8 @@ class TicketService:
                 logger.error(f"[TICKET_SERVICE] ❌ Workflow not found: {workflow_id}")
                 logger.error("[TICKET_SERVICE] ========== FAILED ==========")
                 raise ValueError(f"Workflow not found: {workflow_id}")
-            if workflow.status not in ["active", "paused"]:
-                raise ValueError(f"Workflow is not active: {workflow.status}")
+            if workflow.status not in ["active", "paused", "completed"]:
+                raise ValueError(f"Workflow is not in a state that allows ticket creation: {workflow.status}")
 
             # Validate board_config exists for workflow
             board_config = db.query(BoardConfig).filter_by(workflow_id=workflow_id).first()

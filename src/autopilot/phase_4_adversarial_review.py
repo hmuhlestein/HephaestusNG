@@ -129,6 +129,12 @@ If you find a potential issue, try to reproduce it:
 - Run the code to confirm the bug
 - Document the exact steps to reproduce
 
+**Before classifying any documentation discrepancy as BLOCKER/FIX:** re-read the
+exact file and line you are about to cite. Documentation issues are the most
+common source of false positives — a value you read in one file may already be
+correct; always confirm by opening the file again immediately before writing the
+finding.
+
 ═══════════════════════════════════════════════════════════════════════
 STEP 4: CREATE REVIEW REPORT
 ═══════════════════════════════════════════════════════════════════════

@@ -162,6 +162,11 @@ Compare requirements_analysis.md against the implementation:
 - Do non-functional requirements match the implementation?
 - Are integration points accurately described?
 
+**Staleness check:** scan for forward-looking language that is now out of date —
+phrases like "no source code exists", "to be created", "not yet implemented",
+"will be added", or "planned". For each hit, verify against the current filesystem
+and update the text to reflect what actually exists.
+
 Fix any discrepancies directly in the document.
 
 ═══════════════════════════════════════════════════════════════════════

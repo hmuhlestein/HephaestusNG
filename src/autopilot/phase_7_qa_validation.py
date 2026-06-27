@@ -131,7 +131,8 @@ find . -type d -name "tests" -o -name "test" -o -name "__tests__" | head -10
 Then run whatever tests you find:
 ```bash
 # If pytest tests exist
-python -m pytest -v --tb=short 2>&1 | tee all_results.txt
+python -m pytest -v --tb=short -p no:libtmux 2>&1 | tee all_results.txt
+# Note: -p no:libtmux avoids plugin conflict if libtmux is installed globally
 
 # If npm/node tests exist
 npm test 2>&1 | tee all_results.txt
