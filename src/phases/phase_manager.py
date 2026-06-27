@@ -11,7 +11,8 @@ from src.core.database import (
     DatabaseManager, Workflow, Phase, PhaseExecution, Task,
     WorkflowDefinition as DBWorkflowDefinition
 )
-from src.phases.models import WorkflowDefinition, PhaseDefinition, PhaseContext, PhasesConfig
+from src.sdk.models import Phase as SdkPhase, WorkflowDefinition
+from src.phases.models import PhaseContext, PhasesConfig
 from src.phases.phase_loader import PhaseLoader
 from src.core.simple_config import get_config
 from src.workflow_engine.orchestrator import (
@@ -157,15 +158,16 @@ class PhaseManager:
         finally:
             session.close()
 
-    def initialize_workflow(self, workflow_def: WorkflowDefinition, phases_config: Optional['PhasesConfig'] = None) -> str:
+    def initialize_workflow(self, workflow_def: WorkflowDefinition, phases_config: Optional['PhasesConfig'] = None, folder_path: str = "") -> str:
         """Initialize a workflow and its phases in the database.
 
         If a workflow with the same name already exists, updates its phases_folder_path
         instead of creating a new one. This allows config updates on service restart.
 
         Args:
-            workflow_def: Workflow definition loaded from YAML
+            workflow_def: Workflow definition loaded from YAML (sdk WorkflowDefinition)
             phases_config: Phases configuration for ticket tracking and result handling
+            folder_path: Optional path to the workflow config directory for DB storage
 
         Returns:
             Workflow ID
@@ -182,9 +184,10 @@ class PhaseManager:
             if existing_workflow:
                 # Reuse existing workflow - update phases folder path
                 logger.info(f"♻️  Reusing existing workflow '{existing_workflow.name}' (ID: {existing_workflow.id})")
-                logger.info(f"   Updating phases_folder_path from {existing_workflow.phases_folder_path} to {workflow_def.phases_folder}")
+                _folder = folder_path or ""
+                logger.info(f"   Updating phases_folder_path from {existing_workflow.phases_folder_path} to {_folder}")
 
-                existing_workflow.phases_folder_path = workflow_def.phases_folder
+                existing_workflow.phases_folder_path = _folder
                 # Update the name to match the current workflow definition
                 existing_workflow.name = workflow_def.name
                 session.commit()
@@ -197,7 +200,7 @@ class PhaseManager:
                 workflow = Workflow(
                     id=workflow_id,
                     name=workflow_def.name,
-                    phases_folder_path=workflow_def.phases_folder,
+                    phases_folder_path=folder_path or "",
                     status="active",
                 )
                 session.add(workflow)
@@ -205,19 +208,29 @@ class PhaseManager:
                 # Only create phase records for NEW workflows
                 for phase_def in workflow_def.phases:
                     phase_id = str(uuid.uuid4())
+                    # phase_def is a sdk Phase dataclass; use .id as the order value
+                    outputs_val = phase_def.outputs if isinstance(phase_def.outputs, list) else (
+                        [phase_def.outputs] if phase_def.outputs else []
+                    )
+                    next_steps_val = phase_def.next_steps if isinstance(phase_def.next_steps, list) else (
+                        [phase_def.next_steps] if phase_def.next_steps else []
+                    )
                     phase = Phase(
                         id=phase_id,
                         workflow_id=workflow_id,
-                        order=phase_def.order,
+                        order=phase_def.id,
                         name=phase_def.name,
                         description=phase_def.description,
                         done_definitions=phase_def.done_definitions,
                         additional_notes=phase_def.additional_notes,
-                        outputs=phase_def.outputs,
-                        next_steps=phase_def.next_steps,
+                        outputs=outputs_val,
+                        next_steps=next_steps_val,
                         working_directory=phase_def.working_directory,
-                        validation=phase_def.validation,  # Add validation config
-                        thinking_level=getattr(phase_def, 'thinking_level', None),  # per-phase pi reasoning budget
+                        validation=(
+                            {"enabled": phase_def.validation.enabled, "criteria": phase_def.validation.criteria}
+                            if phase_def.validation else None
+                        ),
+                        thinking_level=phase_def.thinking_level,
                     )
                     session.add(phase)
 
@@ -379,27 +392,36 @@ class PhaseManager:
                 workflow_id=phase.workflow_id
             ).order_by(Phase.order).all()
 
-            # Convert to PhaseDefinition objects
-            phase_defs = []
-            current_def = None
+            # Convert DB Phase rows to sdk Phase objects
+            sdk_phases = []
+            current_sdk_phase = None
             for p in all_phases:
-                phase_def = PhaseDefinition(
-                    filename=f"{p.order:02d}_{p.name.lower().replace(' ', '_')}.yaml",
-                    order=p.order,
-                    name=p.name,
-                    description=p.description,
-                    done_definitions=p.done_definitions or [],
-                    additional_notes=p.additional_notes,
-                    outputs=p.outputs,
-                    next_steps=p.next_steps,
-                    working_directory=p.working_directory,
-                    validation=p.validation,  # Include validation config
-                )
-                phase_defs.append(phase_def)
-                if p.id == phase_id:
-                    current_def = phase_def
+                # Reconstruct outputs/next_steps as lists
+                def _to_list(val):
+                    if val is None:
+                        return []
+                    if isinstance(val, list):
+                        return val
+                    return [val]
 
-            if not current_def:
+                sdk_phase = SdkPhase(
+                    id=p.order,
+                    name=p.name,
+                    description=p.description or "",
+                    done_definitions=p.done_definitions or [],
+                    working_directory=p.working_directory or ".",
+                    additional_notes=p.additional_notes or "",
+                    outputs=_to_list(p.outputs),
+                    next_steps=_to_list(p.next_steps),
+                    cli_tool=p.cli_tool,
+                    cli_model=p.cli_model,
+                    thinking_level=p.thinking_level,
+                )
+                sdk_phases.append(sdk_phase)
+                if p.id == phase_id:
+                    current_sdk_phase = sdk_phase
+
+            if not current_sdk_phase:
                 return None
 
             # Count tasks
@@ -423,8 +445,8 @@ class PhaseManager:
             return PhaseContext(
                 phase_id=phase_id,
                 workflow_id=phase.workflow_id,
-                phase_definition=current_def,
-                all_phases=phase_defs,
+                phase=current_sdk_phase,
+                all_phases=sdk_phases,
                 current_status=status,
                 active_tasks=active_tasks,
                 completed_tasks=completed_tasks,

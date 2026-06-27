@@ -891,7 +891,7 @@ async def startup_event():
             # Log phase names
             logger.info("Loaded phases:")
             for phase in workflow_def.phases:
-                logger.info(f"  Phase {phase.order}: {phase.name}")
+                logger.info(f"  Phase {phase.id}: {phase.name}")
                 logger.info(f"    - Description: {phase.description[:100]}...")
                 logger.info(f"    - Done definitions: {len(phase.done_definitions)} items")
 
