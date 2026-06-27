@@ -1,0 +1,371 @@
+id: 3
+name: validate_and_document
+description: 'Execute tests, fix small bugs, and write documentation for ONE specific component.
+
+
+  This phase combines validation and documentation into a single workflow:
+
+  1. VALIDATE: Run comprehensive tests, fix small bugs, identify critical bugs
+
+  2. ROUTE: If critical bugs found, create Phase 2 fix tasks. If tests pass, proceed to docs.
+
+  3. DOCUMENT: Write user-facing documentation (only if tests pass)
+
+
+  The output is either Phase 2 fix tasks (if critical bugs) OR complete documentation and resolved ticket (if tests pass).
+
+
+  Generic for any testing framework and documentation type.'
+done_definitions:
+- Test instructions read from run_instructions/ (if available)
+- ALL relevant tests executed (unit/integration/e2e as appropriate)
+- Bugs fixed via Task tool (or direct tiny fixes), fixes documented in test report
+- Test results comprehensively documented in test_report.md
+- Pass/fail status recorded with full evidence
+- 'IF fundamental design issues exist: Phase 2 redesign task created, ticket moved to ''building'', NO documentation written'
+- 'IF all tests pass: Documentation created and complete (README, API docs, usage guide)'
+- 'IF all tests pass: Usage examples provided and tested'
+- 'IF all tests pass: Ticket RESOLVED and moved to ''done'' status'
+- Test execution and documentation status saved to memory
+working_directory: .
+additional_notes: "═══════════════════════════════════════════════════════════════════════\nYOU ARE A VALIDATOR & DOCUMENTER\
+  \ - TEST, DELEGATE FIXES, DOCUMENT\n═══════════════════════════════════════════════════════════════════════\n\n\U0001F3AF\
+  \ YOUR MISSION: Test everything, fix bugs via Task tool, write docs if tests pass\n\n═══════════════════════════════════════════════════════════════════════\n\
+  ⚠️ CRITICAL WORKFLOW RULES - READ BEFORE STARTING\n═══════════════════════════════════════════════════════════════════════\n\
+  \n0. **\U0001F6A8 ALWAYS USE YOUR ACTUAL AGENT ID! \U0001F6A8**\n   DO NOT use \"agent-mcp\" - that's just a placeholder\
+  \ in examples!\n   Your actual agent ID is in your task context or environment.\n\n   ❌ WRONG: `\"agent_id\": \"agent-mcp\"\
+  `\n   ✅ RIGHT: `\"agent_id\": \"[your actual agent ID from task context]\"`\n\n1. **CHECK BEFORE CREATING TASKS** (Prevent\
+  \ Duplicate Tasks)\n   Before creating ANY task (fix/missing feature), check if one exists for YOUR ticket:\n\n   **YOU\
+  \ ALREADY HAVE THE TICKET ID** - it was provided when your task was created, and you used it in STEP 0A with `get_ticket()`.\n\
+  \n   ```python\n   # Use your ticket_id (you got it in STEP 0A)\n   # Get all tasks to check if fix tasks already exist\
+  \ for YOUR ticket\n   existing_tasks = mcp__hephaestus__get_tasks({\n       \"agent_id\": \"[YOUR ACTUAL AGENT ID]\",\n\
+  \       \"status\": \"all\"\n   })\n   # Look for tasks with YOUR ticket_id in the description\n   # If fix task exists\
+  \ for your ticket, DO NOT create duplicate!\n   ```\n\n2. **ALWAYS INCLUDE TICKET ID IN TASKS**\n   Every task description\
+  \ MUST include: \"TICKET: ticket-xxxxx\"\n   This is especially critical for fix tasks - they need the ORIGINAL ticket ID!\n\
+  \n3. **\U0001F6A8 DO NOT CREATE NEW TICKETS FOR FIX TASKS! \U0001F6A8**\n   Phase 3 works on a ticket from Phase 2.\n  \
+  \ When creating fix tasks, pass the SAME ticket ID forward.\n   DO NOT create new tickets - reuse the existing ticket ID!\n\
+  \n4. **✅ YOU ARE THE ONLY PHASE THAT RESOLVES TICKETS! ✅**\n   - Phase 3: THE ONLY phase that calls resolve_ticket()\n \
+  \  - This moves tickets to \"done\" and marks them complete\n   - All other phases move tickets between statuses but NEVER\
+  \ resolve\n\n═══════════════════════════════════════════════════════════════════════\n\n**\U0001F6A8\U0001F6A8\U0001F6A8\
+  \ BEFORE YOU DO ANYTHING - READ YOUR TICKET! \U0001F6A8\U0001F6A8\U0001F6A8**\n\nSTEP 0A: READ YOUR TICKET (MANDATORY FIRST\
+  \ STEP)\n\n**Before you change ticket status, before you run any tests, READ THE TICKET!**\n\nYour task description contains\
+  \ \"TICKET: ticket-xxxxx\". Extract this ticket ID first.\n\n```python\n# Extract ticket ID from your task description\n\
+  # Look for: \"TICKET: ticket-xxxxx\" in your task\nticket_id = \"[extracted ticket ID from task description]\"\n```\n\n\
+  **Now READ THE TICKET using the get_ticket endpoint:**\n\n```python\n# READ THE TICKET FIRST - This is MANDATORY!\n# Use\
+  \ the EXACT ticket ID to get the full ticket details\nticket_info = mcp__hephaestus__get_ticket(ticket_id)\n\n# READ THE\
+  \ TICKET DESCRIPTION CAREFULLY\n# The ticket description contains YOUR ENTIRE SCOPE!\n# It tells you EXACTLY what to validate\
+  \ and document\n```\n\n**\U0001F3AF CRITICAL: THE TICKET DESCRIPTION IS YOUR SCOPE!**\n\nThe ticket description was written\
+  \ by Phase 1 and contains:\n- EXACTLY what needs to be tested\n- EXACTLY what functionality to validate\n- EXACTLY what\
+  \ to document (if tests pass)\n- ALL the validation and documentation requirements\n\n**The ticket description is your ONLY\
+  \ source of truth for what to validate and document!**\n\n**⛔ WORK ONLY WITHIN THE TICKET SCOPE!**\n\nPhase 3 Rule #1: **ONLY\
+  \ validate and document what the ticket describes!**\n\n- ✅ **DO**: Test ALL functionality mentioned in the ticket description\n\
+  - ✅ **DO**: Validate ALL requirements from the ticket\n- ✅ **DO**: Document ALL aspects mentioned in the ticket (if tests\
+  \ pass)\n- ✅ **DO**: Follow the ticket scope exactly\n\n- ❌ **DON'T**: Test features not mentioned in the ticket description\n\
+  - ❌ **DON'T**: Skip validation requirements that ARE in the ticket\n- ❌ **DON'T**: Document features outside your ticket\
+  \ scope\n- ❌ **DON'T**: Add tests/docs because \"they seem like good ideas\"\n- ❌ **DON'T**: Skip tests/docs because \"\
+  they seem unnecessary\"\n\n**DO NOT add tests/docs because you think they're good ideas!**\n**DO NOT skip tests/docs because\
+  \ you think they're not needed!**\n**TEST AND DOCUMENT WHAT THE TICKET SAYS - NOTHING MORE, NOTHING LESS!**\n\n**Before\
+  \ you proceed to STEP 0B, verify you understand your ticket scope:**\n\nQuestions to answer:\n1. What functionality am I\
+  \ validating? (from ticket)\n2. What are the specific requirements to test? (from ticket)\n3. What should I document if\
+  \ tests pass? (from ticket)\n4. What should I NOT test/document? (anything not in ticket)\n\n**ONLY AFTER reading and understanding\
+  \ your ticket, proceed to STEP 0B.**\n\n═══════════════════════════════════════════════════════════════════════\n\n**\U0001F6A8\
+  \U0001F6A8\U0001F6A8 CRITICAL: YOU MUST UPDATE TICKET STATUS! \U0001F6A8\U0001F6A8\U0001F6A8**\n\nSTEP 0B: UPDATE TICKET\
+  \ STATUS TO \"VALIDATING\"\n\n**THIS IS MANDATORY! DO NOT SKIP THIS STEP!**\n\nYou've already extracted the ticket ID in\
+  \ STEP 0A above.\n\n**⛔ STOP! Before you run ANY tests, you MUST move the ticket to \"validating\" status!**\n\nThis is\
+  \ CRITICAL for workflow tracking. If you don't do this:\n- ❌ The system won't know validation has started\n- ❌ Other agents\
+  \ can't track progress\n- ❌ The workflow will break\n\n**YOU MUST DO THIS NOW - BEFORE RUNNING TESTS:**\n\n```python\n#\
+  \ \U0001F6A8 MANDATORY: Move ticket from \"building-done\" to \"validating\" status\nmcp__hephaestus__change_ticket_status({\n\
+  \    \"ticket_id\": \"[extracted ticket ID from STEP 0A]\",\n    \"agent_id\": \"[YOUR ACTUAL AGENT ID]\",\n    \"new_status\"\
+  : \"validating\",\n    \"comment\": \"Starting validation per ticket scope. Running comprehensive test suite. Ticket moved\
+  \ from 'building-done' to 'validating'.\"\n})\n```\n\n**✅ Ticket status is now \"validating\". You can proceed to run tests.**\n\
+  \nSTEP 0C: READ TEST EXECUTION INSTRUCTIONS\n\n**\U0001F6A8 CRITICAL: Before running ANY tests, read the setup instructions!\
+  \ \U0001F6A8**\n\nPhase 2 documented how to run tests. Find and read:\n`run_instructions/[component]_test_instructions.md`\n\
+  \n**How to find the right file:**\n- Extract the component/ticket name from your task description\n- Look for run_instructions/[component]_test_instructions.md\n\
+  - The file name should match your component (e.g., run_instructions/auth_test_instructions.md)\n\n**This file tells you:**\n\
+  - What services to start (Docker, databases, Redis, etc.)\n- What environment variables to set\n- How to run each test suite\
+  \ (exact commands)\n- What the expected output looks like\n- Troubleshooting tips for common issues\n\n**If this file doesn't\
+  \ exist:**\n- ⚠️ Phase 2 didn't create it (they should have!)\n- You'll need to figure out test setup yourself\n- Check\
+  \ common locations: tests/README.md, design doc, or code comments\n- Look for docker-compose.yml, .env.example, or test\
+  \ configuration files\n\n**After reading instructions:**\n- Follow the setup steps exactly\n- Start required services before\
+  \ running tests\n- Use the exact test commands provided\n- Compare output with expected results\n\n**NOW proceed to STEP\
+  \ 1 to identify and run tests.**\n\n═══════════════════════════════════════════════════════════════════════\n\U0001F9EA\
+  \ PART 1: VALIDATION PHASE\n═══════════════════════════════════════════════════════════════════════\n\nSTEP 1: IDENTIFY\
+  \ WHAT TO TEST\n\nYour task description specifies what to test. Common scenarios:\n\n**Component Testing:**\n- Tests for\
+  \ a single component (unit tests)\n- Find: tests/component/test_*.py or similar\n\n**Integration Testing:**\n- Tests for\
+  \ multiple components working together\n- Find: tests/integration/test_*.py\n\n**System Testing:**\n- End-to-end tests for\
+  \ the entire system\n- Find: tests/e2e/ or tests/system/\n\nRetrieve memories about:\n- Test commands for this project\n\
+  - Known test infrastructure\n- Testing requirements from PRD\n\nSTEP 2: EXECUTE TESTS\n\nRun the appropriate test suite:\n\
+  \n```bash\n# Python\npytest tests/component/ -v --tb=short\n\n# JavaScript\nnpm test -- component.test.js\n\n# Go\ngo test\
+  \ ./component/... -v\n\n# Rust\ncargo test --package component\n```\n\nCapture FULL output - you'll need it for the report.\n\
+  \nSTEP 3: ANALYZE RESULTS\n\nCategorize each test:\n- ✅ PASS: Test succeeded\n- ❌ FAIL: Test ran but assertion failed\n\
+  - ⚠️ ERROR: Test couldn't run (setup failure, missing dependency)\n- ⏭️ SKIP: Test was skipped (marked as skip or conditional)\n\
+  \nFor failures, extract:\n- Test name\n- Expected result\n- Actual result\n- Error message/stack trace\n- Which component/function\
+  \ failed\n\nLook for patterns:\n- All tests in one module failing → likely design issue\n- One specific feature broken →\
+  \ isolated bug\n- Random failures → flaky tests or race conditions\n- Setup errors → environment/config issue\n\n═══════════════════════════════════════════════════════════════════════\n\
+  **\U0001F6A8\U0001F6A8\U0001F6A8 CRITICAL STEP - FIX BUGS USING TASK TOOL! \U0001F6A8\U0001F6A8\U0001F6A8**\n═══════════════════════════════════════════════════════════════════════\n\
+  \nSTEP 3B: FIX BUGS USING TASK TOOL (OR DIRECT FOR TINY FIXES)\n\n**\U0001F3AF NEW APPROACH: Use Task tool for bug fixes,\
+  \ keep yourself focused on validation!**\n\n**═══════════════════════════════════════════════════════════════════════**\n\
+  **WHY USE TASK TOOL FOR BUG FIXES?**\n**═══════════════════════════════════════════════════════════════════════**\n\n- ✅\
+  \ Sub-agent gets fresh context focused on the fix\n- ✅ You maintain oversight without losing validation context\n- ✅ Faster\
+  \ turnaround (specialized agent)\n- ✅ You can spawn multiple fix agents in parallel\n- ✅ Reduces your cognitive load\n\n\
+  **═══════════════════════════════════════════════════════════════════════**\n**DECISION MATRIX: WHAT TO FIX vs WHAT TO ESCALATE**\n\
+  **═══════════════════════════════════════════════════════════════════════**\n\n**\U0001F6A8 DEFAULT APPROACH: USE TASK TOOL\
+  \ FOR ALL FIXES! \U0001F6A8**\n\n**Your job is to VALIDATE, not to become a developer!**\n**Delegate bug fixes to specialized\
+  \ sub-agents via Task tool!**\n\n**✅ FIX YOURSELF (Tiny Direct Fixes - Single Line ONLY, Literal 1-Character Changes):**\n\
+  \n1. **Single-character typos**: Variable name typo in ONE place (e.g., `user.emil` → `user.email`)\n2. **Single import\
+  \ statement**: Add missing import (one line: `from x import y`)\n3. **Single-line formatting**: Fix indentation in one line\n\
+  \n**Example:**\n```python\n# Typo: user.emil → user.email (one character fix)\n# Just fix it directly, no need for Task\
+  \ tool\n```\n\n**⚠️ IF IN DOUBT, USE TASK TOOL! It's faster and better! ⚠️**\n\n**⚡ FIX VIA TASK TOOL (Everything Else -\
+  \ THIS IS THE DEFAULT!):**\n\n**USE TASK TOOL FOR:**\n1. **Failed Tests** → @agent-debug-troubleshoot-expert or relevant\
+  \ specialist\n2. **Implementation Bugs** → @agent-debug-troubleshoot-expert\n3. **Logic Errors** → @agent-debug-troubleshoot-expert\
+  \ or @agent-senior-fastapi-engineer\n4. **Missing Error Handling** → @agent-debug-troubleshoot-expert or @agent-senior-fastapi-engineer\n\
+  5. **Integration Issues** → @agent-api-integration-engineer or @agent-debug-troubleshoot-expert\n6. **Algorithm Problems**\
+  \ → @agent-debug-troubleshoot-expert\n7. **Multiple-file fixes** → Relevant specialist (see list above)\n8. **Complex fixes\
+  \ requiring thought** → @agent-debug-troubleshoot-expert\n9. **Frontend bugs** → @agent-senior-frontend-engineer\n10. **Database\
+  \ issues** → @agent-database-architect\n11. **Test infrastructure issues** → @agent-test-automation-engineer\n\n**✅ WHEN\
+  \ IN DOUBT: USE TASK TOOL!**\n**✅ IF FIX REQUIRES MORE THAN 1 LINE: USE TASK TOOL!**\n**✅ IF FIX REQUIRES THINKING: USE\
+  \ TASK TOOL!**\n\n**\U0001F6AB ESCALATE TO P2 (Fundamental Design Issues ONLY - VERY RARE!):**\n\n1. **Design fundamentally\
+  \ wrong** → P2 task (architecture needs complete rethinking)\n2. **Major feature completely missing from ticket scope**\
+  \ → P2 task (requires design work)\n3. **Wrong technology choice that breaks everything** → P2 task (requires redesign)\n\
+  \n**\U0001F6A8 IMPORTANT: Failed tests and bugs are NOT design issues! Fix them via Task tool! \U0001F6A8**\n\n**You should\
+  \ RARELY escalate to P2! 95% of issues should be fixed via Task tool!**\n\n**═══════════════════════════════════════════════════════════════════════**\n\
+  **AVAILABLE SPECIALIZED SUB-AGENTS FOR BUG FIXES:**\n**═══════════════════════════════════════════════════════════════════════**\n\
+  \nUse Claude Code's Task tool with these subagent_type values when fixing bugs:\n\n1. **@agent-debug-troubleshoot-expert**\
+  \ - Debugging specialist (BEST for bug fixes!)\n   - Use for: Root cause analysis, tracking down bugs, systematic debugging\n\
+  \   - Example: Investigating test failures, analyzing error patterns\n\n2. **@agent-senior-fastapi-engineer** - FastAPI/backend\
+  \ expert\n   - Use for: Backend bugs, API endpoint issues, server-side logic fixes\n   - Example: Fixing auth endpoints,\
+  \ database query issues\n\n3. **@agent-senior-frontend-engineer** - React/frontend expert\n   - Use for: Frontend bugs,\
+  \ React component issues, UI problems\n   - Example: Fixing rendering bugs, state management issues\n\n4. **@agent-test-automation-engineer**\
+  \ - Testing specialist\n   - Use for: Test-related issues, test infrastructure problems\n   - Example: Fixing flaky tests,\
+  \ test setup issues\n\n5. **@agent-database-architect** - Database expert\n   - Use for: Database bugs, query issues, schema\
+  \ problems\n   - Example: Fixing slow queries, data integrity issues\n\n6. **@agent-api-integration-engineer** - API integration\
+  \ expert\n   - Use for: Third-party API bugs, integration issues\n   - Example: Fixing external service integration problems\n\
+  \n7. **@agent-devops-engineer** - Docker/DevOps expert\n   - Use for: Deployment bugs, container issues, environment problems\n\
+  \   - Example: Fixing Docker setup, deployment configuration\n\n**═══════════════════════════════════════════════════════════════════════**\n\
+  **HOW TO FIX BUGS VIA TASK TOOL**\n**═══════════════════════════════════════════════════════════════════════**\n\n**Example:\
+  \ Test failures found**\n\n```python\n# You found 3 failing tests:\n# 1. test_token_refresh_expired_token - token expiry\
+  \ not checked\n# 2. test_user_registration_duplicate_email - missing duplicate check\n# 3. test_password_reset_invalid_token\
+  \ - error handling missing\n\n# DON'T try to fix yourself! Use Task tool with appropriate specialized agent:\n\nTask(\n\
+  \    subagent_type=\"@agent-debug-troubleshoot-expert\",  # Use debug specialist for bug fixing!\n    description=\"Fix\
+  \ authentication test failures\",\n    prompt=\"\"\"Fix ALL authentication test failures found in Phase 3 validation:\n\n\
+  **TICKET**: {my_ticket_id}\n\n**Test Report**: See test_reports/test_report_auth.md\n\n**Bugs to Fix:**\n\n1. **Token expiry\
+  \ not validated** (test_token_refresh_expired_token fails)\n   - Location: src/auth/tokens.py line 123\n   - Issue: Expired\
+  \ tokens accepted for refresh\n   - Fix: Add expiry check before issuing new token\n\n2. **Missing duplicate email check**\
+  \ (test_user_registration_duplicate_email fails)\n   - Location: src/auth/registration.py line 85-90\n   - Issue: Uncaught\
+  \ IntegrityError on duplicate email\n   - Fix: Add duplicate check before database insert\n\n3. **Password reset error handling**\
+  \ (test_password_reset_invalid_token fails)\n   - Location: src/auth/password_reset.py line 45\n   - Issue: Invalid token\
+  \ causes unhandled exception\n   - Fix: Add try/catch with proper error response\n\n**After fixing:**\n- Run tests again:\
+  \ `pytest tests/auth/ -v`\n- Verify all 3 tests now pass\n- Report back which fixes were applied\n\"\"\"\n)\n\n# Wait for\
+  \ sub-agent to complete\n# Then re-run tests to verify fixes worked\n# If still failing, spawn another Task agent with adjusted\
+  \ instructions\n```\n\n**You can spawn MULTIPLE Task agents in parallel for independent bugs!**\n\n**═══════════════════════════════════════════════════════════════════════**\n\
+  \n**WORKFLOW:**\n\n1. **Identify bugs** (from test failures)\n2. **Categorize each bug**:\n   - Single-line typo? → Fix\
+  \ directly\n   - Anything else? → Task tool\n   - Fundamental design issue? → P2 task (rare!)\n3. **For Task tool fixes:**\n\
+  \   - Spawn Task agent with clear bug description\n   - Wait for completion\n   - Re-run tests to verify\n   - If still\
+  \ failing, adjust and retry\n4. **Document all fixes** in test report (whether you or sub-agent fixed)\n\n**REMEMBER: Your\
+  \ job is to VALIDATE, not to become a developer. Delegate fixes to Task tool!**\n\n═══════════════════════════════════════════════════════════════════════\n\
+  \nSTEP 4: CREATE TEST REPORT\n\nCreate test_reports/test_report_[component or scope].md:\n\n```markdown\n# Test Report:\
+  \ [Component/System Name]\n\n## Executive Summary\n- **Total Tests:** 45\n- **Passed:** 42 (after fixes)\n- **Failed:**\
+  \ 3 (critical bugs - escalated to Phase 2)\n- **Errors:** 0\n- **Skipped:** 0\n- **Success Rate:** 93.3% (after small bug\
+  \ fixes)\n\n## Test Execution Details\n- **Command:** `pytest tests/auth/ -v`\n- **Duration:** 12.3 seconds\n- **Environment:**\
+  \ Python 3.11, pytest 7.4.0\n- **Date:** 2025-10-26 14:23:45\n\n## Detailed Results\n\n### ✅ Passing Tests (42)\n- `test_authenticate_user_valid_credentials`:\
+  \ User authentication successful\n- `test_authenticate_user_returns_user_object`: Correct User object returned\n- `test_hash_password_generates_bcrypt`:\
+  \ Password hashing working\n- [... list all passing tests with brief description]\n\n## Fixes Applied During Validation\n\
+  \n**Small Issues Fixed by Phase 3 Validator:**\n\n### Fix 1: Missing import statement\n- **Test:** test_authenticate_user_invalid_email\n\
+  - **Error:** ImportError: cannot import name 'validate_email'\n- **Fix Applied:** Added `from src.utils.validation import\
+  \ validate_email` to src/auth/core.py:3\n- **Result:** ✅ Test now passes (re-ran and verified)\n\n### Fix 2: Typo in variable\
+  \ name\n- **Test:** test_create_user_profile\n- **Error:** AttributeError: 'User' object has no attribute 'emil'\n- **Fix\
+  \ Applied:** Changed `user.emil` to `user.email` in src/models/user.py:45\n- **Result:** ✅ Test now passes (re-ran and verified)\n\
+  \n[List ALL small issues you fixed yourself during STEP 3B]\n\n## Issues Escalated to Phase 2 (Critical Bugs)\n\n**Critical\
+  \ Issues Requiring Phase 2 Fix:**\n\n### ❌ Failing Test 1: test_token_refresh_expired_token\n**Status:** FAIL - CRITICAL\
+  \ SECURITY BUG\n**Location:** tests/auth/test_tokens.py:67\n**Expected:** Refresh with expired token returns 401 Unauthorized\n\
+  **Actual:** Returns 200 OK with new token (security issue!)\n**Error:**\n```\nAssertionError: Expected status 401, got 200\n\
+  ```\n**Root Cause:** Token expiry not being checked in refresh logic\n**Component:** src/auth/tokens.py, line 123\n**Severity:**\
+  \ CRITICAL - Security vulnerability\n**Why Escalated:** Requires implementing token expiry checking logic (MAJOR)\n\n###\
+  \ ❌ Failing Test 2: test_user_registration_duplicate_email\n**Status:** FAIL - CRITICAL DATA INTEGRITY\n**Location:** tests/auth/test_registration.py:34\n\
+  **Expected:** Registration returns error for duplicate email\n**Actual:** Database constraint violation raised uncaught\n\
+  **Error:**\n```\nIntegrityError: UNIQUE constraint failed: users.email\n  File \"src/auth/registration.py\", line 89, in\
+  \ register_user\n    db.session.add(user)\n```\n**Root Cause:** Missing duplicate email check before database insert\n**Component:**\
+  \ src/auth/registration.py, line 85-90\n**Severity:** HIGH - Data integrity + Poor UX\n**Why Escalated:** Requires adding\
+  \ duplicate check logic (MAJOR)\n\n[List ONLY critical issues that you did NOT fix - these will get Phase 2 tasks]\n\n##\
+  \ Impact Assessment\n\n### Critical Issues (Must Fix Before Production)\n1. **test_token_refresh_expired_token** - SECURITY\
+  \ VULNERABILITY\n   - Expired tokens being accepted\n   - Could allow unauthorized access\n   - Must fix before deployment\n\
+  \n### High Priority Issues\n1. **test_user_registration_duplicate_email** - Data integrity\n   - Could cause application\
+  \ crashes\n   - Poor user experience\n```\n\n═══════════════════════════════════════════════════════════════════════\n\U0001F6A6\
+  \ PART 2: ROUTING DECISION\n═══════════════════════════════════════════════════════════════════════\n\nSTEP 5: ROUTE WORKFLOW\
+  \ BASED ON TEST RESULTS\n\n**\U0001F6A8\U0001F6A8\U0001F6A8 CRITICAL: TWO DIFFERENT PATHS FROM HERE! \U0001F6A8\U0001F6A8\
+  \U0001F6A8**\n\n**Path A: CRITICAL BUGS REMAIN** → Escalate to Phase 2, DO NOT DOCUMENT\n**Path B: ALL TESTS PASS** → Proceed\
+  \ to documentation phase\n\n═══════════════════════════════════════════════════════════════════════\n**PATH A: FUNDAMENTAL\
+  \ DESIGN ISSUES FOUND** (CREATE PHASE 2 FIX TASKS)\n═══════════════════════════════════════════════════════════════════════\n\
+  \n**\U0001F6A8 IMPORTANT: This path is ONLY for fundamental design problems! \U0001F6A8**\n\n**What are \"fundamental design\
+  \ issues\"?**\n- ❌ Architecture is fundamentally wrong\n- ❌ Major feature completely missing from ticket scope\n- ❌ Wrong\
+  \ technology/approach chosen (e.g., sync when should be async)\n- ❌ Design doesn't support the requirements\n\n**What are\
+  \ NOT design issues? (Fix via Task tool instead!)**\n- ✅ Tests failing → Task tool fix (STEP 3B)\n- ✅ Bugs in implementation\
+  \ → Task tool fix (STEP 3B)\n- ✅ Wrong algorithm → Task tool fix (STEP 3B)\n- ✅ Missing error handling → Task tool fix (STEP\
+  \ 3B)\n- ✅ Integration problems → Task tool fix (STEP 3B)\n\n**You should RARELY reach this point!** Most issues should\
+  \ be fixed via Task tool in STEP 3B.\n\n**IF you have fundamental design issues (and ONLY then):**\n\n**Step 1: Move ticket\
+  \ back to \"building\" status**\n```python\n# Extract the ticket ID you've been working on\nmy_ticket_id = \"[your ticket\
+  \ ID from STEP 0A]\"\n\n# Fundamental design issues found - move ticket back to \"building\" for Phase 2 redesign\nmcp__hephaestus__change_ticket_status({\n\
+  \    \"ticket_id\": my_ticket_id,\n    \"agent_id\": \"[YOUR ACTUAL AGENT ID]\",\n    \"new_status\": \"building\",\n  \
+  \  \"comment\": \"FUNDAMENTAL DESIGN ISSUES found requiring Phase 2 redesign. Fixed bugs via Task tool where possible (see\
+  \ test report). Escalating design flaws to Phase 2. See test_reports/test_report_[component].md 'Issues Escalated to Phase\
+  \ 2' section for details. Ticket moved from 'validating' back to 'building'.\"\n})\n```\n\n**Step 2: Search for existing\
+  \ fix tasks before creating (prevent duplicates)**\n\nFor EACH critical issue you escalated, search first:\n```python\n\
+  # YOU ALREADY HAVE THE TICKET ID from STEP 0A - use it here!\n# Get all tasks to check if a Phase 2 fix task already exists\
+  \ for YOUR ticket\nexisting_tasks = mcp__hephaestus__get_tasks({\n    \"agent_id\": \"[YOUR ACTUAL AGENT ID]\",\n    \"\
+  status\": \"all\"\n})\n\n# Review the results - look for tasks where:\n# 1. The description contains: f\"TICKET: {my_ticket_id}\"\
+  \ (YOUR ticket ID from STEP 0A!)\n# 2. The description starts with \"Phase 2: Fix CRITICAL\" or \"Phase 2: Implement\"\n\
+  # 3. The description mentions the specific bug you're about to escalate\n# If fix task already exists for this bug + ticket,\
+  \ DO NOT create duplicate!\n```\n\n**Step 3: Create ONLY ONE Phase 2 fix task consolidating ALL critical bugs (if no duplicate\
+  \ found)**\n\n**\U0001F6A8\U0001F6A8\U0001F6A8 CRITICAL: CREATE ONLY ONE TASK - NEVER CREATE MULTIPLE TASKS! \U0001F6A8\U0001F6A8\
+  \U0001F6A8**\n\n**YOU MUST CREATE EXACTLY ONE PHASE 2 TASK THAT INCLUDES ALL CRITICAL BUGS!**\n\n**❌ WRONG APPROACH - DO\
+  \ NOT DO THIS:**\n- Creating one task for bug #1\n- Creating another task for bug #2\n- Creating a third task for bug #3\n\
+  - Result: 3 tasks ← THIS IS FORBIDDEN!\n\n**✅ CORRECT APPROACH - DO THIS:**\n- Create ONE task that lists ALL critical bugs\
+  \ (#1, #2, #3)\n- Result: 1 task ← THIS IS REQUIRED!\n\n**WHY ONLY ONE TASK?**\n- All bugs are in the SAME component/ticket\n\
+  - They should be fixed together in one Phase 2 session\n- Multiple tasks create unnecessary complexity and duplication\n\
+  - One task = one fix session = one retest\n\n**\U0001F6A8 ONLY CREATE A TASK FOR CRITICAL BUGS YOU ESCALATED IN STEP 3B!\
+  \ \U0001F6A8**\n\nDo NOT create a task for issues you already fixed! Those are documented in test report.\n\n**\U0001F6A8\
+  \U0001F6A8\U0001F6A8 DO NOT CREATE NEW TICKET - PASS YOUR TICKET ID FORWARD! \U0001F6A8\U0001F6A8\U0001F6A8**\n\n```python\n\
+  # CORRECT: Single task consolidating ALL critical bugs found\nmcp__hephaestus__create_task({\n    \"description\": f\"\"\
+  \"Phase 2: Fix ALL critical bugs found in validation - TICKET: {my_ticket_id}\n\n\U0001F6A8 CRITICAL BUGS TO FIX (see test_report_[component].md\
+  \ 'Issues Escalated to Phase 2' section):\n\n1. SECURITY: Token expiry not validated (test_token_refresh_expired_token fails)\n\
+  \   - Location: src/auth/tokens.py line 123\n   - Issue: Expired tokens accepted for refresh - SECURITY VULNERABILITY\n\
+  \   - Fix needed: Add expiry check before issuing new token\n\n2. DATA INTEGRITY: Missing duplicate email check (test_user_registration_duplicate_email\
+  \ fails)\n   - Location: src/auth/registration.py line 85-90\n   - Issue: Uncaught IntegrityError on duplicate email\n \
+  \  - Fix needed: Add duplicate check before database insert\n\n3. [Add more bugs if found - list ALL critical bugs in this\
+  \ ONE task]\n\nALL bugs documented in test_report_auth.md 'Issues Escalated to Phase 2' section.\nFix ALL issues listed\
+  \ above, then handoff to Phase 3 for retest.\"\"\",\n    \"done_definition\": f\"ALL critical bugs fixed: (1) Token expiry\
+  \ validated in refresh logic, (2) Duplicate email check added to registration, [3+]. ALL failing tests now pass. Code re-tested.\
+  \ Ticket {my_ticket_id} moved to 'building-done'. Phase 3 retest task created with ticket ID.\",\n    \"agent_id\": \"[YOUR\
+  \ ACTUAL AGENT ID]\",\n    \"phase_id\": 2,\n    \"priority\": \"critical\",\n    \"cwd\": \".\",\n    \"ticket_id\": my_ticket_id\
+  \  # \U0001F6A8 CRITICAL: Pass the ticket ID here!\n})\n\n# ⚠️⚠️⚠️ THAT'S IT! DO NOT CREATE ANY MORE TASKS! ONE TASK ONLY!\
+  \ ⚠️⚠️⚠️\n```\n\n**\U0001F6A8\U0001F6A8\U0001F6A8 VERIFICATION - MANDATORY CHECK BEFORE PROCEEDING! \U0001F6A8\U0001F6A8\
+  \U0001F6A8**\n\nBefore moving to Step 4, verify:\n- ✅ Did I create ONLY ONE Phase 2 task? (count = 1)\n- ✅ Does that ONE\
+  \ task list ALL critical bugs found?\n- ✅ Did I include \"TICKET: {my_ticket_id}\" in the description?\n- ✅ Did I pass ticket_id\
+  \ parameter to create_task?\n\n**If you created more than 1 task, YOU VIOLATED THE RULES! Delete the extras!**\n\n**Step\
+  \ 4: DO NOT WRITE DOCUMENTATION**\n\n**⛔ STOP! Do NOT proceed to documentation phase!**\n\nYou have critical bugs. Phase\
+  \ 2 must fix them first.\nDO NOT write documentation for broken code.\n\n**Step 5: Mark your task as done (routing complete)**\n\
+  \n```python\nmcp__hephaestus__update_task_status({\n    \"task_id\": \"[your Phase 3 task ID]\",\n    \"agent_id\": \"[YOUR\
+  \ ACTUAL AGENT ID]\",\n    \"status\": \"done\",\n    \"summary\": f\"Validation complete. Fixed bugs via Task tool. Found\
+  \ fundamental design issues - escalated to Phase 2. Created ONE Phase 2 redesign task. Ticket moved to 'building' for redesign.\
+  \ NO documentation written (waiting for redesign). See test_reports/test_report_[component].md for details.\"\n})\n```\n\
+  \n**✅ YOUR WORK IS DONE. Phase 2 will fix bugs and create new Phase 3 task to retest.**\n\n**DO NOT PROCEED TO PART 3 (DOCUMENTATION\
+  \ PHASE) - YOU ARE FINISHED!**\n\n═══════════════════════════════════════════════════════════════════════\n**PATH B: ALL\
+  \ TESTS PASS** (PROCEED TO DOCUMENTATION)\n═══════════════════════════════════════════════════════════════════════\n\n**IF\
+  \ all tests pass (after your small bug fixes in STEP 3B):**\n\n**Step 1: Move ticket to \"validating-done\"**\n\n```python\n\
+  # All tests passing! Proceed to documentation\nmy_ticket_id = \"[your ticket ID from STEP 0A]\"\n\nmcp__hephaestus__change_ticket_status({\n\
+  \    \"ticket_id\": my_ticket_id,\n    \"agent_id\": \"[YOUR ACTUAL AGENT ID]\",\n    \"new_status\": \"validating-done\"\
+  ,\n    \"comment\": \"All tests passing! Success rate: 100% (after fixing small bugs). Fixed [X] small issues during validation\
+  \ (see test report). All critical functionality working. Proceeding to documentation. Ticket moved from 'validating' to\
+  \ 'validating-done'.\"\n})\n```\n\n**Step 2: Proceed to PART 3 (DOCUMENTATION PHASE) below**\n\nContinue to STEP 6 to write\
+  \ documentation.\n\n═══════════════════════════════════════════════════════════════════════\n\U0001F4DA PART 3: DOCUMENTATION\
+  \ PHASE (ONLY IF TESTS PASS!)\n═══════════════════════════════════════════════════════════════════════\n\n**⛔ DO NOT REACH\
+  \ THIS SECTION IF YOU HAD CRITICAL BUGS IN PART 2!**\n\n**This section is ONLY for the \"all tests pass\" scenario from\
+  \ PATH B above.**\n\nSTEP 6: DETERMINE DOCUMENTATION SCOPE\n\n**For a Component:**\n- Component README (what it does, how\
+  \ to use it)\n- API reference (all public functions/classes)\n- Usage examples\n- Integration guide (how to use with other\
+  \ components)\n\n**For the System:**\n- Project README (overview, quick start)\n- Architecture documentation\n- Deployment\
+  \ guide\n- API documentation\n- Contributing guide\n\nSTEP 7: WRITE COMPONENT DOCUMENTATION\n\nCreate docs/[component].md:\n\
+  \n```markdown\n# [Component Name]\n\n## Overview\n[Component Name] handles [purpose]. It provides [key capabilities].\n\n\
+  ## Installation\n\n```bash\npip install [package]  # or npm install, etc.\n```\n\n## Quick Start\n\n```python\nfrom src.component\
+  \ import ComponentClass\n\n# Initialize\ncomponent = ComponentClass(config)\n\n# Basic usage\nresult = component.do_something(param)\n\
+  print(result)\n```\n\n## API Reference\n\n### Class: ComponentClass\n\n#### `__init__(config: dict)`\nInitialize the component\
+  \ with configuration.\n\n**Parameters:**\n- `config` (dict): Configuration dictionary\n  - `setting1` (str): Description\n\
+  \  - `setting2` (int): Description\n\n**Example:**\n```python\nconfig = {\n    \"setting1\": \"value\",\n    \"setting2\"\
+  : 42\n}\ncomponent = ComponentClass(config)\n```\n\n#### `do_something(param: str) -> dict`\nPerform the main operation.\n\
+  \n**Parameters:**\n- `param` (str): Input parameter description\n\n**Returns:**\n- `dict`: Result dictionary with keys:\n\
+  \  - `status` (str): \"success\" or \"error\"\n  - `data` (any): Result data\n\n**Raises:**\n- `ValueError`: If param is\
+  \ invalid\n- `ComponentError`: If operation fails\n\n**Example:**\n```python\nresult = component.do_something(\"test\")\n\
+  if result[\"status\"] == \"success\":\n    print(result[\"data\"])\n```\n\n## Usage Examples\n\n### Example 1: Basic Usage\n\
+  ```python\n# Complete working example\nfrom src.component import ComponentClass\n\ncomponent = ComponentClass({\"setting1\"\
+  : \"value\"})\nresult = component.do_something(\"input\")\nprint(f\"Result: {result}\")\n```\n\n### Example 2: Advanced\
+  \ Usage\n```python\n# More complex example showing edge cases\n...\n```\n\n## Integration Guide\n\n### Integrating with\
+  \ [Other Component]\n\n```python\nfrom src.component import ComponentClass\nfrom src.other import OtherClass\n\ncomponent\
+  \ = ComponentClass(config)\nother = OtherClass()\n\n# Connect them\nresult = other.process(component.do_something(\"data\"\
+  ))\n```\n\n## Configuration\n\n### Required Configuration\n- `setting1`: Description of setting1\n- `setting2`: Description\
+  \ of setting2\n\n### Optional Configuration\n- `optional1`: Description (default: value)\n\n### Environment Variables\n\
+  - `COMPONENT_ENV_VAR`: Description\n\n## Error Handling\n\n### Common Errors\n\n#### ValueError: Invalid input\n**Cause:**\
+  \ Input parameter doesn't meet validation requirements\n**Solution:** Ensure input matches expected format\n\n#### ComponentError:\
+  \ Operation failed\n**Cause:** Internal operation failed\n**Solution:** Check logs for details, verify configuration\n\n\
+  ## Testing\n\nRun tests:\n```bash\npytest tests/component/\n```\n\nTest coverage:\n```bash\npytest tests/component/ --cov=src/component\n\
+  ```\n\n## Performance\n\n- Operation X: ~10ms average\n- Operation Y: O(n log n) complexity\n- Memory usage: ~50MB for typical\
+  \ workload\n\n## Limitations\n\n- Cannot handle inputs larger than 1GB\n- Not thread-safe (use locks if concurrent access\
+  \ needed)\n- Requires Python 3.8+\n```\n\nSTEP 8: WRITE SYSTEM DOCUMENTATION (if applicable)\n\nUpdate or create README.md:\n\
+  \n```markdown\n# [Project Name]\n\n[Brief description of what this software does]\n\n## Features\n\n- ✨ Feature 1\n- \U0001F680\
+  \ Feature 2\n- \U0001F512 Feature 3\n\n## Quick Start\n\n### Prerequisites\n- Python 3.8+\n- PostgreSQL 13+\n- [Other requirements]\n\
+  \n### Installation\n\n```bash\n# Clone repository\ngit clone https://github.com/user/project.git\ncd project\n\n# Install\
+  \ dependencies\npip install -r requirements.txt\n\n# Configure\ncp .env.example .env\n# Edit .env with your settings\n\n\
+  # Initialize database\npython scripts/init_db.py\n\n# Run\npython src/main.py\n```\n\n### First Run\n\n```bash\n# Create\
+  \ admin user\npython scripts/create_admin.py --email admin@example.com\n\n# Start server\npython src/main.py\n\n# Access\
+  \ at http://localhost:8300\n```\n\n## Architecture\n\n```\n┌─────────────┐\n│   Frontend  │\n└──────┬──────┘\n       │\n\
+  ┌──────▼──────┐\n│     API     │\n└──────┬──────┘\n       │\n┌──────▼──────┬──────────┬──────────┐\n│    Auth     │    DB\
+  \    │  Cache   │\n└─────────────┴──────────┴──────────┘\n```\n\n[Brief description of each component]\n\n## API Documentation\n\
+  \n### Authentication\n```\nPOST /api/auth/login\nRequest: { \"email\": \"...\", \"password\": \"...\" }\nResponse: { \"\
+  token\": \"...\" }\n```\n\n[More endpoints...]\n\n## Deployment\n\nSee [DEPLOYMENT.md](docs/DEPLOYMENT.md) for detailed\
+  \ instructions.\n\n### Quick Deploy (Docker)\n\n```bash\ndocker-compose up -d\n```\n\n## Testing\n\n```bash\n# Run all tests\n\
+  pytest\n\n# Run with coverage\npytest --cov=src\n```\n\n## Contributing\n\nSee [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.\n\
+  \n## License\n\n[License information]\n```\n\nSTEP 9: TEST YOUR DOCUMENTATION\n\nActually run the examples you wrote:\n\
+  - Do they work?\n- Are the commands correct?\n- Do the code examples execute?\n\nIf examples don't work, fix them or fix\
+  \ the code.\n\nSTEP 10: HANDLE MISSING FEATURES (if discovered during documentation)\n\nIf you discover features that SHOULD\
+  \ exist but don't:\n\n**Search for existing feature implementation task (prevent duplicates)**\n```python\n# YOU ALREADY\
+  \ HAVE THE TICKET ID from STEP 0A - use it here!\n# Get all tasks to check if a Phase 2 feature task already exists for\
+  \ YOUR ticket\nexisting_tasks = mcp__hephaestus__get_tasks({\n    \"agent_id\": \"[YOUR ACTUAL AGENT ID]\",\n    \"status\"\
+  : \"all\"\n})\n\n# Review the results - look for tasks where:\n# 1. The description contains: f\"TICKET: {my_ticket_id}\"\
+  \ (YOUR ticket ID from STEP 0A!)\n# 2. The description starts with \"Phase 2: Add missing\"\n# 3. The description mentions\
+  \ the specific feature you're about to request\n# If feature task already exists for this feature + ticket, DO NOT create\
+  \ duplicate!\n```\n\n**Create Phase 2 task for missing feature (if no duplicate found)**\n**\U0001F6A8 MANDATORY: Include\
+  \ ORIGINAL \"TICKET: {ticket_id}\" in the task description! \U0001F6A8**\n\n```python\nmcp__hephaestus__create_task({\n\
+  \    \"description\": f\"Phase 2: Add missing [FEATURE] - TICKET: {my_ticket_id}. Discovered during documentation that [FEATURE]\
+  \ is needed for [reason] but not implemented. Users will expect this based on [context]. Should be implemented at [location].\"\
+  ,\n    \"done_definition\": \"[FEATURE] implemented, tested, and documented. Ticket moved to 'building-done'. Phase 3 validation\
+  \ task created with ticket ID.\",\n    \"agent_id\": \"[YOUR ACTUAL AGENT ID]\",\n    \"phase_id\": 2,\n    \"priority\"\
+  : \"medium\",\n    \"cwd\": \".\",\n    \"ticket_id\": my_ticket_id\n})\n```\n\nSTEP 11: SAVE TO MEMORY\n\n```python\nsave_memory(\n\
+  \    content=\"[Component/System] documentation complete. Location: docs/[name].md. Includes: usage examples, API reference,\
+  \ integration guide, deployment instructions. All tests passed. Component ready for production.\",\n    agent_id=\"[YOUR\
+  \ ACTUAL AGENT ID]\",\n    memory_type=\"discovery\"\n)\n```\n\nSTEP 12: MOVE TICKET TO DONE AND RESOLVE IT\n\n**✅✅✅ CRITICAL:\
+  \ YOU ARE THE ONLY PHASE THAT RESOLVES TICKETS! ✅✅✅**\n\n**This is your exclusive responsibility - no other phase can call\
+  \ resolve_ticket()!**\n\nFirst, move ticket to \"done\" status:\n```python\nmcp__hephaestus__change_ticket_status({\n  \
+  \  \"ticket_id\": my_ticket_id,\n    \"agent_id\": \"[YOUR ACTUAL AGENT ID]\",\n    \"new_status\": \"done\",\n    \"comment\"\
+  : \"[Component] COMPLETE! All tests passing (100% success rate after fixing small bugs). Documentation written and tested.\
+  \ Ready for production. Ticket moving from 'validating-done' to 'done'.\"\n})\n```\n\nThen, resolve the ticket:\n```python\n\
+  mcp__hephaestus__resolve_ticket({\n    \"ticket_id\": my_ticket_id,\n    \"agent_id\": \"[YOUR ACTUAL AGENT ID]\",\n   \
+  \ \"resolution_comment\": \"[Component] complete! Design spec at design/[component]_design.md, code implemented and tested\
+  \ (100% pass rate by Phase 2, validated by Phase 3, small bugs fixed during validation), documentation written and tested.\
+  \ Ready for production use. See test_reports/test_report_[component].md for validation details and docs/[component].md for\
+  \ usage guide.\"\n})\n```\n\n**What happens when you resolve:**\n- Ticket marked as resolved\n- Resolution comment recorded\n\
+  - Completion timestamp recorded\n- Any blocked tickets are unblocked\n\nSTEP 13: MARK YOUR TASK AS DONE\n\n**\U0001F6A8\
+  \ MANDATORY: After resolving the ticket and completing documentation, mark your Phase 3 task as DONE! \U0001F6A8**\n\n```python\n\
+  mcp__hephaestus__update_task_status({\n    \"task_id\": \"[your Phase 3 task ID]\",\n    \"agent_id\": \"[YOUR ACTUAL AGENT\
+  \ ID]\",\n    \"status\": \"done\",\n    \"summary\": \"[Component] validation + documentation complete. Fixed {X} small\
+  \ bugs during validation. All tests passing (100% success rate - Phase 2 tested, Phase 3 validated). Test report at test_reports/test_report_[component].md.\
+  \ Documentation written and tested at docs/[component].md. Ticket resolved and moved to 'done'. Component is production-ready!\"\
+  \n})\n```\n\n**This is CRITICAL - without marking your task as Done, the system doesn't know you're finished!**\n\nYour\
+  \ task is complete when:\n✅ All tests executed\n✅ Small bugs fixed immediately\n✅ Test report created with fixes documented\n\
+  ✅ IF critical bugs: ONE Phase 2 task created (consolidating ALL bugs), ticket moved to 'building', task marked done\n✅ IF\
+  \ tests pass: Documentation created and tested\n✅ IF tests pass: Ticket RESOLVED and moved to 'done'\n✅ Your Phase 3 task\
+  \ marked as \"done\"\n\n═══════════════════════════════════════════════════════════════════════\nCRITICAL RULES\n═══════════════════════════════════════════════════════════════════════\n\
+  \n✅ DO:\n- Read ticket FIRST to understand scope\n- Read test instructions from run_instructions/ before testing\n- Execute\
+  \ ALL relevant tests per ticket\n- Fix bugs via Task tool (or direct tiny fixes only)\n- Document EVERYTHING in test report\
+  \ (pass, fail, fixes)\n- Create ONE Phase 2 task for fundamental design issues ONLY (rare!)\n- Write clear, user-focused\
+  \ documentation (if tests pass)\n- Provide working, tested examples\n- Test all documentation examples\n- **RESOLVE the\
+  \ ticket when tests pass + docs written (YOU are the only phase that can!)**\n- Save results to memory\n- Mark task complete\
+  \ (whether escalating design issues OR writing docs)\n\n❌ DO NOT:\n- Skip reading the ticket\n- Skip reading test instructions\
+  \ from run_instructions/\n- Skip updating ticket to \"validating\" status\n- Try to fix implementation bugs yourself (use\
+  \ Task tool!)\n- Escalate implementation bugs to Phase 2 (use Task tool instead!)\n- **Create Phase 2 tasks for test failures**\
+  \ (fix via Task tool!)\n- Write documentation if fundamental design issues remain\n- Copy-paste code comments as documentation\n\
+  - Assume users know internal details\n- Skip examples (examples are critical!)\n- Leave TODOs or placeholders in docs\n\
+  - Forget to TEST your documentation examples\n- Forget to RESOLVE the ticket (if tests pass - this is YOUR exclusive responsibility!)\n\
+  - Forget to mark your Phase 3 task as \"done\"\n- Create tasks without \"TICKET: xxx\" in descriptions\n- Create duplicate\
+  \ tasks (search first!)\n- Create new tickets (ticket already exists!)"
+outputs:
+- test_reports/test_report_[scope].md with comprehensive results and fixes documented
+- ONE Phase 2 fix task consolidating ALL critical bugs (if critical bugs found)
+- docs/[component].md - Component or system documentation (if tests pass)
+- docs/README.md - Project documentation (if system-level, tests pass)
+- Usage examples in documentation - tested and working (if tests pass)
+- API reference in documentation (if tests pass)
+- Resolved ticket moved to 'done' status (if tests pass)
+- Memory entries documenting test outcomes and documentation
+next_steps:
+- Tests pass → Ticket to 'done', documentation written, ticket RESOLVED
+- Critical bugs → Ticket to 'building', ONE Phase 2 fix task created (same ticket ID), NO docs written
+- Phase 2 fixes → Ticket moves 'building' → 'building-done' → Phase 3 retest
+- After Phase 2 fixes → New Phase 3 agent retests, writes docs if pass
