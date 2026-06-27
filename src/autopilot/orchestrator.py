@@ -1561,10 +1561,11 @@ def run_single_design(
     # Copy phase definitions BEFORE workflow so forensics agent can read them
     phases_dir = docs_dir / "phase_prompts"
     phases_dir.mkdir(exist_ok=True)
-    phase_files = list((HEPHAESTUS_DIR / "src" / "autopilot").glob("phase_*.py"))
-    for pf in sorted(phase_files):
+    autopilot_workflow_dir = HEPHAESTUS_DIR / "config" / "workflows" / "autopilot"
+    phase_files = [p for p in sorted(autopilot_workflow_dir.glob("*.yaml")) if p.name != "workflow.yaml"]
+    for pf in phase_files:
         shutil.copy2(pf, phases_dir / pf.name)
-    logger.info(f"Copied {len(phase_files)} phase prompts to {phases_dir}")
+    logger.info(f"Copied {len(phase_files)} phase YAML files to {phases_dir}")
 
     # Write initial pipeline_metrics.json BEFORE workflow so forensics agent can read it
     # (will be updated with final values after workflow completes)
