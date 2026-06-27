@@ -594,6 +594,21 @@ class PhaseManager:
                 )
                 if target_phase:
                     logger.info(f"Goto phase {target_phase.name} from {phase.name}")
+                    # Reset any phase_executions between target and current that are
+                    # still "in_progress" — these are stale records from a prior pass
+                    # that were never closed when the pipeline rewound.
+                    stale = session.query(PhaseExecution).join(Phase).filter(
+                        Phase.workflow_id == phase.workflow_id,
+                        Phase.order >= target_phase.order,
+                        Phase.order < phase.order,
+                        PhaseExecution.status == "in_progress",
+                    ).all()
+                    for s in stale:
+                        s.status = "completed"
+                        s.completed_at = datetime.utcnow()
+                    if stale:
+                        session.commit()
+                        logger.info(f"Reset {len(stale)} stale in_progress phase(s) before GOTO to {target_phase.name}")
                     return {"action": "goto", "target_phase": target_phase.name, "target_phase_id": target_phase.id, "should_continue": True}
                 else:
                     logger.warning(f"Target phase not found: {evaluation.target_phase}")
