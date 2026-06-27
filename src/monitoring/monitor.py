@@ -1484,8 +1484,18 @@ class MonitoringLoop:
             if not wd:
                 return
 
+            # Resolve to project root so logs survive worktree removal.
+            # The working_directory may be a worktree (.worktrees/wt_*);
+            # walk up past the .worktrees dir to get the stable project root.
+            wd_path = _P(wd)
+            if ".worktrees" in wd_path.parts:
+                for parent in wd_path.parents:
+                    if parent.name == ".worktrees":
+                        wd_path = parent.parent
+                        break
+
             # .hephaestus/ is git-excluded — run artifacts never get committed
-            tmux_dir = _P(wd) / ".hephaestus" / "tmux"
+            tmux_dir = wd_path / ".hephaestus" / "tmux"
             tmux_dir.mkdir(parents=True, exist_ok=True)
             log_file = tmux_dir / f"{phase_name}_{agent_id[:8]}.log"
             log_file.write_text(tmux_output)
