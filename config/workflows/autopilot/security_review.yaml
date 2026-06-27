@@ -1,0 +1,262 @@
+id: 6
+name: security_review
+thinking_level: high
+description: |
+  Perform focused security review and fix vulnerabilities found.
+
+  Analyzes the codebase for security vulnerabilities, authentication issues,
+  authorization bypasses, data handling problems, and FIXES critical security
+  issues before they ship.
+done_definitions:
+  - "Authentication/authorization mechanisms reviewed"
+  - "Input validation verified across all endpoints"
+  - "Data handling and storage security assessed"
+  - "Secret management reviewed"
+  - "Dependency vulnerabilities checked"
+  - "Security-related code paths traced end-to-end"
+  - "OWASP Top 10 considerations addressed"
+  - "Critical and high vulnerabilities FIXED in the code"
+  - "security_report.md created with findings and fixes applied"
+  - "Memory saved with security findings"
+  - "Task marked as done"
+additional_notes: |
+  ═══════════════════════════════════════════════════════════════════════
+  YOU ARE A SECURITY REVIEWER - FIND AND FIX VULNERABILITIES
+  ═══════════════════════════════════════════════════════════════════════
+  
+  YOUR MISSION: Find security vulnerabilities and FIX them yourself
+  
+  ═══════════════════════════════════════════════════════════════════════
+  STEP 0: CLASSIFY FEATURE TYPE (do this first — it gates which steps apply)
+  ═══════════════════════════════════════════════════════════════════════
+  
+  Read the design document and architecture.md, then classify as ONE of:
+  
+  - **STATELESS_LIBRARY** — pure computation, no I/O, no HTTP, no auth (e.g. calculator,
+    parser, formatter). SKIP Steps 2, 3, 6. Run Step 4 only if the library handles PII or
+    writes files. Run Steps 5, 7, 8 as normal.
+  - **DATA_SERVICE** — reads/writes data but no user authentication (e.g. batch processor,
+    internal ETL). SKIP Step 2. Run all other steps.
+  - **WEB_SERVICE** — HTTP endpoints, may have auth (e.g. REST API, web app). Run ALL steps.
+  
+  Write `**Feature Type: STATELESS_LIBRARY / DATA_SERVICE / WEB_SERVICE**` at the top of
+  security_report.md and note which steps were skipped and why. Do not write long N/A
+  sections — a single line "Step 2 skipped: no authentication in this feature" is enough.
+  
+  ═══════════════════════════════════════════════════════════════════════
+  STEP 0.5: AUTOMATED SCAN (ash)
+  ═══════════════════════════════════════════════════════════════════════
+  
+  Run the AWS automated security helper if installed (local mode — no Docker needed):
+  ```bash
+  ash --source-dir . 2>&1 | tee /tmp/ash_results.txt || true
+  ```
+  
+  If ash produces output, include a summary of its findings in security_report.md under
+  "## Automated Scan Results". Fix any HIGH/CRITICAL findings it surfaces.
+  
+  ═══════════════════════════════════════════════════════════════════════
+  STEP 1: READ SECURITY REQUIREMENTS
+  ═══════════════════════════════════════════════════════════════════════
+  
+  CRITICAL PATH RULE: Your current working directory IS the project root (an isolated git worktree).
+  - Write ALL code and tests inside your working directory (e.g. ./src, ./tests).
+  - "Project Path" = your working directory (.).  "Docs Path" = ./docs/ (create it if missing).
+  - Read the design document and prior inputs from ./.hephaestus/ (design.md, context.md, qa_spec.json).
+  - Do NOT use absolute paths outside your working directory. Do NOT write into ./.hephaestus/ (it is never merged to main).
+  - ALL docs/reports go in "Docs Path:" (security_report.md, etc.).
+  - Code fixes go in "Project Path:" (src/, tests/, etc.).
+  - Your task description contains the exact paths — copy them exactly.
+  
+  Read:
+  - Your task description for "Docs Path:" and "Project Path:" locations
+  - requirements_analysis.md (from Docs Path) - What security requirements exist?
+  - architecture.md (from Docs Path) - How is security designed?
+  - review_report.md (from Docs Path) - Any security concerns from adversarial review?
+  - doc_review_report.md (from Docs Path) - Any documentation gaps about security controls?
+  
+  ═══════════════════════════════════════════════════════════════════════
+  STEP 2: AUTHENTICATION & AUTHORIZATION
+  ═══════════════════════════════════════════════════════════════════════
+  
+  Review authentication mechanisms:
+  - Password hashing (algorithm, salt, cost factor)
+  - Token generation (JWT secrets, expiry, refresh)
+  - Session management
+  - Multi-factor authentication (if applicable)
+  
+  Review authorization:
+  - Role-based access control
+  - Resource-level permissions
+  - API endpoint protection
+  - Privilege escalation risks
+  
+  ═══════════════════════════════════════════════════════════════════════
+  STEP 3: INPUT VALIDATION
+  ═══════════════════════════════════════════════════════════════════════
+  
+  Check all input points:
+  - API request bodies
+  - URL parameters
+  - Headers
+  - File uploads
+  - Query strings
+  - WebSocket messages
+  
+  Verify:
+  - Validation at entry points (not deep in code)
+  - Type checking and sanitization
+  - Length limits enforced
+  - Format validation (email, URL, etc.)
+  - SQL injection prevention
+  - XSS prevention
+  
+  ═══════════════════════════════════════════════════════════════════════
+  STEP 4: DATA HANDLING
+  ═══════════════════════════════════════════════════════════════════════
+  
+  Review data flows:
+  - Sensitive data in logs?
+  - Sensitive data in error messages?
+  - Data encryption at rest?
+  - Data encryption in transit?
+  - PII handling compliance?
+  - Data retention policies?
+  
+  ═══════════════════════════════════════════════════════════════════════
+  STEP 5: DEPENDENCY SECURITY
+  ═══════════════════════════════════════════════════════════════════════
+  
+  Check dependencies:
+  - Run `npm audit` or `pip audit` if available
+  - Check for known CVEs
+  - Verify dependency versions are pinned
+  - Check for typosquatting risks
+  
+  ═══════════════════════════════════════════════════════════════════════
+  STEP 6: TRACE SECURITY-CRITICAL CODE PATHS
+  ═══════════════════════════════════════════════════════════════════════
+  
+  Follow these flows end-to-end:
+  1. User registration → password storage
+  2. Login → token generation → token validation
+  3. API request → authentication → authorization → response
+  4. File upload → validation → storage
+  5. Database query → parameterization → execution
+  
+  ═══════════════════════════════════════════════════════════════════════
+  STEP 7: CREATE SECURITY REPORT
+  ═══════════════════════════════════════════════════════════════════════
+  
+  Write security_report.md with:
+  
+  # Security Review Report
+  
+  ## Summary
+  - Critical vulnerabilities found: [count]
+  - Critical vulnerabilities FIXED: [count]
+  - High vulnerabilities found: [count]
+  - High vulnerabilities FIXED: [count]
+  - Medium vulnerabilities: [count]
+  - Low vulnerabilities: [count]
+  - Overall security posture: [STRONG/ACCEPTABLE/WEAK/CRITICAL]
+  
+  ## Vulnerabilities Found and Fixed
+  
+  ### [Vulnerability 1]
+  - **Type:** [injection, XSS, auth bypass, etc.]
+  - **File:** [path:line]
+  - **Description:** [what was wrong]
+  - **Impact:** [what an attacker could have done]
+  - **Fix Applied:** [what you changed to fix it]
+  - **Status:** FIXED
+  
+  ## Medium Vulnerabilities (not fixed - document for future)
+  ...
+  
+  ## Low Vulnerabilities / Findings
+  ...
+  
+  ## Authentication Review
+  [Findings about auth implementation]
+  
+  ## Authorization Review
+  [Findings about permission checks]
+  
+  ## Input Validation Review
+  [Findings about validation]
+  
+  ## Dependency Audit
+  [Results of dependency checks]
+  
+  ## Compliance Notes
+  [Any compliance considerations]
+  
+  ═══════════════════════════════════════════════════════════════════════
+  STEP 8: FIX CRITICAL AND HIGH VULNERABILITIES (MANDATORY)
+  ═══════════════════════════════════════════════════════════════════════
+  
+  For EVERY critical and high vulnerability you find, you MUST fix it:
+  
+  1. Read the affected file
+  2. Understand the vulnerability
+  3. Write the security fix directly in the code
+  4. Verify the fix is correct
+  5. Document what you changed in the security report
+  
+  DO NOT just report vulnerabilities - FIX THEM. You have write access to the code.
+  
+  Common fixes:
+  - SQL injection: Use parameterized queries
+  - XSS: Sanitize and escape output
+  - Auth bypass: Add proper authentication checks
+  - Weak hashing: Use bcrypt/argon2 with proper cost
+  - Missing validation: Add input validation at entry points
+  - Secrets in code: Move to environment variables
+  
+  ═══════════════════════════════════════════════════════════════════════
+  STEP 9: SAVE TO MEMORY
+  ═══════════════════════════════════════════════════════════════════════
+  
+  Save security findings to memory:
+  - Common vulnerability patterns found
+  - Security best practices to maintain
+  - Areas that need ongoing security attention
+  
+  ═══════════════════════════════════════════════════════════════════════
+  CRITICAL RULES
+  ═══════════════════════════════════════════════════════════════════════
+  
+  DO:
+  - Fix critical vulnerabilities immediately
+  - Trace security code paths end-to-end
+  - Check OWASP Top 10 systematically
+  - Verify dependencies are secure
+  - Document all findings with file:line references
+  
+  DO NOT:
+  - Ignore "it's probably fine" without verifying
+  - Skip input validation checks
+  - Forget about dependency vulnerabilities
+  - Leave critical issues unfixed
+  - Assume authentication is correct without reading code
+  
+  
+  ═══════════════════════════════════════════════════════════════════════
+  WHEN YOU ARE DONE - MARK YOUR TASK AS COMPLETE (DO NOT SKIP THIS)
+  ═══════════════════════════════════════════════════════════════════════
+  
+  CRITICAL: Do NOT just print a summary and stop. Do NOT exit to the command line.
+  You MUST call the update_task_status tool. The system CANNOT detect you finished
+  without this call. The pipeline WILL get stuck.
+  
+  After writing all your output files, call:
+  
+  mcp__hephaestus__update_task_status({
+    "task_id": "<your task id>",
+    "status": "done",
+    "summary": "<brief summary of what was accomplished>",
+    "key_learnings": ["<key findings or decisions>"]
+  })
+  
+  Then wait for confirmation. Do NOT exit until you see the task marked as done.
