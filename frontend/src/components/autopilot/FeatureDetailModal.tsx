@@ -382,6 +382,26 @@ const LogsTab: React.FC<{
 }> = ({ logs, selectedLog, logContent, onSelectLog }) => {
   const preRef = useRef<HTMLPreElement>(null);
   const [following, setFollowing] = useState(false);
+  const [toast, setToast] = useState<string | null>(null);
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const showToast = (msg: string) => {
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    setToast(msg);
+    toastTimer.current = setTimeout(() => setToast(null), 2000);
+  };
+
+  useEffect(() => () => { if (toastTimer.current) clearTimeout(toastTimer.current); }, []);
+
+  const handleMouseUp = () => {
+    const sel = window.getSelection();
+    if (!sel || sel.isCollapsed) return;
+    const text = sel.toString();
+    if (!text.trim()) return;
+    navigator.clipboard.writeText(text).then(() => {
+      showToast(`Copied ${text.length} chars`);
+    });
+  };
 
   // When content updates, scroll to bottom only if already in follow mode.
   useEffect(() => {
@@ -434,7 +454,12 @@ const LogsTab: React.FC<{
       </div>
 
       {/* Content */}
-      <div className="flex-1 overflow-hidden flex flex-col bg-gray-950">
+      <div className="relative flex-1 overflow-hidden flex flex-col bg-gray-950">
+        {toast && (
+          <div className="absolute bottom-4 right-4 z-10 bg-gray-800 text-green-300 text-xs px-3 py-1.5 rounded-lg shadow-lg pointer-events-none select-none">
+            {toast}
+          </div>
+        )}
         {selectedLog && logContent ? (
           <>
             <div className="flex items-center justify-between px-4 py-2 border-b border-gray-800 bg-gray-900">
@@ -464,6 +489,7 @@ const LogsTab: React.FC<{
             <pre
               ref={preRef}
               onScroll={handleScroll}
+              onMouseUp={handleMouseUp}
               className="flex-1 overflow-y-auto p-4 text-xs text-green-300 font-mono leading-relaxed whitespace-pre-wrap break-all"
             >
               {stripAnsi(logContent.content)}
