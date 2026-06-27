@@ -99,28 +99,17 @@ def build_phase(phase_cfg: dict, default_model: str, default_thinking: str) -> P
                 criteria=v.get("criteria", []),
             )
 
-    def _get(key: str, capitalized: str, default=None):
-        return phase_cfg.get(key) or phase_cfg.get(capitalized) or default
-
-    raw_outputs = _get("outputs", "Outputs", [])
-    if isinstance(raw_outputs, str):
-        raw_outputs = [line.lstrip("- ").strip() for line in raw_outputs.splitlines() if line.strip()]
-
-    raw_next = _get("next_steps", "Next_Steps", [])
-    if isinstance(raw_next, str):
-        raw_next = [line.lstrip("- ").strip() for line in raw_next.splitlines() if line.strip()]
-
     return Phase(
         id=phase_cfg["id"],
         name=phase_cfg["name"],
-        description=_get("description", "Description", ""),
-        done_definitions=_get("done_definitions", "Done_Definitions", []),
-        additional_notes=_get("additional_notes", "Additional_Notes", ""),
+        description=phase_cfg.get("description", ""),
+        done_definitions=phase_cfg.get("done_definitions", []),
+        additional_notes=phase_cfg.get("additional_notes", ""),
         thinking_level=phase_cfg.get("thinking_level", default_thinking),
         cli_model=phase_cfg.get("model") or phase_cfg.get("cli_model") or default_model,
         working_directory=phase_cfg.get("working_directory", "."),
-        outputs=raw_outputs,
-        next_steps=raw_next,
+        outputs=phase_cfg.get("outputs", []),
+        next_steps=phase_cfg.get("next_steps", []),
         validation=validation,
     )
 
