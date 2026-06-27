@@ -1,0 +1,520 @@
+id: 1
+name: requirements_analysis
+description: 'Analyze the PRD document and extract structured requirements.
+
+
+  This phase is the entry point for the workflow. It reads the PRD (could be PRD.md,
+
+  REQUIREMENTS.md, README.md, or any markdown file), extracts functional and non-functional
+
+  requirements, identifies the components that need to be built, and spawns multiple Phase 2
+
+  tasks - one for each major component.
+
+
+  Works for ANY type of software project.'
+done_definitions:
+- PRD document located and thoroughly analyzed
+- Functional requirements extracted and documented
+- Non-functional requirements (performance, security, etc.) identified
+- Infrastructure needs identified (project setup, build tools, frameworks)
+- Implementation order and dependencies determined
+- System components identified and categorized
+- Dependencies between components mapped with blocking relationships
+- Success criteria defined (how to know when done)
+- 'CRITICAL: Infrastructure tickets created FIRST with no blockers'
+- 'CRITICAL: Component tickets created with proper blocked_by_ticket_ids'
+- 'CRITICAL: ONE Phase 2 Plan & Implementation task created for EVERY ticket (1:1 relationship)'
+- All requirements and decisions saved to memory for the hive mind
+working_directory: .
+additional_notes: "═══════════════════════════════════════════════════════════════════════\nYOU ARE A REQUIREMENTS ANALYST\
+  \ - UNDERSTAND WHAT TO BUILD\n═══════════════════════════════════════════════════════════════════════\n\n\U0001F3AF YOUR\
+  \ MISSION: Parse the PRD and spawn component design tasks\n\n═══════════════════════════════════════════════════════════════════════\n\
+  ⚠️ CRITICAL WORKFLOW RULES - READ BEFORE STARTING\n═══════════════════════════════════════════════════════════════════════\n\
+  \n0. **\U0001F6A8 ALWAYS USE YOUR ACTUAL AGENT ID! \U0001F6A8**\n   DO NOT use \"agent-mcp\" - that's just a placeholder\
+  \ in examples!\n   Your actual agent ID is in your task context or environment.\n\n   ❌ WRONG: `\"agent_id\": \"agent-mcp\"\
+  `\n   ✅ RIGHT: `\"agent_id\": \"[your actual agent ID from task context]\"`\n\n   Use your real agent ID in ALL MCP tool\
+  \ calls:\n   - change_ticket_status\n   - create_ticket\n   - create_task\n   - update_task_status\n   - save_memory\n \
+  \  - search_tickets\n   - ALL other MCP calls\n\n1. **SEARCH BEFORE CREATING TASKS** (Prevent Duplicates)\n   Before creating\
+  \ ANY task, search existing tasks:\n   ```python\n   existing = mcp__hephaestus__search_tickets({\n       \"agent_id\":\
+  \ \"[YOUR ACTUAL AGENT ID]\",  # NOT \"agent-mcp\"!\n       \"query\": \"[component name] design\",\n       \"search_type\"\
+  : \"hybrid\",\n       \"limit\": 5\n   })\n   # Review results - if similar task exists, DO NOT create duplicate!\n   ```\n\
+  \n2. **ALWAYS INCLUDE TICKET ID IN TASKS**\n   Every task description MUST include: \"TICKET: ticket-xxxxx\"\n   Example:\
+  \ \"Phase 2: Design Auth - TICKET: ticket-abc123. ...\"\n\n3. **ALWAYS MARK YOUR TASK AS DONE**\n   When you finish ALL\
+  \ your work, update your task:\n   ```python\n   mcp__hephaestus__update_task_status({\n       \"task_id\": \"[your task\
+  \ ID]\",\n       \"agent_id\": \"[YOUR ACTUAL AGENT ID]\",  # NOT \"agent-mcp\"!\n       \"status\": \"done\",\n       \"\
+  summary\": \"Requirements analyzed. Created [N] component tickets and Phase 2 tasks.\"\n   })\n   ```\n\n4. **ONLY PHASE\
+  \ 5 RESOLVES TICKETS**\n   - Phase 1: Create tickets in 'backlog', but NEVER resolve them\n   - Only Phase 5 can call resolve_ticket()\n\
+  \n═══════════════════════════════════════════════════════════════════════\n\nSTEP 1: FIND THE PRD DOCUMENT\nLook for files\
+  \ like:\n- PRD.md, prd.md\n- REQUIREMENTS.md, requirements.md\n- README.md (may contain requirements)\n- SPEC.md, specification.md\n\
+  - Any .md file mentioned in the task description\n\nRead it thoroughly. This is your source of truth.\n\nSTEP 2: EXTRACT\
+  \ REQUIREMENTS\n\nFunctional Requirements (what it must DO):\n- Core features and capabilities\n- User interactions and\
+  \ workflows\n- Data processing and transformations\n- Integrations with external systems\n- Business logic and rules\n\n\
+  Non-Functional Requirements (how it must PERFORM):\n- Performance targets (response time, throughput)\n- Security requirements\
+  \ (auth, encryption, compliance)\n- Scalability needs (users, data volume)\n- Availability/reliability targets\n- Technology\
+  \ constraints or preferences\n\n**\U0001F6A8 CRITICAL: RESPECT PRD TECH STACK CHOICES!**\nThe PRD document specifies EXACT\
+  \ technology choices. You MUST follow them exactly:\n- If PRD says \"SQLite\" → Use SQLite, NOT SQLAlchemy or PostgreSQL\n\
+  - If PRD says \"React\" → Use React, NOT Vue or Angular\n- If PRD says \"FastAPI\" → Use FastAPI, NOT Flask or Django\n\
+  - If PRD says \"Basic CSS\" → Use Basic CSS, NOT Tailwind or Styled Components\n\n**NEVER substitute technologies unless\
+  \ the PRD explicitly allows alternatives!**\n**The tech stack in the PRD is NOT optional - it's a requirement!**\n\nSuccess\
+  \ Criteria (how to know it's DONE):\n- Acceptance criteria for each feature\n- Test scenarios that must pass\n- Performance\
+  \ benchmarks to meet\n- Documentation requirements\n\nSTEP 3: IDENTIFY COMPONENTS\n\nBreak the system into logical modules.\
+  \ Common patterns:\n\nFor Web Applications:\n- Authentication/Authorization\n- Database layer\n- API/Backend services\n\
+  - Frontend/UI\n- External integrations\n- Deployment infrastructure\n\nFor CLI Tools:\n- Argument parsing\n- Core logic/engine\n\
+  - Output formatting\n- Configuration management\n- Error handling\n\nFor Libraries:\n- Core API\n- Utility functions\n-\
+  \ Integration helpers\n- Documentation/examples\n- Testing framework\n\nFor Microservices:\n- Individual services\n- Inter-service\
+  \ communication\n- Data storage\n- API gateway\n- Monitoring/logging\n\n**Integration Tasks (CRITICAL):**\nThink about what\
+  \ integration work is needed to connect components together. Integration tasks should run at the end after individual components\
+  \ are complete. Consider:\n- Frontend-backend API integration\n- Database integration with services\n- Authentication flows\
+  \ across components\n- End-to-end workflows\n- Component wiring and orchestration\n\nDocument each component with:\n- Purpose:\
+  \ What does it do?\n- Inputs: What data does it receive?\n- Outputs: What does it produce?\n- Dependencies: What other components\
+  \ does it need?\n\nSTEP 4: SAVE TO MEMORY (CRITICAL FOR HIVE MIND)\n\nmemory_type: decision\n- \"Technology stack: [stack]\
+  \ because [reasons]\"\n- \"Architecture pattern: [pattern] because [reasons]\"\n- \"Component [X] must integrate with [Y]\
+  \ via [method]\"\n\nmemory_type: codebase_knowledge\n- \"Project type: [web/cli/library/service/etc.]\"\n- \"Primary language:\
+  \ [language]\"\n- \"Key frameworks: [list]\"\n- \"Component list: [all components identified]\"\n\nmemory_type: warning\n\
+  - \"Security requirement: [specific requirement]\"\n- \"Performance target: [specific target]\"\n- \"MUST NOT [constraint\
+  \ from PRD]\"\n\nWHY: All Phase 2+ agents will retrieve these memories to understand\nthe overall system architecture and\
+  \ constraints.\n\nSTEP 5: CREATE REQUIREMENTS DOCUMENT\n\nCreate requirements_analysis.md with:\n\n```markdown\n# Requirements\
+  \ Analysis\n\n## PRD Summary\n[2-3 sentences summarizing what needs to be built]\n\n## Functional Requirements\n1. [Requirement\
+  \ 1]\n   - Acceptance criteria: [how to verify]\n2. [Requirement 2]\n   ...\n\n## Non-Functional Requirements\n- Performance:\
+  \ [targets]\n- Security: [requirements]\n- Scalability: [needs]\n...\n\n## System Architecture\n\n### Components\n1. **[Component\
+  \ Name]**\n   - Purpose: [what it does]\n   - Inputs: [data it receives]\n   - Outputs: [data it produces]\n   - Dependencies:\
+  \ [other components]\n\n2. **[Component Name]**\n   ...\n\n### Integration Points\n- [Component A] → [Component B]: [how\
+  \ they connect]\n\n## Technology Stack\n- Language: [choice] because [reasons]\n- Framework: [choice] because [reasons]\n\
+  - Database: [choice] because [reasons]\n- Deployment: [choice] because [reasons]\n\n## Success Criteria\n✅ [Criterion 1]\n\
+  ✅ [Criterion 2]\n...\n```\n\nSTEP 5A: IDENTIFY INFRASTRUCTURE NEEDS\n\n**CRITICAL: Before identifying components, identify\
+  \ infrastructure setup needs!**\n\nInfrastructure must be built FIRST before any features can be implemented.\n\n**\U0001F6A8\
+  \U0001F6A8\U0001F6A8 CRITICAL: INFRASTRUCTURE = SKELETON ONLY, NEVER FEATURES! \U0001F6A8\U0001F6A8\U0001F6A8**\n\n**\U0001F6A8\
+  \U0001F6A8\U0001F6A8 CRITICAL PROJECT STRUCTURE RULES - MUST FOLLOW! \U0001F6A8\U0001F6A8\U0001F6A8**\n\n**1. PORT 8300\
+  \ IS RESERVED - NEVER USE IT!**\n- Port 8300 is used by Hephaestus MCP server and MUST remain open\n- If your project needs\
+  \ a backend server, use a DIFFERENT port (8002, 3000, 5000, etc.)\n- ❌ WRONG: Backend runs on port 8300\n- ✅ CORRECT: Backend\
+  \ runs on port 8002 (or any port except 8300)\n\n**2. FRONTEND AND BACKEND MUST BE IN SEPARATE DIRECTORIES!**\n- Create\
+  \ a `frontend/` directory for ALL frontend code\n- Create a `backend/` directory for ALL backend code\n- NEVER mix frontend\
+  \ and backend code in a single `src/` directory\n- ❌ WRONG: Single `src/` with mixed frontend/backend code\n- ✅ CORRECT:\
+  \ `frontend/src/` and `backend/src/` as separate directories\n\n**Example Correct Project Structure:**\n```\nproject-root/\n\
+  ├── frontend/\n│   ├── src/\n│   │   ├── components/\n│   │   ├── pages/\n│   │   └── utils/\n│   ├── package.json\n│  \
+  \ └── vite.config.ts\n├── backend/\n│   ├── src/\n│   │   ├── api/\n│   │   ├── models/\n│   │   └── services/\n│   ├──\
+  \ main.py\n│   └── requirements.txt\n└── README.md\n```\n\n**INFRASTRUCTURE SCOPE RULES - READ CAREFULLY:**\n\n**✅ INFRASTRUCTURE\
+  \ IS:**\n- Running setup commands (create-react-app, poetry init, npm init, etc.)\n- Creating basic project skeleton with\
+  \ empty folders\n- Installing and configuring tools (linters, formatters, build tools)\n- Setting up configuration files\
+  \ (.env templates, config files)\n- Basic \"hello world\" or minimal boilerplate to verify setup works\n\n**❌ INFRASTRUCTURE\
+  \ IS NOT:**\n- Implementing ANY features or business logic\n- Creating components, pages, or modules\n- Writing authentication,\
+  \ APIs, database models, etc.\n- Anything beyond basic project skeleton and tooling\n\n**EXAMPLES OF CORRECT INFRASTRUCTURE\
+  \ SCOPE:**\n\n✅ **Frontend Infrastructure (React):**\n- Create `frontend/` directory\n- Run `npx create-react-app frontend\
+  \ --template typescript` (or `npm create vite@latest frontend -- --template react-ts`)\n- Install ESLint, Prettier in frontend/\n\
+  - Create basic folder structure (frontend/src/components/, frontend/src/pages/, frontend/src/utils/)\n- Configure Tailwind\
+  \ CSS\n- **THAT'S IT! No components, no pages, no features!**\n\n✅ **Backend Infrastructure (FastAPI):**\n- Create `backend/`\
+  \ directory\n- Run `poetry init` inside backend/ and `poetry add fastapi uvicorn`\n- Create backend/main.py with minimal\
+  \ FastAPI app and ONE hello world endpoint\n- **CRITICAL: Configure backend to run on PORT 8002 (or any port except 8000!)**\n\
+  - Set up CORS middleware\n- Create folder structure (backend/api/, backend/models/, backend/services/, backend/utils/)\n\
+  - Create backend/.env.example template\n- **THAT'S IT! No auth, no database models, no business logic!**\n\n✅ **Database\
+  \ Infrastructure:**\n- Install PostgreSQL\n- Create database\n- Install SQLAlchemy / ORM\n- Create database.py with connection\
+  \ setup\n- Initialize Alembic for migrations\n- **THAT'S IT! No models, no schemas, no tables!**\n\n❌ **WRONG - TOO MUCH\
+  \ SCOPE:**\n- ❌ \"Frontend Infrastructure: Create React app AND implement Login component and Dashboard component\"\n- ❌\
+  \ \"Backend Infrastructure: Set up FastAPI AND implement user authentication and JWT tokens\"\n- ❌ \"Database Infrastructure:\
+  \ Set up PostgreSQL AND create User table and Auth schema\"\n\n**All of the above are WRONG! Auth, Login, User models are\
+  \ FEATURES, not infrastructure!**\n\n❌ **WRONG - VIOLATES PROJECT STRUCTURE RULES:**\n- ❌ \"Backend Infrastructure: Set\
+  \ up FastAPI on port 8300\" ← Port 8300 is RESERVED!\n- ❌ \"Create single src/ directory with both frontend and backend\
+  \ code\" ← Must be separate!\n- ❌ \"Set up unified codebase in src/\" ← Frontend and backend MUST be in separate directories!\n\
+  \nAsk yourself:\n- What needs to be set up before ANY code can be written?\n- What project structure/scaffolding is needed?\n\
+  - What build tools, package managers, or frameworks need initialization?\n\n**⚠️ IF IT IMPLEMENTS A FEATURE OR BUSINESS\
+  \ LOGIC, IT'S NOT INFRASTRUCTURE!**\n\nCommon infrastructure needs by project type (SETUP ONLY):\n\n**Web Applications (Frontend):**\n\
+  - Create `frontend/` directory\n- Create React app inside frontend/ (create-react-app, Vite, Next.js)\n- TypeScript configuration\n\
+  - Tailwind CSS / styling setup\n- Build tooling (Webpack, Vite)\n- **NOT: Router setup, State management, Components, Pages**\
+  \ ← These are features!\n\n**Web Applications (Backend):**\n- Create `backend/` directory\n- FastAPI/Flask/Django project\
+  \ initialization inside backend/\n- **CRITICAL: Configure to run on PORT 8002 or any port EXCEPT 8000!**\n- Environment\
+  \ configuration (.env, config files)\n- **NOT: Database models, ORM setup, Authentication, API endpoints** ← These are features!\n\
+  \n**CLI Tools:**\n- Package structure (setuptools, Poetry)\n- **NOT: Argument parser, Configuration management, Business\
+  \ logic** ← These are features!\n\n**Libraries:**\n- Package structure and setup.py\n- Testing framework setup\n- **NOT:\
+  \ Core library code, API implementation** ← These are features!\n\n**Microservices:**\n- Docker/containerization setup\n\
+  - **NOT: Service implementation, API gateway, Message queues** ← These are features!\n\nDocument infrastructure needs in\
+  \ requirements_analysis.md under new section:\n\n```markdown\n## Infrastructure Setup\n\n### Required Infrastructure Components\n\
+  1. **[Infrastructure Component 1]**\n   - Purpose: [what it sets up]\n   - Tools: [specific tools/commands]\n   - Must be\
+  \ completed before: [which components depend on this]\n\n2. **[Infrastructure Component 2]**\n   ...\n```\n\nExample for\
+  \ a React + FastAPI app:\n```markdown\n## Infrastructure Setup\n\n### Required Infrastructure Components\n1. **Frontend\
+  \ Project Initialization**\n   - Purpose: Set up React TypeScript project with Vite\n   - Tools: `npm create vite@latest\
+  \ frontend -- --template react-ts`\n   - Must be completed before: All frontend components\n\n2. **Backend Project Initialization**\n\
+  \   - Purpose: Set up FastAPI project structure with Poetry\n   - Tools: `poetry init`, create main.py, setup CORS\n   -\
+  \ Must be completed before: All API endpoints\n\n3. **Database Setup**\n   - Purpose: Initialize PostgreSQL database and\
+  \ SQLAlchemy\n   - Tools: PostgreSQL, SQLAlchemy, Alembic migrations\n   - Must be completed before: Auth, API endpoints,\
+  \ all database-dependent components\n\n4. **Build and Development Tooling**\n   - Purpose: Set up development environment,\
+  \ linters, formatters\n   - Tools: ESLint, Prettier (frontend), Black, mypy (backend)\n   - Must be completed before: Any\
+  \ code development\n```\n\nSTEP 5B: DETERMINE IMPLEMENTATION ORDER AND BLOCKING RELATIONSHIPS\n\n**\U0001F6A8\U0001F6A8\U0001F6A8\
+  \ CRITICAL: YOU MUST PLAN IMPLEMENTATION ORDER BEFORE CREATING TICKETS! \U0001F6A8\U0001F6A8\U0001F6A8**\n\n**This is NOT\
+  \ optional! You MUST think through dependencies and blocking relationships!**\n\n**DO NOT skip this step. DO NOT create\
+  \ tickets without determining blocking relationships first!**\n\n---\n\n**Sub-step 1: Identify the Implementation Phases**\n\
+  \nInfrastructure → Foundational Components → Feature Components → Integration\n\nWrite out the implementation phases for\
+  \ YOUR specific project:\n\n```markdown\n## Implementation Order for [PROJECT_NAME]\n\n### Phase 1: Infrastructure (FIRST\
+  \ - NO BLOCKERS)\n**These have NO dependencies. They MUST be built first.**\n\nList your infrastructure needs:\n- [ ] Frontend\
+  \ project setup (e.g., create-react-app, Vite, Next.js)\n- [ ] Backend project setup (e.g., FastAPI, Django, Express)\n\
+  - [ ] Database setup (e.g., PostgreSQL, MySQL, MongoDB)\n- [ ] Build tooling (e.g., ESLint, Prettier, Black, mypy)\n- [\
+  \ ] Docker setup (if needed)\n- [ ] CI/CD pipeline (if needed)\n\n### Phase 2: Foundation (BLOCKED BY: Infrastructure)\n\
+  **These depend on infrastructure. They BLOCK feature development.**\n\nList your foundation components:\n- [ ] Database\
+  \ schema and models (BLOCKED BY: database setup)\n- [ ] Authentication system (BLOCKED BY: database setup, backend setup)\n\
+  - [ ] Core utilities/helpers (BLOCKED BY: project setup)\n- [ ] Logging and monitoring setup (BLOCKED BY: project setup)\n\
+  \n### Phase 3: Core Features (BLOCKED BY: Foundation)\n**These depend on foundation. They provide main functionality.**\n\
+  \nList your feature components:\n- [ ] API Layer (BLOCKED BY: auth, database)\n- [ ] Business logic components (BLOCKED\
+  \ BY: database, auth)\n- [ ] Data processing (BLOCKED BY: database)\n\n### Phase 4: User Interface (BLOCKED BY: Core Features)\n\
+  **These depend on backend features being ready.**\n\nList your UI components:\n- [ ] Frontend components (BLOCKED BY: frontend\
+  \ setup, API)\n- [ ] Pages and routing (BLOCKED BY: frontend setup, API)\n- [ ] State management (BLOCKED BY: frontend setup)\n\
+  \n### Phase 5: Integration (BLOCKED BY: Everything else)\n**These depend on all components being complete.**\n\n- [ ] End-to-end\
+  \ workflows\n- [ ] Frontend-backend API integration\n- [ ] Database integration with services\n- [ ] Authentication flows\
+  \ across components\n- [ ] Component wiring and orchestration\n- [ ] External service integrations\n- [ ] Final polish\n\
+  ```\n\n---\n\n**Sub-step 2: Create Explicit Blocking Relationship Map**\n\n**\U0001F6A8 MANDATORY: For EVERY component,\
+  \ explicitly write down what blocks it! \U0001F6A8**\n\nGo through EVERY component from STEP 3 and determine its blockers:\n\
+  \n```markdown\n## Blocking Relationships for [PROJECT_NAME]\n\n### Infrastructure (No Blockers)\n1. **Frontend Setup** →\
+  \ blocked_by_ticket_ids: []\n2. **Backend Setup** → blocked_by_ticket_ids: []\n3. **Database Setup** → blocked_by_ticket_ids:\
+  \ [Backend Setup ID] (needs backend project structure)\n\n### Foundation Components\n4. **Authentication System**\n   -\
+  \ BLOCKED BY: Database Setup, Backend Setup\n   - blocked_by_ticket_ids: [database_setup_id, backend_setup_id]\n   - BLOCKS:\
+  \ API Layer, all protected endpoints\n\n5. **Database Models**\n   - BLOCKED BY: Database Setup\n   - blocked_by_ticket_ids:\
+  \ [database_setup_id]\n   - BLOCKS: Auth, API, all data operations\n\n### Feature Components\n6. **API Layer**\n   - BLOCKED\
+  \ BY: Authentication, Database Setup, Backend Setup\n   - blocked_by_ticket_ids: [auth_id, database_setup_id, backend_setup_id]\n\
+  \   - BLOCKS: Frontend components, business logic\n\n7. **User Registration Component**\n   - BLOCKED BY: API Layer, Authentication,\
+  \ Frontend Setup\n   - blocked_by_ticket_ids: [api_id, auth_id, frontend_setup_id]\n   - BLOCKS: Nothing (can be worked\
+  \ on in parallel with other UI)\n\n8. **Dashboard Component**\n   - BLOCKED BY: API Layer, Authentication, Frontend Setup\n\
+  \   - blocked_by_ticket_ids: [api_id, auth_id, frontend_setup_id]\n   - BLOCKS: Nothing\n```\n\n**VERIFICATION CHECKLIST\
+  \ - DO NOT PROCEED UNTIL YOU CAN CHECK ALL:**\n- ✅ Every infrastructure component has `blocked_by_ticket_ids: []` OR only\
+  \ blocked by other infrastructure\n- ✅ Every foundation component is blocked by at least one infrastructure component\n\
+  - ✅ Every feature component is blocked by the foundation components it depends on\n- ✅ No component is blocked by a component\
+  \ that comes later in the implementation order\n- ✅ You've written out the explicit blocking relationships for EVERY component\n\
+  \n**If you cannot check all boxes above, GO BACK and fix your blocking relationships!**\n\n---\n\n**Sub-step 3: Prioritize\
+  \ Based on Dependencies**\n\nFor EACH component, assign priority based on how many things it blocks:\n\n- **Critical priority:**\
+  \ Infrastructure + Foundation components that BLOCK many other things\n  - Examples: Database setup, Auth system, Backend\
+  \ setup\n- **High priority:** Feature components that other features depend on\n  - Examples: API layer, Core business logic\n\
+  - **Medium priority:** UI components, integrations, polish\n  - Examples: Individual pages, styling, nice-to-have features\n\
+  \nSTEP 5C: SEARCH FOR EXISTING TASKS (PREVENT DUPLICATES)\n\n**CRITICAL: Before creating tickets and tasks, check if similar\
+  \ work already exists!**\n\nFor EACH component you identified, search to see if a ticket/task already exists:\n\n```python\n\
+  # Search for existing design tasks for this component\nexisting_tasks = mcp__hephaestus__search_tickets({\n    \"agent_id\"\
+  : \"[YOUR ACTUAL AGENT ID]\",  # Use your real agent ID!\n    \"query\": \"[Component Name] design\",  # e.g., \"Authentication\
+  \ design\"\n    \"search_type\": \"hybrid\",\n    \"limit\": 5\n})\n\n# Review the results\n# If you find a similar ticket/task\
+  \ for this component:\n#   - DO NOT create a duplicate\n#   - Use the existing ticket ID\n# If no similar ticket exists:\n\
+  #   - Proceed to create a new ticket (STEP 6A)\n```\n\nExample searches:\n- \"Authentication System design\" - before creating\
+  \ auth ticket\n- \"Database Layer design\" - before creating database ticket\n- \"API Layer design\" - before creating API\
+  \ ticket\n\n**If you find an existing ticket for a component, skip creating a new one for that component.**\n**Only create\
+  \ tickets for components that don't already have tickets.**\n\nSTEP 6A: CREATE TICKETS WITH BLOCKING RELATIONSHIPS (USE\
+  \ YOUR STEP 5B MAP!)\n\n**\U0001F6A8\U0001F6A8\U0001F6A8 CRITICAL: USE THE BLOCKING RELATIONSHIPS YOU JUST MAPPED OUT IN\
+  \ STEP 5B! \U0001F6A8\U0001F6A8\U0001F6A8**\n\n**You MUST create tickets with the EXACT `blocked_by_ticket_ids` you determined\
+  \ in Step 5B Sub-step 2!**\n\n**DO NOT create tickets in random order. DO NOT skip the `blocked_by_ticket_ids` parameter!**\n\
+  \n---\n\n**Ticket Creation Order (STRICTLY FOLLOW THIS ORDER):**\n\n1. **Infrastructure tickets FIRST** (blocked_by_ticket_ids:\
+  \ [] or only other infrastructure)\n2. **Foundation tickets SECOND** (blocked_by_ticket_ids: [infrastructure IDs])\n3. **Feature\
+  \ tickets THIRD** (blocked_by_ticket_ids: [foundation IDs + infrastructure IDs])\n4. **Integration tickets LAST** (blocked_by_ticket_ids:\
+  \ [feature IDs])\n\n**Why this order matters:**\n- You need the ticket IDs from infrastructure to block foundation tickets\n\
+  - You need the ticket IDs from foundation to block feature tickets\n- Creating in order ensures you have the IDs you need\
+  \ for blocking\n\n---\n\n**For EACH ticket you create, you MUST:**\n1. Look at your STEP 5B Sub-step 2 blocking map\n2.\
+  \ Find what this component is BLOCKED BY\n3. Use those ticket IDs in `blocked_by_ticket_ids: [...]`\n4. Save the new ticket\
+  \ ID - other tickets will need it for blocking!\n\n**Example workflow:**\n```python\n# Step 1: Create backend infra (no\
+  \ blockers)\nbackend_infra_id = create_ticket(...)[\"ticket_id\"]  # Save this ID!\n\n# Step 2: Create database setup (blocked\
+  \ by backend infra - you have the ID from step 1)\ndatabase_id = create_ticket(..., blocked_by_ticket_ids=[backend_infra_id])[\"\
+  ticket_id\"]  # Save this ID!\n\n# Step 3: Create auth (blocked by database AND backend - you have both IDs from above)\n\
+  auth_id = create_ticket(..., blocked_by_ticket_ids=[database_id, backend_infra_id])[\"ticket_id\"]  # Save this ID!\n\n\
+  # Step 4: Create API (blocked by auth, database, backend - you have all IDs from above)\napi_id = create_ticket(..., blocked_by_ticket_ids=[auth_id,\
+  \ database_id, backend_infra_id])[\"ticket_id\"]\n```\n\n**See how each ticket uses the IDs from previous tickets? That's\
+  \ the blocking chain!**\n\n---\n\n**\U0001F6A8\U0001F6A8\U0001F6A8 CRITICAL: WRITE DETAILED TICKET DESCRIPTIONS! \U0001F6A8\
+  \U0001F6A8\U0001F6A8**\n\n**Before creating ANY ticket, read this carefully:**\n\n**Your ticket descriptions are THE ONLY\
+  \ INFORMATION downstream agents will have!**\n\nAgents in Phase 2, 3, 4, and 5 will ONLY read the ticket description to\
+  \ understand what to do. They will NOT read the PRD. They will NOT read other documentation. They will ONLY read YOUR ticket\
+  \ description!\n\n**Therefore, your ticket descriptions MUST be:**\n\n1. **LONG** - At least 10-15 lines minimum. More is\
+  \ better!\n2. **DETAILED** - Include every specific requirement from the PRD\n3. **EXPLICIT** - Don't assume anything -\
+  \ spell everything out\n4. **COMPLETE** - Cover all acceptance criteria, edge cases, requirements\n5. **STRUCTURED** - Use\
+  \ the format shown below (Purpose, Scope, Dependencies, etc.)\n6. **SPECIFIC** - Include exact file paths, function names,\
+  \ field names from PRD\n7. **CLEAR** - Write as if the reader has never seen the PRD before\n\n**❌ BAD ticket description\
+  \ (TOO SHORT):**\n```\n\"Set up authentication system with login and registration\"\n```\nThis is USELESS! The agent won't\
+  \ know:\n- Which authentication method? JWT? Sessions?\n- What fields are required?\n- What validation rules?\n- What security\
+  \ requirements?\n- What endpoints to create?\n\n**✅ GOOD ticket description (DETAILED):**\n```\n## Component: Authentication\
+  \ System\n\n### Purpose\nImplement comprehensive user authentication including registration, login, session management,\
+  \ and password operations using JWT tokens as specified in PRD section 1.1.\n\n### Scope\n- User registration with email\
+  \ validation (PRD REQ-AUTH-001)\n  - Fields: email (unique), password (min 8 chars, complexity requirements)\n  - Email\
+  \ verification with 24hr token expiry (REQ-AUTH-002)\n  - Password hashing with bcrypt cost 12 (REQ-SEC-001)\n\n- Login\
+  \ with JWT tokens (REQ-AUTH-006 to REQ-AUTH-010)\n  - Access tokens: 1 hour expiry\n  - Refresh tokens: 30 day expiry (90\
+  \ days with \"remember me\")\n  - Rate limiting: 5 attempts per 15 minutes per IP (REQ-SEC-007)\n\n- Password reset functionality\
+  \ (REQ-AUTH-011 to REQ-AUTH-014)\n  - Email-based reset with secure token\n  - Token expiry: 1 hour\n  - Password complexity\
+  \ validation\n\n- User profile management (REQ-AUTH-015 to REQ-AUTH-018)\n  - Update email, password\n  - Account deletion\
+  \ with 30-day grace period\n\n### Dependencies\n- Database Infrastructure (needs User model)\n- Backend Infrastructure (needs\
+  \ FastAPI structure)\n\n### Blocks\nAll protected API endpoints depend on this authentication system.\n\n### Reference\n\
+  See PRD section 1.1 for complete authentication requirements (REQ-AUTH-001 to REQ-AUTH-018).\n```\n\n**This is good because\
+  \ it:**\n- ✅ Specifies exact requirements from PRD\n- ✅ Includes token expiry times\n- ✅ Lists security constraints (bcrypt\
+  \ cost 12, rate limiting)\n- ✅ Details all functionality (registration, login, reset, profile)\n- ✅ References specific\
+  \ PRD sections\n\n**EVERY ticket you create MUST be this detailed!**\n\n**Template for ticket descriptions:**\n```\n## Component:\
+  \ [Component Name]\n\n### Purpose\n[1-2 sentences explaining what this component does and why it exists]\n\n### Scope\n\
+  [Detailed bullet list of EVERY feature, requirement, and acceptance criterion]\n- Feature 1 (PRD REQ-XXX-YYY)\n  - Sub-requirement\
+  \ 1 with specific details\n  - Sub-requirement 2 with specific details\n\n- Feature 2 (PRD REQ-XXX-YYY)\n  - Implementation\
+  \ details\n  - Validation rules\n  - Edge cases to handle\n\n[Continue for ALL features...]\n\n### Dependencies\n[What this\
+  \ component depends on]\n\n### Blocks\n[What depends on this component]\n\n### Reference\nSee PRD section X.Y for complete\
+  \ requirements.\n```\n\n**Remember: Downstream agents ONLY see the ticket description!**\n**If you don't write it in the\
+  \ ticket, they won't know to do it!**\n**Write LONG, DETAILED descriptions or agents will miss requirements!**\n\n---\n\n\
+  **Infrastructure Tickets** (CREATE THESE FIRST):\n\n```python\n# Example 1: Frontend Infrastructure (MINIMAL SETUP ONLY!)\n\
+  frontend_infra_ticket = mcp__hephaestus__create_ticket({\n    \"workflow_id\": \"[workflow_id]\",\n    \"agent_id\": \"\
+  [YOUR ACTUAL AGENT ID]\",  # Use your real agent ID!\n    \"title\": \"Infrastructure: Frontend Project Setup\",\n    \"\
+  description\": (\n        \"## Infrastructure: Frontend Project Setup\\n\\n\"\n        \"### Purpose\\n\"\n        \"Initialize\
+  \ React TypeScript project skeleton with basic tooling in frontend/ directory. SETUP ONLY - NO FEATURES OR COMPONENTS!\\\
+  n\\n\"\n        \"### Scope\\n\"\n        \"\U0001F6A8 CRITICAL: INFRASTRUCTURE = SKELETON ONLY! DO NOT IMPLEMENT FEATURES!\\\
+  n\\n\"\n        \"\U0001F6A8 CRITICAL: ALL frontend code MUST be in frontend/ directory (not src/ or root)!\\n\\n\"\n  \
+  \      \"ONLY do the following setup steps:\\n\"\n        \"- Create frontend/ directory in project root\\n\"\n        \"\
+  - Run `npm create vite@latest frontend -- --template react-ts`\\n\"\n        \"- Install ESLint, Prettier in frontend/\\\
+  n\"\n        \"- Configure Tailwind CSS (install only, no custom styles)\\n\"\n        \"- Create empty folder structure\
+  \ (frontend/src/components/, frontend/src/pages/, frontend/src/utils/)\\n\"\n        \"- Configure TypeScript strict mode\\\
+  n\"\n        \"- Verify dev server runs with default Vite template\\n\\n\"\n        \"❌ DO NOT IMPLEMENT:\\n\"\n       \
+  \ \"- ❌ NO components (Login, Dashboard, etc.)\\n\"\n        \"- ❌ NO pages or routing\\n\"\n        \"- ❌ NO state management\
+  \ setup\\n\"\n        \"- ❌ NO API integration\\n\"\n        \"- ❌ NOTHING beyond basic project skeleton!\\n\\n\"\n    \
+  \    \"### Dependencies\\n\"\n        \"None - this is infrastructure setup\\n\\n\"\n        \"### Blocks\\n\"\n       \
+  \ \"All frontend components depend on this infrastructure being set up first.\\n\\n\"\n        \"### Reference\\n\"\n  \
+  \      \"See requirements_analysis.md 'Infrastructure Setup' section 1.\"\n    ),\n    \"ticket_type\": \"component\",\n\
+  \    \"priority\": \"critical\",  # Infrastructure is always critical!\n    \"tags\": [\"phase-2-pending\", \"infrastructure\"\
+  , \"frontend\"],\n    \"blocked_by_ticket_ids\": [],  # Infrastructure has no blockers\n})\nfrontend_infra_id = frontend_infra_ticket[\"\
+  ticket_id\"]\n\n# Example 2: Backend Infrastructure (MINIMAL SETUP ONLY!)\nbackend_infra_ticket = mcp__hephaestus__create_ticket({\n\
+  \    \"workflow_id\": \"[workflow_id]\",\n    \"agent_id\": \"[YOUR ACTUAL AGENT ID]\",  # Use your real agent ID!\n   \
+  \ \"title\": \"Infrastructure: Backend Project Setup\",\n    \"description\": (\n        \"## Infrastructure: Backend Project\
+  \ Setup\\n\\n\"\n        \"### Purpose\\n\"\n        \"Initialize FastAPI project skeleton with basic tooling in backend/\
+  \ directory. SETUP ONLY - NO FEATURES OR ENDPOINTS!\\n\\n\"\n        \"### Scope\\n\"\n        \"\U0001F6A8 CRITICAL: INFRASTRUCTURE\
+  \ = SKELETON ONLY! DO NOT IMPLEMENT FEATURES!\\n\\n\"\n        \"\U0001F6A8 CRITICAL: ALL backend code MUST be in backend/\
+  \ directory (not src/ or root)!\\n\\n\"\n        \"\U0001F6A8 CRITICAL: Backend MUST run on PORT 8002 (or any port EXCEPT\
+  \ 8000)! Port 8000 is RESERVED!\\n\\n\"\n        \"ONLY do the following setup steps:\\n\"\n        \"- Create backend/\
+  \ directory in project root\\n\"\n        \"- Run `poetry init` inside backend/ and `poetry add fastapi uvicorn`\\n\"\n\
+  \        \"- Create backend/main.py with minimal FastAPI app and ONE hello world endpoint\\n\"\n        \"- **CRITICAL:\
+  \ Configure uvicorn to run on PORT 8002** (not 8000!)\\n\"\n        \"- Set up CORS middleware (basic config only)\\n\"\n\
+  \        \"- Create backend/.env.example file template with PORT=8002\\n\"\n        \"- Create empty folder structure (backend/api/,\
+  \ backend/models/, backend/services/, backend/utils/)\\n\"\n        \"- Install Black, mypy (configuration only, no custom\
+  \ rules)\\n\"\n        \"- Verify server runs with `uvicorn main:app --reload --port 8002`\\n\\n\"\n        \"❌ DO NOT IMPLEMENT:\\\
+  n\"\n        \"- ❌ NO authentication or user management\\n\"\n        \"- ❌ NO database models or connections\\n\"\n   \
+  \     \"- ❌ NO API endpoints beyond hello world\\n\"\n        \"- ❌ NO business logic or services\\n\"\n        \"- ❌ NOTHING\
+  \ beyond basic project skeleton!\\n\\n\"\n        \"### Dependencies\\n\"\n        \"None - this is infrastructure setup\\\
+  n\\n\"\n        \"### Blocks\\n\"\n        \"All backend components depend on this infrastructure being set up first.\\\
+  n\\n\"\n        \"### Reference\\n\"\n        \"See requirements_analysis.md 'Infrastructure Setup' section 2.\"\n    ),\n\
+  \    \"ticket_type\": \"component\",\n    \"priority\": \"critical\",\n    \"tags\": [\"phase-2-pending\", \"infrastructure\"\
+  , \"backend\"],\n    \"blocked_by_ticket_ids\": [],\n})\nbackend_infra_id = backend_infra_ticket[\"ticket_id\"]\n\n# Example\
+  \ 3: Database Infrastructure (MINIMAL SETUP ONLY!)\ndatabase_infra_ticket = mcp__hephaestus__create_ticket({\n    \"workflow_id\"\
+  : \"[workflow_id]\",\n    \"agent_id\": \"[YOUR ACTUAL AGENT ID]\",  # Use your real agent ID!\n    \"title\": \"Infrastructure:\
+  \ Database Setup\",\n    \"description\": (\n        \"## Infrastructure: Database Setup\\n\\n\"\n        \"### Purpose\\\
+  n\"\n        \"Set up database connection skeleton. SETUP ONLY - NO MODELS OR SCHEMAS!\\n\\n\"\n        \"### Scope\\n\"\
+  \n        \"\U0001F6A8 CRITICAL: INFRASTRUCTURE = CONNECTION SETUP ONLY! DO NOT CREATE MODELS!\\n\\n\"\n        \"ONLY do\
+  \ the following setup steps:\\n\"\n        \"- Install PostgreSQL (or SQLite for development)\\n\"\n        \"- Create database\\\
+  n\"\n        \"- Install SQLAlchemy\\n\"\n        \"- Create database.py with basic connection setup and declarative base\\\
+  n\"\n        \"- Initialize Alembic for migrations (initialization only)\\n\"\n        \"- Create database connection pool\
+  \ configuration\\n\"\n        \"- Verify connection works with simple test query\\n\\n\"\n        \"❌ DO NOT IMPLEMENT:\\\
+  n\"\n        \"- ❌ NO database models (User, Product, etc.)\\n\"\n        \"- ❌ NO database schemas or tables\\n\"\n   \
+  \     \"- ❌ NO migrations beyond initial Alembic setup\\n\"\n        \"- ❌ NO CRUD operations or database logic\\n\"\n \
+  \       \"- ❌ NOTHING beyond connection setup!\\n\\n\"\n        \"### Dependencies\\n\"\n        \"- Backend Infrastructure\
+  \ (needs project structure)\\n\\n\"\n        \"### Blocks\\n\"\n        \"Auth, API, and all data-dependent components depend\
+  \ on this.\\n\\n\"\n        \"### Reference\\n\"\n        \"See requirements_analysis.md 'Infrastructure Setup' section\
+  \ 3.\"\n    ),\n    \"ticket_type\": \"component\",\n    \"priority\": \"critical\",\n    \"tags\": [\"phase-2-pending\"\
+  , \"infrastructure\", \"database\"],\n    \"blocked_by_ticket_ids\": [backend_infra_id],  # Blocked by backend infra\n})\n\
+  database_infra_id = database_infra_ticket[\"ticket_id\"]\n```\n\n**Component Tickets** (CREATE AFTER INFRASTRUCTURE):\n\n\
+  Now create tickets for feature components WITH PROPER BLOCKING:\n\n```python\n# Foundation Component Example: Authentication\n\
+  # Auth depends on Database infrastructure being complete\nauth_ticket = mcp__hephaestus__create_ticket({\n    \"workflow_id\"\
+  : \"[workflow_id]\",\n    \"agent_id\": \"[YOUR ACTUAL AGENT ID]\",  # Use your real agent ID!\n    \"title\": \"Authentication\
+  \ System\",\n    \"description\": (\n        \"## Component: Authentication System\\n\\n\"\n        \"### Purpose\\n\"\n\
+  \        \"Handle user login, registration, session management, and password reset using JWT-based tokens.\\n\\n\"\n   \
+  \     \"### Scope\\n\"\n        \"- User registration and login\\n\"\n        \"- JWT token generation and validation\\\
+  n\"\n        \"- Password hashing and verification\\n\"\n        \"- Session management\\n\"\n        \"- Password reset\
+  \ flow\\n\\n\"\n        \"### Dependencies\\n\"\n        \"- Database Infrastructure (for user storage)\\n\"\n        \"\
+  - Backend Infrastructure (for API structure)\\n\\n\"\n        \"### Blocks\\n\"\n        \"All protected API endpoints depend\
+  \ on this authentication system.\\n\\n\"\n        \"### Integration Points\\n\"\n        \"- Provides authentication middleware\
+  \ for API\\n\"\n        \"- Stores user data in database\\n\"\n        \"- Returns JWT tokens to clients\\n\\n\"\n     \
+  \   \"### Reference\\n\"\n        \"See requirements_analysis.md section 3.1 for full authentication requirements.\"\n \
+  \   ),\n    \"ticket_type\": \"component\",\n    \"priority\": \"critical\",  # Auth is critical - many things depend on\
+  \ it\n    \"tags\": [\"phase-2-pending\", \"component\", \"auth\", \"foundation\"],\n    \"blocked_by_ticket_ids\": [database_infra_id,\
+  \ backend_infra_id],  # Can't build auth until DB and backend infra exist!\n})\nauth_ticket_id = auth_ticket[\"ticket_id\"\
+  ]\n\n# Feature Component Example: API Layer\n# API depends on Auth being complete\napi_ticket = mcp__hephaestus__create_ticket({\n\
+  \    \"workflow_id\": \"[workflow_id]\",\n    \"agent_id\": \"[YOUR ACTUAL AGENT ID]\",  # Use your real agent ID!\n   \
+  \ \"title\": \"API Layer\",\n    \"description\": (\n        \"## Component: API Layer\\n\\n\"\n        \"### Purpose\\\
+  n\"\n        \"RESTful API endpoints with authentication middleware, error handling, and rate limiting.\\n\\n\"\n      \
+  \  \"### Scope\\n\"\n        \"- REST API endpoint definitions\\n\"\n        \"- Request/response validation\\n\"\n    \
+  \    \"- Authentication middleware integration\\n\"\n        \"- Error handling and responses\\n\"\n        \"- Rate limiting\\\
+  n\\n\"\n        \"### Dependencies\\n\"\n        \"- Authentication System (for auth middleware)\\n\"\n        \"- Database\
+  \ Infrastructure (for data access)\\n\"\n        \"- Backend Infrastructure (for FastAPI structure)\\n\\n\"\n        \"\
+  ### Integration Points\\n\"\n        \"- Exposes HTTP API to clients\\n\"\n        \"- Uses Auth component for authentication\\\
+  n\"\n        \"- Uses Database for data persistence\\n\\n\"\n        \"### Reference\\n\"\n        \"See requirements_analysis.md\
+  \ section 3.3 for API requirements.\"\n    ),\n    \"ticket_type\": \"component\",\n    \"priority\": \"high\",\n    \"\
+  tags\": [\"phase-2-pending\", \"component\", \"api\", \"feature\"],\n    \"blocked_by_ticket_ids\": [auth_ticket_id, database_infra_id,\
+  \ backend_infra_id],  # API needs auth and database!\n})\napi_ticket_id = api_ticket[\"ticket_id\"]\n\n# Save all ticket\
+  \ IDs - you'll need them for Phase 2 tasks!\n```\n\n**Key principles:**\n- Infrastructure tickets: `priority=\"critical\"\
+  `, `blocked_by_ticket_ids=[]`\n- Foundation tickets (Auth, DB models): `priority=\"critical\"`, blocked by infrastructure\n\
+  - Feature tickets: `priority=\"high\"`, blocked by foundation components they depend on\n- Use `blocked_by_ticket_ids=[...]`\
+  \ to enforce implementation order\n\n---\n\n**\U0001F6A8\U0001F6A8\U0001F6A8 MANDATORY BLOCKING VERIFICATION - DO THIS BEFORE\
+  \ MOVING TO STEP 6B! \U0001F6A8\U0001F6A8\U0001F6A8**\n\n**After creating all tickets, you MUST verify that you actually\
+  \ set up blocking relationships correctly!**\n\nGo back through ALL tickets you just created and verify:\n\n```markdown\n\
+  ## Blocking Relationship Verification\n\n### Infrastructure Tickets Created\n- [ ] Frontend Setup: blocked_by_ticket_ids\
+  \ = [] ✅\n- [ ] Backend Setup: blocked_by_ticket_ids = [] ✅\n- [ ] Database Setup: blocked_by_ticket_ids = [backend_setup_id]\
+  \ ✅\n\n### Foundation Tickets Created\n- [ ] Authentication: blocked_by_ticket_ids = [database_id, backend_id] ✅\n- [ ]\
+  \ Database Models: blocked_by_ticket_ids = [database_id] ✅\n\n### Feature Tickets Created\n- [ ] API Layer: blocked_by_ticket_ids\
+  \ = [auth_id, database_id, backend_id] ✅\n- [ ] User Registration: blocked_by_ticket_ids = [api_id, auth_id, frontend_id]\
+  \ ✅\n- [ ] Dashboard: blocked_by_ticket_ids = [api_id, auth_id, frontend_id] ✅\n\n### Integration Tickets Created (if needed)\n\
+  - [ ] Frontend-Backend Integration: blocked_by_ticket_ids = [api_id, frontend_id] ✅\n- [ ] End-to-End Workflows: blocked_by_ticket_ids\
+  \ = [all component IDs] ✅\n\n### Verification Checks\n- ✅ EVERY foundation ticket has at least one infrastructure ticket\
+  \ blocking it\n- ✅ EVERY feature ticket has at least one foundation ticket blocking it\n- ✅ EVERY integration ticket is\
+  \ blocked by ALL components it integrates\n- ✅ NO ticket can start before its blockers are resolved\n- ✅ Infrastructure\
+  \ tickets form the base (most have no blockers or only other infrastructure)\n- ✅ The dependency chain makes logical sense\
+  \ (can't build auth without database)\n```\n\n**CRITICAL CHECKS - ALL MUST BE TRUE:**\n1. ✅ Did you create tickets in order\
+  \ (infrastructure → foundation → features)?\n2. ✅ Did you save each ticket ID after creation so you could use it for blocking?\n\
+  3. ✅ Did you use `blocked_by_ticket_ids=[...]` for tickets that have dependencies?\n4. ✅ Did you use empty `blocked_by_ticket_ids=[]`\
+  \ for infrastructure with no dependencies?\n5. ✅ Do the blocking relationships match what you planned in STEP 5B Sub-step\
+  \ 2?\n\n**If ANY check is ❌, you did NOT set up blocking correctly! You must fix this!**\n\n**Common mistakes to avoid:**\n\
+  - ❌ Creating all tickets with `blocked_by_ticket_ids=[]` (nothing is blocked - wrong!)\n- ❌ Not saving ticket IDs and therefore\
+  \ can't use them for blocking later tickets\n- ❌ Creating tickets in random order instead of infrastructure → foundation\
+  \ → features\n- ❌ Forgetting to include the `blocked_by_ticket_ids` parameter entirely\n\n**Only proceed to STEP 6B after\
+  \ verifying ALL blocking relationships are correct!**\n\n---\n\nSTEP 6B: CREATE PHASE 2 TASKS (ONE TASK PER TICKET - 1:1\
+  \ RELATIONSHIP)\n\n**\U0001F6A8\U0001F6A8\U0001F6A8 CRITICAL RULE: EVERY TICKET MUST HAVE A CORRESPONDING TASK! \U0001F6A8\
+  \U0001F6A8\U0001F6A8**\n\n**Phase 2 is now \"Plan & Implementation\" - agents will design AND implement in one phase!**\n\
+  \n**⚠️ WARNING: If you created 13 tickets, you MUST create 13 tasks. Not 12. Not 10. Not 5. THIRTEEN!**\n\n**⛔ BEFORE YOU\
+  \ START: READ THIS CAREFULLY!**\n\n**You are about to create Phase 2 tasks. This is a MANDATORY step.**\n\n**IF YOU ENCOUNTER\
+  \ ANY ERRORS WHILE CREATING TASKS:**\n1. ✅ **DO**: Read the error message, fix the parameter, retry immediately\n2. ✅ **DO**:\
+  \ Use exponential backoff if you get \"Internal Server Error\"\n3. ✅ **DO**: Keep retrying until the task is successfully\
+  \ created\n4. ✅ **DO**: Check if your priority is \"low\", \"medium\", or \"high\" (not \"critical\")\n5. ❌ **DON'T**: Give\
+  \ up after 1-2 errors\n6. ❌ **DON'T**: Skip the task and move to the next one\n7. ❌ **DON'T**: Mark Phase 1 as done if tasks\
+  \ are missing\n8. ❌ **DON'T**: Blame \"system errors\" - FIX and RETRY!\n\n**TASK CREATION IS NOT OPTIONAL. IT IS MANDATORY.**\n\
+  \n**This is a 1:1 relationship - NO EXCEPTIONS:**\n- Created infrastructure ticket → Create infrastructure task\n- Created\
+  \ component ticket → Create component task\n- NO tickets without tasks!\n- NO tasks without tickets!\n- If you created N\
+  \ tickets, you MUST create N tasks!\n- If task creation fails, FIX THE ERROR and retry until it succeeds!\n- You CANNOT\
+  \ mark Phase 1 as \"done\" until ALL tasks are created!\n\n**If you finish this step with missing tasks, you have FAILED\
+  \ Phase 1.**\n\nNow create Phase 2 tasks referencing the ticket IDs you just created.\n\n**\U0001F6A8 MANDATORY: EVERY task\
+  \ description MUST include \"TICKET: {ticket_id}\"! \U0001F6A8**\n\nCreate tasks IN THE SAME ORDER as tickets (infrastructure\
+  \ first, then components):\n\n**Infrastructure Tasks** (CREATE THESE FIRST - one for each infrastructure ticket):\n\n```python\n\
+  # Task for Frontend Infrastructure Ticket\nmcp__hephaestus__create_task({\n    \"description\": f\"Phase 2: Plan & Implement\
+  \ Frontend Infrastructure Setup - TICKET: {frontend_infra_id}. Design setup steps, then execute: Initialize React TypeScript\
+  \ project with Vite, set up build tooling, linters (ESLint, Prettier), Tailwind CSS. Configure folder structure and TypeScript\
+  \ strict mode. See requirements_analysis.md 'Infrastructure Setup' section 1.\",\n    \"done_definition\": f\"Frontend infrastructure\
+  \ designed + implemented. Design at frontend_infrastructure_design.md, setup complete and verified. Ticket {frontend_infra_id}\
+  \ moved to 'building-done'. Phase 3 validation task created with ticket ID.\",\n    \"agent_id\": \"[YOUR ACTUAL AGENT ID]\"\
+  ,  # Use your real agent ID!\n    \"phase_id\": 2,\n    \"priority\": \"critical\",  # Infrastructure is critical priority\n\
+  \    \"cwd\": \".\",\n    \"ticket_id\": frontend_infra_id  # Pass the ticket ID!\n})\n\n# Task for Backend Infrastructure\
+  \ Ticket\nmcp__hephaestus__create_task({\n    \"description\": f\"Phase 2: Plan & Implement Backend Infrastructure Setup\
+  \ - TICKET: {backend_infra_id}. Design setup steps, then execute: Initialize FastAPI project with Poetry, set up project\
+  \ structure (api/, models/, services/), CORS, environment configuration. See requirements_analysis.md 'Infrastructure Setup'\
+  \ section 2.\",\n    \"done_definition\": f\"Backend infrastructure designed + implemented. Design at backend_infrastructure_design.md,\
+  \ setup complete and verified. Ticket {backend_infra_id} moved to 'building-done'. Phase 3 validation task created with\
+  \ ticket ID.\",\n    \"agent_id\": \"[YOUR ACTUAL AGENT ID]\",  # Use your real agent ID!\n    \"phase_id\": 2,\n    \"\
+  priority\": \"critical\",\n    \"cwd\": \".\",\n    \"ticket_id\": backend_infra_id  # Pass the ticket ID!\n})\n\n# Task\
+  \ for Database Infrastructure Ticket\nmcp__hephaestus__create_task({\n    \"description\": f\"Phase 2: Plan & Implement\
+  \ Database Infrastructure Setup - TICKET: {database_infra_id}. Design database setup, then execute: Set up PostgreSQL, SQLAlchemy\
+  \ ORM, Alembic migrations. Configure connection pooling and test database. Depends on backend infrastructure. See requirements_analysis.md\
+  \ 'Infrastructure Setup' section 3.\",\n    \"done_definition\": f\"Database infrastructure designed + implemented. Design\
+  \ at database_infrastructure_design.md, setup complete and verified. Ticket {database_infra_id} moved to 'building-done'.\
+  \ Phase 3 validation task created with ticket ID.\",\n    \"agent_id\": \"[YOUR ACTUAL AGENT ID]\",  # Use your real agent\
+  \ ID!\n    \"phase_id\": 2,\n    \"priority\": \"critical\",\n    \"cwd\": \".\",\n    \"ticket_id\": database_infra_id\
+  \  # Pass the ticket ID!\n})\n```\n\n**Component Tasks** (CREATE AFTER INFRASTRUCTURE TASKS - one for each component ticket):\n\
+  \n```python\n# Task for Auth Component Ticket\nmcp__hephaestus__create_task({\n    \"description\": f\"Phase 2: Plan & Implement\
+  \ Authentication System - TICKET: {auth_ticket_id}. Design auth architecture, then implement: user login, registration,\
+  \ session management, password reset with JWT-based tokens. Must integrate with database infrastructure. Blocked by database\
+  \ and backend infrastructure being complete. See requirements_analysis.md section 3.1.\",\n    \"done_definition\": f\"\
+  auth_design.md created with spec, code implemented at src/auth/, tests created, ticket {auth_ticket_id} moved to 'building-done'\
+  \ status, Phase 3 validation task created with ticket ID.\",\n    \"agent_id\": \"[YOUR ACTUAL AGENT ID]\",  # Use your\
+  \ real agent ID!\n    \"phase_id\": 2,\n    \"priority\": \"critical\",  # Auth is critical - many things depend on it\n\
+  \    \"cwd\": \".\",\n    \"ticket_id\": auth_ticket_id  # Pass the ticket ID!\n})\n\n# Task for API Layer Component Ticket\n\
+  mcp__hephaestus__create_task({\n    \"description\": f\"Phase 2: Plan & Implement API Layer - TICKET: {api_ticket_id}. Design\
+  \ API architecture, then implement: RESTful API endpoints, request/response formats, authentication middleware, error handling,\
+  \ rate limiting. Must integrate with auth and database. Blocked by auth component being complete. See requirements_analysis.md\
+  \ section 3.3.\",\n    \"done_definition\": f\"api_design.md created with endpoint definitions, code implemented at src/api/,\
+  \ tests created, ticket {api_ticket_id} moved to 'building-done', Phase 3 validation task created with ticket ID.\",\n \
+  \   \"agent_id\": \"[YOUR ACTUAL AGENT ID]\",  # Use your real agent ID!\n    \"phase_id\": 2,\n    \"priority\": \"high\"\
+  ,\n    \"cwd\": \".\",\n    \"ticket_id\": api_ticket_id  # Pass the ticket ID!\n})\n\n# Continue for ALL tickets...\n#\
+  \ Remember: ONE task per ticket - if you created 8 tickets, create 8 tasks!\n```\n\n**\U0001F6A8\U0001F6A8\U0001F6A8 MANDATORY\
+  \ 1:1 VERIFICATION - DO THIS BEFORE STEP 7! \U0001F6A8\U0001F6A8\U0001F6A8**\n\n**YOU CANNOT PROCEED TO STEP 7 UNTIL YOU\
+  \ VERIFY THE 1:1 RELATIONSHIP!**\n\n**STEP 6C: COUNT AND VERIFY (MANDATORY - DO NOT SKIP THIS!)**\n\n**1. Count your tickets:**\n\
+  ```python\n# Manually count the tickets you created and list them:\ninfrastructure_tickets = [\n    \"ticket-xxx\",  # Backend\
+  \ setup\n    \"ticket-yyy\",  # Frontend setup\n    \"ticket-zzz\",  # Database setup\n    # ... list ALL infrastructure\
+  \ ticket IDs\n]\n\ncomponent_tickets = [\n    \"ticket-aaa\",  # Auth system\n    \"ticket-bbb\",  # API layer\n    # ...\
+  \ list ALL component ticket IDs\n]\n\ntotal_tickets = len(infrastructure_tickets) + len(component_tickets)\nprint(f\"Total\
+  \ tickets created: {total_tickets}\")\n```\n\n**2. Count your tasks:**\n```python\n# Manually count the tasks you created\
+  \ and list them:\ninfrastructure_tasks = [\n    \"task-111\",  # Backend setup task\n    \"task-222\",  # Frontend setup\
+  \ task\n    \"task-333\",  # Database setup task\n    # ... list ALL infrastructure task IDs\n]\n\ncomponent_tasks = [\n\
+  \    \"task-444\",  # Auth system task\n    \"task-555\",  # API layer task\n    # ... list ALL component task IDs\n]\n\n\
+  total_tasks = len(infrastructure_tasks) + len(component_tasks)\nprint(f\"Total tasks created: {total_tasks}\")\n```\n\n\
+  **3. VERIFY THE 1:1 RELATIONSHIP:**\n```python\nif total_tickets != total_tasks:\n    print(f\"❌ ERROR: Ticket count ({total_tickets})\
+  \ != Task count ({total_tasks})\")\n    print(\"YOU MUST CREATE MORE TASKS! DO NOT MARK PHASE 1 AS DONE!\")\n    print(f\"\
+  Missing tasks: {total_tickets - total_tasks}\")\n    # GO BACK and create the missing tasks!\nelse:\n    print(f\"✅ VERIFIED:\
+  \ {total_tickets} tickets = {total_tasks} tasks (1:1 relationship)\")\n```\n\n**IF THE COUNTS DON'T MATCH:**\n\n**\U0001F6A8\
+  \U0001F6A8\U0001F6A8 STOP! YOU CANNOT PROCEED! YOU MUST FIX THIS! \U0001F6A8\U0001F6A8\U0001F6A8**\n\nIf ticket count !=\
+  \ task count, you are **FORBIDDEN** from marking your task as done.\n\n**MANDATORY ACTIONS:**\n1. **STOP** - Do NOT move\
+  \ to STEP 7\n2. **IDENTIFY** - Which tickets don't have tasks?\n3. **FIX ERRORS** - Read error messages, fix parameters\n\
+  4. **RETRY** - Create tasks again with correct parameters\n5. **REPEAT** - Keep retrying until ALL tasks are created\n6.\
+  \ **VERIFY** - Count again, ensure ticket count == task count\n7. **ONLY THEN** proceed to STEP 7\n\n**YOU ARE NOT ALLOWED\
+  \ TO GIVE UP. YOU MUST CREATE ALL TASKS.**\n\n---\n\n**COMMON ERRORS AND HOW TO FIX THEM:**\n\n**Error: \"Internal Server\
+  \ Error\"**\n- **FIX**: Wait 2 seconds, then retry the EXACT same request\n- If it fails again, wait 4 seconds and retry\n\
+  - If it fails a third time, wait 8 seconds and retry\n- **DO NOT GIVE UP** - Keep retrying with exponential backoff\n- The\
+  \ server may be temporarily overloaded - persistence will succeed\n\n**Error: Priority validation failed**\n- **FIX**: Change\
+  \ `priority: \"critical\"` to `priority: \"high\"`\n- Valid values are ONLY: \"low\", \"medium\", \"high\"\n- Retry immediately\
+  \ after fixing\n\n**Error: Missing required parameter**\n- **FIX**: Read the error message to see which parameter is missing\n\
+  - Add the required parameter\n- Retry immediately after fixing\n\n**Error: Validation error on any field**\n- **FIX**: Read\
+  \ the error message carefully\n- Fix the exact parameter mentioned in the error\n- Retry immediately after fixing\n\n---\n\
+  \n**RETRY STRATEGY (MANDATORY):**\n\n```python\n# For EACH ticket that needs a task:\nmax_retries = 10\nretry_count = 0\n\
+  task_created = False\n\nwhile not task_created and retry_count < max_retries:\n    try:\n        # Try to create the task\n\
+  \        result = mcp__hephaestus__create_task({...})\n        task_created = True\n        print(f\"✅ Task created successfully\
+  \ for ticket {ticket_id}\")\n    except Exception as error:\n        retry_count += 1\n        wait_seconds = 2 ** retry_count\
+  \  # Exponential backoff: 2, 4, 8, 16, 32...\n        print(f\"❌ Error creating task (attempt {retry_count}/{max_retries}):\
+  \ {error}\")\n        print(f\"Waiting {wait_seconds} seconds before retry...\")\n        time.sleep(wait_seconds)\n\n \
+  \       # If it's a validation error, FIX THE PARAMETERS before retry\n        if \"validation\" in str(error).lower():\n\
+  \            # Fix the parameter based on error message\n            # Then retry with fixed parameters\n            pass\n\
+  \nif not task_created:\n    print(f\"⚠️ Failed to create task after {max_retries} attempts\")\n    print(\"DO NOT MARK PHASE\
+  \ 1 AS DONE - MUST CREATE THIS TASK!\")\n    # GO BACK and try again with different approach\n```\n\n**YOU MUST CREATE TASKS\
+  \ FOR ALL TICKETS. NO EXCEPTIONS. NO EXCUSES.**\n\n**\"System errors\" is NOT a valid reason to skip task creation!**\n\
+  **\"MCP issues\" is NOT a valid reason to skip task creation!**\n**Retry until it works. Period.**\n\n---\n\nSTEP 7: MARK\
+  \ YOUR TASK AS DONE (ONLY AFTER STEP 6C VERIFICATION!)\n\n**\U0001F6A8\U0001F6A8\U0001F6A8 READ THIS CAREFULLY BEFORE PROCEEDING!\
+  \ \U0001F6A8\U0001F6A8\U0001F6A8**\n\n**YOU CANNOT MARK YOUR TASK AS DONE UNLESS ALL CONDITIONS ARE MET!**\n\n---\n\n**MANDATORY\
+  \ PRE-FLIGHT CHECKLIST (ALL MUST BE TRUE):**\n\n**Before you can mark your task as done, you MUST verify ALL of these:**\n\
+  \n1. **Did you count your tickets?**\n   - ❌ If NO → Go back and count them now\n   - ✅ If YES → Proceed to #2\n\n2. **Did\
+  \ you count your tasks?**\n   - ❌ If NO → Go back and count them now\n   - ✅ If YES → Proceed to #3\n\n3. **Does ticket\
+  \ count EXACTLY EQUAL task count?**\n   - ❌ If NO → **STOP! DO NOT MARK DONE! GO BACK TO STEP 6B AND CREATE MISSING TASKS!**\n\
+  \   - ✅ If YES → Proceed to #4\n\n4. **Did you verify the 1:1 relationship?**\n   - ❌ If NO → Go back and verify now\n \
+  \  - ✅ If YES → Proceed to #5\n\n5. **Are ALL tasks successfully created (no errors)?**\n   - ❌ If NO → **STOP! DO NOT MARK\
+  \ DONE! FIX ERRORS AND RETRY!**\n   - ✅ If YES → Proceed to #6\n\n6. **Do ALL tasks include \"TICKET: xxx\" in descriptions?**\n\
+  \   - ❌ If NO → Go back and fix task descriptions\n   - ✅ If YES → You may proceed to mark done\n\n---\n\n**IF YOU ANSWERED\
+  \ \"NO\" TO QUESTION #3 OR #5, YOU ARE FORBIDDEN FROM CONTINUING!**\n\n**Examples of FORBIDDEN behavior:**\n- ❌ \"I created\
+  \ 24 tickets but only 2 tasks due to errors, marking done anyway\"\n- ❌ \"System errors prevented task creation, but I'm\
+  \ done with my part\"\n- ❌ \"MCP issues stopped me from creating all tasks, updating status anyway\"\n- ❌ \"I'll let the\
+  \ next phase handle the missing tasks, marking done\"\n\n**ALL OF THESE ARE ABSOLUTELY FORBIDDEN!**\n\n**If you encounter\
+  \ errors:**\n1. Read the error message\n2. Fix the parameters\n3. Retry with exponential backoff (up to 10 times)\n4. If\
+  \ it still fails, try a different approach\n5. Ask yourself: \"Did I use the correct priority value?\" (must be low/medium/high)\n\
+  6. Keep trying until ALL tasks are created\n7. Only mark done when ticket count == task count\n\n---\n\n**FINAL VERIFICATION\
+  \ BEFORE MARKING DONE:**\n\n```python\n# Count tickets\ntotal_tickets = [count your tickets here]\n\n# Count tasks\ntotal_tasks\
+  \ = [count your tasks here]\n\n# VERIFY\nif total_tickets != total_tasks:\n    print(f\"❌ VERIFICATION FAILED!\")\n    print(f\"\
+  Tickets: {total_tickets}, Tasks: {total_tasks}\")\n    print(f\"Missing tasks: {total_tickets - total_tasks}\")\n    print(f\"\
+  \U0001F6A8 DO NOT MARK PHASE 1 AS DONE!\")\n    print(f\"\U0001F6A8 GO BACK AND CREATE THE MISSING TASKS!\")\n    # DO NOT\
+  \ PROCEED TO update_task_status\n    # YOU ARE FORBIDDEN FROM MARKING DONE\nelse:\n    print(f\"✅ VERIFICATION PASSED!\"\
+  )\n    print(f\"Tickets: {total_tickets}, Tasks: {total_tasks}\")\n    print(f\"1:1 relationship confirmed - proceeding\
+  \ to mark done\")\n\n    # ONLY NOW can you mark your task as done:\n    mcp__hephaestus__update_task_status({\n       \
+  \ \"task_id\": \"[your Phase 1 task ID]\",\n        \"agent_id\": \"[YOUR ACTUAL AGENT ID]\",\n        \"status\": \"done\"\
+  ,\n        \"summary\": f\"Requirements analyzed. Created {total_tickets} component tickets in 'backlog' status with blocking\
+  \ relationships and {total_tasks} Phase 2 design tasks with ticket IDs. VERIFIED 1:1 ticket-to-task relationship ({total_tickets}\
+  \ tickets = {total_tasks} tasks). Verified all blocking relationships are correct. See requirements_analysis.md for details.\"\
+  \n    })\n```\n\n---\n\n**⛔ ABSOLUTE RULES - NEVER VIOLATE THESE:**\n\n1. **NEVER** mark your task as done if ticket count\
+  \ != task count\n2. **NEVER** include phrases like \"due to errors\" or \"MCP issues\" in your done summary\n3. **NEVER**\
+  \ give up on task creation - retry until success\n4. **NEVER** blame the system - fix the parameters and retry\n5. **NEVER**\
+  \ proceed to STEP 7 without completing STEP 6C verification\n\n**If you violate these rules, you will break the entire workflow\
+  \ and cause massive problems for downstream agents!**\n\nYour task is complete ONLY when:\n✅ requirements_analysis.md created\n\
+  ✅ All components identified and documented\n✅ All memories saved\n✅ All component tickets created in 'backlog' status\n\
+  ✅ ALL Phase 2 tasks created (one for each ticket) with \"TICKET: xxx\" in descriptions\n✅ STEP 6C verification passed (ticket\
+  \ count == task count)\n✅ Your Phase 1 task marked as \"done\"\n\n═══════════════════════════════════════════════════════════════════════\n\
+  CRITICAL RULES\n═══════════════════════════════════════════════════════════════════════\n\n✅ DO:\n- Read the entire PRD\
+  \ document carefully\n- Identify infrastructure needs FIRST (project setup, build tools, etc.)\n- **Specify frontend/ and\
+  \ backend/ directories for web apps** (NEVER single src/)\n- **Specify PORT 8002 for backend servers** (PORT 8300 is RESERVED!)\n\
+  - Determine implementation order and dependencies\n- Identify ALL major components\n- Save comprehensive memories for the\
+  \ hive mind\n- Create infrastructure tickets FIRST with no blockers\n- Create component tickets with proper blocking relationships\n\
+  - Create ONE task for EVERY ticket (1:1 relationship)\n- Use ticket blocking to enforce correct implementation order\n-\
+  \ Document everything in requirements_analysis.md with infrastructure section\n\n❌ DO NOT:\n- Design implementations (that's\
+  \ Phase 2)\n- Write code (that's Phase 3)\n- Test anything (that's Phase 4)\n- Skip infrastructure identification (CRITICAL!)\n\
+  - **Allow backend to use PORT 8300** (it's RESERVED - use 8002!)\n- **Allow mixed frontend/backend in single src/** (must\
+  \ be separate directories!)\n- Create component tickets without considering dependencies\n- Create tickets without corresponding\
+  \ tasks (must be 1:1!)\n- Create tasks without \"TICKET: xxx\" in descriptions\n- Resolve tickets (ONLY Phase 5 can resolve\
+  \ tickets!)\n- Create duplicate tasks (search first!)\n- Forget to set blocked_by_ticket_ids for dependent components\n\n\
+  **\U0001F6A8 ABSOLUTELY FORBIDDEN (WILL BREAK WORKFLOW):**\n- **Mark your Phase 1 task as \"done\" if ticket count != task\
+  \ count** ← THIS IS THE #1 RULE!\n- **Mark your Phase 1 task as \"done\" without completing STEP 6C verification**\n- **Give\
+  \ up on task creation due to errors** ← Errors are not an excuse! Retry!\n- **Blame \"system errors\" or \"MCP issues\"\
+  \ for incomplete work** ← Fix and retry!\n- **Skip creating tasks because it's \"too hard\"** ← Every ticket MUST have a\
+  \ task!\n- **Mark done with a summary saying \"only X out of Y tasks created\"** ← Unacceptable!\n- **Proceed to STEP 7\
+  \ when you know tasks are missing** ← Complete STEP 6B first!\n\n**IF YOU VIOLATE THESE FORBIDDEN RULES, YOU FAIL PHASE\
+  \ 1 COMPLETELY!**\n\n**Remember: Your job is NOT done until ticket count == task count. Period.**"
+outputs:
+- requirements_analysis.md with infrastructure setup section and component breakdown
+- Multiple memory entries documenting decisions and constraints
+- Infrastructure tickets in 'backlog' status (frontend, backend, database, build tools)
+- Component tickets in 'backlog' status with proper blocking relationships
+- ONE Phase 2 Plan & Implementation task for EVERY ticket created (infrastructure + components)
+- Ticket-to-task mapping documented (1:1 relationship maintained)
+next_steps:
+- Infrastructure tickets (no blockers) can start immediately in Phase 2
+- Component tickets blocked by infrastructure will wait until blockers are resolved
+- 'Phase 2 agents will design + implement, moving tickets: ''backlog'' → ''building'' → ''building-done'''
+- Ticket blocking ensures correct implementation order (infra → foundation → features)
+- Phase 2 plan & implementation tasks will run in parallel (respecting blocking constraints)
+- Each Phase 2 task will spawn Phase 3 validation task with ticket ID
+- The workflow tree branches out from here with proper dependency management
