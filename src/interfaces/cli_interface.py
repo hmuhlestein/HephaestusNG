@@ -486,17 +486,27 @@ class PiAgent(CLIAgentInterface):
         thinking_flag = f' --thinking {thinking}' if thinking in valid_thinking else ''
 
         if agent_file and os.path.exists(agent_file):
-            # Agent file contains full phase instructions — don't inject full system_prompt.
-            # Extract only task-specific info for the initial user message.
-            task_id = kwargs.get('task_id', 'default')
-            user_prompt = self._build_user_prompt(system_prompt, **kwargs)
-            self._save_prompt_to_file(user_prompt, 'pi_prompt', task_id)
+            # Parse the agent file: strip YAML frontmatter so only the body
+            # (identity + completion instructions) reaches --append-system-prompt.
+            # Also honour the model declared in frontmatter when present.
+            raw = open(agent_file).read()
+            if raw.startswith('---'):
+                parts = raw.split('---', 2)
+                body = parts[2].strip() if len(parts) >= 3 else raw
+                # Pull model from frontmatter if declared
+                import re as _re
+                fm_model = _re.search(r'^model:\s*(\S+)', parts[1], _re.MULTILINE)
+                if fm_model:
+                    model = fm_model.group(1)
+            else:
+                body = raw
 
-            # Session persistence — preserves conversational context across phases/gotos.
+            task_id = kwargs.get('task_id', 'default')
+            body_file = self._save_prompt_to_file(body, 'pi_agent_body', task_id)
             session_args = self.get_session_args(kwargs.get('session_id', ''))
 
             # Launch interactively (no -p/--print). Initial message sent via tmux.
-            command = f'pi --append-system-prompt "$(cat {agent_file})" --model {model}{thinking_flag} --approve --no-context-files {session_args}'
+            command = f'pi --append-system-prompt "$(cat {body_file})" --model {model}{thinking_flag} --approve --no-context-files {session_args}'
         else:
             # Fallback: inject full prompt from file
             task_id = kwargs.get('task_id', 'default')
