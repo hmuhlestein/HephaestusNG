@@ -77,12 +77,44 @@ def _pass_with_subjective(agent_score: Any) -> float:
 
 
 def score_scope_review(result: Optional[Dict[str, Any]]) -> Tuple[float, Dict[str, Any]]:
-    """Score a scope_review_result.json. Binary: PASS=1.0, FAIL=0.2, missing=0.4."""
+    """Score a scope_review_result.json. Binary: PASS=1.0, FAIL=0.2, missing=0.4.
+
+    Accepts both the canonical flat schema and the nested schema agents sometimes
+    write ({"scope_review": {"verdict": ...}, "out_of_scope_items": [...], ...}).
+    """
     if not result:
         return 0.4, {"gate": "scope_review", "reason": "no scope_review_result.json found", "result_missing": True}
-    verdict = str(result.get("verdict", "")).strip().upper()
-    out_of_scope = result.get("out_of_scope") or []
-    missing = result.get("missing") or []
+
+    # Normalise: agents sometimes write {"scope_review": {"verdict": ...}} instead
+    # of the flat {"verdict": ...} schema specified in scope_review.yaml.
+    flat = result
+    if "verdict" not in result and "scope_review" in result and isinstance(result["scope_review"], dict):
+        flat = result["scope_review"]
+
+    verdict = str(flat.get("verdict", "")).strip().upper()
+
+    # Accept verdict from analysis_summary if still missing (another common variant)
+    if not verdict:
+        summary = result.get("analysis_summary") or {}
+        scope_drift = summary.get("scope_drift_detected")
+        if scope_drift is False:
+            verdict = "PASS"
+        elif scope_drift is True:
+            verdict = "FAIL"
+
+    # out_of_scope / missing: try multiple key names agents use
+    out_of_scope = (
+        result.get("out_of_scope")
+        or flat.get("out_of_scope")
+        or result.get("out_of_scope_items")
+        or []
+    )
+    missing = (
+        result.get("missing")
+        or flat.get("missing")
+        or result.get("missing_items")
+        or []
+    )
     meta = {
         "gate": "scope_review",
         "verdict": verdict,

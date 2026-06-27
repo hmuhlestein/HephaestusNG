@@ -63,7 +63,8 @@ additional_notes: |
   STEP 3: WRITE scope_review_result.json
   ═══════════════════════════════════════════════════════════════════════
 
-  Write ./docs/scope_review_result.json with EXACTLY this schema:
+  Write ./docs/scope_review_result.json with EXACTLY this schema — no
+  nesting, no extra top-level keys, "verdict" MUST be at the root level:
 
   ```json
   {
@@ -73,6 +74,11 @@ additional_notes: |
     "correction_instructions": "",
     "summary": "one-line summary"
   }
+  ```
+
+  WRONG (do NOT write this):
+  ```json
+  { "scope_review": { "verdict": "PASS" }, "tracing": [...] }
   ```
 
   Field rules:
