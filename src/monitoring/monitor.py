@@ -10,6 +10,7 @@ from enum import Enum
 
 from src.core.simple_config import get_config
 from src.core.database import DatabaseManager, Agent, Task, AgentLog, GuardianAnalysis, ConductorAnalysis, DetectedDuplicate
+from src.core.constants import WORKTREES_SUBDIR, CONTEXT_DIR_NAME, HEPHAESTUS_LOGS_DIR
 from src.agents.manager import AgentManager
 from src.interfaces import LLMProviderInterface, get_cli_agent
 from src.memory.rag import RAGSystem
@@ -444,7 +445,7 @@ class MonitoringLoop:
         while self.running:
             try:
                 # Write heartbeat file so external watchdogs can verify we're alive
-                heartbeat = Path.home() / ".hephaestus" / "logs" / "monitor_heartbeat"
+                heartbeat = Path(HEPHAESTUS_LOGS_DIR) / "monitor_heartbeat"
                 heartbeat.write_text(str(time.time()))
 
                 await self._monitoring_cycle()
@@ -1518,14 +1519,14 @@ class MonitoringLoop:
             # The working_directory may be a worktree (.worktrees/wt_*);
             # walk up past the .worktrees dir to get the stable project root.
             wd_path = _P(wd)
-            if ".worktrees" in wd_path.parts:
+            if WORKTREES_SUBDIR in wd_path.parts:
                 for parent in wd_path.parents:
-                    if parent.name == ".worktrees":
+                    if parent.name == WORKTREES_SUBDIR:
                         wd_path = parent.parent
                         break
 
             # .hephaestus/ is git-excluded — run artifacts never get committed
-            tmux_dir = wd_path / ".hephaestus" / "tmux"
+            tmux_dir = wd_path / CONTEXT_DIR_NAME / "tmux"
             tmux_dir.mkdir(parents=True, exist_ok=True)
             log_file = tmux_dir / f"{phase_name}_{agent_id[:8]}.log"
             log_file.write_text(tmux_output)

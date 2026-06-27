@@ -16,6 +16,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from src.core.constants import DESIGN_SUBDIR
+
 logger = logging.getLogger(__name__)
 
 
@@ -80,7 +82,7 @@ class AutopilotService:
         if not (project / ".git").exists():
             raise ValueError(f"Project path is not a git repository: {project_path}")
 
-        dq = design_queue or str(project / "docs" / "design")
+        dq = design_queue or str(project / DESIGN_SUBDIR)
         Path(dq).mkdir(parents=True, exist_ok=True)
 
         # Reset state

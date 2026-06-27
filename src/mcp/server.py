@@ -17,6 +17,7 @@ from git import Repo
 from src.core.simple_config import get_config
 from src.core.database import DatabaseManager, Task, Agent, Memory, Phase, ValidationReview, AgentResult, WorkflowResult, Workflow, get_db
 from src.core.worktree_manager import WorktreeManager
+from src.core.constants import CONTEXT_DIR_NAME
 from src.memory.store_factory import create_vector_store, VectorStoreProtocol
 from src.agents.manager import AgentManager
 from src.memory.rag import RAGSystem
@@ -2075,7 +2076,7 @@ async def update_task_status(
                                 break
                 # 2. Check feature folder
                 if not found:
-                    feature_dir = _Path(config.project_root) / ".hephaestus" / "features"
+                    feature_dir = _Path(config.project_root) / CONTEXT_DIR_NAME / "features"
                     if feature_dir.exists():
                         for d in sorted(feature_dir.iterdir(), reverse=True):
                             candidate = d / "docs" / declared_output
@@ -4578,7 +4579,7 @@ async def list_agents(
     try:
         query = session.query(Agent)
         if status == "active":
-            query = query.filter(Agent.status != "terminated")
+            query = query.filter(Agent.status.notin_(["terminated", "idle"]))
         
         total = query.count()
         agents = query.order_by(Agent.created_at.desc()).offset((page - 1) * per_page).limit(per_page).all()
@@ -5631,7 +5632,7 @@ async def get_workflow_execution(workflow_id: str):
                 Task, Agent.current_task_id == Task.id
             ).filter(
                 Task.phase_id == phase.id,
-                Agent.status.in_(['working', 'idle'])
+                Agent.status == 'working'
             ).count()
 
             phases_data.append({

@@ -19,7 +19,9 @@ import json
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
-SPEC_PATH = Path.home() / ".hephaestus" / "autopilot" / "qa_spec.json"
+from src.core.constants import AUTOPILOT_STATE_DIR
+
+SPEC_PATH = Path(AUTOPILOT_STATE_DIR) / "qa_spec.json"
 
 DEFAULT_SPEC: Dict[str, Any] = {
     "max_failed_tests": 0,

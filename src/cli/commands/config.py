@@ -2,6 +2,7 @@
 
 from pathlib import Path
 from src.cli.utils import output
+from src.core.constants import AUTOPILOT_STATE_DIR, HEPHAESTUS_LOGS_DIR
 
 HEPHAESTUS_DIR = Path(__file__).parent.parent.parent.parent
 
@@ -93,8 +94,8 @@ def show_paths(args):
         "project_root": str(HEPHAESTUS_DIR),
         "config": str(HEPHAESTUS_DIR / "hephaestus_config.yaml"),
         "database": str(HEPHAESTUS_DIR / "hephaestus.db"),
-        "logs": str(Path.home() / ".hephaestus" / "logs"),
-        "autopilot_logs": str(Path.home() / ".hephaestus" / "autopilot"),
+        "logs": HEPHAESTUS_LOGS_DIR,
+        "autopilot_logs": AUTOPILOT_STATE_DIR,
         "workflows": str(HEPHAESTUS_DIR / "example_workflows"),
         "phases": str(HEPHAESTUS_DIR / "example_workflows"),
         "scripts": str(HEPHAESTUS_DIR / "scripts"),

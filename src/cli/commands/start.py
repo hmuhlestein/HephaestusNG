@@ -7,6 +7,7 @@ import subprocess
 from pathlib import Path
 
 from src.cli.utils import check_backend, save_pid, read_pid, is_process_running, is_monitor_running, is_backend_running
+from src.core.constants import HEPHAESTUS_LOGS_DIR
 
 HEPHAESTUS_DIR = Path(__file__).parent.parent.parent.parent
 
@@ -149,7 +150,7 @@ def _start_backend(python: str, port: int, reload: bool) -> bool:
     if reload:
         cmd.append("--reload")
 
-    log_dir = Path.home() / ".hephaestus" / "logs"
+    log_dir = Path(HEPHAESTUS_LOGS_DIR)
     log_dir.mkdir(parents=True, exist_ok=True)
     log_file = open(log_dir / "backend.log", "a")
 
@@ -171,7 +172,7 @@ def _start_backend(python: str, port: int, reload: bool) -> bool:
 
 
 def _start_monitor(python: str) -> bool:
-    log_dir = Path.home() / ".hephaestus" / "logs"
+    log_dir = Path(HEPHAESTUS_LOGS_DIR)
     log_dir.mkdir(parents=True, exist_ok=True)
     log_file = open(log_dir / "monitor.log", "a")
     try:
@@ -216,7 +217,7 @@ def _start_frontend() -> bool:
         return False
     # Ensure port 5173 is free
     _kill_port(5173)
-    log_dir = Path.home() / ".hephaestus" / "logs"
+    log_dir = Path(HEPHAESTUS_LOGS_DIR)
     log_dir.mkdir(parents=True, exist_ok=True)
     log_file = open(log_dir / "frontend.log", "a")
     try:

@@ -15,6 +15,7 @@ from src.sdk.models import Phase as SdkPhase, WorkflowDefinition
 from src.phases.models import PhaseContext, PhasesConfig
 from src.phases.phase_loader import PhaseLoader
 from src.core.simple_config import get_config
+from src.core.constants import WORKTREES_SUBDIR, CONTEXT_DIR_NAME
 from src.workflow_engine.orchestrator import (
     WorkflowOrchestrator, OrchestratorConfig, OrchestrationAction
 )
@@ -815,11 +816,11 @@ class PhaseManager:
 
             # Derive the real project root for the features output dir.
             project_path = wt
-            if ".worktrees" in str(project_path):
+            if WORKTREES_SUBDIR in str(project_path):
                 base = project_path
-                while base.name != ".worktrees" and base.parent != base:
+                while base.name != WORKTREES_SUBDIR and base.parent != base:
                     base = base.parent
-                project_path = base.parent if base.name == ".worktrees" else project_path
+                project_path = base.parent if base.name == WORKTREES_SUBDIR else project_path
 
             if not project_path.is_dir():
                 logger.warning(f"[FEATURE-FOLDER] Project root {project_path} not found")
@@ -835,7 +836,7 @@ class PhaseManager:
             design_name = (_design_label or workflow.name or "feature").replace(" ", "_").replace("/", "_")
             safe_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in design_name)[:40]
             timestamp = _dt.utcnow().strftime("%Y%m%d_%H%M%S")
-            feature_dir = project_path / ".hephaestus" / "features" / f"{timestamp}_{safe_name}"
+            feature_dir = project_path / CONTEXT_DIR_NAME / "features" / f"{timestamp}_{safe_name}"
             docs_dir = feature_dir / "docs"
             docs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -866,7 +867,7 @@ class PhaseManager:
             #    survive worktree removal by git_commit_push. Also check the
             #    worktree itself as a fallback for any stragglers.
             tmux_dest = feature_dir / "tmux"
-            for tmux_src in [project_path / ".hephaestus" / "tmux", wt / ".hephaestus" / "tmux"]:
+            for tmux_src in [project_path / CONTEXT_DIR_NAME / "tmux", wt / CONTEXT_DIR_NAME / "tmux"]:
                 if tmux_src.is_dir():
                     tmux_dest.mkdir(exist_ok=True)
                     for f in tmux_src.glob("*.log"):

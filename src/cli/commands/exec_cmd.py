@@ -9,9 +9,10 @@ import subprocess
 from pathlib import Path
 import httpx
 from src.cli.utils import api_get, api_post, output, table
+from src.core.constants import HEPHAESTUS_LOGS_DIR
 
 
-LOG_DIR = Path.home() / ".hephaestus" / "logs"
+LOG_DIR = Path(HEPHAESTUS_LOGS_DIR)
 
 
 def register(subparsers):

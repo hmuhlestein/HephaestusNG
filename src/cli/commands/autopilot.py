@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 
 from src.cli.utils import output
+from src.core.constants import DESIGN_SUBDIR
 
 
 def register(subparsers):
@@ -44,7 +45,7 @@ def start_pipeline(args):
     import requests
 
     project_path = Path(args.project_path).resolve()
-    design_queue = args.design_queue or str(project_path / "docs" / "design")
+    design_queue = args.design_queue or str(project_path / DESIGN_SUBDIR)
 
     if not project_path.exists():
         print(f"Error: Project path does not exist: {project_path}")
@@ -185,7 +186,7 @@ def _print_pipeline_status(data):
 
 
 def show_queue(args):
-    queue_dir = Path(args.project_path) / "docs" / "design"
+    queue_dir = Path(args.project_path) / DESIGN_SUBDIR
     if not queue_dir.exists():
         print(f"Queue directory not found: {queue_dir}")
         return 0
@@ -220,7 +221,7 @@ def add_to_queue(args):
         print(f"File not found: {source}")
         return 1
 
-    queue_dir = Path(args.project_path) / "docs" / "design"
+    queue_dir = Path(args.project_path) / DESIGN_SUBDIR
     queue_dir.mkdir(parents=True, exist_ok=True)
 
     dest = queue_dir / source.name
