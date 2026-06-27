@@ -45,6 +45,9 @@ MAX_WORKFLOW_TIME = 7200  # 2 hours per workflow execution
 ACTIVE_AGENT_STATUSES = {"working", "idle"}  # Excludes 'created' (not yet started), 'stuck', 'terminated'
 PARENT_PEEK_INTERVAL = int(os.environ.get("HEPH_PEEK_INTERVAL", "60"))  # seconds between parent peeks
 
+# Module-level orchestrator agent ID (set during registration)
+_orchestrator_agent_id: Optional[str] = None
+
 
 def get_litellm_config() -> Dict[str, str]:
     """Read LiteLLM proxy config from environment variables."""
@@ -332,6 +335,31 @@ def api_post(endpoint: str, data: dict = None, timeout: int = 5, headers: dict =
     except Exception as e:
         print(f"[api_post] {endpoint} failed: {e}")
     return None
+
+
+def _update_orchestrator_status(status: str) -> None:
+    """Update the orchestrator agent's status in the database.
+
+    Args:
+        status: New status ("working", "idle", or "terminated")
+    """
+    if not _orchestrator_agent_id:
+        return
+    try:
+        from src.core.database import DatabaseManager, Agent
+        db_manager = DatabaseManager()
+        session = db_manager.get_session()
+        try:
+            agent = session.query(Agent).filter_by(id=_orchestrator_agent_id).first()
+            if agent:
+                agent.status = status
+                agent.last_activity = datetime.utcnow()
+                session.commit()
+        finally:
+            session.close()
+    except Exception as e:
+        # Non-critical — don't break the pipeline if status update fails
+        print(f"[orchestrator] Failed to update status to {status}: {e}")
 
 
 def get_tasks(status: str = None, workflow_id: str = None) -> list:
@@ -1882,14 +1910,16 @@ def run_continuous_pipeline(args) -> None:
     logger.info("Services started.")
 
     # Register orchestrator as an agent
+    global _orchestrator_agent_id
     try:
         import uuid
         from src.core.database import DatabaseManager, Agent
         db_manager = DatabaseManager()
         session = db_manager.get_session()
         try:
+            _orchestrator_agent_id = f"orchestrator-{uuid.uuid4().hex[:8]}"
             orchestrator_agent = Agent(
-                id=f"orchestrator-{uuid.uuid4().hex[:8]}",
+                id=_orchestrator_agent_id,
                 system_prompt=f"LOG_DIR:{log_dir}",
                 status="working",
                 cli_type=cli_tool,
@@ -2017,6 +2047,7 @@ def run_continuous_pipeline(args) -> None:
                     logger.info(f"Queue empty. Scanning again in {DESIGN_QUEUE_SCAN_INTERVAL}s...")
                     state.queue_status = {"status": "empty", "processed": len(processed_hashes)}
                     logger.save_state(state)
+                    _update_orchestrator_status("idle")
                     persistent_state.save(state, processed_hashes)
                     time.sleep(DESIGN_QUEUE_SCAN_INTERVAL)
                     continue
@@ -2029,6 +2060,7 @@ def run_continuous_pipeline(args) -> None:
                     "current": next_design.name,
                     "processed": len(processed_hashes),
                 }
+                _update_orchestrator_status("working")
                 logger.save_state(state)
                 persistent_state.save(state, processed_hashes)
 
@@ -2075,6 +2107,7 @@ def run_continuous_pipeline(args) -> None:
                     "succeeded": state.designs_succeeded,
                     "failed": state.designs_failed,
                 }
+                _update_orchestrator_status("idle")
                 logger.save_state(state)
                 persistent_state.save(state, processed_hashes)
 
@@ -2123,6 +2156,7 @@ def run_continuous_pipeline(args) -> None:
             "failed": state.designs_failed,
             "elapsed_seconds": state.total_elapsed,
         })
+        _update_orchestrator_status("terminated")
 
         # Pause all active autopilot workflows
         try:

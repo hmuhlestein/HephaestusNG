@@ -41,11 +41,11 @@ def load_autopilot_config(workflow_name: str = "autopilot", config_dir: Path = N
         logger.warning(f"Config validation failed for '{workflow_name}': {e}")
 
     # Load shared config
-    cfg = yaml.safe_load((base / "_workflow.yaml").read_text())
-    # Load per-phase files
+    cfg = yaml.safe_load((base / "workflow.yaml").read_text())
+    # Load per-phase files (skip workflow.yaml)
     phases = []
     for p in sorted(base.glob("*.yaml")):
-        if p.name.startswith("_"):
+        if p.name == "workflow.yaml":
             continue
         phases.append(yaml.safe_load(p.read_text()))
     phases.sort(key=lambda x: x["id"])
