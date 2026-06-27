@@ -11,16 +11,12 @@ description: |
   3. Create and merge a pull request (or local merge if gh unavailable)
   4. Record commit hash and PR URL
 done_definitions:
-  - "Current branch and remote confirmed"
-  - "All changes staged with git add -A"
-  - "Descriptive commit message created"
-  - "Commit created on feature branch"
-  - "Feature branch pushed to remote"
-  - "Pull request created with summary"
-  - "Pull request merged into main"
-  - "Main branch pushed to remote"
-  - "Commit hash and PR URL recorded"
-  - "Memory saved with commit reference"
+  - "Current branch and remote confirmed (or no-remote noted)"
+  - "All eligible changes staged (git add -A or explicit file list)"
+  - "Descriptive commit message created (or nothing to commit confirmed)"
+  - "Commit created on feature branch (or confirmed already committed)"
+  - "Feature merged into main (via PR if remote available, or local merge)"
+  - "Commit hash recorded in memory"
   - "Task marked as done"
 outputs:
   - "git commit on feature branch"
@@ -62,22 +58,35 @@ additional_notes: |
   STEP 2: STAGE AND COMMIT
   ═══════════════════════════════════════════════════════════════════════
   
-  Stage everything (excluding .hephaestus/ which is already in .git/info/exclude):
+  Stage everything (.hephaestus/ is in .git/info/exclude and won't be picked up):
   ```bash
   git add -A
   git status  # verify what will be committed
   ```
-  
+
+  If `git add -A` shows "no changes added to commit" but `git status` shows
+  untracked or modified files, stage them explicitly:
+  ```bash
+  git add calculator.py tests/ docs/ README.md pyproject.toml  # adapt to actual files
+  # or: git add -f <file>  for files that are in .gitignore but should be committed
+  ```
+
+  If you see `fatal: Unable to create '.git/index.lock'`:
+  ```bash
+  rm -f .git/index.lock  # leftover from a previous crashed process
+  # then retry git add
+  ```
+
   Commit with a descriptive message:
   ```bash
   git commit --no-verify -m "feat: <descriptive feature name>
-  
+
   - Key change 1
   - Key change 2
-  
+
   Autopilot validated: $(date -u +%Y-%m-%d)"
   ```
-  
+
   If there is nothing to commit (all changes were already committed per-task),
   skip to STEP 3.
   
@@ -113,18 +122,29 @@ additional_notes: |
   The local branch is checked out by the active worktree and cannot be deleted —
   attempting to delete it will prompt you to remove the worktree, which you MUST NOT do.
   
-  If `gh` is unavailable, fall back to local merge from the main repo.
-  From the worktree you can push to remote but cannot checkout the main branch.
-  As an alternative, have the main repo pull the merge:
+  If `gh` is unavailable OR there is no remote, do a local merge from the main repo:
   ```bash
-  # ONLY if gh is unavailable:
-  MAIN_REPO=$(git rev-parse --git-common-dir | sed 's|/.git$||')
+  # Navigate to the main repo root (not the worktree)
+  MAIN_REPO=$(git rev-parse --git-common-dir | sed 's|/\.git.*||')
   cd "$MAIN_REPO"
-  git fetch $REMOTE
-  git merge --no-ff $FEATURE_BRANCH -m "Merge $FEATURE_BRANCH into $DEFAULT_BRANCH"
-  git push $REMOTE $DEFAULT_BRANCH
-  # Return to worktree
-  cd -
+  git status  # confirm clean main branch
+
+  git merge --no-ff $FEATURE_BRANCH -m "Merge $FEATURE_BRANCH into main
+
+  Autopilot validated: $(date -u +%Y-%m-%d)"
+  ```
+
+  If merge fails with "Merge with strategy ort failed" due to untracked files
+  in main that conflict with files on the feature branch:
+  ```bash
+  git status   # identify the blocking untracked files
+  rm -f <blocking_file>  # remove the untracked file from main
+  git merge --no-ff $FEATURE_BRANCH -m "Merge $FEATURE_BRANCH into main"
+  ```
+
+  If remote exists, push main after merging:
+  ```bash
+  git push $REMOTE $DEFAULT_BRANCH  # skip if no remote
   ```
   
   ═══════════════════════════════════════════════════════════════════════
