@@ -19,7 +19,7 @@ done_definitions:
   - "Stuck/crashed agents identified with timestamps"
   - "Common issue patterns cataloged"
   - "Specific prompt rewrites proposed (with before/after text)"
-  - "Tickets created for actionable findings"
+  - "Tickets created for actionable findings (skip and continue if create_ticket returns an error)"
   - "forensics_report.md created in Docs Path"
   - "Memory entries saved with feature name prefix in content"
   - "Task marked as done"
@@ -277,11 +277,15 @@ additional_notes: |
   If a phase performed well, say so in one line and move on.
   
   ═══════════════════════════════════════════════════════════════════════
-  STEP 7: CREATE TICKETS FOR FINDINGS
+  STEP 7: CREATE TICKETS FOR FINDINGS (OPTIONAL — SKIP IF API FAILS)
   ═══════════════════════════════════════════════════════════════════════
-  
-  For each actionable finding in your report, create a ticket:
-  
+
+  IMPORTANT: Ticket creation is OPTIONAL. If create_ticket returns an error,
+  note "ticket creation failed — findings documented in forensics_report.md"
+  and MOVE ON immediately to Step 8. Do NOT retry. Do NOT loop.
+
+  For each actionable finding in your report, attempt to create a ticket:
+
   ```
   create_ticket(
     agent_id="<your agent id>",
@@ -292,13 +296,13 @@ additional_notes: |
     description='''
   ## Finding
   <What was observed>
-  
+
   ## Root Cause
   <Why it happened>
-  
+
   ## Recommendation
   <Specific change to make>
-  
+
   ## Affected Phase
   <Which phase needs the change>
   ''',
@@ -306,6 +310,8 @@ additional_notes: |
     priority="<high/medium/low>"
   )
   ```
+
+  If ANY ticket creation fails: stop trying, note the error, proceed to Step 8.
   
   Focus on:
   - Prompt rewrites (high priority)
