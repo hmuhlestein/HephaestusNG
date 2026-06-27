@@ -20,7 +20,7 @@ from src.core.database import (
     Base
 )
 from src.mcp.server import app, server_state
-from src.phases.models import PhaseDefinition, WorkflowDefinition
+from src.sdk.models import WorkflowDefinition
 from src.phases.phase_manager import PhaseManager
 from src.agents.manager import AgentManager
 from src.validation.validator_agent import spawn_validator_agent
@@ -44,10 +44,46 @@ def test_db():
 
 @pytest.fixture
 def sample_phase_yaml():
-    """Create sample phase YAML files for testing."""
+    """Create sample phase YAML files for testing (new workflow.yaml + phase files format)."""
     with tempfile.TemporaryDirectory() as temp_dir:
+        temp_path = Path(temp_dir)
+
+        # workflow.yaml (required by the new yaml_loader)
+        workflow_content = """
+default_model: openrouter/xiaomi/mimo-v2.5
+default_thinking_level: low
+execution_order: [1, 2]
+orchestrator:
+  type: sequential
+  max_phase_retries: 0
+  evaluation_points: []
+workflow:
+  has_result: false
+  on_result_found: do_nothing
+  enable_tickets: false
+  board:
+    columns:
+      - id: backlog
+        name: Backlog
+        order: 1
+        color: "#94a3b8"
+    ticket_types: [task]
+    default_ticket_type: task
+    initial_status: backlog
+    auto_assign: false
+    require_comments_on_status_change: false
+    allow_reopen: true
+    track_time: false
+launch_template:
+  parameters: []
+  phase_1_task_prompt: "Start the workflow"
+"""
+        (temp_path / "workflow.yaml").write_text(workflow_content)
+
         # Phase 1: With validation
         phase1_content = """
+id: 1
+name: implementation
 description: |
   Implement core functionality with proper testing
 done_definitions:
@@ -55,6 +91,7 @@ done_definitions:
   - Unit tests written
   - Documentation updated
 validation:
+  enabled: true
   criteria:
     - description: "All unit tests pass"
       check_type: "command_success"
@@ -65,22 +102,20 @@ validation:
     - description: "No linting errors"
       check_type: "command_success"
       command: "flake8 src/"
-  validator_instructions: |
-    Ensure all edge cases are tested
 """
-        phase1_path = Path(temp_dir) / "01_implementation.yaml"
-        phase1_path.write_text(phase1_content)
+        (temp_path / "implementation.yaml").write_text(phase1_content)
 
         # Phase 2: Without validation
         phase2_content = """
+id: 2
+name: documentation
 description: |
   Document the implementation
 done_definitions:
   - README updated
   - API docs complete
 """
-        phase2_path = Path(temp_dir) / "02_documentation.yaml"
-        phase2_path.write_text(phase2_content)
+        (temp_path / "documentation.yaml").write_text(phase2_content)
 
         yield temp_dir
 
