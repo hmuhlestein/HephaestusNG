@@ -1,4 +1,4 @@
-id: 2
+id: 3
 name: architecture_design
 thinking_level: high
 description: |
@@ -19,6 +19,8 @@ done_definitions:
   - "Memory saved with architectural decisions"
   - "Phase 3 development tasks created for each component"
   - "Task marked as done"
+outputs:
+  - "architecture.md"
 additional_notes: |
   ═══════════════════════════════════════════════════════════════════════
   YOU ARE A SOFTWARE ARCHITECT - DESIGN THE SYSTEM

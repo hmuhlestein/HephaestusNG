@@ -20,7 +20,7 @@ done_definitions:
   - "Memory saved with key decisions and project context"
   - "Task marked as done"
 outputs:
-  - "requirements.md in Docs Path"
+  - "requirements_analysis.md"
 next_steps:
   - "Requirements extracted and saved"
 additional_notes: |

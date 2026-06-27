@@ -1641,6 +1641,8 @@ def run_single_design(
     # docs_dir: where generated docs/reports go (inside feature folder)
     project_path.mkdir(parents=True, exist_ok=True)
 
+    _AP = getattr(sdk, "phases_list", [])
+
     feature_folder = create_feature_folder(project_path, design_entry.name, logger)
     design_entry.project_path = project_path
     design_entry.feature_folder = feature_folder
@@ -1696,16 +1698,12 @@ def run_single_design(
         "max_iterations": max_iterations,
         "max_gotos": max_iterations,  # max_iterations maps to engine's max_total_gotos
         "phases": [
-            {"id": 1, "name": "product_requirements", "output": "requirements_analysis.md"},
-            {"id": 2, "name": "architecture_design", "output": "architecture.md"},
-            {"id": 3, "name": "development", "output": "source code in project path"},
-            {"id": 4, "name": "adversarial_review", "output": "review_report.md"},
-            {"id": 5, "name": "doc_review", "output": "doc_review_report.md"},
-            {"id": 6, "name": "security_review", "output": "security_report.md"},
-            {"id": 7, "name": "qa_validation", "output": "qa_report.md"},
-            {"id": 8, "name": "product_validation", "output": "product_validation.md"},
-            {"id": 9, "name": "forensics_analysis", "output": "forensics_report.md"},
-            {"id": 10, "name": "git_commit_push", "output": "git history"},
+            {
+                "id": p.id,
+                "name": p.name,
+                "output": p.outputs[0] if p.outputs else "",
+            }
+            for p in _AP
         ],
     }
     metrics_path = docs_dir / "pipeline_metrics.json"
@@ -1867,16 +1865,12 @@ def run_single_design(
         "started_at": design_entry.started_at,
         "completed_at": completed_at,
         "phases": [
-            {"id": 1, "name": "product_requirements", "output": "requirements_analysis.md"},
-            {"id": 2, "name": "architecture_design", "output": "architecture.md"},
-            {"id": 3, "name": "development", "output": "source code in project path"},
-            {"id": 4, "name": "adversarial_review", "output": "review_report.md"},
-            {"id": 5, "name": "doc_review", "output": "doc_review_report.md"},
-            {"id": 6, "name": "security_review", "output": "security_report.md"},
-            {"id": 7, "name": "qa_validation", "output": "qa_report.md"},
-            {"id": 8, "name": "product_validation", "output": "product_validation.md"},
-            {"id": 9, "name": "forensics_analysis", "output": "forensics_report.md"},
-            {"id": 10, "name": "git_commit_push", "output": "git history"},
+            {
+                "id": p.id,
+                "name": p.name,
+                "output": p.outputs[0] if p.outputs else "",
+            }
+            for p in _AP
         ],
     }
     metrics_path = docs_dir / "pipeline_metrics.json"

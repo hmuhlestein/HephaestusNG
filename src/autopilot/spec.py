@@ -29,13 +29,14 @@ DEFAULT_SPEC: Dict[str, Any] = {
 }
 
 # Phases gated by the hybrid spec (engine evaluation point keys).
-GATED_PHASES = ("qa_validation", "product_validation")
+GATED_PHASES = ("scope_review", "qa_validation", "product_validation")
 
 # Declared output artifacts per phase — used as completion hard floors.
 # If a phase declares an output, update_task_status rejects 'done' when
 # the artifact is missing (catches hallucinated completions at the source).
 PHASE_OUTPUT_ARTIFACTS = {
     "architecture_design": "architecture.md",
+    "scope_review": "scope_review_result.json",
     "qa_validation": "qa_result.json",
     "product_validation": "product_validation.json",
 }
@@ -71,6 +72,24 @@ def _clamp01(x: Any, default: float = 0.0) -> float:
 def _pass_with_subjective(agent_score: Any) -> float:
     """Floors passed -> 0.7..1.0 blended with the agent's subjective score."""
     return round(_PASS_FLOOR + (1.0 - _PASS_FLOOR) * _clamp01(agent_score, 1.0), 4)
+
+
+def score_scope_review(result: Optional[Dict[str, Any]]) -> Tuple[float, Dict[str, Any]]:
+    """Score a scope_review_result.json. Binary: PASS=1.0, FAIL=0.2, missing=0.4."""
+    if not result:
+        return 0.4, {"gate": "scope_review", "reason": "no scope_review_result.json found", "result_missing": True}
+    verdict = str(result.get("verdict", "")).strip().upper()
+    out_of_scope = result.get("out_of_scope") or []
+    missing = result.get("missing") or []
+    meta = {
+        "gate": "scope_review",
+        "verdict": verdict,
+        "out_of_scope_count": len(out_of_scope),
+        "missing_count": len(missing),
+    }
+    if verdict == "PASS" and not out_of_scope and not missing:
+        return 1.0, {**meta, "band": "pass"}
+    return 0.2, {**meta, "band": "requirements", "out_of_scope": out_of_scope, "missing": missing}
 
 
 def score_qa(result: Optional[Dict[str, Any]], spec: Dict[str, Any]) -> Tuple[float, Dict[str, Any]]:
@@ -189,7 +208,10 @@ def build_phase_output(
 
     spec = spec if spec is not None else load_spec()
 
-    if phase_name == "qa_validation":
+    if phase_name == "scope_review":
+        result = read_result(working_directory, "scope_review_result.json")
+        score, meta = score_scope_review(result)
+    elif phase_name == "qa_validation":
         result = read_result(working_directory, "qa_result.json")
         score, meta = score_qa(result, spec)
     else:  # product_validation

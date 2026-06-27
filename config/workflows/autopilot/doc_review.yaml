@@ -1,4 +1,4 @@
-id: 5
+id: 6
 name: doc_review
 thinking_level: low
 description: |
@@ -15,6 +15,9 @@ done_definitions:
   - "feature_report.html written to Docs Path"
   - "doc_review_report.md written with brief findings summary"
   - "Task marked as done"
+outputs:
+  - "doc_review_report.md"
+  - "feature_report.html"
 additional_notes: |
   ═══════════════════════════════════════════════════════════════════════
   YOU ARE A DOCUMENTATION REVIEWER - FOCUS ON THE HTML REPORT

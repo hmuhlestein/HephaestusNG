@@ -1,4 +1,4 @@
-id: 7
+id: 8
 name: qa_validation
 thinking_level: medium
 description: |
@@ -24,6 +24,9 @@ done_definitions:
   - "Memory saved with QA findings"
   - "Iteration recommendation provided (done/needs_work)"
   - "Task marked as done"
+outputs:
+  - "qa_report.md"
+  - "qa_result.json"
 additional_notes: |
   ═══════════════════════════════════════════════════════════════════════
   YOU ARE A QA ENGINEER - VALIDATE THE IMPLEMENTATION
@@ -46,6 +49,12 @@ additional_notes: |
 
   If TESTING.md EXISTS:
     → Read it fully, then execute these steps IN ORDER:
+
+    0. **Scope check** — read ./.hephaestus/design.md and list every function/file
+       the design requires. Then list what is actually implemented. Flag any
+       implemented items NOT in the design as scope violations (critical issue).
+       Also verify the seeded test file matches the design doc's test section —
+       if it was replaced or modified, that is a critical issue.
 
     1. **Run the application** — follow the "How to Run the Application" section.
        Run the actual code, not just tests. Capture stdout and any log files it writes.

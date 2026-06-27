@@ -1,12 +1,12 @@
 default_model: xiaomi/mimo-v2.5
 default_thinking_level: low
 
-# Execution order by phase id — may differ from natural id order.
-# forensics (10) runs before git_commit_push (9) so the worktree is still valid.
-execution_order: [1, 2, 3, 4, 5, 6, 7, 8, 10, 9]
+# Execution order by phase id. Ids now match pipeline position (1-11).
+execution_order: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
 
 session_roles:
   product_requirements: product-requirements
+  scope_review: scope-reviewer
   architecture_design: architect
   development: developer
   adversarial_review: architect
@@ -22,6 +22,18 @@ orchestrator:
   max_phase_retries: 2
   max_total_gotos: 30
   evaluation_points:
+    - after_phase: scope_review
+      evaluator: heuristic
+      max_retries: 1
+      conditions:
+        - if: "score < 0.5"
+          action: goto
+          target: product_requirements
+          reason: "Scope drift detected — requirements exceed or omit design doc; return for correction"
+        - if: "score >= 0.5"
+          action: continue
+          reason: "Scope verified — requirements match design doc"
+
     - after_phase: architecture_design
       evaluator: heuristic
       max_retries: 2
