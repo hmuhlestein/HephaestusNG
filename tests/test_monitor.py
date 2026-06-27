@@ -456,3 +456,212 @@ class TestMonitoringLoopGetPastSummaries:
         result = make_monitoring_loop._get_past_summaries_for_agent("a1")
         assert len(result) == 1
         assert result[0]["trajectory_summary"] == "Good progress"
+
+
+# ── execute_intervention ──────────────────────────────────────────
+
+
+class TestExecuteIntervention:
+    @pytest.mark.asyncio
+    async def test_continue_does_nothing(self, monitor, mock_agent_manager):
+        agent = Agent(id="a1")
+        decision = {"decision": "continue", "message": "", "reasoning": ""}
+        await monitor.execute_intervention(agent, decision)
+        mock_agent_manager.send_message_to_agent.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_nudge_sends_message(self, monitor, mock_agent_manager):
+        agent = Agent(id="a1", current_task_id="t1")
+        decision = {"decision": "nudge", "message": "Try a different approach"}
+        await monitor.execute_intervention(agent, decision)
+        mock_agent_manager.send_message_to_agent.assert_called_once()
+        call_args = mock_agent_manager.send_message_to_agent.call_args
+        assert "different approach" in call_args[0][1]
+
+    @pytest.mark.asyncio
+    async def test_nudge_default_message(self, monitor, mock_agent_manager):
+        agent = Agent(id="a1", current_task_id="t1")
+        decision = {"decision": "nudge", "message": ""}
+        await monitor.execute_intervention(agent, decision)
+        mock_agent_manager.send_message_to_agent.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_restart_calls_manager(self, monitor, mock_agent_manager):
+        mock_agent_manager.restart_agent = AsyncMock()
+        agent = Agent(id="a1")
+        decision = {"decision": "restart", "reasoning": "Stuck too long"}
+        await monitor.execute_intervention(agent, decision)
+        mock_agent_manager.restart_agent.assert_called_once_with("a1", "Stuck too long")
+
+
+# ── _detect_repetition_loop ──────────────────────────────────────
+
+
+class TestDetectRepetitionLoop:
+    @pytest.mark.asyncio
+    async def test_detects_repetition(self, make_monitoring_loop, mock_agent_manager, mock_db):
+        agent = Agent(id="a1", cli_type="claude")
+        # 6 repeated lines
+        repeated = "This is a long enough line that repeats many times in the output"
+        output = "\n".join([repeated] * 6 + ["Normal line that is different and unique here"])
+        mock_agent_manager.get_agent_output.return_value = output
+
+        session = Mock()
+        mock_db.get_session.return_value = session
+
+        await make_monitoring_loop._detect_repetition_loop(agent)
+        mock_agent_manager.send_message_to_agent.assert_called_once()
+        call_args = mock_agent_manager.send_message_to_agent.call_args
+        assert "thought loop" in call_args[0][1].lower()
+
+    @pytest.mark.asyncio
+    async def test_ignores_short_lines(self, make_monitoring_loop, mock_agent_manager, mock_db):
+        agent = Agent(id="a1", cli_type="claude")
+        # Lines under 30 chars should not trigger
+        output = "\n".join(["short"] * 10)
+        mock_agent_manager.get_agent_output.return_value = output
+
+        await make_monitoring_loop._detect_repetition_loop(agent)
+        mock_agent_manager.send_message_to_agent.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_ignores_few_repeats(self, make_monitoring_loop, mock_agent_manager, mock_db):
+        agent = Agent(id="a1", cli_type="claude")
+        repeated = "This is a long enough line that should not trigger with fewer repeats"
+        output = "\n".join([repeated] * 3)
+        mock_agent_manager.get_agent_output.return_value = output
+
+        await make_monitoring_loop._detect_repetition_loop(agent)
+        mock_agent_manager.send_message_to_agent.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_empty_output(self, make_monitoring_loop, mock_agent_manager, mock_db):
+        agent = Agent(id="a1", cli_type="claude")
+        mock_agent_manager.get_agent_output.return_value = ""
+
+        await make_monitoring_loop._detect_repetition_loop(agent)
+        mock_agent_manager.send_message_to_agent.assert_not_called()
+
+
+# ── _update_agent_health_from_trajectory ─────────────────────────
+
+
+class TestUpdateAgentHealth:
+    @pytest.mark.asyncio
+    async def test_stores_analysis(self, make_monitoring_loop, mock_db):
+        agent = Agent(id="a1")
+        analysis = {
+            "state": "healthy",
+            "confidence": 0.9,
+            "reasoning": "On track",
+            "decision": "continue",
+            "trajectory_aligned": True,
+            "alignment_score": 0.9,
+            "trajectory_summary": "Good",
+        }
+        db_agent = Mock(id="a1", health_check_failures=0)
+        session = Mock()
+        session.query.return_value.filter_by.return_value.first.return_value = db_agent
+        mock_db.get_session.return_value = session
+
+        await make_monitoring_loop._update_agent_health_from_trajectory(agent, analysis)
+        assert session.add.call_count == 2  # GuardianAnalysis + AgentLog
+        session.commit.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_handles_no_agent(self, make_monitoring_loop, mock_db):
+        agent = Agent(id="a1")
+        analysis = {"trajectory_aligned": True}
+        session = Mock()
+        session.query.return_value.filter_by.return_value.first.return_value = None
+        mock_db.get_session.return_value = session
+
+        # Should not raise
+        await make_monitoring_loop._update_agent_health_from_trajectory(agent, analysis)
+
+    @pytest.mark.asyncio
+    async def test_off_track_increments_failures(self, make_monitoring_loop, mock_db):
+        agent = Agent(id="a1")
+        analysis = {
+            "trajectory_aligned": False,
+            "alignment_score": 0.2,
+        }
+        db_agent = Mock(id="a1", health_check_failures=0)
+        session = Mock()
+        session.query.return_value.filter_by.return_value.first.return_value = db_agent
+        mock_db.get_session.return_value = session
+
+        await make_monitoring_loop._update_agent_health_from_trajectory(agent, analysis)
+        # alignment_score < 0.3 → += 2
+        assert db_agent.health_check_failures == 2
+
+
+# ── _save_conductor_analysis ─────────────────────────────────────
+
+
+class TestSaveConductorAnalysis:
+    @pytest.mark.asyncio
+    async def test_saves_analysis(self, make_monitoring_loop, mock_db):
+        analysis = {
+            "system_status": "healthy",
+            "agents_summary": [],
+            "recommendations": [],
+        }
+        session = Mock()
+        mock_db.get_session.return_value = session
+
+        await make_monitoring_loop._save_conductor_analysis(analysis)
+        session.add.assert_called()
+        session.commit.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_handles_exception(self, make_monitoring_loop, mock_db):
+        analysis = {"system_status": "healthy"}
+        session = Mock()
+        session.add.side_effect = Exception("DB error")
+        mock_db.get_session.return_value = session
+
+        # Should not raise
+        await make_monitoring_loop._save_conductor_analysis(analysis)
+
+
+# ── _log_diagnostic_status_report ────────────────────────────────
+
+
+class TestLogDiagnosticStatusReport:
+    def test_logs_trigger(self, make_monitoring_loop):
+        conditions = {
+            "enabled": True,
+            "workflow_exists": True,
+            "has_tasks": True,
+            "all_tasks_finished": True,
+            "no_validated_result": True,
+            "cooldown_passed": True,
+            "stuck_long_enough": True,
+        }
+        # Should not raise
+        make_monitoring_loop._log_diagnostic_status_report(conditions, True, "Test trigger", 120.0)
+
+    def test_logs_no_trigger(self, make_monitoring_loop):
+        conditions = {
+            "enabled": True,
+            "workflow_exists": False,
+            "has_tasks": False,
+            "all_tasks_finished": False,
+            "no_validated_result": False,
+            "cooldown_passed": False,
+            "stuck_long_enough": False,
+        }
+        make_monitoring_loop._log_diagnostic_status_report(conditions, False, "Not stuck")
+
+    def test_logs_with_zero_stuck_time(self, make_monitoring_loop):
+        conditions = {
+            "enabled": True,
+            "workflow_exists": True,
+            "has_tasks": True,
+            "all_tasks_finished": True,
+            "no_validated_result": True,
+            "cooldown_passed": True,
+            "stuck_long_enough": True,
+        }
+        make_monitoring_loop._log_diagnostic_status_report(conditions, True, "Stuck", 0.0)

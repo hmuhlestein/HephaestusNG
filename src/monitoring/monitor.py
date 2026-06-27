@@ -539,6 +539,70 @@ class MonitoringLoop:
         except Exception as e:
             logger.debug(f"[MECH-RECOVERY] check failed for {agent.id[:8]}: {e}")
 
+    async def _detect_repetition_loop(self, agent):
+        """Detect and interrupt an LLM thought-loop where the same sentence repeats
+        many times in recent output (output IS growing, just cycling the same text).
+
+        Unlike the frozen-output check in _mechanical_recovery_for_agent, this fires
+        when the model keeps adding the same paragraph over and over — a semantic loop
+        that the frozen-sig check misses because the content hash changes each tick.
+
+        Trigger: any normalised line of ≥ 30 chars appears ≥ 5 times in the last 80
+        lines of output. One recovery attempt is made (keys + targeted nudge); if the
+        loop resumes it will be caught again on the next cycle.
+        """
+        MIN_LINE_LEN = 30
+        WINDOW_LINES = 80
+        REPEAT_THRESHOLD = 5
+        try:
+            if not hasattr(self, "_rep_loop_state"):
+                self._rep_loop_state = {}
+            out = self.agent_manager.get_agent_output(agent.id, lines=WINDOW_LINES)
+            if not out:
+                return
+            # Normalise: strip leading whitespace, drop blank/trivial lines.
+            lines = [
+                ln.strip() for ln in out.splitlines()
+                if len(ln.strip()) >= MIN_LINE_LEN
+            ]
+            if not lines:
+                return
+            # Count occurrences of each normalised line.
+            from collections import Counter
+            counts = Counter(lines)
+            top_line, top_count = counts.most_common(1)[0]
+            if top_count < REPEAT_THRESHOLD:
+                self._rep_loop_state.pop(agent.id, None)
+                return
+            # Guard: only fire once per unique repeated phrase to avoid spam.
+            last_phrase = self._rep_loop_state.get(agent.id)
+            if last_phrase == top_line:
+                return
+            self._rep_loop_state[agent.id] = top_line
+            logger.warning(
+                f"[REP-LOOP] Agent {agent.id[:8]} ({agent.cli_type}): "
+                f"line repeated {top_count}× in last {WINDOW_LINES} lines — "
+                f"interrupting. Phrase: {top_line[:60]!r}"
+            )
+            from src.interfaces.cli_interface import get_cli_agent
+            try:
+                cli = get_cli_agent(agent.cli_type)
+                keys = cli.recovery_keystrokes()
+            except Exception:
+                keys = []
+            if keys:
+                await self.agent_manager.send_recovery_keystrokes(agent.id)
+            await self.agent_manager.send_message_to_agent(
+                agent.id,
+                f"You are in a thought loop — the phrase {top_line[:60]!r} "
+                f"has appeared {top_count} times. STOP. Do not repeat that "
+                "reasoning again. Pick ONE concrete next step, execute it, "
+                "and if you are still blocked call update_task_status with "
+                "status='failed' and explain why.",
+            )
+        except Exception as e:
+            logger.debug(f"[REP-LOOP] check failed for {agent.id[:8]}: {e}")
+
     async def _monitoring_cycle(self):
         """Execute one monitoring cycle with trajectory monitoring."""
         logger.debug("Starting trajectory monitoring cycle")
@@ -554,12 +618,13 @@ class MonitoringLoop:
         agents = self.agent_manager.get_active_agents()
         logger.info(f"Trajectory monitoring {len(agents)} active agents")
 
-        # Phase 0: cheap mechanical keystroke recovery (no LLM). Detects a TUI whose
-        # substantive output is frozen for minutes (e.g. a pi/mimo thought-loop) and
-        # sends the CLI's recovery keystrokes (Esc, polymorphic) + a nudge — before
-        # the expensive Guardian even runs.
+        # Phase 0: cheap mechanical recovery (no LLM). Two complementary checks:
+        #   a) frozen output — same substantive 40-line sig for ≥5 min
+        #   b) repetition loop — output growing but same sentence repeats 5+ times
+        #      in the last 80 lines (LLM cycling "Actually, let me try…")
         for agent in agents:
             await self._mechanical_recovery_for_agent(agent)
+            await self._detect_repetition_loop(agent)
 
         # Phase 1: Guardian Analysis (Parallel)
         guardian_summaries = []
