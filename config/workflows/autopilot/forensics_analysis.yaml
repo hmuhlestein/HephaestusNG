@@ -10,7 +10,7 @@ description: |
   methodology refinements, and patterns that could reduce iterations.
 done_definitions:
   - "pipeline_metrics.json read for timing and iteration data"
-  - "All phase prompts read from phase_prompts/ directory"
+  - "All phase YAML files read from phase_prompts/ directory"
   - "All phase artifacts read and compared against prompts"
   - "All tmux session logs read from .hephaestus/tmux/ (full agent output per phase)"
   - "Agent logs fetched via API (/api/agents/{id}/logs)"
@@ -67,16 +67,18 @@ additional_notes: |
   ═══════════════════════════════════════════════════════════════════════
   STEP 2: READ ACTUAL AGENT PROMPTS
   ═══════════════════════════════════════════════════════════════════════
-  
-  Read all files in `<Docs Path>/phase_prompts/`. These are the actual
-  Python files containing the prompt text given to each agent.
-  
-  For each phase file, extract:
-  - The `description` field — what the agent was told it would do
-  - The `done_definitions` — what "done" looks like
-  - The `additional_notes` — the step-by-step instructions
-  
+
+  Read all files in `<Docs Path>/phase_prompts/`. These are YAML files
+  (one per phase, e.g. development.yaml, qa_validation.yaml) containing
+  the exact prompt given to each agent.
+
+  For each phase YAML file, extract:
+  - `description` — what the agent was told it would do
+  - `done_definitions` — the list of what "done" looks like
+  - `additional_notes` — the step-by-step instructions given to the agent
+
   These are the ACTUAL prompts. Do not guess or paraphrase them.
+  Quote the relevant sections verbatim when proposing rewrites.
   
   ═══════════════════════════════════════════════════════════════════════
   STEP 3: READ ALL PHASE OUTPUTS
