@@ -44,19 +44,21 @@ class Phase:
         next_steps_str = "\n".join(f"- {item}" for item in self.next_steps) if self.next_steps else ""
 
         data = {
+            "id": self.id,
+            "name": self.name,
             "description": self.description,
-            "Done_Definitions": self.done_definitions,
+            "done_definitions": self.done_definitions,
             "working_directory": self.working_directory,
         }
 
         if outputs_str:
-            data["Outputs"] = outputs_str
+            data["outputs"] = outputs_str
 
         if next_steps_str:
-            data["Next_Steps"] = next_steps_str
+            data["next_steps"] = next_steps_str
 
         if self.additional_notes:
-            data["Additional_Notes"] = self.additional_notes
+            data["additional_notes"] = self.additional_notes
 
         if self.validation and self.validation.enabled:
             data["validation"] = {
