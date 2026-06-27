@@ -1793,8 +1793,12 @@ def run_single_design(
 
             spec = load_spec()
 
-            # Check QA result
-            qa_result = read_result(project_path, "qa_result.json")
+            # Check QA result — prefer the worktree copy but fall back to
+            # docs_dir (feature folder) which survives concurrent git clean.
+            qa_result = (
+                read_result(project_path, "qa_result.json")
+                or read_result(docs_dir.parent, "qa_result.json")
+            )
             if qa_result:
                 qa_score, qa_meta = score_qa(qa_result, spec)
                 report.qa_passed = qa_score >= 0.7
@@ -1805,7 +1809,10 @@ def run_single_design(
                 report.qa_passed = qa_report.exists()
 
             # Check product validation result
-            pv_result = read_result(project_path, "product_validation.json")
+            pv_result = (
+                read_result(project_path, "product_validation.json")
+                or read_result(docs_dir.parent, "product_validation.json")
+            )
             if pv_result:
                 pv_score, pv_meta = score_product_validation(pv_result, spec)
                 report.product_validated = pv_score >= 0.7
