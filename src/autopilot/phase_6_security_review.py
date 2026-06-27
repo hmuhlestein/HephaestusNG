@@ -58,12 +58,9 @@ sections — a single line "Step 2 skipped: no authentication in this feature" i
 STEP 0.5: AUTOMATED SCAN (ash)
 ═══════════════════════════════════════════════════════════════════════
 
-Run the AWS automated security helper if installed:
+Run the AWS automated security helper if installed (local mode — no Docker needed):
 ```bash
-ash --source-dir . --output-file /tmp/ash_results.txt 2>/dev/null \
-  && echo "ash complete" \
-  || echo "ash not available — skipping automated scan"
-cat /tmp/ash_results.txt 2>/dev/null || true
+ash --source-dir . 2>&1 | tee /tmp/ash_results.txt || true
 ```
 
 If ash produces output, include a summary of its findings in security_report.md under
