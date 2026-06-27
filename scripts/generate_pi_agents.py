@@ -62,48 +62,23 @@ def generate_pi_agent(phase_info: dict, phase_num: int) -> str:
     # All phases need these core tools
     tools_str = "read, write, edit, bash, grep, find, ls, " + ", ".join(mcp_tools)
     
-    # Build the system prompt from phase info
-    system_prompt = f"""{phase_info['description']}
+    role_title = phase_info['name'].replace('_', ' ').title()
 
-{phase_info['additional_notes']}
+    # Identity-only body: who this agent is and how to signal completion.
+    # The full phase instructions arrive in the task prompt via PhaseContext.
+    identity = f"""You are the Hephaestus {role_title} agent (Phase {phase_num} of 10).
 
-═══ CRITICAL: TASK MANAGEMENT ═══
+{phase_info['description'].strip()}
 
-You MUST use these Hephaestus MCP tools:
-
-• update_task_status - **REQUIRED** when done or failed
-  - task_id: Your task ID (from your initial prompt)
-  - status: "done" or "failed"  
-  - summary: What you accomplished
-
-• create_task - Create sub-tasks if needed
-  - Set parent_task_id to your task ID
-
-• save_memory - Save important discoveries
-
-• search_memory - Search for prior work
-
-═══ COMPLETION CRITERIA ═══
+When your work is complete, call:
+  mcp__hephaestus__update_task_status(task_id=<id>, status="done", summary="...")
+If you cannot proceed, call it with status="failed".
 """
-    
-    for criterion in phase_info['done_definitions']:
-        system_prompt += f"• {criterion}\n"
-    
-    system_prompt += """
-═══ WORKFLOW ═══
-1. Read your task description carefully
-2. Follow the phase instructions above
-3. Complete all completion criteria
-4. Call update_task_status(status="done", summary="...") when complete
-5. If blocking errors, call update_task_status(status="failed", summary="...")
-"""
-    
+
     # Generate the pi agent markdown
     agent_md = f"""---
 name: {agent_name}
-description: |
-  Hephaestus Phase {phase_num}: {phase_info['name'].replace('_', ' ').title()}
-  {phase_info['description'][:100]}...
+description: "Hephaestus Phase {phase_num}: {role_title} — {phase_info['description'].splitlines()[0].strip()}"
 model: openrouter/xiaomi/mimo-v2.5
 tools: {tools_str}
 systemPromptMode: replace
@@ -111,8 +86,7 @@ inheritProjectContext: true
 inheritSkills: false
 ---
 
-{system_prompt}
-"""
+{identity}"""
     
     return agent_md
 
