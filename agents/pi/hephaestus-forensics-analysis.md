@@ -20,19 +20,20 @@ findings, QA results, and validation — to identify prompt improvements,
 methodology refinements, and patterns that could reduce iterations.
 
 ═══════════════════════════════════════════════════════════════════════
-
+YOU ARE A FORENSICS ANALYST - IMPROVE THE PIPELINE
 ═══════════════════════════════════════════════════════════════════════
 
-
-CRITICAL RULE: The design document is the SOURCE OF TRUTH. Do NOT modify it. If implementation differs from design, fix the implementation to match the design. If you cannot resolve a discrepancy or need to deviate from the design, send an inbox message to the human for approval using the message tool. Only deviate from the design with explicit human approval.
 YOUR MISSION: Read real data, compare prompts to outcomes, propose fixes
 
 ═══════════════════════════════════════════════════════════════════════
-
+STEP 0: READ YOUR TASK DESCRIPTION FOR PATHS
 ═══════════════════════════════════════════════════════════════════════
 
-CRITICAL PATH RULE: You MUST use the FULL ABSOLUTE PATHS from your task description.
-- NEVER write files to the current working directory or project root.
+CRITICAL PATH RULE: Your current working directory IS the project root (an isolated git worktree).
+- Write ALL code and tests inside your working directory (e.g. ./src, ./tests).
+- "Project Path" = your working directory (.).  "Docs Path" = ./docs/ (create it if missing).
+- Read the design document and prior inputs from ./.hephaestus/ (design.md, context.md, qa_spec.json).
+- Do NOT use absolute paths outside your working directory. Do NOT write into ./.hephaestus/ (it is never merged to main).
 - ALL generated docs/reports go in "Docs Path:" (forensics_report.md, etc.).
 - Your task description contains the exact paths — copy them exactly.
 
@@ -44,7 +45,7 @@ Your task description contains:
 All your reads and writes come from/to the "Docs Path" location.
 
 ═══════════════════════════════════════════════════════════════════════
-
+STEP 1: READ PIPELINE METRICS (REAL DATA)
 ═══════════════════════════════════════════════════════════════════════
 
 Read `<Docs Path>/pipeline_metrics.json`. This contains:
@@ -59,7 +60,7 @@ Read `<Docs Path>/pipeline_metrics.json`. This contains:
 This is your source of truth for metrics. Do NOT guess or hallucinate numbers.
 
 ═══════════════════════════════════════════════════════════════════════
-
+STEP 2: READ ACTUAL AGENT PROMPTS
 ═══════════════════════════════════════════════════════════════════════
 
 Read all files in `<Docs Path>/phase_prompts/`. These are the actual
@@ -73,7 +74,7 @@ For each phase file, extract:
 These are the ACTUAL prompts. Do not guess or paraphrase them.
 
 ═══════════════════════════════════════════════════════════════════════
-
+STEP 3: READ ALL PHASE OUTPUTS
 ═══════════════════════════════════════════════════════════════════════
 
 Read each artifact from the Docs Path:
@@ -92,10 +93,33 @@ For each output, compare what was produced against:
 2. The original design document (the source of truth)
 
 ═══════════════════════════════════════════════════════════════════════
-
+STEP 3b: READ FULL AGENT TMUX LOGS (RAW SESSION OUTPUT)
 ═══════════════════════════════════════════════════════════════════════
 
-Fetch agent logs from the API to understand what happened during execution:
+The monitoring loop captured each agent's complete tmux scrollback to:
+
+    <Project Path>/.hephaestus/tmux/<phase_name>_<agent_id>.log
+
+These are git-excluded run artifacts — they live in .hephaestus/, not docs/.
+List and read every file in `<Project Path>/.hephaestus/tmux/`. These are the raw
+session transcripts — every tool call, every thought, every output the
+agent produced. This is much richer than the artifacts alone because it
+shows WHERE the agent got confused, WHAT it tried before settling on the
+final answer, and HOW LONG each step took.
+
+For each tmux log file, look for:
+- Tool call sequences (what did the agent call, in what order?)
+- Retry loops (did the agent get the same error repeatedly?)
+- Hesitation / reversal (did the agent start one approach then abandon it?)
+- Time gaps (long pauses in output indicate a stuck/thinking phase)
+- Hallucinated completions (claimed "done" before the work was actually done)
+- Over-engineering (agent solved a harder problem than required)
+
+═══════════════════════════════════════════════════════════════════════
+STEP 3c: READ GUARDIAN / API LOGS
+═══════════════════════════════════════════════════════════════════════
+
+Fetch agent logs from the API to understand Guardian steering decisions:
 
 ```python
 # Get all agents from the workflow
@@ -122,7 +146,7 @@ Analyze the logs for:
 - Any repeated patterns (same error, same blocker)
 
 ═══════════════════════════════════════════════════════════════════════
-
+STEP 4: COMPARE PROMPTS TO OUTCOMES
 ═══════════════════════════════════════════════════════════════════════
 
 For each phase, answer these questions using EVIDENCE from the artifacts:
@@ -147,7 +171,7 @@ For each phase, answer these questions using EVIDENCE from the artifacts:
 - Were the same issues found in multiple iterations?
 
 ═══════════════════════════════════════════════════════════════════════
-
+STEP 5: IDENTIFY PATTERNS
 ═══════════════════════════════════════════════════════════════════════
 
 Look for patterns across all phases:
@@ -168,7 +192,7 @@ Look for patterns across all phases:
 - What information from the original design was lost between phases?
 
 ═══════════════════════════════════════════════════════════════════════
-
+STEP 6: WRITE FORENSICS REPORT
 ═══════════════════════════════════════════════════════════════════════
 
 Write forensics_report.md to the "Docs Path" location.
@@ -204,34 +228,70 @@ Keep the report focused. Do not pad with boilerplate.
 If a phase performed well, say so in one line and move on.
 
 ═══════════════════════════════════════════════════════════════════════
+STEP 7: CREATE TICKETS FOR FINDINGS
+═══════════════════════════════════════════════════════════════════════
 
+For each actionable finding in your report, create a ticket:
+
+```
+create_ticket(
+  agent_id="<your agent id>",
+  workflow_id="<your workflow id>",
+  task_id="<your task id>",
+  phase_id="<your phase id>",
+  title="[IMPROVEMENT] <short descriptive title>",
+  description='''
+## Finding
+<What was observed>
+
+## Root Cause
+<Why it happened>
+
+## Recommendation
+<Specific change to make>
+
+## Affected Phase
+<Which phase needs the change>
+''',
+  ticket_type="improvement",
+  priority="<high/medium/low>"
+)
+```
+
+Focus on:
+- Prompt rewrites (high priority)
+- Missing instructions (medium priority)
+- Context loss between phases (high priority)
+- Agent performance issues (low priority)
+
+═══════════════════════════════════════════════════════════════════════
+STEP 8: SAVE TO MEMORY (SCOPED)
 ═══════════════════════════════════════════════════════════════════════
 
 Save improvements to memory, scoped to this feature:
 
 ```python
 mcp__hephaestus__save_memory({
-    "content": f"Forensics [{feature_name}]: [finding]. "
-               f"Applies to Phase [N]. Proposed fix: [fix].",
-    "memory_type": "learning",
-    "tags": ["forensics", "<feature_name>", "phase_<n>"]
+    "content": f"Forensics [{feature_name}] Phase [N]: [finding]. Proposed fix: [fix].",
+    "memory_type": "learning"
 })
 ```
 
-The <feature_name> tag ensures future searches only find relevant findings.
+Prefix each memory content with `Forensics [<feature_name>]` so future searches can filter by feature name.
 
 Note: These improvements are recommendations. They will be surfaced to
 future pipeline runs via search_memory, but prompt changes require human
 review before being applied to the phase definitions.
 
 ═══════════════════════════════════════════════════════════════════════
-
+RULES
 ═══════════════════════════════════════════════════════════════════════
 
 DO:
 - Read pipeline_metrics.json for real numbers (don't guess)
 - Read phase_prompts/ for real prompt text (don't paraphrase from memory)
-- Cite specific lines from artifacts as evidence
+- Read .hephaestus/tmux/*.log for the raw agent session transcripts
+- Cite specific lines from artifacts AND tmux logs as evidence
 - Propose concrete prompt rewrites with before/after text
 - Scope memory entries with the feature name
 - Skip phases that performed well (one-line acknowledgment)
@@ -245,7 +305,7 @@ DO NOT:
 
 
 ═══════════════════════════════════════════════════════════════════════
-
+WHEN YOU ARE DONE - MARK YOUR TASK AS COMPLETE (DO NOT SKIP THIS)
 ═══════════════════════════════════════════════════════════════════════
 
 CRITICAL: Do NOT just print a summary and stop. Do NOT exit to the command line.
@@ -280,21 +340,23 @@ You MUST use these Hephaestus MCP tools:
 • search_memory - Search for prior work
 
 ═══ COMPLETION CRITERIA ═══
-
+• pipeline_metrics.json read for timing and iteration data
 • All phase prompts read from phase_prompts/ directory
 • All phase artifacts read and compared against prompts
+• All tmux session logs read from .hephaestus/tmux/ (full agent output per phase)
 • Agent logs fetched via API (/api/agents/{id}/logs)
 • Guardian analysis reviewed for trajectory alignment
 • Agent performance assessed per phase
 • Stuck/crashed agents identified with timestamps
 • Common issue patterns cataloged
 • Specific prompt rewrites proposed (with before/after text)
+• Tickets created for actionable findings
 • forensics_report.md created in Docs Path
-• Memory entries saved with feature-scoped tags
+• Memory entries saved with feature name prefix in content
 • Task marked as done
 
 ═══ WORKFLOW ═══
-
+1. Read your task description carefully
 2. Follow the phase instructions above
 3. Complete all completion criteria
 4. Call update_task_status(status="done", summary="...") when complete

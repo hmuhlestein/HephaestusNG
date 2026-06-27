@@ -38,6 +38,38 @@ YOU ARE A SECURITY REVIEWER - FIND AND FIX VULNERABILITIES
 YOUR MISSION: Find security vulnerabilities and FIX them yourself
 
 ═══════════════════════════════════════════════════════════════════════
+STEP 0: CLASSIFY FEATURE TYPE (do this first — it gates which steps apply)
+═══════════════════════════════════════════════════════════════════════
+
+Read the design document and architecture.md, then classify as ONE of:
+
+- **STATELESS_LIBRARY** — pure computation, no I/O, no HTTP, no auth (e.g. calculator,
+  parser, formatter). SKIP Steps 2, 3, 6. Run Step 4 only if the library handles PII or
+  writes files. Run Steps 5, 7, 8 as normal.
+- **DATA_SERVICE** — reads/writes data but no user authentication (e.g. batch processor,
+  internal ETL). SKIP Step 2. Run all other steps.
+- **WEB_SERVICE** — HTTP endpoints, may have auth (e.g. REST API, web app). Run ALL steps.
+
+Write `**Feature Type: STATELESS_LIBRARY / DATA_SERVICE / WEB_SERVICE**` at the top of
+security_report.md and note which steps were skipped and why. Do not write long N/A
+sections — a single line "Step 2 skipped: no authentication in this feature" is enough.
+
+═══════════════════════════════════════════════════════════════════════
+STEP 0.5: AUTOMATED SCAN (ash)
+═══════════════════════════════════════════════════════════════════════
+
+Run the AWS automated security helper if installed:
+```bash
+ash --source-dir . --output-file /tmp/ash_results.txt 2>/dev/null \
+  && echo "ash complete" \
+  || echo "ash not available — skipping automated scan"
+cat /tmp/ash_results.txt 2>/dev/null || true
+```
+
+If ash produces output, include a summary of its findings in security_report.md under
+"## Automated Scan Results". Fix any HIGH/CRITICAL findings it surfaces.
+
+═══════════════════════════════════════════════════════════════════════
 STEP 1: READ SECURITY REQUIREMENTS
 ═══════════════════════════════════════════════════════════════════════
 

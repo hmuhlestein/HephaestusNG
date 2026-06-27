@@ -86,6 +86,11 @@ CRITICAL — CHECK EXISTING TEST FILES AND ESTABLISH FILE LAYOUT:
 Run: find . -name "test_*.py" -o -name "*_test.py" | head -20
 Read each test file and note its import statements. Then:
 
+0. FIRST: look for existing source files (*.py outside tests/) to detect the current
+   layout. If source already exists in `src/`, follow that. If it already exists at the
+   project root, migrate it into `src/` as part of your work. Existing conventions are the
+   starting point; don't design a layout that contradicts them without fixing the mismatch.
+
 1. If tests already import with a `src.` prefix (`from src.calculator import compute`)
    → source goes in `src/<module>.py`, no extra config needed.
 
@@ -96,12 +101,12 @@ Read each test file and note its import statements. Then:
      sys.path.insert(0, str(pathlib.Path(__file__).parent / "src"))
      ```
    This lets tests import `from calculator import compute` while keeping source in `src/`.
+   Tests themselves always go in `tests/`, never at the project root.
 
-3. If a `pyproject.toml` or `setup.cfg` already configures the layout → follow it.
+3. If a `pyproject.toml` or `setup.cfg` already configures the layout → follow it exactly.
 
-DEFAULT: always prefer `src/<module>.py` over placing source at the project root.
-Never scatter `.py` source files directly in the project root alongside `README.md`,
-`pyproject.toml`, etc. Document the chosen layout explicitly in architecture.md.
+DEFAULT: always prefer `src/<module>.py`. Never place source `.py` files at the project
+root. Tests always go in `tests/`. Document the chosen layout in architecture.md.
 
 ═══════════════════════════════════════════════════════════════════════
 STEP 2: DESIGN SYSTEM ARCHITECTURE
