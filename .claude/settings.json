@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(sqlite3 *)",
+      "Bash(tmux capture-pane *)",
+      "Bash(tmux ls *)",
+      "Bash(tmux list-sessions *)",
+      "Bash(tmux list-panes *)",
+      "Bash(curl -s http://127.0.0.1:*)"
+    ]
+  }
+}
