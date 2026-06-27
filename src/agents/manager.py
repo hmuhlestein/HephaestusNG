@@ -850,7 +850,7 @@ When another agent sends you a message, consider responding if you have helpful 
    - Save memories AS YOU GO, not just at task completion
    - Be specific in memory content (include error messages, file paths, exact solutions)
    - Use search_memory before reinventing the wheel
-   - Include tags and related_files in hephaestus_save_memory for better searchability"""
+   - Prefix memory content with a feature/context identifier so future searches can filter by topic"""
 
         # Add phase transition instructions if available
         if hasattr(task, 'phase_id') and task.phase_id:

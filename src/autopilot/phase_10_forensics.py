@@ -34,7 +34,7 @@ methodology refinements, and patterns that could reduce iterations.""",
         "Specific prompt rewrites proposed (with before/after text)",
         "Tickets created for actionable findings",
         "forensics_report.md created in Docs Path",
-        "Memory entries saved with feature-scoped tags",
+        "Memory entries saved with feature name prefix in content",
         "Task marked as done",
     ],
     working_directory=None,
@@ -273,8 +273,7 @@ create_ticket(
 <Which phase needs the change>
 ''',
   ticket_type="improvement",
-  priority="<high/medium/low>",
-  tags=["forensics", "<feature-name>", "phase-10"]
+  priority="<high/medium/low>"
 )
 ```
 
@@ -292,14 +291,12 @@ Save improvements to memory, scoped to this feature:
 
 ```python
 mcp__hephaestus__save_memory({
-    "content": f"Forensics [{feature_name}]: [finding]. "
-               f"Applies to Phase [N]. Proposed fix: [fix].",
-    "memory_type": "learning",
-    "tags": ["forensics", "<feature_name>", "phase_<n>"]
+    "content": f"Forensics [{feature_name}] Phase [N]: [finding]. Proposed fix: [fix].",
+    "memory_type": "learning"
 })
 ```
 
-The <feature_name> tag ensures future searches only find relevant findings.
+Prefix each memory content with `Forensics [<feature_name>]` so future searches can filter by feature name.
 
 Note: These improvements are recommendations. They will be surfaced to
 future pipeline runs via search_memory, but prompt changes require human

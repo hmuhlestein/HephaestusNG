@@ -448,3 +448,393 @@ class TestOrchestratorLogger:
         logger = OrchestratorLogger(tmp_path)
         logger.event("test_event", {"key": "value"})
         # Should not raise
+
+    def test_save_state(self, tmp_path):
+        from src.autopilot.orchestrator import OrchestratorLogger, PipelineState
+        logger = OrchestratorLogger(tmp_path)
+        state = PipelineState(designs_processed=5)
+        logger.save_state(state)
+        state_file = tmp_path / "state.json"
+        assert state_file.exists()
+
+
+class TestSweepStrayFiles:
+    def test_moves_root_files(self, tmp_path):
+        from src.autopilot.orchestrator import _sweep_stray_files, OrchestratorLogger
+        logger = OrchestratorLogger(tmp_path / "logs")
+        feature = tmp_path / "feature"
+        feature.mkdir()
+        docs = feature / "docs"
+        docs.mkdir()
+
+        # Create stray file in project root
+        stray = tmp_path / "design_notes.md"
+        stray.write_text("# Notes")
+
+        _sweep_stray_files(tmp_path, feature, docs, logger)
+        assert not stray.exists()
+        assert (docs / "design_notes.md").exists()
+
+    def test_skips_root_files(self, tmp_path):
+        from src.autopilot.orchestrator import _sweep_stray_files, OrchestratorLogger
+        logger = OrchestratorLogger(tmp_path / "logs")
+        feature = tmp_path / "feature"
+        feature.mkdir()
+        docs = feature / "docs"
+        docs.mkdir()
+
+        # Create files that should be skipped
+        (tmp_path / "README.md").write_text("skip me")
+        (tmp_path / "requirements.txt").write_text("skip")
+        (tmp_path / ".env").write_text("skip")
+        (tmp_path / "run.py").write_text("skip")
+
+        _sweep_stray_files(tmp_path, feature, docs, logger)
+        assert (tmp_path / "README.md").exists()
+        assert (tmp_path / "run.py").exists()
+
+    def test_moves_feature_files(self, tmp_path):
+        from src.autopilot.orchestrator import _sweep_stray_files, OrchestratorLogger
+        logger = OrchestratorLogger(tmp_path / "logs")
+        feature = tmp_path / "feature"
+        feature.mkdir()
+        docs = feature / "docs"
+        docs.mkdir()
+
+        stray = feature / "notes.md"
+        stray.write_text("# Notes")
+
+        _sweep_stray_files(tmp_path, feature, docs, logger)
+        assert not stray.exists()
+        assert (docs / "notes.md").exists()
+
+    def test_moves_stray_dirs(self, tmp_path):
+        from src.autopilot.orchestrator import _sweep_stray_files, OrchestratorLogger
+        logger = OrchestratorLogger(tmp_path / "logs")
+        feature = tmp_path / "feature"
+        feature.mkdir()
+        docs = feature / "docs"
+        docs.mkdir()
+
+        # Create stray dir in project root
+        stray_dir = tmp_path / "evidence"
+        stray_dir.mkdir()
+        (stray_dir / "proof.md").write_text("evidence")
+
+        _sweep_stray_files(tmp_path, feature, docs, logger)
+        assert not stray_dir.exists()
+        assert (docs / "evidence" / "proof.md").exists()
+
+    def test_copies_report_docs(self, tmp_path):
+        from src.autopilot.orchestrator import _sweep_stray_files, OrchestratorLogger
+        logger = OrchestratorLogger(tmp_path / "logs")
+        feature = tmp_path / "feature"
+        feature.mkdir()
+        docs = feature / "docs"
+        docs.mkdir()
+
+        # Create report in project docs/ dir
+        proj_docs = tmp_path / "docs"
+        proj_docs.mkdir()
+        (proj_docs / "qa_result.json").write_text("{}")
+
+        _sweep_stray_files(tmp_path, feature, docs, logger)
+        # Report should be copied to feature docs
+        assert (docs / "qa_result.json").exists()
+
+    def test_no_existing_dest(self, tmp_path):
+        from src.autopilot.orchestrator import _sweep_stray_files, OrchestratorLogger
+        logger = OrchestratorLogger(tmp_path / "logs")
+        feature = tmp_path / "feature"
+        feature.mkdir()
+        docs = feature / "docs"
+        docs.mkdir()
+
+        # File already exists in dest
+        (docs / "design.md").write_text("existing")
+        (tmp_path / "design.md").write_text("new")
+
+        _sweep_stray_files(tmp_path, feature, docs, logger)
+        # Should not overwrite
+        assert (docs / "design.md").read_text() == "existing"
+
+    def test_empty_dirs(self, tmp_path):
+        from src.autopilot.orchestrator import _sweep_stray_files, OrchestratorLogger
+        logger = OrchestratorLogger(tmp_path / "logs")
+        feature = tmp_path / "feature"
+        feature.mkdir()
+        docs = feature / "docs"
+        docs.mkdir()
+
+        # No stray files
+        _sweep_stray_files(tmp_path, feature, docs, logger)
+        assert docs.exists()
+
+
+class TestCheckApiCredits:
+    @patch("src.autopilot.orchestrator.get_tasks")
+    @patch("src.autopilot.orchestrator.get_agents")
+    def test_no_credits_issue(self, mock_agents, mock_tasks):
+        from src.autopilot.orchestrator import check_api_credits
+        mock_agents.return_value = [{"status": "working", "error": ""}]
+        mock_tasks.return_value = []
+        found, msg = check_api_credits()
+        assert found is False
+
+    @patch("src.autopilot.orchestrator.get_tasks")
+    @patch("src.autopilot.orchestrator.get_agents")
+    def test_agent_credit_error(self, mock_agents, mock_tasks):
+        from src.autopilot.orchestrator import check_api_credits
+        mock_agents.return_value = [{"id": "a1", "status": "error", "error": "insufficient credits"}]
+        mock_tasks.return_value = []
+        found, msg = check_api_credits()
+        assert found is True
+        assert "credit" in msg.lower()
+
+    @patch("src.autopilot.orchestrator.get_tasks")
+    @patch("src.autopilot.orchestrator.get_agents")
+    def test_task_credit_error(self, mock_agents, mock_tasks):
+        from src.autopilot.orchestrator import check_api_credits
+        mock_agents.return_value = []
+        mock_tasks.return_value = [{"id": "t1", "error": "rate limit exceeded"}]
+        found, msg = check_api_credits()
+        assert found is True
+
+    @patch("src.autopilot.orchestrator.get_tasks")
+    @patch("src.autopilot.orchestrator.get_agents")
+    def test_agent_output_log_credit(self, mock_agents, mock_tasks):
+        from src.autopilot.orchestrator import check_api_credits
+        mock_agents.return_value = [{"id": "a1", "status": "working", "error": "", "output_log": "quota exceeded"}]
+        mock_tasks.return_value = []
+        found, msg = check_api_credits()
+        assert found is True
+
+
+class TestIsDesignFullyComplete:
+    @patch("src.autopilot.orchestrator.get_agents")
+    @patch("src.autopilot.orchestrator.get_tasks")
+    @patch("src.autopilot.orchestrator.get_workflow_status")
+    def test_incomplete_workflow_status(self, mock_wf, mock_tasks, mock_agents):
+        from src.autopilot.orchestrator import is_design_fully_complete, OrchestratorLogger
+        logger = OrchestratorLogger(Path("/tmp/logs"))
+        mock_wf.return_value = {"status": "unknown"}
+        mock_tasks.return_value = []
+        mock_agents.return_value = []
+        result, msg = is_design_fully_complete("wf-1", logger)
+        assert result is False
+        assert "Workflow status" in msg
+
+    @patch("src.autopilot.orchestrator.get_agents")
+    @patch("src.autopilot.orchestrator.get_tasks")
+    @patch("src.autopilot.orchestrator.get_workflow_status")
+    def test_incomplete_has_active_tasks(self, mock_wf, mock_tasks, mock_agents):
+        from src.autopilot.orchestrator import is_design_fully_complete, OrchestratorLogger
+        logger = OrchestratorLogger(Path("/tmp/logs"))
+        mock_wf.return_value = {"status": "active"}
+        mock_tasks.side_effect = [
+            [{"id": "t1"}],  # pending
+            [],  # queued
+            [],  # in_progress
+            [],  # assigned
+            [],  # failed
+            [{"id": "t1"}, {"id": "t2"}, {"id": "t3"}, {"id": "t4"},
+             {"id": "t5"}, {"id": "t6"}, {"id": "t7"}, {"id": "t8"},
+             {"id": "t9"}],  # done (only 9)
+        ]
+        mock_agents.return_value = []
+        result, msg = is_design_fully_complete("wf-1", logger)
+        assert result is False
+        assert "active" in msg.lower()
+
+    @patch("src.autopilot.orchestrator.get_agents")
+    @patch("src.autopilot.orchestrator.get_tasks")
+    @patch("src.autopilot.orchestrator.get_workflow_status")
+    def test_incomplete_has_failed_tasks(self, mock_wf, mock_tasks, mock_agents):
+        from src.autopilot.orchestrator import is_design_fully_complete, OrchestratorLogger
+        logger = OrchestratorLogger(Path("/tmp/logs"))
+        mock_wf.return_value = {"status": "active"}
+        mock_tasks.side_effect = [
+            [],  # pending
+            [],  # queued
+            [],  # in_progress
+            [],  # assigned
+            [{"id": "t1"}],  # failed
+            [{"id": "t1"}, {"id": "t2"}, {"id": "t3"}, {"id": "t4"},
+             {"id": "t5"}, {"id": "t6"}, {"id": "t7"}, {"id": "t8"},
+             {"id": "t9"}, {"id": "t10"}],  # done (10)
+        ]
+        mock_agents.return_value = []
+        result, msg = is_design_fully_complete("wf-1", logger)
+        assert result is False
+        assert "failed" in msg.lower()
+
+    @patch("src.autopilot.orchestrator.get_agents")
+    @patch("src.autopilot.orchestrator.get_tasks")
+    @patch("src.autopilot.orchestrator.get_workflow_status")
+    def test_incomplete_has_active_agents(self, mock_wf, mock_tasks, mock_agents):
+        from src.autopilot.orchestrator import is_design_fully_complete, OrchestratorLogger
+        logger = OrchestratorLogger(Path("/tmp/logs"))
+        mock_wf.return_value = {"status": "active"}
+        mock_tasks.side_effect = [
+            [], [], [], [], [],
+            [{"id": "t1"}, {"id": "t2"}, {"id": "t3"}, {"id": "t4"},
+             {"id": "t5"}, {"id": "t6"}, {"id": "t7"}, {"id": "t8"},
+             {"id": "t9"}, {"id": "t10"}],  # done (10)
+        ]
+        mock_agents.return_value = [{"id": "a1", "status": "working"}]
+        result, msg = is_design_fully_complete("wf-1", logger)
+        assert result is False
+        assert "agent" in msg.lower()
+
+
+class TestAttemptRecovery:
+    @patch("src.autopilot.orchestrator.api_post")
+    @patch("src.autopilot.orchestrator.get_agents")
+    @patch("src.autopilot.orchestrator.get_tasks")
+    def test_no_recovery_needed(self, mock_tasks, mock_agents, mock_post):
+        from src.autopilot.orchestrator import attempt_recovery, OrchestratorLogger
+        logger = OrchestratorLogger(Path("/tmp/logs"))
+        mock_tasks.return_value = []
+        mock_agents.return_value = []
+        success, msg = attempt_recovery("wf-1", logger)
+        assert success is False
+        assert "No recovery" in msg
+
+    @patch("src.autopilot.orchestrator.api_post")
+    @patch("src.autopilot.orchestrator.get_agents")
+    @patch("src.autopilot.orchestrator.get_tasks")
+    def test_retries_failed_tasks(self, mock_tasks, mock_agents, mock_post):
+        from src.autopilot.orchestrator import attempt_recovery, OrchestratorLogger
+        logger = OrchestratorLogger(Path("/tmp/logs"))
+        mock_tasks.side_effect = [
+            [{"id": "t1", "retry_count": 0, "phase_id": "p1"}],  # failed tasks
+        ]
+        mock_agents.return_value = []
+        mock_post.return_value = {"agent_id": "a1"}
+        success, msg = attempt_recovery("wf-1", logger)
+        assert success is True
+        assert "retried" in msg.lower()
+
+    @patch("src.autopilot.orchestrator.api_post")
+    @patch("src.autopilot.orchestrator.get_agents")
+    @patch("src.autopilot.orchestrator.get_tasks")
+    def test_skips_max_retries(self, mock_tasks, mock_agents, mock_post):
+        from src.autopilot.orchestrator import attempt_recovery, OrchestratorLogger
+        logger = OrchestratorLogger(Path("/tmp/logs"))
+        mock_tasks.side_effect = [
+            [{"id": "t1", "retry_count": 2, "phase_id": "p1"}],  # already retried 2x
+        ]
+        mock_agents.return_value = []
+        success, msg = attempt_recovery("wf-1", logger)
+        assert success is False
+
+    @patch("src.autopilot.orchestrator.api_post")
+    @patch("src.autopilot.orchestrator.get_agents")
+    @patch("src.autopilot.orchestrator.get_tasks")
+    def test_terminates_stale_agents(self, mock_tasks, mock_agents, mock_post):
+        from src.autopilot.orchestrator import attempt_recovery, OrchestratorLogger
+        logger = OrchestratorLogger(Path("/tmp/logs"))
+        mock_tasks.return_value = []
+        mock_agents.return_value = [{"id": "a1", "status": "working"}]
+        mock_post.return_value = {}
+        success, msg = attempt_recovery("wf-1", logger)
+        assert success is True
+        assert "terminated" in msg.lower()
+
+
+class TestUpdateOrchestratorMaxGotos:
+    @patch("src.core.database.get_db")
+    def test_updates_config(self, mock_get_db):
+        from src.autopilot.orchestrator import _update_orchestrator_max_gotos, OrchestratorLogger
+        logger = OrchestratorLogger(Path("/tmp/logs"))
+        mock_defn = Mock(orchestrator_config={"max_total_gotos": 5})
+        mock_db = Mock()
+        mock_db.query.return_value.filter_by.return_value.first.return_value = mock_defn
+        mock_get_db.return_value.__enter__ = Mock(return_value=mock_db)
+        mock_get_db.return_value.__exit__ = Mock(return_value=False)
+        _update_orchestrator_max_gotos(15, logger)
+        assert mock_defn.orchestrator_config["max_total_gotos"] == 15
+        mock_db.commit.assert_called()
+
+    @patch("src.core.database.get_db")
+    def test_handles_no_defn(self, mock_get_db):
+        from src.autopilot.orchestrator import _update_orchestrator_max_gotos, OrchestratorLogger
+        logger = OrchestratorLogger(Path("/tmp/logs"))
+        mock_db = Mock()
+        mock_db.query.return_value.filter_by.return_value.first.return_value = None
+        mock_get_db.return_value.__enter__ = Mock(return_value=mock_db)
+        mock_get_db.return_value.__exit__ = Mock(return_value=False)
+        _update_orchestrator_max_gotos(10, logger)
+        # Should not raise
+
+    @patch("src.core.database.get_db")
+    def test_handles_exception(self, mock_get_db):
+        from src.autopilot.orchestrator import _update_orchestrator_max_gotos, OrchestratorLogger
+        logger = OrchestratorLogger(Path("/tmp/logs"))
+        mock_get_db.return_value.__enter__ = Mock(side_effect=Exception("DB error"))
+        mock_get_db.return_value.__exit__ = Mock(return_value=False)
+        _update_orchestrator_max_gotos(10, logger)
+        # Should not raise
+
+
+class TestShouldStop:
+    def test_no_event(self):
+        from src.autopilot.orchestrator import _should_stop
+        import src.autopilot.orchestrator as mod
+        old = mod._service_stop_event if hasattr(mod, '_service_stop_event') else None
+        mod._service_stop_event = None
+        try:
+            assert _should_stop() is False
+        finally:
+            if old is not None:
+                mod._service_stop_event = old
+
+    def test_event_not_set(self):
+        from src.autopilot.orchestrator import _should_stop
+        import src.autopilot.orchestrator as mod
+        import threading
+        event = threading.Event()
+        old = getattr(mod, '_service_stop_event', None)
+        mod._service_stop_event = event
+        try:
+            assert _should_stop() is False
+        finally:
+            if old is not None:
+                mod._service_stop_event = old
+
+    def test_event_set(self):
+        from src.autopilot.orchestrator import _should_stop
+        import src.autopilot.orchestrator as mod
+        import threading
+        event = threading.Event()
+        event.set()
+        old = getattr(mod, '_service_stop_event', None)
+        mod._service_stop_event = event
+        try:
+            assert _should_stop() is True
+        finally:
+            if old is not None:
+                mod._service_stop_event = old
+
+
+class TestGetLitellmConfig:
+    def test_reads_env(self):
+        from src.autopilot.orchestrator import get_litellm_config
+        import os
+        old_url = os.environ.get("LITELLM_PROXY_URL")
+        os.environ["LITELLM_PROXY_URL"] = "http://localhost:4000"
+        try:
+            config = get_litellm_config()
+            assert config["url"] == "http://localhost:4000"
+        finally:
+            if old_url is not None:
+                os.environ["LITELLM_PROXY_URL"] = old_url
+            elif "LITELLM_PROXY_URL" in os.environ:
+                del os.environ["LITELLM_PROXY_URL"]
+
+    def test_defaults(self):
+        from src.autopilot.orchestrator import get_litellm_config
+        config = get_litellm_config()
+        assert config["url"] == ""
+        assert config["api_key"] == ""
+        assert config["cost_tracking"] is False
