@@ -35,20 +35,35 @@ additional_notes: |
   STEP 0: CHECK FOR TESTING.md (PRIMARY INSTRUCTIONS)
   ═══════════════════════════════════════════════════════════════════════
   
-  Look for TESTING.md in the project root (Project Path from your task).
-  
+  Your task description contains "Project Root (absolute): <path>".
+  TESTING.md lives in the source code project root, NOT in this worktree.
+
+  ```bash
+  PROJECT_ROOT="<value of 'Project Root (absolute)' from your task description>"
+  TESTING_MD="$PROJECT_ROOT/TESTING.md"
+  [ -f "$TESTING_MD" ] && echo "TESTING.md FOUND at $TESTING_MD" || echo "TESTING.md NOT FOUND"
+  ```
+
   If TESTING.md EXISTS:
-    → TESTING.md is your PRIMARY instructions. Follow it EXACTLY.
-    → It contains:
-       - How to start/run the application
-       - How to run existing tests (exact commands)
-       - Where to find application logs
-       - Known issues and workarounds
-       - Test priorities and focus areas
-       - Environment setup instructions
-    → Read it thoroughly, then follow its instructions step by step.
-    → Skip to STEP 7 (Create Report) after following TESTING.md.
-    → The steps below are FALLBACK only — ignore them if TESTING.md exists.
+    → Read it fully, then execute these steps IN ORDER:
+
+    1. **Run the application** — follow the "How to Run the Application" section.
+       Run the actual code, not just tests. Capture stdout and any log files it writes.
+       Example: `python -c "from calculator import add; add(2,3)"` — does it print a log line?
+
+    2. **Check log files** — follow the "Log Locations" section.
+       Read every log file listed. Verify log lines match the expected format.
+
+    3. **Run the test suite** — copy the EXACT command from TESTING.md's
+       "How to Run Tests" section. Do not invent your own command.
+
+    4. **Run the smoke test** — if TESTING.md has a "Smoke Test" section, run it.
+
+    5. **Check acceptance criteria** — verify every item in TESTING.md's
+       "Acceptance Criteria" section. Mark each PASS or FAIL explicitly.
+
+    → Skip to STEP 7 (Create Report) after completing all 5 steps above.
+    → The fallback steps below are ONLY for when TESTING.md does not exist.
   
   If TESTING.md DOES NOT EXIST:
     → Note in your report: "TESTING.md not found - using fallback instructions"

@@ -1092,11 +1092,11 @@ REMEMBER:
                         for tmux_sess in self.tmux_server.sessions:
                             if tmux_sess.name == agent.tmux_session_name:
                                 pane = tmux_sess.attached_window.attached_pane
-                                # Full scrollback for the tmux log; 50-line slice for AgentLog.
+                                # Capture full scrollback for both tmux log and AgentLog.
                                 full_scrollback = "\n".join(
                                     pane.cmd("capture-pane", "-p", "-S", "-").stdout
                                 )
-                                final_output = "\n".join(full_scrollback.splitlines()[-50:])
+                                final_output = full_scrollback
 
                                 # Write complete scrollback to .hephaestus/tmux/ (git-excluded run artifact).
                                 _task = session.query(Task).filter_by(

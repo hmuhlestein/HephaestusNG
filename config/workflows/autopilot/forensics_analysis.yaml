@@ -33,42 +33,73 @@ additional_notes: |
   ═══════════════════════════════════════════════════════════════════════
   STEP 0: READ YOUR TASK DESCRIPTION FOR PATHS
   ═══════════════════════════════════════════════════════════════════════
-  
-  CRITICAL PATH RULE: Your current working directory IS the project root (an isolated git worktree).
-  - Write ALL code and tests inside your working directory (e.g. ./src, ./tests).
-  - "Project Path" = your working directory (.).  "Docs Path" = ./docs/ (create it if missing).
-  - Read the design document and prior inputs from ./.hephaestus/ (design.md, context.md, qa_spec.json).
-  - Do NOT use absolute paths outside your working directory. Do NOT write into ./.hephaestus/ (it is never merged to main).
-  - ALL generated docs/reports go in "Docs Path:" (forensics_report.md, etc.).
-  - Your task description contains the exact paths — copy them exactly.
-  
-  Your task description contains:
-  - "Docs Path:" — where all generated reports and metrics are stored
-  - "Project Path:" — where the implementation code lives
-  - "Feature Folder:" — the feature-level directory
-  
-  All your reads and writes come from/to the "Docs Path" location.
-  
+
+  Your task description contains these exact lines — copy the values verbatim:
+
+    Feature Folder: <absolute path to this run's feature folder>
+    Docs Path (absolute): <absolute path to this run's docs folder>
+
+  Use "Docs Path (absolute)" for ALL reads and writes in this phase.
+  Do NOT use "./docs/" — that is the worktree-relative path for other phases.
+  Do NOT search for or guess the feature folder — read it from your task description.
+
+  WRONG: ./docs/pipeline_metrics.json
+  RIGHT: <value of "Docs Path (absolute)" from task description>/pipeline_metrics.json
+
+  Write forensics_report.md to "Docs Path (absolute)" as well.
+
+  ═══════════════════════════════════════════════════════════════════════
+  STEP 0.5: READ RUN HEALTH — DECIDE ANALYSIS DEPTH
+  ═══════════════════════════════════════════════════════════════════════
+
+  Read `<Docs Path (absolute)>/run_health.json`. The orchestrator writes this
+  after the pipeline completes by grepping tmux logs and the orchestrator log.
+
+  Fields:
+  - `clean` (bool): true if no GOTOs and no tmux errors were detected
+  - `goto_count` (int): number of GOTO rewinds that occurred
+  - `error_count` (int): number of error-pattern lines found in tmux logs
+  - `goto_events` (list): the actual GOTO log lines
+  - `tmux_errors` (list): per-phase error samples
+
+  **ANALYSIS DEPTH DECISION:**
+
+  GOTOs are normal pipeline iteration — they are NOT errors. A run with 1-2 GOTOs
+  that ended in success is healthy. Only treat a run as problematic if there were
+  agent crashes, unresolved errors, or the pipeline failed to complete.
+
+  If `clean == true` AND `error_count == 0`:
+    → LIGHT MODE: Write a brief forensics_report.md (1-2 pages). Confirm the
+      run was healthy, note timing, GOTO count, and key outputs. Skip deep
+      agent-by-agent log analysis. Skip ticket creation.
+
+  If `clean == false` AND `error_count > 0`:
+    → FULL MODE: Execute all steps below in detail. Read every tmux log.
+      Identify root causes of the errors. Propose specific prompt fixes.
+      Create tickets for actionable findings.
+
+  Note: if `goto_count > 0` but `error_count == 0`, the GOTOs worked correctly —
+  the pipeline self-corrected. Mention the GOTO count in your report but do not
+  treat it as a failure requiring deep investigation.
+
+  Log which mode you chose and why at the top of forensics_report.md.
+
   ═══════════════════════════════════════════════════════════════════════
   STEP 1: READ PIPELINE METRICS (REAL DATA)
   ═══════════════════════════════════════════════════════════════════════
-  
-  Read `<Docs Path>/pipeline_metrics.json`. This contains:
-  - iterations: how many times the pipeline ran
-  - total_time_seconds: wall-clock time
-  - stop_reason: why it stopped
+
+  Read `<Docs Path (absolute)>/pipeline_metrics.json`. This contains:
+  - iterations, total_time_seconds, stop_reason
   - qa_passed / product_validated: final outcomes
-  - phases: list of phases with their expected output files
   - started_at / completed_at: timestamps
-  - cost_total: LLM spend if LiteLLM was configured
-  
+
   This is your source of truth for metrics. Do NOT guess or hallucinate numbers.
   
   ═══════════════════════════════════════════════════════════════════════
   STEP 2: READ ACTUAL AGENT PROMPTS
   ═══════════════════════════════════════════════════════════════════════
 
-  Read all files in `<Docs Path>/phase_prompts/`. These are YAML files
+  Read all files in `<Docs Path (absolute)>/phase_prompts/`. These are YAML files
   (one per phase, e.g. development.yaml, qa_validation.yaml) containing
   the exact prompt given to each agent.
 

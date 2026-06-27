@@ -13,6 +13,7 @@ from fastapi.responses import StreamingResponse, HTMLResponse
 from pydantic import BaseModel, Field
 import asyncio
 
+from git import Repo
 from src.core.simple_config import get_config
 from src.core.database import DatabaseManager, Task, Agent, Memory, Phase, ValidationReview, AgentResult, WorkflowResult, Workflow, get_db
 from src.core.worktree_manager import WorktreeManager
@@ -973,6 +974,15 @@ async def startup_event():
                     )
                     session.add(db_def)
                     logger.info(f"Registered workflow: {defn.id}")
+            # Remove stale definitions that no longer exist on disk
+            loaded_ids = {d.id for d in all_definitions}
+            stale = session.query(DBWorkflowDefinition).filter(
+                DBWorkflowDefinition.id.notin_(loaded_ids)
+            ).all()
+            for stale_def in stale:
+                logger.info(f"Removing stale workflow definition: {stale_def.id}")
+                session.delete(stale_def)
+
             session.commit()
         logger.info(f"Workflow registration complete: {len(all_definitions)} definitions")
     except Exception as e:

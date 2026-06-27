@@ -44,15 +44,20 @@ additional_notes: |
   sections — a single line "Step 2 skipped: no authentication in this feature" is enough.
   
   ═══════════════════════════════════════════════════════════════════════
-  STEP 0.5: AUTOMATED SCAN (ash)
+  STEP 0.5: AUTOMATED SCAN (ash) — MANDATORY
   ═══════════════════════════════════════════════════════════════════════
-  
-  Run the AWS automated security helper if installed (local mode — no Docker needed):
+
+  Run the AWS Automated Security Helper. Derive the path from the `heph` binary:
   ```bash
-  ash --source-dir . 2>&1 | tee /tmp/ash_results.txt || true
+  HEPH_REPO="$(cd "$(dirname "$(which heph)")/../.." && pwd)"
+  "$HEPH_REPO/scripts/ash" --source-dir . 2>&1 | tee /tmp/ash_results.txt || true
+  cat /tmp/ash_results.txt
   ```
-  
-  If ash produces output, include a summary of its findings in security_report.md under
+
+  This script runs via `uvx` (no Docker required). It may take 1-2 minutes.
+  If it fails or times out, note the error in the report and continue.
+
+  Include a summary of its findings in security_report.md under
   "## Automated Scan Results". Fix any HIGH/CRITICAL findings it surfaces.
   
   ═══════════════════════════════════════════════════════════════════════
