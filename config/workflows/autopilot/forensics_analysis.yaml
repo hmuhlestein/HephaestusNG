@@ -23,6 +23,8 @@ done_definitions:
   - "forensics_report.md created in Docs Path"
   - "Memory entries saved with feature name prefix in content"
   - "Task marked as done"
+outputs:
+  - "forensics_report.md"
 additional_notes: |
   ═══════════════════════════════════════════════════════════════════════
   YOU ARE A FORENSICS ANALYST - IMPROVE THE PIPELINE
@@ -47,6 +49,15 @@ additional_notes: |
   RIGHT: <value of "Docs Path (absolute)" from task description>/pipeline_metrics.json
 
   Write forensics_report.md to "Docs Path (absolute)" as well.
+
+  MANDATORY FIRST ACTION — run this exact shell command before anything else:
+  ```bash
+  DOCS_ABS="<value of 'Docs Path (absolute)' from your task description>"
+  echo "Forensics DOCS_ABS=$DOCS_ABS"
+  ls "$DOCS_ABS/pipeline_metrics.json" && echo "OK: metrics found" || echo "ERROR: wrong path"
+  ```
+  If the ls fails, re-read your task description and correct DOCS_ABS before continuing.
+  NEVER write forensics_report.md to ./docs/ — ALWAYS write to $DOCS_ABS/forensics_report.md.
 
   ═══════════════════════════════════════════════════════════════════════
   STEP 0.5: READ RUN HEALTH — DECIDE ANALYSIS DEPTH

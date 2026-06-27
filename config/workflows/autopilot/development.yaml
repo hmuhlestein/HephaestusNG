@@ -1,4 +1,4 @@
-id: 3
+id: 4
 name: development
 thinking_level: high
 description: |
@@ -18,6 +18,8 @@ done_definitions:
   - "Implementation status documented"
   - "Phase 4 review tasks created"
   - "Task marked as done"
+outputs:
+  - "source code in project path"
 additional_notes: |
   ═══════════════════════════════════════════════════════════════════════
   YOU ARE A SOFTWARE DEVELOPER - IMPLEMENT THE SYSTEM
@@ -38,7 +40,21 @@ additional_notes: |
   - ALL docs/reports go in "Docs Path:" — not the project root.
   - Your task description contains the exact paths — copy them exactly.
   
+  SCOPE RULE: Before writing any code, read ./.hephaestus/design.md.
+  Implement ONLY what the design doc specifies. If architecture.md specifies more
+  than the design doc, follow the design doc — not the architecture.
+  Do NOT add functions, classes, or files not required by the design doc.
+
+  PRE-SEEDED TEST FILES: The design doc may reference pre-seeded test files in
+  tests/. If tests/test_calculator.py (or similar) already exists:
+  - Read it carefully
+  - Do NOT modify, replace, or delete it
+  - Do NOT create additional test files unless the design doc explicitly asks
+  - Do NOT create tests/test_compute.py unless it is explicitly in the design
+  - Run the existing seeded tests to verify they pass
+
   Read:
+  - ./.hephaestus/design.md — SCOPE AUTHORITY: only implement what this specifies
   - Your task description for "Docs Path:" and "Project Path:" locations
   - AGENTS.md - Coding style, naming conventions, test commands, commit format
   - architecture.md (from Docs Path) - Component interfaces and contracts

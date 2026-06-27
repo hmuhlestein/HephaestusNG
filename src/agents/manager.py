@@ -525,6 +525,14 @@ class AgentManager:
         except Exception:
             pass  # Non-critical
 
+        # Use a wide terminal so captured output isn't hard-wrapped at 80 columns.
+        # This matches what a developer would see in a full-width terminal.
+        try:
+            pane = session.attached_window.attached_pane
+            pane.set_width(220)
+        except Exception:
+            pass  # Non-critical
+
         # Note: env_vars are exported in the shell before launching the agent
         # (see create_agent_for_task and restart_agent methods)
 

@@ -493,7 +493,11 @@ class MonitoringLoop:
                 st["recov"] = 0
                 return
             frozen_for = now - st["since"] if st["since"] else 0
-            if frozen_for >= FROZEN_SECONDS and st["recov"] < MAX_RECOV:
+            # Fast-path: "Operation aborted" leaves the agent idle at the shell
+            # prompt.  The output signature changed (so the 5-min clock reset),
+            # but the agent won't self-rescue — 30 s is enough to be sure.
+            abort_frozen = "Operation aborted" in sig and frozen_for >= 30
+            if (abort_frozen or frozen_for >= FROZEN_SECONDS) and st["recov"] < MAX_RECOV:
                 st["recov"] += 1
                 st["since"] = now  # restart the window after an attempt
                 logger.warning(
@@ -501,12 +505,20 @@ class MonitoringLoop:
                     f"{int(frozen_for)}s — recovery attempt {st['recov']}/{MAX_RECOV} (keys + nudge)"
                 )
                 if await self.agent_manager.send_recovery_keystrokes(agent.id):
-                    await self.agent_manager.send_message_to_agent(
-                        agent.id,
-                        "You appear stuck or looping. Stop, state your single next concrete "
-                        "action in one line, then do it. If blocked, save a memory and call "
-                        "update_task_status.",
-                    )
+                    if "Operation aborted" in sig:
+                        msg = (
+                            "Your last tool call was aborted. Review what you have already "
+                            "completed in this session. If the work is done, call "
+                            "update_task_status with status='done'. If you are genuinely "
+                            "blocked, call it with status='failed' and explain why."
+                        )
+                    else:
+                        msg = (
+                            "You appear stuck or looping. Stop, state your single next concrete "
+                            "action in one line, then do it. If blocked, save a memory and call "
+                            "update_task_status."
+                        )
+                    await self.agent_manager.send_message_to_agent(agent.id, msg)
             elif frozen_for >= FROZEN_SECONDS and st["recov"] >= MAX_RECOV:
                 # All recovery attempts exhausted and agent is still frozen.
                 # Fail the task so the monitor's retry-bound path handles it

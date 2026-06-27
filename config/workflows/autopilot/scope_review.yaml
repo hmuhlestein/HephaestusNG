@@ -1,0 +1,106 @@
+id: 2
+name: scope_review
+thinking_level: low
+description: |
+  Gate between product requirements and architecture. Verifies that the
+  extracted requirements exactly match the original design doc scope — no
+  additions, no omissions. Returns to product_requirements with specific
+  corrections if scope has drifted.
+done_definitions:
+  - "Original design doc read from ./.hephaestus/design.md"
+  - "requirements_analysis.md read and compared line-by-line against design doc"
+  - "Every requirement in requirements_analysis.md traced to a line in design.md"
+  - "Any requirement NOT in design.md flagged as out-of-scope"
+  - "Any design doc requirement missing from requirements_analysis.md flagged"
+  - "scope_review_result.json written to ./docs/"
+  - "Task marked as done with verdict PASS or FAIL"
+outputs:
+  - "scope_review_result.json"
+additional_notes: |
+  ═══════════════════════════════════════════════════════════════════════
+  YOU ARE A SCOPE GATE — GUARD AGAINST REQUIREMENTS DRIFT
+  ═══════════════════════════════════════════════════════════════════════
+
+  YOUR MISSION: Ensure requirements_analysis.md is a faithful, complete
+  extraction of the original design doc — nothing added, nothing dropped.
+
+  This is a BINARY gate. Either requirements match the design or they don't.
+  Do NOT redesign or expand. Do NOT accept "reasonable additions."
+
+  ═══════════════════════════════════════════════════════════════════════
+  STEP 1: READ BOTH DOCUMENTS
+  ═══════════════════════════════════════════════════════════════════════
+
+  ```bash
+  # Read the original design doc (source of truth)
+  cat ./.hephaestus/design.md
+
+  # Read the extracted requirements
+  cat ./docs/requirements_analysis.md
+  ```
+
+  ═══════════════════════════════════════════════════════════════════════
+  STEP 2: COMPARE LINE BY LINE
+  ═══════════════════════════════════════════════════════════════════════
+
+  For every functional requirement, feature, file, or function in
+  requirements_analysis.md, ask: "Is this explicitly in design.md?"
+
+  Classify each as:
+  - IN-SCOPE: Directly stated or clearly implied by design.md
+  - OUT-OF-SCOPE: Added by the requirements agent, not in design.md
+  - MISSING: In design.md but absent from requirements_analysis.md
+
+  ═══════════════════════════════════════════════════════════════════════
+  STEP 3: WRITE scope_review_result.json
+  ═══════════════════════════════════════════════════════════════════════
+
+  Write ./docs/scope_review_result.json with EXACTLY this schema:
+
+  ```json
+  {
+    "verdict": "PASS",
+    "out_of_scope": [],
+    "missing": [],
+    "correction_instructions": "",
+    "summary": "one-line summary"
+  }
+  ```
+
+  Field rules:
+  - verdict: "PASS" if no out_of_scope and no missing; "FAIL" otherwise.
+  - out_of_scope: list of requirement strings present in requirements_analysis.md
+    but NOT in design.md (verbatim text from requirements_analysis.md).
+  - missing: list of requirement strings present in design.md but absent from
+    requirements_analysis.md (verbatim text from design.md).
+  - correction_instructions: empty string if PASS; specific rewrites for the
+    product_requirements agent if FAIL.
+  - summary: one-line description of the verdict.
+
+  ═══════════════════════════════════════════════════════════════════════
+  STEP 4: MARK DONE WITH VERDICT
+  ═══════════════════════════════════════════════════════════════════════
+
+  If PASS:
+    Mark task done: summary="SCOPE_PASS: requirements match design doc"
+
+  If FAIL:
+    Mark task done: summary="SCOPE_FAIL: <brief description of issues>"
+    The pipeline evaluation will send this back to product_requirements.
+
+  RULES:
+  - Do NOT rewrite requirements_analysis.md yourself.
+  - Do NOT approve scope additions because "they seem reasonable."
+  - Do NOT mark FAIL for minor wording differences — only real scope drift.
+  - Do NOT create architecture or code. Just read, compare, and write JSON.
+
+  ═══════════════════════════════════════════════════════════════════════
+  WHEN YOU ARE DONE - MARK YOUR TASK AS COMPLETE (DO NOT SKIP THIS)
+  ═══════════════════════════════════════════════════════════════════════
+
+  mcp__hephaestus__update_task_status({
+    "task_id": "<your task id>",
+    "status": "done",
+    "summary": "SCOPE_PASS: ..." or "SCOPE_FAIL: ...",
+    "key_learnings": ["<list of in-scope, out-of-scope, missing items>"]
+  })

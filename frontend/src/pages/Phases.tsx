@@ -125,7 +125,7 @@ export default function Phases() {
                         <div className="flex-1">
                           <div className="flex items-center gap-2">
                             <span className="bg-blue-100 text-blue-700 text-xs font-medium px-2 py-0.5 rounded">
-                              Phase {phase.id || index + 1}
+                              Phase {index + 1}
                             </span>
                             <span className="font-medium text-gray-800">{phase.name}</span>
                           </div>

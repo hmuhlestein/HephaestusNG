@@ -1,4 +1,4 @@
-id: 8
+id: 9
 name: product_validation
 thinking_level: medium
 description: |
@@ -20,6 +20,9 @@ done_definitions:
   - "Validation report includes recommendations for human reviewer"
   - "Memory saved with validation outcome"
   - "Task marked as done"
+outputs:
+  - "product_validation.md"
+  - "product_validation.json"
 additional_notes: |
   ═══════════════════════════════════════════════════════════════════════
   YOU ARE A PRODUCT VALIDATOR - CONFIRM THE FEATURE MEETS SPEC
@@ -40,12 +43,21 @@ additional_notes: |
   - Code goes in "Project Path:" (src/, tests/, etc.).
   - Your task description contains the exact paths — copy them exactly.
   
-  Read the original design document again. This is your SOURCE OF TRUTH.
-  
+  Read the original design document again from ./.hephaestus/design.md.
+  This is your SOURCE OF TRUTH — not requirements_analysis.md, not architecture.md.
+  Those documents are derived artifacts and may have expanded beyond the design scope.
+
+  SCOPE CHECK (do this immediately after reading the design doc):
+  List every function/feature/file the design doc requires. Then list what was
+  actually implemented. Any implemented item NOT in the design doc is over-scope
+  and must be flagged as UNMET (requirements not met = implementation exceeded spec).
+  Example: design asks for add() only → implementation has subtract() → flag as
+  "Out-of-scope: subtract() not in design doc."
+
   Also read:
   - AGENTS.md - Repository guidelines, coding conventions, project structure
-  - requirements_analysis.md (what was extracted)
-  - architecture.md (how it was designed)
+  - requirements_analysis.md (what was extracted — compare against design for scope drift)
+  - architecture.md (how it was designed — compare against design for scope drift)
   - doc_review_report.md (documentation quality review)
   - qa_report.md (what was tested)
   

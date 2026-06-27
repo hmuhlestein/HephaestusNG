@@ -1,4 +1,4 @@
-id: 4
+id: 5
 name: adversarial_review
 thinking_level: high
 description: |
@@ -54,9 +54,16 @@ additional_notes: |
   
   Read:
   - Your task description for "Docs Path:" and "Project Path:" locations
+  - ./.hephaestus/design.md — THE ORIGINAL DESIGN DOC (source of truth for scope)
   - architecture.md (from Docs Path) - YOUR design decisions, component structure, interfaces
   - requirements_analysis.md (from Docs Path) - What the system should do
-  - Your goal: Did the implementation (in Project Path) match YOUR design?
+  - Your goal: Did the implementation (in Project Path) match the ORIGINAL DESIGN?
+
+  SCOPE CHECK (do this before anything else):
+  Compare architecture.md against ./.hephaestus/design.md. If the architecture
+  specifies functions, features, or components NOT in the original design doc,
+  flag it as BLOCKER: "Over-scope: architecture exceeds design spec." The code
+  must match the ORIGINAL DESIGN, not an expanded architecture.
   
   ═══════════════════════════════════════════════════════════════════════
   STEP 2: REVIEW AGAINST ARCHITECTURE

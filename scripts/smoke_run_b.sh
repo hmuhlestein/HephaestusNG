@@ -61,8 +61,14 @@ cat > "$PROJECT_PATH/docs/design-queue/add_calculator.md" << 'DESIGN'
 Add an `add(a, b)` function that returns the sum of two numbers, with
 structured logging so every call is traceable.
 
+## SCOPE CONSTRAINT — READ CAREFULLY
+Implement ONLY what is listed below. Do NOT add subtract(), multiply(),
+divide(), compute(), or any other functions. Do NOT expand the scope beyond
+this spec. Any function not listed here is out of scope and must not be
+implemented.
+
 ## Requirements
-- Module named `calculator` with a single function `add(a, b)`
+- Module named `calculator` with a SINGLE function `add(a, b)` — no other functions
 - `add(a, b)` returns `a + b`
 - Every call to `add()` must be logged using Python's `logging` module at
   INFO level: `"add called: a=<a>, b=<b>, result=<result>"`
@@ -74,18 +80,23 @@ structured logging so every call is traceable.
   - Can be run with `python run_calculator.py`
   - Exits 0 on success
 
-## File Layout
+## File Layout — EXACT, no additions
 ```
-calculator.py        # the module
-run_calculator.py    # entry-point script
+calculator.py        # the module — contains ONLY add(a, b) and logger setup
+run_calculator.py    # entry-point script — REQUIRED, must be created
 tests/
-  test_calculator.py # test suite (provided below — do not modify)
+  test_calculator.py # ALREADY EXISTS — do not modify, do not replace
 calculator.log       # written at runtime by the logger
 ```
 
-## Test
+## CRITICAL FILE RULES
+- tests/test_calculator.py is PRE-SEEDED. Read it, do not modify or replace it.
+- Do NOT create tests/test_compute.py or any other test file.
+- If tests/test_compute.py exists, DELETE it (`rm -f tests/test_compute.py`).
+- run_calculator.py MUST be created at the project root (not in tests/ or src/).
+
+## Test (already in tests/test_calculator.py — do not duplicate)
 ```python
-# tests/test_calculator.py — use exactly this file, do not add other test files
 import logging
 from calculator import add
 
@@ -105,9 +116,10 @@ def test_add_logging(caplog):
 ## Acceptance Criteria
 - `python run_calculator.py` exits 0, prints a log line to stdout, and writes
   to `calculator.log`
-- `python -m pytest -p no:libtmux -v` runs and all 3 tests pass
+- `python -m pytest -p no:libtmux -v` runs and ALL 3 seeded tests pass
 - `calculator.log` contains at least one line matching
   `add called: a=<n>, b=<n>, result=<n>`
+- calculator.py contains ONLY `add(a, b)` — no other functions
 DESIGN
 
 cat > "$PROJECT_PATH/tests/test_calculator.py" << 'PYTEST'

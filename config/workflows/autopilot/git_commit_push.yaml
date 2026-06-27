@@ -1,4 +1,4 @@
-id: 9
+id: 11
 name: git_commit_push
 thinking_level: low
 description: |
@@ -16,7 +16,7 @@ done_definitions:
   - "Descriptive commit message created (or nothing to commit confirmed)"
   - "Commit created on feature branch (or confirmed already committed)"
   - "Feature merged into main (via PR if remote available, or local merge)"
-  - "Commit hash recorded in memory"
+  - "Commit hash recorded in task summary"
   - "Task marked as done"
 outputs:
   - "git commit on feature branch"
@@ -156,15 +156,6 @@ additional_notes: |
   git log --oneline -3
   COMMIT=$(git rev-parse HEAD)
   echo "Merge commit: $COMMIT"
-  ```
-  
-  Save to memory:
-  ```python
-  mcp__hephaestus__save_memory({
-      "content": f"Committed feature '{feature_name}': branch {FEATURE_BRANCH} merged to {DEFAULT_BRANCH} at {COMMIT}.",
-      "memory_type": "decision",
-      "tags": ["git", "commit", "deployment"]
-  })
   ```
   
   ═══════════════════════════════════════════════════════════════════════
