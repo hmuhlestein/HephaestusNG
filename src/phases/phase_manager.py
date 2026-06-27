@@ -825,7 +825,14 @@ class PhaseManager:
                 logger.warning(f"[FEATURE-FOLDER] Project root {project_path} not found")
                 return
 
-            design_name = (workflow.name or "feature").replace(" ", "_").replace("/", "_")
+            # Prefer design name over workflow definition name so the folder reads
+            # "add_calculator" not "Autopilot_Multi-Agent_Pipeline".
+            from src.core.database import AutopilotDesign as _AD2
+            _design_label = None
+            if workflow.design_id:
+                _d = session.query(_AD2).filter_by(id=workflow.design_id).first()
+                _design_label = _d.name if _d else None
+            design_name = (_design_label or workflow.name or "feature").replace(" ", "_").replace("/", "_")
             safe_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in design_name)[:40]
             timestamp = _dt.utcnow().strftime("%Y%m%d_%H%M%S")
             feature_dir = project_path / ".hephaestus" / "features" / f"{timestamp}_{safe_name}"
@@ -855,16 +862,18 @@ class PhaseManager:
                         _shutil.copy2(str(candidate), str(dest))
                     break
 
-            # 3. Tmux logs — git-excluded, live in worktree's .hephaestus/tmux/
-            tmux_src = wt / ".hephaestus" / "tmux"
-            if tmux_src.is_dir():
-                tmux_dest = feature_dir / "tmux"
-                tmux_dest.mkdir(exist_ok=True)
-                for f in tmux_src.glob("*.log"):
-                    dest = tmux_dest / f.name
-                    if not dest.exists():
-                        _shutil.copy2(str(f), str(dest))
-                        logger.info(f"[FEATURE-FOLDER] Copied tmux log {f.name}")
+            # 3. Tmux logs — written to project root's .hephaestus/tmux/ so they
+            #    survive worktree removal by git_commit_push. Also check the
+            #    worktree itself as a fallback for any stragglers.
+            tmux_dest = feature_dir / "tmux"
+            for tmux_src in [project_path / ".hephaestus" / "tmux", wt / ".hephaestus" / "tmux"]:
+                if tmux_src.is_dir():
+                    tmux_dest.mkdir(exist_ok=True)
+                    for f in tmux_src.glob("*.log"):
+                        dest = tmux_dest / f.name
+                        if not dest.exists():
+                            _shutil.copy2(str(f), str(dest))
+                            logger.info(f"[FEATURE-FOLDER] Copied tmux log {f.name}")
 
             # 4. Link design → feature folder in DB
             from src.core.database import AutopilotDesign as _AD
