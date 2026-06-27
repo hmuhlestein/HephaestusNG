@@ -79,7 +79,7 @@ def _get_effective_queue_dir() -> str:
         if not proj or not proj.base_dir:
             raise RuntimeError("No active project configured. Set DESIGN_QUEUE_DIR or activate a project.")
         
-        queue_dir = Path(proj.base_dir) / "docs" / "design-queue"
+        queue_dir = Path(proj.base_dir) / "docs" / "design"
         if not queue_dir.exists():
             raise FileNotFoundError(f"Design queue directory does not exist: {queue_dir}. Create it and add design documents.")
         
@@ -571,7 +571,7 @@ async def rerun_design(request: dict):
         raise HTTPException(400, f"Project path does not exist: {project_path}")
 
     # Validate design exists in queue
-    queue_dir = project / "docs" / "design-queue"
+    queue_dir = project / "docs" / "design"
     design_path = queue_dir / filename
     if not design_path.exists():
         raise HTTPException(404, f"Design not found in queue: {filename}")
@@ -800,7 +800,7 @@ Tasks:
 {chr(10).join(task_summary) if task_summary else 'No tasks found'}
 
 YOUR JOB:
-1. Read the design doc at {project / 'docs' / 'design-queue' / filename} (READ ONLY - do not modify)
+1. Read the design doc at {project / 'docs' / 'design' / filename} (READ ONLY - do not modify)
 2. Check what has been completed so far in the feature folder
 3. Identify what's blocking progress
 4. You have FULL AUTHORITY to:
@@ -906,7 +906,7 @@ def _run_repair(repair_id: str, filename: str, project: Path, logger):
                 phases_folder_path=str(project),
                 status="active",
                 launch_params=json.dumps({
-                    "design_document": str(project / 'docs' / 'design-queue' / filename),
+                    "design_document": str(project / 'docs' / 'design' / filename),
                     "project_path": str(project),
                     "repair_mode": True
                 })
@@ -1069,7 +1069,7 @@ import uuid
 import hashlib
 import asyncio as _asyncio
 
-DESIGN_SUBDIR = "docs/design-queue"
+DESIGN_SUBDIR = "docs/design"
 _ORDINAL_RE = re.compile(r"^(\d+)[-_]")
 
 

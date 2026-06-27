@@ -13,7 +13,7 @@ def register(subparsers):
     # start
     s = sub.add_parser("start", help="Start the autopilot pipeline")
     s.add_argument("--project-path", "-p", required=True, help="Project directory")
-    s.add_argument("--design-queue", help="Design queue directory (default: <project>/docs/design-queue)")
+    s.add_argument("--design-queue", help="Design queue directory (default: <project>/docs/design)")
     s.add_argument("--max-iterations", type=int, default=3, help="Max iterations per design")
     s.add_argument("--drop-db", action="store_true", help="Drop database first")
     s.set_defaults(func=start_pipeline)
@@ -44,7 +44,7 @@ def start_pipeline(args):
     import requests
 
     project_path = Path(args.project_path).resolve()
-    design_queue = args.design_queue or str(project_path / "docs" / "design-queue")
+    design_queue = args.design_queue or str(project_path / "docs" / "design")
 
     if not project_path.exists():
         print(f"Error: Project path does not exist: {project_path}")
@@ -185,7 +185,7 @@ def _print_pipeline_status(data):
 
 
 def show_queue(args):
-    queue_dir = Path(args.project_path) / "docs" / "design-queue"
+    queue_dir = Path(args.project_path) / "docs" / "design"
     if not queue_dir.exists():
         print(f"Queue directory not found: {queue_dir}")
         return 0
@@ -220,7 +220,7 @@ def add_to_queue(args):
         print(f"File not found: {source}")
         return 1
 
-    queue_dir = Path(args.project_path) / "docs" / "design-queue"
+    queue_dir = Path(args.project_path) / "docs" / "design"
     queue_dir.mkdir(parents=True, exist_ok=True)
 
     dest = queue_dir / source.name

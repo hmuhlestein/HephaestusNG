@@ -53,9 +53,9 @@ cd - >/dev/null
 rm -f "$PROJECT_PATH/tests/test_compute.py"
 
 # Write canonical design doc and seeded failing test (overwrite each run)
-mkdir -p "$PROJECT_PATH/docs/design-queue" "$PROJECT_PATH/tests"
+mkdir -p "$PROJECT_PATH/docs/design" "$PROJECT_PATH/tests"
 
-cat > "$PROJECT_PATH/docs/design-queue/add_calculator.md" << 'DESIGN'
+cat > "$PROJECT_PATH/docs/design/add_calculator.md" << 'DESIGN'
 # Feature: add()
 
 Add an `add(a, b)` function that returns the sum of two numbers, with
