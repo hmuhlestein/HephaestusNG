@@ -504,19 +504,37 @@ class MonitoringLoop:
                     f"[MECH-RECOVERY] Agent {agent.id[:8]} ({agent.cli_type}) output frozen "
                     f"{int(frozen_for)}s — recovery attempt {st['recov']}/{MAX_RECOV} (keys + nudge)"
                 )
+                # Reconnect MCP if disconnected before sending the nudge.
+                mcp_disconnected = bool(re.search(r"MCP:\s*0/", out))
+                if mcp_disconnected:
+                    logger.warning(
+                        f"[MECH-RECOVERY] Agent {agent.id[:8]}: MCP disconnected — reconnecting"
+                    )
+                    session_name = getattr(agent, "tmux_session_name", None)
+                    if session_name:
+                        import subprocess as _sp
+                        _sp.run(["tmux", "send-keys", "-t", session_name, "Escape", ""], check=False)
+                        await asyncio.sleep(0.5)
+                        _sp.run(["tmux", "send-keys", "-t", session_name, "/mcp", "Enter"], check=False)
+                        await asyncio.sleep(2.0)
+                        _sp.run(["tmux", "send-keys", "-t", session_name, "C-r", ""], check=False)
+                        await asyncio.sleep(3.0)
+                        _sp.run(["tmux", "send-keys", "-t", session_name, "Escape", ""], check=False)
+                        await asyncio.sleep(0.5)
                 if await self.agent_manager.send_recovery_keystrokes(agent.id):
+                    mcp_note = " MCP was disconnected and has been reconnected." if mcp_disconnected else ""
                     if "Operation aborted" in sig:
                         msg = (
                             "Your last tool call was aborted. Review what you have already "
                             "completed in this session. If the work is done, call "
                             "update_task_status with status='done'. If you are genuinely "
-                            "blocked, call it with status='failed' and explain why."
+                            f"blocked, call it with status='failed' and explain why.{mcp_note}"
                         )
                     else:
                         msg = (
                             "You appear stuck or looping. Stop, state your single next concrete "
-                            "action in one line, then do it. If blocked, save a memory and call "
-                            "update_task_status."
+                            f"action in one line, then do it. If blocked, save a memory and call "
+                            f"update_task_status.{mcp_note}"
                         )
                     await self.agent_manager.send_message_to_agent(agent.id, msg)
             elif frozen_for >= FROZEN_SECONDS and st["recov"] >= MAX_RECOV:
