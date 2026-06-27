@@ -387,7 +387,7 @@ const Graph: React.FC = () => {
             <h1 className="text-3xl font-bold text-gray-800">Task Hierarchy</h1>
             <p className="text-gray-600 mt-1">
               {selectedExecution ? (
-                <>Viewing: {selectedExecution.description || selectedExecution.definition_name}</>
+                <>Viewing: {selectedExecution.definition_name || selectedExecution.description?.split('\n')[0]}</>
               ) : (
                 'Task spawning relationships'
               )}

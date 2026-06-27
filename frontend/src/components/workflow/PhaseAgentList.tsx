@@ -5,6 +5,7 @@ import { Terminal, Clock, AlertTriangle } from 'lucide-react';
 interface PhaseAgentListProps {
   agents: any[];
   onTerminateAgent: (agentId: string) => void;
+  onViewAgent?: (agentId: string) => void;
 }
 
 const statusColor: Record<string, string> = {
@@ -14,7 +15,7 @@ const statusColor: Record<string, string> = {
   terminated: 'bg-red-100 text-red-700',
 };
 
-export default function PhaseAgentList({ agents, onTerminateAgent }: PhaseAgentListProps) {
+export default function PhaseAgentList({ agents, onTerminateAgent, onViewAgent }: PhaseAgentListProps) {
   if (!agents || agents.length === 0) {
     return (
       <div className="text-center py-6 text-gray-500 text-sm">
@@ -28,7 +29,8 @@ export default function PhaseAgentList({ agents, onTerminateAgent }: PhaseAgentL
       {agents.map((agent) => (
         <div
           key={agent.id}
-          className="bg-white rounded-lg border border-gray-200 p-3"
+          className={`bg-white rounded-lg border border-gray-200 p-3 ${onViewAgent ? 'cursor-pointer hover:border-blue-300 hover:shadow-sm transition-all' : ''}`}
+          onClick={() => onViewAgent?.(agent.id)}
         >
           <div className="flex items-start justify-between gap-2">
             <div className="flex-1 min-w-0">
@@ -57,14 +59,7 @@ export default function PhaseAgentList({ agents, onTerminateAgent }: PhaseAgentL
                 </div>
               )}
             </div>
-            <div className="flex items-center gap-1">
-              <a
-                href={`/agents/${agent.id}`}
-                className="text-blue-600 hover:text-blue-800 p-1"
-                title="View logs"
-              >
-                <Terminal className="w-3 h-3" />
-              </a>
+            <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
               <Button
                 variant="ghost"
                 size="sm"

@@ -95,7 +95,7 @@ export default function Overview() {
           </h1>
           <p className="text-gray-600 mt-1">
             {selectedExecution ? (
-              <>Workflow: {selectedExecution.description || selectedExecution.definition_name}</>
+              <>Workflow: {selectedExecution.definition_name || selectedExecution.description?.split('\n')[0]}</>
             ) : (
               'Real-time monitoring and trajectory analysis'
             )}

@@ -10,6 +10,7 @@ import PhaseConfigTab from './PhaseConfigTab';
 
 interface PhaseDetailPanelProps {
   phaseId: string;
+  onViewAgent?: (agentId: string) => void;
 }
 
 type SubTab = 'overview' | 'prompts' | 'tasks' | 'agents' | 'config';
@@ -24,6 +25,7 @@ const subTabDefs: { key: SubTab; label: string }[] = [
 
 export default function PhaseDetailPanel({
   phaseId,
+  onViewAgent,
 }: PhaseDetailPanelProps) {
   const [activeTab, setActiveTab] = useState<SubTab>('overview');
   const queryClient = useQueryClient();
@@ -111,6 +113,7 @@ export default function PhaseDetailPanel({
           <PhaseAgentList
             agents={agents}
             onTerminateAgent={(agentId) => terminateMutation.mutate(agentId)}
+            onViewAgent={onViewAgent}
           />
         )}
         {activeTab === 'config' && (

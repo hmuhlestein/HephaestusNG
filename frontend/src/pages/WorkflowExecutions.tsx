@@ -3,6 +3,7 @@ import { useWorkflow } from '@/context/WorkflowContext';
 import { Workflow, Layers, Rocket } from 'lucide-react';
 import LaunchWorkflowModal from '@/components/LaunchWorkflowModal';
 import WorkflowCard from '@/components/workflow/WorkflowCard';
+import AgentDetailModal from '@/components/AgentDetailModal';
 
 export default function WorkflowExecutions() {
   const {
@@ -23,6 +24,7 @@ export default function WorkflowExecutions() {
   // Mutual exclusion state
   const [expandedWorkflowId, setExpandedWorkflowId] = useState<string | null>(null);
   const [expandedPhaseId, setExpandedPhaseId] = useState<string | null>(null);
+  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
 
   const handleWorkflowClick = useCallback((workflowId: string) => {
     // Invariant: expanding a workflow collapses any expanded phase
@@ -138,6 +140,7 @@ export default function WorkflowExecutions() {
                 expandedPhaseId={expandedPhaseId}
                 onTogglePhase={handlePhaseClick}
                 isSelected={selectedExecutionId === execution.id}
+                onViewAgent={setSelectedAgentId}
               />
             ))}
           </div>
@@ -193,6 +196,12 @@ export default function WorkflowExecutions() {
           setLaunchDefinitionId(null);
         }}
         initialDefinitionId={launchDefinitionId ?? undefined}
+      />
+
+      {/* Agent Detail Modal */}
+      <AgentDetailModal
+        agentId={selectedAgentId}
+        onClose={() => setSelectedAgentId(null)}
       />
     </div>
   );

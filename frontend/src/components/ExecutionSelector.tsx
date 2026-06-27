@@ -62,7 +62,7 @@ export const ExecutionSelector: React.FC = () => {
         >
           <Workflow className="w-4 h-4 mr-2 text-gray-500" />
           <span className="flex-1 text-left text-sm text-gray-700 truncate">
-            {selectedExecution?.description || selectedExecution?.definition_name || 'Select Workflow'}
+            {selectedExecution?.definition_name || selectedExecution?.description?.split('\n')[0] || 'Select Workflow'}
           </span>
           <ChevronDown className={`w-4 h-4 ml-2 text-gray-500 transition-transform ${showDropdown ? 'rotate-180' : ''}`} />
         </button>
@@ -87,7 +87,7 @@ export const ExecutionSelector: React.FC = () => {
                     }`}
                   >
                     <div className="text-sm font-medium text-gray-800 truncate">
-                      {execution.description || execution.definition_name || 'Unnamed Workflow'}
+                      {execution.definition_name || execution.description?.split('\n')[0] || 'Unnamed Workflow'}
                     </div>
                     <div className="text-xs text-gray-500 flex items-center gap-2 mt-1">
                       <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-green-100 text-green-700">
@@ -120,7 +120,7 @@ export const ExecutionSelector: React.FC = () => {
                     }`}
                   >
                     <div className="text-sm font-medium text-gray-800 truncate">
-                      {execution.description || execution.definition_name || 'Unnamed Workflow'}
+                      {execution.definition_name || execution.description?.split('\n')[0] || 'Unnamed Workflow'}
                     </div>
                     <div className="text-xs text-gray-500 flex items-center gap-2 mt-1">
                       <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${
