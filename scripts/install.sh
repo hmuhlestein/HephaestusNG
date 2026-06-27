@@ -332,8 +332,7 @@ else
 
     if $_install_ash; then
         log "Installing ash wrapper (uvx local mode)..."
-        printf '#!/bin/sh\nexec uvx "git+https://github.com/awslabs/automated-security-helper.git@v3.5.4" "$@"\n' \
-            > "$ASH_WRAPPER" \
+        cp "$REPO_DIR/scripts/ash" "$ASH_WRAPPER" \
           && chmod +x "$ASH_WRAPPER" \
           && ok "ash wrapper installed → $ASH_WRAPPER" \
           || warn "ash wrapper install failed — security phase will skip automated scan"
