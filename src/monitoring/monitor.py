@@ -1246,8 +1246,15 @@ class MonitoringLoop:
         # promoted to in_progress (e.g., after a workflow restart or race condition).
         completed_phases = [p for p in phases if p["status"] == "completed"]
         pending_phases = [p for p in phases if p["status"] == "pending"]
+        in_progress_phases = [p for p in phases if p["status"] == "in_progress"]
 
-        if completed_phases and pending_phases:
+        # Don't advance to future phases when a GOTO has rewound execution to an
+        # earlier phase that is still running. Without this guard, the
+        # _check_phase_progression logic sees the already-completed gated phase
+        # (e.g. qa_validation) and its still-pending successor (product_validation)
+        # and fires a second task for the successor while the rewound phase is
+        # still in progress — producing spurious parallel execution.
+        if completed_phases and pending_phases and not in_progress_phases:
             # The highest-order completed phase that has a pending successor
             completed_phases.sort(key=lambda p: p["order"])
             last_completed = completed_phases[-1]
