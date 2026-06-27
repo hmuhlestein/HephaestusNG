@@ -218,13 +218,12 @@ class HephaestusSDK:
 
         yaml.SafeDumper.add_representer(str, str_representer)
 
-        # Write phase YAML files
+        # Write per-phase YAML files using the unified schema (name.yaml, lowercase keys)
         for phase_id, phase in self.phases_map.items():
-            filename = f"{phase_id:02d}_{phase.name}.yaml"
+            filename = f"{phase.name}.yaml"
             filepath = temp_dir / filename
 
             with open(filepath, "w") as f:
-                # Use custom dumper with literal style for multiline strings
                 yaml.dump(
                     phase.to_yaml_dict(),
                     f,
@@ -234,18 +233,29 @@ class HephaestusSDK:
                     sort_keys=False,
                 )
 
-        # Write phases_config.yaml if workflow_config is provided
+        # Write workflow.yaml (shared config) instead of legacy phases_config.yaml
+        wf_dict: dict = {}
         if self.workflow_config:
-            config_filepath = temp_dir / "phases_config.yaml"
-            with open(config_filepath, "w") as f:
-                yaml.dump(
-                    self.workflow_config.to_yaml_dict(),
-                    f,
-                    Dumper=yaml.SafeDumper,
-                    default_flow_style=False,
-                    allow_unicode=True,
-                    sort_keys=False,
-                )
+            wc = self.workflow_config
+            wf_dict["workflow"] = {
+                "has_result": wc.has_result,
+                "result_criteria": wc.result_criteria,
+                "on_result_found": wc.on_result_found,
+                "enable_tickets": wc.enable_tickets,
+            }
+            if wc.board_config:
+                wf_dict["workflow"]["board"] = wc.board_config
+
+        config_filepath = temp_dir / "workflow.yaml"
+        with open(config_filepath, "w") as f:
+            yaml.dump(
+                wf_dict,
+                f,
+                Dumper=yaml.SafeDumper,
+                default_flow_style=False,
+                allow_unicode=True,
+                sort_keys=False,
+            )
 
         return temp_dir
 
