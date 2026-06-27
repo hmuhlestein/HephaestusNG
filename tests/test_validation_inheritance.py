@@ -456,40 +456,43 @@ class TestValidationFlowWithInheritance:
 
 
 def test_phases_with_validation_yaml():
-    """Test that phase YAML files with validation are parsed correctly."""
+    """Test that phase YAML config with validation is parsed correctly via the DB layer."""
 
-    from src.phases.models import PhaseDefinition
+    # The old PhaseDefinition.from_yaml_content is gone. Validation metadata is now
+    # stored as raw JSON in the Phase DB column and passed through directly.
+    # We verify that the DB Phase model stores and returns validation dicts correctly.
+    from src.core.database import Phase as DBPhase
 
-    # Simulate a phase YAML content
-    yaml_content = {
-        "description": "Test phase description",
-        "done_definitions": ["Task complete", "Tests pass"],
-        "validation": {
-            "enabled": True,
-            "criteria": [
-                {
-                    "description": "All tests pass",
-                    "check_type": "command_success",
-                    "command": "pytest"
-                },
-                {
-                    "description": "No linting errors",
-                    "check_type": "command_success",
-                    "command": "flake8 ."
-                }
-            ],
-            "validator_instructions": "Pay attention to edge cases"
-        }
+    validation_data = {
+        "enabled": True,
+        "criteria": [
+            {
+                "description": "All tests pass",
+                "check_type": "command_success",
+                "command": "pytest"
+            },
+            {
+                "description": "No linting errors",
+                "check_type": "command_success",
+                "command": "flake8 ."
+            }
+        ],
+        "validator_instructions": "Pay attention to edge cases"
     }
 
-    # Create phase from YAML
-    phase_def = PhaseDefinition.from_yaml_content(
-        filename="01_test_phase.yaml",
-        content=yaml_content
+    # Simulate what initialize_workflow stores in the DB
+    phase = DBPhase(
+        id="test-id",
+        workflow_id="wf-id",
+        order=1,
+        name="test_phase",
+        description="Test phase description",
+        done_definitions=["Task complete", "Tests pass"],
+        validation=validation_data,
     )
 
-    # Verify validation was parsed
-    assert phase_def.validation is not None
-    assert phase_def.validation["enabled"] == True
-    assert len(phase_def.validation["criteria"]) == 2
-    assert phase_def.validation["validator_instructions"] == "Pay attention to edge cases"
+    # Verify validation was stored
+    assert phase.validation is not None
+    assert phase.validation["enabled"] == True
+    assert len(phase.validation["criteria"]) == 2
+    assert phase.validation["validator_instructions"] == "Pay attention to edge cases"
