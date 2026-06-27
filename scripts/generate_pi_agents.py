@@ -36,12 +36,17 @@ def extract_phase_info(phase_file: Path) -> dict:
     if done_match:
         done_text = done_match.group(1)
         done_definitions = re.findall(r'"([^"]+)"', done_text)
-    
+
+    # Extract cli_model (optional — falls back to default in generator)
+    model_match = re.search(r'cli_model="([^"]+)"', content)
+    cli_model = model_match.group(1) if model_match else None
+
     return {
         "name": name,
         "description": description,
         "additional_notes": additional_notes,
         "done_definitions": done_definitions,
+        "cli_model": cli_model,
     }
 
 def generate_pi_agent(phase_info: dict, phase_num: int) -> str:
@@ -59,6 +64,9 @@ def generate_pi_agent(phase_info: dict, phase_num: int) -> str:
         "mcp:hephaestus/get_task_status",
     ]
     
+    DEFAULT_MODEL = "openrouter/xiaomi/mimo-v2.5"
+    model = f"openrouter/{phase_info['cli_model']}" if phase_info.get('cli_model') else DEFAULT_MODEL
+
     # All phases need these core tools
     tools_str = "read, write, edit, bash, grep, find, ls, " + ", ".join(mcp_tools)
     
@@ -79,7 +87,7 @@ If you cannot proceed, call it with status="failed".
     agent_md = f"""---
 name: {agent_name}
 description: "Hephaestus Phase {phase_num}: {role_title} — {phase_info['description'].splitlines()[0].strip()}"
-model: openrouter/xiaomi/mimo-v2.5
+model: {model}
 tools: {tools_str}
 systemPromptMode: replace
 inheritProjectContext: true
