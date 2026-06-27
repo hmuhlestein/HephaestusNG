@@ -33,11 +33,19 @@ additional_notes: |
 
   ```bash
   # Read the original design doc (source of truth)
+  # It is ALWAYS at ./.hephaestus/design.md — the orchestrator places it there.
   cat ./.hephaestus/design.md
 
   # Read the extracted requirements
   cat ./docs/requirements_analysis.md
   ```
+
+  If .hephaestus/design.md is missing, run:
+  ```bash
+  find . -name "*.md" -path "*/design*" | head -5
+  find . -path "./.hephaestus/*" | head -10
+  ```
+  and use whatever design doc you find. Do NOT invent requirements.
 
   ═══════════════════════════════════════════════════════════════════════
   STEP 2: COMPARE LINE BY LINE

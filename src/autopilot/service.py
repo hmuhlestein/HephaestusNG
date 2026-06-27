@@ -60,7 +60,7 @@ class AutopilotService:
 
         Args:
             project_path: Root directory of the project to work on
-            design_queue: Directory containing design documents (default: <project>/docs/design-queue)
+            design_queue: Directory containing design documents (default: <project>/docs/design)
             max_iterations: Maps to engine's max_total_gotos
 
         Returns:
@@ -80,7 +80,7 @@ class AutopilotService:
         if not (project / ".git").exists():
             raise ValueError(f"Project path is not a git repository: {project_path}")
 
-        dq = design_queue or str(project / "docs" / "design-queue")
+        dq = design_queue or str(project / "docs" / "design")
         Path(dq).mkdir(parents=True, exist_ok=True)
 
         # Reset state

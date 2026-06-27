@@ -273,7 +273,7 @@ class AgentManager:
                             if working_directory:
                                 wd = _P(working_directory)
                                 cands = []
-                                dq = wd / "docs" / "design-queue"
+                                dq = wd / "docs" / "design"
                                 if dq.is_dir():
                                     cands += sorted(dq.glob("*.md"))
                                 cands += [

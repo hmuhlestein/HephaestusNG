@@ -869,7 +869,7 @@ def pick_next_design(queue_dir: Path, processed_hashes: Set[str], logger: Orches
                     db.commit()
 
                     # Construct DesignEntry from DB record
-                    design_path = Path(project.base_dir) / "docs" / "design-queue" / design.filename
+                    design_path = Path(project.base_dir) / "docs" / "design" / design.filename
                     if design_path.exists():
                         entry = DesignEntry(
                             path=design_path,
@@ -1340,6 +1340,15 @@ def run_single_workflow(sdk, workflow_id: str, project_path: str, description: s
         design_worktree_path = str(wt_path)
         design_branch_name = feature_branch
         logger.info(f"Created shared worktree: {design_worktree_path} (branch: {feature_branch})")
+        # Copy design doc into worktree as .hephaestus/design.md so all phases can read it
+        wt_heph = wt_path / ".hephaestus"
+        wt_heph.mkdir(parents=True, exist_ok=True)
+        if "design_document" in (launch_params or {}):
+            _dd = Path(launch_params["design_document"])
+            if _dd.exists():
+                import shutil as _shutil
+                _shutil.copy2(_dd, wt_heph / "design.md")
+                logger.info(f"Copied design doc to worktree: {wt_heph / 'design.md'}")
     except Exception as e:
         logger.warning(f"Failed to create shared worktree, using project path: {e}")
         design_worktree_path = project_path
@@ -2305,7 +2314,7 @@ def main():
         description="Autopilot Continuous Pipeline - Design Queue to Validated Software"
     )
     parser.add_argument("--design-queue", default=None,
-                        help="Directory to watch for design documents (default: <project-path>/docs/design-queue)")
+                        help="Directory to watch for design documents (default: <project-path>/docs/design)")
     parser.add_argument("--project-path", required=True,
                         help="Project directory for implementation code")
     parser.add_argument("--max-iterations", type=int, default=3,
@@ -2331,9 +2340,9 @@ def main():
             # Process not alive or invalid PID, clean up
             pid_file.unlink(missing_ok=True)
 
-    # Default design queue to <project-path>/docs/design-queue
+    # Default design queue to <project-path>/docs/design
     if not args.design_queue:
-        args.design_queue = str(Path(args.project_path) / "docs" / "design-queue")
+        args.design_queue = str(Path(args.project_path) / "docs" / "design")
 
     if args.drop_db:
         db = HEPHAESTUS_DIR / "hephaestus.db"
