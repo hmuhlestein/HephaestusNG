@@ -202,10 +202,14 @@ workflow:
     ticket_types:
       - infrastructure
       - feature
+      - improvement
+      - bug
       - bug-fix
       - security
       - integration
       - documentation
+      - task
+      - spike
     default_ticket_type: feature
     initial_status: backlog
     auto_assign: true
