@@ -1719,6 +1719,11 @@ def run_single_design(
     report.forensics_summary = summaries.get("forensics", "")
     report.files_created = collect_files_created(project_path, feature_folder)
 
+    # Finalise report fields before writing metrics so the JSON has real values.
+    report.total_time_seconds = int(time.time() - design_start)
+    report.stop_reason = stop_reason.value
+    completed_at = datetime.utcnow().isoformat() + "Z"
+
     # Update pipeline_metrics.json with final values
     metrics = {
         "design_name": design_entry.name,
@@ -1734,7 +1739,7 @@ def run_single_design(
         "cost_total": report.cost_total,
         "files_created_count": len(report.files_created),
         "started_at": design_entry.started_at,
-        "completed_at": design_entry.completed_at,
+        "completed_at": completed_at,
         "phases": [
             {"id": 1, "name": "product_requirements", "output": "requirements_analysis.md"},
             {"id": 2, "name": "architecture_design", "output": "architecture.md"},
@@ -1751,9 +1756,6 @@ def run_single_design(
     metrics_path = docs_dir / "pipeline_metrics.json"
     metrics_path.write_text(json.dumps(metrics, indent=2, default=str))
     logger.info(f"Final pipeline metrics: {metrics_path}")
-
-    report.total_time_seconds = int(time.time() - design_start)
-    report.stop_reason = stop_reason.value
 
     # Fetch cost data from LiteLLM proxy if configured
     litellm_config = get_litellm_config()
