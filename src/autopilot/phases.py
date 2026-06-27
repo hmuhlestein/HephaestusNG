@@ -67,7 +67,7 @@ AUTOPILOT_WORKFLOW_CONFIG = load_workflow_config(_cfg)
 
 AUTOPILOT_LAUNCH_TEMPLATE = load_launch_template(_cfg)
 
-# Execution order defined in _workflow.yaml (execution_order field).
+# Execution order defined in workflow.yaml (execution_order field).
 AUTOPILOT_PHASES = build_phase_list(_cfg)
 
 __all__ = [

@@ -1,6 +1,6 @@
 id: 9
 name: git_commit_push
-thinking_level: minimal
+thinking_level: low
 description: |
   Commit all validated changes to the feature branch, push, and merge to main.
 

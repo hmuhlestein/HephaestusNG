@@ -2,7 +2,7 @@
 """
 Generate pi agent files from the autopilot YAML config.
 
-Reads config/workflows/autopilot/_workflow.yaml and per-phase YAMLs,
+Reads config/workflows/autopilot/workflow.yaml and per-phase YAMLs,
 generates pi agent .md files in the agents/pi/ directory.
 """
 
@@ -75,15 +75,15 @@ def main():
     output_dir = project_root / "agents" / "pi"
 
     # Load shared config for default_model
-    with open(workflow_dir / "_workflow.yaml") as f:
+    with open(workflow_dir / "workflow.yaml") as f:
         shared_cfg = yaml.safe_load(f)
 
     default_model = shared_cfg.get("default_model", "xiaomi/mimo-v2.5")
 
-    # Load per-phase files (skip _workflow.yaml)
+    # Load per-phase files (skip workflow.yaml)
     phases = []
     for p in sorted(workflow_dir.glob("*.yaml")):
-        if p.name.startswith("_"):
+        if p.name == "workflow.yaml":
             continue
         with open(p) as f:
             phases.append(yaml.safe_load(f))
