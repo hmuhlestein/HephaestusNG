@@ -25,6 +25,7 @@ class OrchestrationAction(Enum):
     GOTO = "goto"                  # Jump to a specific phase
     FAIL = "fail"                  # Fail the workflow
     SKIP = "skip"                  # Skip to next phase (same as continue but logged differently)
+    ARBITRATE = "arbitrate"        # Budget exhausted — spawn LLM arbitration agent before deciding
 
 
 @dataclass
@@ -45,6 +46,7 @@ class EvaluationPoint:
     conditions: List[Dict[str, Any]] = field(default_factory=list)
     max_retries: int = 2
     timeout_seconds: int = 300
+    on_budget_exhausted: str = "continue"  # "continue" or "arbitrate"
 
 
 @dataclass
@@ -71,6 +73,7 @@ class OrchestratorConfig:
                 conditions=ep.get("conditions", []),
                 max_retries=ep.get("max_retries", 2),
                 timeout_seconds=ep.get("timeout_seconds", 300),
+                on_budget_exhausted=ep.get("on_budget_exhausted", "continue"),
             ))
 
         return cls(
@@ -167,6 +170,16 @@ class WorkflowOrchestrator:
         current_retries = self.phase_retry_counts.get(phase_name, 0)
         if current_retries >= eval_point.max_retries:
             logger.info(f"Max retries ({eval_point.max_retries}) reached for {phase_name}")
+            if eval_point.on_budget_exhausted == "arbitrate":
+                logger.warning(
+                    f"[ARBITRATE] Budget exhausted for {phase_name} after {current_retries} retries — "
+                    f"requesting LLM arbitration instead of forcing continue"
+                )
+                return EvaluationResult(
+                    action=OrchestrationAction.ARBITRATE,
+                    reason=f"Retry budget exhausted ({current_retries}/{eval_point.max_retries}) for {phase_name}; arbitration requested",
+                    metadata={"phase": phase_name, "retries": current_retries, "max_retries": eval_point.max_retries},
+                )
             return EvaluationResult(
                 action=OrchestrationAction.CONTINUE,
                 reason=f"Max retries reached for {phase_name}, continuing"
@@ -209,16 +222,28 @@ class WorkflowOrchestrator:
 
             # Check if we've exceeded the GOTO limit
             if self.total_gotos > self.config.max_total_gotos:
-                logger.warning(
-                    f"GOTO limit exceeded ({self.total_gotos}/{self.config.max_total_gotos}). "
-                    f"Forcing continue to prevent infinite loop."
-                )
-                action = EvaluationResult(
-                    action=OrchestrationAction.CONTINUE,
-                    reason=f"GOTO limit exceeded ({self.total_gotos}/{self.config.max_total_gotos}), forcing continue",
-                    score=score,
-                    metadata=action.metadata
-                )
+                if eval_point and eval_point.on_budget_exhausted == "arbitrate":
+                    logger.warning(
+                        f"[ARBITRATE] Total GOTO limit exceeded ({self.total_gotos}/{self.config.max_total_gotos}) "
+                        f"for {phase_name} — requesting LLM arbitration."
+                    )
+                    action = EvaluationResult(
+                        action=OrchestrationAction.ARBITRATE,
+                        reason=f"GOTO limit exceeded ({self.total_gotos}/{self.config.max_total_gotos}), arbitration requested",
+                        score=score,
+                        metadata={**action.metadata, "phase": phase_name},
+                    )
+                else:
+                    logger.warning(
+                        f"GOTO limit exceeded ({self.total_gotos}/{self.config.max_total_gotos}). "
+                        f"Forcing continue to prevent infinite loop."
+                    )
+                    action = EvaluationResult(
+                        action=OrchestrationAction.CONTINUE,
+                        reason=f"GOTO limit exceeded ({self.total_gotos}/{self.config.max_total_gotos}), forcing continue",
+                        score=score,
+                        metadata=action.metadata
+                    )
 
         # Log evaluation
         self.evaluation_history.append({

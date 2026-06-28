@@ -1332,7 +1332,15 @@ class MonitoringLoop:
                             f"Phase completed with {last_completed['tasks']['completed']} tasks",
                             phase_output=phase_output,
                         )
-                        if result.get("should_continue") and result.get("target_phase_id"):
+                        if result.get("action") == "arbitrate":
+                            logger.info(f"[PHASE-PROGRESSION] Arbitration needed for {completed_phase.name}")
+                            await self._spawn_arbitration_agent(
+                                completed_phase.workflow_id,
+                                completed_phase.id,
+                                completed_phase.name,
+                                result.get("arbitration_metadata", {}),
+                            )
+                        elif result.get("should_continue") and result.get("target_phase_id"):
                             logger.info(f"[PHASE-PROGRESSION] Engine decision: {result.get('action')} -> {result.get('target_phase')}")
                             await self._create_phase_task_and_agent(
                                 completed_phase.workflow_id,
@@ -1376,7 +1384,14 @@ class MonitoringLoop:
                         )
 
                         # Create task+agent for the resolved target phase
-                        if result.get("should_continue") and result.get("target_phase_id"):
+                        if result.get("action") == "arbitrate":
+                            await self._spawn_arbitration_agent(
+                                phase.workflow_id,
+                                phase.id,
+                                phase.name,
+                                result.get("arbitration_metadata", {}),
+                            )
+                        elif result.get("should_continue") and result.get("target_phase_id"):
                             await self._create_phase_task_and_agent(
                                 phase.workflow_id,
                                 result["target_phase_id"],
@@ -1400,7 +1415,22 @@ class MonitoringLoop:
                         done_tasks = session.query(_T).filter_by(
                             phase_id=phase.id, status="done"
                         ).count()
-                        if active_tasks == 0 and failed_tasks > 0 and done_tasks == 0:
+                        # Check if an arbitration task just completed for this phase
+                        arb_done = session.query(_T).filter(
+                            _T.phase_id == phase.id,
+                            _T.created_by_agent_id == "arbitration",
+                            _T.status == "done",
+                        ).first()
+                        arb_pending = session.query(_T).filter(
+                            _T.phase_id == phase.id,
+                            _T.created_by_agent_id == "arbitration",
+                            _T.status.in_(["pending", "assigned", "in_progress"]),
+                        ).first()
+                        if arb_done and not arb_pending:
+                            await self._check_arbitration_completion(
+                                phase.workflow_id, phase.id, phase.name
+                            )
+                        elif active_tasks == 0 and failed_tasks > 0 and done_tasks == 0:
                             logger.warning(
                                 f"[PHASE-PROGRESSION] Phase {phase.name} stalled: "
                                 f"{failed_tasks} failed task(s), no active tasks — "
@@ -2234,6 +2264,186 @@ class MonitoringLoop:
             logger.error(f"[DIAGNOSTIC MONITOR] ❌ Failed to create diagnostic agent: {e}", exc_info=True)
             session.rollback()
             raise
+        finally:
+            session.close()
+
+    async def _spawn_arbitration_agent(
+        self,
+        workflow_id: str,
+        phase_id: str,
+        phase_name: str,
+        metadata: Dict[str, Any],
+    ):
+        """Spawn an LLM arbitration agent when a scope-gate GOTO budget is exhausted.
+
+        The agent reads design.md + requirements_analysis.md + scope_review_result.json,
+        decides PROCEED or IMPASSE, writes arbitration_result.json, and marks done.
+        The monitor detects the completed arbitration task on the next poll cycle and
+        calls mark_phase_complete(force_action=...) to resume the pipeline.
+        """
+        import uuid
+        from src.core.database import Task
+
+        logger.warning(f"[ARBITRATE] Spawning arbitration agent for phase {phase_name}")
+
+        # Locate docs dir from any existing phase task for this workflow
+        session = self.db_manager.get_session()
+        try:
+            docs_dir_str = ""
+            sample_task = session.query(Task).filter_by(workflow_id=workflow_id).first()
+            if sample_task and sample_task.raw_description:
+                import re
+                m = re.search(r"Docs Path[:\s]+([^\s]+)", sample_task.raw_description or "")
+                if m:
+                    docs_dir_str = m.group(1)
+
+            # Guard: if arbitration task already pending/done for this phase, skip
+            existing = session.query(Task).filter(
+                Task.phase_id == phase_id,
+                Task.created_by_agent_id == "arbitration",
+                Task.status.in_(["pending", "assigned", "in_progress", "done"]),
+            ).first()
+            if existing:
+                logger.info(f"[ARBITRATE] Arbitration task already exists for {phase_name} ({existing.id[:8]}) — skipping")
+                return
+
+            prompt = f"""You are an ARBITRATION AGENT. The scope_review → product_requirements
+GOTO loop has exhausted its retry budget ({metadata.get('retries', '?')}/{metadata.get('max_retries', '?')} attempts).
+
+Your job: read the design doc and the current requirements_analysis.md, then decide:
+- PROCEED: requirements are close enough — the pipeline should continue to architecture.
+- IMPASSE: requirements are fundamentally misaligned — human intervention is needed.
+
+STEPS:
+1. Read ./.hephaestus/design.md (the source-of-truth design document)
+2. Read ./docs/requirements_analysis.md (the current requirements under review)
+3. Read ./docs/scope_review_result.json (the last scope reviewer verdict + correction_instructions)
+4. Make a judgement: are the requirements SUBSTANTIALLY faithful to the design, even if imperfect?
+   - Minor wording differences → PROCEED
+   - Extra low-risk requirements that logically follow from design → PROCEED
+   - Wrong domain, completely missing core requirements, or fundamental mismatch → IMPASSE
+5. Write ./docs/arbitration_result.json with EXACTLY this schema:
+   {{
+     "decision": "PROCEED",
+     "reasoning": "one-paragraph explanation",
+     "scope_drift_summary": "brief description of any accepted drift"
+   }}
+6. Mark your task done.
+
+CRITICAL: Write the JSON and mark the task done. Do NOT rewrite requirements_analysis.md.
+"""
+
+            task_id = str(uuid.uuid4())
+            task = Task(
+                id=task_id,
+                raw_description=f"ARBITRATION: Resolve scope_review/product_requirements loop for workflow {workflow_id[:8]}",
+                enriched_description=prompt,
+                done_definition="arbitration_result.json written to ./docs/ with decision PROCEED or IMPASSE",
+                status="pending",
+                priority="high",
+                phase_id=phase_id,
+                workflow_id=workflow_id,
+                created_by_agent_id="arbitration",
+                action="arbitrate",
+            )
+            session.add(task)
+            session.commit()
+            logger.info(f"[ARBITRATE] Created arbitration task {task_id[:8]} for phase {phase_name}")
+
+            enriched_data = {
+                "enriched_description": prompt,
+                "completion_criteria": [task.done_definition],
+                "validation_prompt": prompt,
+            }
+            agent = await self.agent_manager.create_agent_for_task(
+                task=task,
+                enriched_data=enriched_data,
+                memories=[],
+                project_context="",
+                agent_type="diagnostic",
+                use_existing_worktree=True,
+                working_directory=str(self.config.main_repo_path),
+            )
+            logger.info(f"[ARBITRATE] ✅ Arbitration agent {agent.id[:8]} spawned for phase {phase_name}")
+
+        except Exception as e:
+            logger.error(f"[ARBITRATE] Failed to spawn arbitration agent: {e}", exc_info=True)
+            session.rollback()
+        finally:
+            session.close()
+
+    async def _check_arbitration_completion(self, workflow_id: str, phase_id: str, phase_name: str):
+        """Poll for a completed arbitration task; if found, resolve the phase.
+
+        Called from _check_phases() when a phase is in_progress with only arbitration
+        tasks (no regular pending/in_progress tasks).
+        """
+        import json
+        from pathlib import Path
+        from src.core.database import Task, Workflow
+
+        session = self.db_manager.get_session()
+        try:
+            done_arb = session.query(Task).filter(
+                Task.phase_id == phase_id,
+                Task.created_by_agent_id == "arbitration",
+                Task.status == "done",
+            ).first()
+            if not done_arb:
+                return
+
+            # Read arbitration_result.json — try docs_dir derived from task description
+            result_path = None
+            for task in session.query(Task).filter_by(workflow_id=workflow_id).all():
+                import re
+                m = re.search(r"Docs Path[:\s]+(\S+)", task.raw_description or "")
+                if m:
+                    result_path = Path(m.group(1)) / "arbitration_result.json"
+                    break
+            # Fallback: check main repo docs/
+            if not result_path:
+                result_path = Path(str(self.config.main_repo_path)) / "docs" / "arbitration_result.json"
+
+            decision = "IMPASSE"  # safe default
+            reasoning = "arbitration_result.json not found"
+            if result_path and result_path.exists():
+                try:
+                    data = json.loads(result_path.read_text())
+                    decision = str(data.get("decision", "IMPASSE")).upper()
+                    reasoning = data.get("reasoning", "")
+                except Exception as e:
+                    logger.error(f"[ARBITRATE] Could not read arbitration_result.json: {e}")
+
+            logger.warning(f"[ARBITRATE] Arbitration decision for {phase_name}: {decision} — {reasoning[:100]}")
+
+            if decision == "PROCEED":
+                phase_output = self._build_spec_phase_output(phase_name)
+                result = self.phase_manager.mark_phase_complete(
+                    phase_id,
+                    f"Arbitration: PROCEED — {reasoning[:120]}",
+                    phase_output=phase_output,
+                    force_action="continue",
+                )
+                if result.get("should_continue") and result.get("target_phase_id"):
+                    await self._create_phase_task_and_agent(
+                        workflow_id,
+                        result["target_phase_id"],
+                        result["target_phase"],
+                        result["action"],
+                    )
+            else:
+                # IMPASSE — pause the workflow for human review
+                wf = session.query(Workflow).filter_by(id=workflow_id).first()
+                if wf and wf.status == "active":
+                    wf.status = "paused"
+                    session.commit()
+                logger.error(
+                    f"[ARBITRATE] IMPASSE on {phase_name} after arbitration — "
+                    f"workflow {workflow_id[:8]} paused for human review."
+                )
+
+        except Exception as e:
+            logger.error(f"[ARBITRATE] _check_arbitration_completion error: {e}", exc_info=True)
         finally:
             session.close()
 
