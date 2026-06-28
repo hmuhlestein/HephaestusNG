@@ -394,8 +394,12 @@ async def get_pipeline_status():
 
 def _get_queue_order_path() -> Optional[Path]:
     try:
+        # Write alongside other server state under .hephaestus/, not inside
+        # the tracked docs/design/ directory (which would pollute git status).
         effective_dir = _get_effective_queue_dir()
-        return Path(effective_dir) / ".queue_order.json"
+        hephaestus_dir = Path(effective_dir).parent.parent / CONTEXT_DIR_NAME
+        hephaestus_dir.mkdir(parents=True, exist_ok=True)
+        return hephaestus_dir / ".queue_order.json"
     except (FileNotFoundError, RuntimeError):
         return None
 
@@ -1568,8 +1572,9 @@ async def reorder_project_designs(project_id: str, req: DesignReorderRequest):
         # Also save order to file for orchestrator to read
         project = db.query(AutopilotProject).get(project_id)
         if project:
-            design_dir = _get_design_queue_dir(project.base_dir)
-            order_file = design_dir / ".queue_order.json"
+            hephaestus_dir = Path(project.base_dir) / CONTEXT_DIR_NAME
+            hephaestus_dir.mkdir(parents=True, exist_ok=True)
+            order_file = hephaestus_dir / ".queue_order.json"
             # Map design_ids back to filenames
             ordered_filenames = [by_id[did].filename for did in req.design_ids]
             order_file.write_text(json.dumps(ordered_filenames))

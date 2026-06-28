@@ -846,8 +846,8 @@ def scan_design_queue(queue_dir: Path, processed_hashes: Set[str]) -> List[Desig
                 content_hash=content_hash,
             ))
 
-    # Check for manual reorder file
-    order_file = queue_dir / ".queue_order.json"
+    # Check for manual reorder file — stored in .hephaestus/ (not in docs/design/)
+    order_file = queue_dir.parent.parent / CONTEXT_DIR_NAME / ".queue_order.json"
     if order_file.exists():
         try:
             saved_order = json.loads(order_file.read_text())
