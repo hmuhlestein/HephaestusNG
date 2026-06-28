@@ -1,6 +1,6 @@
 id: 1
 name: product_requirements
-thinking_level: low
+thinking_level: high
 description: |
   Extract structured requirements from design documents with full project context.
 
@@ -116,6 +116,26 @@ additional_notes: |
      - Whether similar features have been designed before
      - What technology choices are consistent across designs
      - What naming conventions are used
+
+  ═══════════════════════════════════════════════════════════════════════
+  STEP 0.5: CHECK FOR SCOPE REVIEW FEEDBACK (CRITICAL ON RETRY)
+  ═══════════════════════════════════════════════════════════════════════
+
+  Before writing or rewriting requirements, check whether a prior scope
+  review already ran and failed:
+
+  ```bash
+  cat ./docs/scope_review_result.json 2>/dev/null || echo "NO_PRIOR_REVIEW"
+  ```
+
+  If the file exists and `"verdict": "FAIL"`:
+  - Read `correction_instructions` — follow them EXACTLY when writing requirements.
+  - Read `out_of_scope` list — REMOVE every item in that list from your output.
+  - Read `missing` list — ADD every item in that list to your output.
+
+  This feedback is authoritative. Do NOT re-derive the same requirements that
+  were already rejected. If correction_instructions say to remove an item,
+  remove it even if it seems reasonable from the design doc.
 
   ═══════════════════════════════════════════════════════════════════════
   STEP 1: READ THE DESIGN DOCUMENT
