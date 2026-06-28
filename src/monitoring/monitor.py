@@ -1531,6 +1531,18 @@ class MonitoringLoop:
             log_file = tmux_dir / f"{phase_name}_{agent_id[:8]}.log"
             log_file.write_text(tmux_output)
             logger.debug(f"[TMUX-LOG] {phase_name}/{agent_id[:8]}: wrote {len(tmux_output)} chars")
+
+            # Update the manifest so forensics can enumerate logs without ls truncation.
+            import json as _json
+            manifest_path = tmux_dir / "tmux_log_manifest.json"
+            manifest: dict = {}
+            if manifest_path.exists():
+                try:
+                    manifest = _json.loads(manifest_path.read_text())
+                except Exception:
+                    manifest = {}
+            manifest[f"{phase_name}_{agent_id[:8]}"] = str(log_file)
+            manifest_path.write_text(_json.dumps(manifest, indent=2))
         except Exception as e:
             logger.debug(f"[TMUX-LOG] Failed to write log for {agent_id[:8]}: {e}")
 
