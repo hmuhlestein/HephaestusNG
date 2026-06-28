@@ -1010,19 +1010,34 @@ def copy_design_document(design_entry: DesignEntry, feature_folder: Path) -> Pat
 
 
 # ── Stray-file sweep ────────────────────────────────────────────────
-# Agents may accidentally write docs, reports, scripts, or diagnostic
-# files to the project root instead of the feature docs dir.  This
-# function copies (not moves - the iteration loop may still need them
-# in the root) every stray artifact into docs_dir so that nothing is
-# lost and the project root stays clean.
+# Agents may accidentally write report files to the project root instead
+# of the feature docs dir.  Only move files whose names match known
+# ephemeral report patterns — never touch source files, design docs,
+# scripts, or anything else that belongs to the repo.
+#
+# NOTE: the call site is currently disabled (SWEEP_ENABLED = False).
+# Enable once the allowlist has been validated in production.
 
-_DOC_EXTENSIONS = {".md", ".json", ".txt", ".log", ".csv", ".html"}
-_SKIP_ROOT_FILES = {
-    "README.md", "AGENTS.md", "CHANGELOG.md", "LICENSE",
-    "package.json", "tsconfig.json", "pyproject.toml", "poetry.lock",
-    "requirements.txt", "setup.py", "setup.cfg",
+SWEEP_ENABLED = False
+
+# Only files matching these exact names (case-insensitive) are eligible
+# to be swept.  Everything else in the project root is left alone.
+_SWEEP_REPORT_NAMES = {
+    "review_findings.md",
+    "security_report.md",
+    "test_failures.md",
+    "doc_review_report.md",
+    "adversarial_review.md",
+    "forensics_report.md",
+    "architecture.md",
+    "run_health.json",
+    "pipeline_metrics.json",
+    "qa_result.json",
+    "product_validation.json",
+    "scope_review_result.json",
+    "arbitration_result.json",
 }
-_STRAY_DIRS = {"evidence", "plans", "scripts"}
+_STRAY_DIRS: set = set()  # no directories swept until re-validated
 
 
 def _sweep_stray_files(
@@ -1031,83 +1046,48 @@ def _sweep_stray_files(
     docs_dir: Path,
     logger: OrchestratorLogger,
 ) -> None:
-    """Move stray docs/reports/scripts from project root into feature docs."""
+    """Move known ephemeral report files from project root into feature docs.
+
+    Only files whose lowercased name appears in _SWEEP_REPORT_NAMES are
+    eligible — source files, design docs, scripts, and anything else in
+    the project tree are never touched.
+    """
+    if not SWEEP_ENABLED:
+        return
+
     docs_dir.mkdir(parents=True, exist_ok=True)
 
-    # ── reports agents wrote to ./docs/ (merged from worktrees) ────
-    # These stay committed in the project repo; copy them into the feature
-    # bundle so the HTML report / forensics can read them in one place.
+    # ── known report files written to ./docs/ by agents ────────────
     proj_docs = project_path / _REPORT_SUBDIR
     if proj_docs.is_dir() and proj_docs.resolve() != docs_dir.resolve():
         for f in proj_docs.iterdir():
-            if f.is_file() and f.suffix in _DOC_EXTENSIONS:
+            if f.is_file() and f.name.lower() in _SWEEP_REPORT_NAMES:
                 dest = docs_dir / f.name
                 if not dest.exists():
                     shutil.copy2(str(f), str(dest))
                     logger.info(f"Copied report: docs/{f.name} -> features/.../docs/")
 
-    # ── files in project root ──────────────────────────────────────
+    # ── known report files accidentally written to project root ─────
     for f in project_path.iterdir():
         if not f.is_file():
             continue
-        if f.name in _SKIP_ROOT_FILES:
-            continue
-        if f.suffix not in _DOC_EXTENSIONS:
+        if f.name.lower() not in _SWEEP_REPORT_NAMES:
             continue
         dest = docs_dir / f.name
         if not dest.exists():
             shutil.move(str(f), str(dest))
             logger.info(f"Moved root file: {f.name} -> features/.../docs/")
 
-    # ── files in feature_folder root (above docs/) ─────────────────
+    # ── known report files in feature_folder root (above docs/) ─────
     for f in feature_folder.iterdir():
         if not f.is_file():
             continue
-        if f.suffix not in _DOC_EXTENSIONS:
+        if f.name.lower() not in _SWEEP_REPORT_NAMES:
             continue
         dest = docs_dir / f.name
         if not dest.exists():
             shutil.move(str(f), str(dest))
             logger.info(f"Moved feature file: {f.name} -> features/.../docs/")
-
-    # ── stray directories in project root ──────────────────────────
-    for d_name in _STRAY_DIRS:
-        src_dir = project_path / d_name
-        if src_dir.is_dir():
-            dest_dir = docs_dir / d_name
-            if not dest_dir.exists():
-                shutil.move(str(src_dir), str(dest_dir))
-                logger.info(f"Moved stray dir: {d_name}/ -> features/.../docs/")
-            else:
-                # merge contents then remove source
-                for item in src_dir.rglob("*"):
-                    if item.is_file():
-                        rel = item.relative_to(src_dir)
-                        target = dest_dir / rel
-                        if not target.exists():
-                            target.parent.mkdir(parents=True, exist_ok=True)
-                            shutil.move(str(item), str(target))
-                            logger.info(f"Moved file from {d_name}/: {rel} -> features/.../docs/{d_name}/")
-                shutil.rmtree(src_dir)
-
-    # ── stray directories in feature_folder root ───────────────────
-    for d_name in _STRAY_DIRS:
-        src_dir = feature_folder / d_name
-        if src_dir.is_dir() and src_dir != docs_dir:
-            dest_dir = docs_dir / d_name
-            if not dest_dir.exists():
-                shutil.move(str(src_dir), str(dest_dir))
-                logger.info(f"Moved feature dir: {d_name}/ -> features/.../docs/")
-            else:
-                for item in src_dir.rglob("*"):
-                    if item.is_file():
-                        rel = item.relative_to(src_dir)
-                        target = dest_dir / rel
-                        if not target.exists():
-                            target.parent.mkdir(parents=True, exist_ok=True)
-                            shutil.move(str(item), str(target))
-                            logger.info(f"Moved file from {d_name}/: {rel} -> features/.../docs/{d_name}/")
-                shutil.rmtree(src_dir)
 
 
 _REPORT_SUBDIR = "docs"
