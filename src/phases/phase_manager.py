@@ -878,14 +878,41 @@ class PhaseManager:
 
             # 4. Link design → feature folder in DB
             from src.core.database import AutopilotDesign as _AD
+            _design_name_for_metrics = safe_name
             if workflow.design_id:
                 design = session.query(_AD).filter_by(id=workflow.design_id).first()
                 if design:
                     design.feature_folder = str(feature_dir)
                     design.status = "completed"
                     design.completed_at = _dt.utcnow()
+                    _design_name_for_metrics = design.name or safe_name
                     session.commit()
                     logger.info(f"[FEATURE-FOLDER] Design {design.id[:8]} → {feature_dir.name}")
+
+            # 5. Write pipeline_metrics.json so forensics has real timestamps even
+            #    if the orchestrator finalization code never runs (e.g. it was restarted).
+            #    The orchestrator will overwrite this with a more complete version if it runs.
+            import json as _json
+            metrics_path = docs_dir / "pipeline_metrics.json"
+            if not metrics_path.exists():
+                try:
+                    _metrics = {
+                        "design_name": _design_name_for_metrics,
+                        "workflow_id": self.workflow_id,
+                        "project_path": str(project_path),
+                        "docs_dir": str(docs_dir),
+                        "feature_folder": str(feature_dir),
+                        "completed_at": _dt.utcnow().isoformat() + "Z",
+                        "stop_reason": "completed",
+                        # qa_passed / product_validated: orchestrator fills these;
+                        # leave null here since phase_manager doesn't evaluate gates.
+                        "qa_passed": None,
+                        "product_validated": None,
+                    }
+                    metrics_path.write_text(_json.dumps(_metrics, indent=2, default=str))
+                    logger.info(f"[FEATURE-FOLDER] Wrote pipeline_metrics.json (phase_manager stub)")
+                except Exception as _me:
+                    logger.debug(f"[FEATURE-FOLDER] Could not write pipeline_metrics.json: {_me}")
 
             logger.info(f"[FEATURE-FOLDER] Created {feature_dir}")
         except Exception as e:

@@ -430,18 +430,19 @@ def get_active_workflows() -> list:
 
 def is_design_fully_complete(workflow_id: str, logger: OrchestratorLogger) -> Tuple[bool, str]:
     """Check if a design is fully complete:
-    1. All phases done (no pending/in_progress/queued tasks)
+    1. Workflow DB status is completed (or no active agents/tasks remain)
     2. No active agents
     3. All agent branches merged to main
-    4. No failed tasks
 
     Returns:
         (is_complete, reason) tuple
     """
-    # Check workflow status
+    # Check workflow status — if the server already marked it completed, trust that.
     wf = get_workflow_status(workflow_id)
     wf_status = wf.get('status', '')
-    if wf_status not in ('completed', 'active', 'running', 'paused'):
+    if wf_status == 'completed':
+        return True, "Workflow status: completed"
+    if wf_status not in ('active', 'running', 'paused'):
         return False, f"Workflow status: {wf_status}"
 
     # Check task statuses
@@ -452,15 +453,28 @@ def is_design_fully_complete(workflow_id: str, logger: OrchestratorLogger) -> Tu
     failed = get_tasks(status='failed', workflow_id=workflow_id)
     done = get_tasks(status='done', workflow_id=workflow_id)
 
-    # All non-done statuses that indicate work remaining
-    active_tasks = pending + queued + in_progress + assigned
+    # Pending/active tasks indicate real work remaining.
+    # Ignore DIAGNOSTIC tasks (created by the monitor itself when stuck) — they
+    # should not block completion detection.
+    real_pending = [
+        t for t in (pending + queued + in_progress + assigned)
+        if not (t.get('raw_description') or '').startswith('DIAGNOSTIC:')
+    ]
+    if real_pending:
+        task_ids = [t.get('id', '')[:8] for t in real_pending[:3]]
+        return False, f"{len(real_pending)} task(s) still active: {', '.join(task_ids)}"
 
-    if active_tasks:
-        task_ids = [t.get('id', '')[:8] for t in active_tasks[:3]]
-        return False, f"{len(active_tasks)} task(s) still active: {', '.join(task_ids)}"
-
-    if failed:
-        return False, f"{len(failed)} task(s) failed"
+    # Failed tasks: only block if the same phase has NO subsequent done task
+    # (i.e., a retry succeeded → the failure is resolved).
+    done_phase_ids = {t.get('phase_id') for t in done if t.get('phase_id')}
+    unresolved_failures = [
+        t for t in failed
+        if t.get('phase_id') not in done_phase_ids
+        and not (t.get('raw_description') or '').startswith('DIAGNOSTIC:')
+    ]
+    if unresolved_failures:
+        task_ids = [t.get('id', '')[:8] for t in unresolved_failures[:3]]
+        return False, f"{len(unresolved_failures)} unresolved failed task(s): {', '.join(task_ids)}"
 
     # Check for active agents
     agents = get_agents(workflow_id=workflow_id)
@@ -484,9 +498,19 @@ def is_design_fully_complete(workflow_id: str, logger: OrchestratorLogger) -> Tu
     except Exception:
         pass
 
-    # Check if all phases are done (for autopilot: 10 phases = 10 tasks)
-    if len(done) < 10:
-        return False, f"Only {len(done)}/10 phases done"
+    # Check done task count vs actual phase count (not hardcoded 10).
+    try:
+        from src.core.database import Phase, DatabaseManager as _DbM
+        _db = _DbM()
+        _s = _db.get_session()
+        try:
+            phase_count = _s.query(Phase).count()
+        finally:
+            _s.close()
+    except Exception:
+        phase_count = 11  # fallback for the autopilot pipeline
+    if len(done) < phase_count:
+        return False, f"Only {len(done)}/{phase_count} phases done"
 
     return True, "All phases done, branches merged"
 
