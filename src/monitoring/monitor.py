@@ -1795,9 +1795,20 @@ class MonitoringLoop:
                     id=task.assigned_agent_id, status="working"
                 ).first() if task.assigned_agent_id else None
                 if not agent:
-                    logger.warning(f"[HEALTH] Task {task.id[:8]} stuck in_progress for >10min with no active agent — marking failed")
-                    task.status = "failed"
-                    task.failure_reason = "Task stuck: no active agent for >10 minutes"
+                    # If the agent called update_task_status(done) but the session
+                    # was killed before the response was processed, completion_notes
+                    # will be set. Promote to done instead of failing.
+                    if task.completion_notes:
+                        logger.info(
+                            f"[HEALTH] Task {task.id[:8]} stuck in_progress but has "
+                            f"completion_notes — promoting to done (agent finished then crashed)"
+                        )
+                        task.status = "done"
+                        task.completed_at = datetime.utcnow()
+                    else:
+                        logger.warning(f"[HEALTH] Task {task.id[:8]} stuck in_progress for >10min with no active agent — marking failed")
+                        task.status = "failed"
+                        task.failure_reason = "Task stuck: no active agent for >10 minutes"
                     session.commit()
         except Exception as e:
             logger.error(f"Error in task stuck detection: {e}")
@@ -2137,11 +2148,10 @@ class MonitoringLoop:
             context = await self._gather_diagnostic_context(workflow_id, workflow_tasks, stuck_time)
             logger.info(f"[DIAGNOSTIC MONITOR] Context gathered: {len(context['phases_summary'])} phases, {len(context['agents_summary'])} agents reviewed")
 
-            # Create diagnostic task
-            # Find the current phase to assign the diagnostic to
+            # Create diagnostic task on the most-recent active/done phase, not the first.
             current_phase_id = None
-            for t in workflow_tasks:
-                if t.phase_id and t.status in ('done', 'in_progress'):
+            for t in reversed(workflow_tasks):
+                if t.phase_id and t.status in ('done', 'in_progress', 'failed'):
                     current_phase_id = t.phase_id
                     break
             
