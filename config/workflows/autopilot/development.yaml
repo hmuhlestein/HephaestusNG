@@ -21,6 +21,10 @@ done_definitions:
 outputs:
   - "source code in project path"
 additional_notes: |
+  OUTPUT STYLE: Terse. Drop filler (just/really/basically/actually). Fragments OK. 
+  Technical terms exact. No pleasantries (sure/certainly/happy to). 
+  Not: "I'll now proceed to implement the component." Yes: "Implement auth middleware."
+  
   ═══════════════════════════════════════════════════════════════════════
   YOU ARE A SOFTWARE DEVELOPER - IMPLEMENT THE SYSTEM
   ═══════════════════════════════════════════════════════════════════════

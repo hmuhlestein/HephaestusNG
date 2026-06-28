@@ -44,11 +44,28 @@ app = FastAPI(
 # Add CORS middleware
 config = get_config()
 if config.enable_cors:
+    # SECURITY: Use explicit origins instead of wildcard '*' when credentials are allowed.
+    # Wildcard + credentials is a security risk (allows credential theft from any origin).
+    # Default to localhost origins for development; set CORS_ORIGINS env var for production.
+    import os
+    _cors_origins_str = os.environ.get("CORS_ORIGINS", "")
+    if _cors_origins_str:
+        _cors_origins = [o.strip() for o in _cors_origins_str.split(",") if o.strip()]
+    else:
+        # Development defaults: localhost only
+        _cors_origins = [
+            "http://localhost:5173",
+            "http://localhost:3000",
+            "http://localhost:8300",
+            "http://127.0.0.1:5173",
+            "http://127.0.0.1:3000",
+            "http://127.0.0.1:8300",
+        ]
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=_cors_origins,
         allow_credentials=True,
-        allow_methods=["*"],
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=["*"],
     )
 
@@ -57,8 +74,8 @@ if config.enable_cors:
 class CreateTaskRequest(BaseModel):
     """Request model for creating a task."""
 
-    task_description: str = Field(..., description="Raw task description")
-    done_definition: str = Field(..., description="What constitutes completion")
+    task_description: str = Field(..., description="Raw task description", max_length=50000)
+    done_definition: str = Field(..., description="What constitutes completion", max_length=10000)
     ai_agent_id: str = Field(..., description="ID of requesting agent")
     workflow_id: str = Field(..., description="ID of the workflow this task belongs to")
     priority: Optional[str] = Field(default="medium", pattern="^(low|medium|high)$")
@@ -70,7 +87,7 @@ class CreateTaskRequest(BaseModel):
     depends_on: Optional[List[str]] = Field(default=None, description="List of task IDs that must complete before this one")
     parallel_group: Optional[str] = Field(default=None, description="Tasks in same group can run in parallel; different groups are sequential")
     max_concurrent: Optional[int] = Field(default=1, description="Max agents working on this task simultaneously")
-    context: Optional[str] = Field(default=None, description="Additional context for the agent (e.g., design document content, requirements summary)")
+    context: Optional[str] = Field(default=None, description="Additional context for the agent (e.g., design document content, requirements summary)", max_length=100000)
 
 
 class CreateTaskResponse(BaseModel):
@@ -1028,10 +1045,53 @@ async def shutdown_event():
 
 
 def verify_agent_id(agent_id: str = Header(None, alias="X-Agent-ID")) -> str:
-    """Verify agent ID from header."""
+    """Verify agent ID from header.
+    
+    SECURITY: Validates agent_id format (must be UUID or known SDK identifier).
+    Rejects empty/malformed agent IDs.
+    """
     if not agent_id:
         raise HTTPException(status_code=401, detail="Agent ID required in X-Agent-ID header")
+    
+    # Validate format: must be UUID or known SDK/system identifier
+    import re
+    uuid_pattern = re.compile(
+        r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',
+        re.IGNORECASE
+    )
+    known_system_ids = {
+        "main-session-agent", "sdk-agent", "system", "ui-user",
+        "sdk-repair-agent", "orchestrator", "monitor"
+    }
+    
+    if not (uuid_pattern.match(agent_id) or agent_id in known_system_ids or
+            agent_id.startswith("sdk-") or agent_id.startswith("mcp-")):
+        raise HTTPException(
+            status_code=401,
+            detail=f"Invalid agent ID format: '{agent_id}'. Must be a UUID or known system identifier."
+        )
+    
     return agent_id
+
+
+# SECURITY: Rate limiting for sensitive endpoints
+from collections import defaultdict
+import time
+
+_rate_limit_store: Dict[str, List[float]] = defaultdict(list)
+RATE_LIMIT_WINDOW = 60  # seconds
+RATE_LIMIT_MAX = 30  # requests per window
+
+
+def _check_rate_limit(key: str, max_requests: int = RATE_LIMIT_MAX) -> bool:
+    """Check if request is within rate limit. Returns True if allowed."""
+    now = time.time()
+    # Clean old entries
+    _rate_limit_store[key] = [t for t in _rate_limit_store[key] if now - t < RATE_LIMIT_WINDOW]
+    if len(_rate_limit_store[key]) >= max_requests:
+        return False
+    _rate_limit_store[key].append(now)
+    return True
 
 
 def _touch_agent_activity(agent_id: str) -> None:

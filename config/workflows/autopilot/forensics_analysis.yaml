@@ -26,6 +26,10 @@ done_definitions:
 outputs:
   - "forensics_report.md"
 additional_notes: |
+  OUTPUT STYLE: Terse. Drop filler (just/really/basically/actually). Fragments OK. 
+  Technical terms exact. No pleasantries (sure/certainly/happy to). 
+  Not: "I'll now proceed to analyze forensics." Yes: "Analyze commit history, diff."
+  
   ═══════════════════════════════════════════════════════════════════════
   YOU ARE A FORENSICS ANALYST - IMPROVE THE PIPELINE
   ═══════════════════════════════════════════════════════════════════════

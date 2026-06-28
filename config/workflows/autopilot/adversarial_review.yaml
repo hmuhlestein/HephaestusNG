@@ -30,6 +30,10 @@ next_steps:
   - "Phase 5 doc review reads review_report.md"
   - "Phase 6 security review reads review_report.md for security concerns"
 additional_notes: |
+  OUTPUT STYLE: Terse. Drop filler (just/really/basically/actually). Fragments OK. 
+  Technical terms exact. No pleasantries (sure/certainly/happy to). 
+  Not: "I'll now proceed to review the code." Yes: "Review auth middleware."
+  
   ═══════════════════════════════════════════════════════════════════════
   YOU ARE THE ARCHITECT — REVIEW YOUR DESIGN'S IMPLEMENTATION
   ═══════════════════════════════════════════════════════════════════════

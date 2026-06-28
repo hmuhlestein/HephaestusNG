@@ -20,13 +20,14 @@ import {
 import { CSS } from '@dnd-kit/utilities';
 import {
   Plus, Trash2, FileText, Clock, GripVertical, Search, ListOrdered, RefreshCw,
-  CheckCircle2, XCircle, Loader2, Pause, Play, Upload
+  CheckCircle2, XCircle, Loader2, Pause, Play, Upload, ChevronRight, ChevronDown, ExternalLink
 } from 'lucide-react';
 import { apiService } from '@/services/api';
 import { Button } from '@/components/ui/button';
 import { formatDistanceToNow } from 'date-fns';
 import toast from 'react-hot-toast';
 import DesignDetailModal from './DesignDetailModal';
+import TaskDetailModal from '../TaskDetailModal';
 
 interface DesignQueuePanelProps {
   projectId: string | null;
@@ -40,6 +41,7 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
   const [search, setSearch] = useState('');
   const [localOrder, setLocalOrder] = useState<any[] | null>(null);
   const [detailFile, setDetailFile] = useState<string | null>(null);
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [designStatuses, setDesignStatuses] = useState<Record<string, { status: string; workflowId?: string }>>({});
 
   // Fetch status for all designs to show badges
@@ -267,7 +269,9 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
                   isActive={item.name === currentDesign}
                   status={designStatuses[item.filename]?.status}
                   workflowId={designStatuses[item.filename]?.workflowId}
+                  projectId={projectId}
                   onDetail={handleDetail}
+                  onTaskClick={setSelectedTaskId}
                   onPauseResume={(_workflowId, action) => pauseResumeMutation.mutate({ workflowId: item.filename, action })}
                   onRemove={(filename) => {
                     if (confirm(`Remove "${item.name}" from queue?`)) {
@@ -311,6 +315,12 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
           }}
         />
       )}
+
+      {/* Task Detail Modal */}
+      <TaskDetailModal
+        taskId={selectedTaskId}
+        onClose={() => setSelectedTaskId(null)}
+      />
     </div>
   );
 };
@@ -336,6 +346,22 @@ const StatusBadge: React.FC<{ status: string }> = ({ status }) => {
   );
 };
 
+// ── Task Status Icon ─────────────────────────────────────────
+
+const TASK_STATUS_CONFIG: Record<string, { color: string; icon: React.ReactNode }> = {
+  pending: { color: 'text-gray-400', icon: <Clock className="w-4 h-4" /> },
+  assigned: { color: 'text-blue-500', icon: <Loader2 className="w-4 h-4" /> },
+  in_progress: { color: 'text-violet-500', icon: <Loader2 className="w-4 h-4 animate-spin" /> },
+  done: { color: 'text-green-500', icon: <CheckCircle2 className="w-4 h-4" /> },
+  failed: { color: 'text-red-500', icon: <XCircle className="w-4 h-4" /> },
+};
+
+const TaskStatusIcon: React.FC<{ status: string }> = ({ status }) => {
+  const config = TASK_STATUS_CONFIG[status];
+  if (!config) return <Clock className="w-4 h-4 text-gray-400" />;
+  return <span className={config.color}>{config.icon}</span>;
+};
+
 // ── Sortable Item ───────────────────────────────────────────────
 
 interface SortableDesignItemProps {
@@ -344,12 +370,37 @@ interface SortableDesignItemProps {
   isActive?: boolean;
   onRemove: (filename: string) => void;
   onDetail: (filename: string) => void;
+  onTaskClick: (taskId: string) => void;
   onPauseResume?: (workflowId: string, action: 'pause' | 'resume') => void;
   status?: string;
   workflowId?: string;
+  projectId: string | null;
 }
 
-const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, isActive, onRemove, onDetail, onPauseResume, status, workflowId }) => {
+const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, isActive, onRemove, onDetail, onTaskClick, onPauseResume, status, workflowId, projectId }) => {
+  const [expanded, setExpanded] = useState(false);
+  const [tasks, setTasks] = useState<any[]>([]);
+  const [loadingTasks, setLoadingTasks] = useState(false);
+
+  const handleToggleExpand = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    const newExpanded = !expanded;
+    setExpanded(newExpanded);
+    
+    // Fetch tasks when expanding for the first time
+    if (newExpanded && tasks.length === 0 && projectId) {
+      setLoadingTasks(true);
+      try {
+        const statusData = await apiService.getAutopilotProjectDesignStatus(projectId, item.filename);
+        setTasks(statusData.tasks || []);
+      } catch {
+        setTasks([]);
+      } finally {
+        setLoadingTasks(false);
+      }
+    }
+  };
+
   const {
     attributes,
     listeners,
@@ -372,14 +423,26 @@ const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, is
         initial={{ opacity: 0, x: -20 }}
         animate={{ opacity: 1, x: 0 }}
         transition={{ delay: index * 0.03 }}
-        onClick={() => onDetail(item.filename)}
-        className={`rounded-xl border shadow-sm transition-all cursor-pointer ${
+        className={`rounded-xl border shadow-sm transition-all ${
           isDragging ? 'shadow-lg border-violet-300 ring-2 ring-violet-200' :
           isActive ? 'bg-gradient-to-r from-violet-50 to-purple-50 border-violet-300 shadow-md ring-1 ring-violet-200' :
           'bg-white border-gray-100 hover:shadow-md'
         }`}
       >
         <div className="flex items-center gap-4 px-5 py-4">
+          {/* Expand arrow */}
+          <button
+            onClick={handleToggleExpand}
+            className="p-1 rounded hover:bg-gray-100 transition-colors text-gray-400 hover:text-gray-600"
+            title={expanded ? 'Collapse tasks' : 'Show tasks'}
+          >
+            {expanded ? (
+              <ChevronDown className="w-5 h-5" />
+            ) : (
+              <ChevronRight className="w-5 h-5" />
+            )}
+          </button>
+
           {/* Drag handle */}
           <button
             {...listeners}
@@ -443,6 +506,69 @@ const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, is
           </div>
         </div>
       </motion.div>
+
+        {/* Expanded tasks section */}
+        {expanded && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            className="border-t border-gray-100 bg-gray-50 rounded-b-xl"
+          >
+            <div className="px-5 py-3">
+              <h5 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Tasks</h5>
+              {loadingTasks ? (
+                <div className="flex items-center justify-center py-4">
+                  <Loader2 className="w-5 h-5 text-violet-500 animate-spin" />
+                </div>
+              ) : tasks.length > 0 ? (
+                <div className="space-y-2">
+                  {tasks.map((task) => (
+                    <div
+                      key={task.id}
+                      className="flex items-center gap-3 px-3 py-2 bg-white rounded-lg border border-gray-100 cursor-pointer hover:bg-gray-50 hover:border-gray-200 transition-colors"
+                    >
+                      <TaskStatusIcon status={task.status} />
+                      <div 
+                        className="flex-1 min-w-0"
+                        onClick={() => onTaskClick(task.id)}
+                      >
+                        <p className="text-sm text-gray-700 truncate">{task.description || task.id.substring(0, 8)}</p>
+                        <div className="flex items-center gap-2 mt-0.5">
+                          {task.phase_name && (
+                            <span className="text-xs text-gray-400">{task.phase_name}</span>
+                          )}
+                          {task.agent_status && (
+                            <span className={`text-xs px-1.5 py-0.5 rounded ${
+                              task.agent_status === 'working' ? 'bg-green-100 text-green-700' :
+                              task.agent_status === 'idle' ? 'bg-gray-100 text-gray-600' :
+                              'bg-gray-100 text-gray-500'
+                            }`}>
+                              {task.agent_status}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      {task.agent_id && (
+                        <a
+                          href={`/agents/${task.agent_id}`}
+                          className="flex items-center gap-1 px-2 py-1 text-xs bg-violet-100 text-violet-700 rounded hover:bg-violet-200 transition-colors"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <span className={task.agent_status === 'working' ? 'w-1.5 h-1.5 rounded-full bg-green-500' : 'w-1.5 h-1.5 rounded-full bg-gray-400'}></span>
+                          {task.agent_id.substring(0, 6)}
+                          <ExternalLink className="w-3 h-3" />
+                        </a>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-xs text-gray-400 text-center py-4">No tasks yet</p>
+              )}
+            </div>
+          </motion.div>
+        )}
     </div>
   );
 };

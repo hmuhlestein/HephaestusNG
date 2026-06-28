@@ -95,7 +95,9 @@ monitoring:
   guardian_min_agent_age_seconds: 60
   max_ignored_steering: 3
 mcp:
-  auth_required: false
+  # SECURITY: auth_required should be true in production. Set to false only for
+  # local development/debugging. When true, endpoints require valid X-Agent-ID header.
+  auth_required: false  # TODO: Set to true before production deployment
   session_timeout: 3600
   max_concurrent_agents: 6
 task_deduplication:

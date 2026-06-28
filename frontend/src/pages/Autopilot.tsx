@@ -32,6 +32,7 @@ const Autopilot: React.FC = () => {
   const [selectedFeatureId, setSelectedFeatureId] = useState<string | null>(null);
   const [showAddDesign, setShowAddDesign] = useState(false);
   const [showLoadDesign, setShowLoadDesign] = useState(false);
+  const [featureStatusFilter, setFeatureStatusFilter] = useState<'all' | 'validated' | 'needs_review' | 'failed'>('all');
   const { activeProject } = useProject();
   const projectId = activeProject?.id || null;
 
@@ -141,6 +142,20 @@ const Autopilot: React.FC = () => {
       <PipelineStatusCard
         status={status}
         onToggle={() => togglePipeline.mutate()}
+        onMetricClick={(metric) => {
+          if (metric === 'agents') {
+            navigate('/agents');
+          } else {
+            // Map metric to filter: processed → all, succeeded → validated, failed → failed
+            const filterMap: Record<string, 'all' | 'validated' | 'needs_review' | 'failed'> = {
+              processed: 'all',
+              succeeded: 'validated',
+              failed: 'failed',
+            };
+            setFeatureStatusFilter(filterMap[metric] || 'all');
+            handleTabChange('features');
+          }
+        }}
         loading={togglePipeline.isPending}
       />
 
@@ -186,6 +201,19 @@ const Autopilot: React.FC = () => {
               stuckAgents={stuckAgents}
               onGoToQueue={() => setActiveTab('queue')}
               onGoToFeatures={() => setActiveTab('features')}
+              onMetricClick={(metric) => {
+                if (metric === 'queue') {
+                  handleTabChange('queue');
+                } else {
+                  const filterMap: Record<string, 'all' | 'validated' | 'needs_review' | 'failed'> = {
+                    processed: 'all',
+                    succeeded: 'validated',
+                    failed: 'failed',
+                  };
+                  setFeatureStatusFilter(filterMap[metric] || 'all');
+                  handleTabChange('features');
+                }
+              }}
               projectId={projectId}
             />
           )}
@@ -198,7 +226,12 @@ const Autopilot: React.FC = () => {
             />
           )}
           {activeTab === 'features' && (
-            <FeatureGallery onSelectFeature={setSelectedFeatureId} projectId={projectId} />
+            <FeatureGallery
+              onSelectFeature={setSelectedFeatureId}
+              projectId={projectId}
+              statusFilter={featureStatusFilter}
+              onStatusFilterChange={setFeatureStatusFilter}
+            />
           )}
           {activeTab === 'messages' && <MessageCenter projectId={projectId} />}
           {activeTab === 'logs' && <LogsPanel projectId={projectId} />}
@@ -284,8 +317,9 @@ const OverviewTab: React.FC<{
   stuckAgents: any[];
   onGoToQueue: () => void;
   onGoToFeatures: () => void;
+  onMetricClick?: (metric: string) => void;
   projectId: string | null;
-}> = ({ status, activeAgents, stuckAgents, onGoToQueue, onGoToFeatures, projectId }) => {
+}> = ({ status, activeAgents, stuckAgents, onGoToQueue, onGoToFeatures, onMetricClick, projectId }) => {
   const { data: features } = useQuery({
     queryKey: ['autopilot-features', projectId],
     queryFn: () => apiService.getAutopilotFeatures(),
@@ -305,16 +339,19 @@ const OverviewTab: React.FC<{
       {/* Stats */}
       <div className="lg:col-span-2 grid grid-cols-2 sm:grid-cols-4 gap-4">
         {[
-          { label: 'Processed', value: status?.designs_processed || 0, color: 'bg-blue-500', icon: FileText },
-          { label: 'Succeeded', value: status?.designs_succeeded || 0, color: 'bg-emerald-500', icon: CheckCircle2 },
-          { label: 'Failed', value: status?.designs_failed || 0, color: 'bg-red-500', icon: XCircle },
-          { label: 'In Queue', value: status?.queue_depth || 0, color: 'bg-amber-500', icon: ListOrdered },
+          { label: 'Processed', value: status?.designs_processed || 0, color: 'bg-blue-500', icon: FileText, key: 'processed' },
+          { label: 'Succeeded', value: status?.designs_succeeded || 0, color: 'bg-emerald-500', icon: CheckCircle2, key: 'succeeded' },
+          { label: 'Failed', value: status?.designs_failed || 0, color: 'bg-red-500', icon: XCircle, key: 'failed' },
+          { label: 'In Queue', value: status?.queue_depth || 0, color: 'bg-amber-500', icon: ListOrdered, key: 'queue' },
         ].map((stat) => (
           <motion.div
             key={stat.label}
             initial={{ opacity: 0, scale: 0.95 }}
             animate={{ opacity: 1, scale: 1 }}
-            className="bg-white rounded-xl shadow-sm border border-gray-100 p-5"
+            onClick={() => onMetricClick?.(stat.key)}
+            className={`bg-white rounded-xl shadow-sm border border-gray-100 p-5 transition-all ${
+              onMetricClick ? 'cursor-pointer hover:shadow-md hover:border-gray-200 hover:scale-[1.02] active:scale-[0.98]' : ''
+            }`}
           >
             <div className="flex items-center justify-between">
               <div>
