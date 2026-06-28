@@ -2386,7 +2386,14 @@ async def update_task_status(
 
 
 async def _get_project_id_for_agent(agent_id: str) -> Optional[str]:
-    """Resolve project_id from agent's workflow working_directory."""
+    """Resolve project_id from agent's workflow working_directory.
+
+    workflow.working_directory is set to the shared design worktree path
+    (e.g. <project>/.worktrees/wt_feature-...), not the project root itself.
+    AutopilotProject.base_dir is the project root.  Walk up the path hierarchy
+    until we find a matching project so worktree paths resolve correctly.
+    """
+    from pathlib import Path
     try:
         from src.core.database import AutopilotProject
         session = server_state.db_manager.get_session()
@@ -2400,8 +2407,20 @@ async def _get_project_id_for_agent(agent_id: str) -> Optional[str]:
             workflow = session.query(Workflow).filter_by(id=task.workflow_id).first()
             if not workflow or not workflow.working_directory:
                 return None
-            project = session.query(AutopilotProject).filter_by(base_dir=workflow.working_directory).first()
-            return project.id if project else None
+
+            # Walk up from the workflow path until we find a registered project.
+            # Handles the common case where working_directory is a sub-worktree of
+            # the actual project root (e.g. .worktrees/wt_feature-...).
+            candidate = Path(workflow.working_directory).resolve()
+            while True:
+                project = session.query(AutopilotProject).filter_by(base_dir=str(candidate)).first()
+                if project:
+                    return project.id
+                parent = candidate.parent
+                if parent == candidate:
+                    break  # reached filesystem root
+                candidate = parent
+            return None
         finally:
             session.close()
     except Exception as e:
@@ -2541,20 +2560,20 @@ async def search_memory(
     try:
         query_embedding = await server_state.llm_provider.generate_embedding(request.query)
 
-        # Build filter conditions
-        must_conditions = []
-        if request.memory_type:
-            must_conditions.append({"key": "memory_type", "match": {"value": request.memory_type}})
-        
-        # Auto-detect project_id from agent if not provided
+        # Auto-detect project_id from agent if not provided in the request.
         project_id = request.project_id
         if not project_id and agent_id:
             project_id = await _get_project_id_for_agent(agent_id)
-        
-        if project_id:
-            must_conditions.append({"key": "project_id", "match": {"value": project_id}})
 
-        filters = {"must": must_conditions} if must_conditions else None
+        # Build a flat key→value filter dict that vector_store.search expects.
+        # (It builds FieldCondition objects from each key-value pair.)
+        filters: Optional[Dict[str, Any]] = {}
+        if request.memory_type:
+            filters["memory_type"] = request.memory_type
+        if project_id:
+            filters["project_id"] = project_id
+        if not filters:
+            filters = None
 
         results = await server_state.vector_store.search(
             collection="agent_memories",
