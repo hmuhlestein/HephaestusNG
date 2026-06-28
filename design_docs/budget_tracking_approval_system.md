@@ -2349,3 +2349,126 @@ When paused for approval:
 6. **Recovery:** Pipeline survives restarts with correct accumulated spend
 7. **Critical path safety:** Monitoring and credit-detection calls always bypass budget
 8. **Timezone correctness:** Daily limits reset at midnight in the configured timezone
+9. **Per-task visibility:** Every task's token usage and cost is tracked and displayed
+
+---
+
+## 10. Per-Task Cost Tracking
+
+### 10.1 Problem
+
+Currently, cost is only tracked at the design/feature level via `pipeline_metrics.json`. There's no visibility into which tasks consume the most tokens/cost, making it hard to optimize expensive phases or identify cost outliers.
+
+### 10.2 Goal
+
+Track LLM token usage and cost per task, display it in the TaskDetailModal, and aggregate it for design-level reporting.
+
+### 10.3 Database Schema Changes
+
+Add columns to `tasks` table:
+
+```python
+# In src/core/database.py - Task model
+input_tokens: int = Field(default=0)      # Prompt tokens consumed
+output_tokens: int = Field(default=0)     # Completion tokens generated
+total_tokens: int = Field(default=0)      # input + output
+cost_usd: float = Field(default=0.0)      # Cost in USD
+llm_model: str = Field(default=None)      # Model used (e.g., "anthropic/claude-3-opus")
+```
+
+### 10.4 LLM Client Changes
+
+**OpenRouter client** (`src/interfaces/openrouter_client.py`) already returns usage data:
+
+```python
+# generate() already returns:
+{
+    "content": str,
+    "provider": str,
+    "usage": {
+        "prompt_tokens": int,
+        "completion_tokens": int,
+        "total_tokens": int
+    },
+    "cost": float | None,  # From LiteLLM proxy headers
+    "user": str  # Feature name for cost tracking
+}
+```
+
+**LangChain client** (`src/interfaces/langchain_llm_client.py`) doesn't return usage data. Options:
+1. Add callback to capture usage from LangChain response
+2. Track usage separately via LiteLLM proxy (already supported)
+3. Accept that LangChain providers won't have per-call cost data (monitoring costs tracked separately)
+
+### 10.5 Task Execution Updates
+
+In `AgentManager` or wherever LLM calls happen for tasks:
+
+```python
+# After each LLM call in task execution
+task.input_tokens += response["usage"]["prompt_tokens"]
+task.output_tokens += response["usage"]["completion_tokens"]
+task.total_tokens = task.input_tokens + task.output_tokens
+task.cost_usd += response.get("cost", 0)
+task.llm_model = response["model"]  # Track primary model used
+```
+
+### 10.6 API Changes
+
+Add to task endpoints in `server.py`:
+
+```python
+# GET /api/tasks/{task_id}/full-details
+# Add: input_tokens, output_tokens, total_tokens, cost_usd, llm_model
+
+# GET /api/autopilot/projects/{project_id}/designs/{filename}/status
+# Already returns tasks - add cost fields
+```
+
+### 10.7 Frontend Changes
+
+**TaskDetailModal.tsx** - Add token usage section:
+```
+┌─────────────────────────────────────────┐
+│ Token Usage                             │
+│ ┌─────────────┬─────────────┬─────────┐ │
+│ │ Input       │ Output      │ Total   │ │
+│ │ 12,450      │ 3,200       │ 15,650  │ │
+│ └─────────────┴─────────────┴─────────┘ │
+│ Model: claude-3-opus    Cost: $0.18     │
+└─────────────────────────────────────────┘
+```
+
+**DesignDetailModal.tsx** - Aggregate task costs:
+```
+Total Design Cost: $2.45
+├── Phase 1 (requirements): $0.12
+├── Phase 2 (architecture): $0.34
+├── Phase 3 (development): $1.89
+└── Phase 4 (review): $0.10
+```
+
+### 10.8 Migration
+
+```bash
+# Add columns to existing tasks table
+alembic revision --autogenerate -m "add task cost tracking"
+alembic upgrade head
+```
+
+### 10.9 Files to Modify
+
+1. `src/core/database.py` - Add Task columns
+2. `src/interfaces/openrouter_client.py` - No changes (already returns usage)
+3. `src/interfaces/langchain_llm_client.py` - Optional: add usage callback
+4. `src/agents/manager.py` - Track tokens during execution
+5. `src/mcp/server.py` - Add cost to task endpoints
+6. `frontend/src/components/TaskDetailModal.tsx` - Display tokens
+7. `frontend/src/components/autopilot/DesignDetailModal.tsx` - Aggregate costs
+
+### 10.10 Open Questions
+
+1. **Non-LLM operations:** Should we track cost for tool calls, file operations, etc.? (Probably not - they're negligible)
+2. **Cost precision:** Store full precision or round to 4 decimals? (Recommend: full precision, display 2 decimals)
+3. **Budget integration:** Should per-task costs feed into the budget system? (Yes - per-task limits could be added later)
+4. **LangChain coverage:** Accept that monitoring/guardian calls won't have per-task cost? (Yes - they're tracked separately via LiteLLM proxy)

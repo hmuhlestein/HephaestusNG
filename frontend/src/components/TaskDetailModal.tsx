@@ -33,6 +33,7 @@ import {
   Ticket,
   Workflow
 } from 'lucide-react';
+import { markdownToHtml } from '@/utils/markdown';
 import { formatDistanceToNow } from 'date-fns';
 
 import { apiService } from '@/services/api';
@@ -617,9 +618,10 @@ ${taskDetails.child_tasks.map((t: any) => `- ${t.description} (${t.status})`).jo
                             </button>
                           </div>
                           <div className="h-32 p-3 bg-gray-50 dark:bg-gray-800 rounded-lg border overflow-y-auto">
-                            <p className="text-sm text-gray-700 dark:text-gray-300 whitespace-pre-wrap">
-                              {taskDetails.user_prompt}
-                            </p>
+                            <div 
+                              className="text-sm text-gray-700 dark:text-gray-300 prose prose-sm prose-violet max-w-none"
+                              dangerouslySetInnerHTML={{ __html: markdownToHtml(taskDetails.user_prompt || '') }}
+                            />
                           </div>
                         </div>
 
@@ -637,9 +639,10 @@ ${taskDetails.child_tasks.map((t: any) => `- ${t.description} (${t.status})`).jo
                             </button>
                           </div>
                           <div className="h-32 p-3 bg-gray-50 dark:bg-gray-800 rounded-lg border overflow-y-auto">
-                            <p className="text-sm text-gray-700 dark:text-gray-300 whitespace-pre-wrap">
-                              {taskDetails.system_prompt || 'No system prompt available'}
-                            </p>
+                            <div 
+                              className="text-sm text-gray-700 dark:text-gray-300 prose prose-sm prose-violet max-w-none"
+                              dangerouslySetInnerHTML={{ __html: markdownToHtml(taskDetails.system_prompt || 'No system prompt available') }}
+                            />
                           </div>
                         </div>
 
@@ -657,9 +660,10 @@ ${taskDetails.child_tasks.map((t: any) => `- ${t.description} (${t.status})`).jo
                             </button>
                           </div>
                           <div className="p-3 bg-green-50 dark:bg-green-900/20 rounded-lg border border-green-200 dark:border-green-700">
-                            <p className="text-sm text-gray-700 dark:text-gray-300 whitespace-pre-wrap">
-                              {taskDetails.done_definition}
-                            </p>
+                            <div 
+                              className="text-sm text-gray-700 dark:text-gray-300 prose prose-sm prose-violet max-w-none"
+                              dangerouslySetInnerHTML={{ __html: markdownToHtml(taskDetails.done_definition || '') }}
+                            />
                           </div>
                         </div>
                       </motion.div>
@@ -1254,9 +1258,10 @@ ${taskDetails.child_tasks.map((t: any) => `- ${t.description} (${t.status})`).jo
                         ? 'bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-700'
                         : 'bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-700'
                     }`}>
-                      <p className="text-sm text-gray-700 dark:text-gray-300 whitespace-pre-wrap">
-                        {taskDetails.completion_notes || taskDetails.failure_reason}
-                      </p>
+                      <div 
+                        className="text-sm text-gray-700 dark:text-gray-300 prose prose-sm prose-violet max-w-none"
+                        dangerouslySetInnerHTML={{ __html: markdownToHtml(taskDetails.completion_notes || taskDetails.failure_reason || '') }}
+                      />
                     </div>
                   </div>
                 )}

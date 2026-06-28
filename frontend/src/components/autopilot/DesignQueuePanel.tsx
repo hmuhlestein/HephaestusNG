@@ -429,40 +429,34 @@ const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, is
           'bg-white border-gray-100 hover:shadow-md'
         }`}
       >
-        <div className="flex items-center gap-4 px-5 py-4">
+        <div 
+          className="flex items-center gap-4 px-5 py-4 cursor-pointer"
+          onClick={handleToggleExpand}
+        >
           {/* Expand arrow */}
-          <button
-            onClick={handleToggleExpand}
-            className="p-1 rounded hover:bg-gray-100 transition-colors text-gray-400 hover:text-gray-600"
-            title={expanded ? 'Collapse tasks' : 'Show tasks'}
-          >
+          <div className="p-1 text-gray-400">
             {expanded ? (
               <ChevronDown className="w-5 h-5" />
             ) : (
               <ChevronRight className="w-5 h-5" />
             )}
-          </button>
+          </div>
 
           {/* Drag handle */}
           <button
             {...listeners}
             className="flex flex-col items-center gap-1 text-gray-300 hover:text-gray-500 cursor-grab active:cursor-grabbing touch-none"
+            onClick={(e) => e.stopPropagation()}
           >
             <GripVertical className="w-5 h-5" />
             <span className="text-xs font-mono text-gray-400">#{item.ordinal ?? index + 1}</span>
           </button>
 
-          <div 
-            className={`p-2.5 rounded-lg cursor-pointer ${isActive ? 'bg-violet-200' : 'bg-violet-50'}`}
-            onClick={() => onDetail(item.filename)}
-          >
+          <div className={`p-2.5 rounded-lg ${isActive ? 'bg-violet-200' : 'bg-violet-50'}`}>
             <FileText className={`w-5 h-5 ${isActive ? 'text-violet-700' : 'text-violet-600'}`} />
           </div>
 
-          <div 
-            className="flex-1 min-w-0 cursor-pointer"
-            onClick={() => onDetail(item.filename)}
-          >
+          <div className="flex-1 min-w-0">
             <h4 className="text-sm font-semibold text-gray-800 truncate">{item.name}</h4>
             <div className="flex items-center gap-3 mt-1">
               <span className="text-xs text-gray-500 font-mono">{item.filename}</span>
@@ -496,6 +490,16 @@ const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, is
                 {status === 'paused' ? <Play className="w-4 h-4" /> : <Pause className="w-4 h-4" />}
               </button>
             )}
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onDetail(item.filename);
+              }}
+              className="p-2 rounded-lg hover:bg-violet-50 transition-colors text-gray-400 hover:text-violet-600"
+              title="View design details"
+            >
+              <FileText className="w-4 h-4" />
+            </button>
             <button
               onClick={(e) => { e.stopPropagation(); onRemove(item.filename); }}
               className="p-2 rounded-lg hover:bg-red-50 transition-colors text-gray-400 hover:text-red-600"
