@@ -1,4 +1,5 @@
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { markdownToHtml } from '@/utils/markdown';
 
 interface PhaseOverviewProps {
   details: any;
@@ -39,9 +40,10 @@ export default function PhaseOverview({ details, loading, error }: PhaseOverview
         {/* Description */}
         <div>
           <h4 className="font-semibold text-sm text-gray-700 mb-1">Description</h4>
-          <p className="text-sm text-gray-600 leading-relaxed whitespace-pre-wrap">
-            {details.description}
-          </p>
+          <div 
+            className="text-sm text-gray-600 leading-relaxed prose prose-sm prose-violet max-w-none"
+            dangerouslySetInnerHTML={{ __html: markdownToHtml(details.description || '') }}
+          />
         </div>
 
         {/* Done Definitions */}
@@ -63,9 +65,10 @@ export default function PhaseOverview({ details, loading, error }: PhaseOverview
         {details.additional_notes && (
           <div>
             <h4 className="font-semibold text-sm text-gray-700 mb-1">Additional Notes</h4>
-            <p className="text-sm text-gray-600 leading-relaxed bg-blue-50 p-3 rounded-md whitespace-pre-wrap">
-              {details.additional_notes}
-            </p>
+            <div 
+              className="text-sm text-gray-600 leading-relaxed bg-blue-50 p-3 rounded-md prose prose-sm prose-violet max-w-none"
+              dangerouslySetInnerHTML={{ __html: markdownToHtml(details.additional_notes) }}
+            />
           </div>
         )}
 
@@ -73,9 +76,10 @@ export default function PhaseOverview({ details, loading, error }: PhaseOverview
         {details.outputs && (
           <div>
             <h4 className="font-semibold text-sm text-gray-700 mb-1">Expected Outputs</h4>
-            <p className="text-sm text-gray-600 leading-relaxed bg-gray-50 p-3 rounded-md whitespace-pre-wrap">
-              {details.outputs}
-            </p>
+            <div 
+              className="text-sm text-gray-600 leading-relaxed bg-gray-50 p-3 rounded-md prose prose-sm prose-violet max-w-none"
+              dangerouslySetInnerHTML={{ __html: markdownToHtml(details.outputs) }}
+            />
           </div>
         )}
 
@@ -83,9 +87,10 @@ export default function PhaseOverview({ details, loading, error }: PhaseOverview
         {details.next_steps && (
           <div>
             <h4 className="font-semibold text-sm text-gray-700 mb-1">Next Steps</h4>
-            <p className="text-sm text-gray-600 leading-relaxed bg-purple-50 p-3 rounded-md whitespace-pre-wrap">
-              {details.next_steps}
-            </p>
+            <div 
+              className="text-sm text-gray-600 leading-relaxed bg-purple-50 p-3 rounded-md prose prose-sm prose-violet max-w-none"
+              dangerouslySetInnerHTML={{ __html: markdownToHtml(details.next_steps) }}
+            />
           </div>
         )}
       </div>

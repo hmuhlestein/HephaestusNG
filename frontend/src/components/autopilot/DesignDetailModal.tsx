@@ -5,6 +5,7 @@ import {
   X, FileText, GitBranch, Clock, CheckCircle2, XCircle, AlertTriangle,
   Loader2, RotateCcw, ChevronDown, ChevronRight, ExternalLink, Play, Pause, Square
 } from 'lucide-react';
+import { markdownToHtml } from '@/utils/markdown';
 import { apiService, api } from '@/services/api';
 import { Button } from '@/components/ui/button';
 import { formatDistanceToNow } from 'date-fns';
@@ -25,19 +26,9 @@ const STATUS_CONFIG: Record<string, { color: string; icon: React.ReactNode; labe
   paused: { color: 'bg-yellow-100 text-yellow-700', icon: <AlertTriangle className="w-3.5 h-3.5" />, label: 'Paused' },
 };
 
-const TASK_STATUS_COLORS: Record<string, string> = {
-  pending: 'bg-gray-100 text-gray-600',
-  assigned: 'bg-yellow-100 text-yellow-700',
-  in_progress: 'bg-blue-100 text-blue-700',
-  done: 'bg-green-100 text-green-700',
-  failed: 'bg-red-100 text-red-700',
-  under_review: 'bg-purple-100 text-purple-700',
-};
-
 const DesignDetailModal: React.FC<DesignDetailModalProps> = ({ projectId, filename, onClose, onRerun }) => {
   const queryClient = useQueryClient();
   const [showContent, setShowContent] = useState(false);
-  const [expandedTasks, setExpandedTasks] = useState<Set<string>>(new Set());
 
   const { data: status, isLoading } = useQuery({
     queryKey: ['design-status', projectId, filename],
@@ -118,15 +109,6 @@ const DesignDetailModal: React.FC<DesignDetailModalProps> = ({ projectId, filena
     },
   });
 
-  const toggleTask = (taskId: string) => {
-    setExpandedTasks(prev => {
-      const next = new Set(prev);
-      if (next.has(taskId)) next.delete(taskId);
-      else next.add(taskId);
-      return next;
-    });
-  };
-
   const overallStatus = status?.status || 'pending';
   const statusConfig = STATUS_CONFIG[overallStatus] || STATUS_CONFIG.pending;
 
@@ -202,96 +184,27 @@ const DesignDetailModal: React.FC<DesignDetailModalProps> = ({ projectId, filena
                   </div>
                 )}
 
-                {/* Workflows with Tasks */}
+                {/* Workflows */}
                 {status?.workflows?.length > 0 && (
                   <div>
                     <h3 className="text-sm font-semibold text-gray-700 mb-2 flex items-center gap-2">
                       <RotateCcw className="w-4 h-4" />
                       Workflow Runs ({status.workflows.length})
                     </h3>
-                    <div className="space-y-3">
+                    <div className="space-y-2">
                       {status.workflows.map((wf: any) => {
                         const wfStatus = STATUS_CONFIG[wf.status] || STATUS_CONFIG.pending;
-                        const wfTasks = (status.tasks || []).filter((t: any) => t.workflow_id === wf.id);
                         return (
-                          <div key={wf.id} className="border border-gray-200 rounded-lg overflow-hidden">
-                            <div className="flex items-center gap-3 p-3 bg-gray-50">
-                              <span className={`px-2 py-1 text-xs font-semibold rounded-full flex items-center gap-1 ${wfStatus.color}`}>
-                                {wfStatus.icon}
-                                {wfStatus.label}
-                              </span>
-                              <span className="text-xs font-mono text-gray-500">{wf.id.substring(0, 8)}</span>
+                          <div key={wf.id} className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg">
+                            <span className={`px-2 py-1 text-xs font-semibold rounded-full flex items-center gap-1 ${wfStatus.color}`}>
+                              {wfStatus.icon}
+                              {wfStatus.label}
+                            </span>
+                            <span className="text-xs font-mono text-gray-500">{wf.id.substring(0, 8)}</span>
+                            {wf.created_at && (
                               <span className="text-xs text-gray-400 ml-auto">
-                                {wfTasks.length} task{wfTasks.length !== 1 ? 's' : ''}
+                                {formatDistanceToNow(new Date(wf.created_at), { addSuffix: true })}
                               </span>
-                              {wf.created_at && (
-                                <span className="text-xs text-gray-400">
-                                  {formatDistanceToNow(new Date(wf.created_at), { addSuffix: true })}
-                                </span>
-                              )}
-                            </div>
-                            {/* Tasks under this workflow */}
-                            {wfTasks.length > 0 && (
-                              <div className="divide-y border-t">
-                                {wfTasks.map((task: any) => {
-                                  const taskColor = TASK_STATUS_COLORS[task.status] || 'bg-gray-100 text-gray-600';
-                                  const isExpanded = expandedTasks.has(task.id);
-                                  const phaseName = task.phase_name || 'unknown';
-                                  return (
-                                    <div key={task.id}>
-                                      <button
-                                        onClick={() => toggleTask(task.id)}
-                                        className="w-full flex items-center gap-3 p-3 hover:bg-gray-50 transition-colors text-left"
-                                      >
-                                        {isExpanded ? <ChevronDown className="w-4 h-4 text-gray-400" /> : <ChevronRight className="w-4 h-4 text-gray-400" />}
-                                        <span className={`px-2 py-0.5 text-xs font-semibold rounded-full ${taskColor}`}>
-                                          {task.status}
-                                        </span>
-                                        <span className="px-2 py-0.5 text-xs font-medium bg-violet-100 text-violet-700 rounded">
-                                          {phaseName}
-                                        </span>
-                                        <span className="text-sm text-gray-700 flex-1 truncate">{task.description}</span>
-                                        {/* Agent badge in collapsed view */}
-                                        {task.agent_id && (
-                                          <a
-                                            href={`/agents/${task.agent_id}`}
-                                            className="flex items-center gap-1 px-2 py-1 text-xs bg-violet-100 text-violet-700 rounded hover:bg-violet-200 transition-colors"
-                                            onClick={(e) => e.stopPropagation()}
-                                          >
-                                            <span className={task.agent_status === 'working' ? 'w-1.5 h-1.5 rounded-full bg-green-500' : 'w-1.5 h-1.5 rounded-full bg-gray-400'}></span>
-                                            {task.agent_id.substring(0, 6)}
-                                            <ExternalLink className="w-3 h-3" />
-                                          </a>
-                                        )}
-                                      </button>
-                                      {isExpanded && (
-                                        <div className="px-3 pb-3 pt-0 border-t border-gray-100">
-                                          <p className="text-sm text-gray-600 mt-2 whitespace-pre-wrap">{task.description}</p>
-                                          <div className="flex items-center gap-4 mt-2 text-xs text-gray-500">
-                                            {task.priority && <span>Priority: {task.priority}</span>}
-                                          </div>
-                                          {/* Agent info with deep link */}
-                                          {task.agent_id && (
-                                            <div className="flex items-center gap-2 mt-2 p-2 bg-gray-50 rounded-lg">
-                                              <span className={`w-2 h-2 rounded-full ${task.agent_status === 'working' ? 'bg-green-500 animate-pulse' : 'bg-gray-400'}`}></span>
-                                              <span className="text-xs font-mono text-gray-700">{task.agent_id.substring(0, 8)}</span>
-                                              <span className="text-xs text-gray-500">({task.agent_status || 'unknown'})</span>
-                                              <a
-                                                href={`/agents/${task.agent_id}`}
-                                                className="ml-auto px-2 py-1 text-xs bg-violet-100 text-violet-700 rounded hover:bg-violet-200 transition-colors"
-                                                onClick={(e) => e.stopPropagation()}
-                                              >
-                                                <ExternalLink className="w-3 h-3 inline mr-1" />
-                                                View
-                                              </a>
-                                            </div>
-                                          )}
-                                        </div>
-                                      )}
-                                    </div>
-                                  );
-                                })}
-                              </div>
                             )}
                           </div>
                         );
@@ -322,11 +235,10 @@ const DesignDetailModal: React.FC<DesignDetailModalProps> = ({ projectId, filena
                       Design Document
                     </button>
                     {showContent && (
-                      <div className="mt-2 p-4 bg-gray-50 rounded-lg max-h-64 overflow-y-auto">
-                        <pre className="text-xs text-gray-700 whitespace-pre-wrap font-mono leading-relaxed">
-                          {status.content}
-                        </pre>
-                      </div>
+                      <div 
+                        className="mt-2 p-4 bg-gray-50 rounded-lg max-h-96 overflow-y-auto prose prose-sm prose-violet max-w-none"
+                        dangerouslySetInnerHTML={{ __html: markdownToHtml(status.content) }}
+                      />
                     )}
                   </div>
                 )}
@@ -337,7 +249,7 @@ const DesignDetailModal: React.FC<DesignDetailModalProps> = ({ projectId, filena
           {/* Footer */}
           <div className="px-6 py-4 border-t bg-gray-50 flex items-center justify-between">
             <span className="text-xs text-gray-400">
-              {status?.tasks?.length || 0} tasks • {status?.workflows?.length || 0} runs
+              {status?.workflows?.length || 0} runs
             </span>
             <div className="flex items-center gap-2">
               {onRerun && (
