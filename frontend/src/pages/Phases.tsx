@@ -5,7 +5,7 @@ import { Layers, FileCode, ChevronRight, ChevronDown, Edit2 } from 'lucide-react
 import { cn } from '@/lib/utils';
 import { useWorkflow } from '@/context/WorkflowContext';
 import { apiService } from '@/services/api';
-import { markdownToHtml } from '@/utils/markdown';
+import { MarkdownRenderer } from '@/utils/markdown';
 import PhaseDetailPanel from '@/components/workflow/PhaseDetailPanel';
 
 export default function Phases() {
@@ -165,10 +165,7 @@ export default function Phases() {
                           {/* Description */}
                           <div>
                             <h4 className="text-xs font-semibold text-gray-500 mb-1">Description</h4>
-                            <div 
-                              className="text-sm text-gray-700 prose prose-sm prose-violet max-w-none"
-                              dangerouslySetInnerHTML={{ __html: markdownToHtml(phase.description || '') }}
-                            />
+                            <MarkdownRenderer content={phase.description || ''} className="text-sm prose prose-sm prose-violet max-w-none" />
                           </div>
 
                           {/* Done Definitions */}
@@ -190,10 +187,9 @@ export default function Phases() {
                           {phase.additional_notes && (
                             <div>
                               <h4 className="text-xs font-semibold text-gray-500 mb-1">Additional Notes</h4>
-                              <div 
-                                className="text-sm text-gray-600 bg-blue-50 p-2 rounded prose prose-sm prose-violet max-w-none"
-                                dangerouslySetInnerHTML={{ __html: markdownToHtml(phase.additional_notes) }}
-                              />
+                              <div className="text-sm text-gray-600 bg-blue-50 p-2 rounded prose prose-sm prose-violet max-w-none">
+                                <MarkdownRenderer content={phase.additional_notes} />
+                              </div>
                             </div>
                           )}
 
