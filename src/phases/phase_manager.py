@@ -497,17 +497,19 @@ class PhaseManager:
         finally:
             session.close()
 
-    def mark_phase_complete(self, phase_id: str, summary: str = "", phase_output: Dict[str, Any] = None) -> Dict[str, Any]:
+    def mark_phase_complete(self, phase_id: str, summary: str = "", phase_output: Dict[str, Any] = None, force_action: str = None) -> Dict[str, Any]:
         """Mark a phase as complete and evaluate with orchestrator.
 
         Args:
             phase_id: Phase ID to mark complete
             summary: Completion summary
             phase_output: Output from the phase for orchestrator evaluation
+            force_action: If set ("continue" or "fail"), skip orchestrator evaluation
+                and use this action directly.  Used after arbitration resolves.
 
         Returns:
             Dict with keys:
-                - action: 'continue' | 'goto' | 'retry' | 'fail'
+                - action: 'continue' | 'goto' | 'retry' | 'fail' | 'arbitrate'
                 - target_phase: phase name/order for goto (None for continue/retry/fail)
                 - target_phase_id: UUID of target phase (None for continue/retry/fail)
                 - should_continue: bool
@@ -524,6 +526,26 @@ class PhaseManager:
 
             if not execution:
                 return {"action": "continue", "target_phase": None, "target_phase_id": None, "should_continue": True}
+
+            # Arbitration override: skip evaluation and use the resolved action.
+            if force_action == "continue":
+                execution.status = "completed"
+                execution.completed_at = datetime.utcnow()
+                execution.completion_summary = summary
+                session.commit()
+                next_started = self._start_next_phase(session, phase_id)
+                if not next_started:
+                    self._complete_workflow(session)
+                    return {"action": "continue", "target_phase": None, "target_phase_id": None, "should_continue": False}
+                next_phase = self._find_next_phase(session, phase_id)
+                return {"action": "continue", "target_phase": next_phase.name if next_phase else None, "target_phase_id": next_phase.id if next_phase else None, "should_continue": True}
+            elif force_action == "fail":
+                execution.status = "failed"
+                execution.completed_at = datetime.utcnow()
+                execution.completion_summary = summary
+                session.commit()
+                self._fail_workflow(session, summary)
+                return {"action": "fail", "target_phase": None, "target_phase_id": None, "should_continue": False}
 
             # Get orchestrator config
             orchestrator = self._get_orchestrator(session, phase.workflow_id)
@@ -618,6 +640,23 @@ class PhaseManager:
                         self._complete_workflow(session)
                         return {"action": "continue", "target_phase": None, "target_phase_id": None, "should_continue": False}
                     return {"action": "continue", "target_phase": None, "target_phase_id": None, "should_continue": True}
+
+            elif evaluation.action == OrchestrationAction.ARBITRATE:
+                # Budget exhausted — pause the phase and request LLM arbitration.
+                # The monitor will spawn an arbitration agent; once it writes
+                # arbitration_result.json the pipeline resumes (proceed) or stops (impasse).
+                execution.status = "pending"  # keep phase alive until arbitration resolves
+                session.commit()
+                logger.warning(
+                    f"[ARBITRATE] Phase {phase.name} needs arbitration: {evaluation.reason}"
+                )
+                return {
+                    "action": "arbitrate",
+                    "target_phase": phase.name,
+                    "target_phase_id": phase.id,
+                    "should_continue": True,
+                    "arbitration_metadata": evaluation.metadata,
+                }
 
             elif evaluation.action == OrchestrationAction.FAIL:
                 execution.status = "failed"
