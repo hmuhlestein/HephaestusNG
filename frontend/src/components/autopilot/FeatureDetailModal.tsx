@@ -6,7 +6,7 @@ import {
   Clock, DollarSign, Layers, Shield, Beaker, BookOpen, Code, Microscope, Copy,
   Terminal
 } from 'lucide-react';
-import { markdownToHtml } from '@/utils/markdown';
+import { MarkdownRenderer } from '@/utils/markdown';
 import { apiService } from '@/services/api';
 import { StatusBadge, StatusIcon, formatTime } from '@/pages/Autopilot';
 
@@ -346,10 +346,9 @@ const DocsTab: React.FC<{
               <Copy className="w-3 h-3" /> Copy
             </button>
           </div>
-          <div 
-            className="text-sm text-gray-700 prose prose-sm prose-violet max-w-none bg-gray-50 rounded-xl p-4 border"
-            dangerouslySetInnerHTML={{ __html: markdownToHtml(docContent.content) }}
-          />
+          <div className="text-sm text-gray-700 prose prose-sm prose-violet max-w-none bg-gray-50 rounded-xl p-4 border">
+            <MarkdownRenderer content={docContent.content} />
+          </div>
         </div>
       ) : (
         <div className="flex items-center justify-center h-full text-gray-400 text-sm">

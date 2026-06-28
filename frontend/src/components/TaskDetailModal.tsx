@@ -33,7 +33,7 @@ import {
   Ticket,
   Workflow
 } from 'lucide-react';
-import { markdownToHtml } from '@/utils/markdown';
+import { MarkdownRenderer } from '@/utils/markdown';
 import { formatDistanceToNow } from 'date-fns';
 
 import { apiService } from '@/services/api';
@@ -618,10 +618,7 @@ ${taskDetails.child_tasks.map((t: any) => `- ${t.description} (${t.status})`).jo
                             </button>
                           </div>
                           <div className="h-32 p-3 bg-gray-50 dark:bg-gray-800 rounded-lg border overflow-y-auto">
-                            <div 
-                              className="text-sm text-gray-700 dark:text-gray-300 prose prose-sm prose-violet max-w-none"
-                              dangerouslySetInnerHTML={{ __html: markdownToHtml(taskDetails.user_prompt || '') }}
-                            />
+                            <MarkdownRenderer content={taskDetails.user_prompt || ''} className="text-sm prose prose-sm prose-violet max-w-none" />
                           </div>
                         </div>
 
@@ -639,10 +636,7 @@ ${taskDetails.child_tasks.map((t: any) => `- ${t.description} (${t.status})`).jo
                             </button>
                           </div>
                           <div className="h-32 p-3 bg-gray-50 dark:bg-gray-800 rounded-lg border overflow-y-auto">
-                            <div 
-                              className="text-sm text-gray-700 dark:text-gray-300 prose prose-sm prose-violet max-w-none"
-                              dangerouslySetInnerHTML={{ __html: markdownToHtml(taskDetails.system_prompt || 'No system prompt available') }}
-                            />
+                            <MarkdownRenderer content={taskDetails.system_prompt || 'No system prompt available'} className="text-sm prose prose-sm prose-violet max-w-none" />
                           </div>
                         </div>
 
@@ -660,10 +654,7 @@ ${taskDetails.child_tasks.map((t: any) => `- ${t.description} (${t.status})`).jo
                             </button>
                           </div>
                           <div className="p-3 bg-green-50 dark:bg-green-900/20 rounded-lg border border-green-200 dark:border-green-700">
-                            <div 
-                              className="text-sm text-gray-700 dark:text-gray-300 prose prose-sm prose-violet max-w-none"
-                              dangerouslySetInnerHTML={{ __html: markdownToHtml(taskDetails.done_definition || '') }}
-                            />
+                            <MarkdownRenderer content={taskDetails.done_definition || ''} className="text-sm prose prose-sm prose-violet max-w-none" />
                           </div>
                         </div>
                       </motion.div>
@@ -1258,10 +1249,7 @@ ${taskDetails.child_tasks.map((t: any) => `- ${t.description} (${t.status})`).jo
                         ? 'bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-700'
                         : 'bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-700'
                     }`}>
-                      <div 
-                        className="text-sm text-gray-700 dark:text-gray-300 prose prose-sm prose-violet max-w-none"
-                        dangerouslySetInnerHTML={{ __html: markdownToHtml(taskDetails.completion_notes || taskDetails.failure_reason || '') }}
-                      />
+                      <MarkdownRenderer content={taskDetails.completion_notes || taskDetails.failure_reason || ''} className="text-sm prose prose-sm prose-violet max-w-none" />
                     </div>
                   </div>
                 )}

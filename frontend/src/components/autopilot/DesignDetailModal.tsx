@@ -5,7 +5,7 @@ import {
   X, FileText, GitBranch, Clock, CheckCircle2, XCircle, AlertTriangle,
   Loader2, RotateCcw, ChevronDown, ChevronRight, ExternalLink, Play, Pause, Square
 } from 'lucide-react';
-import { markdownToHtml } from '@/utils/markdown';
+import { MarkdownRenderer } from '@/utils/markdown';
 import { apiService, api } from '@/services/api';
 import { Button } from '@/components/ui/button';
 import { formatDistanceToNow } from 'date-fns';
@@ -235,10 +235,9 @@ const DesignDetailModal: React.FC<DesignDetailModalProps> = ({ projectId, filena
                       Design Document
                     </button>
                     {showContent && (
-                      <div 
-                        className="mt-2 p-4 bg-gray-50 rounded-lg max-h-96 overflow-y-auto prose prose-sm prose-violet max-w-none"
-                        dangerouslySetInnerHTML={{ __html: markdownToHtml(status.content) }}
-                      />
+                      <div className="mt-2 p-4 bg-gray-50 rounded-lg max-h-96 overflow-y-auto prose prose-sm prose-violet max-w-none">
+                        <MarkdownRenderer content={status.content} />
+                      </div>
                     )}
                   </div>
                 )}

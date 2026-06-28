@@ -1,6 +1,6 @@
 id: 2
 name: scope_review
-thinking_level: low
+thinking_level: high
 description: |
   Gate between product requirements and architecture. Verifies that the
   extracted requirements exactly match the original design doc scope — no
