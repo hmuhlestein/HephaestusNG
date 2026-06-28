@@ -6,10 +6,11 @@ import { formatTime } from '@/pages/Autopilot';
 interface PipelineStatusCardProps {
   status: any;
   onToggle?: () => void;
+  onMetricClick?: (metric: string) => void;
   loading?: boolean;
 }
 
-const PipelineStatusCard: React.FC<PipelineStatusCardProps> = ({ status, onToggle, loading }) => {
+const PipelineStatusCard: React.FC<PipelineStatusCardProps> = ({ status, onToggle, onMetricClick, loading }) => {
   const running = status?.running ?? false;
   const currentDesign = status?.current_design;
   const designsProcessed = status?.designs_processed ?? 0;
@@ -87,18 +88,27 @@ const PipelineStatusCard: React.FC<PipelineStatusCardProps> = ({ status, onToggl
           {/* Right: Metrics */}
           <div className="flex items-center gap-6">
             {[
-              { label: 'Agents', value: status?.active_agents || 0, icon: Users },
-              { label: 'Processed', value: status?.designs_processed || 0, icon: Activity },
-              { label: 'Succeeded', value: status?.designs_succeeded || 0, icon: CheckCircle2 },
-              { label: 'Failed', value: status?.designs_failed || 0, icon: XCircle },
+              { label: 'Agents', value: status?.active_agents || 0, icon: Users, key: 'agents' },
+              { label: 'Processed', value: status?.designs_processed || 0, icon: Activity, key: 'processed' },
+              { label: 'Succeeded', value: status?.designs_succeeded || 0, icon: CheckCircle2, key: 'succeeded' },
+              { label: 'Failed', value: status?.designs_failed || 0, icon: XCircle, key: 'failed' },
             ].map((metric) => (
-              <div key={metric.label} className="text-center">
+              <button
+                key={metric.label}
+                onClick={() => onMetricClick?.(metric.key)}
+                className={`text-center px-3 py-2 rounded-lg transition-all border border-transparent ${
+                  onMetricClick
+                    ? 'cursor-pointer hover:bg-white/15 hover:border-white/20 hover:underline active:scale-95'
+                    : 'cursor-default'
+                }`}
+                title={`View ${metric.label.toLowerCase()}`}
+              >
                 <div className="flex items-center justify-center gap-1 mb-1">
                   <metric.icon className="w-3.5 h-3.5 text-white/60" />
                   <span className="text-xs text-white/60 uppercase tracking-wider">{metric.label}</span>
                 </div>
                 <p className="text-2xl font-bold text-white">{metric.value}</p>
-              </div>
+              </button>
             ))}
 
             {status?.total_elapsed > 0 && (

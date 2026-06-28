@@ -106,7 +106,9 @@ class Config:
 
         # MCP settings
         mcp = config.get('mcp', {})
-        self.auth_required = mcp.get('auth_required', False)
+        # SECURITY: auth_required defaults to True now. Set mcp.auth_required: false
+        # ONLY in local development. Never disable auth in production.
+        self.auth_required = mcp.get('auth_required', True)
         self.session_timeout = mcp.get('session_timeout', 3600)
         self.max_concurrent_agents = mcp.get('max_concurrent_agents', 10)
 

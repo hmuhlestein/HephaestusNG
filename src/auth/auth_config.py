@@ -10,12 +10,12 @@ class AuthConfig(BaseSettings):
 
     # JWT Settings
     jwt_secret_key: str = Field(
-        default="your-secret-key-here-change-in-production",
-        description="Secret key for JWT token signing"
+        default="",
+        description="Secret key for JWT token signing. MUST be set via AUTH_JWT_SECRET_KEY env var or hephaestus_config.yaml in production."
     )
     jwt_algorithm: str = Field(
         default="HS256",
-        description="Algorithm for JWT token signing"
+        description="Algorithm for JWT token signing. HS256 requires a strong secret."
     )
     access_token_expire_minutes: int = Field(
         default=30,
@@ -112,4 +112,17 @@ def get_auth_config() -> AuthConfig:
     global _auth_config
     if _auth_config is None:
         _auth_config = AuthConfig()
+        # SECURITY: Warn if using default/empty JWT secret
+        import os
+        if not _auth_config.jwt_secret_key or _auth_config.jwt_secret_key == "":
+            # Auto-generate a secure random key for development
+            import secrets
+            _auth_config.jwt_secret_key = secrets.token_urlsafe(64)
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.warning(
+                "SECURITY: No AUTH_JWT_SECRET_KEY set. Auto-generated a random key. "
+                "Tokens will NOT be valid across server restarts. "
+                "Set AUTH_JWT_SECRET_KEY environment variable for production."
+            )
     return _auth_config

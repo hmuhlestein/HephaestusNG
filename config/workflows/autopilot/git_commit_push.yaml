@@ -26,6 +26,10 @@ next_steps:
   - "Feature is now part of main branch"
   - "Worktree preserved for UI artifact access"
 additional_notes: |
+  OUTPUT STYLE: Terse. Drop filler (just/really/basically/actually). Fragments OK. 
+  Technical terms exact. No pleasantries (sure/certainly/happy to). 
+  Not: "I'll now proceed to commit and push." Yes: "Commit with conventional format."
+  
   ═══════════════════════════════════════════════════════════════════════
   YOU ARE A GIT OPERATOR - COMMIT AND MERGE VALIDATED CODE
   ═══════════════════════════════════════════════════════════════════════

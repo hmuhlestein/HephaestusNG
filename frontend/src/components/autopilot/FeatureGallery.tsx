@@ -12,14 +12,18 @@ import { formatDistanceToNow } from 'date-fns';
 interface FeatureGalleryProps {
   onSelectFeature: (featureId: string) => void;
   projectId: string | null;
+  statusFilter?: StatusFilter;
+  onStatusFilterChange?: (filter: StatusFilter) => void;
 }
 
 type ViewMode = 'grid' | 'list';
 type StatusFilter = 'all' | 'validated' | 'needs_review' | 'failed';
 
-const FeatureGallery: React.FC<FeatureGalleryProps> = ({ onSelectFeature, projectId }) => {
+const FeatureGallery: React.FC<FeatureGalleryProps> = ({ onSelectFeature, projectId, statusFilter: externalFilter, onStatusFilterChange }) => {
   const [viewMode, setViewMode] = useState<ViewMode>('grid');
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
+  const [internalFilter, setInternalFilter] = useState<StatusFilter>('all');
+  const statusFilter = externalFilter ?? internalFilter;
+  const setStatusFilter = onStatusFilterChange ?? setInternalFilter;
   const [search, setSearch] = useState('');
 
   const { data: features, isLoading } = useQuery({
