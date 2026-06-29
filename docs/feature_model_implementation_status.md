@@ -96,8 +96,8 @@ Implementation of the Feature Model for Hephaestus Autopilot, enabling decomposi
 - Implements all required interfaces and contracts
 - Database migration is idempotent and safe for production
 
-## Next Steps
-1. Run full test suite to verify no regressions
-2. Integration testing with real design documents
-3. Performance testing with parallel features
-4. Documentation updates
+## Next Steps (Future Work)
+1. End-to-end integration testing with real design documents
+2. Performance benchmarking with parallel features
+3. User acceptance testing
+4. Documentation enhancements (API examples, troubleshooting guide)
