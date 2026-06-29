@@ -3156,6 +3156,10 @@ def _run_one_feature(
             pause_existing=False,  # features run in parallel; don't clobber each other
         )
 
+        # Link workflow to feature in DB
+        if state and state.current_workflow_id and feature_id:
+            _link_workflow_to_feature(state.current_workflow_id, feature_id)
+
         # Determine final status
         if wf_status == "completed":
             # Check if product validation passed
