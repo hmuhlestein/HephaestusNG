@@ -8,7 +8,7 @@ import shlex
 import subprocess
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 
 class ValidationCheckType(Enum):
@@ -25,35 +25,49 @@ class ValidationCheckType(Enum):
 
 # SECURITY: Patterns that indicate dangerous commands
 DANGEROUS_PATTERNS = [
-    ';', '&&', '||', '|', '$(', '`', '${',
-    'rm -rf', 'mkfs', 'dd if=',
-    '/etc/passwd', '/etc/shadow',
-    'sudo', 'su -', 'chmod 777',
-    'eval ', 'exec ',
-    'curl |', 'wget |',
-    'python -c', 'python3 -c',
+    ";",
+    "&&",
+    "||",
+    "|",
+    "$(",
+    "`",
+    "${",
+    "rm -rf",
+    "mkfs",
+    "dd if=",
+    "/etc/passwd",
+    "/etc/shadow",
+    "sudo",
+    "su -",
+    "chmod 777",
+    "eval ",
+    "exec ",
+    "curl |",
+    "wget |",
+    "python -c",
+    "python3 -c",
 ]
 
 
 def _validate_command_safety(command: str) -> Optional[str]:
     """Validate that a command doesn't contain dangerous patterns.
-    
+
     Args:
         command: Command string to validate
-        
+
     Returns:
         Error message if dangerous, None if safe
     """
     command_lower = command.lower().strip()
-    
+
     for pattern in DANGEROUS_PATTERNS:
         if pattern in command_lower:
             return f"Command rejected: contains dangerous pattern '{pattern}'"
-    
+
     # Additional checks
     if not command.strip():
         return "Empty command"
-    
+
     return None
 
 
@@ -135,7 +149,7 @@ def _check_file_exists(criterion: Dict[str, Any], working_dir: str) -> Dict[str,
             results.append(f"{target}: PATH TRAVERSAL BLOCKED")
             all_exist = False
             continue
-            
+
         exists = file_path.exists()
         results.append(f"{target}: {'EXISTS' if exists else 'MISSING'}")
         if not exists:
@@ -170,7 +184,7 @@ def _check_file_contains(criterion: Dict[str, Any], working_dir: str) -> Dict[st
             "passed": False,
             "evidence": f"Path traversal blocked for: {target}",
             "error": True,
-            "security_rejection": True
+            "security_rejection": True,
         }
 
     if not file_path.exists():
@@ -231,16 +245,20 @@ def _check_command_success(
             "passed": False,
             "evidence": safety_error,
             "error": True,
-            "security_rejection": True
+            "security_rejection": True,
         }
 
     try:
         # SECURITY: Use shell=False with argument list (shlex.split)
         cmd_args = shlex.split(command)
-        
+
         if not cmd_args:
-            return {"passed": False, "evidence": "Empty command after parsing", "error": True}
-        
+            return {
+                "passed": False,
+                "evidence": "Empty command after parsing",
+                "error": True,
+            }
+
         result = subprocess.run(
             cmd_args,
             shell=False,  # SECURITY: Never use shell=True
@@ -297,16 +315,20 @@ def _check_test_pass(criterion: Dict[str, Any], working_dir: str) -> Dict[str, A
             "passed": False,
             "evidence": f"Test command rejected: {safety_error}",
             "error": True,
-            "security_rejection": True
+            "security_rejection": True,
         }
 
     try:
         # SECURITY: Use shell=False with argument list (shlex.split)
         cmd_args = shlex.split(test_command)
-        
+
         if not cmd_args:
-            return {"passed": False, "evidence": "Empty command after parsing", "error": True}
-        
+            return {
+                "passed": False,
+                "evidence": "Empty command after parsing",
+                "error": True,
+            }
+
         result = subprocess.run(
             cmd_args,
             shell=False,  # SECURITY: Never use shell=True

@@ -93,16 +93,21 @@ def get_auth_config() -> AuthConfig:
     global _auth_config
     if _auth_config is None:
         _auth_config = AuthConfig()
-        
+
         import logging
+
         logger = logging.getLogger(__name__)
-        
+
         # SECURITY: Validate JWT secret configuration
         if not _auth_config.jwt_secret_key or _auth_config.jwt_secret_key == "":
             # Check if we're in production mode
             import os
-            is_production = os.environ.get("ENVIRONMENT", "").lower() in ["production", "prod"]
-            
+
+            is_production = os.environ.get("ENVIRONMENT", "").lower() in [
+                "production",
+                "prod",
+            ]
+
             if is_production:
                 # SECURITY: Fail hard in production - never auto-generate secrets
                 raise ValueError(
@@ -113,6 +118,7 @@ def get_auth_config() -> AuthConfig:
             else:
                 # Development mode: auto-generate with clear warning
                 import secrets
+
                 _auth_config.jwt_secret_key = secrets.token_urlsafe(64)
                 logger.warning(
                     "SECURITY WARNING: No AUTH_JWT_SECRET_KEY set in development mode. "

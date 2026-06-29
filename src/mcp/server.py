@@ -944,29 +944,30 @@ KNOWN_SYSTEM_AGENTS = {
 
 async def verify_agent_authentication(agent_id: str) -> bool:
     """Verify agent is authenticated and authorized.
-    
+
     SECURITY: Validates agent identity before allowing operations.
     Known system agents are trusted; others must be registered.
-    
+
     Args:
         agent_id: The agent ID from X-Agent-ID header
-        
+
     Returns:
         True if agent is authenticated, False otherwise
     """
     # System agents are always trusted
     if agent_id in KNOWN_SYSTEM_AGENTS:
         return True
-    
+
     # SDK agents are trusted (started by SDK)
     if agent_id.startswith("sdk-") or agent_id.startswith("mcp-"):
         return True
-    
+
     # Check if agent exists in database
     try:
         session = server_state.db_manager.get_session()
         try:
             from src.core.database import Agent
+
             agent = session.query(Agent).filter_by(id=agent_id).first()
             if agent and agent.status in ["idle", "working", "starting"]:
                 # Agent exists and is active - trusted
@@ -2031,9 +2032,9 @@ async def create_task(
     if not await verify_agent_authentication(agent_id):
         raise HTTPException(
             status_code=401,
-            detail="Agent not authenticated. Provide valid X-Agent-ID header."
+            detail="Agent not authenticated. Provide valid X-Agent-ID header.",
         )
-    
+
     _touch_agent_activity(agent_id)
     logger.info(
         f"Creating task from agent {agent_id}: {request.task_description[:100]}..."
@@ -2661,9 +2662,9 @@ async def update_task_status(
     if not await verify_agent_authentication(agent_id):
         raise HTTPException(
             status_code=401,
-            detail="Agent not authenticated. Provide valid X-Agent-ID header."
+            detail="Agent not authenticated. Provide valid X-Agent-ID header.",
         )
-    
+
     _touch_agent_activity(agent_id)
     logger.info(f"Updating task {request.task_id} status to {request.status}")
 
