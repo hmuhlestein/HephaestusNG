@@ -928,6 +928,64 @@ class ServerState:
 server_state = ServerState()
 
 
+# ==================== SECURITY: Agent Authentication ====================
+
+# Known system agents that don't require token validation
+KNOWN_SYSTEM_AGENTS = {
+    "main-session-agent",
+    "sdk-agent",
+    "system",
+    "ui-user",
+    "sdk-repair-agent",
+    "orchestrator",
+    "monitor",
+}
+
+
+async def verify_agent_authentication(agent_id: str) -> bool:
+    """Verify agent is authenticated and authorized.
+    
+    SECURITY: Validates agent identity before allowing operations.
+    Known system agents are trusted; others must be registered.
+    
+    Args:
+        agent_id: The agent ID from X-Agent-ID header
+        
+    Returns:
+        True if agent is authenticated, False otherwise
+    """
+    # System agents are always trusted
+    if agent_id in KNOWN_SYSTEM_AGENTS:
+        return True
+    
+    # SDK agents are trusted (started by SDK)
+    if agent_id.startswith("sdk-") or agent_id.startswith("mcp-"):
+        return True
+    
+    # Check if agent exists in database
+    try:
+        session = server_state.db_manager.get_session()
+        try:
+            from src.core.database import Agent
+            agent = session.query(Agent).filter_by(id=agent_id).first()
+            if agent and agent.status in ["idle", "working", "starting"]:
+                # Agent exists and is active - trusted
+                return True
+            elif agent and agent.status == "terminated":
+                # Agent was terminated - reject
+                logger.warning(f"Rejected terminated agent: {agent_id[:8]}")
+                return False
+            else:
+                # Unknown agent - reject
+                logger.warning(f"Rejected unknown agent: {agent_id[:8]}")
+                return False
+        finally:
+            session.close()
+    except Exception as e:
+        logger.error(f"Agent auth check failed: {e}")
+        return False
+
+
 def _tmux_session_alive(session_name: str) -> bool:
     """True if the named tmux session currently exists."""
     if not session_name:
@@ -1969,6 +2027,13 @@ async def create_task(
     agent_id: str = Header(..., alias="X-Agent-ID"),
 ):
     """Create a new task with automatic enrichment and agent assignment."""
+    # SECURITY: Verify agent authentication before allowing task creation
+    if not await verify_agent_authentication(agent_id):
+        raise HTTPException(
+            status_code=401,
+            detail="Agent not authenticated. Provide valid X-Agent-ID header."
+        )
+    
     _touch_agent_activity(agent_id)
     logger.info(
         f"Creating task from agent {agent_id}: {request.task_description[:100]}..."
@@ -2592,6 +2657,13 @@ async def update_task_status(
     agent_id: str = Header(..., alias="X-Agent-ID"),
 ):
     """Update task status when complete or failed."""
+    # SECURITY: Verify agent authentication before allowing status updates
+    if not await verify_agent_authentication(agent_id):
+        raise HTTPException(
+            status_code=401,
+            detail="Agent not authenticated. Provide valid X-Agent-ID header."
+        )
+    
     _touch_agent_activity(agent_id)
     logger.info(f"Updating task {request.task_id} status to {request.status}")
 
