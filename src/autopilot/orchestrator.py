@@ -1529,17 +1529,20 @@ def _set_workflow_type(workflow_id: str, workflow_type: str) -> None:
 def _link_workflow_to_feature(workflow_id: str, feature_id: str) -> None:
     """Link a workflow to a feature.
 
+    Sets Feature.workflow_id so the UI can find tasks for each feature.
+
     Args:
         workflow_id: Workflow ID
-        feature_id: Feature ID
+        feature_id: Feature ID (feat-...)
     """
-    from src.core.database import Workflow, get_db
+    from src.core.database import Feature, get_db
 
     with get_db() as db:
-        workflow = db.query(Workflow).filter_by(id=workflow_id).first()
-        if workflow:
-            workflow.feature_id = feature_id
+        feature = db.query(Feature).filter_by(id=feature_id).first()
+        if feature:
+            feature.workflow_id = workflow_id
             db.commit()
+            logger.info(f"Linked workflow {workflow_id[:8]} to feature {feature_id}")
 
 
 def _validate_features_json(features_json: dict) -> None:
