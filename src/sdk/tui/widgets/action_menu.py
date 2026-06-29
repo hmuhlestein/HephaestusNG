@@ -1,12 +1,13 @@
 """
 Action menu widget with arrow key navigation
 """
+
 from textual.app import ComposeResult
 from textual.containers import VerticalScroll
+from textual.message import Message
+from textual.reactive import reactive
 from textual.widget import Widget
 from textual.widgets import Static
-from textual.reactive import reactive
-from textual.message import Message
 
 
 class ActionMenu(Widget):

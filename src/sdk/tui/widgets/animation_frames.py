@@ -6,6 +6,7 @@ from dataclasses import dataclass
 @dataclass
 class Frame:
     """Single animation frame with ASCII art and styling."""
+
     art: str
     style: str = "bold yellow"
 
@@ -15,10 +16,22 @@ class Frame:
 # ============================================================================
 
 GRASS_FRAMES = [
-    Frame(art="| | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | |", style="bold green"),
-    Frame(art="/ / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / /", style="bold green"),
-    Frame(art="| | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | |", style="bold green"),
-    Frame(art="\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\", style="bold green"),
+    Frame(
+        art="| | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | |",
+        style="bold green",
+    ),
+    Frame(
+        art="/ / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / /",
+        style="bold green",
+    ),
+    Frame(
+        art="| | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | |",
+        style="bold green",
+    ),
+    Frame(
+        art="\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\",
+        style="bold green",
+    ),
 ]
 
 
@@ -27,29 +40,38 @@ GRASS_FRAMES = [
 # ============================================================================
 
 TREE_LEAVES_FRAMES = [
-    Frame(art="""        @@@@@@@
+    Frame(
+        art="""        @@@@@@@
        @@@@@@@@@
       @@@@@@@@@@@
        @@@@@@@@@
-        @@@@@@@""", style="bold green"),
-
-    Frame(art="""       @@@@@@@
+        @@@@@@@""",
+        style="bold green",
+    ),
+    Frame(
+        art="""       @@@@@@@
       @@@@@@@@@
      @@@@@@@@@@@
       @@@@@@@@@
-       @@@@@@@""", style="bold green"),
-
-    Frame(art="""        @@@@@@@
+       @@@@@@@""",
+        style="bold green",
+    ),
+    Frame(
+        art="""        @@@@@@@
        @@@@@@@@@
       @@@@@@@@@@@
        @@@@@@@@@
-        @@@@@@@""", style="bold green"),
-
-    Frame(art="""         @@@@@@@
+        @@@@@@@""",
+        style="bold green",
+    ),
+    Frame(
+        art="""         @@@@@@@
         @@@@@@@@@
        @@@@@@@@@@@
         @@@@@@@@@
-         @@@@@@@""", style="bold green"),
+         @@@@@@@""",
+        style="bold green",
+    ),
 ]
 
 
@@ -58,9 +80,17 @@ TREE_LEAVES_FRAMES = [
 # ============================================================================
 
 WIND_FRAMES = [
-    Frame(art="  .    .      .       .     .        .    .       .      .", style="dim cyan"),
-    Frame(art="     .    .      .       .     .        .    .       .", style="dim cyan"),
-    Frame(art=" .       .      .       .     .        .    .       .     .", style="dim cyan"),
+    Frame(
+        art="  .    .      .       .     .        .    .       .      .",
+        style="dim cyan",
+    ),
+    Frame(
+        art="     .    .      .       .     .        .    .       .", style="dim cyan"
+    ),
+    Frame(
+        art=" .       .      .       .     .        .    .       .     .",
+        style="dim cyan",
+    ),
 ]
 
 

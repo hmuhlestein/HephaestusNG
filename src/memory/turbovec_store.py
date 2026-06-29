@@ -1,16 +1,16 @@
 """Vector store using turbovec for local vector search with SQLite metadata."""
 
 import asyncio
+import atexit
 import hashlib
 import json
 import logging
-import atexit
 import signal
-import numpy as np
 from datetime import datetime, timezone
-from typing import List, Dict, Any, Optional
 from pathlib import Path
+from typing import Any, Dict, List, Optional
 
+import numpy as np
 from turbovec import IdMapIndex
 
 logger = logging.getLogger(__name__)
@@ -24,13 +24,34 @@ class TurboVecStore:
     """
 
     COLLECTIONS = {
-        "agent_memories": {"dim": 384, "description": "Real-time agent discoveries and learnings"},
-        "static_docs": {"dim": 384, "description": "Documentation files and static knowledge"},
-        "task_completions": {"dim": 384, "description": "Historical task data and outcomes"},
-        "error_solutions": {"dim": 384, "description": "Known error patterns and fixes"},
-        "domain_knowledge": {"dim": 384, "description": "CVEs, CWEs, standards, and domain knowledge"},
-        "project_context": {"dim": 384, "description": "Current project state and goals"},
-        "ticket_embeddings": {"dim": 384, "description": "Ticket tracking system embeddings for semantic search"},
+        "agent_memories": {
+            "dim": 384,
+            "description": "Real-time agent discoveries and learnings",
+        },
+        "static_docs": {
+            "dim": 384,
+            "description": "Documentation files and static knowledge",
+        },
+        "task_completions": {
+            "dim": 384,
+            "description": "Historical task data and outcomes",
+        },
+        "error_solutions": {
+            "dim": 384,
+            "description": "Known error patterns and fixes",
+        },
+        "domain_knowledge": {
+            "dim": 384,
+            "description": "CVEs, CWEs, standards, and domain knowledge",
+        },
+        "project_context": {
+            "dim": 384,
+            "description": "Current project state and goals",
+        },
+        "ticket_embeddings": {
+            "dim": 384,
+            "description": "Ticket tracking system embeddings for semantic search",
+        },
     }
 
     def __init__(
@@ -85,20 +106,30 @@ class TurboVecStore:
             if index_path.exists():
                 try:
                     self._indices[collection_name] = IdMapIndex.load(str(index_path))
-                    logger.debug(f"Loaded index for {collection_name}: {len(self._indices[collection_name])} vectors")
+                    logger.debug(
+                        f"Loaded index for {collection_name}: {len(self._indices[collection_name])} vectors"
+                    )
                 except Exception as e:
                     logger.warning(f"Failed to load index for {collection_name}: {e}")
-                    self._indices[collection_name] = IdMapIndex(dim=config["dim"], bit_width=self.bit_width)
+                    self._indices[collection_name] = IdMapIndex(
+                        dim=config["dim"], bit_width=self.bit_width
+                    )
             else:
-                self._indices[collection_name] = IdMapIndex(dim=config["dim"], bit_width=self.bit_width)
+                self._indices[collection_name] = IdMapIndex(
+                    dim=config["dim"], bit_width=self.bit_width
+                )
 
             if meta_path.exists():
                 try:
                     with open(meta_path, "r") as f:
                         raw = json.load(f)
-                    self._metadata[collection_name] = {int(k): v for k, v in raw.items()}
+                    self._metadata[collection_name] = {
+                        int(k): v for k, v in raw.items()
+                    }
                 except Exception as e:
-                    logger.warning(f"Failed to load metadata for {collection_name}: {e}")
+                    logger.warning(
+                        f"Failed to load metadata for {collection_name}: {e}"
+                    )
                     self._metadata[collection_name] = {}
             else:
                 self._metadata[collection_name] = {}
@@ -233,12 +264,16 @@ class TurboVecStore:
                     if score_threshold and float(score) < score_threshold:
                         continue
 
-                    results.append({
-                        "id": meta.get("memory_id", str(int_id)),
-                        "score": float(score),
-                        "content": meta.get("content", ""),
-                        "metadata": {k: v for k, v in meta.items() if k != "content"},
-                    })
+                    results.append(
+                        {
+                            "id": meta.get("memory_id", str(int_id)),
+                            "score": float(score),
+                            "content": meta.get("content", ""),
+                            "metadata": {
+                                k: v for k, v in meta.items() if k != "content"
+                            },
+                        }
+                    )
 
                     if len(results) >= limit:
                         break

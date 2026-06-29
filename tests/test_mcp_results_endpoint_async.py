@@ -1,12 +1,13 @@
 """Async integration tests for the MCP report_results endpoint."""
 
-import pytest
-import tempfile
-import os
 import asyncio
-from datetime import datetime
-import httpx
+import os
+import tempfile
 import uuid
+from datetime import datetime
+
+import httpx
+import pytest
 
 
 @pytest.mark.asyncio
@@ -18,7 +19,7 @@ class TestReportResultsEndpointAsync:
     @pytest.fixture
     def valid_markdown_file(self):
         """Create a valid markdown file for testing."""
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.md', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
             f.write("# Test Results\n\nThis is a test result.")
             temp_path = f.name
         yield temp_path
@@ -27,7 +28,7 @@ class TestReportResultsEndpointAsync:
     @pytest.fixture
     def large_markdown_file(self):
         """Create a large markdown file for testing."""
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.md', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
             # Write 101KB of data
             f.write("# Large File\n" + "x" * (101 * 1024))
             temp_path = f.name
@@ -47,7 +48,7 @@ class TestReportResultsEndpointAsync:
 
     async def test_report_results_with_mock(self, valid_markdown_file):
         """Test successful result reporting with mocked service."""
-        from unittest.mock import patch, MagicMock
+        from unittest.mock import patch
 
         task_id = str(uuid.uuid4())
         agent_id = str(uuid.uuid4())
@@ -62,7 +63,9 @@ class TestReportResultsEndpointAsync:
             "created_at": datetime.utcnow().isoformat(),
         }
 
-        with patch('src.services.result_service.ResultService.create_result') as mock_create:
+        with patch(
+            "src.services.result_service.ResultService.create_result"
+        ) as mock_create:
             mock_create.return_value = mock_result
 
             # Import after patching
@@ -130,7 +133,7 @@ class TestReportResultsEndpointAsync:
         validate_markdown_format("/path/to/file.md")  # Should not raise
 
         # Test file size validation
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.md') as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".md") as f:
             f.write("Small content")
             f.flush()
             validate_file_size(f.name, max_size_kb=100)  # Should not raise
@@ -157,7 +160,7 @@ class TestReportResultsEndpointAsync:
                 "task_description": "Test task for result reporting",
                 "done_definition": "Task completed",
                 "ai_agent_id": "test-agent-results",
-                "priority": "medium"
+                "priority": "medium",
             }
 
             response = await client.post(
@@ -165,8 +168,8 @@ class TestReportResultsEndpointAsync:
                 json=task_payload,
                 headers={
                     "Content-Type": "application/json",
-                    "X-Agent-ID": "test-agent-results"
-                }
+                    "X-Agent-ID": "test-agent-results",
+                },
             )
 
             if response.status_code == 200:
@@ -177,7 +180,9 @@ class TestReportResultsEndpointAsync:
                 await asyncio.sleep(3)
 
                 # Create result file
-                with tempfile.NamedTemporaryFile(mode='w', suffix='.md', delete=False) as f:
+                with tempfile.NamedTemporaryFile(
+                    mode="w", suffix=".md", delete=False
+                ) as f:
                     f.write("# Test Results\n\nIntegration test results.")
                     result_file = f.name
 
@@ -189,17 +194,19 @@ class TestReportResultsEndpointAsync:
                             "task_id": task_id,
                             "markdown_file_path": result_file,
                             "result_type": "test",
-                            "summary": "Integration test"
+                            "summary": "Integration test",
                         },
                         headers={
                             "Content-Type": "application/json",
-                            "X-Agent-ID": "test-agent-results"
-                        }
+                            "X-Agent-ID": "test-agent-results",
+                        },
                     )
 
                     # If task is not assigned, that's expected
                     if result_response.status_code == 400:
-                        assert "not assigned" in result_response.json().get("detail", "")
+                        assert "not assigned" in result_response.json().get(
+                            "detail", ""
+                        )
                     else:
                         # If successful, verify response
                         assert result_response.status_code == 200

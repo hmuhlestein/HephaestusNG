@@ -7,25 +7,31 @@ This module tests that agents receive proper workflow context in their initial p
 4. Different agent types receive appropriate prompts
 """
 
-import pytest
 import os
 import uuid
-from unittest.mock import MagicMock, AsyncMock, patch
-from datetime import datetime
+from unittest.mock import MagicMock, patch
+
+import pytest
 
 # Set test environment before imports
 os.environ["HEPHAESTUS_TEST_DB"] = ":memory:"
 
-from src.core.database import DatabaseManager, Task, Workflow, Phase
 from src.agents.manager import AgentManager
-from src.phases.phase_manager import PhaseManager
+from src.core.database import Task, Workflow
 
 
 class MockTask:
     """Mock task for testing."""
 
-    def __init__(self, task_id=None, workflow_id=None, description="Test task",
-                 enriched_description=None, done_definition="Task is done", phase_id=None):
+    def __init__(
+        self,
+        task_id=None,
+        workflow_id=None,
+        description="Test task",
+        enriched_description=None,
+        done_definition="Task is done",
+        phase_id=None,
+    ):
         self.id = task_id or str(uuid.uuid4())
         self.workflow_id = workflow_id
         self.raw_description = description
@@ -41,24 +47,26 @@ class TestAgentWorkflowContext:
     @pytest.fixture
     def agent_manager(self, db_manager, mock_llm_provider):
         """Create an agent manager with mocked dependencies."""
-        with patch('src.agents.manager.WorktreeManager') as mock_worktree:
+        with patch("src.agents.manager.WorktreeManager") as mock_worktree:
             mock_worktree.return_value = MagicMock()
             manager = AgentManager(
                 db_manager=db_manager,
                 llm_provider=mock_llm_provider,
-                phase_manager=None
+                phase_manager=None,
             )
             return manager
 
     @pytest.fixture
-    def agent_manager_with_phases(self, db_manager, mock_llm_provider, initialized_phase_manager):
+    def agent_manager_with_phases(
+        self, db_manager, mock_llm_provider, initialized_phase_manager
+    ):
         """Create an agent manager with phase manager."""
-        with patch('src.agents.manager.WorktreeManager') as mock_worktree:
+        with patch("src.agents.manager.WorktreeManager") as mock_worktree:
             mock_worktree.return_value = MagicMock()
             manager = AgentManager(
                 db_manager=db_manager,
                 llm_provider=mock_llm_provider,
-                phase_manager=initialized_phase_manager
+                phase_manager=initialized_phase_manager,
             )
             return manager
 
@@ -67,15 +75,10 @@ class TestAgentWorkflowContext:
         workflow_id = f"test-workflow-{uuid.uuid4()}"
         agent_id = str(uuid.uuid4())
 
-        task = MockTask(
-            workflow_id=workflow_id,
-            description="Test task description"
-        )
+        task = MockTask(workflow_id=workflow_id, description="Test task description")
 
         message = agent_manager._format_initial_message(
-            task=task,
-            agent_id=agent_id,
-            branch_path="/test/project"
+            task=task, agent_id=agent_id, branch_path="/test/project"
         )
 
         # Verify workflow_id is in the message
@@ -90,9 +93,7 @@ class TestAgentWorkflowContext:
         task = MockTask(workflow_id=workflow_id)
 
         message = agent_manager._format_initial_message(
-            task=task,
-            agent_id=agent_id,
-            branch_path="/test/project"
+            task=task, agent_id=agent_id, branch_path="/test/project"
         )
 
         # Verify agent_id is in the message
@@ -107,9 +108,7 @@ class TestAgentWorkflowContext:
         task = MockTask(workflow_id=workflow_id)
 
         message = agent_manager._format_initial_message(
-            task=task,
-            agent_id=agent_id,
-            branch_path="/test/project"
+            task=task, agent_id=agent_id, branch_path="/test/project"
         )
 
         # Should instruct agent about workflow_id usage
@@ -123,15 +122,10 @@ class TestAgentWorkflowContext:
         agent_id = str(uuid.uuid4())
         task_description = "Write comprehensive unit tests for auth module"
 
-        task = MockTask(
-            workflow_id=workflow_id,
-            description=task_description
-        )
+        task = MockTask(workflow_id=workflow_id, description=task_description)
 
         message = agent_manager._format_initial_message(
-            task=task,
-            agent_id=agent_id,
-            branch_path="/test/project"
+            task=task, agent_id=agent_id, branch_path="/test/project"
         )
 
         # Verify task description is included
@@ -146,9 +140,7 @@ class TestAgentWorkflowContext:
         task = MockTask(workflow_id=workflow_id)
 
         message = agent_manager._format_initial_message(
-            task=task,
-            agent_id=agent_id,
-            branch_path=worktree_path
+            task=task, agent_id=agent_id, branch_path=worktree_path
         )
 
         # Verify working directory is included
@@ -159,21 +151,20 @@ class TestAgentWorkflowContext:
         """Test initial message when workflow_id is None (standalone task)."""
         agent_id = str(uuid.uuid4())
 
-        task = MockTask(
-            workflow_id=None,
-            description="Standalone task"
-        )
+        task = MockTask(workflow_id=None, description="Standalone task")
 
         message = agent_manager._format_initial_message(
-            task=task,
-            agent_id=agent_id,
-            branch_path="/test/project"
+            task=task, agent_id=agent_id, branch_path="/test/project"
         )
 
         # Should still have agent_id
         assert agent_id in message
         # Should handle missing workflow_id gracefully
-        assert "N/A" in message or "standalone" in message.lower() or "none" in message.lower()
+        assert (
+            "N/A" in message
+            or "standalone" in message.lower()
+            or "none" in message.lower()
+        )
 
     def test_validator_agent_uses_specialized_prompt(self, agent_manager):
         """Test that validator agents use specialized prompts."""
@@ -191,7 +182,7 @@ class TestAgentWorkflowContext:
             agent_id=agent_id,
             branch_path="/test/project",
             agent_type="validator",
-            enriched_data=enriched_data
+            enriched_data=enriched_data,
         )
 
         # Should use the validation prompt
@@ -213,7 +204,7 @@ class TestAgentWorkflowContext:
             agent_id=agent_id,
             branch_path="/test/project",
             agent_type="result_validator",
-            enriched_data=enriched_data
+            enriched_data=enriched_data,
         )
 
         # Should use the validation prompt
@@ -235,7 +226,7 @@ class TestAgentWorkflowContext:
             agent_id=agent_id,
             branch_path="/test/project",
             agent_type="diagnostic",
-            enriched_data=enriched_data
+            enriched_data=enriched_data,
         )
 
         # Should use the diagnostic prompt
@@ -254,7 +245,7 @@ class TestAgentWorkflowContext:
             agent_id=agent_id,
             branch_path="/test/project",
             agent_type="validator",
-            enriched_data=None
+            enriched_data=None,
         )
 
         # Should get a fallback validator message
@@ -266,15 +257,14 @@ class TestAgentWorkflowContext:
         agent_id = str(uuid.uuid4())
 
         task = MockTask(
-            workflow_id=workflow_id,
-            description="Implement user authentication"
+            workflow_id=workflow_id, description="Implement user authentication"
         )
 
         message = agent_manager._format_initial_message(
             task=task,
             agent_id=agent_id,
             branch_path="/test/project",
-            agent_type="phase"
+            agent_type="phase",
         )
 
         # Should have full task assignment format
@@ -291,9 +281,7 @@ class TestAgentWorkflowContext:
         task = MockTask(workflow_id=workflow_id)
 
         message = agent_manager._format_initial_message(
-            task=task,
-            agent_id=agent_id,
-            branch_path="/test/project"
+            task=task, agent_id=agent_id, branch_path="/test/project"
         )
 
         # Should mention MCP tools
@@ -306,16 +294,18 @@ class TestAgentManagerWithPhaseContext:
     """Test agent manager with phase context integration."""
 
     @pytest.fixture
-    def agent_manager_with_workflow(self, db_manager, mock_llm_provider, workflow_with_execution):
+    def agent_manager_with_workflow(
+        self, db_manager, mock_llm_provider, workflow_with_execution
+    ):
         """Create agent manager with an active workflow execution."""
         phase_manager, workflow_id = workflow_with_execution
 
-        with patch('src.agents.manager.WorktreeManager') as mock_worktree:
+        with patch("src.agents.manager.WorktreeManager") as mock_worktree:
             mock_worktree.return_value = MagicMock()
             manager = AgentManager(
                 db_manager=db_manager,
                 llm_provider=mock_llm_provider,
-                phase_manager=phase_manager
+                phase_manager=phase_manager,
             )
             return manager, workflow_id, phase_manager
 
@@ -332,45 +322,42 @@ class TestAgentManagerWithPhaseContext:
             task = MockTask(
                 workflow_id=workflow_id,
                 phase_id=phase_id,
-                description="Task with phase context"
+                description="Task with phase context",
             )
 
             message = agent_manager._format_initial_message(
-                task=task,
-                agent_id=agent_id,
-                branch_path="/test/project"
+                task=task, agent_id=agent_id, branch_path="/test/project"
             )
 
             # Should include workflow context section
             assert workflow_id in message
 
-    def test_workflow_description_in_context(self, db_manager, mock_llm_provider, initialized_phase_manager):
+    def test_workflow_description_in_context(
+        self, db_manager, mock_llm_provider, initialized_phase_manager
+    ):
         """Test that workflow description is included in context."""
         # Start a workflow with description
         workflow_id, _ = initialized_phase_manager.start_execution(
             definition_id="test-workflow",
             description="Build a URL shortener with analytics",
-            working_directory="/project"
+            working_directory="/project",
         )
 
-        with patch('src.agents.manager.WorktreeManager') as mock_worktree:
+        with patch("src.agents.manager.WorktreeManager") as mock_worktree:
             mock_worktree.return_value = MagicMock()
             agent_manager = AgentManager(
                 db_manager=db_manager,
                 llm_provider=mock_llm_provider,
-                phase_manager=initialized_phase_manager
+                phase_manager=initialized_phase_manager,
             )
 
             agent_id = str(uuid.uuid4())
             task = MockTask(
-                workflow_id=workflow_id,
-                description="Implement redirect endpoint"
+                workflow_id=workflow_id, description="Implement redirect endpoint"
             )
 
             message = agent_manager._format_initial_message(
-                task=task,
-                agent_id=agent_id,
-                branch_path="/test/project"
+                task=task, agent_id=agent_id, branch_path="/test/project"
             )
 
             # Should include workflow_id at minimum
@@ -383,12 +370,12 @@ class TestWorkflowContextFormats:
     @pytest.fixture
     def agent_manager(self, db_manager, mock_llm_provider):
         """Create basic agent manager."""
-        with patch('src.agents.manager.WorktreeManager') as mock_worktree:
+        with patch("src.agents.manager.WorktreeManager") as mock_worktree:
             mock_worktree.return_value = MagicMock()
             return AgentManager(
                 db_manager=db_manager,
                 llm_provider=mock_llm_provider,
-                phase_manager=None
+                phase_manager=None,
             )
 
     def test_message_format_with_all_fields(self, agent_manager):
@@ -402,13 +389,11 @@ class TestWorkflowContextFormats:
             workflow_id=workflow_id,
             description="Complete feature implementation",
             enriched_description="Implement user registration with email verification",
-            done_definition="Users can register and verify email"
+            done_definition="Users can register and verify email",
         )
 
         message = agent_manager._format_initial_message(
-            task=task,
-            agent_id=agent_id,
-            branch_path="/project/worktree"
+            task=task, agent_id=agent_id, branch_path="/project/worktree"
         )
 
         # Verify all key elements are present
@@ -425,15 +410,10 @@ class TestWorkflowContextFormats:
         agent_id = str(uuid.uuid4())
         task_id = f"task-{uuid.uuid4()}"
 
-        task = MockTask(
-            task_id=task_id,
-            workflow_id=workflow_id
-        )
+        task = MockTask(task_id=task_id, workflow_id=workflow_id)
 
         message = agent_manager._format_initial_message(
-            task=task,
-            agent_id=agent_id,
-            branch_path="/test/project"
+            task=task, agent_id=agent_id, branch_path="/test/project"
         )
 
         # Task ID should be in message
@@ -446,15 +426,10 @@ class TestWorkflowContextFormats:
         agent_id = str(uuid.uuid4())
         phase_id = str(uuid.uuid4())
 
-        task = MockTask(
-            workflow_id=workflow_id,
-            phase_id=phase_id
-        )
+        task = MockTask(workflow_id=workflow_id, phase_id=phase_id)
 
         message = agent_manager._format_initial_message(
-            task=task,
-            agent_id=agent_id,
-            branch_path="/test/project"
+            task=task, agent_id=agent_id, branch_path="/test/project"
         )
 
         # Phase ID should be in message

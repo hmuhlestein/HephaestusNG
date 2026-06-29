@@ -246,6 +246,16 @@ launch_template:
       type: text
       required: true
       description: "Where to build the feature"
+    - name: feature_id
+      label: Feature ID (Optional)
+      type: text
+      required: false
+      description: "Optional: Feature ID for feature-specific pipeline"
+    - name: feature_scope
+      label: Feature Scope Document (Optional)
+      type: text
+      required: false
+      description: "Optional: Path to feature scope document (scope.md)"
     - name: project_context
       label: Project Context (Optional)
       type: textarea
@@ -256,6 +266,7 @@ launch_template:
 
     **Design Document:** ./.hephaestus/design.md (copied into your worktree)
     **Project Path:** . (your current working directory — an isolated git worktree)
+    **Feature Scope:** {feature_scope}
 
     ---
 
@@ -275,8 +286,10 @@ launch_template:
     3. Read existing source code to understand the current system
     4. Search memory for technology decisions and constraints
 
-    ### STEP 1: Read the Design Document
-    Read the file at: ./.hephaestus/design.md
+    ### STEP 1: Read the Scope Document (PRIMARY INPUT)
+    If feature_scope is provided, read it first: {feature_scope}
+    This document defines the specific scope for this feature.
+    Otherwise, read the design document: ./.hephaestus/design.md
 
     ### STEP 2: Extract Requirements
     - Functional requirements with acceptance criteria

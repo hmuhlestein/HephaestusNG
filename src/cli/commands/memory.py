@@ -15,7 +15,9 @@ def register(subparsers):
 
     sv = sub.add_parser("save", help="Save to knowledge base")
     sv.add_argument("content", help="Content to save")
-    sv.add_argument("--type", dest="memory_type", default="discovery", help="Memory type")
+    sv.add_argument(
+        "--type", dest="memory_type", default="discovery", help="Memory type"
+    )
     sv.add_argument("--tags", nargs="*", default=[], help="Tags")
     sv.set_defaults(func=save)
 

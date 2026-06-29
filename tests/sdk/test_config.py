@@ -1,7 +1,8 @@
 """Tests for SDK configuration."""
 
-import pytest
 import os
+
+import pytest
 
 from src.sdk.config import HephaestusConfig
 

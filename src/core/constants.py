@@ -1,7 +1,6 @@
 """Shared constants for Hephaestus."""
 
 import os
-from pathlib import Path
 
 # Home-dir state directories
 AUTOPILOT_STATE_DIR = os.path.expanduser("~/.hephaestus/autopilot")

@@ -6,7 +6,6 @@ Reads config/workflows/autopilot/workflow.yaml and per-phase YAMLs,
 generates pi agent .md files in the agents/pi/ directory.
 """
 
-import importlib
 import sys
 from pathlib import Path
 

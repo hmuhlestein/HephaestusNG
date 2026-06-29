@@ -1,30 +1,39 @@
 """heph exec — Execute commands and interact with services."""
 
 import argparse
+import json
 import os
+import subprocess
 import sys
 import time
-import json
-import subprocess
 from pathlib import Path
+
 import httpx
+
 from src.cli.utils import api_get, api_post, output, table
 from src.core.constants import HEPHAESTUS_LOGS_DIR
-
 
 LOG_DIR = Path(HEPHAESTUS_LOGS_DIR)
 
 
 def register(subparsers):
-    p = subparsers.add_parser("exec", help="Execute commands and interact with services")
+    p = subparsers.add_parser(
+        "exec", help="Execute commands and interact with services"
+    )
     sub = p.add_subparsers(dest="subcommand")
 
     # run
     rn = sub.add_parser("run", help="Run a shell command and capture output")
     rn.add_argument("command", nargs=argparse.REMAINDER, help="Command to execute")
-    rn.add_argument("--timeout", type=int, default=120, help="Timeout in seconds (default: 120)")
+    rn.add_argument(
+        "--timeout", type=int, default=120, help="Timeout in seconds (default: 120)"
+    )
     rn.add_argument("--cwd", default=None, help="Working directory")
-    rn.add_argument("--log", default=None, help="Log file path (default: ~/.hephaestus/logs/exec-<ts>.log)")
+    rn.add_argument(
+        "--log",
+        default=None,
+        help="Log file path (default: ~/.hephaestus/logs/exec-<ts>.log)",
+    )
     rn.set_defaults(func=run_command)
 
     # ping
@@ -34,7 +43,9 @@ def register(subparsers):
     # tool
     tl = sub.add_parser("tool", help="Execute an MCP tool directly")
     tl.add_argument("tool_name", help="MCP tool name")
-    tl.add_argument("--args", dest="tool_args", default="{}", help="Tool arguments (JSON)")
+    tl.add_argument(
+        "--args", dest="tool_args", default="{}", help="Tool arguments (JSON)"
+    )
     tl.set_defaults(func=exec_tool)
 
     # endpoints
@@ -121,7 +132,9 @@ def ping(args):
         r = httpx.get(f"{args.api_base}/health", timeout=5)
         elapsed = time.time() - start
         data = {"status": r.status_code, "latency_ms": round(elapsed * 1000, 1)}
-        output(args, data, lambda d: print(f"Pong: {d['status']} ({d['latency_ms']}ms)"))
+        output(
+            args, data, lambda d: print(f"Pong: {d['status']} ({d['latency_ms']}ms)")
+        )
     except Exception as e:
         output(args, {"error": str(e)}, lambda d: print(f"Unreachable: {d['error']}"))
         return 1
@@ -135,10 +148,14 @@ def exec_tool(args):
         print("Error: --args must be valid JSON", file=sys.stderr)
         return 1
 
-    data = api_post(args, "/tools/execute", {
-        "tool_name": args.tool_name,
-        "arguments": tool_args,
-    })
+    data = api_post(
+        args,
+        "/tools/execute",
+        {
+            "tool_name": args.tool_name,
+            "arguments": tool_args,
+        },
+    )
     output(args, data, lambda d: print(json.dumps(d, indent=2)))
     return 0
 
@@ -154,6 +171,7 @@ def list_endpoints(args):
 
     if args.json:
         import json
+
         print(json.dumps(tools, indent=2))
     else:
         if not tools:

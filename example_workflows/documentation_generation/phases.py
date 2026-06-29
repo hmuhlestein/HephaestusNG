@@ -26,11 +26,15 @@ Usage:
 """
 
 # Import phase definitions
-from example_workflows.documentation_generation.phase_1_documentation_discovery import PHASE_1_DOCUMENTATION_DISCOVERY
-from example_workflows.documentation_generation.phase_2_documentation_generation import PHASE_2_DOCUMENTATION_GENERATION
+from example_workflows.documentation_generation.phase_1_documentation_discovery import (
+    PHASE_1_DOCUMENTATION_DISCOVERY,
+)
+from example_workflows.documentation_generation.phase_2_documentation_generation import (
+    PHASE_2_DOCUMENTATION_GENERATION,
+)
 
 # Import SDK models
-from src.sdk.models import WorkflowConfig, LaunchTemplate, LaunchParameter
+from src.sdk.models import LaunchParameter, LaunchTemplate, WorkflowConfig
 
 # Export phase list
 DOC_GEN_PHASES = [
@@ -45,8 +49,18 @@ DOC_GEN_CONFIG = WorkflowConfig(
     enable_tickets=True,
     board_config={
         "columns": [
-            {"id": "to_document", "name": "📋 To Document", "order": 1, "color": "#94a3b8"},
-            {"id": "documenting", "name": "✍️ Documenting", "order": 2, "color": "#f59e0b"},
+            {
+                "id": "to_document",
+                "name": "📋 To Document",
+                "order": 1,
+                "color": "#94a3b8",
+            },
+            {
+                "id": "documenting",
+                "name": "✍️ Documenting",
+                "order": 2,
+                "color": "#f59e0b",
+            },
             {"id": "done", "name": "✅ Done", "order": 3, "color": "#22c55e"},
         ],
         "ticket_types": ["documentation", "update", "new"],
@@ -67,7 +81,7 @@ DOC_GEN_LAUNCH_TEMPLATE = LaunchTemplate(
             label="What to Document",
             type="textarea",
             required=True,
-            description="What should be documented? Examples: 'Everything - create full documentation suite', 'API endpoints only', 'The authentication system', 'Getting started guide'"
+            description="What should be documented? Examples: 'Everything - create full documentation suite', 'API endpoints only', 'The authentication system', 'Getting started guide'",
         ),
         LaunchParameter(
             name="target_audience",
@@ -75,8 +89,14 @@ DOC_GEN_LAUNCH_TEMPLATE = LaunchTemplate(
             type="select",
             required=False,
             default="developers",
-            options=["developers", "end-users", "administrators", "contributors", "all"],
-            description="Who will read this documentation? This affects the technical depth and explanations."
+            options=[
+                "developers",
+                "end-users",
+                "administrators",
+                "contributors",
+                "all",
+            ],
+            description="Who will read this documentation? This affects the technical depth and explanations.",
         ),
     ],
     phase_1_task_prompt="""Phase 1: Documentation Discovery

@@ -6,9 +6,8 @@ This client connects to the Hephaestus server running on port 8300
 
 import os
 
-from fastmcp import FastMCP
 import httpx
-import asyncio
+from fastmcp import FastMCP
 
 # Initialize MCP client
 mcp = FastMCP("hephaestus-client")
@@ -21,11 +20,13 @@ mcp = FastMCP("hephaestus-client")
 HEPHAESTUS_URL = os.environ.get("HEPHAESTUS_URL", "http://127.0.0.1:8300")
 DEFAULT_AGENT_ID = "main-session-agent"
 
+
 @mcp.tool()
 def health_check() -> str:
     """Check if Hephaestus server is running"""
     try:
         import requests
+
         response = requests.get(f"{HEPHAESTUS_URL}/health", timeout=5)
         if response.status_code == 200:
             return "✅ Hephaestus server is healthy and running on port 8300"
@@ -34,8 +35,18 @@ def health_check() -> str:
     except Exception as e:
         return f"❌ Cannot connect to Hephaestus server: {str(e)}"
 
+
 @mcp.tool()
-async def create_task(description: str, done_definition: str, agent_id: str, workflow_id: str, phase_id: int, priority: str = "medium", cwd: str = None, ticket_id: str = None) -> str:
+async def create_task(
+    description: str,
+    done_definition: str,
+    agent_id: str,
+    workflow_id: str,
+    phase_id: int,
+    priority: str = "medium",
+    cwd: str = None,
+    ticket_id: str = None,
+) -> str:
     """Create a new task in Hephaestus.
 
     Args:
@@ -69,7 +80,7 @@ async def create_task(description: str, done_definition: str, agent_id: str, wor
                 "ai_agent_id": agent_id,
                 "workflow_id": workflow_id,
                 "priority": priority,
-                "phase_id": str(phase_id)
+                "phase_id": str(phase_id),
             }
 
             # Add optional fields if provided
@@ -81,25 +92,23 @@ async def create_task(description: str, done_definition: str, agent_id: str, wor
             response = await client.post(
                 f"{HEPHAESTUS_URL}/create_task",
                 json=request_data,
-                headers={
-                    "Content-Type": "application/json",
-                    "X-Agent-ID": agent_id
-                },
-                timeout=10.0
+                headers={"Content-Type": "application/json", "X-Agent-ID": agent_id},
+                timeout=10.0,
             )
 
             if response.status_code == 200:
                 result = response.json()
                 cwd_info = f"\nWorking Directory: {cwd}" if cwd else ""
                 return f"""✅ Task created successfully!
-Task ID: {result.get('task_id', 'unknown')}
-Assigned to: {result.get('assigned_agent_id', 'unknown')}
-Status: {result.get('status', 'unknown')}{cwd_info}
-Description: {result.get('enriched_description', description)[:100]}..."""
+Task ID: {result.get("task_id", "unknown")}
+Assigned to: {result.get("assigned_agent_id", "unknown")}
+Status: {result.get("status", "unknown")}{cwd_info}
+Description: {result.get("enriched_description", description)[:100]}..."""
             else:
                 return f"❌ Failed to create task: {response.text}"
     except Exception as e:
         return f"❌ Error creating task: {str(e)}"
+
 
 @mcp.tool()
 async def get_tasks(status: str = "all") -> str:
@@ -115,7 +124,7 @@ async def get_tasks(status: str = "all") -> str:
                 f"{HEPHAESTUS_URL}/task_progress",
                 params=params,
                 headers={"X-Agent-ID": DEFAULT_AGENT_ID},
-                timeout=10.0
+                timeout=10.0,
             )
 
             if response.status_code == 200:
@@ -129,7 +138,7 @@ async def get_tasks(status: str = "all") -> str:
                         task_list.append(
                             f"• [{task['status']}] {task['id'][:8]}: {task['description'][:60]}..."
                         )
-                    return f"📋 Tasks:\n" + "\n".join(task_list)
+                    return "📋 Tasks:\n" + "\n".join(task_list)
                 else:
                     # Single task
                     return f"📋 Task {tasks['id'][:8]}: {tasks['status']} - {tasks['description']}"
@@ -138,8 +147,11 @@ async def get_tasks(status: str = "all") -> str:
     except Exception as e:
         return f"❌ Error getting tasks: {str(e)}"
 
+
 @mcp.tool()
-async def save_memory(content: str, agent_id: str, memory_type: str = "discovery") -> str:
+async def save_memory(
+    content: str, agent_id: str, memory_type: str = "discovery"
+) -> str:
     """Save a memory to Hephaestus knowledge base.
 
     Args:
@@ -160,13 +172,10 @@ async def save_memory(content: str, agent_id: str, memory_type: str = "discovery
                     "memory_content": content,
                     "memory_type": memory_type,
                     "tags": [],
-                    "related_files": []
+                    "related_files": [],
                 },
-                headers={
-                    "Content-Type": "application/json",
-                    "X-Agent-ID": agent_id
-                },
-                timeout=10.0
+                headers={"Content-Type": "application/json", "X-Agent-ID": agent_id},
+                timeout=10.0,
             )
 
             if response.status_code == 200:
@@ -177,6 +186,7 @@ async def save_memory(content: str, agent_id: str, memory_type: str = "discovery
     except Exception as e:
         return f"❌ Error saving memory: {str(e)}"
 
+
 @mcp.tool()
 async def update_task_status(
     task_id: str,
@@ -184,7 +194,7 @@ async def update_task_status(
     status: str,
     summary: str = "",
     failure_reason: str = "",
-    key_learnings: list = None
+    key_learnings: list = None,
 ) -> str:
     """Update the status of a task in Hephaestus.
 
@@ -204,7 +214,7 @@ async def update_task_status(
             status="done",
             summary="Task completed successfully"
         )
-    
+
     DO NOT use 'agent-mcp' or any placeholder - it will cause "Agent not authorized" errors!
     """
     try:
@@ -213,7 +223,7 @@ async def update_task_status(
                 "task_id": task_id,
                 "status": status,
                 "agent_id": agent_id,
-                "key_learnings": key_learnings or []
+                "key_learnings": key_learnings or [],
             }
 
             if summary:
@@ -224,11 +234,8 @@ async def update_task_status(
             response = await client.post(
                 f"{HEPHAESTUS_URL}/update_task_status",
                 json=payload,
-                headers={
-                    "Content-Type": "application/json",
-                    "X-Agent-ID": agent_id
-                },
-                timeout=10.0
+                headers={"Content-Type": "application/json", "X-Agent-ID": agent_id},
+                timeout=10.0,
             )
 
             if response.status_code == 200:
@@ -251,6 +258,7 @@ async def update_task_status(
     except Exception as e:
         return f"❌ Error updating task status: {str(e)}"
 
+
 @mcp.tool()
 async def give_validation_review(
     task_id: str,
@@ -258,7 +266,7 @@ async def give_validation_review(
     validation_passed: bool,
     feedback: str,
     evidence: list = None,
-    recommendations: list = None
+    recommendations: list = None,
 ) -> str:
     """Submit validation review for a task.
 
@@ -282,22 +290,22 @@ async def give_validation_review(
                     "validation_passed": validation_passed,
                     "feedback": feedback,
                     "evidence": evidence or [],
-                    "recommendations": recommendations or []
+                    "recommendations": recommendations or [],
                 },
                 headers={
                     "Content-Type": "application/json",
-                    "X-Agent-ID": validator_agent_id
+                    "X-Agent-ID": validator_agent_id,
                 },
-                timeout=10.0
+                timeout=10.0,
             )
 
             if response.status_code == 200:
                 result = response.json()
                 status_emoji = "✅" if result.get("status") == "completed" else "🔄"
                 return f"""{status_emoji} Validation Review Submitted!
-Status: {result.get('status', 'unknown')}
-Message: {result.get('message', '')}
-Iteration: {result.get('iteration', 'N/A')}"""
+Status: {result.get("status", "unknown")}
+Message: {result.get("message", "")}
+Iteration: {result.get("iteration", "N/A")}"""
             else:
                 return f"❌ Failed to submit validation review: {response.text}"
     except Exception as e:
@@ -307,29 +315,28 @@ Iteration: {result.get('iteration', 'N/A')}"""
 @mcp.tool()
 async def validate_my_agent_id(agent_id: str) -> str:
     """Validate that your agent ID has the correct format before using it.
-    
+
     Args:
         agent_id: The agent ID you plan to use
-        
+
     Returns:
         Validation result with helpful error messages if invalid
-    
+
     Use this tool if you're unsure about your agent ID format!
     """
     try:
         async with httpx.AsyncClient() as client:
             response = await client.get(
-                f"{HEPHAESTUS_URL}/validate_agent_id/{agent_id}",
-                timeout=5.0
+                f"{HEPHAESTUS_URL}/validate_agent_id/{agent_id}", timeout=5.0
             )
-            
+
             if response.status_code == 200:
                 result = response.json()
                 if result["valid"]:
                     return f"✅ {result['message']}"
                 else:
                     mistakes = "\n".join(f"  • {m}" for m in result["common_mistakes"])
-                    return f"""❌ {result['message']}
+                    return f"""❌ {result["message"]}
 
 Common mistakes:
 {mistakes}
@@ -350,7 +357,7 @@ async def get_agent_status() -> str:
             response = await client.get(
                 f"{HEPHAESTUS_URL}/agent_status",
                 headers={"X-Agent-ID": DEFAULT_AGENT_ID},
-                timeout=10.0
+                timeout=10.0,
             )
 
             if response.status_code == 200:
@@ -360,11 +367,11 @@ async def get_agent_status() -> str:
 
                 agent_list = []
                 for agent in agents:
-                    status_emoji = "🟢" if agent['status'] == "working" else "🔴"
+                    status_emoji = "🟢" if agent["status"] == "working" else "🔴"
                     agent_list.append(
                         f"{status_emoji} {agent['id'][:8]}: {agent['status']} - Task: {agent.get('current_task_id', 'none')[:8] if agent.get('current_task_id') else 'none'}"
                     )
-                return f"🤖 Active Agents:\n" + "\n".join(agent_list)
+                return "🤖 Active Agents:\n" + "\n".join(agent_list)
             else:
                 return f"❌ Failed to get agent status: {response.text}"
     except Exception as e:
@@ -372,7 +379,13 @@ async def get_agent_status() -> str:
 
 
 @mcp.tool()
-async def submit_result(markdown_file_path: str, agent_id: str, explanation: str, evidence: list = None, extra_files: list = None) -> str:
+async def submit_result(
+    markdown_file_path: str,
+    agent_id: str,
+    explanation: str,
+    evidence: list = None,
+    extra_files: list = None,
+) -> str:
     """Submit a workflow result with evidence for validation.
 
     Args:
@@ -402,21 +415,18 @@ async def submit_result(markdown_file_path: str, agent_id: str, explanation: str
                     "evidence": evidence or [],
                     "extra_files": extra_files or [],
                 },
-                headers={
-                    "Content-Type": "application/json",
-                    "X-Agent-ID": agent_id
-                },
-                timeout=10.0
+                headers={"Content-Type": "application/json", "X-Agent-ID": agent_id},
+                timeout=10.0,
             )
 
             if response.status_code == 200:
                 result = response.json()
                 validation_info = f"\n🔍 Validation: {'Triggered' if result.get('validation_triggered') else 'Not required'}"
                 return f"""✅ Result submitted successfully!
-Result ID: {result.get('result_id', 'unknown')}
-Workflow ID: {result.get('workflow_id', 'unknown')}
-Status: {result.get('status', 'unknown')}{validation_info}
-Message: {result.get('message', '')}"""
+Result ID: {result.get("result_id", "unknown")}
+Workflow ID: {result.get("workflow_id", "unknown")}
+Status: {result.get("status", "unknown")}{validation_info}
+Message: {result.get("message", "")}"""
             else:
                 return f"❌ Failed to submit result: {response.text}"
     except Exception as e:
@@ -425,10 +435,7 @@ Message: {result.get('message', '')}"""
 
 @mcp.tool()
 async def submit_result_validation(
-    result_id: str,
-    validation_passed: bool,
-    feedback: str,
-    evidence: list = None
+    result_id: str, validation_passed: bool, feedback: str, evidence: list = None
 ) -> str:
     """Submit validation review for a workflow result.
 
@@ -453,22 +460,24 @@ async def submit_result_validation(
                     "feedback": feedback,
                     "evidence": evidence or [],
                 },
-                headers={
-                    "Content-Type": "application/json"
-                },
-                timeout=10.0
+                headers={"Content-Type": "application/json"},
+                timeout=10.0,
             )
 
             if response.status_code == 200:
                 result = response.json()
-                workflow_action = result.get('workflow_action_taken', 'none')
+                workflow_action = result.get("workflow_action_taken", "none")
                 action_emoji = "🛑" if workflow_action == "workflow_terminated" else "▶️"
-                action_text = f"\n{action_emoji} Workflow Action: {workflow_action}" if workflow_action != 'none' else ""
+                action_text = (
+                    f"\n{action_emoji} Workflow Action: {workflow_action}"
+                    if workflow_action != "none"
+                    else ""
+                )
 
                 return f"""✅ Result Validation Submitted!
-Status: {result.get('status', 'unknown')}
-Message: {result.get('message', '')}{action_text}
-Result ID: {result.get('result_id', 'unknown')}"""
+Status: {result.get("status", "unknown")}
+Message: {result.get("message", "")}{action_text}
+Result ID: {result.get("result_id", "unknown")}"""
             else:
                 return f"❌ Failed to submit result validation: {response.text}"
     except Exception as e:
@@ -489,7 +498,7 @@ async def get_workflow_results(workflow_id: str) -> str:
             response = await client.get(
                 f"{HEPHAESTUS_URL}/workflows/{workflow_id}/results",
                 headers={"X-Agent-ID": DEFAULT_AGENT_ID},
-                timeout=10.0
+                timeout=10.0,
             )
 
             if response.status_code == 200:
@@ -499,12 +508,16 @@ async def get_workflow_results(workflow_id: str) -> str:
 
                 result_list = []
                 for result in results:
-                    status_emoji = "✅" if result['status'] == "validated" else ("❌" if result['status'] == "rejected" else "⏳")
+                    status_emoji = (
+                        "✅"
+                        if result["status"] == "validated"
+                        else ("❌" if result["status"] == "rejected" else "⏳")
+                    )
                     # Show full result_id - critical for validators to use correct ID
                     result_list.append(
                         f"{status_emoji} {result['result_id']}: {result['status']} by {result['agent_id'][:8]}"
                     )
-                return f"📋 Workflow Results:\n" + "\n".join(result_list)
+                return "📋 Workflow Results:\n" + "\n".join(result_list)
             else:
                 return f"❌ Failed to get workflow results: {response.text}"
     except Exception as e:
@@ -538,17 +551,19 @@ async def broadcast_message(message: str, sender_agent_id: str) -> str:
                 json={"message": message},
                 headers={
                     "Content-Type": "application/json",
-                    "X-Agent-ID": sender_agent_id
+                    "X-Agent-ID": sender_agent_id,
                 },
-                timeout=10.0
+                timeout=10.0,
             )
 
             if response.status_code == 200:
                 result = response.json()
-                recipient_count = result.get('recipient_count', 0)
+                recipient_count = result.get("recipient_count", 0)
                 if recipient_count == 0:
                     return "📢 Broadcast sent, but no other agents are currently active"
-                return f"📢 Message broadcast successfully to {recipient_count} agent(s)"
+                return (
+                    f"📢 Message broadcast successfully to {recipient_count} agent(s)"
+                )
             else:
                 return f"❌ Failed to broadcast message: {response.text}"
     except Exception as e:
@@ -556,7 +571,9 @@ async def broadcast_message(message: str, sender_agent_id: str) -> str:
 
 
 @mcp.tool()
-async def send_message(message: str, sender_agent_id: str, recipient_agent_id: str) -> str:
+async def send_message(
+    message: str, sender_agent_id: str, recipient_agent_id: str
+) -> str:
     """Send a direct message to a specific agent.
 
     Use this when you know which specific agent you want to communicate with,
@@ -584,21 +601,20 @@ async def send_message(message: str, sender_agent_id: str, recipient_agent_id: s
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 f"{HEPHAESTUS_URL}/send_message",
-                json={
-                    "recipient_agent_id": recipient_agent_id,
-                    "message": message
-                },
+                json={"recipient_agent_id": recipient_agent_id, "message": message},
                 headers={
                     "Content-Type": "application/json",
-                    "X-Agent-ID": sender_agent_id
+                    "X-Agent-ID": sender_agent_id,
                 },
-                timeout=10.0
+                timeout=10.0,
             )
 
             if response.status_code == 200:
                 result = response.json()
-                if result.get('success'):
-                    return f"✉️ Message sent successfully to agent {recipient_agent_id[:8]}"
+                if result.get("success"):
+                    return (
+                        f"✉️ Message sent successfully to agent {recipient_agent_id[:8]}"
+                    )
                 else:
                     return f"❌ {result.get('message', 'Failed to send message')}"
             else:
@@ -608,6 +624,7 @@ async def send_message(message: str, sender_agent_id: str, recipient_agent_id: s
 
 
 # ==================== TICKET TRACKING SYSTEM TOOLS ====================
+
 
 @mcp.tool()
 async def create_ticket(
@@ -622,7 +639,7 @@ async def create_ticket(
     assigned_agent_id: str = None,
     parent_ticket_id: str = None,
     task_id: str = None,
-    phase_id: str = None
+    phase_id: str = None,
 ) -> str:
     """Create a new ticket in the workflow tracking system.
 
@@ -651,21 +668,26 @@ async def create_ticket(
     """
     import logging
     import os
+
     logger = logging.getLogger(__name__)
 
-    logger.info(f"[MCP_CLIENT_TICKET] ========== START ==========")
+    logger.info("[MCP_CLIENT_TICKET] ========== START ==========")
     logger.info(f"[MCP_CLIENT_TICKET] Agent: {agent_id}")
     logger.info(f"[MCP_CLIENT_TICKET] Title: {title[:60]}...")
     logger.info(f"[MCP_CLIENT_TICKET] Type: {ticket_type}, Priority: {priority}")
 
     # Use MCP_TOOL_TIMEOUT if set (for human approval workflows), otherwise default to 10 seconds
-    mcp_timeout_ms = os.environ.get('MCP_TOOL_TIMEOUT')
+    mcp_timeout_ms = os.environ.get("MCP_TOOL_TIMEOUT")
     if mcp_timeout_ms:
         timeout_seconds = float(mcp_timeout_ms) / 1000.0
-        logger.info(f"[MCP_CLIENT_TICKET] Using MCP_TOOL_TIMEOUT: {timeout_seconds}s ({mcp_timeout_ms}ms)")
+        logger.info(
+            f"[MCP_CLIENT_TICKET] Using MCP_TOOL_TIMEOUT: {timeout_seconds}s ({mcp_timeout_ms}ms)"
+        )
     else:
         timeout_seconds = 10.0
-        logger.info(f"[MCP_CLIENT_TICKET] No MCP_TOOL_TIMEOUT set, using default: {timeout_seconds}s")
+        logger.info(
+            f"[MCP_CLIENT_TICKET] No MCP_TOOL_TIMEOUT set, using default: {timeout_seconds}s"
+        )
 
     try:
         async with httpx.AsyncClient() as client:
@@ -685,16 +707,15 @@ async def create_ticket(
             }
 
             logger.info(f"[MCP_CLIENT_TICKET] Payload: {payload}")
-            logger.info(f"[MCP_CLIENT_TICKET] Sending POST to {HEPHAESTUS_URL}/api/tickets/create")
+            logger.info(
+                f"[MCP_CLIENT_TICKET] Sending POST to {HEPHAESTUS_URL}/api/tickets/create"
+            )
 
             response = await client.post(
                 f"{HEPHAESTUS_URL}/api/tickets/create",
                 json=payload,
-                headers={
-                    "Content-Type": "application/json",
-                    "X-Agent-ID": agent_id
-                },
-                timeout=timeout_seconds
+                headers={"Content-Type": "application/json", "X-Agent-ID": agent_id},
+                timeout=timeout_seconds,
             )
 
             logger.info(f"[MCP_CLIENT_TICKET] Response status: {response.status_code}")
@@ -702,38 +723,39 @@ async def create_ticket(
 
             if response.status_code == 200:
                 result = response.json()
-                logger.info(f"[MCP_CLIENT_TICKET] ✅ Success! Ticket ID: {result.get('ticket_id')}")
+                logger.info(
+                    f"[MCP_CLIENT_TICKET] ✅ Success! Ticket ID: {result.get('ticket_id')}"
+                )
 
                 similar_msg = ""
                 if result.get("similar_tickets"):
                     similar_msg = f"\n\n⚠️ Found {len(result['similar_tickets'])} similar tickets - check for duplicates!"
 
                 success_message = f"""✅ Ticket created successfully!
-Ticket ID: {result.get('ticket_id', 'unknown')}
-Status: {result.get('status', 'unknown')}
-Message: {result.get('message', '')}{similar_msg}"""
-                logger.info(f"[MCP_CLIENT_TICKET] Returning success message to agent")
-                logger.info(f"[MCP_CLIENT_TICKET] ========== SUCCESS ==========")
+Ticket ID: {result.get("ticket_id", "unknown")}
+Status: {result.get("status", "unknown")}
+Message: {result.get("message", "")}{similar_msg}"""
+                logger.info("[MCP_CLIENT_TICKET] Returning success message to agent")
+                logger.info("[MCP_CLIENT_TICKET] ========== SUCCESS ==========")
                 return success_message
             else:
                 error_message = f"❌ Failed to create ticket: {response.text}"
-                logger.error(f"[MCP_CLIENT_TICKET] ❌ HTTP {response.status_code}: {response.text}")
-                logger.error(f"[MCP_CLIENT_TICKET] Returning error message to agent")
-                logger.error(f"[MCP_CLIENT_TICKET] ========== FAILED ==========")
+                logger.error(
+                    f"[MCP_CLIENT_TICKET] ❌ HTTP {response.status_code}: {response.text}"
+                )
+                logger.error("[MCP_CLIENT_TICKET] Returning error message to agent")
+                logger.error("[MCP_CLIENT_TICKET] ========== FAILED ==========")
                 return error_message
     except Exception as e:
         error_message = f"❌ Error creating ticket: {str(e)}"
         logger.error(f"[MCP_CLIENT_TICKET] ❌ Exception: {type(e).__name__}: {e}")
-        logger.error(f"[MCP_CLIENT_TICKET] ========== EXCEPTION ==========")
+        logger.error("[MCP_CLIENT_TICKET] ========== EXCEPTION ==========")
         return error_message
 
 
 @mcp.tool()
 async def update_ticket(
-    ticket_id: str,
-    agent_id: str,
-    updates: dict,
-    update_comment: str = None
+    ticket_id: str, agent_id: str, updates: dict, update_comment: str = None
 ) -> str:
     """Update ticket fields (title, description, priority, tags, assigned_agent_id, blocked_by_ticket_ids).
 
@@ -754,19 +776,16 @@ async def update_ticket(
                     "updates": updates,
                     "update_comment": update_comment,
                 },
-                headers={
-                    "Content-Type": "application/json",
-                    "X-Agent-ID": agent_id
-                },
-                timeout=10.0
+                headers={"Content-Type": "application/json", "X-Agent-ID": agent_id},
+                timeout=10.0,
             )
 
             if response.status_code == 200:
                 result = response.json()
                 return f"""✅ Ticket updated successfully!
 Ticket ID: {ticket_id}
-Fields updated: {', '.join(result.get('fields_updated', []))}
-Message: {result.get('message', '')}"""
+Fields updated: {", ".join(result.get("fields_updated", []))}
+Message: {result.get("message", "")}"""
             else:
                 return f"❌ Failed to update ticket: {response.text}"
     except Exception as e:
@@ -775,11 +794,7 @@ Message: {result.get('message', '')}"""
 
 @mcp.tool()
 async def change_ticket_status(
-    ticket_id: str,
-    agent_id: str,
-    new_status: str,
-    comment: str,
-    commit_sha: str = None
+    ticket_id: str, agent_id: str, new_status: str, comment: str, commit_sha: str = None
 ) -> str:
     """Move ticket to a different status column.
 
@@ -802,17 +817,14 @@ async def change_ticket_status(
                     "comment": comment,
                     "commit_sha": commit_sha,
                 },
-                headers={
-                    "Content-Type": "application/json",
-                    "X-Agent-ID": agent_id
-                },
-                timeout=10.0
+                headers={"Content-Type": "application/json", "X-Agent-ID": agent_id},
+                timeout=10.0,
             )
 
             if response.status_code == 200:
                 result = response.json()
                 if result.get("blocked"):
-                    blocking_ids = ', '.join(result.get("blocking_ticket_ids", []))
+                    blocking_ids = ", ".join(result.get("blocking_ticket_ids", []))
                     return f"""🔒 Ticket is BLOCKED!
 Ticket ID: {ticket_id}
 Blocked by: {blocking_ids}
@@ -820,8 +832,8 @@ Cannot change status until blocking tickets are resolved."""
                 else:
                     return f"""✅ Ticket status changed!
 Ticket ID: {ticket_id}
-From: {result.get('old_status', 'unknown')}
-To: {result.get('new_status', 'unknown')}"""
+From: {result.get("old_status", "unknown")}
+To: {result.get("new_status", "unknown")}"""
             else:
                 return f"❌ Failed to change ticket status: {response.text}"
     except Exception as e:
@@ -834,7 +846,7 @@ async def add_ticket_comment(
     agent_id: str,
     comment_text: str,
     comment_type: str = "general",
-    mentions: list = None
+    mentions: list = None,
 ) -> str:
     """Add a comment to a ticket.
 
@@ -857,11 +869,8 @@ async def add_ticket_comment(
                     "comment_type": comment_type,
                     "mentions": mentions or [],
                 },
-                headers={
-                    "Content-Type": "application/json",
-                    "X-Agent-ID": agent_id
-                },
-                timeout=10.0
+                headers={"Content-Type": "application/json", "X-Agent-ID": agent_id},
+                timeout=10.0,
             )
 
             if response.status_code == 200:
@@ -881,7 +890,7 @@ async def search_tickets(
     search_type: str = "hybrid",
     filters: dict = None,
     limit: int = 10,
-    include_comments: bool = True
+    include_comments: bool = True,
 ) -> str:
     """Search for tickets using HYBRID search (70% semantic + 30% keyword) by default.
 
@@ -913,11 +922,8 @@ async def search_tickets(
                     "limit": limit,
                     "include_comments": include_comments,
                 },
-                headers={
-                    "Content-Type": "application/json",
-                    "X-Agent-ID": agent_id
-                },
-                timeout=10.0
+                headers={"Content-Type": "application/json", "X-Agent-ID": agent_id},
+                timeout=10.0,
             )
 
             if response.status_code == 200:
@@ -933,12 +939,18 @@ async def search_tickets(
                         f"{blocked_icon}{resolved_icon} {ticket['ticket_id'][:12]}: [{ticket['status']}] {ticket['title'][:60]} (score: {ticket.get('relevance_score', 0):.2f})"
                     )
 
-                search_mode_msg = f"({search_type} search: " + (
-                    "70% semantic + 30% keyword" if search_type == "hybrid" else search_type
-                ) + ")"
+                search_mode_msg = (
+                    f"({search_type} search: "
+                    + (
+                        "70% semantic + 30% keyword"
+                        if search_type == "hybrid"
+                        else search_type
+                    )
+                    + ")"
+                )
 
-                return f"""🔍 Found {result.get('total_found', 0)} tickets {search_mode_msg}
-Search time: {result.get('search_time_ms', 0):.0f}ms
+                return f"""🔍 Found {result.get("total_found", 0)} tickets {search_mode_msg}
+Search time: {result.get("search_time_ms", 0):.0f}ms
 
 {chr(10).join(ticket_list)}
 
@@ -988,8 +1000,7 @@ async def get_ticket(ticket_id: str) -> str:
     try:
         async with httpx.AsyncClient() as client:
             response = await client.get(
-                f"{HEPHAESTUS_URL}/api/tickets/{ticket_id}",
-                timeout=10.0
+                f"{HEPHAESTUS_URL}/api/tickets/{ticket_id}", timeout=10.0
             )
 
             if response.status_code == 200:
@@ -1005,12 +1016,12 @@ async def get_ticket(ticket_id: str) -> str:
                 # Header
                 blocked_icon = "🔒 " if ticket.get("is_blocked") else ""
                 resolved_icon = "✅ " if ticket.get("is_resolved") else ""
-                result.append(f"{'='*80}")
+                result.append(f"{'=' * 80}")
                 result.append(f"{blocked_icon}{resolved_icon}TICKET: {ticket['id']}")
-                result.append(f"{'='*80}")
+                result.append(f"{'=' * 80}")
 
                 # Basic info
-                result.append(f"\n📋 BASIC INFORMATION")
+                result.append("\n📋 BASIC INFORMATION")
                 result.append(f"Title: {ticket['title']}")
                 result.append(f"Status: {ticket['status']}")
                 result.append(f"Type: {ticket['ticket_type']}")
@@ -1018,27 +1029,29 @@ async def get_ticket(ticket_id: str) -> str:
                 result.append(f"Created: {ticket['created_at']}")
                 result.append(f"Updated: {ticket['updated_at']}")
 
-                if ticket.get('assigned_agent_id'):
+                if ticket.get("assigned_agent_id"):
                     result.append(f"Assigned to: {ticket['assigned_agent_id']}")
 
-                if ticket.get('tags'):
+                if ticket.get("tags"):
                     result.append(f"Tags: {', '.join(ticket['tags'])}")
 
                 # Blocking info
-                if ticket.get('blocked_by_ticket_ids'):
-                    result.append(f"\n🔒 BLOCKED BY:")
-                    for blocking_id in ticket['blocked_by_ticket_ids']:
+                if ticket.get("blocked_by_ticket_ids"):
+                    result.append("\n🔒 BLOCKED BY:")
+                    for blocking_id in ticket["blocked_by_ticket_ids"]:
                         result.append(f"  - {blocking_id}")
 
                 # Description
-                result.append(f"\n📝 DESCRIPTION")
-                result.append(ticket['description'])
+                result.append("\n📝 DESCRIPTION")
+                result.append(ticket["description"])
 
                 # Comments
                 if comments:
                     result.append(f"\n💬 COMMENTS ({len(comments)})")
                     for comment in comments:
-                        result.append(f"\n  [{comment['created_at']}] {comment['agent_id'][:8]}...")
+                        result.append(
+                            f"\n  [{comment['created_at']}] {comment['agent_id'][:8]}..."
+                        )
                         result.append(f"  Type: {comment['comment_type']}")
                         result.append(f"  {comment['comment_text']}")
 
@@ -1046,22 +1059,32 @@ async def get_ticket(ticket_id: str) -> str:
                 if history:
                     result.append(f"\n📜 HISTORY ({len(history)})")
                     for event in history[-10:]:  # Last 10 events
-                        result.append(f"\n  [{event['changed_at']}] {event['change_type']}")
-                        if event.get('old_value') and event.get('new_value'):
-                            result.append(f"  {event['old_value']} → {event['new_value']}")
-                        if event.get('change_description'):
+                        result.append(
+                            f"\n  [{event['changed_at']}] {event['change_type']}"
+                        )
+                        if event.get("old_value") and event.get("new_value"):
+                            result.append(
+                                f"  {event['old_value']} → {event['new_value']}"
+                            )
+                        if event.get("change_description"):
                             result.append(f"  {event['change_description']}")
 
                 # Commits
                 if commits:
                     result.append(f"\n🔨 LINKED COMMITS ({len(commits)})")
                     for commit in commits:
-                        result.append(f"\n  {commit['commit_sha'][:8]}: {commit['commit_message'][:60]}")
-                        result.append(f"  Files: {commit['files_changed']}, +{commit['insertions']} -{commit['deletions']}")
-                        if commit.get('files_list'):
-                            result.append(f"  Modified: {', '.join(commit['files_list'][:5])}")
+                        result.append(
+                            f"\n  {commit['commit_sha'][:8]}: {commit['commit_message'][:60]}"
+                        )
+                        result.append(
+                            f"  Files: {commit['files_changed']}, +{commit['insertions']} -{commit['deletions']}"
+                        )
+                        if commit.get("files_list"):
+                            result.append(
+                                f"  Modified: {', '.join(commit['files_list'][:5])}"
+                            )
 
-                result.append(f"\n{'='*80}")
+                result.append(f"\n{'=' * 80}")
 
                 return "\n".join(result)
 
@@ -1085,7 +1108,7 @@ async def get_tickets(
     limit: int = 50,
     offset: int = 0,
     sort_by: str = "created_at",
-    sort_order: str = "desc"
+    sort_order: str = "desc",
 ) -> str:
     """List tickets with filtering and pagination.
 
@@ -1127,7 +1150,7 @@ async def get_tickets(
                 f"{HEPHAESTUS_URL}/api/tickets",
                 params=params,
                 headers={"X-Agent-ID": agent_id},
-                timeout=10.0
+                timeout=10.0,
             )
 
             if response.status_code == 200:
@@ -1143,8 +1166,8 @@ async def get_tickets(
                         f"{blocked_icon}{resolved_icon} {ticket['ticket_id'][:12]}: [{ticket['status']}] {ticket['title'][:60]}"
                     )
 
-                return f"""📋 Found {result.get('total_count', 0)} tickets (showing {len(result.get('tickets', []))})
-Has more: {result.get('has_more', False)}
+                return f"""📋 Found {result.get("total_count", 0)} tickets (showing {len(result.get("tickets", []))})
+Has more: {result.get("has_more", False)}
 
 {chr(10).join(ticket_list)}"""
             else:
@@ -1155,10 +1178,7 @@ Has more: {result.get('has_more', False)}
 
 @mcp.tool()
 async def link_commit_to_ticket(
-    ticket_id: str,
-    agent_id: str,
-    commit_sha: str,
-    commit_message: str = None
+    ticket_id: str, agent_id: str, commit_sha: str, commit_message: str = None
 ) -> str:
     """Manually link a git commit to a ticket for traceability.
 
@@ -1179,11 +1199,8 @@ async def link_commit_to_ticket(
                     "commit_sha": commit_sha,
                     "commit_message": commit_message,
                 },
-                headers={
-                    "Content-Type": "application/json",
-                    "X-Agent-ID": agent_id
-                },
-                timeout=10.0
+                headers={"Content-Type": "application/json", "X-Agent-ID": agent_id},
+                timeout=10.0,
             )
 
             if response.status_code == 200:
@@ -1196,10 +1213,7 @@ async def link_commit_to_ticket(
 
 
 @mcp.tool()
-async def get_commit_diff(
-    commit_sha: str,
-    agent_id: str
-) -> str:
+async def get_commit_diff(commit_sha: str, agent_id: str) -> str:
     """Get detailed git diff for a commit (used by Git Diff Window in UI).
 
     Returns structured diff data with file changes, insertions, deletions.
@@ -1213,7 +1227,7 @@ async def get_commit_diff(
             response = await client.get(
                 f"{HEPHAESTUS_URL}/api/tickets/commit-diff/{commit_sha}",
                 headers={"X-Agent-ID": agent_id},
-                timeout=30.0  # Longer timeout for git operations
+                timeout=30.0,  # Longer timeout for git operations
             )
 
             if response.status_code == 200:
@@ -1225,12 +1239,12 @@ async def get_commit_diff(
                     )
 
                 return f"""📊 Commit {commit_sha[:8]}
-Message: {result.get('message', 'No message')}
-Author: {result.get('author_agent_id', 'unknown')}
-Files changed: {result.get('files_changed', 0)}
-+{result.get('insertions', 0)} -{result.get('deletions', 0)}
+Message: {result.get("message", "No message")}
+Author: {result.get("author_agent_id", "unknown")}
+Files changed: {result.get("files_changed", 0)}
++{result.get("insertions", 0)} -{result.get("deletions", 0)}
 
-{chr(10).join(file_summary) if file_summary else 'No files changed'}"""
+{chr(10).join(file_summary) if file_summary else "No files changed"}"""
             else:
                 return f"❌ Failed to get commit diff: {response.text}"
     except Exception as e:
@@ -1239,10 +1253,7 @@ Files changed: {result.get('files_changed', 0)}
 
 @mcp.tool()
 async def resolve_ticket(
-    ticket_id: str,
-    agent_id: str,
-    resolution_comment: str,
-    commit_sha: str = None
+    ticket_id: str, agent_id: str, resolution_comment: str, commit_sha: str = None
 ) -> str:
     """Mark ticket as resolved.
 
@@ -1264,11 +1275,8 @@ async def resolve_ticket(
                     "resolution_comment": resolution_comment,
                     "commit_sha": commit_sha,
                 },
-                headers={
-                    "Content-Type": "application/json",
-                    "X-Agent-ID": agent_id
-                },
-                timeout=10.0
+                headers={"Content-Type": "application/json", "X-Agent-ID": agent_id},
+                timeout=10.0,
             )
 
             if response.status_code == 200:
@@ -1280,7 +1288,7 @@ async def resolve_ticket(
 
                 return f"""✅ Ticket resolved!
 Ticket ID: {ticket_id}
-Message: {result.get('message', '')}{unblocked_msg}"""
+Message: {result.get("message", "")}{unblocked_msg}"""
             else:
                 return f"❌ Failed to resolve ticket: {response.text}"
     except Exception as e:
@@ -1293,7 +1301,7 @@ async def request_ticket_clarification(
     agent_id: str,
     conflict_description: str,
     context: str = "",
-    potential_solutions: list = None
+    potential_solutions: list = None,
 ) -> str:
     """Request LLM-powered clarification for a ticket with conflicting/unclear requirements.
 
@@ -1348,7 +1356,9 @@ async def request_ticket_clarification(
     potential_solutions = potential_solutions or []
 
     logger = logging.getLogger(__name__)
-    logger.info(f"[MCP_CLARIFICATION] Agent {agent_id[:8]} requesting clarification for {ticket_id}")
+    logger.info(
+        f"[MCP_CLARIFICATION] Agent {agent_id[:8]} requesting clarification for {ticket_id}"
+    )
 
     try:
         async with httpx.AsyncClient() as client:
@@ -1360,17 +1370,14 @@ async def request_ticket_clarification(
                     "context": context,
                     "potential_solutions": potential_solutions,
                 },
-                headers={
-                    "Content-Type": "application/json",
-                    "X-Agent-ID": agent_id
-                },
-                timeout=60.0  # Longer timeout for LLM reasoning
+                headers={"Content-Type": "application/json", "X-Agent-ID": agent_id},
+                timeout=60.0,  # Longer timeout for LLM reasoning
             )
 
             if response.status_code == 200:
                 result = response.json()
-                clarification = result.get('clarification', '')
-                comment_id = result.get('comment_id', 'unknown')
+                clarification = result.get("clarification", "")
+                comment_id = result.get("comment_id", "unknown")
 
                 return f"""✅ **Clarification Received from Arbitration System**
 
@@ -1389,7 +1396,9 @@ async def request_ticket_clarification(
 
 ⚡ You now have clear direction - proceed with confidence!"""
             else:
-                logger.error(f"[MCP_CLARIFICATION] Failed: {response.status_code} - {response.text}")
+                logger.error(
+                    f"[MCP_CLARIFICATION] Failed: {response.status_code} - {response.text}"
+                )
                 return f"❌ Failed to get clarification: {response.text}"
     except Exception as e:
         logger.error(f"[MCP_CLARIFICATION] Exception: {e}", exc_info=True)
@@ -1397,6 +1406,7 @@ async def request_ticket_clarification(
 
 
 # ==================== WORKFLOW MANAGEMENT TOOLS ====================
+
 
 @mcp.tool()
 async def list_workflow_definitions() -> str:
@@ -1408,8 +1418,7 @@ async def list_workflow_definitions() -> str:
     try:
         async with httpx.AsyncClient() as client:
             response = await client.get(
-                f"{HEPHAESTUS_URL}/api/workflow-definitions",
-                timeout=10.0
+                f"{HEPHAESTUS_URL}/api/workflow-definitions", timeout=10.0
             )
 
             if response.status_code == 200:
@@ -1426,7 +1435,7 @@ async def list_workflow_definitions() -> str:
                         f"- {d['id']}: {d['name']} ({d['phases_count']} phases, result: {result_indicator})"
                     )
 
-                return f"Workflow Definitions:\n" + "\n".join(def_list)
+                return "Workflow Definitions:\n" + "\n".join(def_list)
             else:
                 return f"Failed to get workflow definitions: {response.text}"
     except Exception as e:
@@ -1447,7 +1456,7 @@ async def list_workflow_executions(status: str = "all") -> str:
             response = await client.get(
                 f"{HEPHAESTUS_URL}/api/workflow-executions",
                 params={"status": status},
-                timeout=10.0
+                timeout=10.0,
             )
 
             if response.status_code == 200:
@@ -1463,7 +1472,7 @@ async def list_workflow_executions(status: str = "all") -> str:
                         "active": "[ACTIVE]",
                         "paused": "[PAUSED]",
                         "completed": "[COMPLETED]",
-                        "failed": "[FAILED]"
+                        "failed": "[FAILED]",
                     }.get(e["status"], "[UNKNOWN]")
 
                     stats = e.get("stats", {})
@@ -1483,9 +1492,7 @@ async def list_workflow_executions(status: str = "all") -> str:
 
 @mcp.tool()
 async def start_workflow_execution(
-    definition_id: str,
-    description: str,
-    working_directory: str = None
+    definition_id: str, description: str, working_directory: str = None
 ) -> str:
     """Start a new workflow execution from a definition.
 
@@ -1523,15 +1530,15 @@ async def start_workflow_execution(
                 f"{HEPHAESTUS_URL}/api/workflow-executions",
                 json=payload,
                 headers={"Content-Type": "application/json"},
-                timeout=10.0
+                timeout=10.0,
             )
 
             if response.status_code == 200:
                 result = response.json()
                 return f"""Workflow execution started!
-Workflow ID: {result.get('workflow_id', 'unknown')}
-Status: {result.get('status', 'unknown')}
-Message: {result.get('message', '')}
+Workflow ID: {result.get("workflow_id", "unknown")}
+Status: {result.get("status", "unknown")}
+Message: {result.get("message", "")}
 
 Use this workflow_id in all subsequent create_task and create_ticket calls."""
             else:
@@ -1552,8 +1559,7 @@ async def get_workflow_execution(workflow_id: str) -> str:
     try:
         async with httpx.AsyncClient() as client:
             response = await client.get(
-                f"{HEPHAESTUS_URL}/api/workflow-executions/{workflow_id}",
-                timeout=10.0
+                f"{HEPHAESTUS_URL}/api/workflow-executions/{workflow_id}", timeout=10.0
             )
 
             if response.status_code == 200:
@@ -1564,23 +1570,23 @@ async def get_workflow_execution(workflow_id: str) -> str:
                     "active": "[ACTIVE]",
                     "paused": "[PAUSED]",
                     "completed": "[COMPLETED]",
-                    "failed": "[FAILED]"
+                    "failed": "[FAILED]",
                 }.get(e["status"], "[UNKNOWN]")
 
                 return f"""{status_indicator} Workflow Execution Details
-ID: {e['id']}
-Definition: {e.get('definition_name', 'N/A')} ({e.get('definition_id', 'N/A')})
-Description: {e.get('description', 'N/A')}
-Status: {e['status']}
-Working Directory: {e.get('working_directory', 'N/A')}
-Created: {e.get('created_at', 'N/A')}
+ID: {e["id"]}
+Definition: {e.get("definition_name", "N/A")} ({e.get("definition_id", "N/A")})
+Description: {e.get("description", "N/A")}
+Status: {e["status"]}
+Working Directory: {e.get("working_directory", "N/A")}
+Created: {e.get("created_at", "N/A")}
 
 Stats:
-  Total Tasks: {stats.get('total_tasks', 0)}
-  Active Tasks: {stats.get('active_tasks', 0)}
-  Done Tasks: {stats.get('done_tasks', 0)}
-  Failed Tasks: {stats.get('failed_tasks', 0)}
-  Active Agents: {stats.get('active_agents', 0)}"""
+  Total Tasks: {stats.get("total_tasks", 0)}
+  Active Tasks: {stats.get("active_tasks", 0)}
+  Done Tasks: {stats.get("done_tasks", 0)}
+  Failed Tasks: {stats.get("failed_tasks", 0)}
+  Active Agents: {stats.get("active_agents", 0)}"""
             elif response.status_code == 404:
                 return f"Workflow not found: {workflow_id}"
             else:
@@ -1595,7 +1601,7 @@ async def spawn_agent(
     task: str,
     parent_task_id: str = None,
     agent_id: str = None,
-    workflow_id: str = None
+    workflow_id: str = None,
 ) -> str:
     """Spawn a pi subagent with a specific Hephaestus agent configuration.
 
@@ -1658,8 +1664,11 @@ async def spawn_agent(
                             "priority": "high",
                             "parent_task_id": parent_task_id,
                         },
-                        headers={"Content-Type": "application/json", "X-Agent-ID": agent_id},
-                        timeout=10.0
+                        headers={
+                            "Content-Type": "application/json",
+                            "X-Agent-ID": agent_id,
+                        },
+                        timeout=10.0,
                     )
                     if response.status_code == 200:
                         sub_task_id = response.json().get("task_id")
@@ -1704,37 +1713,67 @@ if __name__ == "__main__":
     print("  - update_task_status: Update task status (done/failed/in_progress)")
     print("  - save_memory: Save knowledge to memory")
     print("\n🔍 Validation & Results:")
-    print("  - give_validation_review: Submit validation review (validator agents only)")
+    print(
+        "  - give_validation_review: Submit validation review (validator agents only)"
+    )
     print("  - submit_result: Submit workflow result with evidence")
-    print("  - submit_result_validation: Submit result validation (result validator agents only)")
+    print(
+        "  - submit_result_validation: Submit result validation (result validator agents only)"
+    )
     print("  - get_workflow_results: Get all results for a workflow")
     print("\n👥 Agent Communication:")
     print("  - get_agent_status: Get agent statuses")
     print("  - broadcast_message: Broadcast a message to all active agents")
     print("  - send_message: Send a direct message to a specific agent")
     print("\n🎫 Ticket Tracking (when enabled for workflow):")
-    print("  - create_ticket: Create a new ticket (returns similar tickets for duplicate detection)")
-    print("  - update_ticket: Update ticket fields (title, description, priority, tags, etc.)")
+    print(
+        "  - create_ticket: Create a new ticket (returns similar tickets for duplicate detection)"
+    )
+    print(
+        "  - update_ticket: Update ticket fields (title, description, priority, tags, etc.)"
+    )
     print("  - change_ticket_status: Move ticket to different status (checks blockers)")
-    print("  - add_ticket_comment: Add comment to ticket (for progress updates, blockers)")
-    print("  - search_tickets: Search tickets using HYBRID search (70% semantic + 30% keyword) - DEFAULT")
-    print("  - get_ticket: Get full details for a specific ticket by exact ID (description, comments, history, commits)")
+    print(
+        "  - add_ticket_comment: Add comment to ticket (for progress updates, blockers)"
+    )
+    print(
+        "  - search_tickets: Search tickets using HYBRID search (70% semantic + 30% keyword) - DEFAULT"
+    )
+    print(
+        "  - get_ticket: Get full details for a specific ticket by exact ID (description, comments, history, commits)"
+    )
     print("  - get_tickets: List/filter tickets with pagination")
-    print("  - link_commit_to_ticket: Manually link git commit to ticket (auto-linking on task completion)")
+    print(
+        "  - link_commit_to_ticket: Manually link git commit to ticket (auto-linking on task completion)"
+    )
     print("  - get_commit_diff: Get detailed git diff for commit (for Git Diff Window)")
-    print("  - resolve_ticket: Mark ticket as resolved (auto-unblocks dependent tickets)")
-    print("  - request_ticket_clarification: Request LLM arbitration for conflicting requirements (PREVENTS TASK LOOPS!)")
+    print(
+        "  - resolve_ticket: Mark ticket as resolved (auto-unblocks dependent tickets)"
+    )
+    print(
+        "  - request_ticket_clarification: Request LLM arbitration for conflicting requirements (PREVENTS TASK LOOPS!)"
+    )
     print("\n🔄 Workflow Management:")
     print("  - list_workflow_definitions: List available workflow types")
     print("  - list_workflow_executions: List all workflow instances")
     print("  - start_workflow_execution: Start a new workflow")
     print("  - get_workflow_execution: Get workflow details")
     print("\n💡 Ticket Tracking Tips:")
-    print("  - Search BEFORE creating to avoid duplicates (use search_tickets with hybrid mode)")
-    print("  - Use get_ticket() with the EXACT ticket ID to see full details (description, comments, history)")
-    print("  - If you don't know the exact ticket ID, search first with search_tickets() or get_tickets()")
+    print(
+        "  - Search BEFORE creating to avoid duplicates (use search_tickets with hybrid mode)"
+    )
+    print(
+        "  - Use get_ticket() with the EXACT ticket ID to see full details (description, comments, history)"
+    )
+    print(
+        "  - If you don't know the exact ticket ID, search first with search_tickets() or get_tickets()"
+    )
     print("  - Use blocked_by_ticket_ids to create dependencies between tickets")
-    print("  - Blocked tickets cannot change status until blocking tickets are resolved")
+    print(
+        "  - Blocked tickets cannot change status until blocking tickets are resolved"
+    )
     print("  - Resolving a ticket automatically unblocks all dependent tickets")
-    print("  - Hybrid search (default) combines semantic understanding + keyword precision")
+    print(
+        "  - Hybrid search (default) combines semantic understanding + keyword precision"
+    )
     mcp.run()

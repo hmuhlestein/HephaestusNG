@@ -10,27 +10,30 @@ Evaluates phase outputs and decides flow control:
 Configurable per workflow via orchestrator_config.
 """
 
-import logging
 import json
-from typing import Dict, Any, Optional, List, Tuple
+import logging
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
 
 class OrchestrationAction(Enum):
-    CONTINUE = "continue"          # Move to next phase
-    RETRY = "retry"                # Retry current phase
-    GOTO = "goto"                  # Jump to a specific phase
-    FAIL = "fail"                  # Fail the workflow
-    SKIP = "skip"                  # Skip to next phase (same as continue but logged differently)
-    ARBITRATE = "arbitrate"        # Budget exhausted — spawn LLM arbitration agent before deciding
+    CONTINUE = "continue"  # Move to next phase
+    RETRY = "retry"  # Retry current phase
+    GOTO = "goto"  # Jump to a specific phase
+    FAIL = "fail"  # Fail the workflow
+    SKIP = "skip"  # Skip to next phase (same as continue but logged differently)
+    ARBITRATE = (
+        "arbitrate"  # Budget exhausted — spawn LLM arbitration agent before deciding
+    )
 
 
 @dataclass
 class EvaluationResult:
     """Result of evaluating a phase output."""
+
     action: OrchestrationAction
     target_phase: Optional[str] = None  # Phase name or order for GOTO
     reason: str = ""
@@ -41,8 +44,9 @@ class EvaluationResult:
 @dataclass
 class EvaluationPoint:
     """Configuration for evaluating after a specific phase."""
+
     after_phase: str  # Phase name or order
-    evaluator: str    # Evaluator function name or "llm"
+    evaluator: str  # Evaluator function name or "llm"
     conditions: List[Dict[str, Any]] = field(default_factory=list)
     max_retries: int = 2
     timeout_seconds: int = 300
@@ -52,6 +56,7 @@ class EvaluationPoint:
 @dataclass
 class OrchestratorConfig:
     """Configuration for workflow orchestration."""
+
     type: str = "sequential"  # "sequential" or "evaluating"
     evaluation_points: List[EvaluationPoint] = field(default_factory=list)
     max_phase_retries: int = 2
@@ -60,21 +65,23 @@ class OrchestratorConfig:
     stuck_timeout_seconds: int = 1800  # 30 minutes
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'OrchestratorConfig':
+    def from_dict(cls, data: Dict[str, Any]) -> "OrchestratorConfig":
         """Create config from dictionary (e.g., from JSON)."""
         if not data:
             return cls()
 
         eval_points = []
         for ep in data.get("evaluation_points", []):
-            eval_points.append(EvaluationPoint(
-                after_phase=ep.get("after_phase", ""),
-                evaluator=ep.get("evaluator", "llm"),
-                conditions=ep.get("conditions", []),
-                max_retries=ep.get("max_retries", 2),
-                timeout_seconds=ep.get("timeout_seconds", 300),
-                on_budget_exhausted=ep.get("on_budget_exhausted", "continue"),
-            ))
+            eval_points.append(
+                EvaluationPoint(
+                    after_phase=ep.get("after_phase", ""),
+                    evaluator=ep.get("evaluator", "llm"),
+                    conditions=ep.get("conditions", []),
+                    max_retries=ep.get("max_retries", 2),
+                    timeout_seconds=ep.get("timeout_seconds", 300),
+                    on_budget_exhausted=ep.get("on_budget_exhausted", "continue"),
+                )
+            )
 
         return cls(
             type=data.get("type", "sequential"),
@@ -137,7 +144,7 @@ class WorkflowOrchestrator:
         phase_name: str,
         phase_output: Dict[str, Any],
         phase_history: List[Dict[str, Any]],
-        llm_evaluator=None
+        llm_evaluator=None,
     ) -> EvaluationResult:
         """
         Evaluate a completed phase and decide what to do next.
@@ -155,7 +162,7 @@ class WorkflowOrchestrator:
         if self.config.type == "sequential":
             return EvaluationResult(
                 action=OrchestrationAction.CONTINUE,
-                reason="Sequential mode - always continue"
+                reason="Sequential mode - always continue",
             )
 
         # Find evaluation point for this phase
@@ -163,13 +170,15 @@ class WorkflowOrchestrator:
         if not eval_point:
             return EvaluationResult(
                 action=OrchestrationAction.CONTINUE,
-                reason=f"No evaluation point configured for {phase_name}"
+                reason=f"No evaluation point configured for {phase_name}",
             )
 
         # Check retry count
         current_retries = self.phase_retry_counts.get(phase_name, 0)
         if current_retries >= eval_point.max_retries:
-            logger.info(f"Max retries ({eval_point.max_retries}) reached for {phase_name}")
+            logger.info(
+                f"Max retries ({eval_point.max_retries}) reached for {phase_name}"
+            )
             if eval_point.on_budget_exhausted == "arbitrate":
                 logger.warning(
                     f"[ARBITRATE] Budget exhausted for {phase_name} after {current_retries} retries — "
@@ -178,11 +187,15 @@ class WorkflowOrchestrator:
                 return EvaluationResult(
                     action=OrchestrationAction.ARBITRATE,
                     reason=f"Retry budget exhausted ({current_retries}/{eval_point.max_retries}) for {phase_name}; arbitration requested",
-                    metadata={"phase": phase_name, "retries": current_retries, "max_retries": eval_point.max_retries},
+                    metadata={
+                        "phase": phase_name,
+                        "retries": current_retries,
+                        "max_retries": eval_point.max_retries,
+                    },
                 )
             return EvaluationResult(
                 action=OrchestrationAction.CONTINUE,
-                reason=f"Max retries reached for {phase_name}, continuing"
+                reason=f"Max retries reached for {phase_name}, continuing",
             )
 
         # Evaluate using configured evaluator
@@ -193,7 +206,7 @@ class WorkflowOrchestrator:
             score, evaluation_metadata = llm_evaluator(
                 phase_name=phase_name,
                 phase_output=phase_output,
-                conditions=eval_point.conditions
+                conditions=eval_point.conditions,
             )
         elif eval_point.evaluator == "heuristic":
             score, evaluation_metadata = self._heuristic_evaluate(
@@ -242,17 +255,19 @@ class WorkflowOrchestrator:
                         action=OrchestrationAction.CONTINUE,
                         reason=f"GOTO limit exceeded ({self.total_gotos}/{self.config.max_total_gotos}), forcing continue",
                         score=score,
-                        metadata=action.metadata
+                        metadata=action.metadata,
                     )
 
         # Log evaluation
-        self.evaluation_history.append({
-            "phase": phase_name,
-            "score": score,
-            "action": action.action.value,
-            "reason": action.reason,
-            "metadata": evaluation_metadata,
-        })
+        self.evaluation_history.append(
+            {
+                "phase": phase_name,
+                "score": score,
+                "action": action.action.value,
+                "reason": action.reason,
+                "metadata": evaluation_metadata,
+            }
+        )
 
         logger.info(
             f"Orchestrator evaluation for {phase_name}: "
@@ -277,7 +292,7 @@ class WorkflowOrchestrator:
 
     def _phase_name_to_order(self, phase_name: str) -> int:
         """Convert phase name to order number.
-        
+
         This is a best-effort lookup based on common naming patterns.
         Returns 0 if unable to determine order.
         """
@@ -295,23 +310,23 @@ class WorkflowOrchestrator:
             "git_commit_push": 9,
             "forensics_analysis": 10,
         }
-        
+
         # Try exact match
         if phase_name in name_to_order:
             return name_to_order[phase_name]
-        
+
         # Try partial match
         for key, order in name_to_order.items():
             if key in phase_name or phase_name in key:
                 return order
-        
+
         return 0
 
     def _heuristic_evaluate(
         self,
         phase_name: str,
         phase_output: Dict[str, Any],
-        conditions: List[Dict[str, Any]]
+        conditions: List[Dict[str, Any]],
     ) -> Tuple[float, Dict[str, Any]]:
         """Simple heuristic evaluation based on output content."""
         # Start at 0.75 (passing), not 0.5 (neutral). At 0.5 every non-gated
@@ -352,8 +367,7 @@ class WorkflowOrchestrator:
         return score, metadata
 
     def _default_evaluate(
-        self,
-        phase_output: Dict[str, Any]
+        self, phase_output: Dict[str, Any]
     ) -> Tuple[float, Dict[str, Any]]:
         """Default evaluation - check for basic success/failure.
 
@@ -385,7 +399,7 @@ class WorkflowOrchestrator:
         conditions: List[Dict[str, Any]],
         score: Optional[float],
         metadata: Dict[str, Any],
-        phase_output: Dict[str, Any]
+        phase_output: Dict[str, Any],
     ) -> EvaluationResult:
         """Evaluate conditions and return action."""
         if not conditions:
@@ -393,14 +407,16 @@ class WorkflowOrchestrator:
             return EvaluationResult(
                 action=OrchestrationAction.CONTINUE,
                 score=score,
-                reason="No conditions configured"
+                reason="No conditions configured",
             )
 
         for condition in conditions:
             if self._check_condition(condition, score, metadata, phase_output):
                 action_str = condition.get("action", "continue")
                 target = condition.get("target")
-                reason = condition.get("reason", f"Condition matched: {condition.get('if', 'true')}")
+                reason = condition.get(
+                    "reason", f"Condition matched: {condition.get('if', 'true')}"
+                )
 
                 try:
                     action = OrchestrationAction(action_str)
@@ -412,14 +428,14 @@ class WorkflowOrchestrator:
                     target_phase=target,
                     reason=reason,
                     score=score,
-                    metadata=metadata
+                    metadata=metadata,
                 )
 
         # No condition matched - default to continue
         return EvaluationResult(
             action=OrchestrationAction.CONTINUE,
             score=score,
-            reason="No conditions matched"
+            reason="No conditions matched",
         )
 
     def _check_condition(
@@ -427,10 +443,11 @@ class WorkflowOrchestrator:
         condition: Dict[str, Any],
         score: Optional[float],
         metadata: Dict[str, Any],
-        phase_output: Dict[str, Any]
+        phase_output: Dict[str, Any],
     ) -> bool:
         """Check if a condition is met using safe evaluation."""
         import re
+
         condition_str = condition.get("if", "true")
 
         # Build variable map for safe substitution
@@ -448,7 +465,7 @@ class WorkflowOrchestrator:
         try:
             # Pattern: variable_name <operator> number
             # Supported operators: <, <=, >, >=, ==, !=
-            pattern = r'^([a-zA-Z_][a-zA-Z0-9_]*)\s*(<|<=|>|>=|==|!=)\s*([0-9.]+)$'
+            pattern = r"^([a-zA-Z_][a-zA-Z0-9_]*)\s*(<|<=|>|>=|==|!=)\s*([0-9.]+)$"
             match = re.match(pattern, condition_str.strip())
 
             if match:
@@ -514,11 +531,12 @@ class WorkflowOrchestrator:
 
 # Built-in evaluators
 
+
 def llm_evaluator(
     phase_name: str,
     phase_output: Dict[str, Any],
     conditions: List[Dict[str, Any]],
-    llm_client=None
+    llm_client=None,
 ) -> Tuple[float, Dict[str, Any]]:
     """
     LLM-based evaluator that uses AI to assess phase output.

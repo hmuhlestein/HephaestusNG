@@ -1,31 +1,36 @@
 """Main Hephaestus SDK client."""
 
-import time
-import yaml
-import tempfile
-import shutil
-import requests
 import logging
-from pathlib import Path
-from typing import Optional, List, Dict, Any
+import shutil
+import tempfile
+import time
 from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+import requests
+import yaml
 
 logger = logging.getLogger(__name__)
 
 from src.core.constants import HEPHAESTUS_LOGS_DIR
-from src.sdk.models import (
-    Phase, TaskStatus, WorkflowConfig, WorkflowDefinition, WorkflowExecution
-)
 from src.sdk.config import HephaestusConfig
-from src.sdk.process_manager import ProcessManager
 from src.sdk.exceptions import (
     HephaestusStartupError,
-    SDKNotRunningError,
     InvalidPhaseError,
+    QdrantConnectionError,
+    SDKNotRunningError,
     TaskCreationError,
     TaskNotFoundError,
-    QdrantConnectionError,
 )
+from src.sdk.models import (
+    Phase,
+    TaskStatus,
+    WorkflowConfig,
+    WorkflowDefinition,
+    WorkflowExecution,
+)
+from src.sdk.process_manager import ProcessManager
 
 
 class HephaestusSDK:
@@ -99,7 +104,9 @@ class HephaestusSDK:
                 self.workflow_config = first_def.config
                 self.phases_dir = None
         elif phases_dir is None and phases is None:
-            raise ValueError("Either workflow_definitions, phases_dir, or phases must be provided")
+            raise ValueError(
+                "Either workflow_definitions, phases_dir, or phases must be provided"
+            )
         elif phases_dir is not None and phases is not None:
             raise ValueError("Cannot provide both phases_dir and phases")
         else:
@@ -280,7 +287,10 @@ class HephaestusSDK:
                 f"http://{self.config.mcp_host}:{self.config.mcp_port}/health",
                 timeout=2,
             )
-            return response.status_code == 200 and response.json().get("status") == "healthy"
+            return (
+                response.status_code == 200
+                and response.json().get("status") == "healthy"
+            )
         except Exception:
             return False
 
@@ -346,7 +356,9 @@ class HephaestusSDK:
                     "Please ensure Qdrant is running (e.g., docker run -p 6333:6333 qdrant/qdrant)"
                 )
         else:
-            logger.info(f"Using {self.config.vector_store_backend} vector store (skipping Qdrant check)")
+            logger.info(
+                f"Using {self.config.vector_store_backend} vector store (skipping Qdrant check)"
+            )
 
         # Check if backend is already running (e.g., when orchestrator runs inside the backend)
         backend_already_running = self._check_backend_health()
@@ -370,6 +382,7 @@ class HephaestusSDK:
         if backend_already_running:
             # Don't assume monitor is running — check and spawn if needed
             from src.cli.utils import is_monitor_running
+
             if is_monitor_running():
                 logger.info("Monitor already running")
             else:
@@ -420,7 +433,9 @@ class HephaestusSDK:
 
     def _register_workflow_definitions(self):
         """Register workflow definitions with the backend."""
-        print(f"[SDK] _register_workflow_definitions called, definitions count: {len(self.definitions)}")
+        print(
+            f"[SDK] _register_workflow_definitions called, definitions count: {len(self.definitions)}"
+        )
         if not self.definitions:
             print("[SDK] No definitions to register, returning early")
             return
@@ -487,7 +502,9 @@ class HephaestusSDK:
                 response.raise_for_status()
                 print(f"[SDK] ✓ Successfully registered definition: {def_id}")
             except Exception as e:
-                print(f"[Warning] Failed to register workflow definition '{def_id}': {e}")
+                print(
+                    f"[Warning] Failed to register workflow definition '{def_id}': {e}"
+                )
 
     def _start_with_tui(self, timeout: int):
         """Start with TUI interface."""
@@ -640,7 +657,9 @@ class HephaestusSDK:
         if not self.running:
             raise SDKNotRunningError("SDK is not running. Call start() first.")
 
-        url = f"http://{self.config.mcp_host}:{self.config.mcp_port}/api/tasks/{task_id}"
+        url = (
+            f"http://{self.config.mcp_host}:{self.config.mcp_port}/api/tasks/{task_id}"
+        )
 
         try:
             response = requests.get(url, timeout=10)
@@ -788,7 +807,9 @@ class HephaestusSDK:
                 error_detail = response.json().get("detail", str(e))
             except Exception:
                 error_detail = response.text
-            raise TaskCreationError(f"Failed to start workflow: {e} - Details: {error_detail}")
+            raise TaskCreationError(
+                f"Failed to start workflow: {e} - Details: {error_detail}"
+            )
         except Exception as e:
             raise TaskCreationError(f"Failed to start workflow: {e}")
 
@@ -827,7 +848,9 @@ class HephaestusSDK:
             data = response.json()
             executions = []
 
-            workflow_list = data if isinstance(data, list) else data.get("workflows", [])
+            workflow_list = (
+                data if isinstance(data, list) else data.get("workflows", [])
+            )
             for wf_data in workflow_list:
                 executions.append(
                     WorkflowExecution(
@@ -1041,7 +1064,9 @@ class HephaestusSDK:
         response.raise_for_status()
         return response.json().get("sent", False)
 
-    def nudge_child(self, agent_id: str, child_id: str, reason: str = "No progress detected") -> bool:
+    def nudge_child(
+        self, agent_id: str, child_id: str, reason: str = "No progress detected"
+    ) -> bool:
         """
         Nudge a child agent that appears stuck.
 
@@ -1058,7 +1083,9 @@ class HephaestusSDK:
         response.raise_for_status()
         return response.json().get("nudged", False)
 
-    def monitor_children(self, agent_id: str, stuck_threshold_seconds: int = 300) -> List[str]:
+    def monitor_children(
+        self, agent_id: str, stuck_threshold_seconds: int = 300
+    ) -> List[str]:
         """
         Monitor all children and nudge any that appear stuck.
 
@@ -1070,7 +1097,9 @@ class HephaestusSDK:
             List of nudged child agent IDs
         """
         url = f"http://{self.config.mcp_host}:{self.config.mcp_port}/api/agents/{agent_id}/children/monitor"
-        response = requests.post(url, json={"stuck_threshold_seconds": stuck_threshold_seconds})
+        response = requests.post(
+            url, json={"stuck_threshold_seconds": stuck_threshold_seconds}
+        )
         response.raise_for_status()
         return response.json().get("nudged_agents", [])
 
@@ -1093,7 +1122,7 @@ class HephaestusSDK:
         backend_process = self.process_manager.is_process_alive("backend")
         monitor_process = self.process_manager.is_process_alive("monitor")
         backend_api = self._check_backend_health()
-        
+
         # Only check Qdrant if using qdrant backend
         if self.config.vector_store_backend == "qdrant":
             qdrant = self._check_qdrant_health()

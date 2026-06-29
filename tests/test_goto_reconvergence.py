@@ -17,7 +17,6 @@ from src.core.database import (
     Base,
     Phase,
     PhaseExecution,
-    Task,
     Workflow,
     WorkflowDefinition,
 )
@@ -72,7 +71,12 @@ def phase_ids(db_session):
                 "after_phase": "phase_2",
                 "evaluator": "heuristic",
                 "conditions": [
-                    {"if": "score < 0.5", "action": "goto", "target": "phase_1", "reason": "Failed"},
+                    {
+                        "if": "score < 0.5",
+                        "action": "goto",
+                        "target": "phase_1",
+                        "reason": "Failed",
+                    },
                     {"if": "score >= 0.5", "action": "continue", "reason": "Passed"},
                 ],
                 "max_retries": 2,
@@ -161,43 +165,69 @@ def test_goto_reconvergence(db_session, db_manager, phase_ids):
             db_session.commit()
 
     # Start phase 1
-    db_session.query(PhaseExecution).filter_by(phase_id=phase_ids[0]).update({"status": "in_progress", "started_at": datetime.utcnow()})
+    db_session.query(PhaseExecution).filter_by(phase_id=phase_ids[0]).update(
+        {"status": "in_progress", "started_at": datetime.utcnow()}
+    )
     db_session.commit()
 
     # Complete phase 1 -> CONTINUE to phase_2
-    result = pm.mark_phase_complete(phase_ids[0], "P1 done", phase_output={"score": 0.8})
+    result = pm.mark_phase_complete(
+        phase_ids[0], "P1 done", phase_output={"score": 0.8}
+    )
     assert result["action"] == "continue"
     assert result["target_phase_id"] == phase_ids[1]
     simulate_monitor_action(result)
-    assert db_session.query(PhaseExecution).filter_by(phase_id=phase_ids[0]).first().status == "completed"
-    assert db_session.query(PhaseExecution).filter_by(phase_id=phase_ids[1]).first().status == "in_progress"
+    assert (
+        db_session.query(PhaseExecution).filter_by(phase_id=phase_ids[0]).first().status
+        == "completed"
+    )
+    assert (
+        db_session.query(PhaseExecution).filter_by(phase_id=phase_ids[1]).first().status
+        == "in_progress"
+    )
 
     # Complete phase 2 with LOW score -> GOTO phase_1
-    result = pm.mark_phase_complete(phase_ids[1], "P2 failed", phase_output={"score": 0.3})
+    result = pm.mark_phase_complete(
+        phase_ids[1], "P2 failed", phase_output={"score": 0.3}
+    )
     assert result["action"] == "goto"
     assert result["target_phase_id"] == phase_ids[0]
     simulate_monitor_action(result)
-    assert db_session.query(PhaseExecution).filter_by(phase_id=phase_ids[0]).first().status == "in_progress"
+    assert (
+        db_session.query(PhaseExecution).filter_by(phase_id=phase_ids[0]).first().status
+        == "in_progress"
+    )
 
     # Re-complete phase 1 -> CONTINUE to phase_2
-    result = pm.mark_phase_complete(phase_ids[0], "P1 re-done", phase_output={"score": 0.9})
+    result = pm.mark_phase_complete(
+        phase_ids[0], "P1 re-done", phase_output={"score": 0.9}
+    )
     assert result["action"] == "continue"
     assert result["target_phase_id"] == phase_ids[1]
     simulate_monitor_action(result)
-    assert db_session.query(PhaseExecution).filter_by(phase_id=phase_ids[1]).first().status == "in_progress"
+    assert (
+        db_session.query(PhaseExecution).filter_by(phase_id=phase_ids[1]).first().status
+        == "in_progress"
+    )
 
     # Complete phase 2 with HIGH score -> CONTINUE to phase_3
-    result = pm.mark_phase_complete(phase_ids[1], "P2 passed", phase_output={"score": 0.8})
+    result = pm.mark_phase_complete(
+        phase_ids[1], "P2 passed", phase_output={"score": 0.8}
+    )
     assert result["target_phase_id"] == phase_ids[2]
     simulate_monitor_action(result)
 
     # Complete phase 3 -> CONTINUE to phase_4
-    result = pm.mark_phase_complete(phase_ids[2], "P3 done", phase_output={"score": 0.8})
+    result = pm.mark_phase_complete(
+        phase_ids[2], "P3 done", phase_output={"score": 0.8}
+    )
     assert result["target_phase_id"] == phase_ids[3]
     simulate_monitor_action(result)
 
     # Complete phase 4 -> workflow complete
-    result = pm.mark_phase_complete(phase_ids[3], "P4 done", phase_output={"score": 1.0})
+    result = pm.mark_phase_complete(
+        phase_ids[3], "P4 done", phase_output={"score": 1.0}
+    )
     assert result["should_continue"] is False
     assert db_session.query(Workflow).first().status == "completed"
 
@@ -217,30 +247,50 @@ def test_goto_does_not_skip_phases(db_session, db_manager, phase_ids):
             db_session.commit()
 
     # Start and complete phase 1
-    db_session.query(PhaseExecution).filter_by(phase_id=phase_ids[0]).update({"status": "in_progress"})
+    db_session.query(PhaseExecution).filter_by(phase_id=phase_ids[0]).update(
+        {"status": "in_progress"}
+    )
     db_session.commit()
-    simulate_monitor(pm.mark_phase_complete(phase_ids[0], "P1 done", phase_output={"score": 0.8}))
+    simulate_monitor(
+        pm.mark_phase_complete(phase_ids[0], "P1 done", phase_output={"score": 0.8})
+    )
 
     # Complete phase 2 with goto back to phase 1
-    simulate_monitor(pm.mark_phase_complete(phase_ids[1], "P2 failed", phase_output={"score": 0.3}))
-    assert db_session.query(PhaseExecution).filter_by(phase_id=phase_ids[0]).first().status == "in_progress"
+    simulate_monitor(
+        pm.mark_phase_complete(phase_ids[1], "P2 failed", phase_output={"score": 0.3})
+    )
+    assert (
+        db_session.query(PhaseExecution).filter_by(phase_id=phase_ids[0]).first().status
+        == "in_progress"
+    )
 
     # Re-complete phase 1
-    simulate_monitor(pm.mark_phase_complete(phase_ids[0], "P1 re-done", phase_output={"score": 0.9}))
+    simulate_monitor(
+        pm.mark_phase_complete(phase_ids[0], "P1 re-done", phase_output={"score": 0.9})
+    )
 
     # Re-complete phase 2 (now passes)
-    simulate_monitor(pm.mark_phase_complete(phase_ids[1], "P2 passed", phase_output={"score": 0.8}))
+    simulate_monitor(
+        pm.mark_phase_complete(phase_ids[1], "P2 passed", phase_output={"score": 0.8})
+    )
 
     # Complete phase 3
-    simulate_monitor(pm.mark_phase_complete(phase_ids[2], "P3 done", phase_output={"score": 0.8}))
+    simulate_monitor(
+        pm.mark_phase_complete(phase_ids[2], "P3 done", phase_output={"score": 0.8})
+    )
 
     # Complete phase 4 -> workflow should complete (NOT skip phases 3-4)
-    result = pm.mark_phase_complete(phase_ids[3], "P4 done", phase_output={"score": 1.0})
+    result = pm.mark_phase_complete(
+        phase_ids[3], "P4 done", phase_output={"score": 1.0}
+    )
     assert result["should_continue"] is False
 
     # Verify ALL phases are completed
     for pid in phase_ids:
-        assert db_session.query(PhaseExecution).filter_by(phase_id=pid).first().status == "completed"
+        assert (
+            db_session.query(PhaseExecution).filter_by(phase_id=pid).first().status
+            == "completed"
+        )
     assert db_session.query(Workflow).first().status == "completed"
 
 
@@ -251,10 +301,15 @@ def test_start_next_phase_returns_true_for_completed(db_session, db_manager, pha
     pm = PhaseManager(db_manager)
 
     # Set phase 2 to completed (simulating re-run scenario)
-    db_session.query(PhaseExecution).filter_by(phase_id=phase_ids[1]).update({"status": "completed"})
+    db_session.query(PhaseExecution).filter_by(phase_id=phase_ids[1]).update(
+        {"status": "completed"}
+    )
     db_session.commit()
 
     # _start_next_phase should return True even though phase 3 was already completed
     result = pm._start_next_phase(db_session, phase_ids[1])
     assert result is True
-    assert db_session.query(PhaseExecution).filter_by(phase_id=phase_ids[2]).first().status == "in_progress"
+    assert (
+        db_session.query(PhaseExecution).filter_by(phase_id=phase_ids[2]).first().status
+        == "in_progress"
+    )

@@ -1,16 +1,16 @@
 """Test to verify steering message fix works correctly."""
 
-import asyncio
-import pytest
-from unittest.mock import Mock, AsyncMock, patch
 from datetime import datetime
+from unittest.mock import AsyncMock, Mock
 
-from src.core.database import DatabaseManager, Agent, Task, AgentLog
+import pytest
+
 from src.agents.manager import AgentManager
-from src.monitoring.guardian import Guardian
-from src.monitoring.monitor import MonitoringLoop
+from src.core.database import Agent, DatabaseManager, Task
 from src.interfaces import LLMProviderInterface
 from src.memory.rag import RAGSystem
+from src.monitoring.guardian import Guardian
+from src.monitoring.monitor import MonitoringLoop
 
 
 @pytest.fixture
@@ -60,7 +60,7 @@ def test_agent():
         current_task_id="task-1",
         tmux_session_name="agent-session-1",
         cli_type="claude_code",
-        last_activity=datetime.utcnow()
+        last_activity=datetime.utcnow(),
     )
     # Add missing attribute needed by monitor
     agent.health_check_failures = 0
@@ -75,7 +75,7 @@ def test_task():
         raw_description="Test task",
         enriched_description="Test task enriched",
         done_definition="Complete the test",
-        status="in_progress"
+        status="in_progress",
     )
 
 
@@ -89,13 +89,15 @@ class TestSteeringMessageFix:
         mock_agent_manager,
         mock_llm_provider,
         test_agent,
-        test_task
+        test_task,
     ):
         """Test that steering_recommendation from LLM is correctly mapped to steering_message."""
 
         # Setup database session mock
         session_mock = Mock()
-        session_mock.query.return_value.filter_by.return_value.first.return_value = test_task
+        session_mock.query.return_value.filter_by.return_value.first.return_value = (
+            test_task
+        )
         session_mock.query.return_value.filter_by.return_value.order_by.return_value.all.return_value = []
         session_mock.close = Mock()
         mock_db_manager.get_session.return_value = session_mock
@@ -109,27 +111,30 @@ class TestSteeringMessageFix:
             "needs_steering": True,
             "steering_type": "stuck",
             "steering_recommendation": "Try a different approach to fix the import error",  # LLM returns this key
-            "trajectory_summary": "Agent is stuck on import error, needs help"
+            "trajectory_summary": "Agent is stuck on import error, needs help",
         }
 
         # Create Guardian instance
         guardian = Guardian(
             db_manager=mock_db_manager,
             agent_manager=mock_agent_manager,
-            llm_provider=mock_llm_provider
+            llm_provider=mock_llm_provider,
         )
 
         # Perform analysis
         result = await guardian.analyze_agent_with_trajectory(
             agent=test_agent,
             tmux_output="ImportError: cannot import module",
-            past_summaries=[]
+            past_summaries=[],
         )
 
         # Verify the field mapping worked correctly
         assert result["needs_steering"] is True
         assert result["steering_type"] == "stuck"
-        assert result["steering_message"] == "Try a different approach to fix the import error"  # Should be mapped correctly
+        assert (
+            result["steering_message"]
+            == "Try a different approach to fix the import error"
+        )  # Should be mapped correctly
 
         # Verify LLM was called
         mock_llm_provider.analyze_agent_trajectory.assert_called_once()
@@ -142,13 +147,15 @@ class TestSteeringMessageFix:
         mock_llm_provider,
         mock_rag_system,
         test_agent,
-        test_task
+        test_task,
     ):
         """Test that MonitoringLoop correctly uses the steering_message field."""
 
         # Setup database session mock
         session_mock = Mock()
-        session_mock.query.return_value.filter_by.return_value.first.return_value = test_task
+        session_mock.query.return_value.filter_by.return_value.first.return_value = (
+            test_task
+        )
         session_mock.query.return_value.filter_by.return_value.order_by.return_value.all.return_value = []
         session_mock.query.return_value.filter.return_value.order_by.return_value.limit.return_value.all.return_value = []
         session_mock.add = Mock()
@@ -173,7 +180,7 @@ class TestSteeringMessageFix:
             "needs_steering": True,
             "steering_type": "stuck",
             "steering_recommendation": "Check your imports and try using absolute paths",
-            "trajectory_summary": "Agent is stuck on import error, needs guidance"
+            "trajectory_summary": "Agent is stuck on import error, needs guidance",
         }
 
         # Create monitoring loop
@@ -181,7 +188,7 @@ class TestSteeringMessageFix:
             db_manager=mock_db_manager,
             agent_manager=mock_agent_manager,
             llm_provider=mock_llm_provider,
-            rag_system=mock_rag_system
+            rag_system=mock_rag_system,
         )
 
         # Run one monitoring cycle
@@ -208,13 +215,15 @@ class TestSteeringMessageFix:
         mock_llm_provider,
         mock_rag_system,
         test_agent,
-        test_task
+        test_task,
     ):
         """Test that no steering message is sent when needs_steering is False."""
 
         # Setup database session mock
         session_mock = Mock()
-        session_mock.query.return_value.filter_by.return_value.first.return_value = test_task
+        session_mock.query.return_value.filter_by.return_value.first.return_value = (
+            test_task
+        )
         session_mock.query.return_value.filter_by.return_value.order_by.return_value.all.return_value = []
         session_mock.query.return_value.filter.return_value.order_by.return_value.limit.return_value.all.return_value = []
         session_mock.add = Mock()
@@ -225,7 +234,9 @@ class TestSteeringMessageFix:
 
         # Setup agent manager
         mock_agent_manager.get_active_agents.return_value = [test_agent]
-        mock_agent_manager.get_agent_output.return_value = "Working on implementation..."
+        mock_agent_manager.get_agent_output.return_value = (
+            "Working on implementation..."
+        )
         mock_agent_manager.tmux_server.has_session.return_value = True
 
         # Setup LLM provider to return no steering needed
@@ -237,7 +248,7 @@ class TestSteeringMessageFix:
             "needs_steering": False,  # No steering needed
             "steering_type": None,
             "steering_recommendation": None,
-            "trajectory_summary": "Agent is making good progress on implementation"
+            "trajectory_summary": "Agent is making good progress on implementation",
         }
 
         # Create monitoring loop
@@ -245,7 +256,7 @@ class TestSteeringMessageFix:
             db_manager=mock_db_manager,
             agent_manager=mock_agent_manager,
             llm_provider=mock_llm_provider,
-            rag_system=mock_rag_system
+            rag_system=mock_rag_system,
         )
 
         # Run one monitoring cycle
@@ -262,13 +273,15 @@ class TestSteeringMessageFix:
         mock_llm_provider,
         mock_rag_system,
         test_agent,
-        test_task
+        test_task,
     ):
         """Test fallback behavior when steering_message is missing but needs_steering is True."""
 
         # Setup database session mock
         session_mock = Mock()
-        session_mock.query.return_value.filter_by.return_value.first.return_value = test_task
+        session_mock.query.return_value.filter_by.return_value.first.return_value = (
+            test_task
+        )
         session_mock.query.return_value.filter_by.return_value.order_by.return_value.all.return_value = []
         session_mock.query.return_value.filter.return_value.order_by.return_value.limit.return_value.all.return_value = []
         session_mock.add = Mock()
@@ -291,7 +304,7 @@ class TestSteeringMessageFix:
             "needs_steering": True,  # Needs steering
             "steering_type": "confused",
             "steering_recommendation": None,  # But no message provided
-            "trajectory_summary": "Agent needs help but no specific message"
+            "trajectory_summary": "Agent needs help but no specific message",
         }
 
         # Create monitoring loop
@@ -299,7 +312,7 @@ class TestSteeringMessageFix:
             db_manager=mock_db_manager,
             agent_manager=mock_agent_manager,
             llm_provider=mock_llm_provider,
-            rag_system=mock_rag_system
+            rag_system=mock_rag_system,
         )
 
         # Run one monitoring cycle

@@ -1,9 +1,10 @@
 """Configuration management for Hephaestus."""
 
-from typing import Optional, Literal
 from pathlib import Path
-from pydantic_settings import BaseSettings
+from typing import Literal, Optional
+
 from pydantic import Field, SecretStr
+from pydantic_settings import BaseSettings
 
 
 class LLMConfig(BaseSettings):
@@ -139,9 +140,11 @@ class MonitoringConfig(BaseSettings):
 class AgentConfig(BaseSettings):
     """Agent configuration."""
 
-    default_cli_tool: Literal["claude", "opencode", "droid", "codex", "pi", "swarm"] = Field(
-        default="claude",
-        description="Default CLI tool for agents",
+    default_cli_tool: Literal["claude", "opencode", "droid", "codex", "pi", "swarm"] = (
+        Field(
+            default="claude",
+            description="Default CLI tool for agents",
+        )
     )
     max_retries: int = Field(
         default=3,
@@ -252,6 +255,7 @@ class Settings(BaseSettings):
         """Load settings from environment and files."""
         # Load dotenv explicitly
         from dotenv import load_dotenv
+
         load_dotenv()
         return cls()
 

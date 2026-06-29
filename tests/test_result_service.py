@@ -1,10 +1,11 @@
 """Unit tests for the result service."""
 
-import pytest
-import tempfile
 import os
-from unittest.mock import Mock, patch, MagicMock
+import tempfile
 from datetime import datetime
+from unittest.mock import MagicMock, Mock, patch
+
+import pytest
 
 from src.services.result_service import ResultService
 from src.services.validation_helpers import (
@@ -29,7 +30,7 @@ class TestResultService:
     @pytest.fixture
     def valid_markdown_file(self):
         """Create a valid markdown file for testing."""
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.md', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
             f.write("# Test Results\n\nThis is a test result.")
             temp_path = f.name
         yield temp_path
@@ -38,7 +39,7 @@ class TestResultService:
     @pytest.fixture
     def large_markdown_file(self):
         """Create a large markdown file for testing."""
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.md', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
             # Write 101KB of data
             f.write("# Large File\n" + "x" * (101 * 1024))
             temp_path = f.name
@@ -48,20 +49,22 @@ class TestResultService:
     @pytest.fixture
     def non_markdown_file(self):
         """Create a non-markdown file for testing."""
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
             f.write("This is not markdown")
             temp_path = f.name
         yield temp_path
         os.unlink(temp_path)
 
-    @patch('src.services.result_service.get_db')
+    @patch("src.services.result_service.get_db")
     def test_create_result_success(self, mock_get_db, mock_db, valid_markdown_file):
         """Test successful result creation."""
         # Setup mock database
         mock_get_db.return_value.__enter__.return_value = mock_db
 
         # Mock task and agent
-        mock_task = Mock(id="task-123", assigned_agent_id="agent-456", has_results=False)
+        mock_task = Mock(
+            id="task-123", assigned_agent_id="agent-456", has_results=False
+        )
         mock_db.query.return_value.filter_by.return_value.first.return_value = mock_task
 
         # Call create_result
@@ -85,7 +88,7 @@ class TestResultService:
         assert mock_task.has_results == True
         mock_db.commit.assert_called()
 
-    @patch('src.services.result_service.get_db')
+    @patch("src.services.result_service.get_db")
     def test_create_result_file_not_found(self, mock_get_db):
         """Test result creation with non-existent file."""
         with pytest.raises(FileNotFoundError, match="Markdown file not found"):
@@ -97,7 +100,7 @@ class TestResultService:
                 summary="Test",
             )
 
-    @patch('src.services.result_service.get_db')
+    @patch("src.services.result_service.get_db")
     def test_create_result_file_too_large(self, mock_get_db, large_markdown_file):
         """Test result creation with file exceeding size limit."""
         with pytest.raises(ValueError, match="File too large"):
@@ -109,7 +112,7 @@ class TestResultService:
                 summary="Test",
             )
 
-    @patch('src.services.result_service.get_db')
+    @patch("src.services.result_service.get_db")
     def test_create_result_invalid_format(self, mock_get_db, non_markdown_file):
         """Test result creation with non-markdown file."""
         with pytest.raises(ValueError, match="File must be markdown"):
@@ -121,7 +124,7 @@ class TestResultService:
                 summary="Test",
             )
 
-    @patch('src.services.result_service.get_db')
+    @patch("src.services.result_service.get_db")
     def test_create_result_wrong_agent(self, mock_get_db, mock_db, valid_markdown_file):
         """Test result creation by wrong agent."""
         # Setup mock database
@@ -140,7 +143,7 @@ class TestResultService:
                 summary="Test",
             )
 
-    @patch('src.services.result_service.get_db')
+    @patch("src.services.result_service.get_db")
     def test_get_results_for_task(self, mock_get_db, mock_db):
         """Test retrieving results for a task."""
         # Setup mock results
@@ -168,7 +171,8 @@ class TestResultService:
         )
 
         mock_db.query.return_value.filter_by.return_value.all.return_value = [
-            mock_result1, mock_result2
+            mock_result1,
+            mock_result2,
         ]
         mock_get_db.return_value.__enter__.return_value = mock_db
 
@@ -182,7 +186,7 @@ class TestResultService:
         assert results[1]["result_id"] == "result-2"
         assert results[1]["verification_status"] == "unverified"
 
-    @patch('src.services.result_service.get_db')
+    @patch("src.services.result_service.get_db")
     def test_verify_result(self, mock_get_db, mock_db):
         """Test verifying a result."""
         # Setup mock result
@@ -192,7 +196,9 @@ class TestResultService:
             verified_at=None,
             verified_by_validation_id=None,
         )
-        mock_db.query.return_value.filter_by.return_value.first.return_value = mock_result
+        mock_db.query.return_value.filter_by.return_value.first.return_value = (
+            mock_result
+        )
         mock_get_db.return_value.__enter__.return_value = mock_db
 
         # Call verify_result
@@ -231,7 +237,7 @@ class TestValidationHelpers:
 
     def test_validate_file_size_valid(self):
         """Test valid file size validation."""
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.md') as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".md") as f:
             f.write("Small content")
             f.flush()
             # Should not raise
@@ -239,7 +245,7 @@ class TestValidationHelpers:
 
     def test_validate_file_size_too_large(self):
         """Test file size exceeding limit."""
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.md') as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".md") as f:
             # Write 2KB of data
             f.write("x" * (2 * 1024))
             f.flush()

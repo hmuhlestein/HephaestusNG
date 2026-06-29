@@ -1,21 +1,23 @@
 """LLM configuration management for multi-provider support."""
 
-from typing import Dict, Any, Optional, List, Union
-from pathlib import Path
-import yaml
 import os
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Union
 
+import yaml
 from pydantic import BaseModel, Field
 
 
 class ModelInfo(BaseModel):
     """Model information for OpenRouter."""
+
     provider: Optional[str] = None
     model: str
 
 
 class ProviderConfig(BaseModel):
     """Provider configuration."""
+
     api_key_env: str
     base_url: Optional[str] = None
     models: List[Union[str, Dict[str, str]]]
@@ -28,6 +30,7 @@ class ProviderConfig(BaseModel):
 
 class ModelAssignment(BaseModel):
     """Model assignment for a component."""
+
     provider: str
     model: str
     openrouter_provider: Optional[str] = None
@@ -41,21 +44,19 @@ class ModelAssignment(BaseModel):
 
 class MultiProviderLLMConfig(BaseModel):
     """Multi-provider LLM configuration."""
+
     embedding_model: str = Field(
-        default="text-embedding-3-small",
-        description="Embedding model to use"
+        default="text-embedding-3-small", description="Embedding model to use"
     )
     embedding_provider: str = Field(
         default="openai",
-        description="Provider for embeddings (openai, azure_openai, google_ai)"
+        description="Provider for embeddings (openai, azure_openai, google_ai)",
     )
     providers: Dict[str, ProviderConfig] = Field(
-        default_factory=dict,
-        description="Provider configurations"
+        default_factory=dict, description="Provider configurations"
     )
     model_assignments: Dict[str, ModelAssignment] = Field(
-        default_factory=dict,
-        description="Model assignments per component"
+        default_factory=dict, description="Model assignments per component"
     )
 
 
@@ -78,52 +79,56 @@ class SimpleConfig:
         if not self.config_path.exists():
             raise FileNotFoundError(f"Configuration file not found: {self.config_path}")
 
-        with open(self.config_path, 'r') as f:
+        with open(self.config_path, "r") as f:
             self._config = yaml.safe_load(f)
 
         # Parse LLM configuration
-        if 'llm' in self._config:
-            llm_data = self._config['llm']
+        if "llm" in self._config:
+            llm_data = self._config["llm"]
 
             # Convert to proper format
             providers = {}
-            if 'providers' in llm_data:
-                for provider_name, provider_data in llm_data['providers'].items():
+            if "providers" in llm_data:
+                for provider_name, provider_data in llm_data["providers"].items():
                     # Convert models list to proper format
                     models = []
-                    for model in provider_data.get('models', []):
+                    for model in provider_data.get("models", []):
                         if isinstance(model, dict):
                             models.append(model)
                         else:
                             models.append(model)
 
                     # Allow environment variable to override base_url for openrouter
-                    base_url = provider_data.get('base_url')
-                    if provider_name == 'openrouter':
-                        env_base_url = os.getenv('OPENROUTER_BASE_URL')
+                    base_url = provider_data.get("base_url")
+                    if provider_name == "openrouter":
+                        env_base_url = os.getenv("OPENROUTER_BASE_URL")
                         if env_base_url:
                             base_url = env_base_url
 
                     providers[provider_name] = ProviderConfig(
-                        api_key_env=provider_data.get('api_key_env', f"{provider_name.upper()}_API_KEY"),
+                        api_key_env=provider_data.get(
+                            "api_key_env", f"{provider_name.upper()}_API_KEY"
+                        ),
                         base_url=base_url,
                         models=models,
-                        api_version=provider_data.get('api_version'),
-                        project_id=provider_data.get('project_id'),
-                        location=provider_data.get('location')
+                        api_version=provider_data.get("api_version"),
+                        project_id=provider_data.get("project_id"),
+                        location=provider_data.get("location"),
                     )
 
             # Convert model assignments
             model_assignments = {}
-            if 'model_assignments' in llm_data:
-                for component, assignment in llm_data['model_assignments'].items():
+            if "model_assignments" in llm_data:
+                for component, assignment in llm_data["model_assignments"].items():
                     model_assignments[component] = ModelAssignment(**assignment)
 
             self._llm_config = MultiProviderLLMConfig(
-                embedding_model=llm_data.get('embedding_model', 'text-embedding-3-small'),
-                embedding_provider=llm_data.get('embedding_provider', 'openai'),
+                embedding_model=llm_data.get(
+                    "embedding_model", "text-embedding-3-small"
+                ),
+                embedding_provider=llm_data.get("embedding_provider", "openai"),
                 providers=providers,
-                model_assignments=model_assignments
+                model_assignments=model_assignments,
             )
 
     def get_llm_config(self) -> MultiProviderLLMConfig:
@@ -147,7 +152,7 @@ class SimpleConfig:
         Returns:
             Configuration value
         """
-        keys = key.split('.')
+        keys = key.split(".")
         value = self._config
 
         for k in keys:
@@ -164,27 +169,27 @@ class SimpleConfig:
     def llm_provider(self) -> str:
         """Get default LLM provider (for backward compatibility)."""
         # Use task enrichment provider as default
-        if self._llm_config and 'task_enrichment' in self._llm_config.model_assignments:
-            return self._llm_config.model_assignments['task_enrichment'].provider
-        return self.get('llm.provider', 'openai')
+        if self._llm_config and "task_enrichment" in self._llm_config.model_assignments:
+            return self._llm_config.model_assignments["task_enrichment"].provider
+        return self.get("llm.provider", "openai")
 
     @property
     def llm_model(self) -> str:
         """Get default LLM model (for backward compatibility)."""
         # Use task enrichment model as default
-        if self._llm_config and 'task_enrichment' in self._llm_config.model_assignments:
-            assignment = self._llm_config.model_assignments['task_enrichment']
+        if self._llm_config and "task_enrichment" in self._llm_config.model_assignments:
+            assignment = self._llm_config.model_assignments["task_enrichment"]
             if assignment.openrouter_provider:
                 return f"{assignment.openrouter_provider}/{assignment.model}"
             return assignment.model
-        return self.get('llm.model', 'gpt-4-turbo-preview')
+        return self.get("llm.model", "gpt-4-turbo-preview")
 
     @property
     def embedding_model(self) -> str:
         """Get embedding model."""
         if self._llm_config:
             return self._llm_config.embedding_model
-        return self.get('llm.embedding_model', 'text-embedding-3-small')
+        return self.get("llm.embedding_model", "text-embedding-3-small")
 
     def validate(self, strict: bool = False):
         """Validate configuration.
@@ -193,6 +198,7 @@ class SimpleConfig:
             strict: If True, raise error on missing API keys. If False, just log warnings.
         """
         import logging
+
         logger = logging.getLogger(__name__)
 
         # Check for required API keys based on configured providers
@@ -210,9 +216,7 @@ class SimpleConfig:
 
             if missing_keys:
                 if strict:
-                    raise ValueError(
-                        f"Missing API keys: {', '.join(missing_keys)}"
-                    )
+                    raise ValueError(f"Missing API keys: {', '.join(missing_keys)}")
                 else:
                     logger.warning(
                         f"Some API keys are missing: {', '.join(missing_keys)}. "
@@ -236,18 +240,18 @@ class SimpleConfig:
             return os.getenv(provider_config.api_key_env)
 
         # Fallback to legacy env vars
-        if provider == 'openai':
-            return os.getenv('OPENAI_API_KEY')
-        elif provider == 'anthropic':
-            return os.getenv('ANTHROPIC_API_KEY')
-        elif provider == 'groq':
-            return os.getenv('GROQ_API_KEY')
-        elif provider == 'openrouter':
-            return os.getenv('OPENROUTER_API_KEY')
-        elif provider == 'azure_openai':
-            return os.getenv('AZURE_OPENAI_API_KEY')
-        elif provider == 'google_ai':
-            return os.getenv('GOOGLE_API_KEY')
+        if provider == "openai":
+            return os.getenv("OPENAI_API_KEY")
+        elif provider == "anthropic":
+            return os.getenv("ANTHROPIC_API_KEY")
+        elif provider == "groq":
+            return os.getenv("GROQ_API_KEY")
+        elif provider == "openrouter":
+            return os.getenv("OPENROUTER_API_KEY")
+        elif provider == "azure_openai":
+            return os.getenv("AZURE_OPENAI_API_KEY")
+        elif provider == "google_ai":
+            return os.getenv("GOOGLE_API_KEY")
 
         return None
 
@@ -255,37 +259,37 @@ class SimpleConfig:
     @property
     def database_path(self) -> str:
         """Get database path."""
-        return self.get('paths.database', './hephaestus.db')
+        return self.get("paths.database", "./hephaestus.db")
 
     @property
     def qdrant_url(self) -> str:
         """Get Qdrant URL."""
-        return self.get('vector_store.qdrant_url', 'http://localhost:6333')
+        return self.get("vector_store.qdrant_url", "http://localhost:6333")
 
     @property
     def server_host(self) -> str:
         """Get server host."""
-        return self.get('server.host', '0.0.0.0')
+        return self.get("server.host", "0.0.0.0")
 
     @property
     def server_port(self) -> int:
         """Get server port."""
-        return self.get('server.port', 8300)
+        return self.get("server.port", 8300)
 
     @property
     def monitoring_interval(self) -> int:
         """Get monitoring interval."""
-        return self.get('monitoring.interval_seconds', 60)
+        return self.get("monitoring.interval_seconds", 60)
 
     @property
     def tmux_session_prefix(self) -> str:
         """Get tmux session prefix."""
-        return self.get('agents.tmux_session_prefix', 'hep_agent')
+        return self.get("agents.tmux_session_prefix", "hep_agent")
 
     @property
     def default_cli_tool(self) -> str:
         """Get default CLI tool."""
-        return self.get('agents.default_cli_tool', 'claude')
+        return self.get("agents.default_cli_tool", "claude")
 
 
 # Global configuration instance

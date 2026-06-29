@@ -1,23 +1,26 @@
 """HTML report generator for autopilot pipeline features."""
+
 import json
 from pathlib import Path
 
 
 def generate_feature_report(docs_path: str, metrics: dict = None) -> str:
     """Generate an HTML report for a completed feature.
-    
+
     Args:
         docs_path: Path to the docs directory containing generated documents
         metrics: Optional pipeline metrics dictionary
-        
+
     Returns:
         Path to the generated HTML report
     """
     docs_dir = Path(docs_path)
-    
+
     # Gather documents
-    docs_created = sorted([f.name for f in docs_dir.glob("*.md") if f.name != "pipeline_metrics.json"])
-    
+    docs_created = sorted(
+        [f.name for f in docs_dir.glob("*.md") if f.name != "pipeline_metrics.json"]
+    )
+
     # Load metrics if not provided
     if metrics is None:
         metrics_path = docs_dir / "pipeline_metrics.json"
@@ -25,30 +28,39 @@ def generate_feature_report(docs_path: str, metrics: dict = None) -> str:
             metrics = json.loads(metrics_path.read_text())
         else:
             metrics = {}
-    
+
     # Get commit info
     import subprocess
+
     try:
-        commit_hash = subprocess.run(["git", "rev-parse", "--short", "HEAD"], 
-                                   capture_output=True, text=True, cwd=str(docs_dir.parent)).stdout.strip()
+        commit_hash = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            capture_output=True,
+            text=True,
+            cwd=str(docs_dir.parent),
+        ).stdout.strip()
     except Exception:
         commit_hash = "N/A"
-    
+
     design_name = metrics.get("design_name", "Feature")
-    started_at = metrics.get("started_at", "N/A")[:10] if metrics.get("started_at") else "N/A"
-    
+    started_at = (
+        metrics.get("started_at", "N/A")[:10] if metrics.get("started_at") else "N/A"
+    )
+
     # Build phase rows
     phase_rows = ""
     for p in metrics.get("phases", []):
         phase_rows += f"""
                 <tr style="border-bottom: 1px solid #f0f0f0;">
-                    <td style="padding: 0.5rem;">{p.get('name', 'Unknown')}</td>
+                    <td style="padding: 0.5rem;">{p.get("name", "Unknown")}</td>
                     <td style="padding: 0.5rem;"><span class="status-badge status-success">Completed</span></td>
                 </tr>"""
-    
+
     # Build docs list
-    docs_list = "".join(f'<li>📄 <a href="{doc}">{doc}</a></li>' for doc in docs_created)
-    
+    docs_list = "".join(
+        f'<li>📄 <a href="{doc}">{doc}</a></li>' for doc in docs_created
+    )
+
     html = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -90,7 +102,7 @@ def generate_feature_report(docs_path: str, metrics: dict = None) -> str:
             <h2>📊 Pipeline Metrics</h2>
             <div class="metrics-grid">
                 <div class="metric">
-                    <div class="value">{metrics.get('max_iterations', 'N/A')}</div>
+                    <div class="value">{metrics.get("max_iterations", "N/A")}</div>
                     <div class="label">Max Iterations</div>
                 </div>
                 <div class="metric">
@@ -98,7 +110,7 @@ def generate_feature_report(docs_path: str, metrics: dict = None) -> str:
                     <div class="label">Documents Created</div>
                 </div>
                 <div class="metric">
-                    <div class="value">{len(metrics.get('phases', []))}</div>
+                    <div class="value">{len(metrics.get("phases", []))}</div>
                     <div class="label">Phases Completed</div>
                 </div>
                 <div class="metric">
@@ -139,7 +151,7 @@ def generate_feature_report(docs_path: str, metrics: dict = None) -> str:
     </div>
 </body>
 </html>"""
-    
+
     # Write the report
     report_path = docs_dir / "feature_report.html"
     report_path.write_text(html)

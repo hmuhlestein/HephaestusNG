@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """Tests for the git worktree isolation system."""
 
-import os
+import shutil
 import sys
 import tempfile
-import shutil
 import uuid
 from pathlib import Path
 
@@ -12,10 +11,9 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent))
 
 import pytest
-import git
 from git import Repo
 
-from src.core.database import DatabaseManager, Base, Agent
+from src.core.database import Agent, DatabaseManager
 from src.core.worktree_manager import WorktreeManager
 
 
@@ -50,6 +48,7 @@ def worktree_manager(test_db, temp_repo, monkeypatch):
     """Create a WorktreeManager with test configuration."""
     # Mock the config
     import src.core.simple_config
+
     config = src.core.simple_config.Config()
     config.worktree_base_path = Path(tempfile.mkdtemp())
     config.main_repo_path = Path(temp_repo.working_dir)
@@ -57,8 +56,8 @@ def worktree_manager(test_db, temp_repo, monkeypatch):
     config.conflict_resolution_strategy = "newest_file_wins"
     config.prefer_child_on_tie = True
 
-    monkeypatch.setattr('src.core.simple_config.get_config', lambda: config)
-    monkeypatch.setattr('src.core.worktree_manager.get_config', lambda: config)
+    monkeypatch.setattr("src.core.simple_config.get_config", lambda: config)
+    monkeypatch.setattr("src.core.worktree_manager.get_config", lambda: config)
 
     manager = WorktreeManager(test_db)
 
@@ -75,10 +74,7 @@ def test_create_agent_worktree(worktree_manager, test_db):
     # Create a test agent
     session = test_db.get_session()
     agent = Agent(
-        id=agent_id,
-        system_prompt="Test agent",
-        status="working",
-        cli_type="test"
+        id=agent_id, system_prompt="Test agent", status="working", cli_type="test"
     )
     session.add(agent)
     session.commit()
@@ -112,7 +108,9 @@ def test_parent_child_inheritance(worktree_manager, test_db):
 
     # Create parent agent
     session = test_db.get_session()
-    parent_agent = Agent(id=parent_id, system_prompt="Parent", status="working", cli_type="test")
+    parent_agent = Agent(
+        id=parent_id, system_prompt="Parent", status="working", cli_type="test"
+    )
     session.add(parent_agent)
     session.commit()
     session.close()
@@ -132,13 +130,17 @@ def test_parent_child_inheritance(worktree_manager, test_db):
 
     # Create child agent
     session = test_db.get_session()
-    child_agent = Agent(id=child_id, system_prompt="Child", status="working", cli_type="test")
+    child_agent = Agent(
+        id=child_id, system_prompt="Child", status="working", cli_type="test"
+    )
     session.add(child_agent)
     session.commit()
     session.close()
 
     # Create child worktree with parent
-    child_result = worktree_manager.create_agent_worktree(child_id, parent_agent_id=parent_id)
+    child_result = worktree_manager.create_agent_worktree(
+        child_id, parent_agent_id=parent_id
+    )
     child_path = Path(child_result["working_directory"])
 
     # Verify child has parent's file
@@ -158,8 +160,12 @@ def test_parallel_isolation(worktree_manager, test_db):
 
     # Create two agents
     session = test_db.get_session()
-    agent1 = Agent(id=agent1_id, system_prompt="Agent 1", status="working", cli_type="test")
-    agent2 = Agent(id=agent2_id, system_prompt="Agent 2", status="working", cli_type="test")
+    agent1 = Agent(
+        id=agent1_id, system_prompt="Agent 1", status="working", cli_type="test"
+    )
+    agent2 = Agent(
+        id=agent2_id, system_prompt="Agent 2", status="working", cli_type="test"
+    )
     session.add(agent1)
     session.add(agent2)
     session.commit()

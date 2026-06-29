@@ -13,30 +13,29 @@ Agents never read out-of-tree paths. Curated inbound context (design doc, qa_spe
 task framing) is copied into a git-excluded ``<worktree>/.hephaestus/`` directory.
 """
 
-import os
-import uuid
-import shutil
-import logging
 import fcntl
+import logging
+import shutil
 import time
-from pathlib import Path
-from typing import Optional, Dict, List, Any
-from datetime import datetime
+import uuid
 from dataclasses import dataclass
+from datetime import datetime
 from enum import Enum
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 import git
-from git import Repo, GitCommandError
+from git import GitCommandError, Repo
 from sqlalchemy.orm import Session
 
+from src.core.constants import CONTEXT_DIR_NAME, WORKTREES_SUBDIR
 from src.core.database import (
-    DatabaseManager,
     AgentBranch,
-    WorktreeCommit,
+    DatabaseManager,
     MergeConflictResolution,
+    WorktreeCommit,
 )
 from src.core.simple_config import get_config
-from src.core.constants import CONTEXT_DIR_NAME, WORKTREES_SUBDIR
 
 logger = logging.getLogger(__name__)
 
@@ -110,9 +109,13 @@ class WorktreeManager:
             logger.error(f"Invalid git repository at {self.config.main_repo_path}")
             raise ValueError(f"Not a git repository: {self.config.main_repo_path}")
 
-        self.merge_lock_path = Path(self.config.main_repo_path) / ".git" / ".hephaestus_merge_lock"
+        self.merge_lock_path = (
+            Path(self.config.main_repo_path) / ".git" / ".hephaestus_merge_lock"
+        )
         self._ensure_excludes()
-        logger.info(f"WorktreeManager initialized for repo: {self.config.main_repo_path}")
+        logger.info(
+            f"WorktreeManager initialized for repo: {self.config.main_repo_path}"
+        )
 
     def reload(self, new_path):
         """Reinitialize with a new repository path."""
@@ -188,22 +191,28 @@ class WorktreeManager:
         self.merge_lock_path.parent.mkdir(parents=True, exist_ok=True)
         self.merge_lock_path.touch(exist_ok=True)
 
-        lock_file = open(self.merge_lock_path, 'w')
+        lock_file = open(self.merge_lock_path, "w")
         start_time = time.time()
 
         while True:
             try:
                 fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
                 elapsed = time.time() - start_time
-                logger.info(f"[WORKTREE:{agent_id}] Merge lock acquired after {elapsed:.2f}s")
+                logger.info(
+                    f"[WORKTREE:{agent_id}] Merge lock acquired after {elapsed:.2f}s"
+                )
                 return lock_file
             except IOError:
                 elapsed = time.time() - start_time
                 if elapsed > timeout:
                     lock_file.close()
-                    raise TimeoutError(f"[WORKTREE:{agent_id}] Failed to acquire merge lock after {timeout}s")
+                    raise TimeoutError(
+                        f"[WORKTREE:{agent_id}] Failed to acquire merge lock after {timeout}s"
+                    )
                 if int(elapsed) % 10 == 0:
-                    logger.info(f"[WORKTREE:{agent_id}] Waiting for merge lock... ({elapsed:.0f}s)")
+                    logger.info(
+                        f"[WORKTREE:{agent_id}] Waiting for merge lock... ({elapsed:.0f}s)"
+                    )
                 time.sleep(0.5)
 
     def _release_merge_lock(self, lock_file, agent_id: str):
@@ -237,7 +246,9 @@ class WorktreeManager:
             Dict with branch_name, parent_commit, and working_directory (the
             worktree path — the only directory the agent should ever see).
         """
-        logger.info(f"[WORKTREE] Creating worktree for agent {agent_id} (parent={parent_agent_id})")
+        logger.info(
+            f"[WORKTREE] Creating worktree for agent {agent_id} (parent={parent_agent_id})"
+        )
 
         session = self.db_manager.get_session()
         try:
@@ -248,7 +259,9 @@ class WorktreeManager:
                 parent_commit_sha = self._get_parent_commit(parent_agent_id, session)
                 if not parent_commit_sha:
                     parent_commit_sha = self.main_repo.head.commit.hexsha
-                    logger.info(f"[WORKTREE] Parent has no commits, using main HEAD: {parent_commit_sha[:8]}")
+                    logger.info(
+                        f"[WORKTREE] Parent has no commits, using main HEAD: {parent_commit_sha[:8]}"
+                    )
             else:
                 parent_commit_sha = self.main_repo.head.commit.hexsha
                 logger.info(f"[WORKTREE] Using main HEAD: {parent_commit_sha[:8]}")
@@ -258,14 +271,22 @@ class WorktreeManager:
             # Create branch from parent commit
             try:
                 self.main_repo.git.branch(branch_name, parent_commit_sha)
-                logger.info(f"[WORKTREE] Created branch {branch_name} from {parent_commit_sha[:8]}")
+                logger.info(
+                    f"[WORKTREE] Created branch {branch_name} from {parent_commit_sha[:8]}"
+                )
             except GitCommandError as e:
                 if "already exists" in str(e):
-                    logger.info(f"[WORKTREE] Branch exists, recreating from {parent_commit_sha[:8]}")
+                    logger.info(
+                        f"[WORKTREE] Branch exists, recreating from {parent_commit_sha[:8]}"
+                    )
                     self.main_repo.git.branch("-D", branch_name)
                     self.main_repo.git.branch(branch_name, parent_commit_sha)
-                elif "not a valid branch point" in str(e) or "not a valid object name" in str(e):
-                    logger.warning(f"[WORKTREE] Commit {parent_commit_sha[:8]} not found, falling back to main HEAD")
+                elif "not a valid branch point" in str(
+                    e
+                ) or "not a valid object name" in str(e):
+                    logger.warning(
+                        f"[WORKTREE] Commit {parent_commit_sha[:8]} not found, falling back to main HEAD"
+                    )
                     parent_commit_sha = self.main_repo.head.commit.hexsha
                     self.main_repo.git.branch(branch_name, parent_commit_sha)
                 else:
@@ -293,7 +314,9 @@ class WorktreeManager:
                     dest = context_dir / rel_path
                     dest.parent.mkdir(parents=True, exist_ok=True)
                     dest.write_text(content)
-                logger.info(f"[WORKTREE] Wrote {len(context_files)} context file(s) to {context_dir}")
+                logger.info(
+                    f"[WORKTREE] Wrote {len(context_files)} context file(s) to {context_dir}"
+                )
 
             # Record in database
             record = AgentBranch(
@@ -331,14 +354,18 @@ class WorktreeManager:
         context_files: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Any]:
         """Alias for create_agent_branch (creates an isolated worktree + branch)."""
-        return self.create_agent_branch(agent_id, parent_agent_id, base_commit_sha, context_files)
+        return self.create_agent_branch(
+            agent_id, parent_agent_id, base_commit_sha, context_files
+        )
 
     def switch_to_branch(self, branch_name: str) -> None:
         """No-op: each agent has its own worktree, so the main repo never switches.
 
         Kept for call-site compatibility.
         """
-        logger.debug(f"[WORKTREE] switch_to_branch({branch_name}) is a no-op (worktree isolation)")
+        logger.debug(
+            f"[WORKTREE] switch_to_branch({branch_name}) is a no-op (worktree isolation)"
+        )
 
     def switch_to_main(self) -> None:
         """No-op under worktree isolation (main repo stays on the base branch)."""
@@ -346,13 +373,19 @@ class WorktreeManager:
 
     # ── Commit operations ────────────────────────────────────────
 
-    def _commit_in_worktree(self, agent_id: str, message: str, commit_type: str) -> Dict[str, Any]:
+    def _commit_in_worktree(
+        self, agent_id: str, message: str, commit_type: str
+    ) -> Dict[str, Any]:
         """Stage and commit all changes in the agent's worktree."""
         repo = self._agent_repo(agent_id)
         repo.git.add("-A")
 
         if not repo.is_dirty() and not repo.untracked_files:
-            return {"commit_sha": repo.head.commit.hexsha, "files_changed": 0, "message": "No changes"}
+            return {
+                "commit_sha": repo.head.commit.hexsha,
+                "files_changed": 0,
+                "message": "No changes",
+            }
 
         repo.git.commit("-m", f"[Agent {agent_id}] {message}", "--no-verify")
         commit = repo.head.commit
@@ -360,27 +393,37 @@ class WorktreeManager:
 
         session = self.db_manager.get_session()
         try:
-            session.add(WorktreeCommit(
-                id=str(uuid.uuid4()),
-                agent_id=agent_id,
-                commit_sha=commit.hexsha,
-                commit_type=commit_type,
-                commit_message=message,
-                files_changed=stats.get("files", 0),
-                insertions=stats.get("insertions", 0),
-                deletions=stats.get("deletions", 0),
-            ))
+            session.add(
+                WorktreeCommit(
+                    id=str(uuid.uuid4()),
+                    agent_id=agent_id,
+                    commit_sha=commit.hexsha,
+                    commit_type=commit_type,
+                    commit_message=message,
+                    files_changed=stats.get("files", 0),
+                    insertions=stats.get("insertions", 0),
+                    deletions=stats.get("deletions", 0),
+                )
+            )
             session.commit()
         finally:
             session.close()
 
-        return {"commit_sha": commit.hexsha, "files_changed": stats.get("files", 0), "message": message}
+        return {
+            "commit_sha": commit.hexsha,
+            "files_changed": stats.get("files", 0),
+            "message": message,
+        }
 
-    def commit_changes(self, agent_id: str, message: str, branch_name: Optional[str] = None) -> Dict[str, Any]:
+    def commit_changes(
+        self, agent_id: str, message: str, branch_name: Optional[str] = None
+    ) -> Dict[str, Any]:
         """Stage and commit all changes in the agent's worktree."""
         return self._commit_in_worktree(agent_id, message, "auto_save")
 
-    def commit_for_validation(self, agent_id: str, iteration: int, message: Optional[str] = None) -> Dict[str, Any]:
+    def commit_for_validation(
+        self, agent_id: str, iteration: int, message: Optional[str] = None
+    ) -> Dict[str, Any]:
         """Create a checkpoint commit in the agent's worktree for validation."""
         msg = message or f"Iteration {iteration} - Ready for validation"
         return self._commit_in_worktree(agent_id, msg, "validation_ready")
@@ -408,25 +451,35 @@ class WorktreeManager:
                 raise ValueError(f"No worktree record found for agent {agent_id}")
             branch_name = record.branch_name
             target_branch = self.config.base_branch
-            logger.info(f"[WORKTREE:{agent_id}] Merging branch {branch_name} -> {target_branch}")
+            logger.info(
+                f"[WORKTREE:{agent_id}] Merging branch {branch_name} -> {target_branch}"
+            )
 
             # Commit any uncommitted work in the agent's worktree first
             try:
                 wt_repo = Repo(record.worktree_path)
                 wt_repo.git.add("-A")
                 if wt_repo.is_dirty() or wt_repo.untracked_files:
-                    wt_repo.git.commit("-m", f"[Agent {agent_id}] Final - Task completed", "--no-verify")
+                    wt_repo.git.commit(
+                        "-m",
+                        f"[Agent {agent_id}] Final - Task completed",
+                        "--no-verify",
+                    )
                     final = wt_repo.head.commit
-                    session.add(WorktreeCommit(
-                        id=str(uuid.uuid4()),
-                        agent_id=agent_id,
-                        commit_sha=final.hexsha,
-                        commit_type="final",
-                        commit_message=f"[Agent {agent_id}] Final - Task completed",
-                        files_changed=final.stats.total.get("files", 0),
-                    ))
+                    session.add(
+                        WorktreeCommit(
+                            id=str(uuid.uuid4()),
+                            agent_id=agent_id,
+                            commit_sha=final.hexsha,
+                            commit_type="final",
+                            commit_message=f"[Agent {agent_id}] Final - Task completed",
+                            files_changed=final.stats.total.get("files", 0),
+                        )
+                    )
             except Exception as e:
-                logger.warning(f"[WORKTREE:{agent_id}] Could not finalize worktree commit: {e}")
+                logger.warning(
+                    f"[WORKTREE:{agent_id}] Could not finalize worktree commit: {e}"
+                )
 
             # Ensure main repo is on the base branch and clean
             if self.main_repo.active_branch.name != target_branch:
@@ -447,24 +500,36 @@ class WorktreeManager:
 
             if self.main_repo.is_dirty() or self.main_repo.untracked_files:
                 try:
-                    self.main_repo.git.stash("push", "-u", "-m", f"Auto-stash before merge for {agent_id}")
+                    self.main_repo.git.stash(
+                        "push", "-u", "-m", f"Auto-stash before merge for {agent_id}"
+                    )
                     stashed = True
                 except GitCommandError:
                     pass
 
             conflicts_resolved = []
             try:
-                self.main_repo.git.merge(branch_name, no_ff=True, m=f"Merge agent {agent_id} into {target_branch}")
+                self.main_repo.git.merge(
+                    branch_name,
+                    no_ff=True,
+                    m=f"Merge agent {agent_id} into {target_branch}",
+                )
                 merge_commit_sha = self.main_repo.head.commit.hexsha
                 status = "success"
                 logger.info(f"[WORKTREE:{agent_id}] Merge completed (no conflicts)")
             except GitCommandError as e:
                 err_str = str(e)
                 if "CONFLICT" in err_str or "unresolved conflict" in err_str:
-                    logger.info(f"[WORKTREE:{agent_id}] Conflicts detected, resolving (newest-file-wins)")
-                    conflicts_resolved = self._resolve_conflicts(agent_id, session, self.main_repo)
+                    logger.info(
+                        f"[WORKTREE:{agent_id}] Conflicts detected, resolving (newest-file-wins)"
+                    )
+                    conflicts_resolved = self._resolve_conflicts(
+                        agent_id, session, self.main_repo
+                    )
                     self.main_repo.git.commit(
-                        "-m", f"[Auto-Merge] Resolved conflicts for agent {agent_id}", "--no-verify",
+                        "-m",
+                        f"[Auto-Merge] Resolved conflicts for agent {agent_id}",
+                        "--no-verify",
                     )
                     merge_commit_sha = self.main_repo.head.commit.hexsha
                     status = "conflict_resolved"
@@ -484,7 +549,9 @@ class WorktreeManager:
                     logger.warning(f"[WORKTREE:{agent_id}] Stash pop conflict: {e}")
 
             elapsed_ms = int((datetime.utcnow() - start_time).total_seconds() * 1000)
-            logger.info(f"[WORKTREE:{agent_id}] ========== MERGE COMPLETE ({elapsed_ms}ms) ==========")
+            logger.info(
+                f"[WORKTREE:{agent_id}] ========== MERGE COMPLETE ({elapsed_ms}ms) =========="
+            )
 
             return {
                 "status": status,
@@ -529,15 +596,19 @@ class WorktreeManager:
             conflicts_resolved = []
             try:
                 wt_repo.git.merge(
-                    base_commit, no_ff=True,
+                    base_commit,
+                    no_ff=True,
                     m=f"[Auto-Merge] Merged {base_ref} into {branch_name}",
                 )
                 status = "success"
             except GitCommandError as e:
                 if "CONFLICT" in str(e):
-                    conflicts_resolved = self._resolve_conflicts(agent_id, session, wt_repo)
+                    conflicts_resolved = self._resolve_conflicts(
+                        agent_id, session, wt_repo
+                    )
                     wt_repo.git.commit(
-                        "-m", f"[Auto-Merge] Resolved conflicts merging main into {branch_name}",
+                        "-m",
+                        f"[Auto-Merge] Resolved conflicts merging main into {branch_name}",
                         "--no-verify",
                     )
                     status = "conflict_resolved"
@@ -556,7 +627,9 @@ class WorktreeManager:
 
     # ── Conflict resolution ──────────────────────────────────────
 
-    def _resolve_conflicts(self, agent_id: str, session: Session, repo: Optional[Repo] = None) -> List[Dict]:
+    def _resolve_conflicts(
+        self, agent_id: str, session: Session, repo: Optional[Repo] = None
+    ) -> List[Dict]:
         """Resolve merge conflicts using newest-file-wins strategy.
 
         Args:
@@ -593,14 +666,16 @@ class WorktreeManager:
             self._write_file_content(repo.working_dir, file_path, content)
             repo.git.add(file_path)
 
-            session.add(MergeConflictResolution(
-                id=str(uuid.uuid4()),
-                agent_id=agent_id,
-                file_path=file_path,
-                parent_modified_at=parent_ts,
-                child_modified_at=child_ts,
-                resolution_choice=choice,
-            ))
+            session.add(
+                MergeConflictResolution(
+                    id=str(uuid.uuid4()),
+                    agent_id=agent_id,
+                    file_path=file_path,
+                    parent_modified_at=parent_ts,
+                    child_modified_at=child_ts,
+                    resolution_choice=choice,
+                )
+            )
 
             resolved.append({"file": file_path, "resolution": choice})
 
@@ -624,26 +699,36 @@ class WorktreeManager:
                 prepo = Repo(parent.worktree_path)
                 prepo.git.add("-A")
                 if prepo.is_dirty() or prepo.untracked_files:
-                    prepo.git.commit("-m", f"[Agent {parent_id}] Checkpoint before spawning child", "--no-verify")
+                    prepo.git.commit(
+                        "-m",
+                        f"[Agent {parent_id}] Checkpoint before spawning child",
+                        "--no-verify",
+                    )
                     commit = prepo.head.commit
-                    session.add(WorktreeCommit(
-                        id=str(uuid.uuid4()),
-                        agent_id=parent_id,
-                        commit_sha=commit.hexsha,
-                        commit_type="parent_checkpoint",
-                        commit_message="Checkpoint before spawning child",
-                        files_changed=commit.stats.total.get("files", 0),
-                    ))
+                    session.add(
+                        WorktreeCommit(
+                            id=str(uuid.uuid4()),
+                            agent_id=parent_id,
+                            commit_sha=commit.hexsha,
+                            commit_type="parent_checkpoint",
+                            commit_message="Checkpoint before spawning child",
+                            files_changed=commit.stats.total.get("files", 0),
+                        )
+                    )
                     session.flush()
                     return commit.hexsha
                 return prepo.head.commit.hexsha
         except Exception as e:
-            logger.warning(f"[WORKTREE] Could not read parent {parent_id} worktree: {e}")
+            logger.warning(
+                f"[WORKTREE] Could not read parent {parent_id} worktree: {e}"
+            )
 
         # Parent merged/cleaned — branch from its recorded commit or main HEAD
         return parent.parent_commit_sha or self.main_repo.head.commit.hexsha
 
-    def _get_file_timestamp(self, repo: Repo, file_path: str, ref: str = "HEAD") -> Optional[datetime]:
+    def _get_file_timestamp(
+        self, repo: Repo, file_path: str, ref: str = "HEAD"
+    ) -> Optional[datetime]:
         try:
             commits = list(repo.iter_commits(ref, paths=file_path, max_count=1))
             if commits:
@@ -669,9 +754,11 @@ class WorktreeManager:
         full_path = Path(repo_dir) / file_path
         full_path.parent.mkdir(parents=True, exist_ok=True)
         # Sanitize surrogate characters from garbled tmux output
-        full_path.write_text(content.encode('utf-8', errors='replace').decode('utf-8'))
+        full_path.write_text(content.encode("utf-8", errors="replace").decode("utf-8"))
 
-    def get_workspace_changes(self, agent_id: str, since_commit: Optional[str] = None) -> Dict[str, Any]:
+    def get_workspace_changes(
+        self, agent_id: str, since_commit: Optional[str] = None
+    ) -> Dict[str, Any]:
         """Get the diff for an agent's changes within its worktree."""
         session = self.db_manager.get_session()
         try:
@@ -745,9 +832,13 @@ class WorktreeManager:
                     shutil.rmtree(worktree_path, ignore_errors=True)
                 self.main_repo.git.worktree("prune")
             except Exception as e:
-                logger.warning(f"[WORKTREE] Could not remove worktree {worktree_path}: {e}")
+                logger.warning(
+                    f"[WORKTREE] Could not remove worktree {worktree_path}: {e}"
+                )
 
-    def cleanup_worktree(self, agent_id: str, delete_branch: bool = False) -> Dict[str, Any]:
+    def cleanup_worktree(
+        self, agent_id: str, delete_branch: bool = False
+    ) -> Dict[str, Any]:
         """Remove an agent's worktree directory.
 
         Args:
@@ -816,7 +907,9 @@ class WorktreeManager:
             # Step 1: remove all linked worktrees (except the main one)
             try:
                 self.main_repo.git.worktree("prune")
-                blocks = self.main_repo.git.worktree("list", "--porcelain").split("\n\n")
+                blocks = self.main_repo.git.worktree("list", "--porcelain").split(
+                    "\n\n"
+                )
                 for wt in blocks:
                     lines = wt.strip().split("\n")
                     if not lines or not lines[0].startswith("worktree "):
@@ -830,13 +923,16 @@ class WorktreeManager:
                 pass
 
             # Step 2: merge + delete tracked active branches
-            records = session.query(AgentBranch).filter(
-                AgentBranch.merge_status.in_(["active", None])
-            ).all()
+            records = (
+                session.query(AgentBranch)
+                .filter(AgentBranch.merge_status.in_(["active", None]))
+                .all()
+            )
             tracked_branches = {r.branch_name for r in records}
             all_branches = [b.name for b in self.main_repo.branches]
             untracked_branches = [
-                b for b in all_branches
+                b
+                for b in all_branches
                 if b.startswith(("agent-", "autopilot-")) and b not in tracked_branches
             ]
 
@@ -847,12 +943,18 @@ class WorktreeManager:
                     cleaned.append(branch_name)
                     return
                 try:
-                    self.main_repo.git.merge(branch_name, no_ff=True, m=f"[Cleanup] Merged {branch_name}")
+                    self.main_repo.git.merge(
+                        branch_name, no_ff=True, m=f"[Cleanup] Merged {branch_name}"
+                    )
                     merged.append(branch_name)
                 except GitCommandError as e:
                     if "CONFLICT" in str(e) and agent_id:
                         self._resolve_conflicts(agent_id, session, self.main_repo)
-                        self.main_repo.git.commit("-m", f"[Cleanup] Resolved conflicts merging {branch_name}", "--no-verify")
+                        self.main_repo.git.commit(
+                            "-m",
+                            f"[Cleanup] Resolved conflicts merging {branch_name}",
+                            "--no-verify",
+                        )
                         merged.append(branch_name)
                     else:
                         try:
@@ -862,7 +964,9 @@ class WorktreeManager:
                         try:
                             self.main_repo.git.branch("-D", branch_name)
                             cleaned.append(branch_name)
-                            logger.info(f"[WORKTREE] Force-deleted unmergeable branch {branch_name}")
+                            logger.info(
+                                f"[WORKTREE] Force-deleted unmergeable branch {branch_name}"
+                            )
                         except GitCommandError:
                             failed.append(branch_name)
                         return

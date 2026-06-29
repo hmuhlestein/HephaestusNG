@@ -1,10 +1,6 @@
 """Tests for autopilot_api.py REST endpoints using mock services."""
 
 import pytest
-import json
-from pathlib import Path
-from unittest.mock import patch, Mock, AsyncMock
-
 
 # ── Pipeline Status ───────────────────────────────────────────────
 
@@ -37,18 +33,24 @@ class TestDesignQueue:
         assert isinstance(data, list)
 
     def test_add_to_queue(self, client):
-        resp = client.post("/api/autopilot/queue", json={
-            "name": "test_design.md",
-            "description": "A test design",
-        })
+        resp = client.post(
+            "/api/autopilot/queue",
+            json={
+                "name": "test_design.md",
+                "description": "A test design",
+            },
+        )
         # May fail if no active project configured
         assert resp.status_code in (200, 201, 400, 404, 422, 500)
 
     def test_add_to_queue_rejects_traversal(self, client):
-        resp = client.post("/api/autopilot/queue", json={
-            "name": "../etc/passwd",
-            "description": "Evil design",
-        })
+        resp = client.post(
+            "/api/autopilot/queue",
+            json={
+                "name": "../etc/passwd",
+                "description": "Evil design",
+            },
+        )
         # Should reject path traversal or fail without project
         assert resp.status_code in (400, 404, 422, 500)
 
@@ -94,9 +96,12 @@ class TestProjects:
 
 class TestRepair:
     def test_repair_nonexistent(self, client):
-        resp = client.post("/api/autopilot/repair", json={
-            "filename": "nonexistent.md",
-        })
+        resp = client.post(
+            "/api/autopilot/repair",
+            json={
+                "filename": "nonexistent.md",
+            },
+        )
         # Should fail gracefully
         assert resp.status_code in (400, 404, 422, 500)
 
@@ -128,7 +133,7 @@ class TestQueueOrder:
         assert resp.status_code in (200, 404, 405)
 
     def test_save_queue_order(self, client):
-        resp = client.post("/api/autopilot/queue/order", json={
-            "order": ["a.md", "b.md"]
-        })
+        resp = client.post(
+            "/api/autopilot/queue/order", json={"order": ["a.md", "b.md"]}
+        )
         assert resp.status_code in (200, 201, 404, 405)

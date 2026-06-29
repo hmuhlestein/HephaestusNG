@@ -1,17 +1,15 @@
 #!/usr/bin/env python3
 """Create test tickets for E2E testing of the ticket UI."""
 
-import json
+import sys
 import uuid
 from datetime import datetime
 from pathlib import Path
-import sys
 
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.core.database import DatabaseManager
-from src.core.database import Workflow, BoardConfig, Ticket
+from src.core.database import BoardConfig, DatabaseManager, Ticket, Workflow
 
 # Initialize database
 db_path = Path("./hephaestus.db")
@@ -47,7 +45,12 @@ try:
             columns=[
                 {"id": "backlog", "name": "Backlog", "color": "#6B7280", "order": 0},
                 {"id": "todo", "name": "To Do", "color": "#3B82F6", "order": 1},
-                {"id": "in_progress", "name": "In Progress", "color": "#F59E0B", "order": 2},
+                {
+                    "id": "in_progress",
+                    "name": "In Progress",
+                    "color": "#F59E0B",
+                    "order": 2,
+                },
                 {"id": "review", "name": "Review", "color": "#8B5CF6", "order": 3},
                 {"id": "done", "name": "Done", "color": "#10B981", "order": 4},
             ],
@@ -110,10 +113,11 @@ try:
 
     for ticket_data in tickets_data:
         # Check if ticket already exists with this title
-        existing = session.query(Ticket).filter_by(
-            workflow_id=workflow_id,
-            title=ticket_data["title"]
-        ).first()
+        existing = (
+            session.query(Ticket)
+            .filter_by(workflow_id=workflow_id, title=ticket_data["title"])
+            .first()
+        )
 
         if not existing:
             # Need to create dummy task and agent first
@@ -166,7 +170,7 @@ try:
     # Commit all changes
     session.commit()
     print("\n✅ Test data created successfully!")
-    print(f"\nView the board at: http://localhost:8300/tickets")
+    print("\nView the board at: http://localhost:8300/tickets")
 
 except Exception as e:
     session.rollback()

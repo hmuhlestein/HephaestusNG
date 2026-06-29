@@ -16,7 +16,9 @@ def register(subparsers):
     log.set_defaults(func=get_logs)
 
     term = sub.add_parser("terminate", help="Terminate an agent")
-    term.add_argument("agent_id", nargs="?", help="Agent ID (omit with --all to terminate all)")
+    term.add_argument(
+        "agent_id", nargs="?", help="Agent ID (omit with --all to terminate all)"
+    )
     term.add_argument("--all", action="store_true", help="Terminate all active agents")
     term.set_defaults(func=terminate)
 
@@ -45,7 +47,14 @@ def _print_agents(agents):
         print("No agents.")
         return
     rows = [
-        [a.get("id", a.get("agent_id", ""))[:20], a.get("status", ""), (a.get("current_task", {}) or {}).get("description", "")[:40] if a.get("current_task") else "", a.get("cli_type", a.get("cli_tool", ""))]
+        [
+            a.get("id", a.get("agent_id", ""))[:20],
+            a.get("status", ""),
+            (a.get("current_task", {}) or {}).get("description", "")[:40]
+            if a.get("current_task")
+            else "",
+            a.get("cli_type", a.get("cli_tool", "")),
+        ]
         for a in agents
     ]
     table(["Agent ID", "Status", "Task", "CLI Tool"], rows)
@@ -68,7 +77,9 @@ def terminate(args):
 
     if args.all:
         data = api_get(args, "/api/agents", timeout=10)
-        agents = data if isinstance(data, list) else data.get("agents", []) if data else []
+        agents = (
+            data if isinstance(data, list) else data.get("agents", []) if data else []
+        )
         active = [a for a in agents if a.get("status") == "working"]
         if not active:
             print("No active agents.")
@@ -79,7 +90,9 @@ def terminate(args):
 
         def _terminate_one(aid):
             try:
-                result = api_post(args, "/api/terminate_agent", {"agent_id": aid}, timeout=10)
+                result = api_post(
+                    args, "/api/terminate_agent", {"agent_id": aid}, timeout=10
+                )
                 if result is None:
                     return aid, "connection error"
                 elif isinstance(result, dict) and "error" in result:
@@ -89,7 +102,11 @@ def terminate(args):
             except Exception as e:
                 return aid, str(e)[:60]
 
-        aids = [a.get("id", a.get("agent_id", "")) for a in active if a.get("id") or a.get("agent_id")]
+        aids = [
+            a.get("id", a.get("agent_id", ""))
+            for a in active
+            if a.get("id") or a.get("agent_id")
+        ]
         with ThreadPoolExecutor(max_workers=min(len(aids), 10)) as pool:
             futures = {pool.submit(_terminate_one, aid): aid for aid in aids}
             for future in as_completed(futures):
@@ -102,13 +119,17 @@ def terminate(args):
         print("Error: provide an agent_id or use --all")
         return 1
 
-    data = api_post(args, "/api/terminate_agent", {"agent_id": args.agent_id}, timeout=15)
+    data = api_post(
+        args, "/api/terminate_agent", {"agent_id": args.agent_id}, timeout=15
+    )
     if data is None:
         print(f"Agent {args.agent_id}: connection error")
     elif isinstance(data, dict) and "error" in data:
         print(f"Agent {args.agent_id}: {data.get('detail', data['error'])}")
     else:
-        status = data.get("status", "terminated") if isinstance(data, dict) else "terminated"
+        status = (
+            data.get("status", "terminated") if isinstance(data, dict) else "terminated"
+        )
         print(f"Agent {args.agent_id}: {status}")
     return 0
 
@@ -116,9 +137,13 @@ def terminate(args):
 def send_message(args):
     if not require_backend(args):
         return 1
-    data = api_post(args, "/api/send_message", {
-        "agent_id": args.agent_id,
-        "message": args.message,
-    })
+    data = api_post(
+        args,
+        "/api/send_message",
+        {
+            "agent_id": args.agent_id,
+            "message": args.message,
+        },
+    )
     output(args, data, lambda d: print(f"Message sent to {args.agent_id}"))
     return 0

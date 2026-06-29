@@ -1,28 +1,29 @@
 """API endpoints for the frontend dashboard."""
 
-from typing import List, Dict, Any, Optional
+import logging
+import os
 from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, List, Optional
+
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse
 from sqlalchemy import desc, func, or_
 from sqlalchemy.orm import joinedload
-import logging
-import os
 
-from src.core.database import (
-    DatabaseManager,
-    Agent,
-    Task,
-    Memory,
-    AgentLog,
-    Workflow,
-    Phase,
-    AgentResult,
-    WorkflowResult,
-    PhasePromptVersion,
-    TaskPromptOverride,
-)
 from src.agents.manager import AgentManager
+from src.core.database import (
+    Agent,
+    AgentLog,
+    AgentResult,
+    DatabaseManager,
+    Memory,
+    Phase,
+    PhasePromptVersion,
+    Task,
+    TaskPromptOverride,
+    Workflow,
+    WorkflowResult,
+)
 from src.phases import PhaseManager
 
 logger = logging.getLogger(__name__)
@@ -33,7 +34,12 @@ router = APIRouter(prefix="/api", tags=["Frontend API"])
 class FrontendAPI:
     """API handlers for frontend."""
 
-    def __init__(self, db_manager: DatabaseManager, agent_manager: AgentManager, phase_manager: PhaseManager = None):
+    def __init__(
+        self,
+        db_manager: DatabaseManager,
+        agent_manager: AgentManager,
+        phase_manager: PhaseManager = None,
+    ):
         self.db_manager = db_manager
         self.agent_manager = agent_manager
         self.phase_manager = phase_manager
@@ -49,7 +55,7 @@ class FrontendAPI:
         if not raw:
             return None
         try:
-            normalized = raw.replace('Z', '+00:00')
+            normalized = raw.replace("Z", "+00:00")
             dt = datetime.fromisoformat(normalized)
             if dt.tzinfo is None:
                 dt = dt.replace(tzinfo=timezone.utc)
@@ -57,7 +63,9 @@ class FrontendAPI:
         except Exception:
             return None
 
-    def _deduplicate_results(self, results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def _deduplicate_results(
+        self, results: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
         """
         Deduplicate results by preferring workflow-level results over task-level results
         when both exist from the same agent for the same workflow within a close timeframe.
@@ -73,7 +81,7 @@ class FrontendAPI:
         # Group results by agent_id and workflow_id
         grouped = {}
         for result in results:
-            key = (result['agent_id'], result['workflow_id'])
+            key = (result["agent_id"], result["workflow_id"])
             if key not in grouped:
                 grouped[key] = []
             grouped[key].append(result)
@@ -87,21 +95,21 @@ class FrontendAPI:
                 continue
 
             # Separate workflow and task results
-            workflow_results = [r for r in group if r['scope'] == 'workflow']
-            task_results = [r for r in group if r['scope'] == 'task']
+            workflow_results = [r for r in group if r["scope"] == "workflow"]
+            task_results = [r for r in group if r["scope"] == "task"]
 
             # If we have both types from the same agent/workflow
             if workflow_results and task_results:
                 # Check if they were created within 5 minutes of each other
                 for wf_result in workflow_results:
-                    wf_time = self._parse_datetime(wf_result['created_at'])
+                    wf_time = self._parse_datetime(wf_result["created_at"])
                     if not wf_time:
                         continue
 
                     # Find task results created within 5 minutes
                     related_task_results = []
                     for task_result in task_results:
-                        task_time = self._parse_datetime(task_result['created_at'])
+                        task_time = self._parse_datetime(task_result["created_at"])
                         if not task_time:
                             continue
 
@@ -112,8 +120,10 @@ class FrontendAPI:
                     # Enhance workflow result with task_id from related task result
                     if related_task_results:
                         # Use the first related task result's task_id
-                        wf_result['task_id'] = related_task_results[0]['task_id']
-                        wf_result['task_description'] = related_task_results[0]['task_description']
+                        wf_result["task_id"] = related_task_results[0]["task_id"]
+                        wf_result["task_description"] = related_task_results[0][
+                            "task_description"
+                        ]
 
                     # Add workflow result (preferred)
                     deduplicated.append(wf_result)
@@ -135,24 +145,33 @@ class FrontendAPI:
         """Get dashboard statistics."""
         session = self.db_manager.get_session()
         try:
-            active_agents = session.query(func.count(Agent.id)).filter(
-                Agent.status != "terminated"
-            ).scalar()
+            active_agents = (
+                session.query(func.count(Agent.id))
+                .filter(Agent.status != "terminated")
+                .scalar()
+            )
 
-            running_tasks = session.query(func.count(Task.id)).filter(
-                Task.status.in_(["assigned", "in_progress"])
-            ).scalar()
+            running_tasks = (
+                session.query(func.count(Task.id))
+                .filter(Task.status.in_(["assigned", "in_progress"]))
+                .scalar()
+            )
 
-            queued_tasks = session.query(func.count(Task.id)).filter(
-                Task.status == "queued"
-            ).scalar()
+            queued_tasks = (
+                session.query(func.count(Task.id))
+                .filter(Task.status == "queued")
+                .scalar()
+            )
 
             total_memories = session.query(func.count(Memory.id)).scalar()
 
             # Get recent activity
-            recent_logs = session.query(AgentLog).order_by(
-                desc(AgentLog.timestamp)
-            ).limit(10).all()
+            recent_logs = (
+                session.query(AgentLog)
+                .order_by(desc(AgentLog.timestamp))
+                .limit(10)
+                .all()
+            )
 
             recent_activity = [
                 {
@@ -166,14 +185,20 @@ class FrontendAPI:
             ]
 
             # Get system health
-            stuck_agents = session.query(func.count(Agent.id)).filter(
-                Agent.status == "stuck"
-            ).scalar()
+            stuck_agents = (
+                session.query(func.count(Agent.id))
+                .filter(Agent.status == "stuck")
+                .scalar()
+            )
 
-            failed_tasks_today = session.query(func.count(Task.id)).filter(
-                Task.status == "failed",
-                Task.completed_at >= datetime.utcnow() - timedelta(days=1)
-            ).scalar()
+            failed_tasks_today = (
+                session.query(func.count(Task.id))
+                .filter(
+                    Task.status == "failed",
+                    Task.completed_at >= datetime.utcnow() - timedelta(days=1),
+                )
+                .scalar()
+            )
 
             return {
                 "active_agents": active_agents,
@@ -205,7 +230,9 @@ class FrontendAPI:
             if workflow_id:
                 query = query.filter(Task.workflow_id == workflow_id)
 
-            tasks = query.order_by(desc(Task.created_at)).offset(skip).limit(limit).all()
+            tasks = (
+                query.order_by(desc(Task.created_at)).offset(skip).limit(limit).all()
+            )
 
             result = []
             for task in tasks:
@@ -218,9 +245,14 @@ class FrontendAPI:
                     "assigned_agent_id": task.assigned_agent_id,
                     "created_by_agent_id": task.created_by_agent_id,
                     "parent_task_id": task.parent_task_id,
-                    "created_at": task.created_at.isoformat() + 'Z',  # Add UTC timezone indicator
-                    "started_at": task.started_at.isoformat() + 'Z' if task.started_at else None,
-                    "completed_at": task.completed_at.isoformat() + 'Z' if task.completed_at else None,
+                    "created_at": task.created_at.isoformat()
+                    + "Z",  # Add UTC timezone indicator
+                    "started_at": task.started_at.isoformat() + "Z"
+                    if task.started_at
+                    else None,
+                    "completed_at": task.completed_at.isoformat() + "Z"
+                    if task.completed_at
+                    else None,
                     "estimated_complexity": task.estimated_complexity,
                     "phase_id": task.phase_id,
                     "workflow_id": task.workflow_id,
@@ -234,7 +266,11 @@ class FrontendAPI:
                     # Handle numeric phase_id (order) vs UUID phase_id
                     if task.phase_id.isdigit():
                         # Look up by phase order
-                        phase = session.query(Phase).filter_by(order=int(task.phase_id)).first()
+                        phase = (
+                            session.query(Phase)
+                            .filter_by(order=int(task.phase_id))
+                            .first()
+                        )
                     else:
                         # Look up by phase UUID
                         phase = session.query(Phase).filter_by(id=task.phase_id).first()
@@ -264,27 +300,37 @@ class FrontendAPI:
                     "current_task_id": agent.current_task_id,
                     "tmux_session_name": agent.tmux_session_name,
                     "health_check_failures": agent.health_check_failures,
-                    "created_at": agent.created_at.isoformat() + 'Z',
-                    "last_activity": agent.last_activity.isoformat() + 'Z' if agent.last_activity else None,
+                    "created_at": agent.created_at.isoformat() + "Z",
+                    "last_activity": agent.last_activity.isoformat() + "Z"
+                    if agent.last_activity
+                    else None,
                     "current_task": None,
                 }
 
                 # Get current task details
                 if agent.current_task_id:
-                    task = session.query(Task).filter_by(id=agent.current_task_id).first()
+                    task = (
+                        session.query(Task).filter_by(id=agent.current_task_id).first()
+                    )
                     if task:
                         # Calculate runtime
                         runtime_seconds = 0
                         if task.started_at:
                             end_time = task.completed_at or datetime.utcnow()
-                            runtime_seconds = int((end_time - task.started_at).total_seconds())
+                            runtime_seconds = int(
+                                (end_time - task.started_at).total_seconds()
+                            )
 
                         agent_data["current_task"] = {
                             "id": task.id,
-                            "description": (task.enriched_description or task.raw_description)[:100],
+                            "description": (
+                                task.enriched_description or task.raw_description
+                            )[:100],
                             "status": task.status,
                             "priority": task.priority,
-                            "started_at": task.started_at.isoformat() + 'Z' if task.started_at else None,
+                            "started_at": task.started_at.isoformat() + "Z"
+                            if task.started_at
+                            else None,
                             "runtime_seconds": runtime_seconds,
                             "phase_info": None,
                         }
@@ -293,15 +339,27 @@ class FrontendAPI:
                         if task.phase_id:
                             if task.phase_id.isdigit():
                                 # Query by order AND workflow_id to avoid picking phases from other workflows
-                                phase = session.query(Phase).filter_by(
-                                    order=int(task.phase_id),
-                                    workflow_id=task.workflow_id
-                                ).first()
+                                phase = (
+                                    session.query(Phase)
+                                    .filter_by(
+                                        order=int(task.phase_id),
+                                        workflow_id=task.workflow_id,
+                                    )
+                                    .first()
+                                )
                                 # Fallback: try without workflow_id filter
                                 if not phase:
-                                    phase = session.query(Phase).filter_by(order=int(task.phase_id)).first()
+                                    phase = (
+                                        session.query(Phase)
+                                        .filter_by(order=int(task.phase_id))
+                                        .first()
+                                    )
                             else:
-                                phase = session.query(Phase).filter_by(id=task.phase_id).first()
+                                phase = (
+                                    session.query(Phase)
+                                    .filter_by(id=task.phase_id)
+                                    .first()
+                                )
 
                             if phase:
                                 agent_data["current_task"]["phase_info"] = {
@@ -349,11 +407,20 @@ class FrontendAPI:
             # Get counts by type for all memories (not filtered by search)
             type_counts = {}
             base_query = session.query(Memory)
-            for mem_type in ['error_fix', 'discovery', 'decision', 'learning', 'warning', 'codebase_knowledge']:
+            for mem_type in [
+                "error_fix",
+                "discovery",
+                "decision",
+                "learning",
+                "warning",
+                "codebase_knowledge",
+            ]:
                 count = base_query.filter(Memory.memory_type == mem_type).count()
                 type_counts[mem_type] = count
 
-            memories = query.order_by(desc(Memory.created_at)).offset(skip).limit(limit).all()
+            memories = (
+                query.order_by(desc(Memory.created_at)).offset(skip).limit(limit).all()
+            )
 
             return {
                 "memories": [
@@ -381,12 +448,24 @@ class FrontendAPI:
         try:
             # Get tasks filtered by workflow_id if provided
             if workflow_id:
-                tasks = session.query(Task).filter(Task.workflow_id == workflow_id).all()
-                phases = session.query(Phase).filter(Phase.workflow_id == workflow_id).all()
+                tasks = (
+                    session.query(Task).filter(Task.workflow_id == workflow_id).all()
+                )
+                phases = (
+                    session.query(Phase).filter(Phase.workflow_id == workflow_id).all()
+                )
                 # Get agents that are assigned to tasks in this workflow
-                agent_ids = set(t.assigned_agent_id for t in tasks if t.assigned_agent_id)
-                agent_ids.update(t.created_by_agent_id for t in tasks if t.created_by_agent_id)
-                agents = session.query(Agent).filter(Agent.id.in_(agent_ids)).all() if agent_ids else []
+                agent_ids = set(
+                    t.assigned_agent_id for t in tasks if t.assigned_agent_id
+                )
+                agent_ids.update(
+                    t.created_by_agent_id for t in tasks if t.created_by_agent_id
+                )
+                agents = (
+                    session.query(Agent).filter(Agent.id.in_(agent_ids)).all()
+                    if agent_ids
+                    else []
+                )
             else:
                 tasks = session.query(Task).all()
                 agents = session.query(Agent).all()
@@ -401,34 +480,43 @@ class FrontendAPI:
             # Add agent nodes from agents table
             for agent in agents:
                 agent_ids_added.add(agent.id)
-                nodes.append({
-                    "id": f"agent_{agent.id}",
-                    "type": "agent",
-                    "label": f"Agent {agent.id[:8]}",
-                    "data": {
-                        "id": agent.id,
-                        "status": agent.status,
-                        "cli_type": agent.cli_type,
-                        "current_task_id": agent.current_task_id,
-                        "created_at": agent.created_at.isoformat() if agent.created_at else None,
-                    },
-                })
+                nodes.append(
+                    {
+                        "id": f"agent_{agent.id}",
+                        "type": "agent",
+                        "label": f"Agent {agent.id[:8]}",
+                        "data": {
+                            "id": agent.id,
+                            "status": agent.status,
+                            "cli_type": agent.cli_type,
+                            "current_task_id": agent.current_task_id,
+                            "created_at": agent.created_at.isoformat()
+                            if agent.created_at
+                            else None,
+                        },
+                    }
+                )
 
             # Add external agent nodes (agents that created tasks but aren't in agents table)
             for task in tasks:
-                if task.created_by_agent_id and task.created_by_agent_id not in agent_ids_added:
+                if (
+                    task.created_by_agent_id
+                    and task.created_by_agent_id not in agent_ids_added
+                ):
                     agent_ids_added.add(task.created_by_agent_id)
-                    nodes.append({
-                        "id": f"agent_{task.created_by_agent_id}",
-                        "type": "agent",
-                        "label": f"Agent {task.created_by_agent_id[:8] if len(task.created_by_agent_id) > 8 else task.created_by_agent_id}",
-                        "data": {
-                            "id": task.created_by_agent_id,
-                            "status": "external",  # Mark as external agent
-                            "cli_type": "mcp",  # These are typically MCP agents
-                            "current_task_id": None,
-                        },
-                    })
+                    nodes.append(
+                        {
+                            "id": f"agent_{task.created_by_agent_id}",
+                            "type": "agent",
+                            "label": f"Agent {task.created_by_agent_id[:8] if len(task.created_by_agent_id) > 8 else task.created_by_agent_id}",
+                            "data": {
+                                "id": task.created_by_agent_id,
+                                "status": "external",  # Mark as external agent
+                                "cli_type": "mcp",  # These are typically MCP agents
+                                "current_task_id": None,
+                            },
+                        }
+                    )
 
             # Add task nodes
             for task in tasks:
@@ -439,7 +527,11 @@ class FrontendAPI:
                 if task.phase_id:
                     if task.phase_id.isdigit():
                         # Numeric phase_id - lookup by order
-                        phase = session.query(Phase).filter_by(order=int(task.phase_id)).first()
+                        phase = (
+                            session.query(Phase)
+                            .filter_by(order=int(task.phase_id))
+                            .first()
+                        )
                     else:
                         # UUID phase_id - lookup by id
                         phase = session.query(Phase).filter_by(id=task.phase_id).first()
@@ -448,21 +540,28 @@ class FrontendAPI:
                         phase_name = phase.name
                         phase_order = phase.order
 
-                nodes.append({
-                    "id": f"task_{task.id}",
-                    "type": "task",
-                    "label": (task.enriched_description or task.raw_description)[:50],
-                    "data": {
-                        "id": task.id,
-                        "status": task.status,
-                        "priority": task.priority,
-                        "description": task.enriched_description or task.raw_description,
-                        "created_at": task.created_at.isoformat() if task.created_at else None,
-                        "phase_id": task.phase_id,
-                        "phase_name": phase_name,
-                        "phase_order": phase_order,
-                    },
-                })
+                nodes.append(
+                    {
+                        "id": f"task_{task.id}",
+                        "type": "task",
+                        "label": (task.enriched_description or task.raw_description)[
+                            :50
+                        ],
+                        "data": {
+                            "id": task.id,
+                            "status": task.status,
+                            "priority": task.priority,
+                            "description": task.enriched_description
+                            or task.raw_description,
+                            "created_at": task.created_at.isoformat()
+                            if task.created_at
+                            else None,
+                            "phase_id": task.phase_id,
+                            "phase_name": phase_name,
+                            "phase_order": phase_order,
+                        },
+                    }
+                )
 
             # Build edges
             edges = []
@@ -470,35 +569,41 @@ class FrontendAPI:
             # Agent created task edges
             for task in tasks:
                 if task.created_by_agent_id:
-                    edges.append({
-                        "id": f"edge_{task.created_by_agent_id}_{task.id}",
-                        "source": f"agent_{task.created_by_agent_id}",
-                        "target": f"task_{task.id}",
-                        "label": "created",
-                        "type": "created",
-                    })
+                    edges.append(
+                        {
+                            "id": f"edge_{task.created_by_agent_id}_{task.id}",
+                            "source": f"agent_{task.created_by_agent_id}",
+                            "target": f"task_{task.id}",
+                            "label": "created",
+                            "type": "created",
+                        }
+                    )
 
             # Task assigned to agent edges
             for task in tasks:
                 if task.assigned_agent_id:
-                    edges.append({
-                        "id": f"edge_{task.id}_{task.assigned_agent_id}",
-                        "source": f"task_{task.id}",
-                        "target": f"agent_{task.assigned_agent_id}",
-                        "label": "assigned",
-                        "type": "assigned",
-                    })
+                    edges.append(
+                        {
+                            "id": f"edge_{task.id}_{task.assigned_agent_id}",
+                            "source": f"task_{task.id}",
+                            "target": f"agent_{task.assigned_agent_id}",
+                            "label": "assigned",
+                            "type": "assigned",
+                        }
+                    )
 
             # Parent-child task edges (based on parent_task_id)
             for task in tasks:
                 if task.parent_task_id:
-                    edges.append({
-                        "id": f"edge_parent_{task.parent_task_id}_{task.id}",
-                        "source": f"task_{task.parent_task_id}",
-                        "target": f"task_{task.id}",
-                        "label": "subtask",
-                        "type": "subtask",
-                    })
+                    edges.append(
+                        {
+                            "id": f"edge_parent_{task.parent_task_id}_{task.id}",
+                            "source": f"task_{task.parent_task_id}",
+                            "target": f"task_{task.id}",
+                            "label": "subtask",
+                            "type": "subtask",
+                        }
+                    )
 
             # Task spawning edges (tasks created by the agent assigned to execute another task)
             # This captures the actual task hierarchy: if Task A is assigned to Agent X,
@@ -508,16 +613,20 @@ class FrontendAPI:
                 if task.assigned_agent_id:
                     # Find tasks created by this task's assigned agent
                     for other_task in tasks:
-                        if (other_task.created_by_agent_id == task.assigned_agent_id
+                        if (
+                            other_task.created_by_agent_id == task.assigned_agent_id
                             and other_task.id != task.id
-                            and other_task.id in task_ids):
-                            edges.append({
-                                "id": f"edge_spawned_{task.id}_{other_task.id}",
-                                "source": f"task_{task.id}",
-                                "target": f"task_{other_task.id}",
-                                "label": "spawned",
-                                "type": "subtask",
-                            })
+                            and other_task.id in task_ids
+                        ):
+                            edges.append(
+                                {
+                                    "id": f"edge_spawned_{task.id}_{other_task.id}",
+                                    "source": f"task_{task.id}",
+                                    "target": f"task_{other_task.id}",
+                                    "label": "spawned",
+                                    "type": "subtask",
+                                }
+                            )
 
             # Create phase mapping - include both UUID and numeric keys
             phase_info = {}
@@ -554,83 +663,112 @@ class FrontendAPI:
                     "name": "No Workflow",
                     "status": "inactive",
                     "total_phases": 0,
-                    "phases": []
+                    "phases": [],
                 }
 
             # Get phases for this workflow
-            phases = session.query(Phase).filter(
-                Phase.workflow_id == workflow.id
-            ).order_by(Phase.order).all()
+            phases = (
+                session.query(Phase)
+                .filter(Phase.workflow_id == workflow.id)
+                .order_by(Phase.order)
+                .all()
+            )
 
             phase_data = []
             for phase in phases:
                 # Count active agents for this phase
                 # Handle both numeric phase_id (order) and UUID phase_id
-                active_agents = session.query(func.count(Agent.id)).join(
-                    Task, Agent.id == Task.assigned_agent_id
-                ).filter(
-                    or_(
-                        Task.phase_id == phase.id,  # UUID match
-                        Task.phase_id == str(phase.order)  # Numeric order match
-                    ),
-                    Agent.status.in_(["active", "working"])
-                ).scalar() or 0
+                active_agents = (
+                    session.query(func.count(Agent.id))
+                    .join(Task, Agent.id == Task.assigned_agent_id)
+                    .filter(
+                        or_(
+                            Task.phase_id == phase.id,  # UUID match
+                            Task.phase_id == str(phase.order),  # Numeric order match
+                        ),
+                        Agent.status.in_(["active", "working"]),
+                    )
+                    .scalar()
+                    or 0
+                )
 
                 # Count tasks by status for this phase
-                total_tasks = session.query(func.count(Task.id)).filter(
-                    or_(
-                        Task.phase_id == phase.id,  # UUID match
-                        Task.phase_id == str(phase.order)  # Numeric order match
+                total_tasks = (
+                    session.query(func.count(Task.id))
+                    .filter(
+                        or_(
+                            Task.phase_id == phase.id,  # UUID match
+                            Task.phase_id == str(phase.order),  # Numeric order match
+                        )
                     )
-                ).scalar() or 0
+                    .scalar()
+                    or 0
+                )
 
-                completed_tasks = session.query(func.count(Task.id)).filter(
-                    or_(
-                        Task.phase_id == phase.id,  # UUID match
-                        Task.phase_id == str(phase.order)  # Numeric order match
-                    ),
-                    Task.status == "done"
-                ).scalar() or 0
+                completed_tasks = (
+                    session.query(func.count(Task.id))
+                    .filter(
+                        or_(
+                            Task.phase_id == phase.id,  # UUID match
+                            Task.phase_id == str(phase.order),  # Numeric order match
+                        ),
+                        Task.status == "done",
+                    )
+                    .scalar()
+                    or 0
+                )
 
-                active_tasks = session.query(func.count(Task.id)).filter(
-                    or_(
-                        Task.phase_id == phase.id,  # UUID match
-                        Task.phase_id == str(phase.order)  # Numeric order match
-                    ),
-                    Task.status.in_(["assigned", "in_progress"])
-                ).scalar() or 0
+                active_tasks = (
+                    session.query(func.count(Task.id))
+                    .filter(
+                        or_(
+                            Task.phase_id == phase.id,  # UUID match
+                            Task.phase_id == str(phase.order),  # Numeric order match
+                        ),
+                        Task.status.in_(["assigned", "in_progress"]),
+                    )
+                    .scalar()
+                    or 0
+                )
 
-                pending_tasks = session.query(func.count(Task.id)).filter(
-                    or_(
-                        Task.phase_id == phase.id,  # UUID match
-                        Task.phase_id == str(phase.order)  # Numeric order match
-                    ),
-                    Task.status == "pending"
-                ).scalar() or 0
+                pending_tasks = (
+                    session.query(func.count(Task.id))
+                    .filter(
+                        or_(
+                            Task.phase_id == phase.id,  # UUID match
+                            Task.phase_id == str(phase.order),  # Numeric order match
+                        ),
+                        Task.status == "pending",
+                    )
+                    .scalar()
+                    or 0
+                )
 
-                phase_data.append({
-                    "id": phase.id,
-                    "order": phase.order,
-                    "name": phase.name,
-                    "description": phase.description,
-                    "active_agents": active_agents,
-                    "total_tasks": total_tasks,
-                    "completed_tasks": completed_tasks,
-                    "active_tasks": active_tasks,
-                    "pending_tasks": pending_tasks,
-                    "cli_config": {
-                        "cli_tool": phase.cli_tool,
-                        "cli_model": phase.cli_model,
-                        "glm_api_token_env": phase.glm_api_token_env
+                phase_data.append(
+                    {
+                        "id": phase.id,
+                        "order": phase.order,
+                        "name": phase.name,
+                        "description": phase.description,
+                        "active_agents": active_agents,
+                        "total_tasks": total_tasks,
+                        "completed_tasks": completed_tasks,
+                        "active_tasks": active_tasks,
+                        "pending_tasks": pending_tasks,
+                        "cli_config": {
+                            "cli_tool": phase.cli_tool,
+                            "cli_model": phase.cli_model,
+                            "glm_api_token_env": phase.glm_api_token_env,
+                        },
                     }
-                })
+                )
 
             return {
                 "id": workflow.id,
                 "name": workflow.name,
                 "status": "active",
                 "total_phases": len(phases),
-                "phases": phase_data
+                "phases": phase_data,
             }
         finally:
             session.close()
@@ -655,7 +793,7 @@ class FrontendAPI:
                 "done_definitions": phase.done_definitions or [],
                 "additional_notes": phase.additional_notes or "",
                 "outputs": phase.outputs or "",
-                "next_steps": phase.next_steps or ""
+                "next_steps": phase.next_steps or "",
             }
         finally:
             session.close()
@@ -679,7 +817,9 @@ class FrontendAPI:
                 "parent_task_id": task.parent_task_id,
                 "created_at": task.created_at.isoformat() if task.created_at else None,
                 "started_at": task.started_at.isoformat() if task.started_at else None,
-                "completed_at": task.completed_at.isoformat() if task.completed_at else None,
+                "completed_at": task.completed_at.isoformat()
+                if task.completed_at
+                else None,
                 "estimated_complexity": task.estimated_complexity,
                 "phase_id": task.phase_id,
                 "phase_name": None,
@@ -688,7 +828,9 @@ class FrontendAPI:
                 # Deduplication fields
                 "duplicate_of_task_id": task.duplicate_of_task_id,
                 "similarity_score": task.similarity_score,
-                "related_task_ids": task.related_task_ids if task.related_task_ids else []
+                "related_task_ids": task.related_task_ids
+                if task.related_task_ids
+                else [],
             }
         finally:
             session.close()
@@ -705,14 +847,20 @@ class FrontendAPI:
             agent_info = None
             system_prompt = None
             if task.assigned_agent_id:
-                agent = session.query(Agent).filter_by(id=task.assigned_agent_id).first()
+                agent = (
+                    session.query(Agent).filter_by(id=task.assigned_agent_id).first()
+                )
                 if agent:
                     agent_info = {
                         "id": agent.id,
                         "status": agent.status,
                         "cli_type": agent.cli_type,
-                        "created_at": agent.created_at.isoformat() + 'Z' if agent.created_at else None,
-                        "last_activity": agent.last_activity.isoformat() + 'Z' if agent.last_activity else None,
+                        "created_at": agent.created_at.isoformat() + "Z"
+                        if agent.created_at
+                        else None,
+                        "last_activity": agent.last_activity.isoformat() + "Z"
+                        if agent.last_activity
+                        else None,
                     }
                     system_prompt = agent.system_prompt
 
@@ -720,7 +868,9 @@ class FrontendAPI:
             phase_info = None
             if task.phase_id:
                 if task.phase_id.isdigit():
-                    phase = session.query(Phase).filter_by(order=int(task.phase_id)).first()
+                    phase = (
+                        session.query(Phase).filter_by(order=int(task.phase_id)).first()
+                    )
                 else:
                     phase = session.query(Phase).filter_by(id=task.phase_id).first()
 
@@ -737,18 +887,26 @@ class FrontendAPI:
             # Get child tasks (tasks created by this task's agent)
             child_tasks = []
             if task.assigned_agent_id:
-                children = session.query(Task).filter(
-                    Task.created_by_agent_id == task.assigned_agent_id,
-                    Task.id != task.id
-                ).all()
+                children = (
+                    session.query(Task)
+                    .filter(
+                        Task.created_by_agent_id == task.assigned_agent_id,
+                        Task.id != task.id,
+                    )
+                    .all()
+                )
 
                 child_tasks = [
                     {
                         "id": child.id,
-                        "description": (child.enriched_description or child.raw_description)[:100],
+                        "description": (
+                            child.enriched_description or child.raw_description
+                        )[:100],
                         "status": child.status,
                         "priority": child.priority,
-                        "created_at": child.created_at.isoformat() + 'Z' if child.created_at else None,
+                        "created_at": child.created_at.isoformat() + "Z"
+                        if child.created_at
+                        else None,
                     }
                     for child in children
                 ]
@@ -761,67 +919,98 @@ class FrontendAPI:
                 if parent:
                     parent_task = {
                         "id": parent.id,
-                        "description": (parent.enriched_description or parent.raw_description)[:100],
+                        "description": (
+                            parent.enriched_description or parent.raw_description
+                        )[:100],
                         "status": parent.status,
-                        "created_at": parent.created_at.isoformat() + 'Z' if parent.created_at else None,
+                        "created_at": parent.created_at.isoformat() + "Z"
+                        if parent.created_at
+                        else None,
                     }
             elif task.created_by_agent_id:
                 # No explicit parent_task_id, but we can infer it from the agent that created this task
                 # Find the task that was assigned to the agent that created this task
-                parent = session.query(Task).filter_by(assigned_agent_id=task.created_by_agent_id).first()
+                parent = (
+                    session.query(Task)
+                    .filter_by(assigned_agent_id=task.created_by_agent_id)
+                    .first()
+                )
                 if parent and parent.id != task.id:  # Make sure it's not the same task
                     parent_task = {
                         "id": parent.id,
-                        "description": (parent.enriched_description or parent.raw_description)[:100],
+                        "description": (
+                            parent.enriched_description or parent.raw_description
+                        )[:100],
                         "status": parent.status,
-                        "created_at": parent.created_at.isoformat() + 'Z' if parent.created_at else None,
+                        "created_at": parent.created_at.isoformat() + "Z"
+                        if parent.created_at
+                        else None,
                     }
 
             # Get tasks that are duplicates of this task
             duplicated_tasks = []
-            duplicates = session.query(Task).filter_by(
-                duplicate_of_task_id=task.id,
-                status='duplicated'
-            ).all()
+            duplicates = (
+                session.query(Task)
+                .filter_by(duplicate_of_task_id=task.id, status="duplicated")
+                .all()
+            )
             for dup in duplicates:
-                duplicated_tasks.append({
-                    "id": dup.id,
-                    "description": (dup.enriched_description or dup.raw_description)[:100],
-                    "similarity_score": dup.similarity_score,
-                    "created_at": dup.created_at.isoformat() + 'Z' if dup.created_at else None,
-                    "created_by_agent_id": dup.created_by_agent_id,
-                })
+                duplicated_tasks.append(
+                    {
+                        "id": dup.id,
+                        "description": (
+                            dup.enriched_description or dup.raw_description
+                        )[:100],
+                        "similarity_score": dup.similarity_score,
+                        "created_at": dup.created_at.isoformat() + "Z"
+                        if dup.created_at
+                        else None,
+                        "created_by_agent_id": dup.created_by_agent_id,
+                    }
+                )
 
             # Get related tasks with details
             related_tasks_details = []
             if task.related_task_ids:
                 import json
+
                 try:
                     # Parse the related_task_ids if it's a JSON string
-                    related_data = task.related_task_ids if isinstance(task.related_task_ids, list) else json.loads(task.related_task_ids)
+                    related_data = (
+                        task.related_task_ids
+                        if isinstance(task.related_task_ids, list)
+                        else json.loads(task.related_task_ids)
+                    )
 
                     # Backfill similarity scores for old-format related_data (plain ids,
                     # no scores) by cosine over the already-stored task embeddings. Use the
                     # embedding class's shared (static) cosine — no hardcoded math, no
                     # OpenAI dependency, no model load.
                     from src.memory.embedding_factory import EmbeddingProvider
+
                     task_embedding = None
 
                     # Check if we need to calculate similarities (old format without scores)
-                    needs_similarity_calculation = (
-                        bool(related_data) and not isinstance(related_data[0], dict)
-                    )
+                    needs_similarity_calculation = bool(
+                        related_data
+                    ) and not isinstance(related_data[0], dict)
                     if needs_similarity_calculation and task.embedding:
                         try:
-                            task_embedding = task.embedding if isinstance(task.embedding, list) else json.loads(task.embedding)
+                            task_embedding = (
+                                task.embedding
+                                if isinstance(task.embedding, list)
+                                else json.loads(task.embedding)
+                            )
                         except Exception as e:
-                            logger.warning(f"Could not parse task embedding for similarity calculation: {e}")
+                            logger.warning(
+                                f"Could not parse task embedding for similarity calculation: {e}"
+                            )
 
                     for item in related_data:
                         # Handle both new format (dict with id and similarity) and old format (just string id)
                         if isinstance(item, dict):
-                            task_id = item.get('id')
-                            similarity = item.get('similarity', 0.0)
+                            task_id = item.get("id")
+                            similarity = item.get("similarity", 0.0)
                         else:
                             task_id = item
                             similarity = 0.0  # Will calculate if possible
@@ -830,22 +1019,45 @@ class FrontendAPI:
                         related_task = session.query(Task).filter_by(id=task_id).first()
 
                         # Try to calculate similarity for old format
-                        if isinstance(item, str) and task_embedding and related_task and related_task.embedding:
+                        if (
+                            isinstance(item, str)
+                            and task_embedding
+                            and related_task
+                            and related_task.embedding
+                        ):
                             try:
-                                related_embedding = related_task.embedding if isinstance(related_task.embedding, list) else json.loads(related_task.embedding)
-                                similarity = EmbeddingProvider.calculate_cosine_similarity(task_embedding, related_embedding)
+                                related_embedding = (
+                                    related_task.embedding
+                                    if isinstance(related_task.embedding, list)
+                                    else json.loads(related_task.embedding)
+                                )
+                                similarity = (
+                                    EmbeddingProvider.calculate_cosine_similarity(
+                                        task_embedding, related_embedding
+                                    )
+                                )
                             except Exception as e:
-                                logger.debug(f"Could not calculate similarity for task {task_id}: {e}")
+                                logger.debug(
+                                    f"Could not calculate similarity for task {task_id}: {e}"
+                                )
                                 similarity = 0.0
 
                         if related_task:
-                            related_tasks_details.append({
-                                "id": related_task.id,
-                                "description": (related_task.enriched_description or related_task.raw_description)[:100],
-                                "status": related_task.status,
-                                "similarity_score": similarity,
-                                "created_at": related_task.created_at.isoformat() + 'Z' if related_task.created_at else None,
-                            })
+                            related_tasks_details.append(
+                                {
+                                    "id": related_task.id,
+                                    "description": (
+                                        related_task.enriched_description
+                                        or related_task.raw_description
+                                    )[:100],
+                                    "status": related_task.status,
+                                    "similarity_score": similarity,
+                                    "created_at": related_task.created_at.isoformat()
+                                    + "Z"
+                                    if related_task.created_at
+                                    else None,
+                                }
+                            )
                 except (json.JSONDecodeError, TypeError) as e:
                     logger.error(f"Error parsing related tasks: {e}")
                     pass
@@ -863,9 +1075,15 @@ class FrontendAPI:
                 "done_definition": task.done_definition,
                 "status": task.status,
                 "priority": task.priority,
-                "created_at": task.created_at.isoformat() + 'Z' if task.created_at else None,
-                "started_at": task.started_at.isoformat() + 'Z' if task.started_at else None,
-                "completed_at": task.completed_at.isoformat() + 'Z' if task.completed_at else None,
+                "created_at": task.created_at.isoformat() + "Z"
+                if task.created_at
+                else None,
+                "started_at": task.started_at.isoformat() + "Z"
+                if task.started_at
+                else None,
+                "completed_at": task.completed_at.isoformat() + "Z"
+                if task.completed_at
+                else None,
                 "completion_notes": task.completion_notes,
                 "failure_reason": task.failure_reason,
                 "estimated_complexity": task.estimated_complexity,
@@ -882,24 +1100,35 @@ class FrontendAPI:
                 # Task deduplication fields
                 "duplicate_of_task_id": task.duplicate_of_task_id,
                 "similarity_score": task.similarity_score,
-                "related_task_ids": task.related_task_ids if task.related_task_ids else None,
+                "related_task_ids": task.related_task_ids
+                if task.related_task_ids
+                else None,
                 "duplicated_tasks": duplicated_tasks,
                 "related_tasks_details": related_tasks_details,
                 # Ticket tracking integration
                 "ticket_id": task.ticket_id,
-                "related_ticket_ids": task.related_ticket_ids if task.related_ticket_ids else None,
+                "related_ticket_ids": task.related_ticket_ids
+                if task.related_ticket_ids
+                else None,
             }
         finally:
             session.close()
 
-    async def get_guardian_analyses(self, agent_id: str, limit: int = 50) -> List[Dict[str, Any]]:
+    async def get_guardian_analyses(
+        self, agent_id: str, limit: int = 50
+    ) -> List[Dict[str, Any]]:
         """Get guardian analyses for a specific agent."""
         from src.core.database import GuardianAnalysis
+
         session = self.db_manager.get_session()
         try:
-            analyses = session.query(GuardianAnalysis).filter_by(
-                agent_id=agent_id
-            ).order_by(desc(GuardianAnalysis.timestamp)).limit(limit).all()
+            analyses = (
+                session.query(GuardianAnalysis)
+                .filter_by(agent_id=agent_id)
+                .order_by(desc(GuardianAnalysis.timestamp))
+                .limit(limit)
+                .all()
+            )
 
             # Process analyses and detect phase changes
             result = []
@@ -912,24 +1141,30 @@ class FrontendAPI:
                     phase_changed = True
                 prev_phase = analysis.current_phase
 
-                result.append({
-                    "id": analysis.id,
-                    "agent_id": analysis.agent_id,
-                    "timestamp": analysis.timestamp.isoformat() + 'Z',
-                    "current_phase": analysis.current_phase,
-                    "phase_changed": phase_changed,
-                    "trajectory_aligned": analysis.trajectory_aligned,
-                    "alignment_score": analysis.alignment_score,
-                    "progress_assessment": analysis.details.get("progress_assessment") if analysis.details else None,
-                    "needs_steering": analysis.needs_steering,
-                    "steering_type": analysis.steering_type,
-                    "steering_recommendation": analysis.steering_recommendation,
-                    "trajectory_summary": analysis.trajectory_summary,
-                    "accumulated_goal": analysis.accumulated_goal,
-                    "current_focus": analysis.current_focus,
-                    "session_duration": analysis.session_duration,
-                    "conversation_length": analysis.conversation_length
-                })
+                result.append(
+                    {
+                        "id": analysis.id,
+                        "agent_id": analysis.agent_id,
+                        "timestamp": analysis.timestamp.isoformat() + "Z",
+                        "current_phase": analysis.current_phase,
+                        "phase_changed": phase_changed,
+                        "trajectory_aligned": analysis.trajectory_aligned,
+                        "alignment_score": analysis.alignment_score,
+                        "progress_assessment": analysis.details.get(
+                            "progress_assessment"
+                        )
+                        if analysis.details
+                        else None,
+                        "needs_steering": analysis.needs_steering,
+                        "steering_type": analysis.steering_type,
+                        "steering_recommendation": analysis.steering_recommendation,
+                        "trajectory_summary": analysis.trajectory_summary,
+                        "accumulated_goal": analysis.accumulated_goal,
+                        "current_focus": analysis.current_focus,
+                        "session_duration": analysis.session_duration,
+                        "conversation_length": analysis.conversation_length,
+                    }
+                )
 
             return result
         finally:
@@ -938,38 +1173,48 @@ class FrontendAPI:
     async def get_conductor_analyses(self, limit: int = 20) -> List[Dict[str, Any]]:
         """Get conductor analyses for system overview."""
         from src.core.database import ConductorAnalysis, DetectedDuplicate
+
         session = self.db_manager.get_session()
         try:
-            analyses = session.query(ConductorAnalysis).order_by(
-                desc(ConductorAnalysis.timestamp)
-            ).limit(limit).all()
+            analyses = (
+                session.query(ConductorAnalysis)
+                .order_by(desc(ConductorAnalysis.timestamp))
+                .limit(limit)
+                .all()
+            )
 
             result = []
             for analysis in analyses:
                 # Get duplicates for this analysis
-                duplicates = session.query(DetectedDuplicate).filter_by(
-                    conductor_analysis_id=analysis.id
-                ).all()
+                duplicates = (
+                    session.query(DetectedDuplicate)
+                    .filter_by(conductor_analysis_id=analysis.id)
+                    .all()
+                )
 
                 duplicate_list = [
                     {
                         "agent1_id": dup.agent1_id,
                         "agent2_id": dup.agent2_id,
                         "similarity_score": dup.similarity_score,
-                        "work_description": dup.work_description
+                        "work_description": dup.work_description,
                     }
                     for dup in duplicates
                 ]
 
-                result.append({
-                    "id": analysis.id,
-                    "timestamp": analysis.timestamp.isoformat() + 'Z',
-                    "coherence_score": analysis.coherence_score,
-                    "num_agents": analysis.num_agents,
-                    "system_status": analysis.system_status,
-                    "detected_duplicates": duplicate_list,
-                    "recommendations": analysis.details.get("recommendations") if analysis.details else None
-                })
+                result.append(
+                    {
+                        "id": analysis.id,
+                        "timestamp": analysis.timestamp.isoformat() + "Z",
+                        "coherence_score": analysis.coherence_score,
+                        "num_agents": analysis.num_agents,
+                        "system_status": analysis.system_status,
+                        "detected_duplicates": duplicate_list,
+                        "recommendations": analysis.details.get("recommendations")
+                        if analysis.details
+                        else None,
+                    }
+                )
 
             return result
         finally:
@@ -980,9 +1225,12 @@ class FrontendAPI:
         analyses = await self.get_conductor_analyses(limit=1)
         return analyses[0] if analyses else None
 
-    async def get_steering_interventions(self, agent_id: Optional[str] = None, limit: int = 50) -> List[Dict[str, Any]]:
+    async def get_steering_interventions(
+        self, agent_id: Optional[str] = None, limit: int = 50
+    ) -> List[Dict[str, Any]]:
         """Get steering interventions, optionally filtered by agent."""
         from src.core.database import SteeringIntervention
+
         session = self.db_manager.get_session()
         try:
             query = session.query(SteeringIntervention)
@@ -990,19 +1238,19 @@ class FrontendAPI:
             if agent_id:
                 query = query.filter_by(agent_id=agent_id)
 
-            interventions = query.order_by(
-                desc(SteeringIntervention.timestamp)
-            ).limit(limit).all()
+            interventions = (
+                query.order_by(desc(SteeringIntervention.timestamp)).limit(limit).all()
+            )
 
             return [
                 {
                     "id": intervention.id,
                     "agent_id": intervention.agent_id,
                     "guardian_analysis_id": intervention.guardian_analysis_id,
-                    "timestamp": intervention.timestamp.isoformat() + 'Z',
+                    "timestamp": intervention.timestamp.isoformat() + "Z",
                     "steering_type": intervention.steering_type,
                     "message": intervention.message,
-                    "was_successful": intervention.was_successful
+                    "was_successful": intervention.was_successful,
                 }
                 for intervention in interventions
             ]
@@ -1011,18 +1259,24 @@ class FrontendAPI:
 
     async def get_system_overview(self) -> Dict[str, Any]:
         """Get comprehensive system overview data."""
-        from src.core.database import GuardianAnalysis, ConductorAnalysis
         from datetime import datetime, timedelta
+
+        from src.core.database import ConductorAnalysis, GuardianAnalysis
+
         session = self.db_manager.get_session()
         try:
             # Get basic stats
-            active_agents = session.query(func.count(Agent.id)).filter(
-                Agent.status != "terminated"
-            ).scalar()
+            active_agents = (
+                session.query(func.count(Agent.id))
+                .filter(Agent.status != "terminated")
+                .scalar()
+            )
 
-            running_tasks = session.query(func.count(Task.id)).filter(
-                Task.status.in_(["assigned", "in_progress"])
-            ).scalar()
+            running_tasks = (
+                session.query(func.count(Task.id))
+                .filter(Task.status.in_(["assigned", "in_progress"]))
+                .scalar()
+            )
 
             # Get latest conductor analysis
             latest_conductor = await self.get_latest_conductor_analysis()
@@ -1031,24 +1285,29 @@ class FrontendAPI:
             recent_steerings = await self.get_steering_interventions(limit=10)
 
             # Get agent alignment scores (most recent for each active agent)
-            active_agent_ids = session.query(Agent.id).filter(
-                Agent.status != "terminated"
-            ).all()
+            active_agent_ids = (
+                session.query(Agent.id).filter(Agent.status != "terminated").all()
+            )
 
             agent_alignments = []
             for (agent_id,) in active_agent_ids:
-                latest_guardian = session.query(GuardianAnalysis).filter_by(
-                    agent_id=agent_id
-                ).order_by(desc(GuardianAnalysis.timestamp)).first()
+                latest_guardian = (
+                    session.query(GuardianAnalysis)
+                    .filter_by(agent_id=agent_id)
+                    .order_by(desc(GuardianAnalysis.timestamp))
+                    .first()
+                )
 
                 if latest_guardian:
-                    agent_alignments.append({
-                        "agent_id": agent_id,
-                        "alignment_score": latest_guardian.alignment_score,
-                        "current_phase": latest_guardian.current_phase,
-                        "needs_steering": latest_guardian.needs_steering,
-                        "last_update": latest_guardian.timestamp.isoformat() + 'Z'
-                    })
+                    agent_alignments.append(
+                        {
+                            "agent_id": agent_id,
+                            "alignment_score": latest_guardian.alignment_score,
+                            "current_phase": latest_guardian.current_phase,
+                            "needs_steering": latest_guardian.needs_steering,
+                            "last_update": latest_guardian.timestamp.isoformat() + "Z",
+                        }
+                    )
 
             # Get workflow info with phases
             workflow_info = await self.get_workflow_info()
@@ -1056,56 +1315,79 @@ class FrontendAPI:
             # Calculate system health (average alignment score)
             avg_alignment = 0
             if agent_alignments:
-                avg_alignment = sum(a["alignment_score"] or 0 for a in agent_alignments) / len(agent_alignments)
+                avg_alignment = sum(
+                    a["alignment_score"] or 0 for a in agent_alignments
+                ) / len(agent_alignments)
 
             # Get metrics history (last 6 hours)
             metrics_history = []
 
             # Get conductor analyses over time
-            conductor_analyses = session.query(ConductorAnalysis).filter(
-                ConductorAnalysis.timestamp > datetime.utcnow() - timedelta(hours=6)
-            ).order_by(ConductorAnalysis.timestamp).all()
+            conductor_analyses = (
+                session.query(ConductorAnalysis)
+                .filter(
+                    ConductorAnalysis.timestamp > datetime.utcnow() - timedelta(hours=6)
+                )
+                .order_by(ConductorAnalysis.timestamp)
+                .all()
+            )
 
             for analysis in conductor_analyses:
                 # Get average alignment at this time
-                time_guardian_analyses = session.query(GuardianAnalysis).filter(
-                    GuardianAnalysis.timestamp >= analysis.timestamp - timedelta(minutes=5),
-                    GuardianAnalysis.timestamp <= analysis.timestamp + timedelta(minutes=5)
-                ).all()
+                time_guardian_analyses = (
+                    session.query(GuardianAnalysis)
+                    .filter(
+                        GuardianAnalysis.timestamp
+                        >= analysis.timestamp - timedelta(minutes=5),
+                        GuardianAnalysis.timestamp
+                        <= analysis.timestamp + timedelta(minutes=5),
+                    )
+                    .all()
+                )
 
                 time_avg_alignment = 0
                 if time_guardian_analyses:
-                    time_avg_alignment = sum(g.alignment_score or 0 for g in time_guardian_analyses) / len(time_guardian_analyses)
+                    time_avg_alignment = sum(
+                        g.alignment_score or 0 for g in time_guardian_analyses
+                    ) / len(time_guardian_analyses)
 
-                metrics_history.append({
-                    "timestamp": analysis.timestamp.isoformat() + 'Z',
-                    "coherence_score": analysis.coherence_score,
-                    "avg_alignment": time_avg_alignment,
-                    "active_agents": analysis.num_agents,
-                    "phase": analysis.details.get("primary_phase") if analysis.details else None
-                })
+                metrics_history.append(
+                    {
+                        "timestamp": analysis.timestamp.isoformat() + "Z",
+                        "coherence_score": analysis.coherence_score,
+                        "avg_alignment": time_avg_alignment,
+                        "active_agents": analysis.num_agents,
+                        "phase": analysis.details.get("primary_phase")
+                        if analysis.details
+                        else None,
+                    }
+                )
 
             return {
                 "system_health": {
-                    "coherence_score": latest_conductor["coherence_score"] if latest_conductor else 0,
+                    "coherence_score": latest_conductor["coherence_score"]
+                    if latest_conductor
+                    else 0,
                     "average_alignment": avg_alignment,
                     "active_agents": active_agents,
                     "running_tasks": running_tasks,
-                    "status": latest_conductor["system_status"] if latest_conductor else "No analysis available"
+                    "status": latest_conductor["system_status"]
+                    if latest_conductor
+                    else "No analysis available",
                 },
                 "phase_distribution": workflow_info["phases"] if workflow_info else [],
                 "latest_conductor_analysis": latest_conductor,
                 "recent_steering_events": recent_steerings,
                 "agent_alignments": agent_alignments,
                 "metrics_history": metrics_history,
-                "timestamp": datetime.utcnow().isoformat() + 'Z'
+                "timestamp": datetime.utcnow().isoformat() + "Z",
             }
         finally:
             session.close()
 
     async def get_results(
         self,
-        scope: str = 'all',
+        scope: str = "all",
         status: Optional[str] = None,
         workflow_id: Optional[str] = None,
         agent_id: Optional[str] = None,
@@ -1122,8 +1404,8 @@ class FrontendAPI:
             created_after = self._parse_datetime(date_from)
             created_before = self._parse_datetime(date_to)
 
-            include_workflow = scope in ('all', 'workflow')
-            include_task = scope in ('all', 'task')
+            include_workflow = scope in ("all", "workflow")
+            include_task = scope in ("all", "task")
 
             if include_workflow:
                 wf_query = session.query(WorkflowResult).options(
@@ -1133,15 +1415,21 @@ class FrontendAPI:
                 )
 
                 if workflow_id:
-                    wf_query = wf_query.filter(WorkflowResult.workflow_id == workflow_id)
+                    wf_query = wf_query.filter(
+                        WorkflowResult.workflow_id == workflow_id
+                    )
                 if agent_id:
                     wf_query = wf_query.filter(WorkflowResult.agent_id == agent_id)
                 if status:
                     wf_query = wf_query.filter(WorkflowResult.status == status)
                 if created_after:
-                    wf_query = wf_query.filter(WorkflowResult.created_at >= created_after.replace(tzinfo=None))
+                    wf_query = wf_query.filter(
+                        WorkflowResult.created_at >= created_after.replace(tzinfo=None)
+                    )
                 if created_before:
-                    wf_query = wf_query.filter(WorkflowResult.created_at <= created_before.replace(tzinfo=None))
+                    wf_query = wf_query.filter(
+                        WorkflowResult.created_at <= created_before.replace(tzinfo=None)
+                    )
 
                 for wf_result in wf_query.all():
                     try:
@@ -1149,7 +1437,11 @@ class FrontendAPI:
                         agent = wf_result.agent
                         validator = wf_result.validator_agent
 
-                        summary_source = wf_result.validation_feedback or (wf_result.result_content[:200] if wf_result.result_content else '')
+                        summary_source = wf_result.validation_feedback or (
+                            wf_result.result_content[:200]
+                            if wf_result.result_content
+                            else ""
+                        )
 
                         # Safely handle extra_files - ensure it's a list
                         extra_files = []
@@ -1157,46 +1449,64 @@ class FrontendAPI:
                             if isinstance(wf_result.extra_files, list):
                                 extra_files = wf_result.extra_files
                             else:
-                                logger.warning(f"extra_files is not a list for result {wf_result.id}: {type(wf_result.extra_files)}")
+                                logger.warning(
+                                    f"extra_files is not a list for result {wf_result.id}: {type(wf_result.extra_files)}"
+                                )
                                 extra_files = []
 
                         entry = {
-                            'result_id': wf_result.id,
-                            'scope': 'workflow',
-                            'workflow_id': wf_result.workflow_id,
-                            'workflow_name': workflow.name if workflow else None,
-                            'task_id': None,
-                            'task_description': None,
-                            'agent_id': wf_result.agent_id,
-                            'agent_label': (agent.id[:8] if agent else wf_result.agent_id[:8]) if wf_result.agent_id else None,
-                            'status': wf_result.status,
-                            'validation_feedback': wf_result.validation_feedback,
-                            'validation_evidence': wf_result.validation_evidence or [],
-                            'result_type': None,
-                            'summary': summary_source,
-                            'created_at': self._format_timestamp(wf_result.created_at),
-                            'validated_at': self._format_timestamp(wf_result.validated_at),
-                            'result_file_path': wf_result.result_file_path,
-                            'validation_report_path': None,
-                            'validator_agent_id': validator.id if validator else wf_result.validated_by_agent_id,
-                            'extra_files': extra_files,
+                            "result_id": wf_result.id,
+                            "scope": "workflow",
+                            "workflow_id": wf_result.workflow_id,
+                            "workflow_name": workflow.name if workflow else None,
+                            "task_id": None,
+                            "task_description": None,
+                            "agent_id": wf_result.agent_id,
+                            "agent_label": (
+                                agent.id[:8] if agent else wf_result.agent_id[:8]
+                            )
+                            if wf_result.agent_id
+                            else None,
+                            "status": wf_result.status,
+                            "validation_feedback": wf_result.validation_feedback,
+                            "validation_evidence": wf_result.validation_evidence or [],
+                            "result_type": None,
+                            "summary": summary_source,
+                            "created_at": self._format_timestamp(wf_result.created_at),
+                            "validated_at": self._format_timestamp(
+                                wf_result.validated_at
+                            ),
+                            "result_file_path": wf_result.result_file_path,
+                            "validation_report_path": None,
+                            "validator_agent_id": validator.id
+                            if validator
+                            else wf_result.validated_by_agent_id,
+                            "extra_files": extra_files,
                         }
                     except Exception as e:
-                        logger.error(f"Error processing workflow result {wf_result.id}: {e}", exc_info=True)
+                        logger.error(
+                            f"Error processing workflow result {wf_result.id}: {e}",
+                            exc_info=True,
+                        )
                         continue
 
-                    if status and status != 'all' and entry['status'] != status:
+                    if status and status != "all" and entry["status"] != status:
                         continue
 
                     if search_term:
-                        haystack = ' '.join(filter(None, [
-                            entry['result_id'],
-                            entry['workflow_id'],
-                            entry['workflow_name'],
-                            entry['summary'],
-                            entry['validation_feedback'],
-                            entry['agent_id'],
-                        ])).lower()
+                        haystack = " ".join(
+                            filter(
+                                None,
+                                [
+                                    entry["result_id"],
+                                    entry["workflow_id"],
+                                    entry["workflow_name"],
+                                    entry["summary"],
+                                    entry["validation_feedback"],
+                                    entry["agent_id"],
+                                ],
+                            )
+                        ).lower()
                         if search_term not in haystack:
                             continue
 
@@ -1210,15 +1520,23 @@ class FrontendAPI:
                 )
 
                 if workflow_id:
-                    task_query = task_query.join(Task).filter(Task.workflow_id == workflow_id)
+                    task_query = task_query.join(Task).filter(
+                        Task.workflow_id == workflow_id
+                    )
                 if agent_id:
                     task_query = task_query.filter(AgentResult.agent_id == agent_id)
-                if status and status in {'unverified', 'verified', 'disputed'}:
-                    task_query = task_query.filter(AgentResult.verification_status == status)
+                if status and status in {"unverified", "verified", "disputed"}:
+                    task_query = task_query.filter(
+                        AgentResult.verification_status == status
+                    )
                 if created_after:
-                    task_query = task_query.filter(AgentResult.created_at >= created_after.replace(tzinfo=None))
+                    task_query = task_query.filter(
+                        AgentResult.created_at >= created_after.replace(tzinfo=None)
+                    )
                 if created_before:
-                    task_query = task_query.filter(AgentResult.created_at <= created_before.replace(tzinfo=None))
+                    task_query = task_query.filter(
+                        AgentResult.created_at <= created_before.replace(tzinfo=None)
+                    )
 
                 for task_result in task_query.all():
                     task = task_result.task
@@ -1227,39 +1545,60 @@ class FrontendAPI:
                     validation = task_result.validation_review
 
                     entry = {
-                        'result_id': task_result.id,
-                        'scope': 'task',
-                        'workflow_id': task.workflow_id if task else None,
-                        'workflow_name': workflow.name if workflow else None,
-                        'task_id': task_result.task_id,
-                        'task_description': (task.enriched_description or task.raw_description) if task else None,
-                        'agent_id': task_result.agent_id,
-                        'agent_label': (agent.id[:8] if agent else task_result.agent_id[:8]) if task_result.agent_id else None,
-                        'status': task_result.verification_status,
-                        'validation_feedback': validation.feedback if validation else (task.last_validation_feedback if task else None),
-                        'validation_evidence': validation.evidence if validation and validation.evidence else [],
-                        'result_type': task_result.result_type,
-                        'summary': task_result.summary,
-                        'created_at': self._format_timestamp(task_result.created_at),
-                        'validated_at': self._format_timestamp(task_result.verified_at),  # AgentResult uses verified_at not validated_at
-                        'result_file_path': task_result.markdown_file_path,
-                        'validation_report_path': None,
-                        'validator_agent_id': validation.validator_agent_id if validation else None,
-                        'extra_files': [],  # Task results don't have extra_files yet, but include for consistency
+                        "result_id": task_result.id,
+                        "scope": "task",
+                        "workflow_id": task.workflow_id if task else None,
+                        "workflow_name": workflow.name if workflow else None,
+                        "task_id": task_result.task_id,
+                        "task_description": (
+                            task.enriched_description or task.raw_description
+                        )
+                        if task
+                        else None,
+                        "agent_id": task_result.agent_id,
+                        "agent_label": (
+                            agent.id[:8] if agent else task_result.agent_id[:8]
+                        )
+                        if task_result.agent_id
+                        else None,
+                        "status": task_result.verification_status,
+                        "validation_feedback": validation.feedback
+                        if validation
+                        else (task.last_validation_feedback if task else None),
+                        "validation_evidence": validation.evidence
+                        if validation and validation.evidence
+                        else [],
+                        "result_type": task_result.result_type,
+                        "summary": task_result.summary,
+                        "created_at": self._format_timestamp(task_result.created_at),
+                        "validated_at": self._format_timestamp(
+                            task_result.verified_at
+                        ),  # AgentResult uses verified_at not validated_at
+                        "result_file_path": task_result.markdown_file_path,
+                        "validation_report_path": None,
+                        "validator_agent_id": validation.validator_agent_id
+                        if validation
+                        else None,
+                        "extra_files": [],  # Task results don't have extra_files yet, but include for consistency
                     }
 
-                    if status and status != 'all' and entry['status'] != status:
+                    if status and status != "all" and entry["status"] != status:
                         continue
 
                     if search_term:
-                        haystack = ' '.join(filter(None, [
-                            entry['result_id'],
-                            entry['workflow_id'],
-                            entry['workflow_name'],
-                            entry['summary'],
-                            entry['task_description'],
-                            entry['agent_id'],
-                        ])).lower()
+                        haystack = " ".join(
+                            filter(
+                                None,
+                                [
+                                    entry["result_id"],
+                                    entry["workflow_id"],
+                                    entry["workflow_name"],
+                                    entry["summary"],
+                                    entry["task_description"],
+                                    entry["agent_id"],
+                                ],
+                            )
+                        ).lower()
                         if search_term not in haystack:
                             continue
 
@@ -1267,11 +1606,11 @@ class FrontendAPI:
 
             # Deduplicate: When both workflow and task results exist from the same agent,
             # prefer the workflow result (as it's the final validated answer)
-            if scope == 'all':
+            if scope == "all":
                 results = self._deduplicate_results(results)
 
             # Sort newest first
-            results.sort(key=lambda item: item['created_at'] or '', reverse=True)
+            results.sort(key=lambda item: item["created_at"] or "", reverse=True)
             logger.info(f"get_results returning {len(results)} results")
             return results
         except Exception as e:
@@ -1283,30 +1622,34 @@ class FrontendAPI:
     async def get_result_content(self, result_id: str) -> Dict[str, Any]:
         session = self.db_manager.get_session()
         try:
-            workflow_result = session.query(WorkflowResult).filter_by(id=result_id).first()
+            workflow_result = (
+                session.query(WorkflowResult).filter_by(id=result_id).first()
+            )
             if workflow_result:
                 return {
-                    'result_id': workflow_result.id,
-                    'content': workflow_result.result_content,
-                    'content_type': 'markdown',
+                    "result_id": workflow_result.id,
+                    "content": workflow_result.result_content,
+                    "content_type": "markdown",
                 }
 
             task_result = session.query(AgentResult).filter_by(id=result_id).first()
             if task_result:
                 return {
-                    'result_id': task_result.id,
-                    'content': task_result.markdown_content,
-                    'content_type': 'markdown',
+                    "result_id": task_result.id,
+                    "content": task_result.markdown_content,
+                    "content_type": "markdown",
                 }
 
-            raise HTTPException(status_code=404, detail='Result not found')
+            raise HTTPException(status_code=404, detail="Result not found")
         finally:
             session.close()
 
     async def get_result_validation(self, result_id: str) -> Dict[str, Any]:
         session = self.db_manager.get_session()
         try:
-            workflow_result = session.query(WorkflowResult).filter_by(id=result_id).first()
+            workflow_result = (
+                session.query(WorkflowResult).filter_by(id=result_id).first()
+            )
             if workflow_result:
                 # Transform evidence to expected format if needed
                 evidence = []
@@ -1316,107 +1659,160 @@ class FrontendAPI:
                         # Already a list - ensure each item has the required structure
                         for item in workflow_result.validation_evidence:
                             if isinstance(item, dict):
-                                evidence.append({
-                                    'criterion': item.get('criterion', item.get('description', 'Unknown criterion')),
-                                    'passed': item.get('passed', item.get('met', True)),
-                                    'notes': item.get('notes', item.get('details', None)),
-                                    'artifact_path': item.get('artifact_path', None),
-                                })
+                                evidence.append(
+                                    {
+                                        "criterion": item.get(
+                                            "criterion",
+                                            item.get(
+                                                "description", "Unknown criterion"
+                                            ),
+                                        ),
+                                        "passed": item.get(
+                                            "passed", item.get("met", True)
+                                        ),
+                                        "notes": item.get(
+                                            "notes", item.get("details", None)
+                                        ),
+                                        "artifact_path": item.get(
+                                            "artifact_path", None
+                                        ),
+                                    }
+                                )
                     elif isinstance(workflow_result.validation_evidence, dict):
                         # If it's a single dict, convert to list with one item
-                        evidence = [{
-                            'criterion': workflow_result.validation_evidence.get('criterion', 'Validation criteria'),
-                            'passed': workflow_result.validation_evidence.get('passed', True),
-                            'notes': workflow_result.validation_evidence.get('notes', workflow_result.validation_feedback),
-                            'artifact_path': workflow_result.validation_evidence.get('artifact_path', None),
-                        }]
+                        evidence = [
+                            {
+                                "criterion": workflow_result.validation_evidence.get(
+                                    "criterion", "Validation criteria"
+                                ),
+                                "passed": workflow_result.validation_evidence.get(
+                                    "passed", True
+                                ),
+                                "notes": workflow_result.validation_evidence.get(
+                                    "notes", workflow_result.validation_feedback
+                                ),
+                                "artifact_path": workflow_result.validation_evidence.get(
+                                    "artifact_path", None
+                                ),
+                            }
+                        ]
 
                 # If no evidence but validation was done, create a summary item from feedback
-                if not evidence and workflow_result.validation_feedback and workflow_result.status == 'validated':
-                    evidence = [{
-                        'criterion': 'Overall validation assessment',
-                        'passed': True,
-                        'notes': workflow_result.validation_feedback,
-                        'artifact_path': None,
-                    }]
+                if (
+                    not evidence
+                    and workflow_result.validation_feedback
+                    and workflow_result.status == "validated"
+                ):
+                    evidence = [
+                        {
+                            "criterion": "Overall validation assessment",
+                            "passed": True,
+                            "notes": workflow_result.validation_feedback,
+                            "artifact_path": None,
+                        }
+                    ]
 
                 return {
-                    'result_id': workflow_result.id,
-                    'status': workflow_result.status,
-                    'validator_agent_id': workflow_result.validated_by_agent_id,
-                    'feedback': workflow_result.validation_feedback,
-                    'evidence': evidence,
-                    'started_at': None,
-                    'completed_at': self._format_timestamp(workflow_result.validated_at),
-                    'report_path': None,
+                    "result_id": workflow_result.id,
+                    "status": workflow_result.status,
+                    "validator_agent_id": workflow_result.validated_by_agent_id,
+                    "feedback": workflow_result.validation_feedback,
+                    "evidence": evidence,
+                    "started_at": None,
+                    "completed_at": self._format_timestamp(
+                        workflow_result.validated_at
+                    ),
+                    "report_path": None,
                 }
 
-            task_result = session.query(AgentResult).options(joinedload(AgentResult.validation_review)).filter_by(id=result_id).first()
+            task_result = (
+                session.query(AgentResult)
+                .options(joinedload(AgentResult.validation_review))
+                .filter_by(id=result_id)
+                .first()
+            )
             if task_result:
                 validation = task_result.validation_review
                 return {
-                    'result_id': task_result.id,
-                    'status': task_result.verification_status,
-                    'validator_agent_id': validation.validator_agent_id if validation else None,
-                    'feedback': validation.feedback if validation else None,
-                    'evidence': validation.evidence if validation and validation.evidence else [],
-                    'started_at': None,
-                    'completed_at': self._format_timestamp(task_result.verified_at),
-                    'report_path': None,
+                    "result_id": task_result.id,
+                    "status": task_result.verification_status,
+                    "validator_agent_id": validation.validator_agent_id
+                    if validation
+                    else None,
+                    "feedback": validation.feedback if validation else None,
+                    "evidence": validation.evidence
+                    if validation and validation.evidence
+                    else [],
+                    "started_at": None,
+                    "completed_at": self._format_timestamp(task_result.verified_at),
+                    "report_path": None,
                 }
 
-            raise HTTPException(status_code=404, detail='Result not found')
+            raise HTTPException(status_code=404, detail="Result not found")
         finally:
             session.close()
 
-    async def get_extra_file_content(self, result_id: str, file_index: int) -> Dict[str, Any]:
+    async def get_extra_file_content(
+        self, result_id: str, file_index: int
+    ) -> Dict[str, Any]:
         """Get content of a specific extra file for a result."""
         session = self.db_manager.get_session()
         try:
             # Only workflow results have extra_files currently
-            workflow_result = session.query(WorkflowResult).filter_by(id=result_id).first()
+            workflow_result = (
+                session.query(WorkflowResult).filter_by(id=result_id).first()
+            )
             if not workflow_result:
-                raise HTTPException(status_code=404, detail='Result not found')
+                raise HTTPException(status_code=404, detail="Result not found")
 
             if not workflow_result.extra_files or len(workflow_result.extra_files) == 0:
-                raise HTTPException(status_code=404, detail='No extra files found for this result')
+                raise HTTPException(
+                    status_code=404, detail="No extra files found for this result"
+                )
 
             if file_index < 0 or file_index >= len(workflow_result.extra_files):
-                raise HTTPException(status_code=400, detail=f'Invalid file index. Must be between 0 and {len(workflow_result.extra_files) - 1}')
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid file index. Must be between 0 and {len(workflow_result.extra_files) - 1}",
+                )
 
             file_path = workflow_result.extra_files[file_index]
 
             # Security check: ensure file exists
             if not os.path.exists(file_path):
-                raise HTTPException(status_code=404, detail=f'Extra file not found on disk: {os.path.basename(file_path)}')
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Extra file not found on disk: {os.path.basename(file_path)}",
+                )
 
             # Read file content
             try:
-                with open(file_path, 'r', encoding='utf-8') as f:
+                with open(file_path, "r", encoding="utf-8") as f:
                     content = f.read()
             except UnicodeDecodeError:
                 # If it's a binary file, read as binary and encode as base64
-                with open(file_path, 'rb') as f:
+                with open(file_path, "rb") as f:
                     import base64
-                    content = base64.b64encode(f.read()).decode('utf-8')
+
+                    content = base64.b64encode(f.read()).decode("utf-8")
                 return {
-                    'result_id': result_id,
-                    'file_index': file_index,
-                    'file_path': file_path,
-                    'filename': os.path.basename(file_path),
-                    'content': content,
-                    'content_type': 'binary',
-                    'encoding': 'base64',
+                    "result_id": result_id,
+                    "file_index": file_index,
+                    "file_path": file_path,
+                    "filename": os.path.basename(file_path),
+                    "content": content,
+                    "content_type": "binary",
+                    "encoding": "base64",
                 }
 
             return {
-                'result_id': result_id,
-                'file_index': file_index,
-                'file_path': file_path,
-                'filename': os.path.basename(file_path),
-                'content': content,
-                'content_type': 'text',
-                'encoding': 'utf-8',
+                "result_id": result_id,
+                "file_index": file_index,
+                "file_path": file_path,
+                "filename": os.path.basename(file_path),
+                "content": content,
+                "content_type": "text",
+                "encoding": "utf-8",
             }
         finally:
             session.close()
@@ -1425,19 +1821,27 @@ class FrontendAPI:
         """Get the file path for result markdown to download."""
         session = self.db_manager.get_session()
         try:
-            workflow_result = session.query(WorkflowResult).filter_by(id=result_id).first()
+            workflow_result = (
+                session.query(WorkflowResult).filter_by(id=result_id).first()
+            )
             if workflow_result and workflow_result.result_file_path:
                 if os.path.exists(workflow_result.result_file_path):
                     return workflow_result.result_file_path
-                raise HTTPException(status_code=404, detail='Result file not found on disk')
+                raise HTTPException(
+                    status_code=404, detail="Result file not found on disk"
+                )
 
             task_result = session.query(AgentResult).filter_by(id=result_id).first()
             if task_result and task_result.markdown_file_path:
                 if os.path.exists(task_result.markdown_file_path):
                     return task_result.markdown_file_path
-                raise HTTPException(status_code=404, detail='Result file not found on disk')
+                raise HTTPException(
+                    status_code=404, detail="Result file not found on disk"
+                )
 
-            raise HTTPException(status_code=404, detail='Result not found or no file path available')
+            raise HTTPException(
+                status_code=404, detail="Result not found or no file path available"
+            )
         finally:
             session.close()
 
@@ -1446,23 +1850,33 @@ class FrontendAPI:
         session = self.db_manager.get_session()
         try:
             # For workflow results, check if there's a validation report path
-            workflow_result = session.query(WorkflowResult).filter_by(id=result_id).first()
+            workflow_result = (
+                session.query(WorkflowResult).filter_by(id=result_id).first()
+            )
             if workflow_result:
                 # Currently workflow results don't have a separate validation report path
                 # but we can check for validation_evidence or generate from validation_feedback
-                raise HTTPException(status_code=404, detail='Validation report not available for this result type')
+                raise HTTPException(
+                    status_code=404,
+                    detail="Validation report not available for this result type",
+                )
 
             # For task results, check validation review
-            task_result = session.query(AgentResult).options(
-                joinedload(AgentResult.validation_review)
-            ).filter_by(id=result_id).first()
+            task_result = (
+                session.query(AgentResult)
+                .options(joinedload(AgentResult.validation_review))
+                .filter_by(id=result_id)
+                .first()
+            )
 
             if task_result and task_result.validation_review:
                 # Check if there's a report_path (if your ValidationReview model has this field)
                 # For now, return 404 as validation reports might not be stored as separate files
-                raise HTTPException(status_code=404, detail='Validation report file not available')
+                raise HTTPException(
+                    status_code=404, detail="Validation report file not available"
+                )
 
-            raise HTTPException(status_code=404, detail='Validation report not found')
+            raise HTTPException(status_code=404, detail="Validation report not found")
         finally:
             session.close()
 
@@ -1489,7 +1903,7 @@ class FrontendAPI:
                     "task_id": task_id,
                     "is_blocked": False,
                     "blocker_count": 0,
-                    "blockers": []
+                    "blockers": [],
                 }
 
             return blocker_info
@@ -1510,7 +1924,9 @@ class FrontendAPI:
 
     # ── Phase Prompt Editor ──────────────────────────────────────────────
 
-    async def update_phase(self, phase_id: str, updates: Dict[str, Any]) -> Dict[str, Any]:
+    async def update_phase(
+        self, phase_id: str, updates: Dict[str, Any]
+    ) -> Dict[str, Any]:
         """Partial update of phase definition fields."""
         session = self.db_manager.get_session()
         try:
@@ -1520,20 +1936,50 @@ class FrontendAPI:
 
             # Only allow mutable fields with type validation
             mutable_fields = {
-                "description", "done_definitions", "additional_notes",
-                "outputs", "next_steps", "working_directory",
-                "cli_tool", "cli_model", "glm_api_token_env",
+                "description",
+                "done_definitions",
+                "additional_notes",
+                "outputs",
+                "next_steps",
+                "working_directory",
+                "cli_tool",
+                "cli_model",
+                "glm_api_token_env",
             }
-            str_fields = {"description", "additional_notes", "outputs", "next_steps", "working_directory", "cli_tool", "cli_model", "glm_api_token_env"}
+            str_fields = {
+                "description",
+                "additional_notes",
+                "outputs",
+                "next_steps",
+                "working_directory",
+                "cli_tool",
+                "cli_model",
+                "glm_api_token_env",
+            }
             list_fields = {"done_definitions"}
 
             for key, value in updates.items():
                 if key not in mutable_fields:
-                    raise HTTPException(status_code=400, detail=f"Field '{key}' is not mutable")
-                if key in str_fields and value is not None and not isinstance(value, str):
-                    raise HTTPException(status_code=400, detail=f"Field '{key}' must be a string or null")
-                if key in list_fields and value is not None and not isinstance(value, list):
-                    raise HTTPException(status_code=400, detail=f"Field '{key}' must be a list or null")
+                    raise HTTPException(
+                        status_code=400, detail=f"Field '{key}' is not mutable"
+                    )
+                if (
+                    key in str_fields
+                    and value is not None
+                    and not isinstance(value, str)
+                ):
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Field '{key}' must be a string or null",
+                    )
+                if (
+                    key in list_fields
+                    and value is not None
+                    and not isinstance(value, list)
+                ):
+                    raise HTTPException(
+                        status_code=400, detail=f"Field '{key}' must be a list or null"
+                    )
                 setattr(phase, key, value)
 
             session.commit()
@@ -1561,7 +2007,9 @@ class FrontendAPI:
         finally:
             session.close()
 
-    async def reset_phase(self, phase_id: str, target_status: str, force: bool = False) -> Dict[str, Any]:
+    async def reset_phase(
+        self, phase_id: str, target_status: str, force: bool = False
+    ) -> Dict[str, Any]:
         """Reset phase execution status, handling active agents."""
         session = self.db_manager.get_session()
         try:
@@ -1569,9 +2017,18 @@ class FrontendAPI:
             if not phase:
                 raise HTTPException(status_code=404, detail="Phase not found")
 
-            valid_statuses = {"pending", "in_progress", "completed", "failed", "skipped"}
+            valid_statuses = {
+                "pending",
+                "in_progress",
+                "completed",
+                "failed",
+                "skipped",
+            }
             if target_status not in valid_statuses:
-                raise HTTPException(status_code=400, detail=f"target_status must be one of: {valid_statuses}")
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"target_status must be one of: {valid_statuses}",
+                )
 
             # Find active agents in this phase
             active_agents = (
@@ -1595,19 +2052,27 @@ class FrontendAPI:
             if active_agents and force:
                 import asyncio
                 import functools
+
                 loop = asyncio.get_event_loop()
                 for agent in active_agents:
                     try:
                         # Terminate via tmux kill-session (non-blocking)
                         import subprocess
+
                         if agent.tmux_session_name:
                             await loop.run_in_executor(
                                 None,
                                 functools.partial(
                                     subprocess.run,
-                                    ["tmux", "kill-session", "-t", agent.tmux_session_name],
-                                    timeout=5, capture_output=True,
-                                )
+                                    [
+                                        "tmux",
+                                        "kill-session",
+                                        "-t",
+                                        agent.tmux_session_name,
+                                    ],
+                                    timeout=5,
+                                    capture_output=True,
+                                ),
                             )
                         agent.status = "terminated"
                         terminated_count += 1
@@ -1628,6 +2093,7 @@ class FrontendAPI:
 
             # Update phase execution status
             from src.core.database import PhaseExecution
+
             pe = (
                 session.query(PhaseExecution)
                 .filter_by(phase_id=phase.id)
@@ -1676,7 +2142,9 @@ class FrontendAPI:
                         "status": agent.status,
                         "cli_type": agent.cli_type,
                         "current_task_id": agent.current_task_id,
-                        "started_at": agent.created_at.isoformat() if agent.created_at else None,
+                        "started_at": agent.created_at.isoformat()
+                        if agent.created_at
+                        else None,
                         "health_check_failures": agent.health_check_failures,
                     }
                     for agent in agents
@@ -1706,19 +2174,24 @@ class FrontendAPI:
                         "version": v.version,
                         "status": v.status,
                         "created_by": v.created_by,
-                        "created_at": v.created_at.isoformat() if v.created_at else None,
+                        "created_at": v.created_at.isoformat()
+                        if v.created_at
+                        else None,
                         "change_summary": v.change_summary,
                         "parent_version": v.parent_version,
-                        "changed_fields": list({
-                            f for f, val in [
-                                ("description", v.description),
-                                ("done_definitions", v.done_definitions),
-                                ("additional_notes", v.additional_notes),
-                                ("outputs", v.outputs),
-                                ("next_steps", v.next_steps),
-                            ]
-                            if val is not None and val != "" and val != []
-                        }),
+                        "changed_fields": list(
+                            {
+                                f
+                                for f, val in [
+                                    ("description", v.description),
+                                    ("done_definitions", v.done_definitions),
+                                    ("additional_notes", v.additional_notes),
+                                    ("outputs", v.outputs),
+                                    ("next_steps", v.next_steps),
+                                ]
+                                if val is not None and val != "" and val != []
+                            }
+                        ),
                     }
                     for v in versions
                 ]
@@ -1726,7 +2199,9 @@ class FrontendAPI:
         finally:
             session.close()
 
-    async def get_phase_prompt_version(self, phase_id: str, version: int) -> Dict[str, Any]:
+    async def get_phase_prompt_version(
+        self, phase_id: str, version: int
+    ) -> Dict[str, Any]:
         """Get a specific prompt version's content."""
         session = self.db_manager.get_session()
         try:
@@ -1736,7 +2211,10 @@ class FrontendAPI:
                 .first()
             )
             if not pv:
-                raise HTTPException(status_code=404, detail=f"Version {version} not found for phase {phase_id}")
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Version {version} not found for phase {phase_id}",
+                )
 
             return {
                 "version": pv.version,
@@ -1759,6 +2237,7 @@ class FrontendAPI:
     ) -> Dict[str, Any]:
         """Create a new prompt version for a phase."""
         import time
+
         from sqlalchemy.exc import IntegrityError
 
         last_error = None
@@ -1784,8 +2263,12 @@ class FrontendAPI:
                     version=new_version,
                     status="active" if publish else "draft",
                     description=data.get("description", phase.description or ""),
-                    done_definitions=data.get("done_definitions", phase.done_definitions or []),
-                    additional_notes=data.get("additional_notes", phase.additional_notes),
+                    done_definitions=data.get(
+                        "done_definitions", phase.done_definitions or []
+                    ),
+                    additional_notes=data.get(
+                        "additional_notes", phase.additional_notes
+                    ),
                     outputs=data.get("outputs", phase.outputs),
                     next_steps=data.get("next_steps", phase.next_steps),
                     change_summary=data.get("change_summary", ""),
@@ -1803,8 +2286,12 @@ class FrontendAPI:
                     for pv in existing:
                         pv.status = "archived"
                     phase.description = data.get("description", phase.description)
-                    phase.done_definitions = data.get("done_definitions", phase.done_definitions)
-                    phase.additional_notes = data.get("additional_notes", phase.additional_notes)
+                    phase.done_definitions = data.get(
+                        "done_definitions", phase.done_definitions
+                    )
+                    phase.additional_notes = data.get(
+                        "additional_notes", phase.additional_notes
+                    )
                     phase.outputs = data.get("outputs", phase.outputs)
                     phase.next_steps = data.get("next_steps", phase.next_steps)
 
@@ -1819,6 +2306,7 @@ class FrontendAPI:
                     )
                     if parent_pv:
                         from src.prompts.assembler import PromptAssembler
+
                         old_asm = PromptAssembler(
                             phase_description=parent_pv.description,
                             done_definitions=parent_pv.done_definitions or [],
@@ -1839,7 +2327,9 @@ class FrontendAPI:
                     "success": True,
                     "version": new_version,
                     "status": new_pv.status,
-                    "created_at": new_pv.created_at.isoformat() if new_pv.created_at else None,
+                    "created_at": new_pv.created_at.isoformat()
+                    if new_pv.created_at
+                    else None,
                     "created_by": new_pv.created_by,
                     "diff": diff_result,
                 }
@@ -1861,9 +2351,14 @@ class FrontendAPI:
                 except Exception:
                     pass
 
-        raise HTTPException(status_code=500, detail=f"Failed to create version after retries: {last_error}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to create version after retries: {last_error}",
+        )
 
-    async def publish_phase_prompt_version(self, phase_id: str, version: int) -> Dict[str, Any]:
+    async def publish_phase_prompt_version(
+        self, phase_id: str, version: int
+    ) -> Dict[str, Any]:
         """Publish a draft version as active."""
         session = self.db_manager.get_session()
         try:
@@ -1873,7 +2368,9 @@ class FrontendAPI:
                 .first()
             )
             if not pv:
-                raise HTTPException(status_code=404, detail=f"Version {version} not found")
+                raise HTTPException(
+                    status_code=404, detail=f"Version {version} not found"
+                )
 
             # Demote existing active
             existing_active = (
@@ -1905,9 +2402,12 @@ class FrontendAPI:
         finally:
             session.close()
 
-    async def restore_phase_prompt_version(self, phase_id: str, version: int) -> Dict[str, Any]:
+    async def restore_phase_prompt_version(
+        self, phase_id: str, version: int
+    ) -> Dict[str, Any]:
         """Restore an older version as a new active version."""
         import time
+
         from sqlalchemy.exc import IntegrityError
 
         last_error = None
@@ -1920,7 +2420,9 @@ class FrontendAPI:
                     .first()
                 )
                 if not pv:
-                    raise HTTPException(status_code=404, detail=f"Version {version} not found")
+                    raise HTTPException(
+                        status_code=404, detail=f"Version {version} not found"
+                    )
 
                 max_version = (
                     session.query(func.max(PhasePromptVersion.version))
@@ -1988,7 +2490,10 @@ class FrontendAPI:
                 except Exception:
                     pass
 
-        raise HTTPException(status_code=500, detail=f"Failed to restore version after retries: {last_error}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to restore version after retries: {last_error}",
+        )
 
     async def get_phase_prompt_preview(
         self, phase_id: str, variables: Optional[Dict[str, str]] = None
@@ -1996,6 +2501,7 @@ class FrontendAPI:
         """Render a preview of the assembled prompt."""
         try:
             from src.prompts.assembler import assemble_phase_prompt
+
             result = assemble_phase_prompt(phase_id, variables=variables)
             return {
                 "system_prompt": result.system_prompt,
@@ -2013,14 +2519,23 @@ class FrontendAPI:
         """Get diff between two versions."""
         session = self.db_manager.get_session()
         try:
-            pv1 = session.query(PhasePromptVersion).filter_by(phase_id=phase_id, version=v1).first()
-            pv2 = session.query(PhasePromptVersion).filter_by(phase_id=phase_id, version=v2).first()
+            pv1 = (
+                session.query(PhasePromptVersion)
+                .filter_by(phase_id=phase_id, version=v1)
+                .first()
+            )
+            pv2 = (
+                session.query(PhasePromptVersion)
+                .filter_by(phase_id=phase_id, version=v2)
+                .first()
+            )
             if not pv1:
                 raise HTTPException(status_code=404, detail=f"Version {v1} not found")
             if not pv2:
                 raise HTTPException(status_code=404, detail=f"Version {v2} not found")
 
             from src.prompts.assembler import PromptAssembler
+
             assembler1 = PromptAssembler(
                 phase_description=pv1.description,
                 done_definitions=pv1.done_definitions or [],
@@ -2050,14 +2565,18 @@ class FrontendAPI:
             if not task:
                 raise HTTPException(status_code=404, detail="Task not found")
 
-            override = session.query(TaskPromptOverride).filter_by(task_id=task_id).first()
+            override = (
+                session.query(TaskPromptOverride).filter_by(task_id=task_id).first()
+            )
             if not override:
                 return {"system_prompt": None, "user_prompt": None}
 
             return {
                 "system_prompt": override.system_prompt,
                 "user_prompt": override.user_prompt,
-                "updated_at": override.updated_at.isoformat() if override.updated_at else None,
+                "updated_at": override.updated_at.isoformat()
+                if override.updated_at
+                else None,
                 "updated_by": override.updated_by,
             }
         finally:
@@ -2074,9 +2593,13 @@ class FrontendAPI:
                 raise HTTPException(status_code=404, detail="Task not found")
 
             if task.status in ("done", "failed", "duplicated"):
-                raise HTTPException(status_code=400, detail="Cannot edit prompts for completed tasks")
+                raise HTTPException(
+                    status_code=400, detail="Cannot edit prompts for completed tasks"
+                )
 
-            override = session.query(TaskPromptOverride).filter_by(task_id=task_id).first()
+            override = (
+                session.query(TaskPromptOverride).filter_by(task_id=task_id).first()
+            )
             if override:
                 if data.get("system_prompt") is not None:
                     override.system_prompt = data["system_prompt"]
@@ -2096,10 +2619,13 @@ class FrontendAPI:
 
             # Build effective prompt using already-loaded data (no N+1 query)
             from src.prompts.assembler import PromptAssembler
+
             phase = None
             if task.phase_id:
                 if task.phase_id.isdigit():
-                    phase = session.query(Phase).filter_by(order=int(task.phase_id)).first()
+                    phase = (
+                        session.query(Phase).filter_by(order=int(task.phase_id)).first()
+                    )
                 else:
                     phase = session.query(Phase).filter_by(id=task.phase_id).first()
 
@@ -2128,8 +2654,12 @@ class FrontendAPI:
                     "user_prompt": override.user_prompt,
                 },
                 "effective_prompt": {
-                    "system_prompt": effective.system_prompt[:500] + "..." if len(effective.system_prompt) > 500 else effective.system_prompt,
-                    "user_prompt": effective.user_prompt[:500] + "..." if len(effective.user_prompt) > 500 else effective.user_prompt,
+                    "system_prompt": effective.system_prompt[:500] + "..."
+                    if len(effective.system_prompt) > 500
+                    else effective.system_prompt,
+                    "user_prompt": effective.user_prompt[:500] + "..."
+                    if len(effective.user_prompt) > 500
+                    else effective.user_prompt,
                 },
             }
         except HTTPException:
@@ -2144,7 +2674,9 @@ class FrontendAPI:
         """Clear prompt overrides for a task."""
         session = self.db_manager.get_session()
         try:
-            override = session.query(TaskPromptOverride).filter_by(task_id=task_id).first()
+            override = (
+                session.query(TaskPromptOverride).filter_by(task_id=task_id).first()
+            )
             if override:
                 session.delete(override)
                 session.commit()
@@ -2160,7 +2692,11 @@ class FrontendAPI:
 frontend_api = None
 
 
-def create_frontend_routes(db_manager: DatabaseManager, agent_manager: AgentManager, phase_manager: PhaseManager = None):
+def create_frontend_routes(
+    db_manager: DatabaseManager,
+    agent_manager: AgentManager,
+    phase_manager: PhaseManager = None,
+):
     """Create frontend API routes."""
     global frontend_api
     frontend_api = FrontendAPI(db_manager, agent_manager, phase_manager)
@@ -2219,12 +2755,18 @@ def create_frontend_routes(db_manager: DatabaseManager, agent_manager: AgentMana
     async def get_definition_phases(definition_id: str):
         """Get phase definitions from a workflow definition."""
         import json as json_mod
+
         from src.core.database import WorkflowDefinition
+
         session = frontend_api.db_manager.get_session()
         try:
-            wf_def = session.query(WorkflowDefinition).filter_by(id=definition_id).first()
+            wf_def = (
+                session.query(WorkflowDefinition).filter_by(id=definition_id).first()
+            )
             if not wf_def:
-                raise HTTPException(status_code=404, detail="Workflow definition not found")
+                raise HTTPException(
+                    status_code=404, detail="Workflow definition not found"
+                )
             phases = wf_def.phases_config
             # Handle double-encoded JSON strings
             if isinstance(phases, str):
@@ -2254,7 +2796,9 @@ def create_frontend_routes(db_manager: DatabaseManager, agent_manager: AgentMana
         return await frontend_api.get_task_full_details(task_id)
 
     @router.get("/guardian-analyses/{agent_id}")
-    async def get_guardian_analyses(agent_id: str, limit: int = Query(50, ge=1, le=200)):
+    async def get_guardian_analyses(
+        agent_id: str, limit: int = Query(50, ge=1, le=200)
+    ):
         """Get guardian analyses for a specific agent."""
         return await frontend_api.get_guardian_analyses(agent_id, limit)
 
@@ -2270,8 +2814,7 @@ def create_frontend_routes(db_manager: DatabaseManager, agent_manager: AgentMana
 
     @router.get("/steering-interventions")
     async def get_steering_interventions(
-        agent_id: Optional[str] = None,
-        limit: int = Query(50, ge=1, le=200)
+        agent_id: Optional[str] = None, limit: int = Query(50, ge=1, le=200)
     ):
         """Get steering interventions, optionally filtered by agent."""
         return await frontend_api.get_steering_interventions(agent_id, limit)
@@ -2283,7 +2826,7 @@ def create_frontend_routes(db_manager: DatabaseManager, agent_manager: AgentMana
 
     @router.get("/results")
     async def get_results(
-        scope: str = Query('all', regex='^(all|workflow|task)$'),
+        scope: str = Query("all", regex="^(all|workflow|task)$"),
         status: Optional[str] = Query(None),
         workflow_id: Optional[str] = None,
         agent_id: Optional[str] = None,
@@ -2323,9 +2866,7 @@ def create_frontend_routes(db_manager: DatabaseManager, agent_manager: AgentMana
         file_path = await frontend_api.download_result_markdown(result_id)
         filename = os.path.basename(file_path)
         return FileResponse(
-            path=file_path,
-            media_type='text/markdown',
-            filename=filename
+            path=file_path, media_type="text/markdown", filename=filename
         )
 
     @router.get("/results/{result_id}/validation/download")
@@ -2334,9 +2875,7 @@ def create_frontend_routes(db_manager: DatabaseManager, agent_manager: AgentMana
         file_path = await frontend_api.download_validation_report(result_id)
         filename = os.path.basename(file_path)
         return FileResponse(
-            path=file_path,
-            media_type='text/markdown',
-            filename=filename
+            path=file_path, media_type="text/markdown", filename=filename
         )
 
     @router.get("/blocked-tasks")
@@ -2357,57 +2896,71 @@ def create_frontend_routes(db_manager: DatabaseManager, agent_manager: AgentMana
     @router.post("/workflows/{workflow_id}/stop")
     async def stop_workflow(workflow_id: str):
         """Stop a running workflow and terminate its agents."""
-        from src.core.database import Workflow, Agent, Task
         from datetime import datetime
+
+        from src.core.database import Agent, Task, Workflow
 
         session = frontend_api.db_manager.get_session()
         try:
             workflow = session.query(Workflow).filter_by(id=workflow_id).first()
             if not workflow:
-                raise HTTPException(status_code=404, detail=f"Workflow {workflow_id} not found")
+                raise HTTPException(
+                    status_code=404, detail=f"Workflow {workflow_id} not found"
+                )
 
-            if workflow.status != 'active':
-                raise HTTPException(status_code=400, detail=f"Workflow is {workflow.status}, not active")
+            if workflow.status != "active":
+                raise HTTPException(
+                    status_code=400, detail=f"Workflow is {workflow.status}, not active"
+                )
 
             # Terminate all active agents for this workflow (agents link via tasks)
-            agents = session.query(Agent).join(Task, Agent.current_task_id == Task.id).filter(
-                Task.workflow_id == workflow_id,
-                Agent.status == 'working'
-            ).all()
+            agents = (
+                session.query(Agent)
+                .join(Task, Agent.current_task_id == Task.id)
+                .filter(Task.workflow_id == workflow_id, Agent.status == "working")
+                .all()
+            )
 
             terminated_count = 0
             for agent in agents:
-                agent.status = 'terminated'
+                agent.status = "terminated"
                 terminated_count += 1
                 # Kill tmux session
                 if agent.tmux_session_name:
                     try:
                         import subprocess
+
                         subprocess.run(
                             ["tmux", "kill-session", "-t", agent.tmux_session_name],
-                            capture_output=True, timeout=5
+                            capture_output=True,
+                            timeout=5,
                         )
                     except Exception:
                         pass
 
             # Mark assigned tasks as failed
-            tasks = session.query(Task).filter_by(
-                workflow_id=workflow_id
-            ).filter(Task.status.in_(['assigned', 'in_progress', 'queued', 'pending'])).all()
+            tasks = (
+                session.query(Task)
+                .filter_by(workflow_id=workflow_id)
+                .filter(
+                    Task.status.in_(["assigned", "in_progress", "queued", "pending"])
+                )
+                .all()
+            )
 
             for task in tasks:
-                task.status = 'failed'
-                task.failure_reason = 'Workflow stopped by user'
+                task.status = "failed"
+                task.failure_reason = "Workflow stopped by user"
                 task.completed_at = datetime.utcnow()
 
             # Update workflow status
-            workflow.status = 'failed'
+            workflow.status = "failed"
 
             session.commit()
 
             return {
                 "success": True,
-                "message": f"Workflow stopped. Terminated {terminated_count} agents, failed {len(tasks)} tasks."
+                "message": f"Workflow stopped. Terminated {terminated_count} agents, failed {len(tasks)} tasks.",
             }
         except HTTPException:
             raise
@@ -2464,21 +3017,26 @@ def create_frontend_routes(db_manager: DatabaseManager, agent_manager: AgentMana
         return await frontend_api.restore_phase_prompt_version(phase_id, version)
 
     @router.get("/phases/{phase_id}/prompt/preview")
-    async def get_phase_prompt_preview(phase_id: str, variables: Optional[str] = Query(None)):
+    async def get_phase_prompt_preview(
+        phase_id: str, variables: Optional[str] = Query(None)
+    ):
         """Render a preview of the assembled prompt (from DB)."""
         import json
+
         try:
             var_dict = json.loads(variables) if variables else None
         except (json.JSONDecodeError, TypeError):
-            raise HTTPException(status_code=400, detail="Invalid JSON in variables parameter")
+            raise HTTPException(
+                status_code=400, detail="Invalid JSON in variables parameter"
+            )
         return await frontend_api.get_phase_prompt_preview(phase_id, var_dict)
 
     @router.post("/phases/{phase_id}/prompt/preview")
     async def post_phase_prompt_preview(phase_id: str, body: Dict[str, Any]):
         """Render a preview of the assembled prompt with draft content."""
         try:
-            from src.prompts.assembler import PromptAssembler
             from src.core.database import DatabaseManager, Phase
+            from src.prompts.assembler import PromptAssembler
 
             db_manager = DatabaseManager("hephaestus.db")
             with db_manager.get_session() as session:
@@ -2486,15 +3044,28 @@ def create_frontend_routes(db_manager: DatabaseManager, agent_manager: AgentMana
                 if not phase:
                     raise HTTPException(status_code=404, detail="Phase not found")
 
-                all_phases = session.query(Phase).filter_by(workflow_id=phase.workflow_id).order_by(Phase.order).all()
+                all_phases = (
+                    session.query(Phase)
+                    .filter_by(workflow_id=phase.workflow_id)
+                    .order_by(Phase.order)
+                    .all()
+                )
                 phases_list = [
-                    {"order": p.order, "name": p.name, "description": p.description, "done_definitions": p.done_definitions or [], "outputs": p.outputs}
+                    {
+                        "order": p.order,
+                        "name": p.name,
+                        "description": p.description,
+                        "done_definitions": p.done_definitions or [],
+                        "outputs": p.outputs,
+                    }
                     for p in all_phases
                 ]
 
             assembler = PromptAssembler(
                 phase_description=body.get("description", phase.description or ""),
-                done_definitions=body.get("done_definitions", phase.done_definitions or []),
+                done_definitions=body.get(
+                    "done_definitions", phase.done_definitions or []
+                ),
                 additional_notes=body.get("additional_notes", phase.additional_notes),
                 outputs=body.get("outputs", phase.outputs),
                 next_steps=body.get("next_steps", phase.next_steps),
@@ -2519,7 +3090,9 @@ def create_frontend_routes(db_manager: DatabaseManager, agent_manager: AgentMana
             raise HTTPException(status_code=500, detail=str(e))
 
     @router.get("/phases/{phase_id}/prompt/diff")
-    async def get_phase_prompt_diff(phase_id: str, v1: int = Query(...), v2: int = Query(...)):
+    async def get_phase_prompt_diff(
+        phase_id: str, v1: int = Query(...), v2: int = Query(...)
+    ):
         """Get diff between two prompt versions."""
         return await frontend_api.get_phase_prompt_diff(phase_id, v1, v2)
 
@@ -2527,6 +3100,7 @@ def create_frontend_routes(db_manager: DatabaseManager, agent_manager: AgentMana
     async def get_task_prompt(task_id: str):
         """Get the assembled prompt for a task (with overrides applied)."""
         from src.prompts.assembler import assemble_task_prompt
+
         result = assemble_task_prompt(task_id)
         return {
             "system_prompt": result.system_prompt,

@@ -1,13 +1,13 @@
 """Integration tests for task deduplication flow."""
 
-import pytest
 import asyncio
-import json
-from datetime import datetime
-from unittest.mock import Mock, MagicMock, patch, AsyncMock
+from unittest.mock import AsyncMock, Mock, patch
+
+import pytest
 from fastapi.testclient import TestClient
+
+from src.core.database import Task
 from src.mcp.server import app, server_state
-from src.core.database import Task, DatabaseManager
 from src.services.embedding_service import EmbeddingService
 from src.services.task_similarity_service import TaskSimilarityService
 
@@ -19,7 +19,7 @@ class TestTaskDeduplicationFlow:
     async def initialized_server(self):
         """Initialize server with mocked services."""
         # Mock the services
-        with patch('src.mcp.server.get_config') as mock_config:
+        with patch("src.mcp.server.get_config") as mock_config:
             config = Mock()
             config.openai_api_key = "test-key"
             config.task_dedup_enabled = True
@@ -54,35 +54,45 @@ class TestTaskDeduplicationFlow:
         return [0.1] * 3072
 
     @pytest.mark.asyncio
-    async def test_create_duplicate_task_rejected(self, initialized_server, client, sample_embedding):
+    async def test_create_duplicate_task_rejected(
+        self, initialized_server, client, sample_embedding
+    ):
         """Test that duplicate tasks are properly rejected with 409 status."""
         # Setup mocks
         server = initialized_server
-        server.embedding_service.generate_embedding = AsyncMock(return_value=sample_embedding)
+        server.embedding_service.generate_embedding = AsyncMock(
+            return_value=sample_embedding
+        )
 
         # Mock LLM enrichment
-        server.llm_provider.enrich_task = AsyncMock(return_value={
-            "enriched_description": "Enriched: Implement user authentication",
-            "completion_criteria": ["User can log in", "User can log out"],
-            "agent_prompt": "Build auth system",
-            "required_capabilities": ["coding"],
-            "estimated_complexity": 5
-        })
+        server.llm_provider.enrich_task = AsyncMock(
+            return_value={
+                "enriched_description": "Enriched: Implement user authentication",
+                "completion_criteria": ["User can log in", "User can log out"],
+                "agent_prompt": "Build auth system",
+                "required_capabilities": ["coding"],
+                "estimated_complexity": 5,
+            }
+        )
 
         # Mock RAG
         server.rag_system.retrieve_for_task = AsyncMock(return_value=[])
 
         # Mock agent manager
-        server.agent_manager.get_project_context = AsyncMock(return_value="Project context")
+        server.agent_manager.get_project_context = AsyncMock(
+            return_value="Project context"
+        )
         server.agent_manager.create_agent_for_task = AsyncMock()
 
         # First task - should succeed
-        server.task_similarity_service.check_for_duplicates = AsyncMock(return_value={
-            'is_duplicate': False,
-            'duplicate_of': None,
-            'related_tasks': [],
-            'max_similarity': 0.0
-        })
+        server.task_similarity_service.check_for_duplicates = AsyncMock(
+            return_value={
+                "is_duplicate": False,
+                "duplicate_of": None,
+                "related_tasks": [],
+                "max_similarity": 0.0,
+            }
+        )
         server.task_similarity_service.store_task_embedding = AsyncMock()
 
         response1 = client.post(
@@ -91,9 +101,9 @@ class TestTaskDeduplicationFlow:
                 "task_description": "Implement user authentication",
                 "done_definition": "Users can log in and out",
                 "ai_agent_id": "agent-123",
-                "priority": "high"
+                "priority": "high",
             },
-            headers={"X-Agent-ID": "agent-123"}
+            headers={"X-Agent-ID": "agent-123"},
         )
 
         assert response1.status_code == 200
@@ -101,13 +111,15 @@ class TestTaskDeduplicationFlow:
         assert "task_id" in task1_data
 
         # Second task - duplicate, should be rejected
-        server.task_similarity_service.check_for_duplicates = AsyncMock(return_value={
-            'is_duplicate': True,
-            'duplicate_of': task1_data["task_id"],
-            'duplicate_description': "Enriched: Implement user authentication",
-            'related_tasks': [],
-            'max_similarity': 0.95
-        })
+        server.task_similarity_service.check_for_duplicates = AsyncMock(
+            return_value={
+                "is_duplicate": True,
+                "duplicate_of": task1_data["task_id"],
+                "duplicate_description": "Enriched: Implement user authentication",
+                "related_tasks": [],
+                "max_similarity": 0.95,
+            }
+        )
 
         response2 = client.post(
             "/create_task",
@@ -115,9 +127,9 @@ class TestTaskDeduplicationFlow:
                 "task_description": "Build user authentication system",
                 "done_definition": "Allow users to authenticate",
                 "ai_agent_id": "agent-456",
-                "priority": "high"
+                "priority": "high",
             },
-            headers={"X-Agent-ID": "agent-456"}
+            headers={"X-Agent-ID": "agent-456"},
         )
 
         # Should be rejected as duplicate
@@ -128,22 +140,30 @@ class TestTaskDeduplicationFlow:
         assert duplicate_data["similarity"] == 0.95
 
         # Verify agent was NOT created for duplicate
-        assert server.agent_manager.create_agent_for_task.call_count == 1  # Only for first task
+        assert (
+            server.agent_manager.create_agent_for_task.call_count == 1
+        )  # Only for first task
 
     @pytest.mark.asyncio
-    async def test_create_related_task_accepted(self, initialized_server, client, sample_embedding):
+    async def test_create_related_task_accepted(
+        self, initialized_server, client, sample_embedding
+    ):
         """Test that related but not duplicate tasks are accepted."""
         server = initialized_server
-        server.embedding_service.generate_embedding = AsyncMock(return_value=sample_embedding)
+        server.embedding_service.generate_embedding = AsyncMock(
+            return_value=sample_embedding
+        )
 
         # Mock enrichment and other services
-        server.llm_provider.enrich_task = AsyncMock(return_value={
-            "enriched_description": "Enriched task",
-            "completion_criteria": ["Done"],
-            "agent_prompt": "Do task",
-            "required_capabilities": ["general"],
-            "estimated_complexity": 3
-        })
+        server.llm_provider.enrich_task = AsyncMock(
+            return_value={
+                "enriched_description": "Enriched task",
+                "completion_criteria": ["Done"],
+                "agent_prompt": "Do task",
+                "required_capabilities": ["general"],
+                "estimated_complexity": 3,
+            }
+        )
         server.rag_system.retrieve_for_task = AsyncMock(return_value=[])
         server.agent_manager.get_project_context = AsyncMock(return_value="Context")
         server.agent_manager.create_agent_for_task = AsyncMock(
@@ -151,12 +171,14 @@ class TestTaskDeduplicationFlow:
         )
 
         # First task
-        server.task_similarity_service.check_for_duplicates = AsyncMock(return_value={
-            'is_duplicate': False,
-            'duplicate_of': None,
-            'related_tasks': [],
-            'max_similarity': 0.0
-        })
+        server.task_similarity_service.check_for_duplicates = AsyncMock(
+            return_value={
+                "is_duplicate": False,
+                "duplicate_of": None,
+                "related_tasks": [],
+                "max_similarity": 0.0,
+            }
+        )
         server.task_similarity_service.store_task_embedding = AsyncMock()
 
         response1 = client.post(
@@ -166,21 +188,27 @@ class TestTaskDeduplicationFlow:
                 "done_definition": "User profiles exist",
                 "ai_agent_id": "agent-111",
             },
-            headers={"X-Agent-ID": "agent-111"}
+            headers={"X-Agent-ID": "agent-111"},
         )
         assert response1.status_code == 200
         task1_id = response1.json()["task_id"]
 
         # Second task - related but not duplicate
-        server.task_similarity_service.check_for_duplicates = AsyncMock(return_value={
-            'is_duplicate': False,
-            'duplicate_of': None,
-            'related_tasks': [task1_id],
-            'related_tasks_details': [
-                {'task_id': task1_id, 'description': 'Create user profiles', 'similarity': 0.55}
-            ],
-            'max_similarity': 0.55
-        })
+        server.task_similarity_service.check_for_duplicates = AsyncMock(
+            return_value={
+                "is_duplicate": False,
+                "duplicate_of": None,
+                "related_tasks": [task1_id],
+                "related_tasks_details": [
+                    {
+                        "task_id": task1_id,
+                        "description": "Create user profiles",
+                        "similarity": 0.55,
+                    }
+                ],
+                "max_similarity": 0.55,
+            }
+        )
 
         response2 = client.post(
             "/create_task",
@@ -189,7 +217,7 @@ class TestTaskDeduplicationFlow:
                 "done_definition": "Settings page works",
                 "ai_agent_id": "agent-222",
             },
-            headers={"X-Agent-ID": "agent-222"}
+            headers={"X-Agent-ID": "agent-222"},
         )
 
         # Should be accepted
@@ -198,26 +226,32 @@ class TestTaskDeduplicationFlow:
         assert "task_id" in task2_data
 
         # Check if related tasks are included in response
-        if isinstance(task2_data, dict) and 'related_tasks' in task2_data:
-            assert task1_id in task2_data['related_tasks']
+        if isinstance(task2_data, dict) and "related_tasks" in task2_data:
+            assert task1_id in task2_data["related_tasks"]
 
         # Verify both agents were created
         assert server.agent_manager.create_agent_for_task.call_count == 2
 
     @pytest.mark.asyncio
-    async def test_create_unrelated_task_accepted(self, initialized_server, client, sample_embedding):
+    async def test_create_unrelated_task_accepted(
+        self, initialized_server, client, sample_embedding
+    ):
         """Test that unrelated tasks are created without relationships."""
         server = initialized_server
-        server.embedding_service.generate_embedding = AsyncMock(return_value=sample_embedding)
+        server.embedding_service.generate_embedding = AsyncMock(
+            return_value=sample_embedding
+        )
 
         # Mock services
-        server.llm_provider.enrich_task = AsyncMock(return_value={
-            "enriched_description": "Enriched task",
-            "completion_criteria": ["Done"],
-            "agent_prompt": "Do task",
-            "required_capabilities": ["general"],
-            "estimated_complexity": 2
-        })
+        server.llm_provider.enrich_task = AsyncMock(
+            return_value={
+                "enriched_description": "Enriched task",
+                "completion_criteria": ["Done"],
+                "agent_prompt": "Do task",
+                "required_capabilities": ["general"],
+                "estimated_complexity": 2,
+            }
+        )
         server.rag_system.retrieve_for_task = AsyncMock(return_value=[])
         server.agent_manager.get_project_context = AsyncMock(return_value="Context")
         server.agent_manager.create_agent_for_task = AsyncMock(
@@ -225,12 +259,14 @@ class TestTaskDeduplicationFlow:
         )
 
         # Task with low similarity to all existing tasks
-        server.task_similarity_service.check_for_duplicates = AsyncMock(return_value={
-            'is_duplicate': False,
-            'duplicate_of': None,
-            'related_tasks': [],  # No related tasks
-            'max_similarity': 0.2  # Below related threshold
-        })
+        server.task_similarity_service.check_for_duplicates = AsyncMock(
+            return_value={
+                "is_duplicate": False,
+                "duplicate_of": None,
+                "related_tasks": [],  # No related tasks
+                "max_similarity": 0.2,  # Below related threshold
+            }
+        )
         server.task_similarity_service.store_task_embedding = AsyncMock()
 
         response = client.post(
@@ -240,7 +276,7 @@ class TestTaskDeduplicationFlow:
                 "done_definition": "Backups are automated",
                 "ai_agent_id": "agent-333",
             },
-            headers={"X-Agent-ID": "agent-333"}
+            headers={"X-Agent-ID": "agent-333"},
         )
 
         assert response.status_code == 200
@@ -251,13 +287,13 @@ class TestTaskDeduplicationFlow:
         server.task_similarity_service.store_task_embedding.assert_called_with(
             task_data["task_id"],
             sample_embedding,
-            []  # No related tasks
+            [],  # No related tasks
         )
 
     @pytest.mark.asyncio
     async def test_deduplication_disabled(self, client):
         """Test that tasks are created normally when deduplication is disabled."""
-        with patch('src.mcp.server.get_config') as mock_config:
+        with patch("src.mcp.server.get_config") as mock_config:
             config = Mock()
             config.task_dedup_enabled = False  # Disabled
             config.openai_api_key = "test-key"
@@ -268,15 +304,19 @@ class TestTaskDeduplicationFlow:
             await server_state.initialize()
 
             # Mock other services
-            server_state.llm_provider.enrich_task = AsyncMock(return_value={
-                "enriched_description": "Task",
-                "completion_criteria": ["Done"],
-                "agent_prompt": "Do it",
-                "required_capabilities": ["general"],
-                "estimated_complexity": 3
-            })
+            server_state.llm_provider.enrich_task = AsyncMock(
+                return_value={
+                    "enriched_description": "Task",
+                    "completion_criteria": ["Done"],
+                    "agent_prompt": "Do it",
+                    "required_capabilities": ["general"],
+                    "estimated_complexity": 3,
+                }
+            )
             server_state.rag_system.retrieve_for_task = AsyncMock(return_value=[])
-            server_state.agent_manager.get_project_context = AsyncMock(return_value="Context")
+            server_state.agent_manager.get_project_context = AsyncMock(
+                return_value="Context"
+            )
             server_state.agent_manager.create_agent_for_task = AsyncMock(
                 return_value=Mock(id="agent-id")
             )
@@ -290,7 +330,7 @@ class TestTaskDeduplicationFlow:
                         "done_definition": "Same completion",
                         "ai_agent_id": f"agent-{i}",
                     },
-                    headers={"X-Agent-ID": f"agent-{i}"}
+                    headers={"X-Agent-ID": f"agent-{i}"},
                 )
 
                 # Both should succeed
@@ -301,9 +341,12 @@ class TestTaskDeduplicationFlow:
             assert server_state.agent_manager.create_agent_for_task.call_count == 2
 
     @pytest.mark.asyncio
-    async def test_deduplication_performance(self, initialized_server, sample_embedding):
+    async def test_deduplication_performance(
+        self, initialized_server, sample_embedding
+    ):
         """Test deduplication performance with many existing tasks."""
         import time
+
         server = initialized_server
 
         # Create many existing tasks in database
@@ -315,7 +358,7 @@ class TestTaskDeduplicationFlow:
                 enriched_description=f"Enriched task {i}",
                 done_definition=f"Complete task {i}",
                 status="in_progress",
-                embedding=[i * 0.001] * 3072  # Unique embeddings
+                embedding=[i * 0.001] * 3072,  # Unique embeddings
             )
             session.add(task)
         session.commit()
@@ -329,29 +372,34 @@ class TestTaskDeduplicationFlow:
         # Measure time for duplicate check
         start_time = time.time()
         result = await server.task_similarity_service.check_for_duplicates(
-            "New task description",
-            sample_embedding
+            "New task description", sample_embedding
         )
         elapsed = time.time() - start_time
 
         # Should complete within 2 seconds even with 1000 tasks
         assert elapsed < 2.0
-        assert result['is_duplicate'] is False
+        assert result["is_duplicate"] is False
 
     @pytest.mark.asyncio
-    async def test_concurrent_duplicate_creation(self, initialized_server, client, sample_embedding):
+    async def test_concurrent_duplicate_creation(
+        self, initialized_server, client, sample_embedding
+    ):
         """Test handling of concurrent duplicate task creation."""
         server = initialized_server
-        server.embedding_service.generate_embedding = AsyncMock(return_value=sample_embedding)
+        server.embedding_service.generate_embedding = AsyncMock(
+            return_value=sample_embedding
+        )
 
         # Mock services
-        server.llm_provider.enrich_task = AsyncMock(return_value={
-            "enriched_description": "Same task",
-            "completion_criteria": ["Done"],
-            "agent_prompt": "Do it",
-            "required_capabilities": ["general"],
-            "estimated_complexity": 3
-        })
+        server.llm_provider.enrich_task = AsyncMock(
+            return_value={
+                "enriched_description": "Same task",
+                "completion_criteria": ["Done"],
+                "agent_prompt": "Do it",
+                "required_capabilities": ["general"],
+                "estimated_complexity": 3,
+            }
+        )
         server.rag_system.retrieve_for_task = AsyncMock(return_value=[])
         server.agent_manager.get_project_context = AsyncMock(return_value="Context")
 
@@ -376,19 +424,19 @@ class TestTaskDeduplicationFlow:
             if call_count == 1:
                 # First task finds no duplicates
                 return {
-                    'is_duplicate': False,
-                    'duplicate_of': None,
-                    'related_tasks': [],
-                    'max_similarity': 0.0
+                    "is_duplicate": False,
+                    "duplicate_of": None,
+                    "related_tasks": [],
+                    "max_similarity": 0.0,
                 }
             else:
                 # Second task finds first as duplicate
                 return {
-                    'is_duplicate': True,
-                    'duplicate_of': 'task-first',
-                    'duplicate_description': 'Same task',
-                    'related_tasks': [],
-                    'max_similarity': 0.99
+                    "is_duplicate": True,
+                    "duplicate_of": "task-first",
+                    "duplicate_description": "Same task",
+                    "related_tasks": [],
+                    "max_similarity": 0.99,
                 }
 
         server.task_similarity_service.check_for_duplicates = check_duplicates_mock
@@ -403,15 +451,13 @@ class TestTaskDeduplicationFlow:
                     "done_definition": "Task done",
                     "ai_agent_id": agent_id,
                 },
-                headers={"X-Agent-ID": agent_id}
+                headers={"X-Agent-ID": agent_id},
             )
             return response
 
         # Run concurrently
         results = await asyncio.gather(
-            create_task("agent-A"),
-            create_task("agent-B"),
-            return_exceptions=True
+            create_task("agent-A"), create_task("agent-B"), return_exceptions=True
         )
 
         # One should succeed, one should be duplicate
@@ -431,13 +477,15 @@ class TestTaskDeduplicationFlow:
         )
 
         # Other services work normally
-        server.llm_provider.enrich_task = AsyncMock(return_value={
-            "enriched_description": "Task despite error",
-            "completion_criteria": ["Done"],
-            "agent_prompt": "Do it",
-            "required_capabilities": ["general"],
-            "estimated_complexity": 3
-        })
+        server.llm_provider.enrich_task = AsyncMock(
+            return_value={
+                "enriched_description": "Task despite error",
+                "completion_criteria": ["Done"],
+                "agent_prompt": "Do it",
+                "required_capabilities": ["general"],
+                "estimated_complexity": 3,
+            }
+        )
         server.rag_system.retrieve_for_task = AsyncMock(return_value=[])
         server.agent_manager.get_project_context = AsyncMock(return_value="Context")
         server.agent_manager.create_agent_for_task = AsyncMock(
@@ -451,7 +499,7 @@ class TestTaskDeduplicationFlow:
                 "done_definition": "Complete it",
                 "ai_agent_id": "agent-error",
             },
-            headers={"X-Agent-ID": "agent-error"}
+            headers={"X-Agent-ID": "agent-error"},
         )
 
         # Should still succeed despite embedding error

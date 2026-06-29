@@ -1,26 +1,30 @@
 """LangChain-based multi-provider LLM client for Hephaestus."""
 
+import asyncio
+import json
 import logging
 import os
-from typing import Dict, Any, List, Optional
 from enum import Enum
-import json
-import asyncio
+from typing import Any, Dict, List, Optional
 
-from langchain_openai import ChatOpenAI, OpenAIEmbeddings, AzureChatOpenAI, AzureOpenAIEmbeddings
-from langchain_groq import ChatGroq
-from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.output_parsers import JsonOutputParser
+from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
+from langchain_groq import ChatGroq
+from langchain_openai import (
+    AzureChatOpenAI,
+    AzureOpenAIEmbeddings,
+    ChatOpenAI,
+    OpenAIEmbeddings,
+)
 from pydantic import BaseModel
-
 
 logger = logging.getLogger(__name__)
 
 
-
 class ModelAssignment(BaseModel):
     """Model assignment configuration."""
+
     provider: str
     model: str
     openrouter_provider: Optional[str] = None
@@ -34,6 +38,7 @@ class ModelAssignment(BaseModel):
 
 class ProviderConfig(BaseModel):
     """Provider configuration."""
+
     api_key_env: str
     base_url: Optional[str] = None
     models: List[Any]
@@ -41,6 +46,7 @@ class ProviderConfig(BaseModel):
 
 class LLMConfig(BaseModel):
     """Complete LLM configuration."""
+
     embedding_model: str = "text-embedding-3-small"
     providers: Dict[str, ProviderConfig]
     model_assignments: Dict[str, ModelAssignment]
@@ -48,6 +54,7 @@ class LLMConfig(BaseModel):
 
 class ComponentType(Enum):
     """Component types for model routing."""
+
     TASK_ENRICHMENT = "task_enrichment"
     AGENT_MONITORING = "agent_monitoring"
     GUARDIAN_ANALYSIS = "guardian_analysis"
@@ -68,19 +75,21 @@ class LangChainLLMClient:
         self._models: Dict[str, Any] = {}
         self._embedding_model = None
 
-        logger.info("="*60)
+        logger.info("=" * 60)
         logger.info("🚀 Initializing Multi-Provider LLM Client")
-        logger.info("="*60)
+        logger.info("=" * 60)
         self._initialize_models()
         logger.info("✅ Multi-Provider LLM Client initialized successfully")
-        logger.info("="*60)
+        logger.info("=" * 60)
 
     def _initialize_models(self):
         """Initialize all configured models."""
 
         # Initialize embedding model based on configured provider
-        embedding_provider = getattr(self.config, 'embedding_provider', 'openai')
-        logger.info(f"Initializing embedding model: {self.config.embedding_model} (provider: {embedding_provider})")
+        embedding_provider = getattr(self.config, "embedding_provider", "openai")
+        logger.info(
+            f"Initializing embedding model: {self.config.embedding_model} (provider: {embedding_provider})"
+        )
 
         if embedding_provider == "openai":
             openai_provider = self.config.providers.get("openai")
@@ -88,10 +97,11 @@ class LangChainLLMClient:
                 openai_key = os.getenv(openai_provider.api_key_env)
                 if openai_key:
                     self._embedding_model = OpenAIEmbeddings(
-                        model=self.config.embedding_model,
-                        openai_api_key=openai_key
+                        model=self.config.embedding_model, openai_api_key=openai_key
                     )
-                    logger.info(f"  ✓ Embedding model initialized: OpenAI {self.config.embedding_model}")
+                    logger.info(
+                        f"  ✓ Embedding model initialized: OpenAI {self.config.embedding_model}"
+                    )
 
         elif embedding_provider == "azure_openai":
             azure_provider = self.config.providers.get("azure_openai")
@@ -105,11 +115,15 @@ class LangChainLLMClient:
                         azure_deployment=self.config.embedding_model,
                         azure_endpoint=azure_endpoint,
                         api_version=api_version,
-                        api_key=azure_key
+                        api_key=azure_key,
                     )
-                    logger.info(f"  ✓ Embedding model initialized: Azure OpenAI {self.config.embedding_model}")
+                    logger.info(
+                        f"  ✓ Embedding model initialized: Azure OpenAI {self.config.embedding_model}"
+                    )
                 else:
-                    logger.warning("Azure OpenAI embedding configuration incomplete (key or endpoint missing)")
+                    logger.warning(
+                        "Azure OpenAI embedding configuration incomplete (key or endpoint missing)"
+                    )
 
         elif embedding_provider == "google_ai":
             google_provider = self.config.providers.get("google_ai")
@@ -118,11 +132,15 @@ class LangChainLLMClient:
                 if google_key:
                     self._embedding_model = GoogleGenerativeAIEmbeddings(
                         model=self.config.embedding_model,  # e.g., "models/embedding-001"
-                        google_api_key=google_key
+                        google_api_key=google_key,
                     )
-                    logger.info(f"  ✓ Embedding model initialized: Google AI {self.config.embedding_model}")
+                    logger.info(
+                        f"  ✓ Embedding model initialized: Google AI {self.config.embedding_model}"
+                    )
                 else:
-                    logger.warning("Google AI embedding configuration incomplete (key missing)")
+                    logger.warning(
+                        "Google AI embedding configuration incomplete (key missing)"
+                    )
 
         elif embedding_provider in ("fastembed", "local", "openrouter"):
             # OpenRouter (and most chat-only providers) have no embeddings API.
@@ -130,17 +148,24 @@ class LangChainLLMClient:
             # Default bge-small = 384-dim, matching the vector store dimension.
             try:
                 from langchain_community.embeddings import FastEmbedEmbeddings
+
                 fe_model = os.getenv("FASTEMBED_MODEL", "BAAI/bge-small-en-v1.5")
                 self._embedding_model = FastEmbedEmbeddings(model_name=fe_model)
-                logger.info(f"  ✓ Embedding model initialized: FastEmbed {fe_model} (python-only, no API key)")
+                logger.info(
+                    f"  ✓ Embedding model initialized: FastEmbed {fe_model} (python-only, no API key)"
+                )
             except Exception as e:
                 logger.warning(f"FastEmbed embedding init failed: {e}")
 
         if not self._embedding_model:
-            logger.warning(f"Embedding model not initialized for provider: {embedding_provider}")
+            logger.warning(
+                f"Embedding model not initialized for provider: {embedding_provider}"
+            )
 
         # Initialize models for each component
-        logger.info(f"Configuring models for {len(self.config.model_assignments)} components:")
+        logger.info(
+            f"Configuring models for {len(self.config.model_assignments)} components:"
+        )
         for component_name, assignment in self.config.model_assignments.items():
             model_key = f"{component_name}_{assignment.provider}_{assignment.model}"
 
@@ -149,9 +174,14 @@ class LangChainLLMClient:
                 if model:
                     self._models[model_key] = model
                     provider_info = f"{assignment.provider}"
-                    if hasattr(assignment, 'openrouter_provider') and assignment.openrouter_provider:
+                    if (
+                        hasattr(assignment, "openrouter_provider")
+                        and assignment.openrouter_provider
+                    ):
                         provider_info += f" (via {assignment.openrouter_provider})"
-                    logger.info(f"  ✓ {component_name}: {assignment.model} [{provider_info}]")
+                    logger.info(
+                        f"  ✓ {component_name}: {assignment.model} [{provider_info}]"
+                    )
 
     def _create_model(self, assignment: ModelAssignment):
         """Create a model instance based on assignment.
@@ -180,7 +210,7 @@ class LangChainLLMClient:
                 kwargs = {
                     "model": assignment.model,
                     "max_tokens": assignment.max_tokens,
-                    "openai_api_key": api_key
+                    "openai_api_key": api_key,
                 }
 
                 # GPT-5 models only support temperature=1.0 (no other values allowed)
@@ -197,7 +227,7 @@ class LangChainLLMClient:
                     model=assignment.model,
                     temperature=assignment.temperature,
                     max_tokens=assignment.max_tokens,
-                    groq_api_key=api_key
+                    groq_api_key=api_key,
                 )
 
             elif provider == "openrouter":
@@ -214,9 +244,11 @@ class LangChainLLMClient:
                     provider_name = assignment.openrouter_provider.capitalize()
                     extra_body["provider"] = {
                         "order": [provider_name],
-                        "allow_fallbacks": False  # Force only the specified provider
+                        "allow_fallbacks": False,  # Force only the specified provider
                     }
-                    logger.info(f"OpenRouter configured with provider routing: {provider_name} (order: [{provider_name}], fallbacks: disabled)")
+                    logger.info(
+                        f"OpenRouter configured with provider routing: {provider_name} (order: [{provider_name}], fallbacks: disabled)"
+                    )
                 if assignment.reasoning_effort:
                     # Cap reasoning for reasoning models. "off" disables it entirely;
                     # otherwise pass the effort level. (Ignored harmlessly by models
@@ -224,13 +256,21 @@ class LangChainLLMClient:
                     if assignment.reasoning_effort.lower() == "off":
                         extra_body["reasoning"] = {"enabled": False}
                     else:
-                        extra_body["reasoning"] = {"effort": assignment.reasoning_effort.lower()}
-                    logger.info(f"OpenRouter reasoning capped: {assignment.reasoning_effort} for {assignment.model}")
+                        extra_body["reasoning"] = {
+                            "effort": assignment.reasoning_effort.lower()
+                        }
+                    logger.info(
+                        f"OpenRouter reasoning capped: {assignment.reasoning_effort} for {assignment.model}"
+                    )
                 if extra_body:
                     model_kwargs["extra_body"] = extra_body
 
                 # Use config base_url, then env var, then default
-                base_url = provider_config.base_url or os.getenv('OPENROUTER_BASE_URL') or "https://openrouter.ai/api/v1"
+                base_url = (
+                    provider_config.base_url
+                    or os.getenv("OPENROUTER_BASE_URL")
+                    or "https://openrouter.ai/api/v1"
+                )
 
                 return ChatOpenAI(
                     model=model_name,
@@ -241,9 +281,9 @@ class LangChainLLMClient:
                     max_retries=1,  # one retry only — slow/over-streaming models shouldn't retry-loop for minutes
                     default_headers={
                         "HTTP-Referer": "https://github.com/Ido-Levi/Hephaestus",
-                        "X-Title": "Hephaestus - Semi Structured Agentic Framework"
+                        "X-Title": "Hephaestus - Semi Structured Agentic Framework",
                     },
-                    model_kwargs=model_kwargs  # extra_body gets passed through to the API
+                    model_kwargs=model_kwargs,  # extra_body gets passed through to the API
                 )
 
             elif provider == "azure_openai":
@@ -251,11 +291,15 @@ class LangChainLLMClient:
                 # Requires azure_endpoint, api_version, and azure_deployment parameters
                 azure_endpoint = provider_config.base_url
                 if not azure_endpoint:
-                    logger.error("Azure OpenAI requires base_url (azure_endpoint) in configuration")
+                    logger.error(
+                        "Azure OpenAI requires base_url (azure_endpoint) in configuration"
+                    )
                     return None
 
                 api_version = provider_config.api_version or "2024-02-01"
-                logger.info(f"Creating Azure OpenAI model with deployment: {assignment.model}, endpoint: {azure_endpoint}, api_version: {api_version}")
+                logger.info(
+                    f"Creating Azure OpenAI model with deployment: {assignment.model}, endpoint: {azure_endpoint}, api_version: {api_version}"
+                )
 
                 return AzureChatOpenAI(
                     model=assignment.model,  # This is the deployment name in Azure
@@ -264,7 +308,7 @@ class LangChainLLMClient:
                     azure_endpoint=azure_endpoint,
                     api_key=api_key,
                     temperature=assignment.temperature,
-                    max_tokens=assignment.max_tokens
+                    max_tokens=assignment.max_tokens,
                 )
 
             elif provider == "google_ai":
@@ -275,7 +319,7 @@ class LangChainLLMClient:
                     model=assignment.model,  # e.g., "gemini-2.5-flash", "gemini-1.5-pro"
                     google_api_key=api_key,
                     temperature=assignment.temperature,
-                    max_tokens=assignment.max_tokens
+                    max_tokens=assignment.max_tokens,
                 )
 
             else:
@@ -311,7 +355,8 @@ class LangChainLLMClient:
         to the actual scope (so a calculator isn't treated like a multi-service system).
         Reuses the fast, reasoning-capped task_enrichment model. Defaults to 'medium'."""
         try:
-            from langchain_core.messages import SystemMessage, HumanMessage
+            from langchain_core.messages import HumanMessage, SystemMessage
+
             model = self._get_model_for_component(ComponentType.TASK_ENRICHMENT)
             if model is None:
                 return "medium"
@@ -324,18 +369,28 @@ class LangChainLLMClient:
                 f"DESIGN:\n{(design_text or '')[:4000]}\n\n"
                 "Answer with ONE word only (low, medium, or high):"
             )
-            resp = await model.ainvoke([
-                SystemMessage(content="You are a concise software complexity classifier."),
-                HumanMessage(content=prompt),
-            ])
+            resp = await model.ainvoke(
+                [
+                    SystemMessage(
+                        content="You are a concise software complexity classifier."
+                    ),
+                    HumanMessage(content=prompt),
+                ]
+            )
             text = (getattr(resp, "content", None) or str(resp)).strip().lower()
-            for level in ("high", "medium", "low"):  # check high/medium before low (substring)
+            for level in (
+                "high",
+                "medium",
+                "low",
+            ):  # check high/medium before low (substring)
                 if level in text:
                     logger.info(f"[COMPLEXITY] classified design as '{level}'")
                     return level
             return "medium"
         except Exception as e:
-            logger.warning(f"[COMPLEXITY] classification failed, defaulting to medium: {e}")
+            logger.warning(
+                f"[COMPLEXITY] classification failed, defaulting to medium: {e}"
+            )
             return "medium"
 
     async def enrich_task(
@@ -356,12 +411,16 @@ class LangChainLLMClient:
         Returns:
             Dictionary with enriched task information
         """
-        assignment = self.config.model_assignments.get('task_enrichment')
-        logger.info(f"🔵 [LLM CALL] enrich_task | Provider: {assignment.provider} | Model: {assignment.model}")
+        assignment = self.config.model_assignments.get("task_enrichment")
+        logger.info(
+            f"🔵 [LLM CALL] enrich_task | Provider: {assignment.provider} | Model: {assignment.model}"
+        )
 
         model = self._get_model_for_component(ComponentType.TASK_ENRICHMENT)
         if not model:
-            logger.warning("⚠️ [LLM CALL] No model available for task_enrichment, using fallback")
+            logger.warning(
+                "⚠️ [LLM CALL] No model available for task_enrichment, using fallback"
+            )
             return self._default_task_enrichment(task_description, done_definition)
 
         prompt = self._build_task_enrichment_prompt(
@@ -369,8 +428,10 @@ class LangChainLLMClient:
         )
 
         messages = [
-            SystemMessage(content="You are a task analysis expert for an AI orchestration system."),
-            HumanMessage(content=prompt)
+            SystemMessage(
+                content="You are a task analysis expert for an AI orchestration system."
+            ),
+            HumanMessage(content=prompt),
         ]
 
         try:
@@ -378,11 +439,15 @@ class LangChainLLMClient:
             parser = JsonOutputParser()
             result = parser.parse(response.content)
 
-            logger.info(f"✅ [LLM CALL] enrich_task completed | Provider: {assignment.provider} | Model: {assignment.model}")
+            logger.info(
+                f"✅ [LLM CALL] enrich_task completed | Provider: {assignment.provider} | Model: {assignment.model}"
+            )
             return result
 
         except Exception as e:
-            logger.error(f"❌ [LLM CALL] enrich_task failed | Provider: {assignment.provider} | Model: {assignment.model} | Error: {e}")
+            logger.error(
+                f"❌ [LLM CALL] enrich_task failed | Provider: {assignment.provider} | Model: {assignment.model} | Error: {e}"
+            )
             return self._default_task_enrichment(task_description, done_definition)
 
     async def resolve_ticket_clarification(
@@ -393,7 +458,7 @@ class LangChainLLMClient:
         potential_solutions: List[str],
         ticket_details: Dict[str, Any],
         related_tickets: List[Dict[str, Any]],
-        active_tasks: List[Dict[str, Any]]
+        active_tasks: List[Dict[str, Any]],
     ) -> str:
         """Use LLM to resolve ticket clarification conflicts.
 
@@ -423,20 +488,24 @@ class LangChainLLMClient:
             potential_solutions=potential_solutions,
             ticket_details=ticket_details,
             related_tickets=related_tickets,
-            active_tasks=active_tasks
+            active_tasks=active_tasks,
         )
 
         # Create messages
         messages = [
-            SystemMessage(content="You are a ticket clarification arbitrator specialized in resolving conflicts and ambiguities in software development requirements."),
-            HumanMessage(content=prompt)
+            SystemMessage(
+                content="You are a ticket clarification arbitrator specialized in resolving conflicts and ambiguities in software development requirements."
+            ),
+            HumanMessage(content=prompt),
         ]
 
         try:
             # Invoke model with longer timeout for reasoning
             response = await model.ainvoke(messages)
 
-            logger.info(f"Ticket clarification resolved successfully for {ticket_id} using {self.config.model_assignments['task_enrichment'].model}")
+            logger.info(
+                f"Ticket clarification resolved successfully for {ticket_id} using {self.config.model_assignments['task_enrichment'].model}"
+            )
             return response.content
 
         except Exception as e:
@@ -452,7 +521,9 @@ class LangChainLLMClient:
         Returns:
             Embedding vector
         """
-        logger.debug(f"🔵 [LLM CALL] generate_embedding | Provider: openai | Model: {self.config.embedding_model}")
+        logger.debug(
+            f"🔵 [LLM CALL] generate_embedding | Provider: openai | Model: {self.config.embedding_model}"
+        )
 
         if not self._embedding_model:
             logger.error("❌ [LLM CALL] Embedding model not initialized")
@@ -460,10 +531,14 @@ class LangChainLLMClient:
 
         try:
             embedding = await self._embedding_model.aembed_query(text[:8000])
-            logger.debug(f"✅ [LLM CALL] generate_embedding completed | Provider: openai | Model: {self.config.embedding_model}")
+            logger.debug(
+                f"✅ [LLM CALL] generate_embedding completed | Provider: openai | Model: {self.config.embedding_model}"
+            )
             return embedding
         except Exception as e:
-            logger.error(f"❌ [LLM CALL] generate_embedding failed | Provider: openai | Model: {self.config.embedding_model} | Error: {e}")
+            logger.error(
+                f"❌ [LLM CALL] generate_embedding failed | Provider: openai | Model: {self.config.embedding_model} | Error: {e}"
+            )
             # Return zero vector as fallback
             return [0.0] * 1536
 
@@ -487,11 +562,13 @@ class LangChainLLMClient:
         if not model:
             return self._default_agent_state()
 
-        prompt = self._build_agent_state_prompt(agent_output, task_info, project_context)
+        prompt = self._build_agent_state_prompt(
+            agent_output, task_info, project_context
+        )
 
         messages = [
             SystemMessage(content="You are an AI agent monitoring expert."),
-            HumanMessage(content=prompt)
+            HumanMessage(content=prompt),
         ]
 
         try:
@@ -499,7 +576,9 @@ class LangChainLLMClient:
             parser = JsonOutputParser()
             result = parser.parse(response.content)
 
-            logger.debug(f"Agent state analyzed using {self.config.model_assignments['agent_monitoring'].model}")
+            logger.debug(
+                f"Agent state analyzed using {self.config.model_assignments['agent_monitoring'].model}"
+            )
             return result
 
         except Exception as e:
@@ -550,12 +629,16 @@ class LangChainLLMClient:
         Returns:
             Dictionary with trajectory analysis
         """
-        assignment = self.config.model_assignments.get('guardian_analysis')
-        logger.info(f"🔵 [LLM CALL] Guardian analyze_agent_trajectory | Provider: {assignment.provider} | Model: {assignment.model}")
+        assignment = self.config.model_assignments.get("guardian_analysis")
+        logger.info(
+            f"🔵 [LLM CALL] Guardian analyze_agent_trajectory | Provider: {assignment.provider} | Model: {assignment.model}"
+        )
 
         model = self._get_model_for_component(ComponentType.GUARDIAN_ANALYSIS)
         if not model:
-            logger.warning("⚠️ [LLM CALL] No model available for guardian_analysis, using fallback")
+            logger.warning(
+                "⚠️ [LLM CALL] No model available for guardian_analysis, using fallback"
+            )
             return self._default_trajectory_analysis()
 
         from src.monitoring.prompt_loader import prompt_loader
@@ -569,8 +652,10 @@ class LangChainLLMClient:
         )
 
         messages = [
-            SystemMessage(content="You are a trajectory analysis expert using accumulated context thinking."),
-            HumanMessage(content=prompt)
+            SystemMessage(
+                content="You are a trajectory analysis expert using accumulated context thinking."
+            ),
+            HumanMessage(content=prompt),
         ]
 
         for attempt in range(3):
@@ -581,13 +666,19 @@ class LangChainLLMClient:
                 parser = JsonOutputParser()
                 result = parser.parse(response.content)
 
-                logger.info(f"✅ [LLM CALL] Guardian analyze_agent_trajectory completed | Provider: {assignment.provider} | Model: {assignment.model}")
+                logger.info(
+                    f"✅ [LLM CALL] Guardian analyze_agent_trajectory completed | Provider: {assignment.provider} | Model: {assignment.model}"
+                )
                 return result
 
             except Exception as e:
-                logger.error(f"❌ [LLM CALL] Guardian analyze_agent_trajectory failed (attempt {attempt + 1}/3) | Provider: {assignment.provider} | Model: {assignment.model} | Error: {e}")
+                logger.error(
+                    f"❌ [LLM CALL] Guardian analyze_agent_trajectory failed (attempt {attempt + 1}/3) | Provider: {assignment.provider} | Model: {assignment.model} | Error: {e}"
+                )
                 if attempt == 2:
-                    logger.warning("⚠️ [LLM CALL] Guardian analyze_agent_trajectory exhausted retries, using fallback")
+                    logger.warning(
+                        "⚠️ [LLM CALL] Guardian analyze_agent_trajectory exhausted retries, using fallback"
+                    )
                     return self._default_trajectory_analysis()
                 await asyncio.sleep(1)
 
@@ -605,12 +696,16 @@ class LangChainLLMClient:
         Returns:
             Dictionary with coherence analysis
         """
-        assignment = self.config.model_assignments.get('conductor_analysis')
-        logger.info(f"🔵 [LLM CALL] Conductor analyze_system_coherence | Provider: {assignment.provider} | Model: {assignment.model}")
+        assignment = self.config.model_assignments.get("conductor_analysis")
+        logger.info(
+            f"🔵 [LLM CALL] Conductor analyze_system_coherence | Provider: {assignment.provider} | Model: {assignment.model}"
+        )
 
         model = self._get_model_for_component(ComponentType.CONDUCTOR_ANALYSIS)
         if not model:
-            logger.warning("⚠️ [LLM CALL] No model available for conductor_analysis, using fallback")
+            logger.warning(
+                "⚠️ [LLM CALL] No model available for conductor_analysis, using fallback"
+            )
             return self._default_coherence_analysis()
 
         from src.monitoring.prompt_loader import prompt_loader
@@ -621,8 +716,10 @@ class LangChainLLMClient:
         )
 
         messages = [
-            SystemMessage(content="You are a system orchestration expert analyzing multi-agent coherence."),
-            HumanMessage(content=prompt)
+            SystemMessage(
+                content="You are a system orchestration expert analyzing multi-agent coherence."
+            ),
+            HumanMessage(content=prompt),
         ]
 
         for attempt in range(3):
@@ -633,13 +730,19 @@ class LangChainLLMClient:
                 parser = JsonOutputParser()
                 result = parser.parse(response.content)
 
-                logger.info(f"✅ [LLM CALL] Conductor analyze_system_coherence completed | Provider: {assignment.provider} | Model: {assignment.model}")
+                logger.info(
+                    f"✅ [LLM CALL] Conductor analyze_system_coherence completed | Provider: {assignment.provider} | Model: {assignment.model}"
+                )
                 return result
 
             except Exception as e:
-                logger.error(f"❌ [LLM CALL] Conductor analyze_system_coherence failed (attempt {attempt + 1}/3) | Provider: {assignment.provider} | Model: {assignment.model} | Error: {e}")
+                logger.error(
+                    f"❌ [LLM CALL] Conductor analyze_system_coherence failed (attempt {attempt + 1}/3) | Provider: {assignment.provider} | Model: {assignment.model} | Error: {e}"
+                )
                 if attempt == 2:
-                    logger.warning("⚠️ [LLM CALL] Conductor analyze_system_coherence exhausted retries, using fallback")
+                    logger.warning(
+                        "⚠️ [LLM CALL] Conductor analyze_system_coherence exhausted retries, using fallback"
+                    )
                     return self._default_coherence_analysis()
                 await asyncio.sleep(1)
 
@@ -661,12 +764,16 @@ class LangChainLLMClient:
         Returns:
             Dictionary with verdict, reasoning, and recommendations
         """
-        assignment = self.config.model_assignments.get('conductor_analysis')
-        logger.info(f"🔵 [LLM CALL] Conductor review_qa_report | Provider: {assignment.provider} | Model: {assignment.model}")
+        assignment = self.config.model_assignments.get("conductor_analysis")
+        logger.info(
+            f"🔵 [LLM CALL] Conductor review_qa_report | Provider: {assignment.provider} | Model: {assignment.model}"
+        )
 
         model = self._get_model_for_component(ComponentType.CONDUCTOR_ANALYSIS)
         if not model:
-            logger.warning("⚠️ [LLM CALL] No model available for conductor_analysis, using fallback")
+            logger.warning(
+                "⚠️ [LLM CALL] No model available for conductor_analysis, using fallback"
+            )
             return {"up_to_spec": False, "reasoning": "No LLM available for review"}
 
         prompt = f"""You are a QA reviewer evaluating whether a project's output meets its requirements.
@@ -706,8 +813,10 @@ Consider:
 """
 
         messages = [
-            SystemMessage(content="You are a senior QA engineer reviewing project output against requirements. Be thorough and critical."),
-            HumanMessage(content=prompt)
+            SystemMessage(
+                content="You are a senior QA engineer reviewing project output against requirements. Be thorough and critical."
+            ),
+            HumanMessage(content=prompt),
         ]
 
         for attempt in range(3):
@@ -718,13 +827,19 @@ Consider:
                 parser = JsonOutputParser()
                 result = parser.parse(response.content)
 
-                logger.info(f"✅ [LLM CALL] Conductor review_qa_report completed | up_to_spec={result.get('up_to_spec')} | Provider: {assignment.provider} | Model: {assignment.model}")
+                logger.info(
+                    f"✅ [LLM CALL] Conductor review_qa_report completed | up_to_spec={result.get('up_to_spec')} | Provider: {assignment.provider} | Model: {assignment.model}"
+                )
                 return result
 
             except Exception as e:
-                logger.error(f"❌ [LLM CALL] Conductor review_qa_report failed (attempt {attempt + 1}/3) | Provider: {assignment.provider} | Model: {assignment.model} | Error: {e}")
+                logger.error(
+                    f"❌ [LLM CALL] Conductor review_qa_report failed (attempt {attempt + 1}/3) | Provider: {assignment.provider} | Model: {assignment.model} | Error: {e}"
+                )
                 if attempt == 2:
-                    logger.warning("⚠️ [LLM CALL] Conductor review_qa_report exhausted retries, using fallback")
+                    logger.warning(
+                        "⚠️ [LLM CALL] Conductor review_qa_report exhausted retries, using fallback"
+                    )
                     return {"up_to_spec": False, "reasoning": f"LLM review failed: {e}"}
                 await asyncio.sleep(1)
 
@@ -751,14 +866,14 @@ Consider:
         task_description: str,
         done_definition: str,
         context: List[str],
-        phase_context: Optional[str] = None
+        phase_context: Optional[str] = None,
     ) -> str:
         """Build prompt for task enrichment."""
         prompt = f"""Given this task request, analyze and enrich it with clear specifications.
 
 Task: {task_description}
 Done Definition: {done_definition}
-Context: {' '.join(context[:10])}"""
+Context: {" ".join(context[:10])}"""
 
         if phase_context:
             prompt += f"""
@@ -790,49 +905,61 @@ Ensure the enriched description is actionable and the completion criteria are sp
         potential_solutions: List[str],
         ticket_details: Dict[str, Any],
         related_tickets: List[Dict[str, Any]],
-        active_tasks: List[Dict[str, Any]]
+        active_tasks: List[Dict[str, Any]],
     ) -> str:
         """Build prompt for ticket clarification using structured template."""
         from pathlib import Path
 
         # Load template from src/prompts/ticket_clarification_prompt.md
-        template_path = Path(__file__).parent.parent / "prompts" / "ticket_clarification_prompt.md"
+        template_path = (
+            Path(__file__).parent.parent / "prompts" / "ticket_clarification_prompt.md"
+        )
 
         try:
-            with open(template_path, 'r') as f:
+            with open(template_path, "r") as f:
                 template = f.read()
         except FileNotFoundError:
-            logger.error(f"Ticket clarification prompt template not found at {template_path}")
+            logger.error(
+                f"Ticket clarification prompt template not found at {template_path}"
+            )
             # Fallback to a basic prompt
             return self._build_fallback_clarification_prompt(
-                ticket_id, conflict_description, context, potential_solutions, ticket_details
+                ticket_id,
+                conflict_description,
+                context,
+                potential_solutions,
+                ticket_details,
             )
 
         # Format related tickets (60 most recent)
-        tickets_context = "\n".join([
-            f"[{t['ticket_id'][:12]}] ({t['status']}) {t['priority']} - {t['title']}\n"
-            f"  Type: {t['ticket_type']}\n"
-            f"  Description: {t['description'][:150]}..."
-            for t in related_tickets[:60]
-        ])
+        tickets_context = "\n".join(
+            [
+                f"[{t['ticket_id'][:12]}] ({t['status']}) {t['priority']} - {t['title']}\n"
+                f"  Type: {t['ticket_type']}\n"
+                f"  Description: {t['description'][:150]}..."
+                for t in related_tickets[:60]
+            ]
+        )
 
         if not tickets_context:
             tickets_context = "No other tickets found in the system."
 
         # Format active tasks (60 most recent)
-        tasks_context = "\n".join([
-            f"[{t['id'][:8]}] ({t['status']}) Phase {t.get('phase_id', 'N/A')} - {t['description'][:150]}..."
-            for t in active_tasks[:60]
-        ])
+        tasks_context = "\n".join(
+            [
+                f"[{t['id'][:8]}] ({t['status']}) Phase {t.get('phase_id', 'N/A')} - {t['description'][:150]}..."
+                for t in active_tasks[:60]
+            ]
+        )
 
         if not tasks_context:
             tasks_context = "No active tasks found in the system."
 
         # Format potential solutions with numbering
         if potential_solutions:
-            solutions_text = "\n".join([
-                f"{i+1}. {sol}" for i, sol in enumerate(potential_solutions)
-            ])
+            solutions_text = "\n".join(
+                [f"{i + 1}. {sol}" for i, sol in enumerate(potential_solutions)]
+            )
         else:
             solutions_text = "(Agent did not provide potential solutions)"
 
@@ -840,22 +967,28 @@ Ensure the enriched description is actionable and the completion criteria are sp
         try:
             prompt = template.format(
                 ticket_id=ticket_id,
-                ticket_title=ticket_details.get('title', 'Unknown'),
-                ticket_description=ticket_details.get('description', 'No description provided'),
-                ticket_status=ticket_details.get('status', 'unknown'),
-                ticket_priority=ticket_details.get('priority', 'unknown'),
-                agent_id=ticket_details.get('assigned_agent_id', 'unassigned'),
+                ticket_title=ticket_details.get("title", "Unknown"),
+                ticket_description=ticket_details.get(
+                    "description", "No description provided"
+                ),
+                ticket_status=ticket_details.get("status", "unknown"),
+                ticket_priority=ticket_details.get("priority", "unknown"),
+                agent_id=ticket_details.get("assigned_agent_id", "unassigned"),
                 conflict_description=conflict_description,
                 context=context if context else "(No additional context provided)",
                 potential_solutions=solutions_text,
                 related_tickets=tickets_context,
-                active_tasks=tasks_context
+                active_tasks=tasks_context,
             )
             return prompt
         except Exception as e:
             logger.error(f"Failed to format ticket clarification template: {e}")
             return self._build_fallback_clarification_prompt(
-                ticket_id, conflict_description, context, potential_solutions, ticket_details
+                ticket_id,
+                conflict_description,
+                context,
+                potential_solutions,
+                ticket_details,
             )
 
     def _build_fallback_clarification_prompt(
@@ -864,22 +997,26 @@ Ensure the enriched description is actionable and the completion criteria are sp
         conflict_description: str,
         context: str,
         potential_solutions: List[str],
-        ticket_details: Dict[str, Any]
+        ticket_details: Dict[str, Any],
     ) -> str:
         """Fallback prompt when template is unavailable."""
-        solutions_text = "\n".join([f"{i+1}. {sol}" for i, sol in enumerate(potential_solutions)]) if potential_solutions else "No solutions provided"
+        solutions_text = (
+            "\n".join([f"{i + 1}. {sol}" for i, sol in enumerate(potential_solutions)])
+            if potential_solutions
+            else "No solutions provided"
+        )
 
         return f"""You are a ticket clarification arbitrator. An agent has encountered a conflict or ambiguity in their ticket requirements.
 
 TICKET: {ticket_id}
-TITLE: {ticket_details.get('title', 'Unknown')}
-DESCRIPTION: {ticket_details.get('description', 'No description')}
+TITLE: {ticket_details.get("title", "Unknown")}
+DESCRIPTION: {ticket_details.get("description", "No description")}
 
 CONFLICT DESCRIBED BY AGENT:
 {conflict_description}
 
 ADDITIONAL CONTEXT:
-{context if context else 'None provided'}
+{context if context else "None provided"}
 
 POTENTIAL SOLUTIONS AGENT IS CONSIDERING:
 {solutions_text}
@@ -895,10 +1032,7 @@ Provide a clear, detailed resolution in markdown format that includes:
 Be decisive and provide actionable guidance to prevent the agent from creating infinite tasks."""
 
     def _build_agent_state_prompt(
-        self,
-        agent_output: str,
-        task_info: Dict[str, Any],
-        project_context: str
+        self, agent_output: str, task_info: Dict[str, Any], project_context: str
     ) -> str:
         """Build prompt for agent state analysis."""
         return f"""Analyze this AI agent's current state and decide on the appropriate action.
@@ -909,9 +1043,9 @@ AGENT OUTPUT (Last 200 lines):
 ```
 
 TASK INFO:
-- Description: {task_info.get('description', 'Unknown')}
-- Completion Criteria: {task_info.get('done_definition', 'Unknown')}
-- Time on Task: {task_info.get('time_elapsed', 0)} minutes
+- Description: {task_info.get("description", "Unknown")}
+- Completion Criteria: {task_info.get("done_definition", "Unknown")}
+- Time on Task: {task_info.get("time_elapsed", 0)} minutes
 
 PROJECT CONTEXT:
 {project_context}
@@ -926,7 +1060,9 @@ Based on the agent's output, determine:
 Return as JSON with keys: state, decision, message, reasoning, confidence"""
 
     # Default/fallback methods
-    def _default_task_enrichment(self, task_description: str, done_definition: str) -> Dict[str, Any]:
+    def _default_task_enrichment(
+        self, task_description: str, done_definition: str
+    ) -> Dict[str, Any]:
         """Default task enrichment when model unavailable."""
         return {
             "enriched_description": task_description,
@@ -947,24 +1083,20 @@ Return as JSON with keys: state, decision, message, reasoning, confidence"""
         }
 
     def _default_agent_prompt(
-        self,
-        task: Dict[str, Any],
-        memories: List[Dict[str, Any]],
-        project_context: str
+        self, task: Dict[str, Any], memories: List[Dict[str, Any]], project_context: str
     ) -> str:
         """Generate default agent prompt."""
-        memory_context = "\n".join([
-            f"- {mem.get('content', '')[:200]}"
-            for mem in memories[:10]
-        ])
+        memory_context = "\n".join(
+            [f"- {mem.get('content', '')[:200]}" for mem in memories[:10]]
+        )
 
         return f"""You are an AI agent in the Hephaestus orchestration system.
 
 ═══ TASK ═══
-{task.get('enriched_description', task.get('description', ''))}
+{task.get("enriched_description", task.get("description", ""))}
 
 COMPLETION CRITERIA:
-{task.get('done_definition', 'Complete the assigned task')}
+{task.get("done_definition", "Complete the assigned task")}
 
 ═══ PRE-LOADED CONTEXT ═══
 Top 10 relevant memories (use qdrant-find for more):
@@ -976,7 +1108,7 @@ PROJECT:
 ═══ AVAILABLE TOOLS ═══
 
 Hephaestus MCP (task management):
-• create_task - Create sub-tasks (MUST set parent_task_id="{task.get('id', 'unknown')}")
+• create_task - Create sub-tasks (MUST set parent_task_id="{task.get("id", "unknown")}")
 • update_task_status - Mark done/failed when complete (REQUIRED)
 • save_memory - Save discoveries for other agents
 
@@ -992,7 +1124,7 @@ Qdrant MCP (memory search):
 3. Save important discoveries via save_memory (error fixes, decisions, warnings)
 4. Call update_task_status when done (status='done') or failed (status='failed')
 
-IDs: Agent={task.get('agent_id', 'unknown')} | Task={task.get('id', 'unknown')}"""
+IDs: Agent={task.get("agent_id", "unknown")} | Task={task.get("id", "unknown")}"""
 
     def _default_trajectory_analysis(self) -> Dict[str, Any]:
         """Default trajectory analysis when model unavailable."""
@@ -1004,7 +1136,7 @@ IDs: Agent={task.get('agent_id', 'unknown')} | Task={task.get('id', 'unknown')}"
             "needs_steering": False,
             "steering_type": None,
             "steering_recommendation": None,
-            "trajectory_summary": "Analysis unavailable"
+            "trajectory_summary": "Analysis unavailable",
         }
 
     def _default_coherence_analysis(self) -> Dict[str, Any]:
@@ -1015,5 +1147,5 @@ IDs: Agent={task.get('agent_id', 'unknown')} | Task={task.get('id', 'unknown')}"
             "alignment_issues": [],
             "termination_recommendations": [],
             "coordination_needs": [],
-            "system_summary": "Analysis unavailable"
+            "system_summary": "Analysis unavailable",
         }

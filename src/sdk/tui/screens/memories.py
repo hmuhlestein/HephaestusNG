@@ -1,10 +1,10 @@
 """Memories screen showing saved memories."""
 
-from textual.app import ComposeResult
-from textual.screen import Screen
-from textual.widgets import DataTable, Static, Footer, Input
-from textual.containers import Container, Vertical, Horizontal
 import requests
+from textual.app import ComposeResult
+from textual.containers import Container, Horizontal, Vertical
+from textual.screen import Screen
+from textual.widgets import DataTable, Footer, Input, Static
 
 
 class MemoriesScreen(Screen):
@@ -131,7 +131,9 @@ class MemoriesScreen(Screen):
                     table.add_row(
                         memory.get("id", "")[:8],
                         memory.get("memory_type", ""),
-                        memory.get("agent_id", "")[:12] if memory.get("agent_id") else "-",
+                        memory.get("agent_id", "")[:12]
+                        if memory.get("agent_id")
+                        else "-",
                         created,
                         content,
                         key=memory.get("id", ""),
@@ -162,13 +164,13 @@ class MemoriesScreen(Screen):
         """Display memory details in the details panel."""
         details = self.query_one("#details-content", Static)
 
-        text = f"""[bold yellow]Memory ID:[/] {memory.get('id', 'N/A')}
-[bold yellow]Type:[/] {memory.get('memory_type', 'N/A')}
-[bold yellow]Agent:[/] {memory.get('agent_id', 'N/A')}
-[bold yellow]Created:[/] {memory.get('created_at', 'N/A')}
+        text = f"""[bold yellow]Memory ID:[/] {memory.get("id", "N/A")}
+[bold yellow]Type:[/] {memory.get("memory_type", "N/A")}
+[bold yellow]Agent:[/] {memory.get("agent_id", "N/A")}
+[bold yellow]Created:[/] {memory.get("created_at", "N/A")}
 
 [bold yellow]Content:[/]
-{memory.get('content', 'N/A')}
+{memory.get("content", "N/A")}
 """
         details.update(text)
 
@@ -199,5 +201,5 @@ class MemoriesScreen(Screen):
                 title="⚠️  EXIT HEPHAESTUS",
                 message="Are you sure you want to exit?\nAll running agents will continue in the background.",
             ),
-            check_quit
+            check_quit,
         )

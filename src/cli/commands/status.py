@@ -1,8 +1,17 @@
 """heph status — System health and status."""
 
 import time
+
 import httpx
-from src.cli.utils import api_get, output, table, status_icon, read_pid, is_process_running
+
+from src.cli.utils import (
+    api_get,
+    is_process_running,
+    output,
+    read_pid,
+    status_icon,
+    table,
+)
 
 
 def register(subparsers):
@@ -17,7 +26,9 @@ def run(args):
     start = time.time()
     health = api_get(args, "/health")
     backend_latency_ms = round((time.time() - start) * 1000)
-    data["backend"] = "healthy" if health and "healthy" in str(health) else "unreachable"
+    data["backend"] = (
+        "healthy" if health and "healthy" in str(health) else "unreachable"
+    )
 
     # Frontend (independent of backend)
     frontend_pid = read_pid("frontend")
@@ -32,7 +43,13 @@ def run(args):
 
     # Agents
     agents = api_get(args, "/api/agents")
-    agent_list = agents if isinstance(agents, list) else agents.get("agents", []) if agents else []
+    agent_list = (
+        agents
+        if isinstance(agents, list)
+        else agents.get("agents", [])
+        if agents
+        else []
+    )
     data["agents"] = {
         "total": len(agent_list),
         "working": sum(1 for a in agent_list if a.get("status") == "working"),
@@ -43,7 +60,13 @@ def run(args):
     # Tasks
     for task_status in ("pending", "in_progress", "done", "failed"):
         tasks = api_get(args, f"/api/tasks?status={task_status}")
-        task_list = tasks if isinstance(tasks, list) else tasks.get("tasks", []) if tasks else []
+        task_list = (
+            tasks
+            if isinstance(tasks, list)
+            else tasks.get("tasks", [])
+            if tasks
+            else []
+        )
         data[f"tasks_{task_status}"] = len(task_list)
 
     # Workflows
@@ -58,12 +81,14 @@ def run(args):
 
     # Service health checks
     import os
+
     services = []
     timeout = 5
 
     # Backend (reuse earlier result)
-    services.append({"name": "Backend", "status": 200, "latency_ms": backend_latency_ms,
-                     "ok": True})
+    services.append(
+        {"name": "Backend", "status": 200, "latency_ms": backend_latency_ms, "ok": True}
+    )
 
     # Qdrant (only if using qdrant backend)
     vector_backend = os.environ.get("VECTOR_STORE_BACKEND", "turbovec")
@@ -72,12 +97,34 @@ def run(args):
         try:
             r = httpx.get("http://localhost:6333/", timeout=timeout)
             elapsed = time.time() - start
-            services.append({"name": "Qdrant", "status": r.status_code, "latency_ms": round(elapsed * 1000),
-                             "ok": r.status_code == 200})
+            services.append(
+                {
+                    "name": "Qdrant",
+                    "status": r.status_code,
+                    "latency_ms": round(elapsed * 1000),
+                    "ok": r.status_code == 200,
+                }
+            )
         except Exception as e:
-            services.append({"name": "Qdrant", "status": "ERR", "latency_ms": None, "ok": False, "detail": str(e)[:50]})
+            services.append(
+                {
+                    "name": "Qdrant",
+                    "status": "ERR",
+                    "latency_ms": None,
+                    "ok": False,
+                    "detail": str(e)[:50],
+                }
+            )
     else:
-        services.append({"name": "Qdrant", "status": "SKIP", "latency_ms": None, "ok": True, "detail": "turbovec"})
+        services.append(
+            {
+                "name": "Qdrant",
+                "status": "SKIP",
+                "latency_ms": None,
+                "ok": True,
+                "detail": "turbovec",
+            }
+        )
 
     # MCP Tools
     start = time.time()
@@ -86,31 +133,74 @@ def run(args):
         elapsed = time.time() - start
         tools = r.json() if r.status_code == 200 else []
         tool_count = len(tools) if isinstance(tools, list) else 0
-        services.append({"name": "MCP Tools", "status": r.status_code, "latency_ms": round(elapsed * 1000),
-                         "ok": r.status_code == 200, "detail": f"{tool_count} tools"})
+        services.append(
+            {
+                "name": "MCP Tools",
+                "status": r.status_code,
+                "latency_ms": round(elapsed * 1000),
+                "ok": r.status_code == 200,
+                "detail": f"{tool_count} tools",
+            }
+        )
     except Exception as e:
-        services.append({"name": "MCP Tools", "status": "ERR", "latency_ms": None, "ok": False, "detail": str(e)[:50]})
+        services.append(
+            {
+                "name": "MCP Tools",
+                "status": "ERR",
+                "latency_ms": None,
+                "ok": False,
+                "detail": str(e)[:50],
+            }
+        )
 
     # Workflow API
     start = time.time()
     try:
         r = httpx.get(f"{args.api_base}/api/workflow-definitions", timeout=timeout)
         elapsed = time.time() - start
-        services.append({"name": "Workflow API", "status": r.status_code, "latency_ms": round(elapsed * 1000),
-                         "ok": r.status_code == 200})
+        services.append(
+            {
+                "name": "Workflow API",
+                "status": r.status_code,
+                "latency_ms": round(elapsed * 1000),
+                "ok": r.status_code == 200,
+            }
+        )
     except Exception as e:
-        services.append({"name": "Workflow API", "status": "ERR", "latency_ms": None, "ok": False, "detail": str(e)[:50]})
+        services.append(
+            {
+                "name": "Workflow API",
+                "status": "ERR",
+                "latency_ms": None,
+                "ok": False,
+                "detail": str(e)[:50],
+            }
+        )
 
     # SSE
     start = time.time()
     try:
         r = httpx.get(f"{args.api_base}/sse", timeout=2, stream=True)
         elapsed = time.time() - start
-        services.append({"name": "SSE Stream", "status": r.status_code, "latency_ms": round(elapsed * 1000),
-                         "ok": True})
+        services.append(
+            {
+                "name": "SSE Stream",
+                "status": r.status_code,
+                "latency_ms": round(elapsed * 1000),
+                "ok": True,
+            }
+        )
         r.close()
     except Exception:
-        services.append({"name": "SSE Stream", "status": "SKIP", "latency_ms": None, "ok": True, "detail": "not available"})
+        services.append(
+            {
+                "name": "SSE Stream",
+                "status": "SKIP",
+                "latency_ms": None,
+                "ok": True,
+                "detail": "not available",
+            }
+        )
 
     data["services"] = services
 
@@ -137,10 +227,12 @@ def _print_status(data):
     print()
 
     a = data.get("agents", {})
-    print(f"Agents:    {a.get('total', 0)} total  "
-          f"({a.get('working', 0)} working, "
-          f"{a.get('idle', 0)} idle, "
-          f"{a.get('error', 0)} error)")
+    print(
+        f"Agents:    {a.get('total', 0)} total  "
+        f"({a.get('working', 0)} working, "
+        f"{a.get('idle', 0)} idle, "
+        f"{a.get('error', 0)} error)"
+    )
     print()
 
     print("Tasks:")
@@ -150,8 +242,10 @@ def _print_status(data):
     print(f"  failed:       {data.get('tasks_failed', 0)}")
     print()
 
-    print(f"Workflows: {data.get('workflow_definitions', 0)} definitions, "
-          f"{data.get('workflow_executions', 0)} executions")
+    print(
+        f"Workflows: {data.get('workflow_definitions', 0)} definitions, "
+        f"{data.get('workflow_executions', 0)} executions"
+    )
     print()
 
     services = data.get("services", [])

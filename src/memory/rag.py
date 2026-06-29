@@ -1,11 +1,11 @@
 """RAG (Retrieval Augmented Generation) system for Hephaestus."""
 
-from typing import List, Dict, Any, Optional
-from datetime import datetime, timedelta
 import logging
+from datetime import datetime, timedelta
+from typing import Any, Dict, List, Optional
 
-from src.memory.vector_store import VectorStoreManager
 from src.interfaces import LLMProviderInterface
+from src.memory.vector_store import VectorStoreManager
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +47,9 @@ class RAGSystem:
 
         try:
             # Generate embedding for the task description
-            query_embedding = await self.llm_provider.generate_embedding(task_description)
+            query_embedding = await self.llm_provider.generate_embedding(
+                task_description
+            )
 
             # Search across all relevant collections
             all_results = await self.vector_store.search_all_collections(
@@ -62,15 +64,17 @@ class RAGSystem:
             # Format results for consumption
             formatted_results = []
             for result in ranked_results[:limit]:
-                formatted_results.append({
-                    "content": result["content"],
-                    "source_collection": result.get("collection", "unknown"),
-                    "source_agent": result["metadata"].get("agent_id", "system"),
-                    "memory_type": result["metadata"].get("memory_type", "general"),
-                    "relevance_score": result["score"],
-                    "timestamp": result["metadata"].get("timestamp"),
-                    "related_files": result["metadata"].get("related_files", []),
-                })
+                formatted_results.append(
+                    {
+                        "content": result["content"],
+                        "source_collection": result.get("collection", "unknown"),
+                        "source_agent": result["metadata"].get("agent_id", "system"),
+                        "memory_type": result["metadata"].get("memory_type", "general"),
+                        "relevance_score": result["score"],
+                        "timestamp": result["metadata"].get("timestamp"),
+                        "related_files": result["metadata"].get("related_files", []),
+                    }
+                )
 
             logger.info(f"Retrieved {len(formatted_results)} memories for task")
             return formatted_results
@@ -202,9 +206,9 @@ class RAGSystem:
 
             # Calculate weighted final score
             final_score = (
-                vector_score * 0.5 +  # Similarity weight
-                recency_score * 0.2 +  # Recency weight
-                type_relevance * 0.3  # Type relevance weight
+                vector_score * 0.5  # Similarity weight
+                + recency_score * 0.2  # Recency weight
+                + type_relevance * 0.3  # Type relevance weight
             )
 
             result["final_score"] = final_score
@@ -319,7 +323,7 @@ class MemoryIngestion:
             document_type: Type of document
         """
         try:
-            with open(file_path, 'r', encoding='utf-8') as f:
+            with open(file_path, "r", encoding="utf-8") as f:
                 content = f.read()
 
             # Chunk the document
@@ -374,7 +378,7 @@ class MemoryIngestion:
         step = chunk_size - overlap
 
         for i in range(0, len(words), step):
-            chunk = " ".join(words[i:i + chunk_size])
+            chunk = " ".join(words[i : i + chunk_size])
             chunks.append(chunk)
 
             # Stop if we've reached the end

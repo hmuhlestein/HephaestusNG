@@ -1,13 +1,12 @@
 """Test that validation agents are protected from duplicate termination."""
 
-import pytest
-import asyncio
-from unittest.mock import Mock, MagicMock, AsyncMock, patch
-from datetime import datetime
+from unittest.mock import AsyncMock, Mock
 
+import pytest
+
+from src.core.database import Agent
 from src.monitoring.conductor import Conductor, SystemDecision
 from src.monitoring.guardian import Guardian
-from src.core.database import Agent
 
 
 @pytest.fixture
@@ -68,7 +67,9 @@ async def test_validation_agent_not_terminated(
     """Test that validation agents are not terminated even when marked as duplicate."""
     # Setup mock session to return validation agent
     mock_session = Mock()
-    mock_session.query.return_value.filter_by.return_value.first.return_value = validation_agent
+    mock_session.query.return_value.filter_by.return_value.first.return_value = (
+        validation_agent
+    )
     mock_session.close = Mock()
     mock_db_manager.get_session.return_value = mock_session
 
@@ -100,7 +101,9 @@ async def test_regular_agent_is_terminated(
     """Test that regular agents are terminated when marked as duplicate."""
     # Setup mock session to return regular agent
     mock_session = Mock()
-    mock_session.query.return_value.filter_by.return_value.first.return_value = regular_agent
+    mock_session.query.return_value.filter_by.return_value.first.return_value = (
+        regular_agent
+    )
     mock_session.close = Mock()
     mock_session.add = Mock()
     mock_session.commit = Mock()
@@ -134,7 +137,9 @@ async def test_result_validator_not_terminated(
 
     # Setup mock session
     mock_session = Mock()
-    mock_session.query.return_value.filter_by.return_value.first.return_value = result_validator
+    mock_session.query.return_value.filter_by.return_value.first.return_value = (
+        result_validator
+    )
     mock_session.close = Mock()
     mock_db_manager.get_session.return_value = mock_session
 

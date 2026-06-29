@@ -1,36 +1,57 @@
 """MCP Server implementation for Hephaestus."""
 
-from typing import Dict, Any, Optional, List
+import asyncio
 import json
-import uuid
 import logging
 import os
 import time
+import uuid
 from datetime import datetime, timedelta
-from fastapi import FastAPI, HTTPException, Header, WebSocket, WebSocketDisconnect, Body, Request, Query
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, HTMLResponse
-from pydantic import BaseModel, Field
-import asyncio
+from typing import Any, Dict, List, Optional
 
+from fastapi import (
+    Body,
+    FastAPI,
+    Header,
+    HTTPException,
+    Query,
+    Request,
+    WebSocket,
+    WebSocketDisconnect,
+)
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse, StreamingResponse
 from git import Repo
-from src.core.simple_config import get_config
-from src.core.database import DatabaseManager, Task, Agent, Memory, Phase, ValidationReview, AgentResult, WorkflowResult, Workflow, get_db
-from src.core.worktree_manager import WorktreeManager
-from src.core.constants import CONTEXT_DIR_NAME
-from src.memory.store_factory import create_vector_store, VectorStoreProtocol
+from pydantic import BaseModel, Field
+
 from src.agents.manager import AgentManager
-from src.memory.rag import RAGSystem
-from src.mcp.api import create_frontend_routes
-from src.phases import PhaseManager
 from src.auth.auth_api import router as auth_router
-from src.services.workflow_result_service import WorkflowResultService
-from src.services.result_validator_service import ResultValidatorService
+from src.core.constants import CONTEXT_DIR_NAME
+from src.core.database import (
+    Agent,
+    AgentResult,
+    DatabaseManager,
+    Memory,
+    Phase,
+    Task,
+    ValidationReview,
+    Workflow,
+    WorkflowResult,
+    get_db,
+)
+from src.core.simple_config import get_config
+from src.core.worktree_manager import WorktreeManager
+from src.mcp.api import create_frontend_routes
+from src.memory.rag import RAGSystem
+from src.memory.store_factory import VectorStoreProtocol, create_vector_store
+from src.phases import PhaseManager
 from src.services.embedding_service import EmbeddingService
-from src.services.task_similarity_service import TaskSimilarityService
 from src.services.queue_service import QueueService
-from src.services.ticket_service import TicketService
+from src.services.result_validator_service import ResultValidatorService
+from src.services.task_similarity_service import TaskSimilarityService
 from src.services.ticket_search_service import TicketSearchService
+from src.services.ticket_service import TicketService
+from src.services.workflow_result_service import WorkflowResultService
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +69,7 @@ if config.enable_cors:
     # Wildcard + credentials is a security risk (allows credential theft from any origin).
     # Default to localhost origins for development; set CORS_ORIGINS env var for production.
     import os
+
     _cors_origins_str = os.environ.get("CORS_ORIGINS", "")
     if _cors_origins_str:
         _cors_origins = [o.strip() for o in _cors_origins_str.split(",") if o.strip()]
@@ -74,20 +96,46 @@ if config.enable_cors:
 class CreateTaskRequest(BaseModel):
     """Request model for creating a task."""
 
-    task_description: str = Field(..., description="Raw task description", max_length=50000)
-    done_definition: str = Field(..., description="What constitutes completion", max_length=10000)
+    task_description: str = Field(
+        ..., description="Raw task description", max_length=50000
+    )
+    done_definition: str = Field(
+        ..., description="What constitutes completion", max_length=10000
+    )
     ai_agent_id: str = Field(..., description="ID of requesting agent")
     workflow_id: str = Field(..., description="ID of the workflow this task belongs to")
     priority: Optional[str] = Field(default="medium", pattern="^(low|medium|high)$")
-    parent_task_id: Optional[str] = Field(default=None, description="Parent task ID for sub-tasks")
-    phase_id: Optional[str] = Field(default=None, description="Phase ID for workflow-based tasks")
-    phase_order: Optional[int] = Field(default=None, description="Phase order number (alternative to phase_id)")
-    cwd: Optional[str] = Field(default=None, description="Working directory for the task")
-    ticket_id: Optional[str] = Field(default=None, description="Associated ticket ID (required when ticket tracking enabled)")
-    depends_on: Optional[List[str]] = Field(default=None, description="List of task IDs that must complete before this one")
-    parallel_group: Optional[str] = Field(default=None, description="Tasks in same group can run in parallel; different groups are sequential")
-    max_concurrent: Optional[int] = Field(default=1, description="Max agents working on this task simultaneously")
-    context: Optional[str] = Field(default=None, description="Additional context for the agent (e.g., design document content, requirements summary)", max_length=100000)
+    parent_task_id: Optional[str] = Field(
+        default=None, description="Parent task ID for sub-tasks"
+    )
+    phase_id: Optional[str] = Field(
+        default=None, description="Phase ID for workflow-based tasks"
+    )
+    phase_order: Optional[int] = Field(
+        default=None, description="Phase order number (alternative to phase_id)"
+    )
+    cwd: Optional[str] = Field(
+        default=None, description="Working directory for the task"
+    )
+    ticket_id: Optional[str] = Field(
+        default=None,
+        description="Associated ticket ID (required when ticket tracking enabled)",
+    )
+    depends_on: Optional[List[str]] = Field(
+        default=None, description="List of task IDs that must complete before this one"
+    )
+    parallel_group: Optional[str] = Field(
+        default=None,
+        description="Tasks in same group can run in parallel; different groups are sequential",
+    )
+    max_concurrent: Optional[int] = Field(
+        default=1, description="Max agents working on this task simultaneously"
+    )
+    context: Optional[str] = Field(
+        default=None,
+        description="Additional context for the agent (e.g., design document content, requirements summary)",
+        max_length=100000,
+    )
 
 
 class CreateTaskResponse(BaseModel):
@@ -107,8 +155,12 @@ class UpdateTaskStatusRequest(BaseModel):
     status: str = Field(..., pattern="^(done|failed)$")
     summary: str = Field(..., description="What was accomplished")
     key_learnings: List[str] = Field(..., description="Important discoveries")
-    code_changes: Optional[List[str]] = Field(default=None, description="Files modified/created")
-    failure_reason: Optional[str] = Field(default=None, description="Required if status is 'failed'")
+    code_changes: Optional[List[str]] = Field(
+        default=None, description="Files modified/created"
+    )
+    failure_reason: Optional[str] = Field(
+        default=None, description="Required if status is 'failed'"
+    )
 
 
 class UpdateTaskStatusResponse(BaseModel):
@@ -126,7 +178,7 @@ class SaveMemoryRequest(BaseModel):
     memory_content: str
     memory_type: str = Field(
         ...,
-        pattern="^(error_fix|discovery|decision|learning|warning|codebase_knowledge)$"
+        pattern="^(error_fix|discovery|decision|learning|warning|codebase_knowledge)$",
     )
     related_files: Optional[List[str]] = Field(default=None)
     tags: Optional[List[str]] = Field(default=None)
@@ -144,11 +196,13 @@ class ReportResultsRequest(BaseModel):
     """Request model for reporting task results."""
 
     task_id: str = Field(..., description="ID of the task")
-    markdown_file_path: str = Field(..., description="Path to markdown file with results")
+    markdown_file_path: str = Field(
+        ..., description="Path to markdown file with results"
+    )
     result_type: str = Field(
         ...,
         pattern="^(implementation|analysis|fix|design|test|documentation)$",
-        description="Type of result"
+        description="Type of result",
     )
     summary: str = Field(..., description="Brief summary of the result")
 
@@ -171,8 +225,12 @@ class GiveValidationReviewRequest(BaseModel):
     validator_agent_id: str = Field(..., description="ID of validator agent")
     validation_passed: bool = Field(..., description="Whether validation passed")
     feedback: str = Field(..., description="Detailed feedback")
-    evidence: List[Dict[str, Any]] = Field(default_factory=list, description="Evidence supporting decision")
-    recommendations: List[str] = Field(default_factory=list, description="Follow-up task recommendations")
+    evidence: List[Dict[str, Any]] = Field(
+        default_factory=list, description="Evidence supporting decision"
+    )
+    recommendations: List[str] = Field(
+        default_factory=list, description="Follow-up task recommendations"
+    )
 
 
 class GiveValidationReviewResponse(BaseModel):
@@ -180,28 +238,45 @@ class GiveValidationReviewResponse(BaseModel):
 
     status: str = Field(..., description="completed, needs_work, or error")
     message: str = Field(..., description="Status message")
-    iteration: Optional[int] = Field(default=None, description="Current iteration number")
+    iteration: Optional[int] = Field(
+        default=None, description="Current iteration number"
+    )
 
 
 class SubmitResultRequest(BaseModel):
     """Request model for submitting workflow results."""
 
-    markdown_file_path: str = Field(..., description="Path to markdown file with result evidence")
-    explanation: str = Field(..., description="Brief explanation of what was accomplished")
-    evidence: Optional[List[str]] = Field(default=None, description="List of evidence supporting completion")
-    extra_files: Optional[List[str]] = Field(default=None, description="List of additional file paths (e.g., patches, reproduction scripts) for validators")
+    markdown_file_path: str = Field(
+        ..., description="Path to markdown file with result evidence"
+    )
+    explanation: str = Field(
+        ..., description="Brief explanation of what was accomplished"
+    )
+    evidence: Optional[List[str]] = Field(
+        default=None, description="List of evidence supporting completion"
+    )
+    extra_files: Optional[List[str]] = Field(
+        default=None,
+        description="List of additional file paths (e.g., patches, reproduction scripts) for validators",
+    )
 
 
 class SubmitResultResponse(BaseModel):
     """Response model for result submission."""
 
     status: str = Field(..., description="submitted, rejected, or error")
-    result_id: Optional[str] = Field(default=None, description="ID of the submitted result")
+    result_id: Optional[str] = Field(
+        default=None, description="ID of the submitted result"
+    )
     workflow_id: str = Field(..., description="ID of the workflow")
     agent_id: str = Field(..., description="ID of the agent")
-    validation_triggered: bool = Field(..., description="Whether validation was triggered")
+    validation_triggered: bool = Field(
+        ..., description="Whether validation was triggered"
+    )
     message: str = Field(..., description="Status message")
-    created_at: Optional[str] = Field(default=None, description="ISO timestamp of creation")
+    created_at: Optional[str] = Field(
+        default=None, description="ISO timestamp of creation"
+    )
 
 
 class SubmitResultValidationRequest(BaseModel):
@@ -210,7 +285,9 @@ class SubmitResultValidationRequest(BaseModel):
     result_id: str = Field(..., description="ID of result being validated")
     validation_passed: bool = Field(..., description="Whether validation passed")
     feedback: str = Field(..., description="Detailed validation feedback")
-    evidence: List[Dict[str, Any]] = Field(default_factory=list, description="Evidence supporting decision")
+    evidence: List[Dict[str, Any]] = Field(
+        default_factory=list, description="Evidence supporting decision"
+    )
 
 
 class SubmitResultValidationResponse(BaseModel):
@@ -218,7 +295,9 @@ class SubmitResultValidationResponse(BaseModel):
 
     status: str = Field(..., description="completed, workflow_terminated, or error")
     message: str = Field(..., description="Status message")
-    workflow_action_taken: Optional[str] = Field(default=None, description="Action taken on workflow")
+    workflow_action_taken: Optional[str] = Field(
+        default=None, description="Action taken on workflow"
+    )
     result_id: str = Field(..., description="ID of the validated result")
 
 
@@ -232,20 +311,50 @@ class BroadcastMessageRequest(BaseModel):
 class CreateTicketRequest(BaseModel):
     """Request model for creating a ticket."""
 
-    workflow_id: str = Field(..., description="ID of the workflow this ticket belongs to")
-    title: str = Field(..., min_length=3, max_length=500, description="Short, descriptive title")
+    workflow_id: str = Field(
+        ..., description="ID of the workflow this ticket belongs to"
+    )
+    title: str = Field(
+        ..., min_length=3, max_length=500, description="Short, descriptive title"
+    )
     description: str = Field(..., min_length=10, description="Detailed description")
-    ticket_type: str = Field(default="task", description="Type of ticket (bug, feature, improvement, task, spike)")
-    priority: str = Field(default="medium", pattern="^(low|medium|high|critical)$", description="Priority level")
-    initial_status: Optional[str] = Field(default=None, description="Initial status (if None, uses board_config.initial_status)")
-    assigned_agent_id: Optional[str] = Field(default=None, description="Optional agent to assign to")
-    agent_id: Optional[str] = Field(default=None, description="Agent ID creating this ticket (overrides header)")
-    parent_ticket_id: Optional[str] = Field(default=None, description="Parent ticket ID for sub-tickets")
-    blocked_by_ticket_ids: List[str] = Field(default_factory=list, description="List of ticket IDs blocking this ticket")
-    tags: List[str] = Field(default_factory=list, description="List of tags for categorization")
-    related_task_ids: List[str] = Field(default_factory=list, description="List of related task IDs")
-    task_id: Optional[str] = Field(default=None, description="Task ID this ticket relates to")
-    phase_id: Optional[str] = Field(default=None, description="Phase ID where this ticket was created")
+    ticket_type: str = Field(
+        default="task",
+        description="Type of ticket (bug, feature, improvement, task, spike)",
+    )
+    priority: str = Field(
+        default="medium",
+        pattern="^(low|medium|high|critical)$",
+        description="Priority level",
+    )
+    initial_status: Optional[str] = Field(
+        default=None,
+        description="Initial status (if None, uses board_config.initial_status)",
+    )
+    assigned_agent_id: Optional[str] = Field(
+        default=None, description="Optional agent to assign to"
+    )
+    agent_id: Optional[str] = Field(
+        default=None, description="Agent ID creating this ticket (overrides header)"
+    )
+    parent_ticket_id: Optional[str] = Field(
+        default=None, description="Parent ticket ID for sub-tickets"
+    )
+    blocked_by_ticket_ids: List[str] = Field(
+        default_factory=list, description="List of ticket IDs blocking this ticket"
+    )
+    tags: List[str] = Field(
+        default_factory=list, description="List of tags for categorization"
+    )
+    related_task_ids: List[str] = Field(
+        default_factory=list, description="List of related task IDs"
+    )
+    task_id: Optional[str] = Field(
+        default=None, description="Task ID this ticket relates to"
+    )
+    phase_id: Optional[str] = Field(
+        default=None, description="Phase ID where this ticket was created"
+    )
 
 
 class CreateTicketResponse(BaseModel):
@@ -264,7 +373,9 @@ class UpdateTicketRequest(BaseModel):
 
     ticket_id: str = Field(..., description="ID of the ticket to update")
     updates: Dict[str, Any] = Field(..., description="Fields to update")
-    update_comment: Optional[str] = Field(default=None, description="Optional comment explaining changes")
+    update_comment: Optional[str] = Field(
+        default=None, description="Optional comment explaining changes"
+    )
 
 
 class UpdateTicketResponse(BaseModel):
@@ -282,8 +393,12 @@ class ChangeTicketStatusRequest(BaseModel):
 
     ticket_id: str = Field(..., description="ID of the ticket")
     new_status: str = Field(..., description="New status to move to")
-    comment: str = Field(..., min_length=10, description="Required comment explaining status change")
-    commit_sha: Optional[str] = Field(default=None, description="Optional commit SHA to link")
+    comment: str = Field(
+        ..., min_length=10, description="Required comment explaining status change"
+    )
+    commit_sha: Optional[str] = Field(
+        default=None, description="Optional commit SHA to link"
+    )
 
 
 class ChangeTicketStatusResponse(BaseModel):
@@ -303,9 +418,16 @@ class AddCommentRequest(BaseModel):
 
     ticket_id: str = Field(..., description="ID of the ticket")
     comment_text: str = Field(..., min_length=1, description="The comment text")
-    comment_type: str = Field(default="general", description="Type of comment (general, status_change, blocker, resolution)")
-    mentions: List[str] = Field(default_factory=list, description="List of mentioned agent/ticket IDs")
-    attachments: List[str] = Field(default_factory=list, description="List of file paths")
+    comment_type: str = Field(
+        default="general",
+        description="Type of comment (general, status_change, blocker, resolution)",
+    )
+    mentions: List[str] = Field(
+        default_factory=list, description="List of mentioned agent/ticket IDs"
+    )
+    attachments: List[str] = Field(
+        default_factory=list, description="List of file paths"
+    )
 
 
 class AddCommentResponse(BaseModel):
@@ -322,8 +444,15 @@ class SearchTicketsRequest(BaseModel):
 
     workflow_id: str = Field(..., description="ID of the workflow to search tickets in")
     query: str = Field(..., min_length=3, description="Search query (natural language)")
-    search_type: str = Field(default="hybrid", pattern="^(semantic|keyword|hybrid)$", description="Search type (default: hybrid)")
-    filters: Dict[str, Any] = Field(default_factory=dict, description="Optional filters (status, priority, type, etc.)")
+    search_type: str = Field(
+        default="hybrid",
+        pattern="^(semantic|keyword|hybrid)$",
+        description="Search type (default: hybrid)",
+    )
+    filters: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Optional filters (status, priority, type, etc.)",
+    )
     limit: int = Field(default=10, ge=1, le=50, description="Max number of results")
     include_comments: bool = Field(default=True, description="Search in comments too")
 
@@ -388,11 +517,17 @@ class GetTicketsRequest(BaseModel):
     status: Optional[str] = Field(default=None, description="Filter by status")
     ticket_type: Optional[str] = Field(default=None, description="Filter by type")
     priority: Optional[str] = Field(default=None, description="Filter by priority")
-    assigned_agent_id: Optional[str] = Field(default=None, description="Filter by assigned agent")
-    include_completed: bool = Field(default=True, description="Include completed tickets")
+    assigned_agent_id: Optional[str] = Field(
+        default=None, description="Filter by assigned agent"
+    )
+    include_completed: bool = Field(
+        default=True, description="Include completed tickets"
+    )
     limit: int = Field(default=50, ge=1, le=200, description="Max number of results")
     offset: int = Field(default=0, ge=0, description="Offset for pagination")
-    sort_by: str = Field(default="created_at", pattern="^(created_at|updated_at|priority|status)$")
+    sort_by: str = Field(
+        default="created_at", pattern="^(created_at|updated_at|priority|status)$"
+    )
     sort_order: str = Field(default="desc", pattern="^(asc|desc)$")
 
 
@@ -435,8 +570,12 @@ class ResolveTicketRequest(BaseModel):
     """Request model for resolving a ticket."""
 
     ticket_id: str = Field(..., description="ID of the ticket to resolve")
-    resolution_comment: str = Field(..., min_length=10, description="Comment explaining resolution")
-    commit_sha: Optional[str] = Field(default=None, description="Commit that resolved the ticket")
+    resolution_comment: str = Field(
+        ..., min_length=10, description="Comment explaining resolution"
+    )
+    commit_sha: Optional[str] = Field(
+        default=None, description="Commit that resolved the ticket"
+    )
 
 
 class ResolveTicketResponse(BaseModel):
@@ -453,7 +592,9 @@ class LinkCommitRequest(BaseModel):
 
     ticket_id: str = Field(..., description="ID of the ticket")
     commit_sha: str = Field(..., description="Git commit SHA")
-    commit_message: Optional[str] = Field(default=None, description="Commit message (auto-fetched if not provided)")
+    commit_message: Optional[str] = Field(
+        default=None, description="Commit message (auto-fetched if not provided)"
+    )
 
 
 class LinkCommitResponse(BaseModel):
@@ -469,9 +610,15 @@ class RequestTicketClarificationRequest(BaseModel):
     """Request model for ticket clarification."""
 
     ticket_id: str = Field(..., description="ID of the ticket needing clarification")
-    conflict_description: str = Field(..., min_length=20, description="Clear description of the conflict or issue")
-    context: str = Field(default="", description="Additional context relevant to the clarification")
-    potential_solutions: List[str] = Field(default_factory=list, description="List of potential solutions being considered")
+    conflict_description: str = Field(
+        ..., min_length=20, description="Clear description of the conflict or issue"
+    )
+    context: str = Field(
+        default="", description="Additional context relevant to the clarification"
+    )
+    potential_solutions: List[str] = Field(
+        default_factory=list, description="List of potential solutions being considered"
+    )
 
 
 class RequestTicketClarificationResponse(BaseModel):
@@ -508,17 +655,31 @@ class RegisterWorkflowDefinitionRequest(BaseModel):
     name: str = Field(..., description="Human-readable name")
     description: str = Field(default="", description="Description of the workflow")
     phases_config: List[Dict[str, Any]] = Field(..., description="Phase configurations")
-    workflow_config: Optional[Dict[str, Any]] = Field(default=None, description="Workflow configuration")
+    workflow_config: Optional[Dict[str, Any]] = Field(
+        default=None, description="Workflow configuration"
+    )
 
 
 class StartWorkflowRequest(BaseModel):
     """Request model for starting a workflow execution."""
 
-    definition_id: str = Field(..., description="ID of the workflow definition to execute")
-    description: str = Field(..., description="Description/name of this workflow execution")
-    working_directory: Optional[str] = Field(default=None, description="Working directory for the workflow")
-    launch_params: Optional[Dict[str, Any]] = Field(default=None, description="Parameters from launch template to substitute into phases")
-    design_id: Optional[str] = Field(default=None, description="autopilot_designs.id that spawned this execution (§9.7)")
+    definition_id: str = Field(
+        ..., description="ID of the workflow definition to execute"
+    )
+    description: str = Field(
+        ..., description="Description/name of this workflow execution"
+    )
+    working_directory: Optional[str] = Field(
+        default=None, description="Working directory for the workflow"
+    )
+    launch_params: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Parameters from launch template to substitute into phases",
+    )
+    design_id: Optional[str] = Field(
+        default=None,
+        description="autopilot_designs.id that spawned this execution (§9.7)",
+    )
 
 
 class PendingReviewCountResponse(BaseModel):
@@ -559,14 +720,18 @@ class BroadcastMessageResponse(BaseModel):
     """Response model for message broadcast."""
 
     success: bool = Field(..., description="Whether broadcast was successful")
-    recipient_count: int = Field(..., description="Number of agents message was sent to")
+    recipient_count: int = Field(
+        ..., description="Number of agents message was sent to"
+    )
     message: str = Field(..., description="Status message")
 
 
 class SendMessageRequest(BaseModel):
     """Request model for sending a direct message to an agent."""
 
-    recipient_agent_id: str = Field(..., description="ID of the agent to send message to")
+    recipient_agent_id: str = Field(
+        ..., description="ID of the agent to send message to"
+    )
     message: str = Field(..., description="Message content")
 
 
@@ -622,17 +787,14 @@ class ServerState:
         # Initialize LLM provider using get_llm_provider()
         # This automatically handles multi-provider config or falls back to legacy single-provider
         from src.interfaces.llm_interface import get_llm_provider
+
         self.llm_provider = get_llm_provider()
 
         # Initialize phase manager first (needed by agent manager)
-        self.phase_manager = PhaseManager(
-            db_manager=self.db_manager
-        )
+        self.phase_manager = PhaseManager(db_manager=self.db_manager)
 
         # Initialize worktree manager
-        self.branch_manager = WorktreeManager(
-            db_manager=self.db_manager
-        )
+        self.branch_manager = WorktreeManager(db_manager=self.db_manager)
 
         # Initialize agent manager with phase manager
         self.agent_manager = AgentManager(
@@ -660,34 +822,43 @@ class ServerState:
         if config.task_dedup_enabled:
             try:
                 from src.memory.embedding_factory import create_embedding_provider
+
                 self.embedding_service = create_embedding_provider()
                 self.task_similarity_service = TaskSimilarityService(
-                    self.db_manager,
-                    self.embedding_service
+                    self.db_manager, self.embedding_service
                 )
-                logger.info("Task deduplication service initialized (embedding via configurable provider)")
+                logger.info(
+                    "Task deduplication service initialized (embedding via configurable provider)"
+                )
             except Exception as e:
-                logger.warning(f"Task deduplication disabled — embedding provider init failed: {e}")
+                logger.warning(
+                    f"Task deduplication disabled — embedding provider init failed: {e}"
+                )
         else:
             logger.info("Task deduplication disabled by configuration")
 
         # Initialize queue service
         self.queue_service = QueueService(
             db_manager=self.db_manager,
-            max_concurrent_agents=config.max_concurrent_agents
+            max_concurrent_agents=config.max_concurrent_agents,
         )
-        logger.info(f"Queue service initialized with max_concurrent_agents={config.max_concurrent_agents}")
+        logger.info(
+            f"Queue service initialized with max_concurrent_agents={config.max_concurrent_agents}"
+        )
 
         logger.info("Server state initialized successfully")
 
     def _migrate_is_active_column(self):
         """Add is_active column to autopilot_projects if missing."""
         import sqlalchemy
+
         try:
             with self.db_manager.get_session() as session:
-                session.execute(sqlalchemy.text(
-                    "ALTER TABLE autopilot_projects ADD COLUMN is_active BOOLEAN DEFAULT 0"
-                ))
+                session.execute(
+                    sqlalchemy.text(
+                        "ALTER TABLE autopilot_projects ADD COLUMN is_active BOOLEAN DEFAULT 0"
+                    )
+                )
                 session.commit()
                 logger.info("Migrated: added is_active column to autopilot_projects")
         except Exception:
@@ -696,26 +867,39 @@ class ServerState:
     def _load_active_project(self, config):
         """Load active project from DB and apply to config before managers init."""
         from src.core.database import AutopilotProject
+
         try:
             with self.db_manager.get_session() as session:
-                active = session.query(AutopilotProject).filter_by(is_active=True).first()
+                active = (
+                    session.query(AutopilotProject).filter_by(is_active=True).first()
+                )
                 if active:
                     from pathlib import Path
+
                     config.main_repo_path = Path(active.base_dir)
                     config.project_root = Path(active.base_dir)
-                    logger.info(f"Active project loaded: {active.name} ({active.base_dir})")
+                    logger.info(
+                        f"Active project loaded: {active.name} ({active.base_dir})"
+                    )
                 else:
                     # Auto-activate the default or first project
-                    proj = session.query(AutopilotProject).filter_by(is_default=True).first()
+                    proj = (
+                        session.query(AutopilotProject)
+                        .filter_by(is_default=True)
+                        .first()
+                    )
                     if not proj:
                         proj = session.query(AutopilotProject).first()
                     if proj:
                         proj.is_active = True
                         session.commit()
                         from pathlib import Path
+
                         config.main_repo_path = Path(proj.base_dir)
                         config.project_root = Path(proj.base_dir)
-                        logger.info(f"Auto-activated project: {proj.name} ({proj.base_dir})")
+                        logger.info(
+                            f"Auto-activated project: {proj.name} ({proj.base_dir})"
+                        )
         except Exception as e:
             logger.warning(f"Could not load active project: {e}")
 
@@ -750,14 +934,18 @@ def _tmux_session_alive(session_name: str) -> bool:
         return False
     try:
         import subprocess
-        r = subprocess.run(["tmux", "has-session", "-t", session_name],
-                           capture_output=True, timeout=3)
+
+        r = subprocess.run(
+            ["tmux", "has-session", "-t", session_name], capture_output=True, timeout=3
+        )
         return r.returncode == 0
     except Exception:
         return False
 
 
-async def _resume_interrupted_workflows(workflow_id: Optional[str] = None, reactivate: bool = False):
+async def _resume_interrupted_workflows(
+    workflow_id: Optional[str] = None, reactivate: bool = False
+):
     """Re-drive workflows that were mid-flight when the server last stopped.
 
     Completed phases are durable (committed to the integration branch) and the DB
@@ -774,7 +962,8 @@ async def _resume_interrupted_workflows(workflow_id: Optional[str] = None, react
 
     Returns {"resumed": int, "workflows": [ids]}.
     """
-    from src.core.database import Workflow, Task, Agent
+    from src.core.database import Agent, Task, Workflow
+
     session = server_state.db_manager.get_session()
     result = {"resumed": 0, "workflows": []}
     try:
@@ -802,34 +991,49 @@ async def _resume_interrupted_workflows(workflow_id: Optional[str] = None, react
         for wf in active:
             # Only tasks that still need work — a 'done' task advances via the
             # monitor's phase-completion check, not by restarting its old agent.
-            task_ids = [t.id for t in session.query(Task).filter(
-                Task.workflow_id == wf.id,
-                Task.status.in_(["pending", "assigned", "in_progress", "queued"]),
-            ).all()]
+            task_ids = [
+                t.id
+                for t in session.query(Task)
+                .filter(
+                    Task.workflow_id == wf.id,
+                    Task.status.in_(["pending", "assigned", "in_progress", "queued"]),
+                )
+                .all()
+            ]
             if not task_ids:
                 continue
-            orphans = session.query(Agent).filter(
-                Agent.current_task_id.in_(task_ids),
-                Agent.agent_type == "phase",
-                Agent.status.in_(["working", "idle", "starting"]),
-            ).all()
+            orphans = (
+                session.query(Agent)
+                .filter(
+                    Agent.current_task_id.in_(task_ids),
+                    Agent.agent_type == "phase",
+                    Agent.status.in_(["working", "idle", "starting"]),
+                )
+                .all()
+            )
             for agent in orphans:
                 if _tmux_session_alive(agent.tmux_session_name):
                     continue  # still alive (e.g., only the monitor restarted) — leave it
-                logger.info(f"[RESUME] Workflow {wf.id[:8]}: restarting orphaned phase agent "
-                            f"{agent.id[:8]} (dead tmux session) to continue from committed state")
+                logger.info(
+                    f"[RESUME] Workflow {wf.id[:8]}: restarting orphaned phase agent "
+                    f"{agent.id[:8]} (dead tmux session) to continue from committed state"
+                )
                 try:
                     await server_state.agent_manager.restart_agent(
                         agent.id, reason="server restarted — resuming interrupted work"
                     )
                     resumed += 1
                 except Exception as e:
-                    logger.warning(f"[RESUME] Failed to restart agent {agent.id[:8]}: {e}")
+                    logger.warning(
+                        f"[RESUME] Failed to restart agent {agent.id[:8]}: {e}"
+                    )
         result["resumed"] = resumed
         result["workflows"] = [wf.id for wf in active]
         if resumed:
-            logger.info(f"[RESUME] Resumed {resumed} interrupted phase agent(s) across "
-                        f"{len(active)} workflow(s)")
+            logger.info(
+                f"[RESUME] Resumed {resumed} interrupted phase agent(s) across "
+                f"{len(active)} workflow(s)"
+            )
         return result
     finally:
         session.close()
@@ -842,14 +1046,18 @@ async def startup_event():
     await server_state.initialize()
 
     # Add frontend API routes
-    api_router = create_frontend_routes(server_state.db_manager, server_state.agent_manager, server_state.phase_manager)
+    api_router = create_frontend_routes(
+        server_state.db_manager, server_state.agent_manager, server_state.phase_manager
+    )
     app.include_router(api_router)
 
     # Add authentication routes
     app.include_router(auth_router)
 
     # Add autopilot routes (configure BEFORE including)
-    from src.mcp.autopilot_api import router as autopilot_router, configure_autopilot_api
+    from src.mcp.autopilot_api import configure_autopilot_api
+    from src.mcp.autopilot_api import router as autopilot_router
+
     configure_autopilot_api(
         design_queue_dir=os.environ.get("DESIGN_QUEUE_DIR", ""),
         features_dir=os.environ.get("FEATURES_DIR", ""),
@@ -858,6 +1066,7 @@ async def startup_event():
 
     # Add project management routes
     from src.mcp.projects_api import router as projects_router
+
     app.include_router(projects_router)
 
     # Load phases if folder is specified
@@ -865,7 +1074,9 @@ async def startup_event():
 
     logger.info("=== PHASE LOADING DEBUG ===")
     logger.info(f"Current working directory: {os.getcwd()}")
-    logger.info(f"Environment variables starting with HEPHAESTUS: {[k for k in os.environ.keys() if 'HEPHAESTUS' in k]}")
+    logger.info(
+        f"Environment variables starting with HEPHAESTUS: {[k for k in os.environ.keys() if 'HEPHAESTUS' in k]}"
+    )
 
     phases_folder = os.environ.get("HEPHAESTUS_PHASES_FOLDER")
     logger.info(f"HEPHAESTUS_PHASES_FOLDER value: '{phases_folder}'")
@@ -880,7 +1091,9 @@ async def startup_event():
 
         logger.info(f"Full path to phases folder: {full_path}")
         logger.info(f"Folder exists: {full_path.exists()}")
-        logger.info(f"Is directory: {full_path.is_dir() if full_path.exists() else 'N/A'}")
+        logger.info(
+            f"Is directory: {full_path.is_dir() if full_path.exists() else 'N/A'}"
+        )
 
         if full_path.exists() and full_path.is_dir():
             # List files in directory
@@ -891,36 +1104,49 @@ async def startup_event():
 
         try:
             from src.phases import PhaseLoader
+
             logger.info("PhaseLoader imported successfully")
 
             # Load phases from folder
-            logger.info(f"Calling PhaseLoader.load_phases_from_folder('{phases_folder}')")
+            logger.info(
+                f"Calling PhaseLoader.load_phases_from_folder('{phases_folder}')"
+            )
             workflow_def = PhaseLoader.load_phases_from_folder(phases_folder)
-            logger.info(f"Loaded workflow '{workflow_def.name}' with {len(workflow_def.phases)} phases")
+            logger.info(
+                f"Loaded workflow '{workflow_def.name}' with {len(workflow_def.phases)} phases"
+            )
 
             # Load phases configuration (for ticket tracking, result handling, etc.)
             logger.info(f"Loading phases_config.yaml from '{phases_folder}'")
             phases_config = PhaseLoader.load_phases_config(phases_folder)
-            logger.info(f"Loaded phases config: enable_tickets={phases_config.enable_tickets}, has_result={phases_config.has_result}")
+            logger.info(
+                f"Loaded phases config: enable_tickets={phases_config.enable_tickets}, has_result={phases_config.has_result}"
+            )
 
             # Workflow initialization is handled by SDK's start_workflow() call
             # The phase definitions are loaded but workflow execution is created on-demand
-            logger.info("Phases loaded successfully - workflow execution will be created via start_workflow() call")
+            logger.info(
+                "Phases loaded successfully - workflow execution will be created via start_workflow() call"
+            )
 
             # Log phase names
             logger.info("Loaded phases:")
             for phase in workflow_def.phases:
                 logger.info(f"  Phase {phase.id}: {phase.name}")
                 logger.info(f"    - Description: {phase.description[:100]}...")
-                logger.info(f"    - Done definitions: {len(phase.done_definitions)} items")
+                logger.info(
+                    f"    - Done definitions: {len(phase.done_definitions)} items"
+                )
 
         except ImportError as e:
             logger.error(f"Failed to import PhaseLoader: {e}")
             import traceback
+
             logger.error(traceback.format_exc())
         except Exception as e:
             logger.error(f"Failed to load phases: {e}")
             import traceback
+
             logger.error(f"Full traceback:\n{traceback.format_exc()}")
             # Don't fail server startup, just run without phases
     else:
@@ -931,8 +1157,8 @@ async def startup_event():
 
     # Register all workflow definitions
     try:
-        from src.workflow_registry import get_all_workflow_definitions
         from src.core.database import WorkflowDefinition as DBWorkflowDefinition
+        from src.workflow_registry import get_all_workflow_definitions
 
         all_definitions = get_all_workflow_definitions()
 
@@ -967,12 +1193,15 @@ async def startup_event():
                 # Include launch_template in workflow_config if present
                 if defn.launch_template:
                     from dataclasses import asdict
+
                     workflow_config["launch_template"] = asdict(defn.launch_template)
 
                 # Get orchestrator_config if present
-                orchestrator_config = getattr(defn, 'orchestrator_config', None)
+                orchestrator_config = getattr(defn, "orchestrator_config", None)
 
-                existing = session.query(DBWorkflowDefinition).filter_by(id=defn.id).first()
+                existing = (
+                    session.query(DBWorkflowDefinition).filter_by(id=defn.id).first()
+                )
                 if existing:
                     # Update from source files (source of truth)
                     existing.name = defn.name
@@ -994,23 +1223,30 @@ async def startup_event():
                     logger.info(f"Registered workflow: {defn.id}")
             # Remove stale definitions that no longer exist on disk
             loaded_ids = {d.id for d in all_definitions}
-            stale = session.query(DBWorkflowDefinition).filter(
-                DBWorkflowDefinition.id.notin_(loaded_ids)
-            ).all()
+            stale = (
+                session.query(DBWorkflowDefinition)
+                .filter(DBWorkflowDefinition.id.notin_(loaded_ids))
+                .all()
+            )
             for stale_def in stale:
                 logger.info(f"Removing stale workflow definition: {stale_def.id}")
                 session.delete(stale_def)
 
             session.commit()
-        logger.info(f"Workflow registration complete: {len(all_definitions)} definitions")
+        logger.info(
+            f"Workflow registration complete: {len(all_definitions)} definitions"
+        )
     except Exception as e:
         logger.error(f"Failed to register workflows: {e}")
         import traceback
+
         logger.error(traceback.format_exc())
 
     # Start background queue processor
     logger.info("Starting background queue processor...")
-    server_state.background_queue_processor_task = asyncio.create_task(background_queue_processor())
+    server_state.background_queue_processor_task = asyncio.create_task(
+        background_queue_processor()
+    )
     logger.info("Background queue processor task created")
 
     # Resume any workflows that were mid-flight when the server last stopped
@@ -1033,10 +1269,14 @@ async def shutdown_event():
     server_state.shutdown_event.set()
     if server_state.background_queue_processor_task:
         try:
-            await asyncio.wait_for(server_state.background_queue_processor_task, timeout=5.0)
+            await asyncio.wait_for(
+                server_state.background_queue_processor_task, timeout=5.0
+            )
             logger.info("Background queue processor stopped")
         except asyncio.TimeoutError:
-            logger.warning("Background queue processor did not stop gracefully, cancelling...")
+            logger.warning(
+                "Background queue processor did not stop gracefully, cancelling..."
+            )
             server_state.background_queue_processor_task.cancel()
 
     # Close all WebSocket connections
@@ -1046,37 +1286,47 @@ async def shutdown_event():
 
 def verify_agent_id(agent_id: str = Header(None, alias="X-Agent-ID")) -> str:
     """Verify agent ID from header.
-    
+
     SECURITY: Validates agent_id format (must be UUID or known SDK identifier).
     Rejects empty/malformed agent IDs.
     """
     if not agent_id:
-        raise HTTPException(status_code=401, detail="Agent ID required in X-Agent-ID header")
-    
+        raise HTTPException(
+            status_code=401, detail="Agent ID required in X-Agent-ID header"
+        )
+
     # Validate format: must be UUID or known SDK/system identifier
     import re
+
     uuid_pattern = re.compile(
-        r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',
-        re.IGNORECASE
+        r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE
     )
     known_system_ids = {
-        "main-session-agent", "sdk-agent", "system", "ui-user",
-        "sdk-repair-agent", "orchestrator", "monitor"
+        "main-session-agent",
+        "sdk-agent",
+        "system",
+        "ui-user",
+        "sdk-repair-agent",
+        "orchestrator",
+        "monitor",
     }
-    
-    if not (uuid_pattern.match(agent_id) or agent_id in known_system_ids or
-            agent_id.startswith("sdk-") or agent_id.startswith("mcp-")):
+
+    if not (
+        uuid_pattern.match(agent_id)
+        or agent_id in known_system_ids
+        or agent_id.startswith("sdk-")
+        or agent_id.startswith("mcp-")
+    ):
         raise HTTPException(
             status_code=401,
-            detail=f"Invalid agent ID format: '{agent_id}'. Must be a UUID or known system identifier."
+            detail=f"Invalid agent ID format: '{agent_id}'. Must be a UUID or known system identifier.",
         )
-    
+
     return agent_id
 
 
 # SECURITY: Rate limiting for sensitive endpoints
 from collections import defaultdict
-import time
 
 _rate_limit_store: Dict[str, List[float]] = defaultdict(list)
 RATE_LIMIT_WINDOW = 60  # seconds
@@ -1087,7 +1337,9 @@ def _check_rate_limit(key: str, max_requests: int = RATE_LIMIT_MAX) -> bool:
     """Check if request is within rate limit. Returns True if allowed."""
     now = time.time()
     # Clean old entries
-    _rate_limit_store[key] = [t for t in _rate_limit_store[key] if now - t < RATE_LIMIT_WINDOW]
+    _rate_limit_store[key] = [
+        t for t in _rate_limit_store[key] if now - t < RATE_LIMIT_WINDOW
+    ]
     if len(_rate_limit_store[key]) >= max_requests:
         return False
     _rate_limit_store[key].append(now)
@@ -1100,9 +1352,11 @@ def _touch_agent_activity(agent_id: str) -> None:
         session = server_state.db_manager.get_session()
         try:
             from src.core.database import Agent
+
             agent = session.query(Agent).filter_by(id=agent_id).first()
             if agent:
                 from datetime import datetime
+
                 agent.last_activity = datetime.utcnow()
                 session.commit()
         finally:
@@ -1129,24 +1383,41 @@ async def process_queue():
             logger.debug("No queued tasks to process")
             return
 
-        logger.info(f"Processing queued task {next_task.id} (priority={next_task.priority}, boosted={next_task.priority_boosted})")
+        logger.info(
+            f"Processing queued task {next_task.id} (priority={next_task.priority}, boosted={next_task.priority_boosted})"
+        )
 
         # Dequeue the task
         server_state.queue_service.dequeue_task(next_task.id)
 
         # BUG FIX: Check if task needs enrichment (was blocked on creation and skipped enrichment)
         # Tasks created with placeholder "[Processing] ..." need real LLM enrichment
-        needs_enrichment = not next_task.enriched_description or next_task.enriched_description.startswith("[Processing]")
+        needs_enrichment = (
+            not next_task.enriched_description
+            or next_task.enriched_description.startswith("[Processing]")
+        )
         logger.info(f"[QUEUE_ENRICHMENT] Task {next_task.id} enrichment check:")
-        logger.info(f"[QUEUE_ENRICHMENT]   - enriched_description exists: {bool(next_task.enriched_description)}")
-        logger.info(f"[QUEUE_ENRICHMENT]   - enriched_description value: {next_task.enriched_description[:100] if next_task.enriched_description else 'NULL'}")
-        logger.info(f"[QUEUE_ENRICHMENT]   - starts with [Processing]: {next_task.enriched_description.startswith('[Processing]') if next_task.enriched_description else False}")
+        logger.info(
+            f"[QUEUE_ENRICHMENT]   - enriched_description exists: {bool(next_task.enriched_description)}"
+        )
+        logger.info(
+            f"[QUEUE_ENRICHMENT]   - enriched_description value: {next_task.enriched_description[:100] if next_task.enriched_description else 'NULL'}"
+        )
+        logger.info(
+            f"[QUEUE_ENRICHMENT]   - starts with [Processing]: {next_task.enriched_description.startswith('[Processing]') if next_task.enriched_description else False}"
+        )
         logger.info(f"[QUEUE_ENRICHMENT]   - NEEDS ENRICHMENT: {needs_enrichment}")
 
         if needs_enrichment:
-            logger.info(f"[QUEUE_ENRICHMENT] ========== STARTING ENRICHMENT PIPELINE FOR TASK {next_task.id} ==========")
-            logger.info(f"[QUEUE_ENRICHMENT] Task phase_id (from DB): {next_task.phase_id} (type: {type(next_task.phase_id).__name__})")
-            logger.info(f"[QUEUE_ENRICHMENT] Task raw_description: {next_task.raw_description[:200]}")
+            logger.info(
+                f"[QUEUE_ENRICHMENT] ========== STARTING ENRICHMENT PIPELINE FOR TASK {next_task.id} =========="
+            )
+            logger.info(
+                f"[QUEUE_ENRICHMENT] Task phase_id (from DB): {next_task.phase_id} (type: {type(next_task.phase_id).__name__})"
+            )
+            logger.info(
+                f"[QUEUE_ENRICHMENT] Task raw_description: {next_task.raw_description[:200]}"
+            )
 
             # Get phase context for enrichment
             # CRITICAL: phase_id might be an integer (phase order) or UUID string
@@ -1157,77 +1428,127 @@ async def process_queue():
             if next_task.phase_id and server_state.phase_manager:
                 # BUG FIX: Convert phase order number to UUID (same logic as process_task_async)
                 logger.info("[QUEUE_ENRICHMENT] Converting phase_id to UUID if needed")
-                logger.info(f"[QUEUE_ENRICHMENT]   - Original phase_id: {next_task.phase_id}")
-                logger.info(f"[QUEUE_ENRICHMENT]   - Is digit check: {str(next_task.phase_id).isdigit()}")
+                logger.info(
+                    f"[QUEUE_ENRICHMENT]   - Original phase_id: {next_task.phase_id}"
+                )
+                logger.info(
+                    f"[QUEUE_ENRICHMENT]   - Is digit check: {str(next_task.phase_id).isdigit()}"
+                )
 
                 if str(next_task.phase_id).isdigit():
                     # phase_id is a phase order number - convert to UUID
-                    logger.info(f"[QUEUE_ENRICHMENT] phase_id={next_task.phase_id} is an ORDER number - converting to UUID")
+                    logger.info(
+                        f"[QUEUE_ENRICHMENT] phase_id={next_task.phase_id} is an ORDER number - converting to UUID"
+                    )
                     phase_id_uuid = server_state.phase_manager.get_phase_for_task(
                         phase_id=None,
                         order=int(next_task.phase_id),
-                        requesting_agent_id="system"
+                        requesting_agent_id="system",
                     )
-                    logger.info(f"[QUEUE_ENRICHMENT] ✓ Converted phase order {next_task.phase_id} → UUID: {phase_id_uuid}")
+                    logger.info(
+                        f"[QUEUE_ENRICHMENT] ✓ Converted phase order {next_task.phase_id} → UUID: {phase_id_uuid}"
+                    )
                 else:
                     # phase_id is already a UUID
-                    logger.info(f"[QUEUE_ENRICHMENT] phase_id={next_task.phase_id} is a UUID - using directly")
+                    logger.info(
+                        f"[QUEUE_ENRICHMENT] phase_id={next_task.phase_id} is a UUID - using directly"
+                    )
                     phase_id_uuid = next_task.phase_id
 
-                logger.info(f"[QUEUE_ENRICHMENT] Fetching phase context for UUID: {phase_id_uuid}")
-                phase_context = server_state.phase_manager.get_phase_context(phase_id_uuid)
+                logger.info(
+                    f"[QUEUE_ENRICHMENT] Fetching phase context for UUID: {phase_id_uuid}"
+                )
+                phase_context = server_state.phase_manager.get_phase_context(
+                    phase_id_uuid
+                )
                 if phase_context:
                     phase_context_str = phase_context.to_prompt_context()
                     workflow_id = phase_context.workflow_id
-                    logger.info(f"[QUEUE_ENRICHMENT] ✓ Got phase context (length={len(phase_context_str)}, workflow_id={workflow_id})")
-                    logger.info(f"[QUEUE_ENRICHMENT] Phase context preview: {phase_context_str[:300]}")
+                    logger.info(
+                        f"[QUEUE_ENRICHMENT] ✓ Got phase context (length={len(phase_context_str)}, workflow_id={workflow_id})"
+                    )
+                    logger.info(
+                        f"[QUEUE_ENRICHMENT] Phase context preview: {phase_context_str[:300]}"
+                    )
                 else:
-                    logger.warning(f"[QUEUE_ENRICHMENT] ✗ No phase context returned for phase UUID={phase_id_uuid}")
+                    logger.warning(
+                        f"[QUEUE_ENRICHMENT] ✗ No phase context returned for phase UUID={phase_id_uuid}"
+                    )
             else:
-                logger.warning(f"[QUEUE_ENRICHMENT] ✗ Skipping phase context (phase_id={next_task.phase_id}, phase_manager={bool(server_state.phase_manager)})")
+                logger.warning(
+                    f"[QUEUE_ENRICHMENT] ✗ Skipping phase context (phase_id={next_task.phase_id}, phase_manager={bool(server_state.phase_manager)})"
+                )
 
             # Use the task's workflow_id if not obtained from phase context
             if not workflow_id:
-                logger.info("[QUEUE_ENRICHMENT] No workflow_id from phase context - using task's workflow_id")
+                logger.info(
+                    "[QUEUE_ENRICHMENT] No workflow_id from phase context - using task's workflow_id"
+                )
                 workflow_id = next_task.workflow_id
                 if workflow_id:
-                    logger.info(f"[QUEUE_ENRICHMENT] ✓ Got workflow_id from task: {workflow_id}")
+                    logger.info(
+                        f"[QUEUE_ENRICHMENT] ✓ Got workflow_id from task: {workflow_id}"
+                    )
                 else:
                     logger.warning("[QUEUE_ENRICHMENT] ✗ Task has no workflow_id set")
 
             # Retrieve RAG memories for enrichment
             logger.info("[QUEUE_ENRICHMENT] Retrieving RAG memories for enrichment")
-            context_memories_for_enrichment = await server_state.rag_system.retrieve_for_task(
-                task_description=next_task.raw_description,
-                requesting_agent_id="system",
+            context_memories_for_enrichment = (
+                await server_state.rag_system.retrieve_for_task(
+                    task_description=next_task.raw_description,
+                    requesting_agent_id="system",
+                )
             )
-            logger.info(f"[QUEUE_ENRICHMENT] ✓ Retrieved {len(context_memories_for_enrichment)} memories from RAG")
+            logger.info(
+                f"[QUEUE_ENRICHMENT] ✓ Retrieved {len(context_memories_for_enrichment)} memories from RAG"
+            )
 
             # Get project context for enrichment
             logger.info("[QUEUE_ENRICHMENT] Getting project context")
-            project_context_for_enrichment = await server_state.agent_manager.get_project_context()
-            logger.info(f"[QUEUE_ENRICHMENT] ✓ Got project context (length={len(project_context_for_enrichment)})")
+            project_context_for_enrichment = (
+                await server_state.agent_manager.get_project_context()
+            )
+            logger.info(
+                f"[QUEUE_ENRICHMENT] ✓ Got project context (length={len(project_context_for_enrichment)})"
+            )
 
             if phase_context_str:
-                project_context_for_enrichment = f"{project_context_for_enrichment}\n\n{phase_context_str}"
-                logger.info(f"[QUEUE_ENRICHMENT] ✓ Added phase context to project context (total length={len(project_context_for_enrichment)})")
+                project_context_for_enrichment = (
+                    f"{project_context_for_enrichment}\n\n{phase_context_str}"
+                )
+                logger.info(
+                    f"[QUEUE_ENRICHMENT] ✓ Added phase context to project context (total length={len(project_context_for_enrichment)})"
+                )
 
             # Enrich task using LLM
             logger.info("[QUEUE_ENRICHMENT] Calling LLM for task enrichment")
-            logger.info(f"[QUEUE_ENRICHMENT]   - task_description: {next_task.raw_description[:100]}")
-            logger.info(f"[QUEUE_ENRICHMENT]   - done_definition: {next_task.done_definition}")
-            logger.info(f"[QUEUE_ENRICHMENT]   - context memories: {len(context_memories_for_enrichment)} items")
-            logger.info(f"[QUEUE_ENRICHMENT]   - phase_context provided: {bool(phase_context_str)}")
+            logger.info(
+                f"[QUEUE_ENRICHMENT]   - task_description: {next_task.raw_description[:100]}"
+            )
+            logger.info(
+                f"[QUEUE_ENRICHMENT]   - done_definition: {next_task.done_definition}"
+            )
+            logger.info(
+                f"[QUEUE_ENRICHMENT]   - context memories: {len(context_memories_for_enrichment)} items"
+            )
+            logger.info(
+                f"[QUEUE_ENRICHMENT]   - phase_context provided: {bool(phase_context_str)}"
+            )
 
-            context_strings = [mem.get("content", "") for mem in context_memories_for_enrichment]
+            context_strings = [
+                mem.get("content", "") for mem in context_memories_for_enrichment
+            ]
             enriched_task = await server_state.llm_provider.enrich_task(
                 task_description=next_task.raw_description,
-                done_definition=next_task.done_definition or "Task completed successfully",
+                done_definition=next_task.done_definition
+                or "Task completed successfully",
                 context=context_strings,
                 phase_context=phase_context_str if phase_context_str else None,
             )
             # Normalize: ensure enriched_description is always a string
             import json as _json
+
             _raw_desc = enriched_task.get("enriched_description")
             if _raw_desc is None:
                 _raw_desc = next_task.raw_description
@@ -1235,8 +1556,12 @@ async def process_queue():
                 _raw_desc = _json.dumps(_raw_desc, indent=2)
             enriched_task["enriched_description"] = str(_raw_desc)
             logger.info("[QUEUE_ENRICHMENT] ✓ LLM enrichment complete!")
-            logger.info(f"[QUEUE_ENRICHMENT] Enriched description: {enriched_task['enriched_description'][:200]}")
-            logger.info(f"[QUEUE_ENRICHMENT] Estimated complexity: {enriched_task.get('estimated_complexity', 'N/A')}")
+            logger.info(
+                f"[QUEUE_ENRICHMENT] Enriched description: {enriched_task['enriched_description'][:200]}"
+            )
+            logger.info(
+                f"[QUEUE_ENRICHMENT] Estimated complexity: {enriched_task.get('estimated_complexity', 'N/A')}"
+            )
 
             # Update task with enriched data
             logger.info("[QUEUE_ENRICHMENT] Updating task in database")
@@ -1247,37 +1572,57 @@ async def process_queue():
                     enriched_desc = enriched_task["enriched_description"]
                     if isinstance(enriched_desc, dict):
                         import json
+
                         enriched_desc = json.dumps(enriched_desc, indent=2)
                     task.enriched_description = enriched_desc
-                    task.estimated_complexity = enriched_task.get("estimated_complexity", 5)
-                    logger.info("[QUEUE_ENRICHMENT] ✓ Set enriched_description and estimated_complexity")
+                    task.estimated_complexity = enriched_task.get(
+                        "estimated_complexity", 5
+                    )
+                    logger.info(
+                        "[QUEUE_ENRICHMENT] ✓ Set enriched_description and estimated_complexity"
+                    )
 
                     # BUG FIX: Update phase_id to UUID if we converted it from order
                     if phase_id_uuid and phase_id_uuid != next_task.phase_id:
-                        logger.info(f"[QUEUE_ENRICHMENT] Updating phase_id from order {next_task.phase_id} to UUID {phase_id_uuid}")
+                        logger.info(
+                            f"[QUEUE_ENRICHMENT] Updating phase_id from order {next_task.phase_id} to UUID {phase_id_uuid}"
+                        )
                         task.phase_id = phase_id_uuid
-                        next_task.phase_id = phase_id_uuid  # Update in-memory object too
-                        logger.info("[QUEUE_ENRICHMENT] ✓ Updated phase_id to UUID in database")
+                        next_task.phase_id = (
+                            phase_id_uuid  # Update in-memory object too
+                        )
+                        logger.info(
+                            "[QUEUE_ENRICHMENT] ✓ Updated phase_id to UUID in database"
+                        )
 
                     # BUG FIX: Always set workflow_id (to match process_task_async behavior)
                     if workflow_id:
                         task.workflow_id = workflow_id
-                        logger.info(f"[QUEUE_ENRICHMENT] ✓ Set workflow_id: {workflow_id}")
+                        logger.info(
+                            f"[QUEUE_ENRICHMENT] ✓ Set workflow_id: {workflow_id}"
+                        )
                     else:
                         logger.warning("[QUEUE_ENRICHMENT] ✗ No workflow_id to set")
 
                     # Check if phase has validation enabled
                     if phase_id_uuid:
                         from src.core.database import Phase
+
                         phase = session.query(Phase).filter_by(id=phase_id_uuid).first()
                         if phase and phase.validation:
                             if phase.validation.get("enabled", True):
                                 task.validation_enabled = True
-                                logger.info("[QUEUE_ENRICHMENT] ✓ Inherited validation from phase (enabled=True)")
+                                logger.info(
+                                    "[QUEUE_ENRICHMENT] ✓ Inherited validation from phase (enabled=True)"
+                                )
                             else:
-                                logger.info("[QUEUE_ENRICHMENT] Phase validation explicitly disabled")
+                                logger.info(
+                                    "[QUEUE_ENRICHMENT] Phase validation explicitly disabled"
+                                )
                         else:
-                            logger.info("[QUEUE_ENRICHMENT] No validation config in phase")
+                            logger.info(
+                                "[QUEUE_ENRICHMENT] No validation config in phase"
+                            )
 
                     session.commit()
                     logger.info("[QUEUE_ENRICHMENT] ✓ Database commit successful")
@@ -1286,57 +1631,93 @@ async def process_queue():
                     next_enriched_desc = enriched_task["enriched_description"]
                     if isinstance(enriched_desc, dict):
                         import json
+
                         enriched_desc = json.dumps(enriched_desc, indent=2)
                     task.enriched_description = enriched_desc
                     next_task._enriched_task_dict = enriched_task  # Store full dict
-                    logger.info("[QUEUE_ENRICHMENT] ✓ Stored full enriched_task dict for agent creation")
-                    logger.info(f"[QUEUE_ENRICHMENT] ========== ENRICHMENT PIPELINE COMPLETE FOR TASK {next_task.id} ==========")
+                    logger.info(
+                        "[QUEUE_ENRICHMENT] ✓ Stored full enriched_task dict for agent creation"
+                    )
+                    logger.info(
+                        f"[QUEUE_ENRICHMENT] ========== ENRICHMENT PIPELINE COMPLETE FOR TASK {next_task.id} =========="
+                    )
                 else:
-                    logger.error(f"[QUEUE_ENRICHMENT] ✗ Task {next_task.id} not found in database!")
+                    logger.error(
+                        f"[QUEUE_ENRICHMENT] ✗ Task {next_task.id} not found in database!"
+                    )
             finally:
                 session.close()
         else:
-            logger.info(f"[QUEUE_ENRICHMENT] Task {next_task.id} already enriched - skipping enrichment pipeline")
+            logger.info(
+                f"[QUEUE_ENRICHMENT] Task {next_task.id} already enriched - skipping enrichment pipeline"
+            )
 
         # BUG FIX: Refresh task from database first to get enriched_description for RAG retrieval
         session_pre = server_state.db_manager.get_session()
         try:
-            refreshed_task_pre = session_pre.query(Task).filter_by(id=next_task.id).first()
-            task_description_for_rag = refreshed_task_pre.enriched_description or refreshed_task_pre.raw_description
+            refreshed_task_pre = (
+                session_pre.query(Task).filter_by(id=next_task.id).first()
+            )
+            task_description_for_rag = (
+                refreshed_task_pre.enriched_description
+                or refreshed_task_pre.raw_description
+            )
         finally:
             session_pre.close()
 
         # Get project context
-        logger.info(f"[QUEUE_AGENT_CREATE] Getting project context for task {next_task.id}")
+        logger.info(
+            f"[QUEUE_AGENT_CREATE] Getting project context for task {next_task.id}"
+        )
         project_context = await server_state.agent_manager.get_project_context()
-        logger.info(f"[QUEUE_AGENT_CREATE] ✓ Got project context (length={len(project_context)})")
+        logger.info(
+            f"[QUEUE_AGENT_CREATE] ✓ Got project context (length={len(project_context)})"
+        )
 
         # Get phase context if applicable
         # BUG FIX: Convert phase order to UUID (same as enrichment above)
         phase_id_for_agent = None
         if next_task.phase_id and server_state.phase_manager:
             logger.info("[QUEUE_AGENT_CREATE] Converting phase_id for agent creation")
-            logger.info(f"[QUEUE_AGENT_CREATE]   - phase_id from task: {next_task.phase_id}")
+            logger.info(
+                f"[QUEUE_AGENT_CREATE]   - phase_id from task: {next_task.phase_id}"
+            )
 
             if str(next_task.phase_id).isdigit():
-                logger.info(f"[QUEUE_AGENT_CREATE] phase_id={next_task.phase_id} is ORDER - converting to UUID")
+                logger.info(
+                    f"[QUEUE_AGENT_CREATE] phase_id={next_task.phase_id} is ORDER - converting to UUID"
+                )
                 phase_id_for_agent = server_state.phase_manager.get_phase_for_task(
                     phase_id=None,
                     order=int(next_task.phase_id),
-                    requesting_agent_id="system"
+                    requesting_agent_id="system",
                 )
-                logger.info(f"[QUEUE_AGENT_CREATE] ✓ Converted order {next_task.phase_id} → UUID: {phase_id_for_agent}")
+                logger.info(
+                    f"[QUEUE_AGENT_CREATE] ✓ Converted order {next_task.phase_id} → UUID: {phase_id_for_agent}"
+                )
             else:
-                logger.info(f"[QUEUE_AGENT_CREATE] phase_id={next_task.phase_id} is UUID - using directly")
+                logger.info(
+                    f"[QUEUE_AGENT_CREATE] phase_id={next_task.phase_id} is UUID - using directly"
+                )
                 phase_id_for_agent = next_task.phase_id
 
-            logger.info(f"[QUEUE_AGENT_CREATE] Fetching phase context for agent with UUID: {phase_id_for_agent}")
-            phase_context = server_state.phase_manager.get_phase_context(phase_id_for_agent)
+            logger.info(
+                f"[QUEUE_AGENT_CREATE] Fetching phase context for agent with UUID: {phase_id_for_agent}"
+            )
+            phase_context = server_state.phase_manager.get_phase_context(
+                phase_id_for_agent
+            )
             if phase_context:
-                project_context = f"{project_context}\n\n{phase_context.to_prompt_context()}"
-                logger.info(f"[QUEUE_AGENT_CREATE] ✓ Added phase context to project context (total={len(project_context)})")
+                project_context = (
+                    f"{project_context}\n\n{phase_context.to_prompt_context()}"
+                )
+                logger.info(
+                    f"[QUEUE_AGENT_CREATE] ✓ Added phase context to project context (total={len(project_context)})"
+                )
             else:
-                logger.warning(f"[QUEUE_AGENT_CREATE] ✗ No phase context for UUID: {phase_id_for_agent}")
+                logger.warning(
+                    f"[QUEUE_AGENT_CREATE] ✗ No phase context for UUID: {phase_id_for_agent}"
+                )
 
         # Retrieve relevant memories (using enriched description if available)
         logger.info("[QUEUE_AGENT_CREATE] Retrieving RAG memories")
@@ -1344,33 +1725,47 @@ async def process_queue():
             task_description=task_description_for_rag,
             requesting_agent_id="system",
         )
-        logger.info(f"[QUEUE_AGENT_CREATE] ✓ Retrieved {len(context_memories)} memories")
+        logger.info(
+            f"[QUEUE_AGENT_CREATE] ✓ Retrieved {len(context_memories)} memories"
+        )
 
         # Determine working directory
         working_directory = None
         if phase_id_for_agent:
-            logger.info("[QUEUE_AGENT_CREATE] Querying database for phase working directory")
+            logger.info(
+                "[QUEUE_AGENT_CREATE] Querying database for phase working directory"
+            )
             session = server_state.db_manager.get_session()
             try:
                 from src.core.database import Phase
 
                 # DEBUG: Show what's in the Phase table
-                logger.info(f"[QUEUE_AGENT_CREATE] DEBUG: Querying Phase table with UUID: {phase_id_for_agent}")
+                logger.info(
+                    f"[QUEUE_AGENT_CREATE] DEBUG: Querying Phase table with UUID: {phase_id_for_agent}"
+                )
                 all_phases = session.query(Phase.id, Phase.name, Phase.order).all()
-                logger.info(f"[QUEUE_AGENT_CREATE] DEBUG: All phases in DB: {all_phases}")
+                logger.info(
+                    f"[QUEUE_AGENT_CREATE] DEBUG: All phases in DB: {all_phases}"
+                )
 
                 phase = session.query(Phase).filter_by(id=phase_id_for_agent).first()
                 if phase:
-                    logger.info(f"[QUEUE_AGENT_CREATE] ✓ Found phase: {phase.name}, working_dir: {phase.working_directory}")
+                    logger.info(
+                        f"[QUEUE_AGENT_CREATE] ✓ Found phase: {phase.name}, working_dir: {phase.working_directory}"
+                    )
                     if phase.working_directory:
                         working_directory = phase.working_directory
                 else:
-                    logger.warning(f"[QUEUE_AGENT_CREATE] ✗ No phase found with UUID: {phase_id_for_agent}")
+                    logger.warning(
+                        f"[QUEUE_AGENT_CREATE] ✗ No phase found with UUID: {phase_id_for_agent}"
+                    )
             finally:
                 session.close()
         if not working_directory:
             working_directory = os.getcwd()
-            logger.info(f"[QUEUE_AGENT_CREATE] Using default working directory: {working_directory}")
+            logger.info(
+                f"[QUEUE_AGENT_CREATE] Using default working directory: {working_directory}"
+            )
 
         # BUG FIX: Refresh task from database to get updated enriched_description
         # The next_task object is stale if enrichment just ran
@@ -1380,8 +1775,12 @@ async def process_queue():
             refreshed_task = session.query(Task).filter_by(id=next_task.id).first()
             if refreshed_task:
                 logger.info("[QUEUE_AGENT_CREATE] ✓ Refreshed task from DB")
-                logger.info(f"[QUEUE_AGENT_CREATE]   - enriched_description: {refreshed_task.enriched_description[:100] if refreshed_task.enriched_description else 'NULL'}")
-                logger.info(f"[QUEUE_AGENT_CREATE]   - phase_id: {refreshed_task.phase_id}")
+                logger.info(
+                    f"[QUEUE_AGENT_CREATE]   - enriched_description: {refreshed_task.enriched_description[:100] if refreshed_task.enriched_description else 'NULL'}"
+                )
+                logger.info(
+                    f"[QUEUE_AGENT_CREATE]   - phase_id: {refreshed_task.phase_id}"
+                )
 
                 # BUG FIX: Use the UUID phase_id for the temp task, not the order number
                 # Create temp task object with fresh data (like normal flow does)
@@ -1390,15 +1789,20 @@ async def process_queue():
                     raw_description=refreshed_task.raw_description,
                     enriched_description=refreshed_task.enriched_description,
                     done_definition=refreshed_task.done_definition,
-                    phase_id=phase_id_for_agent or refreshed_task.phase_id,  # Use UUID if converted
+                    phase_id=phase_id_for_agent
+                    or refreshed_task.phase_id,  # Use UUID if converted
                     created_by_agent_id=refreshed_task.created_by_agent_id,
                     workflow_id=refreshed_task.workflow_id,  # CRITICAL: Include workflow_id
                 )
                 task_for_agent = temp_task
-                logger.info(f"[QUEUE_AGENT_CREATE] ✓ Created temp task object for agent (phase_id={temp_task.phase_id})")
+                logger.info(
+                    f"[QUEUE_AGENT_CREATE] ✓ Created temp task object for agent (phase_id={temp_task.phase_id})"
+                )
             else:
                 # Fallback to next_task if refresh failed
-                logger.warning("[QUEUE_AGENT_CREATE] ✗ Could not refresh task from DB - using stale task")
+                logger.warning(
+                    "[QUEUE_AGENT_CREATE] ✗ Could not refresh task from DB - using stale task"
+                )
                 task_for_agent = next_task
         finally:
             session.close()
@@ -1406,7 +1810,7 @@ async def process_queue():
         # BUG FIX: Prepare enriched_data dict to match process_task_async exactly
         # If we just ran enrichment, use the full dict; otherwise create minimal dict
         logger.info("[QUEUE_AGENT_CREATE] Preparing enriched_data for agent")
-        if hasattr(next_task, '_enriched_task_dict'):
+        if hasattr(next_task, "_enriched_task_dict"):
             # Enrichment just ran - use full dict from LLM
             enriched_data_for_agent = next_task._enriched_task_dict
             logger.info("[QUEUE_AGENT_CREATE] ✓ Using full enriched_task dict from LLM")
@@ -1419,9 +1823,15 @@ async def process_queue():
             logger.info("[QUEUE_AGENT_CREATE] ✓ Created minimal enriched_data dict")
 
         logger.info(f"[QUEUE_AGENT_CREATE] Creating agent for task {next_task.id}")
-        logger.info(f"[QUEUE_AGENT_CREATE]   - task enriched_description: {task_for_agent.enriched_description[:100] if task_for_agent.enriched_description else 'NULL'}")
-        logger.info(f"[QUEUE_AGENT_CREATE]   - task phase_id: {task_for_agent.phase_id}")
-        logger.info(f"[QUEUE_AGENT_CREATE]   - project_context length: {len(project_context)}")
+        logger.info(
+            f"[QUEUE_AGENT_CREATE]   - task enriched_description: {task_for_agent.enriched_description[:100] if task_for_agent.enriched_description else 'NULL'}"
+        )
+        logger.info(
+            f"[QUEUE_AGENT_CREATE]   - task phase_id: {task_for_agent.phase_id}"
+        )
+        logger.info(
+            f"[QUEUE_AGENT_CREATE]   - project_context length: {len(project_context)}"
+        )
         logger.info(f"[QUEUE_AGENT_CREATE]   - memories count: {len(context_memories)}")
         logger.info(f"[QUEUE_AGENT_CREATE]   - working_directory: {working_directory}")
 
@@ -1435,19 +1845,32 @@ async def process_queue():
             phase_session = server_state.db_manager.get_session()
             try:
                 from src.core.database import Phase
-                phase = phase_session.query(Phase).filter(Phase.id == task_for_agent.phase_id).first()
-                logger.info(f"[QUEUE_AGENT_CREATE] Found phase in DB: {phase is not None}")
+
+                phase = (
+                    phase_session.query(Phase)
+                    .filter(Phase.id == task_for_agent.phase_id)
+                    .first()
+                )
+                logger.info(
+                    f"[QUEUE_AGENT_CREATE] Found phase in DB: {phase is not None}"
+                )
                 if phase:
                     phase_cli_tool = phase.cli_tool
                     phase_cli_model = phase.cli_model
                     phase_glm_token_env = phase.glm_api_token_env
-                    phase_thinking_level = phase.thinking_level  # per-phase pi reasoning budget
+                    phase_thinking_level = (
+                        phase.thinking_level
+                    )  # per-phase pi reasoning budget
                 else:
-                    logger.warning(f"[QUEUE_AGENT_CREATE] Phase not found in database for phase_id: {task_for_agent.phase_id}")
+                    logger.warning(
+                        f"[QUEUE_AGENT_CREATE] Phase not found in database for phase_id: {task_for_agent.phase_id}"
+                    )
             finally:
                 phase_session.close()
         else:
-            logger.info("[QUEUE_AGENT_CREATE] No phase_id set on task, using global CLI config")
+            logger.info(
+                "[QUEUE_AGENT_CREATE] No phase_id set on task, using global CLI config"
+            )
 
         # Create agent for the task (using refreshed task data and full enriched_data)
         agent = await server_state.agent_manager.create_agent_for_task(
@@ -1462,7 +1885,9 @@ async def process_queue():
             phase_thinking_level=phase_thinking_level,
         )
 
-        logger.info(f"[QUEUE_AGENT_CREATE] ✓✓✓ AGENT CREATED SUCCESSFULLY: {agent.id} for task {next_task.id} ✓✓✓")
+        logger.info(
+            f"[QUEUE_AGENT_CREATE] ✓✓✓ AGENT CREATED SUCCESSFULLY: {agent.id} for task {next_task.id} ✓✓✓"
+        )
 
         # Update task status
         session = server_state.db_manager.get_session()
@@ -1477,18 +1902,23 @@ async def process_queue():
             session.close()
 
         # Broadcast update
-        await server_state.broadcast_update({
-            "type": "task_dequeued",
-            "task_id": next_task.id,
-            "agent_id": agent.id,
-            "description": (next_task.enriched_description or next_task.raw_description)[:200],
-        })
+        await server_state.broadcast_update(
+            {
+                "type": "task_dequeued",
+                "task_id": next_task.id,
+                "agent_id": agent.id,
+                "description": (
+                    next_task.enriched_description or next_task.raw_description
+                )[:200],
+            }
+        )
 
         logger.info(f"Created agent {agent.id} for queued task {next_task.id}")
 
     except Exception as e:
         logger.error(f"Failed to process queue: {e}")
         import traceback
+
         logger.error(traceback.format_exc())
 
 
@@ -1507,7 +1937,9 @@ async def background_queue_processor():
             queued_count = queue_status.get("queued_tasks_count", 0)
 
             if queued_count > 0:
-                logger.info(f"[BACKGROUND_QUEUE] Found {queued_count} queued task(s), processing queue...")
+                logger.info(
+                    f"[BACKGROUND_QUEUE] Found {queued_count} queued task(s), processing queue..."
+                )
                 await process_queue()
             else:
                 logger.debug("[BACKGROUND_QUEUE] No queued tasks, skipping")
@@ -1515,6 +1947,7 @@ async def background_queue_processor():
         except Exception as e:
             logger.error(f"[BACKGROUND_QUEUE] Error in background queue processor: {e}")
             import traceback
+
             logger.error(traceback.format_exc())
 
         # Wait 60 seconds before next check
@@ -1537,7 +1970,9 @@ async def create_task(
 ):
     """Create a new task with automatic enrichment and agent assignment."""
     _touch_agent_activity(agent_id)
-    logger.info(f"Creating task from agent {agent_id}: {request.task_description[:100]}...")
+    logger.info(
+        f"Creating task from agent {agent_id}: {request.task_description[:100]}..."
+    )
 
     try:
         # Check if ticket tracking is enabled and ticket_id is required
@@ -1548,6 +1983,7 @@ async def create_task(
         session = server_state.db_manager.get_session()
         try:
             from src.core.database import BoardConfig
+
             # Check if there are any board configs (indicating ticket tracking is active)
             has_ticket_tracking = session.query(BoardConfig).first() is not None
 
@@ -1555,9 +1991,9 @@ async def create_task(
             if has_ticket_tracking and not request.ticket_id:
                 # Check if this is an SDK agent (allowed to create tasks without tickets)
                 is_sdk_agent = (
-                    agent_id == "main-session-agent" or
-                    "sdk" in agent_id.lower() or
-                    "main" in agent_id.lower()
+                    agent_id == "main-session-agent"
+                    or "sdk" in agent_id.lower()
+                    or "main" in agent_id.lower()
                 )
 
                 if not is_sdk_agent:
@@ -1565,8 +2001,8 @@ async def create_task(
                     raise HTTPException(
                         status_code=400,
                         detail="Ticket tracking is enabled. MCP agents MUST provide ticket_id. "
-                               "Create a ticket first using create_ticket, then use that ticket_id here. "
-                               "Only SDK/root agents can create tasks without tickets."
+                        "Create a ticket first using create_ticket, then use that ticket_id here. "
+                        "Only SDK/root agents can create tasks without tickets.",
                     )
         finally:
             if session.is_active:
@@ -1577,20 +2013,26 @@ async def create_task(
 
         # Validate phase_id is REQUIRED for workflow tasks
         if request.workflow_id:
-            logger.info(f"[CREATE_TASK] phase_id={repr(request.phase_id)}, phase_order={repr(request.phase_order)}")
+            logger.info(
+                f"[CREATE_TASK] phase_id={repr(request.phase_id)}, phase_order={repr(request.phase_order)}"
+            )
             if not request.phase_id and not request.phase_order:
-                logger.error(f"[CREATE_TASK] REJECTED: no phase_id for workflow {request.workflow_id}")
+                logger.error(
+                    f"[CREATE_TASK] REJECTED: no phase_id for workflow {request.workflow_id}"
+                )
                 raise HTTPException(
                     status_code=400,
                     detail=f"phase_id or phase_order is REQUIRED for workflow tasks. "
-                           f"Agent {agent_id} must provide phase_id when workflow_id is set."
+                    f"Agent {agent_id} must provide phase_id when workflow_id is set.",
                 )
             if request.phase_id in ("None", "none", "null", ""):
-                logger.error(f"[CREATE_TASK] REJECTED: invalid phase_id={repr(request.phase_id)}")
+                logger.error(
+                    f"[CREATE_TASK] REJECTED: invalid phase_id={repr(request.phase_id)}"
+                )
                 raise HTTPException(
                     status_code=400,
                     detail=f"phase_id cannot be None/null/empty string. "
-                           f"Agent {agent_id} must provide a valid phase_id."
+                    f"Agent {agent_id} must provide a valid phase_id.",
                 )
 
             # Dedup: don't create duplicate tasks for the same phase
@@ -1598,11 +2040,16 @@ async def create_task(
             if not dedup_phase_id and request.phase_order:
                 # Resolve phase_order to phase_id
                 from src.core.database import Phase as PhaseModel
+
                 _s = server_state.db_manager.get_session()
                 try:
-                    _phase = _s.query(PhaseModel).filter_by(
-                        workflow_id=request.workflow_id, order=request.phase_order
-                    ).first()
+                    _phase = (
+                        _s.query(PhaseModel)
+                        .filter_by(
+                            workflow_id=request.workflow_id, order=request.phase_order
+                        )
+                        .first()
+                    )
                     if _phase:
                         dedup_phase_id = _phase.id
                 finally:
@@ -1611,20 +2058,31 @@ async def create_task(
                 _s = server_state.db_manager.get_session()
                 try:
                     from src.core.database import Task as TaskModel
-                    existing = _s.query(TaskModel).filter(
-                        TaskModel.phase_id == dedup_phase_id,
-                        TaskModel.workflow_id == request.workflow_id,
-                        TaskModel.status.in_(["pending", "assigned", "in_progress", "queued"])
-                    ).first()
+
+                    existing = (
+                        _s.query(TaskModel)
+                        .filter(
+                            TaskModel.phase_id == dedup_phase_id,
+                            TaskModel.workflow_id == request.workflow_id,
+                            TaskModel.status.in_(
+                                ["pending", "assigned", "in_progress", "queued"]
+                            ),
+                        )
+                        .first()
+                    )
                     if existing:
-                        logger.info(f"[CREATE_TASK] Dedup: phase already has active task {existing.id[:8]}, returning it")
+                        logger.info(
+                            f"[CREATE_TASK] Dedup: phase already has active task {existing.id[:8]}, returning it"
+                        )
                         _s.close()
                         return CreateTaskResponse(
                             task_id=existing.id,
-                            enriched_description=existing.enriched_description or existing.raw_description,
-                            assigned_agent_id=existing.assigned_agent_id or "unassigned",
+                            enriched_description=existing.enriched_description
+                            or existing.raw_description,
+                            assigned_agent_id=existing.assigned_agent_id
+                            or "unassigned",
                             estimated_completion_time=30,
-                            status="queued"
+                            status="queued",
                         )
                 finally:
                     if _s.is_active:
@@ -1672,20 +2130,26 @@ async def create_task(
                     if task_obj:
                         task_obj.status = "blocked"
 
-                        blocker_titles = [t["title"] for t in blocking_info["blocking_tickets"]]
-                        task_obj.completion_notes = f"Blocked by tickets: {', '.join(blocker_titles)}"
+                        blocker_titles = [
+                            t["title"] for t in blocking_info["blocking_tickets"]
+                        ]
+                        task_obj.completion_notes = (
+                            f"Blocked by tickets: {', '.join(blocker_titles)}"
+                        )
 
                         session.commit()
                 finally:
                     session.close()
 
                 # Broadcast blocked status
-                await server_state.broadcast_update({
-                    "type": "task_blocked",
-                    "task_id": task_id,
-                    "description": request.task_description[:200],
-                    "blocking_tickets": blocking_info["blocking_ticket_ids"],
-                })
+                await server_state.broadcast_update(
+                    {
+                        "type": "task_blocked",
+                        "task_id": task_id,
+                        "description": request.task_description[:200],
+                        "blocking_tickets": blocking_info["blocking_ticket_ids"],
+                    }
+                )
 
                 # Return immediately - don't process this task further
                 return {
@@ -1707,8 +2171,12 @@ async def create_task(
                 logger.info(f"Request phase_id: {request.phase_id}")
                 logger.info(f"Request phase_order: {request.phase_order}")
                 logger.info(f"Server phase_manager: {server_state.phase_manager}")
-                logger.info(f"Server phase_manager.workflow_id: {getattr(server_state.phase_manager, 'workflow_id', 'NOT SET')}")
-                logger.debug(f"Server phase_manager.active_workflow: {getattr(server_state.phase_manager, 'active_workflow', 'NOT SET')}...")
+                logger.info(
+                    f"Server phase_manager.workflow_id: {getattr(server_state.phase_manager, 'workflow_id', 'NOT SET')}"
+                )
+                logger.debug(
+                    f"Server phase_manager.active_workflow: {getattr(server_state.phase_manager, 'active_workflow', 'NOT SET')}..."
+                )
 
                 # Use the phase_id from the request first, then fallback to phase_manager
                 phase_id = request.phase_id
@@ -1716,54 +2184,76 @@ async def create_task(
                 phase_context_str = ""
 
                 # Check if we have a workflow context - either from request or from phase_manager singleton
-                target_workflow_id = request.workflow_id or server_state.phase_manager.workflow_id
+                target_workflow_id = (
+                    request.workflow_id or server_state.phase_manager.workflow_id
+                )
                 if target_workflow_id:
-                    logger.info(f"Workflow context: request.workflow_id={request.workflow_id}, phase_manager.workflow_id={server_state.phase_manager.workflow_id}")
+                    logger.info(
+                        f"Workflow context: request.workflow_id={request.workflow_id}, phase_manager.workflow_id={server_state.phase_manager.workflow_id}"
+                    )
 
                     # Handle phase identification - request.phase_id might be a phase order number, not UUID
                     if request.phase_id and str(request.phase_id).isdigit():
                         # request.phase_id is actually a phase order number
-                        logger.info(f"phase_id appears to be an order number: {request.phase_id}")
+                        logger.info(
+                            f"phase_id appears to be an order number: {request.phase_id}"
+                        )
                         phase_id = server_state.phase_manager.get_phase_for_task(
                             phase_id=None,
                             order=int(request.phase_id),
                             requesting_agent_id=agent_id,
-                            workflow_id=request.workflow_id  # Pass explicit workflow_id for multi-workflow support
+                            workflow_id=request.workflow_id,  # Pass explicit workflow_id for multi-workflow support
                         )
-                        logger.info(f"get_phase_for_task returned phase_id: {phase_id} for order: {request.phase_id}")
+                        logger.info(
+                            f"get_phase_for_task returned phase_id: {phase_id} for order: {request.phase_id}"
+                        )
                     elif request.phase_id:
                         # request.phase_id is a UUID string
-                        logger.info(f"phase_id appears to be a UUID: {request.phase_id}")
+                        logger.info(
+                            f"phase_id appears to be a UUID: {request.phase_id}"
+                        )
                         phase_id = request.phase_id
                     else:
                         # No phase specified, get current phase
-                        logger.info("No explicit phase_id in request, calling get_phase_for_task")
+                        logger.info(
+                            "No explicit phase_id in request, calling get_phase_for_task"
+                        )
                         phase_id = server_state.phase_manager.get_phase_for_task(
                             phase_id=None,
                             order=request.phase_order,
                             requesting_agent_id=agent_id,
-                            workflow_id=request.workflow_id  # Pass explicit workflow_id for multi-workflow support
+                            workflow_id=request.workflow_id,  # Pass explicit workflow_id for multi-workflow support
                         )
                         logger.info(f"get_phase_for_task returned: {phase_id}")
 
                     if phase_id:
                         logger.info(f"Getting phase context for phase_id: {phase_id}")
                         # Get phase context for enrichment
-                        phase_context = server_state.phase_manager.get_phase_context(phase_id)
+                        phase_context = server_state.phase_manager.get_phase_context(
+                            phase_id
+                        )
                         logger.debug(f"get_phase_context returned: {phase_context}")
                         if phase_context:
-                            logger.info("Phase context found, generating prompt context")
+                            logger.info(
+                                "Phase context found, generating prompt context"
+                            )
                             phase_context_str = phase_context.to_prompt_context()
                             workflow_id = phase_context.workflow_id
-                            logger.info(f"Generated context length: {len(phase_context_str)}, workflow_id: {workflow_id}")
+                            logger.info(
+                                f"Generated context length: {len(phase_context_str)}, workflow_id: {workflow_id}"
+                            )
                         else:
-                            logger.warning(f"No phase context returned for phase_id: {phase_id}")
+                            logger.warning(
+                                f"No phase context returned for phase_id: {phase_id}"
+                            )
                     else:
                         logger.warning("No phase_id determined for task")
                 else:
                     logger.warning("No active workflow in phase_manager")
 
-                logger.info(f"Final values: phase_id={phase_id}, workflow_id={workflow_id}, context_length={len(phase_context_str)}")
+                logger.info(
+                    f"Final values: phase_id={phase_id}, workflow_id={workflow_id}, context_length={len(phase_context_str)}"
+                )
                 logger.info("=== END TASK CREATION PHASE DEBUG ===")
 
                 # 2. Determine working directory (priority: request > phase > server)
@@ -1802,6 +2292,7 @@ async def create_task(
 
                 # 5b. Normalize enriched_task: ensure enriched_description is always a string
                 import json as _json
+
                 _raw_desc = enriched_task.get("enriched_description")
                 if _raw_desc is None:
                     _raw_desc = request.task_description
@@ -1816,23 +2307,32 @@ async def create_task(
                     enriched_desc = enriched_task["enriched_description"]
                     if isinstance(enriched_desc, dict):
                         import json
+
                         enriched_desc = json.dumps(enriched_desc, indent=2)
                     task.enriched_description = enriched_desc
                     task.phase_id = phase_id
                     # Prioritize request.workflow_id for multi-workflow support, fallback to phase context
                     task.workflow_id = request.workflow_id or workflow_id
-                    task.estimated_complexity = enriched_task.get("estimated_complexity", 5)
+                    task.estimated_complexity = enriched_task.get(
+                        "estimated_complexity", 5
+                    )
 
                     # Check if phase has validation enabled and inherit it
                     if phase_id:
                         phase = session.query(Phase).filter_by(id=phase_id).first()
                         if phase and phase.validation:
                             # Check if validation is explicitly disabled
-                            if phase.validation.get("enabled", True):  # Default to True if not specified
+                            if phase.validation.get(
+                                "enabled", True
+                            ):  # Default to True if not specified
                                 task.validation_enabled = True
-                                logger.info(f"Task {task_id} inheriting validation from phase {phase.name}")
+                                logger.info(
+                                    f"Task {task_id} inheriting validation from phase {phase.name}"
+                                )
                             else:
-                                logger.info(f"Task {task_id} validation explicitly disabled in phase {phase.name}")
+                                logger.info(
+                                    f"Task {task_id} validation explicitly disabled in phase {phase.name}"
+                                )
 
                     session.commit()
 
@@ -1849,31 +2349,38 @@ async def create_task(
 
                     # 6.5 Check for duplicates if deduplication is enabled
                     duplicate_info = None
-                    if (server_state.embedding_service and
-                        server_state.task_similarity_service and
-                        get_config().task_dedup_enabled):
-
+                    if (
+                        server_state.embedding_service
+                        and server_state.task_similarity_service
+                        and get_config().task_dedup_enabled
+                    ):
                         try:
                             # Generate embedding for enriched description
-                            task_embedding = await server_state.embedding_service.generate_embedding(
-                                enriched_task["enriched_description"]
+                            task_embedding = (
+                                await server_state.embedding_service.generate_embedding(
+                                    enriched_task["enriched_description"]
+                                )
                             )
 
                             # Check for duplicates within the same phase
                             duplicate_info = await server_state.task_similarity_service.check_for_duplicates(
                                 enriched_task["enriched_description"],
                                 task_embedding,
-                                phase_id=phase_id  # Only check duplicates within same phase
+                                phase_id=phase_id,  # Only check duplicates within same phase
                             )
 
-                            if duplicate_info['is_duplicate']:
+                            if duplicate_info["is_duplicate"]:
                                 # Update task as duplicate
                                 session = server_state.db_manager.get_session()
                                 task = session.query(Task).filter_by(id=task_id).first()
                                 if task:
-                                    task.status = 'duplicated'
-                                    task.duplicate_of_task_id = duplicate_info['duplicate_of']
-                                    task.similarity_score = duplicate_info['max_similarity']
+                                    task.status = "duplicated"
+                                    task.duplicate_of_task_id = duplicate_info[
+                                        "duplicate_of"
+                                    ]
+                                    task.similarity_score = duplicate_info[
+                                        "max_similarity"
+                                    ]
                                     session.commit()
                                 session.close()
 
@@ -1890,10 +2397,12 @@ async def create_task(
                             await server_state.task_similarity_service.store_task_embedding(
                                 task_id,
                                 task_embedding,
-                                related_tasks_details=duplicate_info.get('related_tasks_details', [])
+                                related_tasks_details=duplicate_info.get(
+                                    "related_tasks_details", []
+                                ),
                             )
 
-                            if duplicate_info.get('related_tasks'):
+                            if duplicate_info.get("related_tasks"):
                                 logger.info(
                                     f"Task {task_id} has {len(duplicate_info['related_tasks'])} related tasks"
                                 )
@@ -1911,15 +2420,25 @@ async def create_task(
                         queue_status = server_state.queue_service.get_queue_status()
 
                         # Broadcast queued status
-                        await server_state.broadcast_update({
-                            "type": "task_queued",
-                            "task_id": task_id,
-                            "description": enriched_task["enriched_description"][:200],
-                            "queue_position": queue_status.get("queued_tasks_count", 0),
-                            "slots_available": queue_status.get("slots_available", 0),
-                        })
+                        await server_state.broadcast_update(
+                            {
+                                "type": "task_queued",
+                                "task_id": task_id,
+                                "description": enriched_task["enriched_description"][
+                                    :200
+                                ],
+                                "queue_position": queue_status.get(
+                                    "queued_tasks_count", 0
+                                ),
+                                "slots_available": queue_status.get(
+                                    "slots_available", 0
+                                ),
+                            }
+                        )
 
-                        logger.info(f"Task {task_id} queued (at capacity: {queue_status['active_agents']}/{queue_status['max_concurrent_agents']} agents)")
+                        logger.info(
+                            f"Task {task_id} queued (at capacity: {queue_status['active_agents']}/{queue_status['max_concurrent_agents']} agents)"
+                        )
                         return  # Don't create agent yet
 
                     # 7. Create agent for the task (using task data, not the ORM object)
@@ -1933,11 +2452,15 @@ async def create_task(
                         enriched_description=task_data["enriched_description"],
                         done_definition=task_data["done_definition"],
                         phase_id=task_data["phase_id"],
-                        workflow_id=task_data["workflow_id"],  # CRITICAL: Include workflow_id
+                        workflow_id=task_data[
+                            "workflow_id"
+                        ],  # CRITICAL: Include workflow_id
                         created_by_agent_id=agent_id,  # Important: Set the parent agent ID
                     )
 
-                    logger.info(f"[CREATE_TASK] temp_task.created_by_agent_id = {temp_task.created_by_agent_id}")
+                    logger.info(
+                        f"[CREATE_TASK] temp_task.created_by_agent_id = {temp_task.created_by_agent_id}"
+                    )
 
                     # Fetch phase CLI configuration
                     phase_cli_tool = None
@@ -1947,12 +2470,18 @@ async def create_task(
                     if temp_task.phase_id:
                         session = server_state.db_manager.get_session()
                         try:
-                            phase = session.query(Phase).filter_by(id=temp_task.phase_id).first()
+                            phase = (
+                                session.query(Phase)
+                                .filter_by(id=temp_task.phase_id)
+                                .first()
+                            )
                             if phase:
                                 phase_cli_tool = phase.cli_tool
                                 phase_cli_model = phase.cli_model
                                 phase_glm_token_env = phase.glm_api_token_env
-                                phase_thinking_level = phase.thinking_level  # per-phase pi reasoning budget
+                                phase_thinking_level = (
+                                    phase.thinking_level
+                                )  # per-phase pi reasoning budget
                         finally:
                             session.close()
 
@@ -1982,12 +2511,14 @@ async def create_task(
                     session.close()
 
                     # 9. Broadcast update via WebSocket
-                    await server_state.broadcast_update({
-                        "type": "task_created",
-                        "task_id": task_id,
-                        "agent_id": agent_id_str,
-                        "description": enriched_task["enriched_description"][:200],
-                    })
+                    await server_state.broadcast_update(
+                        {
+                            "type": "task_created",
+                            "task_id": task_id,
+                            "agent_id": agent_id_str,
+                            "description": enriched_task["enriched_description"][:200],
+                        }
+                    )
 
                     logger.info(f"Task {task_id} processed successfully in background")
                 else:
@@ -2006,6 +2537,7 @@ async def create_task(
 
         # Start processing in the background without waiting
         import asyncio
+
         asyncio.create_task(process_task_async())
 
         # Return immediately with pending status
@@ -2027,20 +2559,20 @@ async def create_task(
 @app.get("/validate_agent_id/{agent_id}")
 async def validate_agent_id(agent_id: str):
     """Quick endpoint for agents to validate their ID format.
-    
+
     Returns:
         Success if ID matches UUID format, error otherwise
     """
     import re
+
     uuid_pattern = re.compile(
-        r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',
-        re.IGNORECASE
+        r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE
     )
-    
+
     if uuid_pattern.match(agent_id):
         return {
             "valid": True,
-            "message": f"✅ Agent ID {agent_id} is valid UUID format"
+            "message": f"✅ Agent ID {agent_id} is valid UUID format",
         }
     else:
         return {
@@ -2049,8 +2581,8 @@ async def validate_agent_id(agent_id: str):
             "common_mistakes": [
                 "Using 'agent-mcp' instead of actual UUID",
                 "Using 'main-session-agent' when you're not the main session",
-                "Typo in UUID"
-            ]
+                "Typo in UUID",
+            ],
         }
 
 
@@ -2072,7 +2604,9 @@ async def update_task_status(
             raise HTTPException(status_code=404, detail="Task not found")
 
         if task.assigned_agent_id != agent_id:
-            raise HTTPException(status_code=403, detail="Agent not authorized for this task")
+            raise HTTPException(
+                status_code=403, detail="Agent not authorized for this task"
+            )
 
         # 2. Save learnings as memories
         for learning in request.key_learnings:
@@ -2108,14 +2642,18 @@ async def update_task_status(
 
         # 3. Check if task has results reported
         if request.status == "done" and not task.has_results:
-            logger.warning(f"Task {request.task_id} completed without formal results reported")
+            logger.warning(
+                f"Task {request.task_id} completed without formal results reported"
+            )
 
         # 3b. Output-existence hard floor — reject done when declared output artifact is missing.
         # General, not phase-special-cased: drives off PHASE_OUTPUT_ARTIFACTS in spec.py.
         # Same class as ruff/tests: mechanical check, hard floor.
         if request.status == "done" and task.phase_id:
             from pathlib import Path as _Path
+
             from src.autopilot.spec import load_phase_output_artifacts
+
             # Load required_output from workflow.yaml for this workflow
             required_output = load_phase_output_artifacts(task.workflow_id)
             phase = session.query(Phase).filter_by(id=task.phase_id).first()
@@ -2127,6 +2665,7 @@ async def update_task_status(
                 # 1. Check the workflow's shared worktree
                 if task.workflow_id:
                     from src.core.database import Workflow as _WF
+
                     wf = session.query(_WF).filter_by(id=task.workflow_id).first()
                     if wf and wf.working_directory:
                         for candidate in [
@@ -2138,7 +2677,9 @@ async def update_task_status(
                                 break
                 # 2. Check feature folder
                 if not found:
-                    feature_dir = _Path(config.project_root) / CONTEXT_DIR_NAME / "features"
+                    feature_dir = (
+                        _Path(config.project_root) / CONTEXT_DIR_NAME / "features"
+                    )
                     if feature_dir.exists():
                         for d in sorted(feature_dir.iterdir(), reverse=True):
                             candidate = d / "docs" / declared_output
@@ -2148,15 +2689,23 @@ async def update_task_status(
                 if not found:
                     # Check if this phase is optional — if so, allow completion without output
                     from src.autopilot.spec import load_optional_phases
+
                     optional_phases = load_optional_phases(task.workflow_id)
                     if phase.name in optional_phases:
-                        logger.info(f"Agent {agent_id[:8]} completed optional phase {phase.name} without {declared_output} — allowing")
+                        logger.info(
+                            f"Agent {agent_id[:8]} completed optional phase {phase.name} without {declared_output} — allowing"
+                        )
                     else:
-                        logger.warning(f"Agent {agent_id[:8]} claimed done on {phase.name} but {declared_output} not found — rejecting")
+                        logger.warning(
+                            f"Agent {agent_id[:8]} claimed done on {phase.name} but {declared_output} not found — rejecting"
+                        )
                         task.status = "failed"
                         task.failure_reason = f"Agent claimed completion but {declared_output} was not created."
                         session.commit()
-                        return {"status": "failed", "message": f"Output validation failed: {declared_output} not found"}
+                        return {
+                            "status": "failed",
+                            "message": f"Output validation failed: {declared_output} not found",
+                        }
 
         # 3c. Spec gate firing — when a gated phase task completes and the phase
         # is now complete, trigger the gate immediately (don't wait for monitor poll).
@@ -2165,36 +2714,57 @@ async def update_task_status(
         # the completion path itself and actually trigger the evaluation.
         if request.status == "done" and task.phase_id:
             from src.autopilot.spec import GATED_PHASES, build_phase_output
+
             phase = session.query(Phase).filter_by(id=task.phase_id).first()
             if phase and phase.name in GATED_PHASES:
-                incomplete = session.query(Task).filter_by(phase_id=phase.id).filter(
-                    Task.status.in_(["pending", "assigned", "in_progress", "failed"])
-                ).count()
+                incomplete = (
+                    session.query(Task)
+                    .filter_by(phase_id=phase.id)
+                    .filter(
+                        Task.status.in_(
+                            ["pending", "assigned", "in_progress", "failed"]
+                        )
+                    )
+                    .count()
+                )
                 if incomplete == 0:
                     # Phase complete — fire the gate now
                     from src.core.database import Workflow
+
                     wf = session.query(Workflow).filter_by(id=task.workflow_id).first()
                     if wf and wf.working_directory:
                         from pathlib import Path as _P
-                        phase_output = build_phase_output(phase.name, _P(wf.working_directory))
-                        logger.info(f"[SPEC-GATE] {phase.name}: gate fired from completion path, phase_output={phase_output}")
+
+                        phase_output = build_phase_output(
+                            phase.name, _P(wf.working_directory)
+                        )
+                        logger.info(
+                            f"[SPEC-GATE] {phase.name}: gate fired from completion path, phase_output={phase_output}"
+                        )
                         # Actually trigger the evaluation by calling mark_phase_complete
                         # This ensures the GOTO/retry/continue decision is made immediately
                         from src.phases import PhaseManager
+
                         pm = PhaseManager(task.workflow_id)
                         result = pm.mark_phase_complete(
                             phase.id,
-                            f"Phase completed (spec gate fired from update_task_status)",
+                            "Phase completed (spec gate fired from update_task_status)",
                             phase_output=phase_output,
                         )
-                        if result.get("action") == "goto" and result.get("target_phase_id"):
-                            logger.info(f"[SPEC-GATE] {phase.name}: GOTO {result.get('target_phase')} (score too low)")
+                        if result.get("action") == "goto" and result.get(
+                            "target_phase_id"
+                        ):
+                            logger.info(
+                                f"[SPEC-GATE] {phase.name}: GOTO {result.get('target_phase')} (score too low)"
+                            )
                             # Store the GOTO action so the monitor can create the target phase task
                             task.action = "goto"
                             task.has_results = True
                             session.commit()
                         elif result.get("action") == "continue":
-                            logger.info(f"[SPEC-GATE] {phase.name}: PASSED (score >= 0.7)")
+                            logger.info(
+                                f"[SPEC-GATE] {phase.name}: PASSED (score >= 0.7)"
+                            )
 
         # 4. Check if task has validation enabled
         validation_spawned = False
@@ -2219,15 +2789,19 @@ async def update_task_status(
             # Process validation spawning asynchronously (like create_task)
             async def spawn_validation_async():
                 try:
-                    logger.info(f"Starting validation process for task {request.task_id}")
+                    logger.info(
+                        f"Starting validation process for task {request.task_id}"
+                    )
 
                     # Commit agent's work for validation (using worktree manager)
                     commit_sha = None
-                    if hasattr(server_state, 'branch_manager'):
+                    if hasattr(server_state, "branch_manager"):
                         try:
-                            commit_result = server_state.branch_manager.commit_for_validation(
-                                agent_id=agent_id,
-                                iteration=task_validation_iteration
+                            commit_result = (
+                                server_state.branch_manager.commit_for_validation(
+                                    agent_id=agent_id,
+                                    iteration=task_validation_iteration,
+                                )
                             )
                             commit_sha = commit_result.get("commit_sha")
                         except Exception as e:
@@ -2235,15 +2809,16 @@ async def update_task_status(
 
                     # Spawn validator agent
                     from src.validation.validator_agent import spawn_validator_agent
+
                     validator_id = await spawn_validator_agent(
                         validation_type="task",
                         target_id=request.task_id,
                         workflow_id=task_workflow_id,
                         commit_sha=commit_sha or "HEAD",
                         db_manager=server_state.db_manager,
-                        branch_manager=getattr(server_state, 'branch_manager', None),
+                        branch_manager=getattr(server_state, "branch_manager", None),
                         agent_manager=server_state.agent_manager,
-                        original_agent_id=agent_id
+                        original_agent_id=agent_id,
                     )
 
                     # Update task status to validation in progress
@@ -2253,29 +2828,39 @@ async def update_task_status(
                         if task:
                             task.status = "validation_in_progress"
                             session.commit()
-                            logger.info(f"Task {request.task_id} validation spawned successfully, validator: {validator_id}")
+                            logger.info(
+                                f"Task {request.task_id} validation spawned successfully, validator: {validator_id}"
+                            )
                         else:
-                            logger.error(f"Task {request.task_id} not found during validation update")
+                            logger.error(
+                                f"Task {request.task_id} not found during validation update"
+                            )
                     finally:
                         session.close()
 
                     # Broadcast validation started
-                    await server_state.broadcast_update({
-                        "type": "validation_started",
-                        "task_id": request.task_id,
-                        "validator_id": validator_id,
-                        "original_agent_id": agent_id,
-                    })
+                    await server_state.broadcast_update(
+                        {
+                            "type": "validation_started",
+                            "task_id": request.task_id,
+                            "validator_id": validator_id,
+                            "original_agent_id": agent_id,
+                        }
+                    )
 
                 except Exception as e:
-                    logger.error(f"Failed to spawn validation for task {request.task_id}: {e}")
+                    logger.error(
+                        f"Failed to spawn validation for task {request.task_id}: {e}"
+                    )
                     # Update task status to failed validation
                     session = server_state.db_manager.get_session()
                     try:
                         task = session.query(Task).filter_by(id=request.task_id).first()
                         if task:
                             task.status = "failed"
-                            task.failure_reason = f"Validation spawning failed: {str(e)}"
+                            task.failure_reason = (
+                                f"Validation spawning failed: {str(e)}"
+                            )
                             session.commit()
 
                         # Terminate the agent since validation failed and process queue
@@ -2304,44 +2889,72 @@ async def update_task_status(
             if request.status == "done":
                 try:
                     from pathlib import Path as _P
+
                     wt_path = None
 
                     # Shared-worktree path (normal autopilot): use the workflow's directory.
                     if task.workflow_id:
                         from src.core.database import Workflow as _WF
-                        wf_row = session.query(_WF).filter_by(id=task.workflow_id).first()
+
+                        wf_row = (
+                            session.query(_WF).filter_by(id=task.workflow_id).first()
+                        )
                         if wf_row and wf_row.working_directory:
                             wt_path = wf_row.working_directory
 
                     # Legacy per-agent worktree fallback.
-                    if not wt_path and hasattr(server_state, 'branch_manager'):
-                        record = server_state.branch_manager._agent_record(session, agent_id)
+                    if not wt_path and hasattr(server_state, "branch_manager"):
+                        record = server_state.branch_manager._agent_record(
+                            session, agent_id
+                        )
                         if record and record.worktree_path:
                             wt_path = record.worktree_path
 
                     if wt_path and _P(wt_path).is_dir():
-                        phase_obj = session.query(Phase).filter_by(id=task.phase_id).first() if task.phase_id else None
-                        phase_label = phase_obj.name if phase_obj else (task.phase_id[:8] if task.phase_id else "unknown")
+                        phase_obj = (
+                            session.query(Phase).filter_by(id=task.phase_id).first()
+                            if task.phase_id
+                            else None
+                        )
+                        phase_label = (
+                            phase_obj.name
+                            if phase_obj
+                            else (task.phase_id[:8] if task.phase_id else "unknown")
+                        )
 
                         wt_repo = Repo(wt_path)
                         wt_repo.git.add("-A")
                         if wt_repo.is_dirty(index=True) or wt_repo.untracked_files:
                             # Use the agent's summary as the commit message body.
                             summary = (request.summary or "").strip()
-                            subject = f"phase({phase_label}): " + (summary[:60] if summary else f"task {task.id[:8]} done")
-                            msg = subject if not summary or len(summary) <= 60 else f"{subject}\n\n{summary}"
+                            subject = f"phase({phase_label}): " + (
+                                summary[:60] if summary else f"task {task.id[:8]} done"
+                            )
+                            msg = (
+                                subject
+                                if not summary or len(summary) <= 60
+                                else f"{subject}\n\n{summary}"
+                            )
                             wt_repo.git.commit("-m", msg, "--no-verify")
                             merge_commit_sha = wt_repo.head.commit.hexsha
-                            logger.info(f"[COMMIT] phase({phase_label}) agent {agent_id[:8]}: {merge_commit_sha[:8]}")
+                            logger.info(
+                                f"[COMMIT] phase({phase_label}) agent {agent_id[:8]}: {merge_commit_sha[:8]}"
+                            )
                         else:
-                            logger.debug(f"[COMMIT] phase agent {agent_id[:8]}: nothing to commit")
+                            logger.debug(
+                                f"[COMMIT] phase agent {agent_id[:8]}: nothing to commit"
+                            )
                 except Exception as e:
-                    logger.warning(f"Failed to commit after task done for agent {agent_id[:8]}: {e}")
+                    logger.warning(
+                        f"Failed to commit after task done for agent {agent_id[:8]}: {e}"
+                    )
 
                 # Auto-link commit to ticket if task has ticket_id
                 if task.ticket_id and merge_commit_sha:
                     try:
-                        logger.info(f"Auto-linking commit {merge_commit_sha} to ticket {task.ticket_id}")
+                        logger.info(
+                            f"Auto-linking commit {merge_commit_sha} to ticket {task.ticket_id}"
+                        )
 
                         # Link the merge commit to the ticket
                         await TicketService.link_commit(
@@ -2349,19 +2962,23 @@ async def update_task_status(
                             agent_id=agent_id,
                             commit_sha=merge_commit_sha,
                             commit_message=f"Task {request.task_id} completed and merged",
-                            link_method="auto_task_completion"
+                            link_method="auto_task_completion",
                         )
 
-                        logger.info(f"Commit {merge_commit_sha} linked to ticket {task.ticket_id}")
+                        logger.info(
+                            f"Commit {merge_commit_sha} linked to ticket {task.ticket_id}"
+                        )
 
                         # Broadcast commit linked to ticket
-                        await server_state.broadcast_update({
-                            "type": "ticket_commit_linked",
-                            "ticket_id": task.ticket_id,
-                            "task_id": request.task_id,
-                            "agent_id": agent_id,
-                            "commit_sha": merge_commit_sha
-                        })
+                        await server_state.broadcast_update(
+                            {
+                                "type": "ticket_commit_linked",
+                                "ticket_id": task.ticket_id,
+                                "task_id": request.task_id,
+                                "agent_id": agent_id,
+                                "commit_sha": merge_commit_sha,
+                            }
+                        )
 
                     except Exception as e:
                         logger.error(f"Failed to auto-link commit to ticket: {e}")
@@ -2375,13 +2992,15 @@ async def update_task_status(
             asyncio.create_task(terminate_and_process_queue())
 
         # 5. Broadcast update
-        await server_state.broadcast_update({
-            "type": "task_completed",
-            "task_id": request.task_id,
-            "agent_id": agent_id,
-            "status": request.status,
-            "summary": request.summary[:200],
-        })
+        await server_state.broadcast_update(
+            {
+                "type": "task_completed",
+                "task_id": request.task_id,
+                "agent_id": agent_id,
+                "status": request.status,
+                "summary": request.summary[:200],
+            }
+        )
 
         session.close()
 
@@ -2406,7 +3025,6 @@ async def update_task_status(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-
 async def _get_project_id_for_agent(agent_id: str) -> Optional[str]:
     """Resolve project_id from agent's workflow working_directory.
 
@@ -2416,8 +3034,10 @@ async def _get_project_id_for_agent(agent_id: str) -> Optional[str]:
     until we find a matching project so worktree paths resolve correctly.
     """
     from pathlib import Path
+
     try:
         from src.core.database import AutopilotProject
+
         session = server_state.db_manager.get_session()
         try:
             agent = session.query(Agent).filter_by(id=agent_id).first()
@@ -2435,7 +3055,11 @@ async def _get_project_id_for_agent(agent_id: str) -> Optional[str]:
             # the actual project root (e.g. .worktrees/wt_feature-...).
             candidate = Path(workflow.working_directory).resolve()
             while True:
-                project = session.query(AutopilotProject).filter_by(base_dir=str(candidate)).first()
+                project = (
+                    session.query(AutopilotProject)
+                    .filter_by(base_dir=str(candidate))
+                    .first()
+                )
                 if project:
                     return project.id
                 parent = candidate.parent
@@ -2457,7 +3081,9 @@ async def save_memory(
 ):
     """Store important discoveries and learnings."""
     _touch_agent_activity(agent_id)
-    logger.info(f"Saving memory from agent {agent_id}: {request.memory_content[:100]}...")
+    logger.info(
+        f"Saving memory from agent {agent_id}: {request.memory_content[:100]}..."
+    )
 
     try:
         # Generate memory ID immediately
@@ -2482,7 +3108,9 @@ async def save_memory(
         async def process_memory_async():
             try:
                 # 1. Generate embedding
-                embedding = await server_state.llm_provider.generate_embedding(request.memory_content)
+                embedding = await server_state.llm_provider.generate_embedding(
+                    request.memory_content
+                )
 
                 # 2. Check for similar memories
                 similar = await server_state.vector_store.search(
@@ -2520,17 +3148,23 @@ async def save_memory(
                         session.commit()
                     session.close()
 
-                    logger.info(f"Memory {memory_id} indexed successfully in background")
+                    logger.info(
+                        f"Memory {memory_id} indexed successfully in background"
+                    )
                 else:
                     # Memory is too similar to existing one - mark as duplicate
                     session = server_state.db_manager.get_session()
                     memory = session.query(Memory).filter_by(id=memory_id).first()
                     if memory:
                         # Mark as duplicate by adding a reference to the original
-                        memory.tags = (memory.tags or []) + [f"duplicate_of:{similar[0]['id']}"]
+                        memory.tags = (memory.tags or []) + [
+                            f"duplicate_of:{similar[0]['id']}"
+                        ]
                         session.commit()
                     session.close()
-                    logger.info(f"Memory {memory_id} marked as duplicate of {similar[0]['id']}")
+                    logger.info(
+                        f"Memory {memory_id} marked as duplicate of {similar[0]['id']}"
+                    )
 
             except Exception as e:
                 logger.error(f"Failed to process memory {memory_id} in background: {e}")
@@ -2538,7 +3172,9 @@ async def save_memory(
                 session = server_state.db_manager.get_session()
                 memory = session.query(Memory).filter_by(id=memory_id).first()
                 if memory:
-                    memory.tags = (memory.tags or []) + [f"indexing_error:{str(e)[:50]}"]
+                    memory.tags = (memory.tags or []) + [
+                        f"indexing_error:{str(e)[:50]}"
+                    ]
                     session.commit()
                 session.close()
 
@@ -2559,14 +3195,18 @@ async def save_memory(
 
 class SearchMemoryRequest(BaseModel):
     """Request model for searching memories."""
+
     query: str
     limit: int = 10
     memory_type: Optional[str] = None
-    project_id: Optional[str] = None  # Filter by project (auto-detected from agent if not set)
+    project_id: Optional[str] = (
+        None  # Filter by project (auto-detected from agent if not set)
+    )
 
 
 class SearchMemoryResponse(BaseModel):
     """Response model for memory search."""
+
     results: List[Dict[str, Any]]
     total: int
 
@@ -2580,7 +3220,9 @@ async def search_memory(
     logger.info(f"Searching memory: '{request.query[:100]}' (limit={request.limit})")
 
     try:
-        query_embedding = await server_state.llm_provider.generate_embedding(request.query)
+        query_embedding = await server_state.llm_provider.generate_embedding(
+            request.query
+        )
 
         # Auto-detect project_id from agent if not provided in the request.
         project_id = request.project_id
@@ -2606,16 +3248,19 @@ async def search_memory(
 
         formatted_results = []
         for r in results:
-            formatted_results.append({
-                "id": r.get("id", ""),
-                "content": r.get("payload", {}).get("content", ""),
-                "memory_type": r.get("payload", {}).get("memory_type", ""),
-                "score": r.get("score", 0),
-                "metadata": {
-                    k: v for k, v in r.get("payload", {}).items()
-                    if k not in ("content", "memory_id", "timestamp")
-                },
-            })
+            formatted_results.append(
+                {
+                    "id": r.get("id", ""),
+                    "content": r.get("payload", {}).get("content", ""),
+                    "memory_type": r.get("payload", {}).get("memory_type", ""),
+                    "score": r.get("score", 0),
+                    "metadata": {
+                        k: v
+                        for k, v in r.get("payload", {}).items()
+                        if k not in ("content", "memory_id", "timestamp")
+                    },
+                }
+            )
 
         return SearchMemoryResponse(
             results=formatted_results,
@@ -2649,13 +3294,15 @@ async def report_results(
         )
 
         # Broadcast update
-        await server_state.broadcast_update({
-            "type": "results_reported",
-            "task_id": request.task_id,
-            "agent_id": agent_id,
-            "result_id": result["result_id"],
-            "summary": request.summary[:200],
-        })
+        await server_state.broadcast_update(
+            {
+                "type": "results_reported",
+                "task_id": request.task_id,
+                "agent_id": agent_id,
+                "result_id": result["result_id"],
+                "summary": request.summary[:200],
+            }
+        )
 
         return ReportResultsResponse(
             status=result["status"],
@@ -2683,7 +3330,9 @@ async def give_validation_review(
     agent_id: str = Header(..., alias="X-Agent-ID"),
 ):
     """Submit validation review for a task."""
-    logger.info(f"Validation review from {agent_id}: task={request.task_id}, passed={request.validation_passed}")
+    logger.info(
+        f"Validation review from {agent_id}: task={request.task_id}, passed={request.validation_passed}"
+    )
 
     try:
         session = server_state.db_manager.get_session()
@@ -2691,7 +3340,9 @@ async def give_validation_review(
         # 1. Verify caller is a validator agent
         agent = session.query(Agent).filter_by(id=agent_id).first()
         if not agent or agent.agent_type != "validator":
-            raise HTTPException(status_code=403, detail="Only validator agents can submit reviews")
+            raise HTTPException(
+                status_code=403, detail="Only validator agents can submit reviews"
+            )
 
         # 2. Get task
         task = session.query(Task).filter_by(id=request.task_id).first()
@@ -2709,7 +3360,7 @@ async def give_validation_review(
             validation_passed=request.validation_passed,
             feedback=request.feedback,
             evidence=request.evidence,
-            recommendations=request.recommendations
+            recommendations=request.recommendations,
         )
         session.add(review)
 
@@ -2722,16 +3373,19 @@ async def give_validation_review(
             # Update verification status of results if they exist
             if task.has_results:
                 from src.services.result_service import ResultService
+
                 results = ResultService.get_results_for_task(request.task_id)
                 for result_info in results:
                     try:
                         ResultService.verify_result(
                             result_id=result_info["result_id"],
                             validation_review_id=review.id,
-                            verified=True
+                            verified=True,
                         )
                     except Exception as e:
-                        logger.warning(f"Failed to verify result {result_info['result_id']}: {e}")
+                        logger.warning(
+                            f"Failed to verify result {result_info['result_id']}: {e}"
+                        )
 
             # Create recommended follow-up tasks
             if request.recommendations:
@@ -2743,35 +3397,42 @@ async def give_validation_review(
                         parent_task_id=request.task_id,
                         created_by_agent_id=agent_id,
                         priority="medium",
-                        status="pending"
+                        status="pending",
                     )
                     session.add(follow_up_task)
 
             session.commit()
 
             # Commit validated work in the agent's worktree (don't merge to main yet)
-            if hasattr(server_state, 'branch_manager') and original_agent_id:
+            if hasattr(server_state, "branch_manager") and original_agent_id:
                 try:
-                    record = server_state.branch_manager._agent_record(session, original_agent_id)
+                    record = server_state.branch_manager._agent_record(
+                        session, original_agent_id
+                    )
                     if record and record.worktree_path:
                         wt_repo = Repo(record.worktree_path)
                         wt_repo.git.add("-A")
                         if wt_repo.is_dirty() or wt_repo.untracked_files:
                             wt_repo.git.commit(
-                                "-m", f"[Agent {original_agent_id[:8]}] Validated work completed",
-                                "--no-verify"
+                                "-m",
+                                f"[Agent {original_agent_id[:8]}] Validated work completed",
+                                "--no-verify",
                             )
-                            logger.info(f"Committed validated work in worktree for {original_agent_id[:8]}")
+                            logger.info(
+                                f"Committed validated work in worktree for {original_agent_id[:8]}"
+                            )
 
                     # Track for final merge
-                    if not hasattr(server_state, '_completed_agent_branches'):
+                    if not hasattr(server_state, "_completed_agent_branches"):
                         server_state._completed_agent_branches = []
                     if record:
-                        server_state._completed_agent_branches.append({
-                            'agent_id': original_agent_id,
-                            'branch': record.branch_name,
-                            'phase': 'validated',
-                        })
+                        server_state._completed_agent_branches.append(
+                            {
+                                "agent_id": original_agent_id,
+                                "branch": record.branch_name,
+                                "phase": "validated",
+                            }
+                        )
                 except Exception as e:
                     logger.warning(f"Failed to commit validated work: {e}")
 
@@ -2784,18 +3445,20 @@ async def give_validation_review(
             asyncio.create_task(terminate_both_and_process_queue())
 
             # Broadcast success
-            await server_state.broadcast_update({
-                "type": "validation_passed",
-                "task_id": request.task_id,
-                "agent_id": original_agent_id,
-                "validator_id": agent_id,
-                "iteration": task.validation_iteration
-            })
+            await server_state.broadcast_update(
+                {
+                    "type": "validation_passed",
+                    "task_id": request.task_id,
+                    "agent_id": original_agent_id,
+                    "validator_id": agent_id,
+                    "iteration": task.validation_iteration,
+                }
+            )
 
             return GiveValidationReviewResponse(
                 status="completed",
                 message="Validation passed, task completed",
-                iteration=task.validation_iteration
+                iteration=task.validation_iteration,
             )
 
         else:
@@ -2806,10 +3469,11 @@ async def give_validation_review(
 
             # Send feedback to the still-running agent
             from src.validation.validator_agent import send_feedback_to_agent
+
             feedback_sent = send_feedback_to_agent(
                 agent_id=original_agent_id,
                 feedback=request.feedback,
-                iteration=task.validation_iteration
+                iteration=task.validation_iteration,
             )
 
             if not feedback_sent:
@@ -2823,18 +3487,20 @@ async def give_validation_review(
             asyncio.create_task(terminate_validator_and_process_queue())
 
             # Broadcast validation failure
-            await server_state.broadcast_update({
-                "type": "validation_failed",
-                "task_id": request.task_id,
-                "agent_id": original_agent_id,
-                "validator_id": agent_id,
-                "iteration": task.validation_iteration
-            })
+            await server_state.broadcast_update(
+                {
+                    "type": "validation_failed",
+                    "task_id": request.task_id,
+                    "agent_id": original_agent_id,
+                    "validator_id": agent_id,
+                    "iteration": task.validation_iteration,
+                }
+            )
 
             return GiveValidationReviewResponse(
                 status="needs_work",
                 message="Validation failed, feedback sent to agent",
-                iteration=task.validation_iteration
+                iteration=task.validation_iteration,
             )
 
     except HTTPException:
@@ -2860,18 +3526,26 @@ async def submit_result(
         try:
             agent = session.query(Agent).filter_by(id=agent_id).first()
             if not agent:
-                raise HTTPException(status_code=404, detail=f"Agent not found: {agent_id}")
+                raise HTTPException(
+                    status_code=404, detail=f"Agent not found: {agent_id}"
+                )
 
             # Find the agent's assigned task
             task = session.query(Task).filter_by(assigned_agent_id=agent_id).first()
             if not task:
-                raise HTTPException(status_code=404, detail=f"No task found for agent: {agent_id}")
+                raise HTTPException(
+                    status_code=404, detail=f"No task found for agent: {agent_id}"
+                )
 
             workflow_id = task.workflow_id
             if not workflow_id:
-                raise HTTPException(status_code=400, detail=f"Task {task.id} has no workflow_id")
+                raise HTTPException(
+                    status_code=400, detail=f"Task {task.id} has no workflow_id"
+                )
 
-            logger.info(f"Derived workflow_id {workflow_id} from agent {agent_id}'s task {task.id}")
+            logger.info(
+                f"Derived workflow_id {workflow_id} from agent {agent_id}'s task {task.id}"
+            )
 
         finally:
             session.close()
@@ -2892,7 +3566,7 @@ async def submit_result(
             # Get the task to link AgentResult
             task = session.query(Task).filter_by(assigned_agent_id=agent_id).first()
             if task:
-                with open(request.markdown_file_path, 'r') as f:
+                with open(request.markdown_file_path, "r") as f:
                     markdown_content = f.read()
 
                 agent_result = AgentResult(
@@ -2903,11 +3577,13 @@ async def submit_result(
                     markdown_file_path=request.markdown_file_path,
                     result_type="implementation",  # Default to implementation for workflow results
                     summary=request.explanation or "Workflow result submitted",
-                    created_at=datetime.utcnow()
+                    created_at=datetime.utcnow(),
                 )
                 session.add(agent_result)
                 session.commit()
-                logger.info(f"Created AgentResult {agent_result.id} for workflow result {result['result_id']}")
+                logger.info(
+                    f"Created AgentResult {agent_result.id} for workflow result {result['result_id']}"
+                )
         except Exception as e:
             logger.warning(f"Failed to create AgentResult entry: {e}")
             session.rollback()
@@ -2916,21 +3592,23 @@ async def submit_result(
 
         # Create commit for result submission
         commit_sha = None
-        if hasattr(server_state, 'branch_manager'):
+        if hasattr(server_state, "branch_manager"):
             try:
                 commit_result = server_state.branch_manager.commit_for_validation(
                     agent_id=agent_id,
                     iteration=1,  # Results are always first iteration
-                    message="Result submitted for workflow validation"
+                    message="Result submitted for workflow validation",
                 )
                 commit_sha = commit_result.get("commit_sha")
-                logger.info(f"Created commit {commit_sha} for result submission by agent {agent_id}")
+                logger.info(
+                    f"Created commit {commit_sha} for result submission by agent {agent_id}"
+                )
             except Exception as e:
                 logger.warning(f"Failed to create result submission commit: {e}")
 
         # Check if validation should be triggered
-        should_validate, criteria = server_state.result_validator_service.should_spawn_validator(
-            workflow_id
+        should_validate, criteria = (
+            server_state.result_validator_service.should_spawn_validator(workflow_id)
         )
 
         validation_triggered = False
@@ -2939,18 +3617,21 @@ async def submit_result(
             async def spawn_validator_async():
                 try:
                     from src.validation.validator_agent import spawn_validator_agent
+
                     validator_id = await spawn_validator_agent(
                         validation_type="result",
                         target_id=result["result_id"],
                         workflow_id=workflow_id,
                         commit_sha=commit_sha or "HEAD",
                         db_manager=server_state.db_manager,
-                        branch_manager=getattr(server_state, 'branch_manager', None),
+                        branch_manager=getattr(server_state, "branch_manager", None),
                         agent_manager=server_state.agent_manager,
                         criteria=criteria,
-                        original_agent_id=agent_id
+                        original_agent_id=agent_id,
                     )
-                    logger.info(f"Spawned result validator {validator_id} for result {result['result_id']}")
+                    logger.info(
+                        f"Spawned result validator {validator_id} for result {result['result_id']}"
+                    )
                 except Exception as e:
                     logger.error(f"Failed to spawn result validator: {e}")
 
@@ -2958,13 +3639,15 @@ async def submit_result(
             validation_triggered = True
 
         # Broadcast result submission
-        await server_state.broadcast_update({
-            "type": "result_submitted",
-            "result_id": result["result_id"],
-            "workflow_id": workflow_id,
-            "agent_id": agent_id,
-            "validation_triggered": validation_triggered,
-        })
+        await server_state.broadcast_update(
+            {
+                "type": "result_submitted",
+                "result_id": result["result_id"],
+                "workflow_id": workflow_id,
+                "agent_id": agent_id,
+                "validation_triggered": validation_triggered,
+            }
+        )
 
         return SubmitResultResponse(
             status=result["status"],
@@ -2972,7 +3655,8 @@ async def submit_result(
             workflow_id=workflow_id,
             agent_id=agent_id,
             validation_triggered=validation_triggered,
-            message="Result submitted successfully" + (" and validation triggered" if validation_triggered else ""),
+            message="Result submitted successfully"
+            + (" and validation triggered" if validation_triggered else ""),
             created_at=result["created_at"],
         )
 
@@ -2998,21 +3682,33 @@ async def submit_result_validation(
         # Get the workflow result to find the validator agent
         session = server_state.db_manager.get_session()
         try:
-            result = session.query(WorkflowResult).filter_by(id=request.result_id).first()
+            result = (
+                session.query(WorkflowResult).filter_by(id=request.result_id).first()
+            )
             if not result:
-                raise HTTPException(status_code=404, detail=f"Result {request.result_id} not found")
+                raise HTTPException(
+                    status_code=404, detail=f"Result {request.result_id} not found"
+                )
 
             # The validator agent should be the one that currently has this result assigned
             # We can find it by looking for the most recent result_validator agent for this workflow
-            validator_agent = session.query(Agent).filter(
-                Agent.agent_type == "result_validator"
-            ).order_by(Agent.created_at.desc()).first()
+            validator_agent = (
+                session.query(Agent)
+                .filter(Agent.agent_type == "result_validator")
+                .order_by(Agent.created_at.desc())
+                .first()
+            )
 
             if not validator_agent:
-                raise HTTPException(status_code=500, detail="No validator agent found for this validation")
+                raise HTTPException(
+                    status_code=500,
+                    detail="No validator agent found for this validation",
+                )
 
             agent_id = validator_agent.id
-            logger.info(f"Using validator agent {agent_id} for result {request.result_id}")
+            logger.info(
+                f"Using validator agent {agent_id} for result {request.result_id}"
+            )
         finally:
             session.close()
 
@@ -3022,7 +3718,7 @@ async def submit_result_validation(
             passed=request.validation_passed,
             feedback=request.feedback,
             evidence=request.evidence,
-            validator_agent_id=agent_id
+            validator_agent_id=agent_id,
         )
 
         # Handle workflow actions
@@ -3030,18 +3726,23 @@ async def submit_result_validation(
         if "terminate_workflow" in outcome["next_actions"]:
             # Import termination handler when needed
             from src.workflow.termination_handler import WorkflowTerminationHandler
+
             termination_handler = WorkflowTerminationHandler(
                 db_manager=server_state.db_manager,
-                agent_manager=server_state.agent_manager
+                agent_manager=server_state.agent_manager,
             )
 
             await termination_handler.terminate_workflow(outcome["workflow_id"])
             workflow_action_taken = "workflow_terminated"
-            logger.info(f"Terminated workflow {outcome['workflow_id']} due to validated result")
+            logger.info(
+                f"Terminated workflow {outcome['workflow_id']} due to validated result"
+            )
 
         elif "continue_workflow" in outcome["next_actions"]:
             workflow_action_taken = "workflow_continues"
-            logger.info(f"Workflow {outcome['workflow_id']} continues after validated result")
+            logger.info(
+                f"Workflow {outcome['workflow_id']} continues after validated result"
+            )
 
         # Terminate validator agent and process queue
         async def terminate_result_validator_and_process_queue():
@@ -3051,16 +3752,22 @@ async def submit_result_validation(
         asyncio.create_task(terminate_result_validator_and_process_queue())
 
         # Broadcast validation result
-        await server_state.broadcast_update({
-            "type": "result_validation_completed",
-            "result_id": request.result_id,
-            "workflow_id": outcome["workflow_id"],
-            "validation_passed": request.validation_passed,
-            "validator_agent_id": agent_id,
-            "workflow_action": workflow_action_taken,
-        })
+        await server_state.broadcast_update(
+            {
+                "type": "result_validation_completed",
+                "result_id": request.result_id,
+                "workflow_id": outcome["workflow_id"],
+                "validation_passed": request.validation_passed,
+                "validator_agent_id": agent_id,
+                "workflow_action": workflow_action_taken,
+            }
+        )
 
-        status = "workflow_terminated" if workflow_action_taken == "workflow_terminated" else "completed"
+        status = (
+            "workflow_terminated"
+            if workflow_action_taken == "workflow_terminated"
+            else "completed"
+        )
         message = f"Validation {'passed' if request.validation_passed else 'failed'}"
         if workflow_action_taken == "workflow_terminated":
             message += " - workflow terminated"
@@ -3105,27 +3812,32 @@ async def broadcast_message(
     This allows agents to communicate with each other by sending messages
     that will be delivered to all other active agents in the system.
     """
-    logger.info(f"Agent {agent_id[:8]} broadcasting message: {request.message[:100]}...")
+    logger.info(
+        f"Agent {agent_id[:8]} broadcasting message: {request.message[:100]}..."
+    )
 
     try:
         # Use agent manager to broadcast the message
-        recipient_count = await server_state.agent_manager.broadcast_message_to_all_agents(
-            sender_agent_id=agent_id,
-            message=request.message
+        recipient_count = (
+            await server_state.agent_manager.broadcast_message_to_all_agents(
+                sender_agent_id=agent_id, message=request.message
+            )
         )
 
         # Broadcast update via WebSocket
-        await server_state.broadcast_update({
-            "type": "agent_broadcast",
-            "sender_agent_id": agent_id,
-            "recipient_count": recipient_count,
-            "message_preview": request.message[:100],
-        })
+        await server_state.broadcast_update(
+            {
+                "type": "agent_broadcast",
+                "sender_agent_id": agent_id,
+                "recipient_count": recipient_count,
+                "message_preview": request.message[:100],
+            }
+        )
 
         return BroadcastMessageResponse(
             success=True,
             recipient_count=recipient_count,
-            message=f"Message broadcast to {recipient_count} agent(s)"
+            message=f"Message broadcast to {recipient_count} agent(s)",
         )
 
     except Exception as e:
@@ -3143,33 +3855,37 @@ async def send_message(
     This allows agents to communicate directly with each other by sending
     targeted messages to specific agents.
     """
-    logger.info(f"Agent {agent_id[:8]} sending message to {request.recipient_agent_id[:8]}: {request.message[:100]}...")
+    logger.info(
+        f"Agent {agent_id[:8]} sending message to {request.recipient_agent_id[:8]}: {request.message[:100]}..."
+    )
 
     try:
         # Use agent manager to send the direct message
         success = await server_state.agent_manager.send_direct_message(
             sender_agent_id=agent_id,
             recipient_agent_id=request.recipient_agent_id,
-            message=request.message
+            message=request.message,
         )
 
         if not success:
             return SendMessageResponse(
                 success=False,
-                message=f"Failed to send message - recipient agent {request.recipient_agent_id[:8]} may not exist or is terminated"
+                message=f"Failed to send message - recipient agent {request.recipient_agent_id[:8]} may not exist or is terminated",
             )
 
         # Broadcast update via WebSocket
-        await server_state.broadcast_update({
-            "type": "agent_direct_message",
-            "sender_agent_id": agent_id,
-            "recipient_agent_id": request.recipient_agent_id,
-            "message_preview": request.message[:100],
-        })
+        await server_state.broadcast_update(
+            {
+                "type": "agent_direct_message",
+                "sender_agent_id": agent_id,
+                "recipient_agent_id": request.recipient_agent_id,
+                "message_preview": request.message[:100],
+            }
+        )
 
         return SendMessageResponse(
             success=True,
-            message=f"Message sent to agent {request.recipient_agent_id[:8]}"
+            message=f"Message sent to agent {request.recipient_agent_id[:8]}",
         )
 
     except Exception as e:
@@ -3178,6 +3894,7 @@ async def send_message(
 
 
 # ==================== TICKET TRACKING SYSTEM ENDPOINTS ====================
+
 
 @app.post("/api/tickets/create", response_model=CreateTicketResponse)
 async def create_ticket_endpoint(
@@ -3188,11 +3905,13 @@ async def create_ticket_endpoint(
     # Use agent_id from request if provided, otherwise use header
     # Note: request.agent_id is the agent_id from the payload, agent_id is from X-Agent-ID header
     created_by_agent_id = request.agent_id or agent_id
-    
+
     logger.info("[TICKET_CREATE] ========== START ==========")
     logger.info(f"[TICKET_CREATE] Agent: {created_by_agent_id}")
     logger.info(f"[TICKET_CREATE] Title: {request.title}")
-    logger.info(f"[TICKET_CREATE] Type: {request.ticket_type}, Priority: {request.priority}")
+    logger.info(
+        f"[TICKET_CREATE] Type: {request.ticket_type}, Priority: {request.priority}"
+    )
     logger.info(f"[TICKET_CREATE] Workflow_ID provided: {request.workflow_id}")
     logger.info(f"[TICKET_CREATE] Task_ID: {request.task_id}")
     logger.info(f"[TICKET_CREATE] Phase_ID: {request.phase_id}")
@@ -3203,7 +3922,9 @@ async def create_ticket_endpoint(
         workflow_id = request.workflow_id
         logger.info(f"[TICKET_CREATE] Using workflow_id: {workflow_id}")
 
-        logger.info(f"[TICKET_CREATE] Calling TicketService.create_ticket with workflow_id={workflow_id}")
+        logger.info(
+            f"[TICKET_CREATE] Calling TicketService.create_ticket with workflow_id={workflow_id}"
+        )
         result = await TicketService.create_ticket(
             workflow_id=workflow_id,
             agent_id=created_by_agent_id,
@@ -3221,19 +3942,23 @@ async def create_ticket_endpoint(
             phase_id=request.phase_id,
         )
 
-        logger.info("[TICKET_CREATE] ✅ TicketService.create_ticket returned successfully")
+        logger.info(
+            "[TICKET_CREATE] ✅ TicketService.create_ticket returned successfully"
+        )
         logger.info(f"[TICKET_CREATE] Result: {result}")
         logger.info(f"[TICKET_CREATE] Ticket ID: {result.get('ticket_id')}")
 
         # Broadcast update
         logger.info("[TICKET_CREATE] Broadcasting update...")
-        await server_state.broadcast_update({
-            "type": "ticket_created",
-            "ticket_id": result["ticket_id"],
-            "workflow_id": workflow_id,
-            "agent_id": agent_id,
-            "title": request.title,
-        })
+        await server_state.broadcast_update(
+            {
+                "type": "ticket_created",
+                "ticket_id": result["ticket_id"],
+                "workflow_id": workflow_id,
+                "agent_id": agent_id,
+                "title": request.title,
+            }
+        )
         logger.info("[TICKET_CREATE] Broadcast complete")
 
         logger.info("[TICKET_CREATE] Creating response object...")
@@ -3250,7 +3975,7 @@ async def create_ticket_endpoint(
         # Return a warning response instead of crashing the agent
         return CreateTicketResponse(
             ticket_id="",
-            workflow_id=workflow_id if 'workflow_id' in dir() else "",
+            workflow_id=workflow_id if "workflow_id" in dir() else "",
             agent_id=agent_id,
             title=request.title,
             ticket_type=request.ticket_type,
@@ -3263,6 +3988,7 @@ async def create_ticket_endpoint(
         logger.error(f"[TICKET_CREATE] ❌ Unexpected error: {type(e).__name__}: {e}")
         logger.error("[TICKET_CREATE] ========== FAILED (Exception) ==========")
         import traceback
+
         logger.error(f"[TICKET_CREATE] Traceback: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -3284,12 +4010,14 @@ async def update_ticket_endpoint(
         )
 
         # Broadcast update
-        await server_state.broadcast_update({
-            "type": "ticket_updated",
-            "ticket_id": request.ticket_id,
-            "agent_id": agent_id,
-            "fields_updated": result["fields_updated"],
-        })
+        await server_state.broadcast_update(
+            {
+                "type": "ticket_updated",
+                "ticket_id": request.ticket_id,
+                "agent_id": agent_id,
+                "fields_updated": result["fields_updated"],
+            }
+        )
 
         return UpdateTicketResponse(**result)
 
@@ -3307,7 +4035,9 @@ async def change_ticket_status_endpoint(
     agent_id: str = Header(..., alias="X-Agent-ID"),
 ):
     """Move ticket to a different status column."""
-    logger.info(f"Agent {agent_id} changing status of ticket {request.ticket_id} to {request.new_status}")
+    logger.info(
+        f"Agent {agent_id} changing status of ticket {request.ticket_id} to {request.new_status}"
+    )
 
     try:
         result = await TicketService.change_status(
@@ -3319,14 +4049,16 @@ async def change_ticket_status_endpoint(
         )
 
         # Broadcast update
-        await server_state.broadcast_update({
-            "type": "ticket_status_changed",
-            "ticket_id": request.ticket_id,
-            "agent_id": agent_id,
-            "old_status": result["old_status"],
-            "new_status": result["new_status"],
-            "blocked": result["blocked"],
-        })
+        await server_state.broadcast_update(
+            {
+                "type": "ticket_status_changed",
+                "ticket_id": request.ticket_id,
+                "agent_id": agent_id,
+                "old_status": result["old_status"],
+                "new_status": result["new_status"],
+                "blocked": result["blocked"],
+            }
+        )
 
         return ChangeTicketStatusResponse(**result)
 
@@ -3357,12 +4089,14 @@ async def add_comment_endpoint(
         )
 
         # Broadcast update
-        await server_state.broadcast_update({
-            "type": "ticket_comment_added",
-            "ticket_id": request.ticket_id,
-            "agent_id": agent_id,
-            "comment_id": result["comment_id"],
-        })
+        await server_state.broadcast_update(
+            {
+                "type": "ticket_comment_added",
+                "ticket_id": request.ticket_id,
+                "agent_id": agent_id,
+                "comment_id": result["comment_id"],
+            }
+        )
 
         return AddCommentResponse(**result)
 
@@ -3412,7 +4146,9 @@ async def get_ticket_endpoint(
         ticket = await TicketService.get_ticket(ticket_id)
 
         if not ticket:
-            raise HTTPException(status_code=404, detail=f"Ticket not found: {ticket_id}")
+            raise HTTPException(
+                status_code=404, detail=f"Ticket not found: {ticket_id}"
+            )
 
         return ticket
 
@@ -3436,7 +4172,9 @@ async def search_tickets_endpoint(
     - "keyword": SQLite FTS5 only
     - "hybrid": Combined (70% semantic + 30% keyword) - DEFAULT
     """
-    logger.info(f"Agent {agent_id} searching tickets: query='{request.query}', type={request.search_type}")
+    logger.info(
+        f"Agent {agent_id} searching tickets: query='{request.query}', type={request.search_type}"
+    )
 
     try:
         # workflow_id is now required in the request
@@ -3450,14 +4188,14 @@ async def search_tickets_endpoint(
                 query_text=request.query,
                 workflow_id=workflow_id,
                 limit=request.limit,
-                filters=request.filters
+                filters=request.filters,
             )
         elif request.search_type == "keyword":
             results = await TicketSearchService.keyword_search(
                 keywords=request.query,
                 workflow_id=workflow_id,
                 limit=request.limit,
-                filters=request.filters
+                filters=request.filters,
             )
         else:  # hybrid (default)
             results = await TicketSearchService.hybrid_search(
@@ -3465,7 +4203,7 @@ async def search_tickets_endpoint(
                 workflow_id=workflow_id,
                 limit=request.limit,
                 filters=request.filters,
-                include_comments=request.include_comments
+                include_comments=request.include_comments,
             )
 
         search_time_ms = (time.time() - start_time) * 1000
@@ -3475,7 +4213,7 @@ async def search_tickets_endpoint(
             query=request.query,
             results=[TicketSearchResult(**r) for r in results],
             total_found=len(results),
-            search_time_ms=search_time_ms
+            search_time_ms=search_time_ms,
         )
 
     except Exception as e:
@@ -3492,93 +4230,142 @@ async def get_ticket_stats_endpoint(
     logger.info(f"Agent {agent_id} fetching ticket stats for workflow {workflow_id}")
 
     try:
-        from src.core.database import Ticket, TicketComment, TicketCommit, BoardConfig
         from sqlalchemy import func
+
+        from src.core.database import BoardConfig, Ticket, TicketComment, TicketCommit
 
         session = server_state.db_manager.get_session()
         try:
             # Get board config for this workflow
-            board_config = session.query(BoardConfig).filter_by(workflow_id=workflow_id).first()
-            logger.info(f"BoardConfig found: {board_config is not None}, workflow_id: {workflow_id}")
+            board_config = (
+                session.query(BoardConfig).filter_by(workflow_id=workflow_id).first()
+            )
+            logger.info(
+                f"BoardConfig found: {board_config is not None}, workflow_id: {workflow_id}"
+            )
 
             # Total tickets
-            total_tickets = session.query(func.count(Ticket.id)).filter_by(workflow_id=workflow_id).scalar()
+            total_tickets = (
+                session.query(func.count(Ticket.id))
+                .filter_by(workflow_id=workflow_id)
+                .scalar()
+            )
 
             # By status
             by_status = {}
-            status_counts = session.query(
-                Ticket.status, func.count(Ticket.id)
-            ).filter_by(workflow_id=workflow_id).group_by(Ticket.status).all()
+            status_counts = (
+                session.query(Ticket.status, func.count(Ticket.id))
+                .filter_by(workflow_id=workflow_id)
+                .group_by(Ticket.status)
+                .all()
+            )
             for status, count in status_counts:
                 by_status[status] = count
 
             # By type
             by_type = {}
-            type_counts = session.query(
-                Ticket.ticket_type, func.count(Ticket.id)
-            ).filter_by(workflow_id=workflow_id).group_by(Ticket.ticket_type).all()
+            type_counts = (
+                session.query(Ticket.ticket_type, func.count(Ticket.id))
+                .filter_by(workflow_id=workflow_id)
+                .group_by(Ticket.ticket_type)
+                .all()
+            )
             for ticket_type, count in type_counts:
                 by_type[ticket_type] = count
 
             # By priority
             by_priority = {}
-            priority_counts = session.query(
-                Ticket.priority, func.count(Ticket.id)
-            ).filter_by(workflow_id=workflow_id).group_by(Ticket.priority).all()
+            priority_counts = (
+                session.query(Ticket.priority, func.count(Ticket.id))
+                .filter_by(workflow_id=workflow_id)
+                .group_by(Ticket.priority)
+                .all()
+            )
             for priority, count in priority_counts:
                 by_priority[priority] = count
 
             # By agent
             by_agent = {}
-            agent_counts = session.query(
-                Ticket.assigned_agent_id, func.count(Ticket.id)
-            ).filter_by(workflow_id=workflow_id).filter(
-                Ticket.assigned_agent_id.isnot(None)
-            ).group_by(Ticket.assigned_agent_id).all()
+            agent_counts = (
+                session.query(Ticket.assigned_agent_id, func.count(Ticket.id))
+                .filter_by(workflow_id=workflow_id)
+                .filter(Ticket.assigned_agent_id.isnot(None))
+                .group_by(Ticket.assigned_agent_id)
+                .all()
+            )
             for agent_id_val, count in agent_counts:
                 by_agent[agent_id_val] = count
 
             # Blocked count
-            tickets_list = session.query(Ticket).filter_by(workflow_id=workflow_id).all()
-            blocked_count = sum(1 for t in tickets_list if t.blocked_by_ticket_ids and len(t.blocked_by_ticket_ids) > 0)
+            tickets_list = (
+                session.query(Ticket).filter_by(workflow_id=workflow_id).all()
+            )
+            blocked_count = sum(
+                1
+                for t in tickets_list
+                if t.blocked_by_ticket_ids and len(t.blocked_by_ticket_ids) > 0
+            )
 
             # Resolved count
-            resolved_count = session.query(func.count(Ticket.id)).filter_by(
-                workflow_id=workflow_id, is_resolved=True
-            ).scalar()
+            resolved_count = (
+                session.query(func.count(Ticket.id))
+                .filter_by(workflow_id=workflow_id, is_resolved=True)
+                .scalar()
+            )
 
             # Average comments per ticket
-            total_comments = session.query(func.count(TicketComment.id)).join(
-                Ticket, TicketComment.ticket_id == Ticket.id
-            ).filter(Ticket.workflow_id == workflow_id).scalar()
+            total_comments = (
+                session.query(func.count(TicketComment.id))
+                .join(Ticket, TicketComment.ticket_id == Ticket.id)
+                .filter(Ticket.workflow_id == workflow_id)
+                .scalar()
+            )
             avg_comments = total_comments / total_tickets if total_tickets > 0 else 0.0
 
             # Average commits per ticket
-            total_commits = session.query(func.count(TicketCommit.id)).join(
-                Ticket, TicketCommit.ticket_id == Ticket.id
-            ).filter(Ticket.workflow_id == workflow_id).scalar()
+            total_commits = (
+                session.query(func.count(TicketCommit.id))
+                .join(Ticket, TicketCommit.ticket_id == Ticket.id)
+                .filter(Ticket.workflow_id == workflow_id)
+                .scalar()
+            )
             avg_commits = total_commits / total_tickets if total_tickets > 0 else 0.0
 
             # Created today
-            today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
-            created_today = session.query(func.count(Ticket.id)).filter(
-                Ticket.workflow_id == workflow_id,
-                Ticket.created_at >= today_start
-            ).scalar()
+            today_start = datetime.utcnow().replace(
+                hour=0, minute=0, second=0, microsecond=0
+            )
+            created_today = (
+                session.query(func.count(Ticket.id))
+                .filter(
+                    Ticket.workflow_id == workflow_id, Ticket.created_at >= today_start
+                )
+                .scalar()
+            )
 
             # Completed today
-            completed_today = session.query(func.count(Ticket.id)).filter(
-                Ticket.workflow_id == workflow_id,
-                Ticket.completed_at >= today_start
-            ).scalar() if Ticket.completed_at else 0
+            completed_today = (
+                session.query(func.count(Ticket.id))
+                .filter(
+                    Ticket.workflow_id == workflow_id,
+                    Ticket.completed_at >= today_start,
+                )
+                .scalar()
+                if Ticket.completed_at
+                else 0
+            )
 
             # Velocity last 7 days (tickets completed in last 7 days)
             seven_days_ago = datetime.utcnow() - timedelta(days=7)
-            velocity_last_7_days = session.query(func.count(Ticket.id)).filter(
-                Ticket.workflow_id == workflow_id,
-                Ticket.is_resolved,
-                Ticket.resolved_at >= seven_days_ago
-            ).scalar()
+            velocity_last_7_days = (
+                session.query(func.count(Ticket.id))
+                .filter(
+                    Ticket.workflow_id == workflow_id,
+                    Ticket.is_resolved,
+                    Ticket.resolved_at >= seven_days_ago,
+                )
+                .scalar()
+            )
 
             stats = TicketStats(
                 total_tickets=total_tickets or 0,
@@ -3592,7 +4379,7 @@ async def get_ticket_stats_endpoint(
                 avg_commits_per_ticket=avg_commits or 0.0,
                 created_today=created_today or 0,
                 completed_today=completed_today or 0,
-                velocity_last_7_days=velocity_last_7_days or 0
+                velocity_last_7_days=velocity_last_7_days or 0,
             )
 
             # Convert board_config to dict if it exists
@@ -3604,16 +4391,22 @@ async def get_ticket_stats_endpoint(
                     "ticket_types": board_config.ticket_types,
                     "default_ticket_type": board_config.default_ticket_type,
                     "initial_status": board_config.initial_status,
-                    "auto_assign": board_config.auto_assign if hasattr(board_config, 'auto_assign') else False,
-                    "allow_reopen": board_config.allow_reopen if hasattr(board_config, 'allow_reopen') else True,
-                    "track_time": board_config.track_time if hasattr(board_config, 'track_time') else False,
+                    "auto_assign": board_config.auto_assign
+                    if hasattr(board_config, "auto_assign")
+                    else False,
+                    "allow_reopen": board_config.allow_reopen
+                    if hasattr(board_config, "allow_reopen")
+                    else True,
+                    "track_time": board_config.track_time
+                    if hasattr(board_config, "track_time")
+                    else False,
                 }
 
             return TicketStatsResponse(
                 success=True,
                 workflow_id=workflow_id,
                 stats=stats,
-                board_config=board_config_dict
+                board_config=board_config_dict,
             )
 
         finally:
@@ -3694,12 +4487,14 @@ async def resolve_ticket_endpoint(
         )
 
         # Broadcast update
-        await server_state.broadcast_update({
-            "type": "ticket_resolved",
-            "ticket_id": request.ticket_id,
-            "agent_id": agent_id,
-            "unblocked_tickets": result["unblocked_tickets"],
-        })
+        await server_state.broadcast_update(
+            {
+                "type": "ticket_resolved",
+                "ticket_id": request.ticket_id,
+                "agent_id": agent_id,
+                "unblocked_tickets": result["unblocked_tickets"],
+            }
+        )
 
         return ResolveTicketResponse(**result)
 
@@ -3717,7 +4512,9 @@ async def link_commit_endpoint(
     agent_id: str = Header(..., alias="X-Agent-ID"),
 ):
     """Manually link a git commit to a ticket."""
-    logger.info(f"Agent {agent_id} linking commit {request.commit_sha} to ticket {request.ticket_id}")
+    logger.info(
+        f"Agent {agent_id} linking commit {request.commit_sha} to ticket {request.ticket_id}"
+    )
 
     try:
         result = await TicketService.link_commit(
@@ -3729,12 +4526,14 @@ async def link_commit_endpoint(
         )
 
         # Broadcast update
-        await server_state.broadcast_update({
-            "type": "commit_linked",
-            "ticket_id": request.ticket_id,
-            "agent_id": agent_id,
-            "commit_sha": request.commit_sha,
-        })
+        await server_state.broadcast_update(
+            {
+                "type": "commit_linked",
+                "ticket_id": request.ticket_id,
+                "agent_id": agent_id,
+                "commit_sha": request.commit_sha,
+            }
+        )
 
         return LinkCommitResponse(**result)
 
@@ -3746,7 +4545,10 @@ async def link_commit_endpoint(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/tickets/request-clarification", response_model=RequestTicketClarificationResponse)
+@app.post(
+    "/api/tickets/request-clarification",
+    response_model=RequestTicketClarificationResponse,
+)
 async def request_ticket_clarification_endpoint(
     request: RequestTicketClarificationRequest,
     agent_id: str = Header(..., alias="X-Agent-ID"),
@@ -3764,7 +4566,9 @@ async def request_ticket_clarification_endpoint(
     4. Stores clarification as ticket comment for audit trail
     """
     logger.info("[CLARIFICATION] ========== START ==========")
-    logger.info(f"[CLARIFICATION] Agent {agent_id[:8]} requesting clarification for ticket {request.ticket_id}")
+    logger.info(
+        f"[CLARIFICATION] Agent {agent_id[:8]} requesting clarification for ticket {request.ticket_id}"
+    )
     logger.info(f"[CLARIFICATION] Conflict: {request.conflict_description[:100]}...")
 
     try:
@@ -3773,12 +4577,16 @@ async def request_ticket_clarification_endpoint(
             ticket = db.query(Ticket).filter_by(id=request.ticket_id).first()
             if not ticket:
                 logger.error(f"[CLARIFICATION] Ticket not found: {request.ticket_id}")
-                raise HTTPException(status_code=404, detail=f"Ticket not found: {request.ticket_id}")
+                raise HTTPException(
+                    status_code=404, detail=f"Ticket not found: {request.ticket_id}"
+                )
 
             logger.info(f"[CLARIFICATION] Ticket found: {ticket.title}")
 
             # 2. Gather context - Latest 60 tickets
-            recent_tickets = db.query(Ticket).order_by(Ticket.created_at.desc()).limit(60).all()
+            recent_tickets = (
+                db.query(Ticket).order_by(Ticket.created_at.desc()).limit(60).all()
+            )
             tickets_context = [
                 {
                     "ticket_id": t.id,
@@ -3786,24 +4594,30 @@ async def request_ticket_clarification_endpoint(
                     "description": t.description,
                     "status": t.status,
                     "priority": t.priority,
-                    "ticket_type": t.ticket_type
+                    "ticket_type": t.ticket_type,
                 }
                 for t in recent_tickets
             ]
-            logger.info(f"[CLARIFICATION] Gathered {len(tickets_context)} recent tickets for context")
+            logger.info(
+                f"[CLARIFICATION] Gathered {len(tickets_context)} recent tickets for context"
+            )
 
             # 3. Gather context - Latest 60 tasks
-            recent_tasks = db.query(Task).order_by(Task.created_at.desc()).limit(60).all()
+            recent_tasks = (
+                db.query(Task).order_by(Task.created_at.desc()).limit(60).all()
+            )
             tasks_context = [
                 {
                     "id": t.id,
                     "description": t.description,
                     "status": t.status,
-                    "phase_id": t.phase_id
+                    "phase_id": t.phase_id,
                 }
                 for t in recent_tasks
             ]
-            logger.info(f"[CLARIFICATION] Gathered {len(tasks_context)} recent tasks for context")
+            logger.info(
+                f"[CLARIFICATION] Gathered {len(tasks_context)} recent tasks for context"
+            )
 
             # 4. Prepare ticket details
             ticket_details = {
@@ -3814,24 +4628,30 @@ async def request_ticket_clarification_endpoint(
                 "priority": ticket.priority,
                 "ticket_type": ticket.ticket_type,
                 "assigned_agent_id": ticket.assigned_agent_id,
-                "tags": ticket.tags or []
+                "tags": ticket.tags or [],
             }
 
         # 5. Call LLM for clarification
         logger.info("[CLARIFICATION] Calling LLM arbitrator with full context...")
-        logger.info(f"[CLARIFICATION] Potential solutions provided: {len(request.potential_solutions)}")
-
-        clarification_markdown = await server_state.llm_provider.resolve_ticket_clarification(
-            ticket_id=request.ticket_id,
-            conflict_description=request.conflict_description,
-            context=request.context,
-            potential_solutions=request.potential_solutions,
-            ticket_details=ticket_details,
-            related_tickets=tickets_context,
-            active_tasks=tasks_context
+        logger.info(
+            f"[CLARIFICATION] Potential solutions provided: {len(request.potential_solutions)}"
         )
 
-        logger.info(f"[CLARIFICATION] ✅ LLM arbitration complete, {len(clarification_markdown)} chars")
+        clarification_markdown = (
+            await server_state.llm_provider.resolve_ticket_clarification(
+                ticket_id=request.ticket_id,
+                conflict_description=request.conflict_description,
+                context=request.context,
+                potential_solutions=request.potential_solutions,
+                ticket_details=ticket_details,
+                related_tickets=tickets_context,
+                active_tasks=tasks_context,
+            )
+        )
+
+        logger.info(
+            f"[CLARIFICATION] ✅ LLM arbitration complete, {len(clarification_markdown)} chars"
+        )
 
         # 6. Store clarification as ticket comment
         comment_text = f"""## 🤖 AUTOMATED CLARIFICATION REQUEST
@@ -3854,26 +4674,30 @@ async def request_ticket_clarification_endpoint(
             comment_text=comment_text,
             comment_type="clarification",
             mentions=[],
-            attachments=[]
+            attachments=[],
         )
 
-        logger.info(f"[CLARIFICATION] ✅ Stored as comment {comment_result['comment_id']}")
+        logger.info(
+            f"[CLARIFICATION] ✅ Stored as comment {comment_result['comment_id']}"
+        )
         logger.info("[CLARIFICATION] ========== SUCCESS ==========")
 
         # Broadcast update
-        await server_state.broadcast_update({
-            "type": "ticket_clarification_requested",
-            "ticket_id": request.ticket_id,
-            "agent_id": agent_id,
-            "comment_id": comment_result['comment_id'],
-        })
+        await server_state.broadcast_update(
+            {
+                "type": "ticket_clarification_requested",
+                "ticket_id": request.ticket_id,
+                "agent_id": agent_id,
+                "comment_id": comment_result["comment_id"],
+            }
+        )
 
         return RequestTicketClarificationResponse(
             success=True,
             ticket_id=request.ticket_id,
             clarification=clarification_markdown,
-            comment_id=comment_result['comment_id'],
-            message="Clarification generated and stored successfully"
+            comment_id=comment_result["comment_id"],
+            message="Clarification generated and stored successfully",
         )
 
     except HTTPException:
@@ -3881,7 +4705,9 @@ async def request_ticket_clarification_endpoint(
     except Exception as e:
         logger.error(f"[CLARIFICATION] ❌ Error: {e}", exc_info=True)
         logger.error("[CLARIFICATION] ========== FAILED ==========")
-        raise HTTPException(status_code=500, detail=f"Failed to generate clarification: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to generate clarification: {str(e)}"
+        )
 
 
 @app.post("/api/tickets/approve", response_model=ApproveTicketResponse)
@@ -3911,12 +4737,14 @@ async def approve_ticket_endpoint(
         )
 
         # Broadcast approval
-        await server_state.broadcast_update({
-            "type": "ticket_approved",
-            "ticket_id": ticket_id,
-            "approved_by": agent_id,
-            "pending_count": TicketService.get_pending_review_count(),
-        })
+        await server_state.broadcast_update(
+            {
+                "type": "ticket_approved",
+                "ticket_id": ticket_id,
+                "approved_by": agent_id,
+                "pending_count": TicketService.get_pending_review_count(),
+            }
+        )
 
         logger.info(f"[APPROVE_TICKET] ✅ Ticket {ticket_id} approved successfully")
 
@@ -3953,7 +4781,9 @@ async def reject_ticket_endpoint(
         if not rejection_reason:
             raise HTTPException(status_code=400, detail="rejection_reason required")
 
-        logger.info(f"[REJECT_TICKET] Ticket ID: {ticket_id}, Reason: {rejection_reason}")
+        logger.info(
+            f"[REJECT_TICKET] Ticket ID: {ticket_id}, Reason: {rejection_reason}"
+        )
 
         result = await TicketService.reject_ticket(
             ticket_id=ticket_id,
@@ -3962,13 +4792,15 @@ async def reject_ticket_endpoint(
         )
 
         # Broadcast rejection
-        await server_state.broadcast_update({
-            "type": "ticket_rejected",
-            "ticket_id": ticket_id,
-            "rejected_by": agent_id,
-            "rejection_reason": rejection_reason,
-            "pending_count": TicketService.get_pending_review_count(),
-        })
+        await server_state.broadcast_update(
+            {
+                "type": "ticket_rejected",
+                "ticket_id": ticket_id,
+                "rejected_by": agent_id,
+                "rejection_reason": rejection_reason,
+                "pending_count": TicketService.get_pending_review_count(),
+            }
+        )
 
         logger.info(f"[REJECT_TICKET] ✅ Ticket {ticket_id} rejected successfully")
 
@@ -3991,8 +4823,8 @@ async def get_commit_diff_endpoint(
     logger.info(f"Agent {agent_id} fetching commit diff for {commit_sha}")
 
     try:
-        import subprocess
         import re
+        import subprocess
 
         # Get the configured main repo path
         config = get_config()
@@ -4025,10 +4857,14 @@ async def get_commit_diff_endpoint(
 
         # Get commit metadata from the correct repository
         cmd = ["git", "show", "--format=%H|%an|%at|%s", "-s", commit_sha]
-        result = subprocess.run(cmd, cwd=main_repo_path, capture_output=True, text=True, check=True)
+        result = subprocess.run(
+            cmd, cwd=main_repo_path, capture_output=True, text=True, check=True
+        )
 
         if result.returncode != 0:
-            raise HTTPException(status_code=404, detail=f"Commit not found: {commit_sha}")
+            raise HTTPException(
+                status_code=404, detail=f"Commit not found: {commit_sha}"
+            )
 
         parts = result.stdout.strip().split("|", 3)
         commit_hash = parts[0] if len(parts) > 0 else commit_sha
@@ -4036,11 +4872,17 @@ async def get_commit_diff_endpoint(
         timestamp_unix = int(parts[2]) if len(parts) > 2 else 0
         message = parts[3] if len(parts) > 3 else "No message"
 
-        timestamp = datetime.fromtimestamp(timestamp_unix).isoformat() if timestamp_unix > 0 else datetime.utcnow().isoformat()
+        timestamp = (
+            datetime.fromtimestamp(timestamp_unix).isoformat()
+            if timestamp_unix > 0
+            else datetime.utcnow().isoformat()
+        )
 
         # Get file stats from the correct repository
         cmd = ["git", "diff", "--numstat", f"{commit_sha}^", commit_sha]
-        result = subprocess.run(cmd, cwd=main_repo_path, capture_output=True, text=True, check=True)
+        result = subprocess.run(
+            cmd, cwd=main_repo_path, capture_output=True, text=True, check=True
+        )
 
         files_data = []
         total_insertions = 0
@@ -4062,7 +4904,9 @@ async def get_commit_diff_endpoint(
 
             # Get unified diff for this file from the correct repository
             cmd_diff = ["git", "diff", f"{commit_sha}^", commit_sha, "--", file_path]
-            diff_result = subprocess.run(cmd_diff, cwd=main_repo_path, capture_output=True, text=True)
+            diff_result = subprocess.run(
+                cmd_diff, cwd=main_repo_path, capture_output=True, text=True
+            )
 
             # Determine file status
             status = "modified"
@@ -4077,15 +4921,17 @@ async def get_commit_diff_endpoint(
                 if rename_match:
                     old_path = rename_match.group(1)
 
-            files_data.append(FileDiff(
-                path=file_path,
-                status=status,
-                insertions=insertions,
-                deletions=deletions,
-                diff=diff_result.stdout,
-                language=detect_language(file_path),
-                old_path=old_path,
-            ))
+            files_data.append(
+                FileDiff(
+                    path=file_path,
+                    status=status,
+                    insertions=insertions,
+                    deletions=deletions,
+                    diff=diff_result.stdout,
+                    language=detect_language(file_path),
+                    old_path=old_path,
+                )
+            )
 
         return CommitDiffResponse(
             success=True,
@@ -4148,7 +4994,9 @@ async def create_agent_for_task_endpoint(
     logger.info(f"Creating agent for task {task_id}")
 
     if not workflow_id:
-        raise HTTPException(status_code=400, detail="workflow_id is REQUIRED for create_agent_for_task")
+        raise HTTPException(
+            status_code=400, detail="workflow_id is REQUIRED for create_agent_for_task"
+        )
 
     try:
         session = server_state.db_manager.get_session()
@@ -4161,9 +5009,9 @@ async def create_agent_for_task_endpoint(
             # Get enriched data if available
             enriched_data = {}
             if task.enriched_description:
-                enriched_data['enriched_description'] = task.enriched_description
-            if hasattr(task, 'completion_criteria') and task.completion_criteria:
-                enriched_data['completion_criteria'] = task.completion_criteria
+                enriched_data["enriched_description"] = task.enriched_description
+            if hasattr(task, "completion_criteria") and task.completion_criteria:
+                enriched_data["completion_criteria"] = task.completion_criteria
 
             # Create agent
             agent = await server_state.agent_manager.create_agent_for_task(
@@ -4204,10 +5052,14 @@ async def terminate_agent_endpoint(
             # Verify agent exists
             agent = session.query(Agent).filter_by(id=agent_id).first()
             if not agent:
-                raise HTTPException(status_code=404, detail=f"Agent {agent_id} not found")
+                raise HTTPException(
+                    status_code=404, detail=f"Agent {agent_id} not found"
+                )
 
             if agent.status == "terminated":
-                raise HTTPException(status_code=400, detail=f"Agent {agent_id} is already terminated")
+                raise HTTPException(
+                    status_code=400, detail=f"Agent {agent_id} is already terminated"
+                )
 
             # Get the agent's task if any
             task = None
@@ -4230,13 +5082,18 @@ async def terminate_agent_endpoint(
         asyncio.create_task(process_queue())
 
         # Broadcast update
-        await server_state.broadcast_update({
-            "type": "agent_terminated_manually",
-            "agent_id": agent_id,
-            "reason": reason,
-        })
+        await server_state.broadcast_update(
+            {
+                "type": "agent_terminated_manually",
+                "agent_id": agent_id,
+                "reason": reason,
+            }
+        )
 
-        return {"success": True, "message": f"Agent {agent_id[:8]} terminated successfully"}
+        return {
+            "success": True,
+            "message": f"Agent {agent_id[:8]} terminated successfully",
+        }
 
     except HTTPException:
         raise
@@ -4267,7 +5124,7 @@ async def bump_task_priority_endpoint(
             if task.status != "queued":
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Task {task_id} is not queued (status: {task.status})"
+                    detail=f"Task {task_id} is not queued (status: {task.status})",
                 )
 
         finally:
@@ -4291,9 +5148,13 @@ async def bump_task_priority_endpoint(
 
             # Get phase context if applicable
             if task.phase_id and server_state.phase_manager:
-                phase_context = server_state.phase_manager.get_phase_context(task.phase_id)
+                phase_context = server_state.phase_manager.get_phase_context(
+                    task.phase_id
+                )
                 if phase_context:
-                    project_context = f"{project_context}\n\n{phase_context.to_prompt_context()}"
+                    project_context = (
+                        f"{project_context}\n\n{phase_context.to_prompt_context()}"
+                    )
 
             # Retrieve relevant memories
             context_memories = await server_state.rag_system.retrieve_for_task(
@@ -4309,6 +5170,7 @@ async def bump_task_priority_endpoint(
             phase_thinking_level = None
             if task.phase_id:
                 from src.core.database import Phase
+
                 phase = session.query(Phase).filter_by(id=task.phase_id).first()
                 if phase:
                     if phase.working_directory:
@@ -4317,7 +5179,9 @@ async def bump_task_priority_endpoint(
                     phase_cli_tool = phase.cli_tool
                     phase_cli_model = phase.cli_model
                     phase_glm_token_env = phase.glm_api_token_env
-                    phase_thinking_level = phase.thinking_level  # per-phase pi reasoning budget
+                    phase_thinking_level = (
+                        phase.thinking_level
+                    )  # per-phase pi reasoning budget
             if not working_directory:
                 working_directory = os.getcwd()
 
@@ -4350,13 +5214,17 @@ async def bump_task_priority_endpoint(
             session.close()
 
         # Broadcast update
-        await server_state.broadcast_update({
-            "type": "task_priority_bumped",
-            "task_id": task_id,
-            "agent_id": agent.id,
-        })
+        await server_state.broadcast_update(
+            {
+                "type": "task_priority_bumped",
+                "task_id": task_id,
+                "agent_id": agent.id,
+            }
+        )
 
-        logger.info(f"Task {task_id} bumped and agent {agent.id} created (bypassing limit)")
+        logger.info(
+            f"Task {task_id} bumped and agent {agent.id} created (bypassing limit)"
+        )
 
         return {
             "success": True,
@@ -4369,6 +5237,7 @@ async def bump_task_priority_endpoint(
     except Exception as e:
         logger.error(f"Failed to bump and start task: {e}")
         import traceback
+
         logger.error(traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -4385,16 +5254,20 @@ async def cancel_task_endpoint(task_id: str):
             task = session.query(Task).filter_by(id=task_id).first()
             if not task:
                 # Try prefix match with escaped LIKE wildcards
-                escaped = task_id.replace('%', '\\%').replace('_', '\\_')
-                task = session.query(Task).filter(Task.id.like(f"{escaped}%", escape='\\')).first()
+                escaped = task_id.replace("%", "\\%").replace("_", "\\_")
+                task = (
+                    session.query(Task)
+                    .filter(Task.id.like(f"{escaped}%", escape="\\"))
+                    .first()
+                )
             if not task:
                 raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
 
             # Only allow cancelling pending or queued tasks
-            if task.status not in ('pending', 'queued'):
+            if task.status not in ("pending", "queued"):
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Cannot cancel task in '{task.status}' status. Terminate the assigned agent first."
+                    detail=f"Cannot cancel task in '{task.status}' status. Terminate the assigned agent first.",
                 )
 
             task.status = "failed"
@@ -4407,10 +5280,12 @@ async def cancel_task_endpoint(task_id: str):
             session.close()
 
         if cancelled_task_id:
-            await server_state.broadcast_update({
-                "type": "task_cancelled",
-                "task_id": cancelled_task_id,
-            })
+            await server_state.broadcast_update(
+                {
+                    "type": "task_cancelled",
+                    "task_id": cancelled_task_id,
+                }
+            )
 
             logger.info(f"Task {cancelled_task_id} cancelled")
             return {"success": True, "task_id": cancelled_task_id}
@@ -4445,7 +5320,7 @@ async def cancel_queued_task_endpoint(
             if task.status != "queued":
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Task {task_id} is not queued (status: {task.status})"
+                    detail=f"Task {task_id} is not queued (status: {task.status})",
                 )
 
             # Mark task as failed
@@ -4461,10 +5336,12 @@ async def cancel_queued_task_endpoint(
         server_state.queue_service.dequeue_task(task_id)
 
         # Broadcast update
-        await server_state.broadcast_update({
-            "type": "task_cancelled",
-            "task_id": task_id,
-        })
+        await server_state.broadcast_update(
+            {
+                "type": "task_cancelled",
+                "task_id": task_id,
+            }
+        )
 
         logger.info(f"Task {task_id} cancelled and removed from queue")
 
@@ -4478,6 +5355,7 @@ async def cancel_queued_task_endpoint(
     except Exception as e:
         logger.error(f"Failed to cancel queued task: {e}")
         import traceback
+
         logger.error(traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -4507,7 +5385,7 @@ async def restart_task_endpoint(
             if task.status not in ["done", "failed"]:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Can only restart completed or failed tasks (current status: {task.status})"
+                    detail=f"Can only restart completed or failed tasks (current status: {task.status})",
                 )
 
             # Get agent ID before clearing (to delete trajectory data)
@@ -4532,10 +5410,14 @@ async def restart_task_endpoint(
                 from src.core.database import GuardianAnalysis, SteeringIntervention
 
                 # Delete guardian analyses
-                session.query(GuardianAnalysis).filter_by(agent_id=old_agent_id).delete()
+                session.query(GuardianAnalysis).filter_by(
+                    agent_id=old_agent_id
+                ).delete()
 
                 # Delete steering interventions
-                session.query(SteeringIntervention).filter_by(agent_id=old_agent_id).delete()
+                session.query(SteeringIntervention).filter_by(
+                    agent_id=old_agent_id
+                ).delete()
 
                 session.commit()
                 logger.info(f"Cleared trajectory data for agent {old_agent_id}")
@@ -4552,11 +5434,13 @@ async def restart_task_endpoint(
             logger.info(f"Task {task_id} restarted and queued")
 
             # Broadcast update
-            await server_state.broadcast_update({
-                "type": "task_restarted",
-                "task_id": task_id,
-                "status": "queued",
-            })
+            await server_state.broadcast_update(
+                {
+                    "type": "task_restarted",
+                    "task_id": task_id,
+                    "status": "queued",
+                }
+            )
 
             return {
                 "success": True,
@@ -4574,9 +5458,13 @@ async def restart_task_endpoint(
 
                 # Get phase context if applicable
                 if task.phase_id and server_state.phase_manager:
-                    phase_context = server_state.phase_manager.get_phase_context(task.phase_id)
+                    phase_context = server_state.phase_manager.get_phase_context(
+                        task.phase_id
+                    )
                     if phase_context:
-                        project_context = f"{project_context}\n\n{phase_context.to_prompt_context()}"
+                        project_context = (
+                            f"{project_context}\n\n{phase_context.to_prompt_context()}"
+                        )
 
                 # Retrieve relevant memories
                 context_memories = await server_state.rag_system.retrieve_for_task(
@@ -4588,6 +5476,7 @@ async def restart_task_endpoint(
                 working_directory = None
                 if task.phase_id:
                     from src.core.database import Phase
+
                     phase = session.query(Phase).filter_by(id=task.phase_id).first()
                     if phase and phase.working_directory:
                         working_directory = phase.working_directory
@@ -4621,12 +5510,14 @@ async def restart_task_endpoint(
             logger.info(f"Task {task_id} restarted with new agent {agent.id}")
 
             # Broadcast update
-            await server_state.broadcast_update({
-                "type": "task_restarted",
-                "task_id": task_id,
-                "agent_id": agent.id,
-                "status": "assigned",
-            })
+            await server_state.broadcast_update(
+                {
+                    "type": "task_restarted",
+                    "task_id": task_id,
+                    "agent_id": agent.id,
+                    "status": "assigned",
+                }
+            )
 
             return {
                 "success": True,
@@ -4640,6 +5531,7 @@ async def restart_task_endpoint(
     except Exception as e:
         logger.error(f"Failed to restart task: {e}")
         import traceback
+
         logger.error(traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -4661,8 +5553,9 @@ async def get_queue_status_endpoint():
 def _require_localhost(request: Request):
     """Guard that only localhost can access the endpoint."""
     client_host = request.client.host if request.client else None
-    if client_host not in ('127.0.0.1', '::1', 'localhost'):
+    if client_host not in ("127.0.0.1", "::1", "localhost"):
         from fastapi import HTTPException as HE
+
         raise HE(status_code=403, detail="Localhost only")
 
 
@@ -4676,51 +5569,80 @@ async def list_agents(
     """List agents with pagination. status='active' excludes terminated, 'all' includes everything."""
     _require_localhost(request)
     from src.core.database import Workflow
+
     session = server_state.db_manager.get_session()
     try:
         query = session.query(Agent)
         if status == "active":
             query = query.filter(Agent.status.notin_(["terminated", "idle"]))
-        
+
         total = query.count()
-        agents = query.order_by(Agent.created_at.desc()).offset((page - 1) * per_page).limit(per_page).all()
-        
+        agents = (
+            query.order_by(Agent.created_at.desc())
+            .offset((page - 1) * per_page)
+            .limit(per_page)
+            .all()
+        )
+
         result = []
         for a in agents:
             agent_data = {
                 "id": a.id,
                 "status": a.status,
-                "agent_type": getattr(a, 'agent_type', 'phase'),
+                "agent_type": getattr(a, "agent_type", "phase"),
                 "current_task_id": a.current_task_id,
                 "health_check_failures": a.health_check_failures,
-                "last_activity": a.last_activity.isoformat() if a.last_activity else None,
+                "last_activity": a.last_activity.isoformat()
+                if a.last_activity
+                else None,
                 "created_at": a.created_at.isoformat() if a.created_at else None,
                 "tmux_session_name": a.tmux_session_name,
-                "cli_type": getattr(a, 'cli_type', None),
+                "cli_type": getattr(a, "cli_type", None),
                 "current_task": None,
                 "workflow": None,
             }
             # Add task and workflow info
             if a.current_task_id:
                 from src.core.database import Task
+
                 task = session.query(Task).filter_by(id=a.current_task_id).first()
                 if task:
                     task_data = {
                         "id": task.id,
-                        "description": (task.enriched_description or task.raw_description or '')[:200],
+                        "description": (
+                            task.enriched_description or task.raw_description or ""
+                        )[:200],
                         "status": task.status,
                         "priority": task.priority,
-                        "runtime_seconds": int((datetime.utcnow() - task.started_at).total_seconds()) if task.started_at else 0,
+                        "runtime_seconds": int(
+                            (datetime.utcnow() - task.started_at).total_seconds()
+                        )
+                        if task.started_at
+                        else 0,
                         "phase_info": None,
                     }
                     if task.phase_id:
                         from src.core.database import Phase
+
                         if task.phase_id.isdigit():
-                            phase = session.query(Phase).filter_by(order=int(task.phase_id), workflow_id=task.workflow_id).first()
+                            phase = (
+                                session.query(Phase)
+                                .filter_by(
+                                    order=int(task.phase_id),
+                                    workflow_id=task.workflow_id,
+                                )
+                                .first()
+                            )
                             if not phase:
-                                phase = session.query(Phase).filter_by(order=int(task.phase_id)).first()
+                                phase = (
+                                    session.query(Phase)
+                                    .filter_by(order=int(task.phase_id))
+                                    .first()
+                                )
                         else:
-                            phase = session.query(Phase).filter_by(id=task.phase_id).first()
+                            phase = (
+                                session.query(Phase).filter_by(id=task.phase_id).first()
+                            )
                         if phase:
                             task_data["phase_info"] = {
                                 "id": phase.id,
@@ -4729,22 +5651,28 @@ async def list_agents(
                             }
                     elif task.workflow_id:
                         # Task has workflow but no phase_id — agent should have set it
-                        logger.warning(f"Task {task.id} has workflow_id={task.workflow_id} but no phase_id — agent failed to provide it")
+                        logger.warning(
+                            f"Task {task.id} has workflow_id={task.workflow_id} but no phase_id — agent failed to provide it"
+                        )
                     agent_data["current_task"] = task_data
-                    
+
                     # Add workflow info
                     if task.workflow_id:
-                        wf = session.query(Workflow).filter_by(id=task.workflow_id).first()
+                        wf = (
+                            session.query(Workflow)
+                            .filter_by(id=task.workflow_id)
+                            .first()
+                        )
                         if wf:
                             agent_data["workflow"] = {
                                 "id": wf.id,
                                 "name": wf.name,
                                 "status": wf.status,
-                                "description": (wf.description or '')[:100],
+                                "description": (wf.description or "")[:100],
                             }
-            
+
             result.append(agent_data)
-        
+
         return {
             "agents": result,
             "total": total,
@@ -4764,13 +5692,13 @@ async def send_agent_message(agent_id: str, request: Request):
     message = body.get("message", "")
     if not message:
         raise HTTPException(status_code=400, detail="Message required")
-    
+
     session = server_state.db_manager.get_session()
     try:
         agent = session.query(Agent).filter_by(id=agent_id).first()
         if not agent or not agent.tmux_session_name:
             raise HTTPException(status_code=404, detail="Agent not found")
-        
+
         # Send via agent manager
         await server_state.agent_manager.send_message_to_agent(agent_id, message)
         return {"sent": True, "agent_id": agent_id}
@@ -4781,13 +5709,19 @@ async def send_agent_message(agent_id: str, request: Request):
 @app.get("/api/agents/{agent_id}/logs")
 async def get_agent_logs(agent_id: str, limit: int = 50, request: Request = None):
     """Get logs for a specific agent."""
-    if request: _require_localhost(request)
+    if request:
+        _require_localhost(request)
     session = server_state.db_manager.get_session()
     try:
         from src.core.database import AgentLog
-        logs = session.query(AgentLog).filter_by(agent_id=agent_id).order_by(
-            AgentLog.created_at.desc()
-        ).limit(limit).all()
+
+        logs = (
+            session.query(AgentLog)
+            .filter_by(agent_id=agent_id)
+            .order_by(AgentLog.created_at.desc())
+            .limit(limit)
+            .all()
+        )
         return [
             {
                 "id": l.id,
@@ -4805,14 +5739,15 @@ async def get_agent_logs(agent_id: str, limit: int = 50, request: Request = None
 @app.get("/api/agents/{agent_id}/output")
 async def get_agent_output(agent_id: str, lines: int = 30, request: Request = None):
     """Peek at the last N lines of an agent's tmux output."""
-    if request: _require_localhost(request)
+    if request:
+        _require_localhost(request)
     lines = min(lines, 2000)  # Cap to prevent abuse
     session = server_state.db_manager.get_session()
     try:
         agent = session.query(Agent).filter_by(id=agent_id).first()
         if not agent or not agent.tmux_session_name:
             return {"output": ""}
-        
+
         # Get output from tmux
         try:
             output = server_state.agent_manager.get_agent_output(agent_id, lines=lines)
@@ -4826,16 +5761,17 @@ async def get_agent_output(agent_id: str, lines: int = 30, request: Request = No
 # ── Parent-Child Agent Communication ──────────────────────────────────
 # These endpoints require X-Agent-ID header to verify caller identity
 
+
 @app.get("/api/agents/{agent_id}/children")
 async def get_agent_children(
-    agent_id: str,
-    requesting_agent_id: str = Header(..., alias="X-Agent-ID")
+    agent_id: str, requesting_agent_id: str = Header(..., alias="X-Agent-ID")
 ):
     """Get all child agents for a parent agent."""
     # Allow if: caller is the parent, or caller is system/root
     if requesting_agent_id != agent_id and "main" not in requesting_agent_id.lower():
         raise HTTPException(403, "Can only view your own children")
     from src.services.agent_communication import AgentCommunicationService
+
     comm = AgentCommunicationService(server_state.db_manager)
     children = comm.get_children(agent_id)
     return {"children": children, "count": len(children)}
@@ -4843,13 +5779,13 @@ async def get_agent_children(
 
 @app.get("/api/agents/{agent_id}/children/status")
 async def get_children_status(
-    agent_id: str,
-    requesting_agent_id: str = Header(..., alias="X-Agent-ID")
+    agent_id: str, requesting_agent_id: str = Header(..., alias="X-Agent-ID")
 ):
     """Get summary of all children's status."""
     if requesting_agent_id != agent_id and "main" not in requesting_agent_id.lower():
         raise HTTPException(403, "Can only view your own children")
     from src.services.agent_communication import AgentCommunicationService
+
     comm = AgentCommunicationService(server_state.db_manager)
     summary = comm.get_children_status_summary(agent_id)
     return summary
@@ -4860,12 +5796,13 @@ async def get_child_logs(
     agent_id: str,
     child_id: str,
     lines: int = Query(default=50, ge=1, le=2000),
-    requesting_agent_id: str = Header(..., alias="X-Agent-ID")
+    requesting_agent_id: str = Header(..., alias="X-Agent-ID"),
 ):
     """Read logs from a child agent."""
     if requesting_agent_id != agent_id and "main" not in requesting_agent_id.lower():
         raise HTTPException(403, "Can only view your own children's logs")
     from src.services.agent_communication import AgentCommunicationService
+
     comm = AgentCommunicationService(server_state.db_manager)
     logs = comm.get_child_logs(agent_id, child_id, lines=lines)
     if logs is None:
@@ -4878,22 +5815,25 @@ async def send_message_to_child(
     agent_id: str,
     child_id: str,
     request: Request,
-    requesting_agent_id: str = Header(..., alias="X-Agent-ID")
+    requesting_agent_id: str = Header(..., alias="X-Agent-ID"),
 ):
     """Send a message from parent to child agent."""
     if requesting_agent_id != agent_id and "main" not in requesting_agent_id.lower():
         raise HTTPException(403, "Can only message your own children")
     from src.services.agent_communication import AgentCommunicationService
+
     comm = AgentCommunicationService(server_state.db_manager)
-    
+
     body = await request.json()
     message = body.get("message", "")
     if not message:
         raise HTTPException(400, "Message is required")
-    
+
     success = comm.send_message_to_child(agent_id, child_id, message)
     if not success:
-        raise HTTPException(400, "Failed to send message - child not found or access denied")
+        raise HTTPException(
+            400, "Failed to send message - child not found or access denied"
+        )
     return {"sent": True}
 
 
@@ -4902,17 +5842,22 @@ async def nudge_child_agent(
     agent_id: str,
     child_id: str,
     request: Request,
-    requesting_agent_id: str = Header(..., alias="X-Agent-ID")
+    requesting_agent_id: str = Header(..., alias="X-Agent-ID"),
 ):
     """Nudge a child agent that appears stuck."""
     if requesting_agent_id != agent_id and "main" not in requesting_agent_id.lower():
         raise HTTPException(403, "Can only nudge your own children")
     from src.services.agent_communication import AgentCommunicationService
+
     comm = AgentCommunicationService(server_state.db_manager)
-    
-    body = await request.json() if request.headers.get("content-type") == "application/json" else {}
+
+    body = (
+        await request.json()
+        if request.headers.get("content-type") == "application/json"
+        else {}
+    )
     reason = body.get("reason", "No progress detected")
-    
+
     success = comm.nudge_child(agent_id, child_id, reason)
     if not success:
         raise HTTPException(400, "Failed to nudge - child not found or access denied")
@@ -4923,17 +5868,22 @@ async def nudge_child_agent(
 async def monitor_and_nudge_stuck_children(
     agent_id: str,
     request: Request,
-    requesting_agent_id: str = Header(..., alias="X-Agent-ID")
+    requesting_agent_id: str = Header(..., alias="X-Agent-ID"),
 ):
     """Monitor all children and nudge any that appear stuck."""
     if requesting_agent_id != agent_id and "main" not in requesting_agent_id.lower():
         raise HTTPException(403, "Can only monitor your own children")
     from src.services.agent_communication import AgentCommunicationService
+
     comm = AgentCommunicationService(server_state.db_manager)
-    
-    body = await request.json() if request.headers.get("content-type") == "application/json" else {}
+
+    body = (
+        await request.json()
+        if request.headers.get("content-type") == "application/json"
+        else {}
+    )
     threshold = body.get("stuck_threshold_seconds", 300)
-    
+
     nudged = comm.monitor_and_nudge_stuck_children(agent_id, threshold)
     return {"nudged_count": len(nudged), "nudged_agents": nudged}
 
@@ -4956,21 +5906,23 @@ async def get_agent_status(
                 "id": agent.id,
                 "status": agent.status,
                 "current_task_id": agent.current_task_id,
-                "last_activity": agent.last_activity.isoformat() if agent.last_activity else None,
+                "last_activity": agent.last_activity.isoformat()
+                if agent.last_activity
+                else None,
                 "health_check_failures": agent.health_check_failures,
             }
         else:
             # Get all active agents
-            agents = session.query(Agent).filter(
-                Agent.status != "terminated"
-            ).all()
+            agents = session.query(Agent).filter(Agent.status != "terminated").all()
 
             result = [
                 {
                     "id": agent.id,
                     "status": agent.status,
                     "current_task_id": agent.current_task_id,
-                    "last_activity": agent.last_activity.isoformat() if agent.last_activity else None,
+                    "last_activity": agent.last_activity.isoformat()
+                    if agent.last_activity
+                    else None,
                 }
                 for agent in agents
             ]
@@ -5005,7 +5957,9 @@ async def get_task_progress(
                 "description": task.enriched_description or task.raw_description,
                 "assigned_agent_id": task.assigned_agent_id,
                 "started_at": task.started_at.isoformat() if task.started_at else None,
-                "completed_at": task.completed_at.isoformat() if task.completed_at else None,
+                "completed_at": task.completed_at.isoformat()
+                if task.completed_at
+                else None,
                 "phase_id": task.phase_id,
                 "workflow_id": task.workflow_id,
             }
@@ -5018,16 +5972,20 @@ async def get_task_progress(
                     result["phase_order"] = phase.order
         else:
             # Get all active tasks
-            tasks = session.query(Task).filter(
-                Task.status.in_(["pending", "assigned", "in_progress"])
-            ).all()
+            tasks = (
+                session.query(Task)
+                .filter(Task.status.in_(["pending", "assigned", "in_progress"]))
+                .all()
+            )
 
             result = []
             for task in tasks:
                 task_data = {
                     "id": task.id,
                     "status": task.status,
-                    "description": (task.enriched_description or task.raw_description)[:200],
+                    "description": (task.enriched_description or task.raw_description)[
+                        :200
+                    ],
                     "assigned_agent_id": task.assigned_agent_id,
                     "phase_id": task.phase_id,
                     "workflow_id": task.workflow_id,
@@ -5135,7 +6093,9 @@ async def register_client(request: Dict[str, Any]):
         "client_id": client_id,
         "client_secret": client_secret,
         "client_name": request.get("client_name", "Claude"),
-        "redirect_uris": request.get("redirect_uris", ["https://claude.ai/api/mcp/auth_callback"]),
+        "redirect_uris": request.get(
+            "redirect_uris", ["https://claude.ai/api/mcp/auth_callback"]
+        ),
         "grant_types": request.get("grant_types", ["authorization_code"]),
         "response_types": request.get("response_types", ["code"]),
         "scope": request.get("scope", "openid profile email"),
@@ -5153,7 +6113,9 @@ async def register_client(request: Dict[str, Any]):
         "response_types": registered_clients[client_id]["response_types"],
         "client_name": registered_clients[client_id]["client_name"],
         "scope": registered_clients[client_id]["scope"],
-        "token_endpoint_auth_method": registered_clients[client_id]["token_endpoint_auth_method"],
+        "token_endpoint_auth_method": registered_clients[client_id][
+            "token_endpoint_auth_method"
+        ],
     }
 
 
@@ -5250,10 +6212,7 @@ async def root():
             "tools": True,
             "resources": True,
             "prompts": False,
-            "auth": {
-                "type": "none",
-                "required": False
-            }
+            "auth": {"type": "none", "required": False},
         },
         "endpoints": [
             "/create_task",
@@ -5282,19 +6241,55 @@ async def list_tools():
                 "input_schema": {
                     "type": "object",
                     "properties": {
-                        "task_description": {"type": "string", "description": "Description of the task"},
-                        "done_definition": {"type": "string", "description": "What constitutes completion"},
-                        "workflow_id": {"type": "string", "description": "ID of the workflow execution this task belongs to (REQUIRED)"},
-                        "phase_id": {"type": "string", "description": "Phase ID for workflow-based tasks (REQUIRED)"},
-                        "priority": {"type": "string", "enum": ["low", "medium", "high"]},
-                        "ticket_id": {"type": "string", "description": "Associated ticket ID"},
-                        "depends_on": {"type": "array", "items": {"type": "string"}, "description": "List of task IDs that must complete before this one. OMIT or set null for sequential execution (one at a time). Set to [] for immediate parallel execution. Set to [task_id, ...] to wait for specific tasks."},
-                        "parallel_group": {"type": "string", "description": "Tasks in same group can run in parallel. Different groups are sequential."},
-                        "max_concurrent": {"type": "integer", "description": "Max agents working on this task simultaneously (default: 1)"},
-                        "context": {"type": "string", "description": "Additional context for the agent (e.g., design document content, requirements summary)"},
+                        "task_description": {
+                            "type": "string",
+                            "description": "Description of the task",
+                        },
+                        "done_definition": {
+                            "type": "string",
+                            "description": "What constitutes completion",
+                        },
+                        "workflow_id": {
+                            "type": "string",
+                            "description": "ID of the workflow execution this task belongs to (REQUIRED)",
+                        },
+                        "phase_id": {
+                            "type": "string",
+                            "description": "Phase ID for workflow-based tasks (REQUIRED)",
+                        },
+                        "priority": {
+                            "type": "string",
+                            "enum": ["low", "medium", "high"],
+                        },
+                        "ticket_id": {
+                            "type": "string",
+                            "description": "Associated ticket ID",
+                        },
+                        "depends_on": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "List of task IDs that must complete before this one. OMIT or set null for sequential execution (one at a time). Set to [] for immediate parallel execution. Set to [task_id, ...] to wait for specific tasks.",
+                        },
+                        "parallel_group": {
+                            "type": "string",
+                            "description": "Tasks in same group can run in parallel. Different groups are sequential.",
+                        },
+                        "max_concurrent": {
+                            "type": "integer",
+                            "description": "Max agents working on this task simultaneously (default: 1)",
+                        },
+                        "context": {
+                            "type": "string",
+                            "description": "Additional context for the agent (e.g., design document content, requirements summary)",
+                        },
                     },
-                    "required": ["task_description", "done_definition", "workflow_id", "phase_id"]
-                }
+                    "required": [
+                        "task_description",
+                        "done_definition",
+                        "workflow_id",
+                        "phase_id",
+                    ],
+                },
             },
             {
                 "name": "save_memory",
@@ -5304,10 +6299,10 @@ async def list_tools():
                     "properties": {
                         "content": {"type": "string"},
                         "memory_type": {"type": "string"},
-                        "tags": {"type": "array", "items": {"type": "string"}}
+                        "tags": {"type": "array", "items": {"type": "string"}},
                     },
-                    "required": ["content", "memory_type"]
-                }
+                    "required": ["content", "memory_type"],
+                },
             },
             {
                 "name": "search_memory",
@@ -5315,21 +6310,30 @@ async def list_tools():
                 "input_schema": {
                     "type": "object",
                     "properties": {
-                        "query": {"type": "string", "description": "Search query to find relevant memories"},
-                        "limit": {"type": "integer", "description": "Maximum number of results (default: 10)"},
-                        "memory_type": {"type": "string", "description": "Filter by memory type (e.g., decision, discovery, learning)"},
-                        "project_id": {"type": "string", "description": "Filter by project ID (auto-detected from agent if not set)"}
+                        "query": {
+                            "type": "string",
+                            "description": "Search query to find relevant memories",
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "description": "Maximum number of results (default: 10)",
+                        },
+                        "memory_type": {
+                            "type": "string",
+                            "description": "Filter by memory type (e.g., decision, discovery, learning)",
+                        },
+                        "project_id": {
+                            "type": "string",
+                            "description": "Filter by project ID (auto-detected from agent if not set)",
+                        },
                     },
-                    "required": ["query"]
-                }
+                    "required": ["query"],
+                },
             },
             {
                 "name": "get_task_status",
                 "description": "Get status of all tasks",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {}
-                }
+                "input_schema": {"type": "object", "properties": {}},
             },
             {
                 "name": "create_ticket",
@@ -5338,17 +6342,45 @@ async def list_tools():
                     "type": "object",
                     "properties": {
                         "title": {"type": "string", "description": "Ticket title"},
-                        "description": {"type": "string", "description": "Detailed description"},
-                        "ticket_type": {"type": "string", "enum": ["bug", "feature", "improvement", "task", "spike"], "description": "Type of ticket"},
-                        "priority": {"type": "string", "enum": ["low", "medium", "high", "critical"], "description": "Priority level"},
-                        "tags": {"type": "array", "items": {"type": "string"}, "description": "Tags for categorization"},
-                        "blocked_by_ticket_ids": {"type": "array", "items": {"type": "string"}, "description": "IDs of blocking tickets"},
-                        "agent_id": {"type": "string", "description": "Agent ID creating this ticket"},
-                        "task_id": {"type": "string", "description": "Task ID this ticket relates to"},
-                        "phase_id": {"type": "string", "description": "Phase ID where this ticket was created"}
+                        "description": {
+                            "type": "string",
+                            "description": "Detailed description",
+                        },
+                        "ticket_type": {
+                            "type": "string",
+                            "enum": ["bug", "feature", "improvement", "task", "spike"],
+                            "description": "Type of ticket",
+                        },
+                        "priority": {
+                            "type": "string",
+                            "enum": ["low", "medium", "high", "critical"],
+                            "description": "Priority level",
+                        },
+                        "tags": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Tags for categorization",
+                        },
+                        "blocked_by_ticket_ids": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "IDs of blocking tickets",
+                        },
+                        "agent_id": {
+                            "type": "string",
+                            "description": "Agent ID creating this ticket",
+                        },
+                        "task_id": {
+                            "type": "string",
+                            "description": "Task ID this ticket relates to",
+                        },
+                        "phase_id": {
+                            "type": "string",
+                            "description": "Phase ID where this ticket was created",
+                        },
                     },
-                    "required": ["title", "description", "ticket_type", "priority"]
-                }
+                    "required": ["title", "description", "ticket_type", "priority"],
+                },
             },
             {
                 "name": "search_tickets",
@@ -5356,12 +6388,19 @@ async def list_tools():
                 "input_schema": {
                     "type": "object",
                     "properties": {
-                        "query": {"type": "string", "description": "Search query for title"},
-                        "tags": {"type": "array", "items": {"type": "string"}, "description": "Filter by tags"},
-                        "status": {"type": "string", "description": "Filter by status"}
+                        "query": {
+                            "type": "string",
+                            "description": "Search query for title",
+                        },
+                        "tags": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Filter by tags",
+                        },
+                        "status": {"type": "string", "description": "Filter by status"},
                     },
-                    "required": []
-                }
+                    "required": [],
+                },
             },
             {
                 "name": "update_ticket_status",
@@ -5370,10 +6409,13 @@ async def list_tools():
                     "type": "object",
                     "properties": {
                         "ticket_id": {"type": "string", "description": "Ticket ID"},
-                        "new_status": {"type": "string", "description": "New status value"}
+                        "new_status": {
+                            "type": "string",
+                            "description": "New status value",
+                        },
                     },
-                    "required": ["ticket_id", "new_status"]
-                }
+                    "required": ["ticket_id", "new_status"],
+                },
             },
             {
                 "name": "devtools_connect",
@@ -5381,12 +6423,21 @@ async def list_tools():
                 "input_schema": {
                     "type": "object",
                     "properties": {
-                        "session_id": {"type": "string", "description": "Session identifier for this browser connection"},
-                        "debug_url": {"type": "string", "description": "Chrome DevTools debug URL (default: http://localhost:9222)"},
-                        "target_url": {"type": "string", "description": "URL to open in a new tab (optional, connects to existing page if omitted)"}
+                        "session_id": {
+                            "type": "string",
+                            "description": "Session identifier for this browser connection",
+                        },
+                        "debug_url": {
+                            "type": "string",
+                            "description": "Chrome DevTools debug URL (default: http://localhost:9222)",
+                        },
+                        "target_url": {
+                            "type": "string",
+                            "description": "URL to open in a new tab (optional, connects to existing page if omitted)",
+                        },
                     },
-                    "required": ["session_id"]
-                }
+                    "required": ["session_id"],
+                },
             },
             {
                 "name": "devtools_navigate",
@@ -5394,11 +6445,14 @@ async def list_tools():
                 "input_schema": {
                     "type": "object",
                     "properties": {
-                        "session_id": {"type": "string", "description": "Browser session ID"},
-                        "url": {"type": "string", "description": "URL to navigate to"}
+                        "session_id": {
+                            "type": "string",
+                            "description": "Browser session ID",
+                        },
+                        "url": {"type": "string", "description": "URL to navigate to"},
                     },
-                    "required": ["session_id", "url"]
-                }
+                    "required": ["session_id", "url"],
+                },
             },
             {
                 "name": "devtools_evaluate",
@@ -5406,11 +6460,17 @@ async def list_tools():
                 "input_schema": {
                     "type": "object",
                     "properties": {
-                        "session_id": {"type": "string", "description": "Browser session ID"},
-                        "expression": {"type": "string", "description": "JavaScript expression to evaluate"}
+                        "session_id": {
+                            "type": "string",
+                            "description": "Browser session ID",
+                        },
+                        "expression": {
+                            "type": "string",
+                            "description": "JavaScript expression to evaluate",
+                        },
                     },
-                    "required": ["session_id", "expression"]
-                }
+                    "required": ["session_id", "expression"],
+                },
             },
             {
                 "name": "devtools_screenshot",
@@ -5418,12 +6478,22 @@ async def list_tools():
                 "input_schema": {
                     "type": "object",
                     "properties": {
-                        "session_id": {"type": "string", "description": "Browser session ID"},
-                        "path": {"type": "string", "description": "File path to save screenshot (optional, returns base64 if omitted)"},
-                        "format": {"type": "string", "enum": ["png", "jpeg"], "description": "Image format (default: png)"}
+                        "session_id": {
+                            "type": "string",
+                            "description": "Browser session ID",
+                        },
+                        "path": {
+                            "type": "string",
+                            "description": "File path to save screenshot (optional, returns base64 if omitted)",
+                        },
+                        "format": {
+                            "type": "string",
+                            "enum": ["png", "jpeg"],
+                            "description": "Image format (default: png)",
+                        },
                     },
-                    "required": ["session_id"]
-                }
+                    "required": ["session_id"],
+                },
             },
             {
                 "name": "devtools_click",
@@ -5431,11 +6501,17 @@ async def list_tools():
                 "input_schema": {
                     "type": "object",
                     "properties": {
-                        "session_id": {"type": "string", "description": "Browser session ID"},
-                        "selector": {"type": "string", "description": "CSS selector for the element to click"}
+                        "session_id": {
+                            "type": "string",
+                            "description": "Browser session ID",
+                        },
+                        "selector": {
+                            "type": "string",
+                            "description": "CSS selector for the element to click",
+                        },
                     },
-                    "required": ["session_id", "selector"]
-                }
+                    "required": ["session_id", "selector"],
+                },
             },
             {
                 "name": "devtools_fill",
@@ -5443,12 +6519,18 @@ async def list_tools():
                 "input_schema": {
                     "type": "object",
                     "properties": {
-                        "session_id": {"type": "string", "description": "Browser session ID"},
-                        "selector": {"type": "string", "description": "CSS selector for the input element"},
-                        "value": {"type": "string", "description": "Value to fill in"}
+                        "session_id": {
+                            "type": "string",
+                            "description": "Browser session ID",
+                        },
+                        "selector": {
+                            "type": "string",
+                            "description": "CSS selector for the input element",
+                        },
+                        "value": {"type": "string", "description": "Value to fill in"},
                     },
-                    "required": ["session_id", "selector", "value"]
-                }
+                    "required": ["session_id", "selector", "value"],
+                },
             },
             {
                 "name": "devtools_get_console_errors",
@@ -5456,10 +6538,13 @@ async def list_tools():
                 "input_schema": {
                     "type": "object",
                     "properties": {
-                        "session_id": {"type": "string", "description": "Browser session ID"}
+                        "session_id": {
+                            "type": "string",
+                            "description": "Browser session ID",
+                        }
                     },
-                    "required": ["session_id"]
-                }
+                    "required": ["session_id"],
+                },
             },
             {
                 "name": "devtools_get_failed_requests",
@@ -5467,11 +6552,17 @@ async def list_tools():
                 "input_schema": {
                     "type": "object",
                     "properties": {
-                        "session_id": {"type": "string", "description": "Browser session ID"},
-                        "status": {"type": "integer", "description": "Filter by HTTP status code (optional)"}
+                        "session_id": {
+                            "type": "string",
+                            "description": "Browser session ID",
+                        },
+                        "status": {
+                            "type": "integer",
+                            "description": "Filter by HTTP status code (optional)",
+                        },
                     },
-                    "required": ["session_id"]
-                }
+                    "required": ["session_id"],
+                },
             },
             {
                 "name": "devtools_get_network_logs",
@@ -5479,13 +6570,25 @@ async def list_tools():
                 "input_schema": {
                     "type": "object",
                     "properties": {
-                        "session_id": {"type": "string", "description": "Browser session ID"},
-                        "method": {"type": "string", "description": "Filter by HTTP method (GET, POST, etc.)"},
-                        "status": {"type": "integer", "description": "Filter by HTTP status code"},
-                        "failed_only": {"type": "boolean", "description": "Only return failed requests"}
+                        "session_id": {
+                            "type": "string",
+                            "description": "Browser session ID",
+                        },
+                        "method": {
+                            "type": "string",
+                            "description": "Filter by HTTP method (GET, POST, etc.)",
+                        },
+                        "status": {
+                            "type": "integer",
+                            "description": "Filter by HTTP status code",
+                        },
+                        "failed_only": {
+                            "type": "boolean",
+                            "description": "Only return failed requests",
+                        },
                     },
-                    "required": ["session_id"]
-                }
+                    "required": ["session_id"],
+                },
             },
             {
                 "name": "devtools_get_performance",
@@ -5493,10 +6596,13 @@ async def list_tools():
                 "input_schema": {
                     "type": "object",
                     "properties": {
-                        "session_id": {"type": "string", "description": "Browser session ID"}
+                        "session_id": {
+                            "type": "string",
+                            "description": "Browser session ID",
+                        }
                     },
-                    "required": ["session_id"]
-                }
+                    "required": ["session_id"],
+                },
             },
             {
                 "name": "devtools_get_page_info",
@@ -5504,10 +6610,13 @@ async def list_tools():
                 "input_schema": {
                     "type": "object",
                     "properties": {
-                        "session_id": {"type": "string", "description": "Browser session ID"}
+                        "session_id": {
+                            "type": "string",
+                            "description": "Browser session ID",
+                        }
                     },
-                    "required": ["session_id"]
-                }
+                    "required": ["session_id"],
+                },
             },
             {
                 "name": "devtools_check_broken_images",
@@ -5515,10 +6624,13 @@ async def list_tools():
                 "input_schema": {
                     "type": "object",
                     "properties": {
-                        "session_id": {"type": "string", "description": "Browser session ID"}
+                        "session_id": {
+                            "type": "string",
+                            "description": "Browser session ID",
+                        }
                     },
-                    "required": ["session_id"]
-                }
+                    "required": ["session_id"],
+                },
             },
             {
                 "name": "devtools_wait_for_selector",
@@ -5526,12 +6638,21 @@ async def list_tools():
                 "input_schema": {
                     "type": "object",
                     "properties": {
-                        "session_id": {"type": "string", "description": "Browser session ID"},
-                        "selector": {"type": "string", "description": "CSS selector to wait for"},
-                        "timeout_ms": {"type": "integer", "description": "Timeout in milliseconds (default: 5000)"}
+                        "session_id": {
+                            "type": "string",
+                            "description": "Browser session ID",
+                        },
+                        "selector": {
+                            "type": "string",
+                            "description": "CSS selector to wait for",
+                        },
+                        "timeout_ms": {
+                            "type": "integer",
+                            "description": "Timeout in milliseconds (default: 5000)",
+                        },
                     },
-                    "required": ["session_id", "selector"]
-                }
+                    "required": ["session_id", "selector"],
+                },
             },
             {
                 "name": "devtools_get_cookies",
@@ -5539,10 +6660,13 @@ async def list_tools():
                 "input_schema": {
                     "type": "object",
                     "properties": {
-                        "session_id": {"type": "string", "description": "Browser session ID"}
+                        "session_id": {
+                            "type": "string",
+                            "description": "Browser session ID",
+                        }
                     },
-                    "required": ["session_id"]
-                }
+                    "required": ["session_id"],
+                },
             },
             {
                 "name": "devtools_close",
@@ -5550,16 +6674,20 @@ async def list_tools():
                 "input_schema": {
                     "type": "object",
                     "properties": {
-                        "session_id": {"type": "string", "description": "Browser session ID to close"}
+                        "session_id": {
+                            "type": "string",
+                            "description": "Browser session ID to close",
+                        }
                     },
-                    "required": ["session_id"]
-                }
-            }
+                    "required": ["session_id"],
+                },
+            },
         ]
     }
 
 
 # ==================== WORKFLOW MANAGEMENT ENDPOINTS ====================
+
 
 @app.get("/api/workflow-definitions")
 async def list_workflow_definitions():
@@ -5576,23 +6704,34 @@ async def list_workflow_definitions():
             phases = d.phases_config
             if isinstance(phases, str):
                 import json as _json
+
                 phases = _json.loads(phases)
             config = d.workflow_config
             if isinstance(config, str):
                 import json as _json
+
                 config = _json.loads(config)
-            result.append({
-                "id": d.id,
-                "name": d.name,
-                "description": d.description,
-                "phases_count": len(phases) if phases else 0,
-                "has_result": (config or {}).get("has_result", False),
-                "created_at": d.created_at.isoformat() if d.created_at else None,
-                "launch_template": (config or {}).get("launch_template"),
-            })
+            result.append(
+                {
+                    "id": d.id,
+                    "name": d.name,
+                    "description": d.description,
+                    "phases_count": len(phases) if phases else 0,
+                    "has_result": (config or {}).get("has_result", False),
+                    "created_at": d.created_at.isoformat() if d.created_at else None,
+                    "launch_template": (config or {}).get("launch_template"),
+                }
+            )
         except Exception as e:
             logger.error(f"Error processing definition {d.id}: {e}")
-            result.append({"id": d.id, "name": d.name, "description": d.description, "error": str(e)})
+            result.append(
+                {
+                    "id": d.id,
+                    "name": d.name,
+                    "description": d.description,
+                    "error": str(e),
+                }
+            )
 
     return {"definitions": result}
 
@@ -5607,14 +6746,14 @@ async def register_workflow_definition(request: RegisterWorkflowDefinitionReques
             name=request.name,
             description=request.description,
             phases_config=request.phases_config,
-            workflow_config=request.workflow_config
+            workflow_config=request.workflow_config,
         )
         logger.info(f"Successfully registered workflow definition: {request.id}")
         return {
             "id": request.id,
             "name": request.name,
             "status": "registered",
-            "message": f"Workflow definition '{request.name}' registered successfully"
+            "message": f"Workflow definition '{request.name}' registered successfully",
         }
     except Exception as e:
         logger.error(f"Failed to register workflow definition {request.id}: {e}")
@@ -5636,7 +6775,7 @@ async def list_workflow_executions(status: str = "all"):
                 "created_at": e.created_at.isoformat() if e.created_at else None,
                 "working_directory": e.working_directory,
                 # Add stats
-                "stats": server_state.phase_manager.get_execution_stats(e.id)
+                "stats": server_state.phase_manager.get_execution_stats(e.id),
             }
             for e in executions
         ]
@@ -5646,7 +6785,9 @@ async def list_workflow_executions(status: str = "all"):
 @app.post("/api/workflow-executions")
 async def start_workflow_execution(request: StartWorkflowRequest):
     """Start a new workflow execution from a definition."""
-    logger.info(f"Starting workflow execution: definition={request.definition_id}, desc={request.description}, launch_params={request.launch_params}")
+    logger.info(
+        f"Starting workflow execution: definition={request.definition_id}, desc={request.description}, launch_params={request.launch_params}"
+    )
     try:
         # start_execution now returns (workflow_id, initial_task_info)
         result = server_state.phase_manager.start_execution(
@@ -5684,18 +6825,21 @@ async def start_workflow_execution(request: StartWorkflowRequest):
                 # Call the create_task endpoint handler directly
                 # Use "main-session-agent" as the creator since this is a UI-launched task
                 task_response = await create_task(
-                    request=task_request,
-                    agent_id="main-session-agent"
+                    request=task_request, agent_id="main-session-agent"
                 )
-                logger.info(f"Created initial task {task_response.task_id} for workflow {workflow_id}")
+                logger.info(
+                    f"Created initial task {task_response.task_id} for workflow {workflow_id}"
+                )
             except Exception as task_error:
-                logger.error(f"Failed to create initial task for workflow {workflow_id}: {task_error}")
+                logger.error(
+                    f"Failed to create initial task for workflow {workflow_id}: {task_error}"
+                )
                 # Don't fail the whole workflow creation, just log the error
 
         return {
             "workflow_id": workflow_id,
             "status": "active",
-            "message": f"Started workflow execution: {request.description}"
+            "message": f"Started workflow execution: {request.description}",
         }
     except ValueError as e:
         logger.error(f"ValueError starting workflow: {e}")
@@ -5724,34 +6868,46 @@ async def get_workflow_execution(workflow_id: str):
         for phase in phases:
             # Count tasks in this phase
             total_tasks = session.query(Task).filter_by(phase_id=phase.id).count()
-            completed_tasks = session.query(Task).filter_by(phase_id=phase.id, status='done').count()
-            active_tasks = session.query(Task).filter_by(phase_id=phase.id, status='in_progress').count()
-            pending_tasks = session.query(Task).filter_by(phase_id=phase.id, status='pending').count()
+            completed_tasks = (
+                session.query(Task).filter_by(phase_id=phase.id, status="done").count()
+            )
+            active_tasks = (
+                session.query(Task)
+                .filter_by(phase_id=phase.id, status="in_progress")
+                .count()
+            )
+            pending_tasks = (
+                session.query(Task)
+                .filter_by(phase_id=phase.id, status="pending")
+                .count()
+            )
 
             # Count active agents working on tasks in this phase
-            active_agents = session.query(Agent).join(
-                Task, Agent.current_task_id == Task.id
-            ).filter(
-                Task.phase_id == phase.id,
-                Agent.status == 'working'
-            ).count()
+            active_agents = (
+                session.query(Agent)
+                .join(Task, Agent.current_task_id == Task.id)
+                .filter(Task.phase_id == phase.id, Agent.status == "working")
+                .count()
+            )
 
-            phases_data.append({
-                "id": phase.id,
-                "order": phase.order,
-                "name": phase.name,
-                "description": phase.description,
-                "active_agents": active_agents,
-                "total_tasks": total_tasks,
-                "completed_tasks": completed_tasks,
-                "active_tasks": active_tasks,
-                "pending_tasks": pending_tasks,
-                "cli_config": {
-                    "cli_tool": phase.cli_tool,
-                    "cli_model": phase.cli_model,
-                    "glm_api_token_env": phase.glm_api_token_env
+            phases_data.append(
+                {
+                    "id": phase.id,
+                    "order": phase.order,
+                    "name": phase.name,
+                    "description": phase.description,
+                    "active_agents": active_agents,
+                    "total_tasks": total_tasks,
+                    "completed_tasks": completed_tasks,
+                    "active_tasks": active_tasks,
+                    "pending_tasks": pending_tasks,
+                    "cli_config": {
+                        "cli_tool": phase.cli_tool,
+                        "cli_model": phase.cli_model,
+                        "glm_api_token_env": phase.glm_api_token_env,
+                    },
                 }
-            })
+            )
     finally:
         session.close()
 
@@ -5764,7 +6920,7 @@ async def get_workflow_execution(workflow_id: str):
         "created_at": workflow.created_at.isoformat() if workflow.created_at else None,
         "working_directory": workflow.working_directory,
         "stats": stats,
-        "phases": phases_data
+        "phases": phases_data,
     }
 
 
@@ -5774,18 +6930,23 @@ async def complete_workflow_execution(workflow_id: str, request: Request):
     Only allows localhost access for security."""
     # Security: only allow localhost calls for this destructive operation
     client_host = request.client.host if request.client else None
-    if client_host not in ('127.0.0.1', '::1', 'localhost'):
-        raise HTTPException(status_code=403, detail="Only localhost can force-complete workflows")
-    
+    if client_host not in ("127.0.0.1", "::1", "localhost"):
+        raise HTTPException(
+            status_code=403, detail="Only localhost can force-complete workflows"
+        )
+
     session = server_state.db_manager.get_session()
     try:
         from src.core.database import Workflow
+
         workflow = session.query(Workflow).filter_by(id=workflow_id).first()
         if not workflow:
-            raise HTTPException(status_code=404, detail=f"Workflow {workflow_id} not found")
-        if workflow.status in ('completed', 'failed', 'cancelled'):
+            raise HTTPException(
+                status_code=404, detail=f"Workflow {workflow_id} not found"
+            )
+        if workflow.status in ("completed", "failed", "cancelled"):
             return {"status": workflow.status, "message": "Already terminal"}
-        workflow.status = 'completed'
+        workflow.status = "completed"
         session.commit()
         return {"status": "completed", "workflow_id": workflow_id}
     finally:
@@ -5796,38 +6957,52 @@ async def complete_workflow_execution(workflow_id: str, request: Request):
 async def stop_workflow(workflow_id: str, request: Request):
     """Stop a workflow and terminate all its agents."""
     import subprocess
+
     session = server_state.db_manager.get_session()
     try:
-        from src.core.database import Workflow, Task, Agent
+        from src.core.database import Agent, Task, Workflow
+
         workflow = session.query(Workflow).filter_by(id=workflow_id).first()
         if not workflow:
-            raise HTTPException(status_code=404, detail=f"Workflow {workflow_id} not found")
-        if workflow.status in ('completed', 'failed', 'paused'):
+            raise HTTPException(
+                status_code=404, detail=f"Workflow {workflow_id} not found"
+            )
+        if workflow.status in ("completed", "failed", "paused"):
             return {"status": workflow.status, "message": "Already stopped"}
-        
+
         # Find all tasks in this workflow
         tasks = session.query(Task).filter_by(workflow_id=workflow_id).all()
         task_ids = [t.id for t in tasks]
-        
+
         # Find and terminate all agents working on these tasks
         terminated_count = 0
         if task_ids:
-            agents = session.query(Agent).filter(Agent.current_task_id.in_(task_ids)).filter(
-                Agent.status.in_(['working', 'starting', 'idle'])
-            ).all()
+            agents = (
+                session.query(Agent)
+                .filter(Agent.current_task_id.in_(task_ids))
+                .filter(Agent.status.in_(["working", "starting", "idle"]))
+                .all()
+            )
             for agent in agents:
                 try:
-                    subprocess.run(['tmux', 'kill-session', '-t', agent.tmux_session_name],
-                                 capture_output=True, timeout=5)
+                    subprocess.run(
+                        ["tmux", "kill-session", "-t", agent.tmux_session_name],
+                        capture_output=True,
+                        timeout=5,
+                    )
                 except Exception:
                     pass
-                agent.status = 'terminated'
+                agent.status = "terminated"
                 terminated_count += 1
-        
-        workflow.status = 'paused'
+
+        workflow.status = "paused"
         session.commit()
-        
-        return {"status": "paused", "workflow_id": workflow_id, "agents_terminated": terminated_count}
+
+        return {
+            "status": "paused",
+            "workflow_id": workflow_id,
+            "agents_terminated": terminated_count,
+        }
     finally:
         session.close()
 
@@ -5838,13 +7013,16 @@ async def resume_workflow(workflow_id: str, request: Request):
     session = server_state.db_manager.get_session()
     try:
         from src.core.database import Workflow
+
         workflow = session.query(Workflow).filter_by(id=workflow_id).first()
         if not workflow:
-            raise HTTPException(status_code=404, detail=f"Workflow {workflow_id} not found")
-        if workflow.status != 'paused':
+            raise HTTPException(
+                status_code=404, detail=f"Workflow {workflow_id} not found"
+            )
+        if workflow.status != "paused":
             return {"status": workflow.status, "message": "Not paused"}
-        
-        workflow.status = 'active'
+
+        workflow.status = "active"
         session.commit()
         return {"status": "active", "workflow_id": workflow_id}
     finally:
@@ -5879,32 +7057,42 @@ async def recover_workflows(workflow_id: Optional[str] = None):
 async def cancel_workflow(workflow_id: str, request: Request):
     """Terminate agents and mark workflow as cancelled."""
     import subprocess
+
     session = server_state.db_manager.get_session()
     try:
-        from src.core.database import Workflow, Task, Agent
+        from src.core.database import Agent, Task, Workflow
+
         workflow = session.query(Workflow).filter_by(id=workflow_id).first()
         if not workflow:
-            raise HTTPException(status_code=404, detail=f"Workflow {workflow_id} not found")
-        
+            raise HTTPException(
+                status_code=404, detail=f"Workflow {workflow_id} not found"
+            )
+
         # Terminate agents
         tasks = session.query(Task).filter_by(workflow_id=workflow_id).all()
         task_ids = [t.id for t in tasks]
         terminated_count = 0
         if task_ids:
-            agents = session.query(Agent).filter(Agent.current_task_id.in_(task_ids)).filter(
-                Agent.status.in_(['working', 'starting', 'idle'])
-            ).all()
+            agents = (
+                session.query(Agent)
+                .filter(Agent.current_task_id.in_(task_ids))
+                .filter(Agent.status.in_(["working", "starting", "idle"]))
+                .all()
+            )
             for agent in agents:
                 try:
-                    subprocess.run(['tmux', 'kill-session', '-t', agent.tmux_session_name],
-                                 capture_output=True, timeout=5)
+                    subprocess.run(
+                        ["tmux", "kill-session", "-t", agent.tmux_session_name],
+                        capture_output=True,
+                        timeout=5,
+                    )
                 except Exception:
                     pass
-                agent.status = 'terminated'
+                agent.status = "terminated"
                 terminated_count += 1
-        
+
         # Mark as failed (can't delete due to FK constraints, using failed to indicate user cancellation)
-        workflow.status = 'failed'
+        workflow.status = "failed"
         session.commit()
         return {"cancelled": workflow_id, "agents_terminated": terminated_count}
     except Exception as e:
@@ -5924,7 +7112,9 @@ async def execute_tool(request: Dict[str, Any]):
         # Forward to create_task endpoint
         workflow_id = arguments.get("workflow_id")
         if not workflow_id:
-            raise HTTPException(status_code=400, detail="workflow_id is required for create_task")
+            raise HTTPException(
+                status_code=400, detail="workflow_id is required for create_task"
+            )
 
         return await create_task(
             CreateTaskRequest(
@@ -5937,9 +7127,9 @@ async def execute_tool(request: Dict[str, Any]):
                 ticket_id=arguments.get("ticket_id"),
                 depends_on=arguments.get("depends_on"),
                 parallel_group=arguments.get("parallel_group"),
-                max_concurrent=arguments.get("max_concurrent", 1)
+                max_concurrent=arguments.get("max_concurrent", 1),
             ),
-            agent_id="mcp-claude"
+            agent_id="mcp-claude",
         )
     elif tool_name == "save_memory":
         # Forward to save_memory endpoint
@@ -5948,9 +7138,9 @@ async def execute_tool(request: Dict[str, Any]):
                 content=arguments.get("content"),
                 memory_type=arguments.get("memory_type", "discovery"),
                 tags=arguments.get("tags", []),
-                related_files=arguments.get("related_files", [])
+                related_files=arguments.get("related_files", []),
             ),
-            agent_id="mcp-claude"
+            agent_id="mcp-claude",
         )
     elif tool_name == "search_memory":
         return await search_memory(
@@ -5981,7 +7171,7 @@ async def execute_tool(request: Dict[str, Any]):
             ticket_type=arguments.get("ticket_type"),
             priority=arguments.get("priority"),
             tags=arguments.get("tags", []),
-            blocked_by_ticket_ids=arguments.get("blocked_by_ticket_ids", [])
+            blocked_by_ticket_ids=arguments.get("blocked_by_ticket_ids", []),
         )
         return {"success": True, "ticket": result}
     elif tool_name == "search_tickets":
@@ -5994,7 +7184,7 @@ async def execute_tool(request: Dict[str, Any]):
             results = await search_service.search_tickets(
                 query=arguments.get("query"),
                 tags=arguments.get("tags"),
-                status=arguments.get("status")
+                status=arguments.get("status"),
             )
             return {"tickets": results}
         finally:
@@ -6006,7 +7196,7 @@ async def execute_tool(request: Dict[str, Any]):
         result = await TicketService.change_ticket_status(
             ticket_id=arguments.get("ticket_id"),
             new_status=arguments.get("new_status"),
-            agent_id=arguments.get("agent_id", "mcp-claude")
+            agent_id=arguments.get("agent_id", "mcp-claude"),
         )
         return {"success": True, "result": result}
     elif tool_name.startswith("devtools_"):
@@ -6038,11 +7228,15 @@ async def _handle_devtools_tool(tool_name: str, arguments: Dict[str, Any]):
 
     required = REQUIRED_ARGS.get(tool_name)
     if required is None:
-        raise HTTPException(status_code=400, detail=f"Unknown devtools tool: {tool_name}")
+        raise HTTPException(
+            status_code=400, detail=f"Unknown devtools tool: {tool_name}"
+        )
 
     missing = [k for k in required if k not in arguments]
     if missing:
-        raise HTTPException(status_code=400, detail=f"Missing required arguments: {', '.join(missing)}")
+        raise HTTPException(
+            status_code=400, detail=f"Missing required arguments: {', '.join(missing)}"
+        )
 
     raw_session = arguments.get("session_id", "default")
     try:
@@ -6055,15 +7249,24 @@ async def _handle_devtools_tool(tool_name: str, arguments: Dict[str, Any]):
             debug_url = arguments.get("debug_url", "http://localhost:9222")
             target_url = arguments.get("target_url")
             if target_url:
-                browser = await devtools_manager.connect_new_tab(session_id, target_url, debug_url)
+                browser = await devtools_manager.connect_new_tab(
+                    session_id, target_url, debug_url
+                )
             else:
                 browser = await devtools_manager.connect(session_id, debug_url)
             version = await browser.get_version()
-            return {"success": True, "session_id": session_id, "browser": version.get("Browser", "unknown")}
+            return {
+                "success": True,
+                "session_id": session_id,
+                "browser": version.get("Browser", "unknown"),
+            }
 
         browser = devtools_manager.get(session_id)
         if not browser:
-            raise HTTPException(status_code=404, detail=f"No browser session '{session_id}'. Call devtools_connect first.")
+            raise HTTPException(
+                status_code=404,
+                detail=f"No browser session '{session_id}'. Call devtools_connect first.",
+            )
 
         if tool_name == "devtools_navigate":
             result = await browser.navigate(arguments["url"])
@@ -6077,7 +7280,11 @@ async def _handle_devtools_tool(tool_name: str, arguments: Dict[str, Any]):
             path = arguments.get("path")
             fmt = arguments.get("format", "png")
             data = await browser.screenshot(path=path, format=fmt)
-            return {"success": True, "data_length": len(data) if data else 0, "saved_to": path}
+            return {
+                "success": True,
+                "data_length": len(data) if data else 0,
+                "saved_to": path,
+            }
 
         elif tool_name == "devtools_click":
             await browser.click(arguments["selector"])
@@ -6093,7 +7300,9 @@ async def _handle_devtools_tool(tool_name: str, arguments: Dict[str, Any]):
 
         elif tool_name == "devtools_get_failed_requests":
             status_filter = arguments.get("status")
-            logs = await browser.get_network_logs(failed_only=True, status=status_filter)
+            logs = await browser.get_network_logs(
+                failed_only=True, status=status_filter
+            )
             return {"success": True, "failed_requests": logs, "count": len(logs)}
 
         elif tool_name == "devtools_get_network_logs":
@@ -6135,7 +7344,9 @@ async def _handle_devtools_tool(tool_name: str, arguments: Dict[str, Any]):
     except HTTPException:
         raise
     except (KeyError, TypeError) as e:
-        raise HTTPException(status_code=400, detail=f"Invalid arguments for {tool_name}: {e}")
+        raise HTTPException(
+            status_code=400, detail=f"Invalid arguments for {tool_name}: {e}"
+        )
     except Exception as e:
         logger.error(f"DevTools tool error: {tool_name}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"DevTools error: {str(e)}")
@@ -6152,8 +7363,10 @@ async def list_resources():
                 {
                     "uri": f"task://{task.id}",
                     "name": f"Task: {task.id[:8]}",
-                    "description": (task.enriched_description or task.raw_description)[:100],
-                    "mimeType": "application/json"
+                    "description": (task.enriched_description or task.raw_description)[
+                        :100
+                    ],
+                    "mimeType": "application/json",
                 }
                 for task in tasks
             ]
@@ -6175,11 +7388,14 @@ async def get_resource(resource_uri: str):
                     "uri": resource_uri,
                     "content": {
                         "id": task.id,
-                        "description": task.enriched_description or task.raw_description,
+                        "description": task.enriched_description
+                        or task.raw_description,
                         "status": task.status,
                         "assigned_agent": task.assigned_agent_id,
-                        "created_at": task.created_at.isoformat() if task.created_at else None
-                    }
+                        "created_at": task.created_at.isoformat()
+                        if task.created_at
+                        else None,
+                    },
                 }
             else:
                 raise HTTPException(status_code=404, detail="Task not found")
@@ -6192,6 +7408,7 @@ async def get_resource(resource_uri: str):
 @app.get("/sse")
 async def sse_endpoint():
     """Server-Sent Events endpoint for Claude MCP integration."""
+
     async def event_generator():
         """Generate SSE events."""
         # Send initial connection event

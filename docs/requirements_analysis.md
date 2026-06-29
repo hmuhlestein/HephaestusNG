@@ -4,14 +4,16 @@
 **Feature Name:** Feature Model Implementation  
 **Status:** Requirements Extracted  
 **Date:** 2026-06-29  
-**Design Document:** `.hephaestus/design.md`  
-**References:** `docs/autopilot.md`, `design_docs/autopilot_architecture_review.md`
+**Design Document:** `.hephaestus/design.md`
 
 ---
 
 ## 1. Executive Summary
 
-Implement the Feature model for HephaestusNG's autopilot pipeline. The Feature model decomposes complex designs into independently shippable slices before code is written. Each slice (Feature) runs its own 12-phase pipeline in its own git worktree with controlled parallelism. This addresses context window overflow, agent scope loss, and failure isolation issues in the current flat pipeline.
+Implement the Feature model for HephaestusNG's autopilot pipeline. Decomposes complex designs into independently shippable slices (Features) before code is written. Each Feature runs its own 12-phase pipeline in its own git worktree with controlled parallelism. Addresses context window overflow, agent scope loss, and failure isolation issues in the current flat pipeline.
+
+**Current State:** Single flat Design → 11-phase workflow → feature report  
+**Target State:** Design → Phase 0 (Feature Architect) → features.json → Per-feature pipelines (parallel/sequential) → Design Aggregate → design_report.html + design_metrics.json
 
 ---
 
@@ -20,14 +22,18 @@ Implement the Feature model for HephaestusNG's autopilot pipeline. The Feature m
 ### PR-1: Spec Gate Must Fire on QA Completion
 - **Problem:** `_build_spec_phase_output` not called when `qa_validation` completes
 - **Fix A:** Instrument task completion paths in `src/monitoring/monitor.py`
-- **Fix B:** Output-existence completion floor in `update_task_status` handler (`src/mcp/server.py`)
-- **Acceptance:** Seeded failing test triggers GOTO
+- **Fix B:** Output-existence completion floor in `update_task_status` handler (`src/mcp/server.py` ~line 1794)
+- **Output artifact declarations required per phase:**
+  - `qa_result.json` (qa_validation)
+  - `product_validation.json` (product_validation)
+  - `architecture.md` (architecture_design)
+  - `requirements_analysis.md` (product_requirements)
+  - `scope_review_result.json` (scope_review)
 
 ### PR-2: Abandoned Required Phase Must Escalate to Impasse
 - **Problem:** `security_review` abandoned after 6 attempts, pipeline continued silently
-- **Fix:** In `src/monitoring/monitor.py`, set phase status to `failed`, workflow to `impasse`
-- **Acceptance:** Abandoned phase triggers human intervention flow
-- **Optional phases:** `forensics_analysis`, `git_commit_push`
+- **Fix:** In `src/monitoring/monitor.py`, set phase status to `failed`, workflow to `impasse`, trigger human intervention
+- **Optional phases (can fail without blocking):** `forensics_analysis`, `git_commit_push`
 
 ---
 
@@ -35,14 +41,14 @@ Implement the Feature model for HephaestusNG's autopilot pipeline. The Feature m
 
 ### FR-1: Feature Database Table
 - **Requirement:** New `Feature` SQLAlchemy table
-- **Columns:** id, design_id, feature_key, name, scope, files (JSON), depends_on (JSON), execution, status, workflow_id, scope_doc_path, feature_record_path, created_at, started_at, completed_at, error
+- **Columns:** id (PK), design_id (FK), feature_key, name, scope, files (JSON), depends_on (JSON), execution, status, workflow_id (FK), scope_doc_path, feature_record_path, created_at, started_at, completed_at, error
 - **Check Constraints:** execution IN ('parallel', 'sequential'), status IN ('pending', 'active', 'completed', 'failed', 'skipped')
 - **Relationships:** belongs_to AutopilotDesign, has_one Workflow
 - **Acceptance:** `from src.core.database import Feature` succeeds; table created on startup
 
 ### FR-2: AutopilotDesign Table Modifications
 - **Requirement:** Add columns: file_path (Text), designs_folder (Text), phase0_workflow_id (FK to workflows)
-- **Requirement:** Extend status check constraint: `pending | processing | decomposing | active | completed | failed | skipped`
+- **Requirement:** Extend status constraint: `pending | processing | decomposing | active | completed | failed | skipped`
 - **Acceptance:** New columns exist; design status transitions work
 
 ### FR-3: Workflow Table Modifications
@@ -50,13 +56,13 @@ Implement the Feature model for HephaestusNG's autopilot pipeline. The Feature m
 - **Acceptance:** Workflow type tracking works; feature linkage established
 
 ### FR-4: Database Migration
-- **Requirement:** Idempotent `_migrate_feature_model_columns()` function in `src/core/database.py`
-- **Call location:** `DatabaseManager.__init__` alongside existing migrations
+- **Requirement:** Idempotent `_migrate_feature_model_columns()` in `src/core/database.py`
+- **Call location:** `DatabaseManager.__init__`
 - **Acceptance:** Safe to call on every startup; creates Feature table and adds columns
 
 ### FR-5: Phase 0 Workflow Definition
 - **Requirement:** New `config/workflows/autopilot-phase0/` directory with:
-  - `workflow.yaml`: default_model, execution_order, orchestrator config, launch_template
+  - `workflow.yaml`: default_model (xiaomi/mimo-v2.5), execution_order, orchestrator config, launch_template
   - `01_feature_architect.yaml`: phase definition with done_definitions, outputs, instructions
 - **Agent role:** feature_architect
 - **Acceptance:** Phase 0 runs standalone; produces valid features.json and scope.md files
@@ -119,7 +125,7 @@ Implement the Feature model for HephaestusNG's autopilot pipeline. The Feature m
 ## 4. Non-Functional Requirements
 
 ### NFR-1: Backward Compatibility
-- **Requirement:** Existing autopilot workflow continues to work for designs without Feature model
+- **Requirement:** Existing autopilot workflow continues for designs without Feature model
 - **Acceptance:** Old flow still runs; feature_scope and feature_id parameters optional
 
 ### NFR-2: Performance
@@ -127,7 +133,7 @@ Implement the Feature model for HephaestusNG's autopilot pipeline. The Feature m
 - **Acceptance:** System doesn't exceed resource limits
 
 ### NFR-3: Reliability
-- **Requirement:** Phase 0 timeout: MAX_PHASE0_TIME = 3600 seconds
+- **Requirement:** MAX_PHASE0_TIME = 3600 seconds timeout
 - **Acceptance:** Long-running Phase 0 doesn't block indefinitely
 
 ### NFR-4: Idempotency
@@ -144,12 +150,13 @@ Implement the Feature model for HephaestusNG's autopilot pipeline. The Feature m
 | `src/autopilot/orchestrator.py` | Modify | Refactor run_single_design to three-stage coordinator |
 | `src/cli/commands/autopilot.py` | Modify | Rewrite add_to_queue |
 | `src/mcp/autopilot_api.py` | Modify | Add POST /api/autopilot/designs/add |
+| `src/mcp/server.py` | Modify | Output-existence completion floor (PR-1 Fix B) |
+| `src/monitoring/monitor.py` | Modify | Spec gate firing + impasse handling (PR-1, PR-2) |
 | `src/workflow_registry.py` | Modify | Register autopilot-phase0 |
-| `src/monitoring/monitor.py` | Modify | Fix spec gate and impasse handling (Prerequisites) |
 | `config/workflows/autopilot-phase0/` | New | workflow.yaml + 01_feature_architect.yaml |
 | `src/autopilot/templates/` | New | design_report.html (Jinja2) |
 
-**No new external dependencies required.** All changes use existing stack (SQLAlchemy, Jinja2, Python stdlib).
+**No new external dependencies required.** All changes use existing stack.
 
 ---
 
@@ -158,7 +165,7 @@ Implement the Feature model for HephaestusNG's autopilot pipeline. The Feature m
 1. **Language:** Python 3 (existing HephaestusNG stack)
 2. **ORM:** SQLAlchemy (existing)
 3. **Template Engine:** Jinja2 (existing)
-4. **Testing:** pytest with existing test suite (74 tests)
+4. **Testing:** pytest with `-p no:libtmux` flag (broken plugin)
 5. **Version Control:** Git worktrees for feature isolation
 6. **No new dependencies:** Pure extensions of existing patterns
 
@@ -199,23 +206,23 @@ Implement the Feature model for HephaestusNG's autopilot pipeline. The Feature m
 
 | ID | Criterion | Verification |
 |----|-----------|--------------|
-| AC-1 | Feature table created | `python -c "from src.core.database import Feature; print('OK')"` |
+| AC-1 | Feature table created | `from src.core.database import Feature` |
 | AC-2 | Phase 0 workflow registered | Workflow launchable via SDK |
-| AC-3 | Phase 0 produces valid features.json | JSON parsing + schema validation |
+| AC-3 | Phase 0 produces valid features.json | JSON schema validation |
 | AC-4 | Phase 0 produces scope.md per feature | File existence check |
 | AC-5 | Parallel features execute concurrently | ThreadPoolExecutor with MAX_PARALLEL_FEATURES |
 | AC-6 | Sequential features respect depends_on | Topological sort ordering |
 | AC-7 | design_report.html generated | HTML file written to designs_folder |
 | AC-8 | CLI add_to_queue stores file_path | DB record has file_path column |
 | AC-9 | API endpoint works | POST /api/autopilot/designs/add returns 200 |
-| AC-10 | Backward compatible | Old flow still runs without feature_scope |
+| AC-10 | Backward compatible | Old flow runs without feature_scope |
 | AC-11 | Existing tests pass | All 74 tests green |
 | AC-12 | Spec gate fires | Seeded failing test triggers GOTO |
 | AC-13 | Impasse on abandoned phase | Abandoned required phase escalates to human |
 
 ---
 
-## 9. Implementation Order (Prerequisites)
+## 9. Implementation Order
 
 1. **Step 0:** Run B fixes (spec gate + abandoned phase impasse) - MUST be green first
 2. **Step 1:** DB schema (Feature table + column additions + migration)
@@ -255,14 +262,6 @@ Implement the Feature model for HephaestusNG's autopilot pipeline. The Feature m
 | Context overflow in Phase 0 | Low | High | Design doc size; may need chunking |
 | Worktree cleanup failures | Medium | Medium | Robust cleanup helpers with error handling |
 | Backward compatibility break | Medium | High | Optional parameters; fallback logic |
-
----
-
-## 12. Open Questions
-
-1. What is the current status of Run B (spec gate fix + abandoned phase impasse fix)?
-2. Are there existing designs/ folders to reference for scope boundary patterns?
-3. What Jinja2 version is available in the environment?
 
 ---
 

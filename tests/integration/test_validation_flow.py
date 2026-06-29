@@ -1,30 +1,23 @@
 """Integration tests for the complete validation flow with inheritance."""
 
-import pytest
-import asyncio
-import uuid
 import json
 import os
 import tempfile
-from unittest.mock import Mock, patch, AsyncMock, MagicMock, call
-from datetime import datetime
+import uuid
 from pathlib import Path
+from unittest.mock import patch
+
+import pytest
 
 from src.core.database import (
-    DatabaseManager,
-    Task,
     Agent,
+    DatabaseManager,
     Phase,
-    Workflow,
+    Task,
     ValidationReview,
-    Base
+    Workflow,
 )
-from src.mcp.server import app, server_state
-from src.sdk.models import WorkflowDefinition
 from src.phases.phase_manager import PhaseManager
-from src.agents.manager import AgentManager
-from src.validation.validator_agent import spawn_validator_agent
-from fastapi.testclient import TestClient
 
 
 @pytest.fixture
@@ -124,11 +117,14 @@ class TestEndToEndValidationFlow:
     """Test the complete validation flow from phase loading to validator execution."""
 
     @pytest.mark.asyncio
-    async def test_complete_validation_inheritance_flow(self, test_db, sample_phase_yaml):
+    async def test_complete_validation_inheritance_flow(
+        self, test_db, sample_phase_yaml
+    ):
         """Test the full flow: load phases -> create task -> inherit validation -> trigger validation."""
 
         # 1. Load phases from YAML
         from src.phases.phase_loader import PhaseLoader
+
         workflow_def = PhaseLoader.load_phases_from_folder(sample_phase_yaml)
 
         assert len(workflow_def.phases) == 2
@@ -157,7 +153,7 @@ class TestEndToEndValidationFlow:
             enriched_description="Implement feature X with tests",
             done_definition="Feature X works and is tested",
             status="pending",
-            priority="high"
+            priority="high",
         )
         session.add(task1)
         session.commit()
@@ -178,7 +174,7 @@ class TestEndToEndValidationFlow:
             enriched_description="Write comprehensive documentation",
             done_definition="Documentation is complete",
             status="pending",
-            priority="medium"
+            priority="medium",
         )
         session.add(task2)
         session.commit()
@@ -192,8 +188,12 @@ class TestEndToEndValidationFlow:
         session.commit()
 
         # 5. Verify inheritance
-        assert task1.validation_enabled == True, "Task in validation phase should have validation enabled"
-        assert task2.validation_enabled == False, "Task in non-validation phase should not have validation enabled"
+        assert task1.validation_enabled == True, (
+            "Task in validation phase should have validation enabled"
+        )
+        assert task2.validation_enabled == False, (
+            "Task in non-validation phase should not have validation enabled"
+        )
 
         # 6. Simulate agent completing task1 (with validation)
         agent1 = Agent(
@@ -201,7 +201,7 @@ class TestEndToEndValidationFlow:
             name="Agent 1",
             status="active",
             current_task_id=task1.id,
-            agent_type="phase"
+            agent_type="phase",
         )
         session.add(agent1)
         task1.assigned_agent_id = agent1.id
@@ -209,7 +209,9 @@ class TestEndToEndValidationFlow:
         session.commit()
 
         # When agent marks task as done, validation should trigger
-        with patch('src.validation.validator_agent.spawn_validator_agent') as mock_spawn:
+        with patch(
+            "src.validation.validator_agent.spawn_validator_agent"
+        ) as mock_spawn:
             mock_spawn.return_value = "validator-agent-id"
 
             # Simulate the logic in update_task_status
@@ -236,7 +238,7 @@ class TestEndToEndValidationFlow:
             name="Agent 2",
             status="active",
             current_task_id=task2.id,
-            agent_type="phase"
+            agent_type="phase",
         )
         session.add(agent2)
         task2.assigned_agent_id = agent2.id
@@ -255,7 +257,10 @@ class TestEndToEndValidationFlow:
         # Verify no validation triggered
         assert task2.status == "done"
         assert task2.validation_iteration == 0
-        assert not hasattr(agent2, 'kept_alive_for_validation') or not agent2.kept_alive_for_validation
+        assert (
+            not hasattr(agent2, "kept_alive_for_validation")
+            or not agent2.kept_alive_for_validation
+        )
 
         session.close()
 
@@ -270,7 +275,7 @@ class TestEndToEndValidationFlow:
             id=str(uuid.uuid4()),
             name="Test Workflow",
             phases_folder_path="/test/path",
-            status="active"
+            status="active",
         )
         session.add(workflow)
 
@@ -283,9 +288,13 @@ class TestEndToEndValidationFlow:
             done_definitions=["Complete"],
             validation={
                 "criteria": [
-                    {"description": "Tests pass", "check_type": "command_success", "command": "pytest"}
+                    {
+                        "description": "Tests pass",
+                        "check_type": "command_success",
+                        "command": "pytest",
+                    }
                 ]
-            }
+            },
         )
         session.add(phase)
 
@@ -298,7 +307,7 @@ class TestEndToEndValidationFlow:
             phase_id=phase.id,
             validation_enabled=True,  # Inherited from phase
             assigned_agent_id="agent-123",
-            validation_iteration=0
+            validation_iteration=0,
         )
         session.add(task)
 
@@ -307,7 +316,7 @@ class TestEndToEndValidationFlow:
             name="Implementation Agent",
             status="active",
             current_task_id=task.id,
-            agent_type="phase"
+            agent_type="phase",
         )
         session.add(agent)
         session.commit()
@@ -325,7 +334,7 @@ class TestEndToEndValidationFlow:
             iteration_number=1,
             validation_passed=False,
             feedback="Tests are failing. Please fix the implementation.",
-            evidence=json.dumps(["pytest output shows 3 failures"])
+            evidence=json.dumps(["pytest output shows 3 failures"]),
         )
         session.add(validation_review1)
 
@@ -350,7 +359,7 @@ class TestEndToEndValidationFlow:
             validation_passed=True,
             feedback="All tests passing. Implementation looks good.",
             evidence=json.dumps(["All 10 tests passed"]),
-            recommendations=json.dumps(["Consider adding performance tests"])
+            recommendations=json.dumps(["Consider adding performance tests"]),
         )
         session.add(validation_review2)
 
@@ -383,7 +392,7 @@ class TestEndToEndValidationFlow:
             id=str(uuid.uuid4()),
             name="Test Workflow",
             phases_folder_path="/test/path",
-            status="active"
+            status="active",
         )
         session.add(workflow)
 
@@ -398,9 +407,13 @@ class TestEndToEndValidationFlow:
             validation={
                 "enabled": False,  # Explicitly disabled
                 "criteria": [
-                    {"description": "Would check tests", "check_type": "command_success", "command": "pytest"}
-                ]
-            }
+                    {
+                        "description": "Would check tests",
+                        "check_type": "command_success",
+                        "command": "pytest",
+                    }
+                ],
+            },
         )
         session.add(phase)
         session.commit()
@@ -412,7 +425,7 @@ class TestEndToEndValidationFlow:
             enriched_description="Task enriched",
             done_definition="Done",
             status="pending",
-            phase_id=phase.id
+            phase_id=phase.id,
         )
         session.add(task)
 
@@ -431,7 +444,9 @@ class TestEndToEndValidationFlow:
         session.commit()
 
         # Verify validation is disabled
-        assert task.validation_enabled == False, "Task should not have validation when explicitly disabled"
+        assert task.validation_enabled == False, (
+            "Task should not have validation when explicitly disabled"
+        )
 
         session.close()
 
@@ -451,7 +466,7 @@ class TestValidationErrorHandling:
             enriched_description="Standalone task enriched",
             done_definition="Done when complete",
             status="pending",
-            phase_id=None  # No phase
+            phase_id=None,  # No phase
         )
         session.add(task)
 
@@ -480,7 +495,7 @@ class TestValidationErrorHandling:
             enriched_description="Task enriched",
             done_definition="Done",
             status="pending",
-            phase_id="non-existent-phase-id"
+            phase_id="non-existent-phase-id",
         )
         session.add(task)
 

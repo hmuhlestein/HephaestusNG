@@ -1,8 +1,8 @@
 """heph init — Initialize database and vector store."""
 
 import os
-import sys
 import shutil
+import sys
 from pathlib import Path
 
 from src.cli.utils import output
@@ -38,18 +38,27 @@ def run(args):
 
     # Init DB
     import subprocess
+
     r = subprocess.run(
         [python, str(HEPHAESTUS_DIR / "scripts" / "init_db.py")],
-        capture_output=True, text=True, cwd=str(HEPHAESTUS_DIR)
+        capture_output=True,
+        text=True,
+        cwd=str(HEPHAESTUS_DIR),
     )
-    results["database"] = "initialized" if r.returncode == 0 else f"failed: {r.stderr[:100]}"
+    results["database"] = (
+        "initialized" if r.returncode == 0 else f"failed: {r.stderr[:100]}"
+    )
 
     # Init Qdrant
     r = subprocess.run(
         [python, str(HEPHAESTUS_DIR / "scripts" / "init_qdrant.py")],
-        capture_output=True, text=True, cwd=str(HEPHAESTUS_DIR)
+        capture_output=True,
+        text=True,
+        cwd=str(HEPHAESTUS_DIR),
     )
-    results["qdrant"] = "initialized" if r.returncode == 0 else f"failed: {r.stderr[:100]}"
+    results["qdrant"] = (
+        "initialized" if r.returncode == 0 else f"failed: {r.stderr[:100]}"
+    )
 
     output(args, results, lambda d: [print(f"  {k}: {v}") for k, v in d.items()])
     return 0

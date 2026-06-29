@@ -1,23 +1,25 @@
 """Phase manager for runtime orchestration of workflow phases."""
 
-import uuid
 import json
 import logging
-from typing import Dict, Any, List, Optional
+import uuid
 from datetime import datetime
+from typing import Any, Dict, List, Optional
 
 from sqlalchemy.orm import joinedload
-from src.core.database import (
-    DatabaseManager, Workflow, Phase, PhaseExecution, Task,
-    WorkflowDefinition as DBWorkflowDefinition
-)
-from src.sdk.models import Phase as SdkPhase, WorkflowDefinition
+
+from src.core.constants import CONTEXT_DIR_NAME, WORKTREES_SUBDIR
+from src.core.database import DatabaseManager, Phase, PhaseExecution, Task, Workflow
+from src.core.database import WorkflowDefinition as DBWorkflowDefinition
+from src.core.simple_config import get_config
 from src.phases.models import PhaseContext, PhasesConfig
 from src.phases.phase_loader import PhaseLoader
-from src.core.simple_config import get_config
-from src.core.constants import WORKTREES_SUBDIR, CONTEXT_DIR_NAME
+from src.sdk.models import Phase as SdkPhase
+from src.sdk.models import WorkflowDefinition
 from src.workflow_engine.orchestrator import (
-    WorkflowOrchestrator, OrchestratorConfig, OrchestrationAction
+    OrchestrationAction,
+    OrchestratorConfig,
+    WorkflowOrchestrator,
 )
 
 logger = logging.getLogger(__name__)
@@ -75,13 +77,17 @@ class PhaseManager:
         self.workflow_id: Optional[str] = None
 
         # Multi-workflow support
-        self.definitions: Dict[str, DBWorkflowDefinition] = {}  # definition_id -> definition
+        self.definitions: Dict[
+            str, DBWorkflowDefinition
+        ] = {}  # definition_id -> definition
         self.active_executions: Dict[str, str] = {}  # workflow_id -> definition_id
 
         # Orchestrator instances cache (per workflow_id) to persist state
-        self._orchestrators: Dict[str, 'WorkflowOrchestrator'] = {}
+        self._orchestrators: Dict[str, "WorkflowOrchestrator"] = {}
 
-        self.phases_config_cache: Dict[str, PhasesConfig] = {}  # Cache for workflow configs
+        self.phases_config_cache: Dict[
+            str, PhasesConfig
+        ] = {}  # Cache for workflow configs
 
     def load_active_workflow(self) -> Optional[str]:
         """Load the first active workflow from the database.
@@ -95,9 +101,12 @@ class PhaseManager:
         session = self.db_manager.get_session()
         try:
             # Find ALL active workflows
-            all_workflows = session.query(Workflow).filter_by(
-                status='active'
-            ).order_by(Workflow.created_at.desc()).all()
+            all_workflows = (
+                session.query(Workflow)
+                .filter_by(status="active")
+                .order_by(Workflow.created_at.desc())
+                .all()
+            )
 
             if not all_workflows:
                 logger.info("[DIAGNOSTIC] No active workflows found in database")
@@ -111,16 +120,30 @@ class PhaseManager:
 
             for wf in all_workflows:
                 task_count = session.query(Task).filter_by(workflow_id=wf.id).count()
-                done_count = session.query(Task).filter_by(workflow_id=wf.id, status='done').count()
-                failed_count = session.query(Task).filter_by(workflow_id=wf.id, status='failed').count()
-                active_count = session.query(Task).filter(
-                    Task.workflow_id == wf.id,
-                    Task.status.in_(['pending', 'assigned', 'in_progress'])
-                ).count()
+                done_count = (
+                    session.query(Task)
+                    .filter_by(workflow_id=wf.id, status="done")
+                    .count()
+                )
+                failed_count = (
+                    session.query(Task)
+                    .filter_by(workflow_id=wf.id, status="failed")
+                    .count()
+                )
+                active_count = (
+                    session.query(Task)
+                    .filter(
+                        Task.workflow_id == wf.id,
+                        Task.status.in_(["pending", "assigned", "in_progress"]),
+                    )
+                    .count()
+                )
 
                 logger.info(f"[DIAGNOSTIC]   - {wf.name} (ID: {wf.id[:8]}...)")
                 logger.info(f"[DIAGNOSTIC]     Created: {wf.created_at}")
-                logger.info(f"[DIAGNOSTIC]     Tasks: {task_count} total ({done_count} done, {failed_count} failed, {active_count} active)")
+                logger.info(
+                    f"[DIAGNOSTIC]     Tasks: {task_count} total ({done_count} done, {failed_count} failed, {active_count} active)"
+                )
                 logger.info(f"[DIAGNOSTIC]     Phases folder: {wf.phases_folder_path}")
 
                 if task_count > max_tasks:
@@ -130,24 +153,38 @@ class PhaseManager:
             # Select the workflow with the most tasks (or newest if tie)
             workflow = workflow_with_tasks if workflow_with_tasks else all_workflows[0]
 
-            logger.info(f"[DIAGNOSTIC] Selected workflow: {workflow.name} (ID: {workflow.id[:8]}...)")
-            logger.info(f"[DIAGNOSTIC] Reason: {'Most tasks' if workflow == workflow_with_tasks and max_tasks > 0 else 'Newest created'}")
+            logger.info(
+                f"[DIAGNOSTIC] Selected workflow: {workflow.name} (ID: {workflow.id[:8]}...)"
+            )
+            logger.info(
+                f"[DIAGNOSTIC] Reason: {'Most tasks' if workflow == workflow_with_tasks and max_tasks > 0 else 'Newest created'}"
+            )
             logger.info(f"[DIAGNOSTIC] Phases folder: {workflow.phases_folder_path}")
 
             # Load the workflow definition from the phases folder
             try:
-                workflow_def = PhaseLoader.load_phases_from_folder(workflow.phases_folder_path)
+                workflow_def = PhaseLoader.load_phases_from_folder(
+                    workflow.phases_folder_path
+                )
                 self.active_workflow = workflow_def
                 self.workflow_id = workflow.id
 
-                logger.info(f"[DIAGNOSTIC] Successfully loaded workflow '{workflow.name}' with {len(workflow_def.phases)} phases")
-                logger.info(f"[DIAGNOSTIC] PhaseManager.workflow_id set to: {self.workflow_id[:8]}...")
+                logger.info(
+                    f"[DIAGNOSTIC] Successfully loaded workflow '{workflow.name}' with {len(workflow_def.phases)} phases"
+                )
+                logger.info(
+                    f"[DIAGNOSTIC] PhaseManager.workflow_id set to: {self.workflow_id[:8]}..."
+                )
 
                 return self.workflow_id
 
             except Exception as e:
-                logger.error(f"[DIAGNOSTIC] Failed to load workflow definition from {workflow.phases_folder_path}: {e}")
-                logger.warning("[DIAGNOSTIC] Will set workflow_id anyway to allow diagnostic agent to work")
+                logger.error(
+                    f"[DIAGNOSTIC] Failed to load workflow definition from {workflow.phases_folder_path}: {e}"
+                )
+                logger.warning(
+                    "[DIAGNOSTIC] Will set workflow_id anyway to allow diagnostic agent to work"
+                )
                 # Even if we can't load the full definition, set the workflow_id
                 # so diagnostic checks can still run
                 self.workflow_id = workflow.id
@@ -159,7 +196,12 @@ class PhaseManager:
         finally:
             session.close()
 
-    def initialize_workflow(self, workflow_def: WorkflowDefinition, phases_config: Optional['PhasesConfig'] = None, folder_path: str = "") -> str:
+    def initialize_workflow(
+        self,
+        workflow_def: WorkflowDefinition,
+        phases_config: Optional["PhasesConfig"] = None,
+        folder_path: str = "",
+    ) -> str:
         """Initialize a workflow and its phases in the database.
 
         If a workflow with the same name already exists, updates its phases_folder_path
@@ -178,15 +220,21 @@ class PhaseManager:
         try:
             # SINGLE WORKFLOW POLICY: Check if ANY active workflow exists
             # We maintain only ONE workflow at a time - reuse it on restart
-            existing_workflow = session.query(Workflow).filter(
-                Workflow.status.in_(["active", "paused"])
-            ).first()
+            existing_workflow = (
+                session.query(Workflow)
+                .filter(Workflow.status.in_(["active", "paused"]))
+                .first()
+            )
 
             if existing_workflow:
                 # Reuse existing workflow - update phases folder path
-                logger.info(f"♻️  Reusing existing workflow '{existing_workflow.name}' (ID: {existing_workflow.id})")
+                logger.info(
+                    f"♻️  Reusing existing workflow '{existing_workflow.name}' (ID: {existing_workflow.id})"
+                )
                 _folder = folder_path or ""
-                logger.info(f"   Updating phases_folder_path from {existing_workflow.phases_folder_path} to {_folder}")
+                logger.info(
+                    f"   Updating phases_folder_path from {existing_workflow.phases_folder_path} to {_folder}"
+                )
 
                 existing_workflow.phases_folder_path = _folder
                 # Update the name to match the current workflow definition
@@ -210,11 +258,15 @@ class PhaseManager:
                 for phase_def in workflow_def.phases:
                     phase_id = str(uuid.uuid4())
                     # phase_def is a sdk Phase dataclass; use .id as the order value
-                    outputs_val = phase_def.outputs if isinstance(phase_def.outputs, list) else (
-                        [phase_def.outputs] if phase_def.outputs else []
+                    outputs_val = (
+                        phase_def.outputs
+                        if isinstance(phase_def.outputs, list)
+                        else ([phase_def.outputs] if phase_def.outputs else [])
                     )
-                    next_steps_val = phase_def.next_steps if isinstance(phase_def.next_steps, list) else (
-                        [phase_def.next_steps] if phase_def.next_steps else []
+                    next_steps_val = (
+                        phase_def.next_steps
+                        if isinstance(phase_def.next_steps, list)
+                        else ([phase_def.next_steps] if phase_def.next_steps else [])
                     )
                     phase = Phase(
                         id=phase_id,
@@ -228,8 +280,12 @@ class PhaseManager:
                         next_steps=next_steps_val,
                         working_directory=phase_def.working_directory,
                         validation=(
-                            {"enabled": phase_def.validation.enabled, "criteria": phase_def.validation.criteria}
-                            if phase_def.validation else None
+                            {
+                                "enabled": phase_def.validation.enabled,
+                                "criteria": phase_def.validation.criteria,
+                            }
+                            if phase_def.validation
+                            else None
                         ),
                         thinking_level=phase_def.thinking_level,
                     )
@@ -245,36 +301,64 @@ class PhaseManager:
                     session.add(execution)
 
                 # Create BoardConfig if ticket tracking is enabled
-                if phases_config and phases_config.enable_tickets and phases_config.board_config:
+                if (
+                    phases_config
+                    and phases_config.enable_tickets
+                    and phases_config.board_config
+                ):
                     from src.core.database import BoardConfig
 
                     board_id = f"board-{str(uuid.uuid4())}"
                     # Read global defaults for human approval
                     config = get_config()
-                    default_human_review = getattr(config, 'default_human_review', False)
-                    default_approval_timeout = getattr(config, 'default_approval_timeout', 1800)
+                    default_human_review = getattr(
+                        config, "default_human_review", False
+                    )
+                    default_approval_timeout = getattr(
+                        config, "default_approval_timeout", 1800
+                    )
 
                     board_config = BoardConfig(
                         id=board_id,
                         workflow_id=workflow_id,
                         name=f"{workflow_def.name} Board",
-                        columns=phases_config.board_config.get('columns', []),
-                        ticket_types=phases_config.board_config.get('ticket_types', ['task']),
-                        default_ticket_type=phases_config.board_config.get('default_ticket_type', 'task'),
-                        initial_status=phases_config.board_config.get('initial_status', 'backlog'),
-                        auto_assign=phases_config.board_config.get('auto_assign', False),
-                        require_comments_on_status_change=phases_config.board_config.get('require_comments_on_status_change', False),
-                        allow_reopen=phases_config.board_config.get('allow_reopen', True),
-                        track_time=phases_config.board_config.get('track_time', False),
+                        columns=phases_config.board_config.get("columns", []),
+                        ticket_types=phases_config.board_config.get(
+                            "ticket_types", ["task"]
+                        ),
+                        default_ticket_type=phases_config.board_config.get(
+                            "default_ticket_type", "task"
+                        ),
+                        initial_status=phases_config.board_config.get(
+                            "initial_status", "backlog"
+                        ),
+                        auto_assign=phases_config.board_config.get(
+                            "auto_assign", False
+                        ),
+                        require_comments_on_status_change=phases_config.board_config.get(
+                            "require_comments_on_status_change", False
+                        ),
+                        allow_reopen=phases_config.board_config.get(
+                            "allow_reopen", True
+                        ),
+                        track_time=phases_config.board_config.get("track_time", False),
                         # Human approval settings (with global defaults, can be overridden in board_config)
-                        ticket_human_review=phases_config.board_config.get('ticket_human_review', default_human_review),
-                        approval_timeout_seconds=phases_config.board_config.get('approval_timeout_seconds', default_approval_timeout),
+                        ticket_human_review=phases_config.board_config.get(
+                            "ticket_human_review", default_human_review
+                        ),
+                        approval_timeout_seconds=phases_config.board_config.get(
+                            "approval_timeout_seconds", default_approval_timeout
+                        ),
                     )
                     session.add(board_config)
-                    logger.info(f"Created BoardConfig for workflow '{workflow_def.name}' with {len(phases_config.board_config.get('columns', []))} columns")
+                    logger.info(
+                        f"Created BoardConfig for workflow '{workflow_def.name}' with {len(phases_config.board_config.get('columns', []))} columns"
+                    )
 
                 session.commit()
-                logger.info(f"Created new workflow '{workflow_def.name}' with {len(workflow_def.phases)} phases")
+                logger.info(
+                    f"Created new workflow '{workflow_def.name}' with {len(workflow_def.phases)} phases"
+                )
 
             # Store as active workflow
             self.active_workflow = workflow_def
@@ -289,9 +373,13 @@ class PhaseManager:
         finally:
             session.close()
 
-    def get_phase_for_task(self, phase_id: Optional[str] = None, order: Optional[int] = None,
-                          requesting_agent_id: Optional[str] = None,
-                          workflow_id: Optional[str] = None) -> Optional[str]:
+    def get_phase_for_task(
+        self,
+        phase_id: Optional[str] = None,
+        order: Optional[int] = None,
+        requesting_agent_id: Optional[str] = None,
+        workflow_id: Optional[str] = None,
+    ) -> Optional[str]:
         """Get phase ID for task creation.
 
         Args:
@@ -314,10 +402,11 @@ class PhaseManager:
         if order is not None and target_workflow_id:
             session = self.db_manager.get_session()
             try:
-                phase = session.query(Phase).filter_by(
-                    workflow_id=target_workflow_id,
-                    order=order
-                ).first()
+                phase = (
+                    session.query(Phase)
+                    .filter_by(workflow_id=target_workflow_id, order=order)
+                    .first()
+                )
                 return phase.id if phase else None
             finally:
                 session.close()
@@ -328,9 +417,12 @@ class PhaseManager:
             try:
                 # Find the agent's current task and its phase
                 from src.core.database import Agent, Task
+
                 agent = session.query(Agent).filter_by(id=requesting_agent_id).first()
                 if agent and agent.current_task_id:
-                    task = session.query(Task).filter_by(id=agent.current_task_id).first()
+                    task = (
+                        session.query(Task).filter_by(id=agent.current_task_id).first()
+                    )
                     if task and task.phase_id:
                         return task.phase_id
             finally:
@@ -351,10 +443,16 @@ class PhaseManager:
         session = self.db_manager.get_session()
         try:
             # Find first non-completed phase
-            execution = session.query(PhaseExecution).join(Phase).filter(
-                Phase.workflow_id == self.workflow_id,
-                PhaseExecution.status.in_(["pending", "in_progress"])
-            ).order_by(Phase.order).first()
+            execution = (
+                session.query(PhaseExecution)
+                .join(Phase)
+                .filter(
+                    Phase.workflow_id == self.workflow_id,
+                    PhaseExecution.status.in_(["pending", "in_progress"]),
+                )
+                .order_by(Phase.order)
+                .first()
+            )
 
             return execution.phase_id if execution else None
         finally:
@@ -383,15 +481,22 @@ class PhaseManager:
                 logger.warning(f"No phase found in database with id: {phase_id}")
                 # List all phases for debugging
                 all_phases = session.query(Phase).all()
-                logger.info(f"All phases in database: {[(p.id, p.name, p.order) for p in all_phases]}")
+                logger.info(
+                    f"All phases in database: {[(p.id, p.name, p.order) for p in all_phases]}"
+                )
                 return None
 
-            logger.info(f"Found phase: {phase.name} (order: {phase.order}) in workflow: {phase.workflow_id}")
+            logger.info(
+                f"Found phase: {phase.name} (order: {phase.order}) in workflow: {phase.workflow_id}"
+            )
 
             # Get all phases in workflow
-            all_phases = session.query(Phase).filter_by(
-                workflow_id=phase.workflow_id
-            ).order_by(Phase.order).all()
+            all_phases = (
+                session.query(Phase)
+                .filter_by(workflow_id=phase.workflow_id)
+                .order_by(Phase.order)
+                .all()
+            )
 
             # Convert DB Phase rows to sdk Phase objects
             sdk_phases = []
@@ -426,21 +531,23 @@ class PhaseManager:
                 return None
 
             # Count tasks
-            active_tasks = session.query(Task).filter_by(
-                phase_id=phase_id,
-            ).filter(
-                Task.status.in_(["pending", "assigned", "in_progress"])
-            ).count()
+            active_tasks = (
+                session.query(Task)
+                .filter_by(
+                    phase_id=phase_id,
+                )
+                .filter(Task.status.in_(["pending", "assigned", "in_progress"]))
+                .count()
+            )
 
-            completed_tasks = session.query(Task).filter_by(
-                phase_id=phase_id,
-                status="done"
-            ).count()
+            completed_tasks = (
+                session.query(Task).filter_by(phase_id=phase_id, status="done").count()
+            )
 
             # Get execution status
-            execution = session.query(PhaseExecution).filter_by(
-                phase_id=phase_id
-            ).first()
+            execution = (
+                session.query(PhaseExecution).filter_by(phase_id=phase_id).first()
+            )
             status = execution.status if execution else "pending"
 
             return PhaseContext(
@@ -476,20 +583,20 @@ class PhaseManager:
             # a phase that has some done + some failed tasks (but no active tasks)
             # should still advance. The stalled-phase handler in the monitor covers
             # the all-failed (done_tasks == 0) case separately.
-            incomplete_tasks = session.query(Task).filter_by(
-                phase_id=phase_id
-            ).filter(
-                Task.status.in_(["pending", "assigned", "in_progress"])
-            ).count()
+            incomplete_tasks = (
+                session.query(Task)
+                .filter_by(phase_id=phase_id)
+                .filter(Task.status.in_(["pending", "assigned", "in_progress"]))
+                .count()
+            )
 
             if incomplete_tasks > 0:
                 return False
 
             # Check if phase has any completed tasks
-            completed_tasks = session.query(Task).filter_by(
-                phase_id=phase_id,
-                status="done"
-            ).count()
+            completed_tasks = (
+                session.query(Task).filter_by(phase_id=phase_id, status="done").count()
+            )
 
             # Phase is complete if it has completed tasks and no incomplete ones
             return completed_tasks > 0
@@ -497,7 +604,13 @@ class PhaseManager:
         finally:
             session.close()
 
-    def mark_phase_complete(self, phase_id: str, summary: str = "", phase_output: Dict[str, Any] = None, force_action: str = None) -> Dict[str, Any]:
+    def mark_phase_complete(
+        self,
+        phase_id: str,
+        summary: str = "",
+        phase_output: Dict[str, Any] = None,
+        force_action: str = None,
+    ) -> Dict[str, Any]:
         """Mark a phase as complete and evaluate with orchestrator.
 
         Args:
@@ -518,14 +631,24 @@ class PhaseManager:
         try:
             phase = session.query(Phase).filter_by(id=phase_id).first()
             if not phase:
-                return {"action": "continue", "target_phase": None, "target_phase_id": None, "should_continue": True}
+                return {
+                    "action": "continue",
+                    "target_phase": None,
+                    "target_phase_id": None,
+                    "should_continue": True,
+                }
 
-            execution = session.query(PhaseExecution).filter_by(
-                phase_id=phase_id
-            ).first()
+            execution = (
+                session.query(PhaseExecution).filter_by(phase_id=phase_id).first()
+            )
 
             if not execution:
-                return {"action": "continue", "target_phase": None, "target_phase_id": None, "should_continue": True}
+                return {
+                    "action": "continue",
+                    "target_phase": None,
+                    "target_phase_id": None,
+                    "should_continue": True,
+                }
 
             # Arbitration override: skip evaluation and use the resolved action.
             if force_action == "continue":
@@ -536,16 +659,31 @@ class PhaseManager:
                 next_started = self._start_next_phase(session, phase_id)
                 if not next_started:
                     self._complete_workflow(session)
-                    return {"action": "continue", "target_phase": None, "target_phase_id": None, "should_continue": False}
+                    return {
+                        "action": "continue",
+                        "target_phase": None,
+                        "target_phase_id": None,
+                        "should_continue": False,
+                    }
                 next_phase = self._find_next_phase(session, phase_id)
-                return {"action": "continue", "target_phase": next_phase.name if next_phase else None, "target_phase_id": next_phase.id if next_phase else None, "should_continue": True}
+                return {
+                    "action": "continue",
+                    "target_phase": next_phase.name if next_phase else None,
+                    "target_phase_id": next_phase.id if next_phase else None,
+                    "should_continue": True,
+                }
             elif force_action == "fail":
                 execution.status = "failed"
                 execution.completed_at = datetime.utcnow()
                 execution.completion_summary = summary
                 session.commit()
                 self._fail_workflow(session, summary)
-                return {"action": "fail", "target_phase": None, "target_phase_id": None, "should_continue": False}
+                return {
+                    "action": "fail",
+                    "target_phase": None,
+                    "target_phase_id": None,
+                    "should_continue": False,
+                }
 
             # Get orchestrator config
             orchestrator = self._get_orchestrator(session, phase.workflow_id)
@@ -563,15 +701,25 @@ class PhaseManager:
                 next_started = self._start_next_phase(session, phase_id)
                 if not next_started:
                     self._complete_workflow(session)
-                    return {"action": "continue", "target_phase": None, "target_phase_id": None, "should_continue": False}
-                return {"action": "continue", "target_phase": None, "target_phase_id": None, "should_continue": True}
+                    return {
+                        "action": "continue",
+                        "target_phase": None,
+                        "target_phase_id": None,
+                        "should_continue": False,
+                    }
+                return {
+                    "action": "continue",
+                    "target_phase": None,
+                    "target_phase_id": None,
+                    "should_continue": True,
+                }
 
             # Evaluating mode - use orchestrator to decide flow
             phase_history = self._get_phase_history(session, phase.workflow_id)
             evaluation = orchestrator.evaluate(
                 phase_name=phase.name,
                 phase_output=phase_output or {},
-                phase_history=phase_history
+                phase_history=phase_history,
             )
 
             logger.info(
@@ -588,10 +736,20 @@ class PhaseManager:
                 next_started = self._start_next_phase(session, phase_id)
                 if not next_started:
                     self._complete_workflow(session)
-                    return {"action": "continue", "target_phase": None, "target_phase_id": None, "should_continue": False}
+                    return {
+                        "action": "continue",
+                        "target_phase": None,
+                        "target_phase_id": None,
+                        "should_continue": False,
+                    }
                 # Return the next phase info for the caller to create task+agent
                 next_phase = self._find_next_phase(session, phase_id)
-                return {"action": "continue", "target_phase": next_phase.name if next_phase else None, "target_phase_id": next_phase.id if next_phase else None, "should_continue": True}
+                return {
+                    "action": "continue",
+                    "target_phase": next_phase.name if next_phase else None,
+                    "target_phase_id": next_phase.id if next_phase else None,
+                    "should_continue": True,
+                }
 
             elif evaluation.action == OrchestrationAction.RETRY:
                 execution.status = "pending"
@@ -603,7 +761,12 @@ class PhaseManager:
                     f"({evaluation.metadata.get('retry_count', 0)}/"
                     f"{evaluation.metadata.get('max_retries', '?')})"
                 )
-                return {"action": "retry", "target_phase": phase.name, "target_phase_id": phase.id, "should_continue": True}
+                return {
+                    "action": "retry",
+                    "target_phase": phase.name,
+                    "target_phase_id": phase.id,
+                    "should_continue": True,
+                }
 
             elif evaluation.action == OrchestrationAction.GOTO:
                 execution.status = "completed"
@@ -620,32 +783,56 @@ class PhaseManager:
                     # Reset any phase_executions between target and current that are
                     # still "in_progress" — these are stale records from a prior pass
                     # that were never closed when the pipeline rewound.
-                    stale = session.query(PhaseExecution).join(Phase).filter(
-                        Phase.workflow_id == phase.workflow_id,
-                        Phase.order >= target_phase.order,
-                        Phase.order < phase.order,
-                        PhaseExecution.status == "in_progress",
-                    ).all()
+                    stale = (
+                        session.query(PhaseExecution)
+                        .join(Phase)
+                        .filter(
+                            Phase.workflow_id == phase.workflow_id,
+                            Phase.order >= target_phase.order,
+                            Phase.order < phase.order,
+                            PhaseExecution.status == "in_progress",
+                        )
+                        .all()
+                    )
                     for s in stale:
                         s.status = "completed"
                         s.completed_at = datetime.utcnow()
                     if stale:
                         session.commit()
-                        logger.info(f"Reset {len(stale)} stale in_progress phase(s) before GOTO to {target_phase.name}")
-                    return {"action": "goto", "target_phase": target_phase.name, "target_phase_id": target_phase.id, "should_continue": True}
+                        logger.info(
+                            f"Reset {len(stale)} stale in_progress phase(s) before GOTO to {target_phase.name}"
+                        )
+                    return {
+                        "action": "goto",
+                        "target_phase": target_phase.name,
+                        "target_phase_id": target_phase.id,
+                        "should_continue": True,
+                    }
                 else:
                     logger.warning(f"Target phase not found: {evaluation.target_phase}")
                     next_started = self._start_next_phase(session, phase_id)
                     if not next_started:
                         self._complete_workflow(session)
-                        return {"action": "continue", "target_phase": None, "target_phase_id": None, "should_continue": False}
-                    return {"action": "continue", "target_phase": None, "target_phase_id": None, "should_continue": True}
+                        return {
+                            "action": "continue",
+                            "target_phase": None,
+                            "target_phase_id": None,
+                            "should_continue": False,
+                        }
+                    return {
+                        "action": "continue",
+                        "target_phase": None,
+                        "target_phase_id": None,
+                        "should_continue": True,
+                    }
 
             elif evaluation.action == OrchestrationAction.ARBITRATE:
                 # Budget exhausted — pause the phase and request LLM arbitration.
                 # The monitor will spawn an arbitration agent; once it writes
                 # arbitration_result.json the pipeline resumes (proceed) or stops (impasse).
-                execution.status = "pending"  # keep phase alive until arbitration resolves
+                execution.status = (
+                    "pending"  # keep phase alive until arbitration resolves
+                )
                 session.commit()
                 logger.warning(
                     f"[ARBITRATE] Phase {phase.name} needs arbitration: {evaluation.reason}"
@@ -666,18 +853,35 @@ class PhaseManager:
 
                 logger.error(f"Phase {phase.name} failed: {evaluation.reason}")
                 self._fail_workflow(session, evaluation.reason)
-                return {"action": "fail", "target_phase": None, "target_phase_id": None, "should_continue": False}
+                return {
+                    "action": "fail",
+                    "target_phase": None,
+                    "target_phase_id": None,
+                    "should_continue": False,
+                }
 
-            return {"action": "continue", "target_phase": None, "target_phase_id": None, "should_continue": True}
+            return {
+                "action": "continue",
+                "target_phase": None,
+                "target_phase_id": None,
+                "should_continue": True,
+            }
 
         except Exception as e:
             logger.error(f"Failed to mark phase complete: {e}")
             session.rollback()
-            return {"action": "continue", "target_phase": None, "target_phase_id": None, "should_continue": True}
+            return {
+                "action": "continue",
+                "target_phase": None,
+                "target_phase_id": None,
+                "should_continue": True,
+            }
         finally:
             session.close()
 
-    def _get_orchestrator(self, session, workflow_id: str) -> Optional[WorkflowOrchestrator]:
+    def _get_orchestrator(
+        self, session, workflow_id: str
+    ) -> Optional[WorkflowOrchestrator]:
         """Get orchestrator for a workflow (cached to persist state)."""
         try:
             # Return cached orchestrator if exists
@@ -688,9 +892,11 @@ class PhaseManager:
             if not workflow or not workflow.definition_id:
                 return None
 
-            definition = session.query(DBWorkflowDefinition).filter_by(
-                id=workflow.definition_id
-            ).first()
+            definition = (
+                session.query(DBWorkflowDefinition)
+                .filter_by(id=workflow.definition_id)
+                .first()
+            )
             if not definition or not definition.orchestrator_config:
                 return None
 
@@ -708,16 +914,21 @@ class PhaseManager:
 
     def _get_phase_history(self, session, workflow_id: str) -> List[Dict[str, Any]]:
         """Get history of completed phases."""
-        executions = session.query(PhaseExecution).join(Phase).filter(
-            Phase.workflow_id == workflow_id
-        ).all()
+        executions = (
+            session.query(PhaseExecution)
+            .join(Phase)
+            .filter(Phase.workflow_id == workflow_id)
+            .all()
+        )
 
         return [
             {
                 "phase": ex.phase.name if ex.phase else "unknown",
                 "status": ex.status,
                 "summary": ex.completion_summary,
-                "completed_at": ex.completed_at.isoformat() if ex.completed_at else None,
+                "completed_at": ex.completed_at.isoformat()
+                if ex.completed_at
+                else None,
             }
             for ex in executions
             if ex.status in ("completed", "failed")
@@ -728,11 +939,12 @@ class PhaseManager:
     ) -> Optional[Phase]:
         """Find phase by name or order number."""
         # Try by name first
-        phase = session.query(Phase).filter_by(
-            workflow_id=workflow_id
-        ).filter(
-            Phase.name == name_or_order
-        ).first()
+        phase = (
+            session.query(Phase)
+            .filter_by(workflow_id=workflow_id)
+            .filter(Phase.name == name_or_order)
+            .first()
+        )
 
         if phase:
             return phase
@@ -740,19 +952,18 @@ class PhaseManager:
         # Try by order
         try:
             order = int(name_or_order)
-            phase = session.query(Phase).filter_by(
-                workflow_id=workflow_id,
-                order=order
-            ).first()
+            phase = (
+                session.query(Phase)
+                .filter_by(workflow_id=workflow_id, order=order)
+                .first()
+            )
             return phase
         except (ValueError, TypeError):
             return None
 
     def _start_phase(self, session, phase_id: str) -> None:
         """Start a specific phase."""
-        execution = session.query(PhaseExecution).filter_by(
-            phase_id=phase_id
-        ).first()
+        execution = session.query(PhaseExecution).filter_by(phase_id=phase_id).first()
 
         if execution and execution.status == "pending":
             execution.status = "in_progress"
@@ -774,10 +985,14 @@ class PhaseManager:
         current = session.query(Phase).filter_by(id=current_phase_id).first()
         if not current:
             return None
-        return session.query(Phase).filter(
-            Phase.workflow_id == current.workflow_id,
-            Phase.order > current.order
-        ).order_by(Phase.order).first()
+        return (
+            session.query(Phase)
+            .filter(
+                Phase.workflow_id == current.workflow_id, Phase.order > current.order
+            )
+            .order_by(Phase.order)
+            .first()
+        )
 
     def _start_next_phase(self, session, current_phase_id: str) -> bool:
         """Start the next phase after current one completes.
@@ -795,23 +1010,32 @@ class PhaseManager:
 
         # Don't advance phases on a completed workflow — stale mark_phase_complete
         # calls from the spec-gate or 3a path can fire after _complete_workflow runs.
-        workflow = session.query(Workflow).filter_by(id=current_phase.workflow_id).first()
+        workflow = (
+            session.query(Workflow).filter_by(id=current_phase.workflow_id).first()
+        )
         if not workflow or workflow.status not in ("active", "paused"):
-            logger.debug(f"[PHASE] _start_next_phase skipped — workflow is {getattr(workflow, 'status', 'missing')}")
+            logger.debug(
+                f"[PHASE] _start_next_phase skipped — workflow is {getattr(workflow, 'status', 'missing')}"
+            )
             return False
 
         # Find next phase
-        next_phase = session.query(Phase).filter(
-            Phase.workflow_id == current_phase.workflow_id,
-            Phase.order > current_phase.order
-        ).order_by(Phase.order).first()
+        next_phase = (
+            session.query(Phase)
+            .filter(
+                Phase.workflow_id == current_phase.workflow_id,
+                Phase.order > current_phase.order,
+            )
+            .order_by(Phase.order)
+            .first()
+        )
 
         if next_phase:
             # Update execution status for pending or completed phases
             # (completed = re-run after goto reconvergence)
-            execution = session.query(PhaseExecution).filter_by(
-                phase_id=next_phase.id
-            ).first()
+            execution = (
+                session.query(PhaseExecution).filter_by(phase_id=next_phase.id).first()
+            )
 
             if execution and execution.status in ("pending", "completed"):
                 execution.status = "in_progress"
@@ -842,9 +1066,9 @@ class PhaseManager:
         committed docs/ and git-excluded .hephaestus/tmux/ logs are available here.
         """
         try:
-            from pathlib import Path as _P
             import shutil as _shutil
             from datetime import datetime as _dt
+            from pathlib import Path as _P
 
             wt_path = workflow.working_directory if workflow.working_directory else None
             if not wt_path:
@@ -859,23 +1083,39 @@ class PhaseManager:
                 base = project_path
                 while base.name != WORKTREES_SUBDIR and base.parent != base:
                     base = base.parent
-                project_path = base.parent if base.name == WORKTREES_SUBDIR else project_path
+                project_path = (
+                    base.parent if base.name == WORKTREES_SUBDIR else project_path
+                )
 
             if not project_path.is_dir():
-                logger.warning(f"[FEATURE-FOLDER] Project root {project_path} not found")
+                logger.warning(
+                    f"[FEATURE-FOLDER] Project root {project_path} not found"
+                )
                 return
 
             # Prefer design name over workflow definition name so the folder reads
             # "add_calculator" not "Autopilot_Multi-Agent_Pipeline".
             from src.core.database import AutopilotDesign as _AD2
+
             _design_label = None
             if workflow.design_id:
                 _d = session.query(_AD2).filter_by(id=workflow.design_id).first()
                 _design_label = _d.name if _d else None
-            design_name = (_design_label or workflow.name or "feature").replace(" ", "_").replace("/", "_")
-            safe_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in design_name)[:40]
+            design_name = (
+                (_design_label or workflow.name or "feature")
+                .replace(" ", "_")
+                .replace("/", "_")
+            )
+            safe_name = "".join(
+                c if c.isalnum() or c in "-_" else "_" for c in design_name
+            )[:40]
             timestamp = _dt.utcnow().strftime("%Y%m%d_%H%M%S")
-            feature_dir = project_path / CONTEXT_DIR_NAME / "features" / f"{timestamp}_{safe_name}"
+            feature_dir = (
+                project_path
+                / CONTEXT_DIR_NAME
+                / "features"
+                / f"{timestamp}_{safe_name}"
+            )
             docs_dir = feature_dir / "docs"
             docs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -886,7 +1126,11 @@ class PhaseManager:
             wt_docs = wt / "docs"
             if wt_docs.is_dir():
                 for f in wt_docs.rglob("*"):
-                    if f.is_file() and f.suffix in _DOC_EXTENSIONS and "tmux" not in f.parts:
+                    if (
+                        f.is_file()
+                        and f.suffix in _DOC_EXTENSIONS
+                        and "tmux" not in f.parts
+                    ):
                         rel = f.relative_to(wt_docs)
                         dest = docs_dir / rel
                         dest.parent.mkdir(parents=True, exist_ok=True)
@@ -894,8 +1138,10 @@ class PhaseManager:
                             _shutil.copy2(str(f), str(dest))
 
             # 2. feature_report.html → feature dir root (where UI expects it)
-            for candidate in [docs_dir / "feature_report.html",
-                               wt_docs / "feature_report.html"]:
+            for candidate in [
+                docs_dir / "feature_report.html",
+                wt_docs / "feature_report.html",
+            ]:
                 if candidate.is_file():
                     dest = feature_dir / "feature_report.html"
                     if not dest.exists():
@@ -906,7 +1152,10 @@ class PhaseManager:
             #    survive worktree removal by git_commit_push. Also check the
             #    worktree itself as a fallback for any stragglers.
             tmux_dest = feature_dir / "tmux"
-            for tmux_src in [project_path / CONTEXT_DIR_NAME / "tmux", wt / CONTEXT_DIR_NAME / "tmux"]:
+            for tmux_src in [
+                project_path / CONTEXT_DIR_NAME / "tmux",
+                wt / CONTEXT_DIR_NAME / "tmux",
+            ]:
                 if tmux_src.is_dir():
                     tmux_dest.mkdir(exist_ok=True)
                     for f in tmux_src.glob("*.log"):
@@ -917,6 +1166,7 @@ class PhaseManager:
 
             # 4. Link design → feature folder in DB
             from src.core.database import AutopilotDesign as _AD
+
             _design_name_for_metrics = safe_name
             if workflow.design_id:
                 design = session.query(_AD).filter_by(id=workflow.design_id).first()
@@ -926,12 +1176,15 @@ class PhaseManager:
                     design.completed_at = _dt.utcnow()
                     _design_name_for_metrics = design.name or safe_name
                     session.commit()
-                    logger.info(f"[FEATURE-FOLDER] Design {design.id[:8]} → {feature_dir.name}")
+                    logger.info(
+                        f"[FEATURE-FOLDER] Design {design.id[:8]} → {feature_dir.name}"
+                    )
 
             # 5. Write pipeline_metrics.json so forensics has real timestamps even
             #    if the orchestrator finalization code never runs (e.g. it was restarted).
             #    The orchestrator will overwrite this with a more complete version if it runs.
             import json as _json
+
             metrics_path = docs_dir / "pipeline_metrics.json"
             if not metrics_path.exists():
                 try:
@@ -948,10 +1201,16 @@ class PhaseManager:
                         "qa_passed": None,
                         "product_validated": None,
                     }
-                    metrics_path.write_text(_json.dumps(_metrics, indent=2, default=str))
-                    logger.info(f"[FEATURE-FOLDER] Wrote pipeline_metrics.json (phase_manager stub)")
+                    metrics_path.write_text(
+                        _json.dumps(_metrics, indent=2, default=str)
+                    )
+                    logger.info(
+                        "[FEATURE-FOLDER] Wrote pipeline_metrics.json (phase_manager stub)"
+                    )
                 except Exception as _me:
-                    logger.debug(f"[FEATURE-FOLDER] Could not write pipeline_metrics.json: {_me}")
+                    logger.debug(
+                        f"[FEATURE-FOLDER] Could not write pipeline_metrics.json: {_me}"
+                    )
 
             logger.info(f"[FEATURE-FOLDER] Created {feature_dir}")
         except Exception as e:
@@ -973,35 +1232,41 @@ class PhaseManager:
                 return {"error": "Workflow not found"}
 
             # Get phase statuses
-            phases = session.query(Phase).filter_by(
-                workflow_id=self.workflow_id
-            ).order_by(Phase.order).all()
+            phases = (
+                session.query(Phase)
+                .filter_by(workflow_id=self.workflow_id)
+                .order_by(Phase.order)
+                .all()
+            )
 
             phase_statuses = []
             for phase in phases:
-                execution = session.query(PhaseExecution).filter_by(
-                    phase_id=phase.id
-                ).first()
+                execution = (
+                    session.query(PhaseExecution).filter_by(phase_id=phase.id).first()
+                )
 
                 task_stats = {
                     "total": session.query(Task).filter_by(phase_id=phase.id).count(),
-                    "completed": session.query(Task).filter_by(
-                        phase_id=phase.id, status="done"
-                    ).count(),
-                    "active": session.query(Task).filter_by(phase_id=phase.id).filter(
-                        Task.status.in_(["assigned", "in_progress"])
-                    ).count(),
-                    "failed": session.query(Task).filter_by(
-                        phase_id=phase.id, status="failed"
-                    ).count(),
+                    "completed": session.query(Task)
+                    .filter_by(phase_id=phase.id, status="done")
+                    .count(),
+                    "active": session.query(Task)
+                    .filter_by(phase_id=phase.id)
+                    .filter(Task.status.in_(["assigned", "in_progress"]))
+                    .count(),
+                    "failed": session.query(Task)
+                    .filter_by(phase_id=phase.id, status="failed")
+                    .count(),
                 }
 
-                phase_statuses.append({
-                    "order": phase.order,
-                    "name": phase.name,
-                    "status": execution.status if execution else "pending",
-                    "tasks": task_stats,
-                })
+                phase_statuses.append(
+                    {
+                        "order": phase.order,
+                        "name": phase.name,
+                        "status": execution.status if execution else "pending",
+                        "tasks": task_stats,
+                    }
+                )
 
             return {
                 "workflow_id": self.workflow_id,
@@ -1041,7 +1306,9 @@ class PhaseManager:
             # Cache the configuration
             self.phases_config_cache[workflow_id] = config
 
-            logger.info(f"Loaded phases config for workflow {workflow_id}: has_result={config.has_result}")
+            logger.info(
+                f"Loaded phases config for workflow {workflow_id}: has_result={config.has_result}"
+            )
             return config
 
         finally:
@@ -1049,9 +1316,14 @@ class PhaseManager:
 
     # ==================== Multi-Workflow Support Methods ====================
 
-    def register_definition(self, definition_id: str, name: str, description: str = "",
-                           phases_config: List[Dict[str, Any]] = None,
-                           workflow_config: Dict[str, Any] = None) -> str:
+    def register_definition(
+        self,
+        definition_id: str,
+        name: str,
+        description: str = "",
+        phases_config: List[Dict[str, Any]] = None,
+        workflow_config: Dict[str, Any] = None,
+    ) -> str:
         """Register a workflow definition.
 
         Args:
@@ -1067,7 +1339,9 @@ class PhaseManager:
         session = self.db_manager.get_session()
         try:
             # Check if definition already exists
-            existing = session.query(DBWorkflowDefinition).filter_by(id=definition_id).first()
+            existing = (
+                session.query(DBWorkflowDefinition).filter_by(id=definition_id).first()
+            )
             if existing:
                 # Update existing definition
                 existing.name = name
@@ -1090,9 +1364,9 @@ class PhaseManager:
                 logger.info(f"Registered workflow definition: {definition_id}")
 
             # Cache in memory
-            self.definitions[definition_id] = session.query(DBWorkflowDefinition).filter_by(
-                id=definition_id
-            ).first()
+            self.definitions[definition_id] = (
+                session.query(DBWorkflowDefinition).filter_by(id=definition_id).first()
+            )
 
             return definition_id
 
@@ -1103,10 +1377,14 @@ class PhaseManager:
         finally:
             session.close()
 
-    def start_execution(self, definition_id: str, description: str,
-                       working_directory: str = None,
-                       launch_params: Dict[str, Any] = None,
-                       design_id: str = None) -> str:
+    def start_execution(
+        self,
+        definition_id: str,
+        description: str,
+        working_directory: str = None,
+        launch_params: Dict[str, Any] = None,
+        design_id: str = None,
+    ) -> str:
         """Start a new workflow execution from a definition.
 
         Args:
@@ -1121,7 +1399,9 @@ class PhaseManager:
         session = self.db_manager.get_session()
         try:
             # Get the definition
-            db_definition = session.query(DBWorkflowDefinition).filter_by(id=definition_id).first()
+            db_definition = (
+                session.query(DBWorkflowDefinition).filter_by(id=definition_id).first()
+            )
             if not db_definition:
                 raise ValueError(f"Workflow definition not found: {definition_id}")
 
@@ -1155,7 +1435,7 @@ class PhaseManager:
 
                 # Helper to serialize lists/dicts as JSON strings for Text columns
                 def serialize_for_text(value):
-                    if value is None or value == 'null':
+                    if value is None or value == "null":
                         return None
                     if isinstance(value, (list, dict)):
                         return json.dumps(value)
@@ -1169,21 +1449,35 @@ class PhaseManager:
                 phase_next_steps = phase_config.get("next_steps")
 
                 if launch_params:
-                    phase_description = substitute_params(phase_description, launch_params)
+                    phase_description = substitute_params(
+                        phase_description, launch_params
+                    )
                     if phase_additional_notes:
-                        phase_additional_notes = substitute_params(phase_additional_notes, launch_params)
+                        phase_additional_notes = substitute_params(
+                            phase_additional_notes, launch_params
+                        )
                     if phase_done_definitions:
-                        phase_done_definitions = substitute_params_in_list(phase_done_definitions, launch_params)
+                        phase_done_definitions = substitute_params_in_list(
+                            phase_done_definitions, launch_params
+                        )
                     if phase_outputs:
                         if isinstance(phase_outputs, list):
-                            phase_outputs = substitute_params_in_list(phase_outputs, launch_params)
+                            phase_outputs = substitute_params_in_list(
+                                phase_outputs, launch_params
+                            )
                         elif isinstance(phase_outputs, str):
-                            phase_outputs = substitute_params(phase_outputs, launch_params)
+                            phase_outputs = substitute_params(
+                                phase_outputs, launch_params
+                            )
                     if phase_next_steps:
                         if isinstance(phase_next_steps, list):
-                            phase_next_steps = substitute_params_in_list(phase_next_steps, launch_params)
+                            phase_next_steps = substitute_params_in_list(
+                                phase_next_steps, launch_params
+                            )
                         elif isinstance(phase_next_steps, str):
-                            phase_next_steps = substitute_params(phase_next_steps, launch_params)
+                            phase_next_steps = substitute_params(
+                                phase_next_steps, launch_params
+                            )
 
                 # Resolve working directory: substitute params, treat "." and "" as inherit
                 phase_wd = phase_config.get("working_directory")
@@ -1223,34 +1517,40 @@ class PhaseManager:
 
             # Create BoardConfig if ticket tracking is enabled
             workflow_config_data = db_definition.workflow_config or {}
-            if workflow_config_data.get("enable_tickets") and workflow_config_data.get("board_config"):
+            if workflow_config_data.get("enable_tickets") and workflow_config_data.get(
+                "board_config"
+            ):
                 from src.core.database import BoardConfig
 
                 board_id = f"board-{str(uuid.uuid4())}"
                 config = get_config()
-                default_human_review = getattr(config, 'default_human_review', False)
-                default_approval_timeout = getattr(config, 'default_approval_timeout', 1800)
+                default_human_review = getattr(config, "default_human_review", False)
+                default_approval_timeout = getattr(
+                    config, "default_approval_timeout", 1800
+                )
                 board_config_data = workflow_config_data.get("board_config", {})
 
                 board_config = BoardConfig(
                     id=board_id,
                     workflow_id=workflow_id,
                     name=f"{db_definition.name} Board",
-                    columns=board_config_data.get('columns', []),
-                    ticket_types=board_config_data.get('ticket_types', ['task']),
-                    default_ticket_type=board_config_data.get('default_ticket_type', 'task'),
-                    initial_status=board_config_data.get('initial_status', 'backlog'),
-                    auto_assign=board_config_data.get('auto_assign', False),
-                    require_comments_on_status_change=board_config_data.get(
-                        'require_comments_on_status_change', False
+                    columns=board_config_data.get("columns", []),
+                    ticket_types=board_config_data.get("ticket_types", ["task"]),
+                    default_ticket_type=board_config_data.get(
+                        "default_ticket_type", "task"
                     ),
-                    allow_reopen=board_config_data.get('allow_reopen', True),
-                    track_time=board_config_data.get('track_time', False),
+                    initial_status=board_config_data.get("initial_status", "backlog"),
+                    auto_assign=board_config_data.get("auto_assign", False),
+                    require_comments_on_status_change=board_config_data.get(
+                        "require_comments_on_status_change", False
+                    ),
+                    allow_reopen=board_config_data.get("allow_reopen", True),
+                    track_time=board_config_data.get("track_time", False),
                     ticket_human_review=board_config_data.get(
-                        'ticket_human_review', default_human_review
+                        "ticket_human_review", default_human_review
                     ),
                     approval_timeout_seconds=board_config_data.get(
-                        'approval_timeout_seconds', default_approval_timeout
+                        "approval_timeout_seconds", default_approval_timeout
                     ),
                 )
                 session.add(board_config)
@@ -1264,7 +1564,9 @@ class PhaseManager:
                 if phase_1_task_prompt:
                     # Substitute launch params into the task prompt
                     if launch_params:
-                        phase_1_task_prompt = substitute_params(phase_1_task_prompt, launch_params)
+                        phase_1_task_prompt = substitute_params(
+                            phase_1_task_prompt, launch_params
+                        )
 
                     # Return task info for the API endpoint to create properly
                     initial_task_info = {
@@ -1273,7 +1575,9 @@ class PhaseManager:
                         "priority": "high",
                         "workflow_id": workflow_id,
                     }
-                    logger.info(f"Prepared Phase 1 task info for workflow {workflow_id}")
+                    logger.info(
+                        f"Prepared Phase 1 task info for workflow {workflow_id}"
+                    )
 
             session.commit()
 
@@ -1288,7 +1592,9 @@ class PhaseManager:
             if first_phase_id:
                 self._start_phase(session, first_phase_id)
 
-            logger.info(f"Started workflow execution: {workflow_id} (definition: {definition_id})")
+            logger.info(
+                f"Started workflow execution: {workflow_id} (definition: {definition_id})"
+            )
 
             # Return both workflow_id and initial task info
             return workflow_id, initial_task_info
@@ -1311,9 +1617,12 @@ class PhaseManager:
         """
         session = self.db_manager.get_session()
         try:
-            workflow = session.query(Workflow).options(
-                joinedload(Workflow.definition)
-            ).filter_by(id=workflow_id).first()
+            workflow = (
+                session.query(Workflow)
+                .options(joinedload(Workflow.definition))
+                .filter_by(id=workflow_id)
+                .first()
+            )
             if workflow:
                 session.expunge(workflow)
             return workflow
@@ -1335,7 +1644,9 @@ class PhaseManager:
 
         session = self.db_manager.get_session()
         try:
-            definition = session.query(DBWorkflowDefinition).filter_by(id=definition_id).first()
+            definition = (
+                session.query(DBWorkflowDefinition).filter_by(id=definition_id).first()
+            )
             if definition:
                 self.definitions[definition_id] = definition
             return definition
@@ -1390,9 +1701,12 @@ class PhaseManager:
         """
         session = self.db_manager.get_session()
         try:
-            return session.query(Phase).filter_by(
-                workflow_id=workflow_id
-            ).order_by(Phase.order).all()
+            return (
+                session.query(Phase)
+                .filter_by(workflow_id=workflow_id)
+                .order_by(Phase.order)
+                .all()
+            )
         finally:
             session.close()
 
@@ -1408,12 +1722,24 @@ class PhaseManager:
         session = self.db_manager.get_session()
         try:
             total = session.query(Task).filter_by(workflow_id=workflow_id).count()
-            done = session.query(Task).filter_by(workflow_id=workflow_id, status="done").count()
-            failed = session.query(Task).filter_by(workflow_id=workflow_id, status="failed").count()
-            active = session.query(Task).filter(
-                Task.workflow_id == workflow_id,
-                Task.status.in_(["pending", "assigned", "in_progress"])
-            ).count()
+            done = (
+                session.query(Task)
+                .filter_by(workflow_id=workflow_id, status="done")
+                .count()
+            )
+            failed = (
+                session.query(Task)
+                .filter_by(workflow_id=workflow_id, status="failed")
+                .count()
+            )
+            active = (
+                session.query(Task)
+                .filter(
+                    Task.workflow_id == workflow_id,
+                    Task.status.in_(["pending", "assigned", "in_progress"]),
+                )
+                .count()
+            )
 
             return {
                 "total_tasks": total,
@@ -1434,15 +1760,19 @@ class PhaseManager:
             Number of active agents
         """
         from src.core.database import Agent
+
         session = self.db_manager.get_session()
         try:
             # Count agents working on tasks in this workflow
-            return session.query(Agent).join(
-                Task, Agent.current_task_id == Task.id
-            ).filter(
-                Task.workflow_id == workflow_id,
-                Agent.status.in_(["working", "idle"])
-            ).count()
+            return (
+                session.query(Agent)
+                .join(Task, Agent.current_task_id == Task.id)
+                .filter(
+                    Task.workflow_id == workflow_id,
+                    Agent.status.in_(["working", "idle"]),
+                )
+                .count()
+            )
         finally:
             session.close()
 
@@ -1454,9 +1784,11 @@ class PhaseManager:
         session = self.db_manager.get_session()
         try:
             # Load all active workflows
-            workflows = session.query(Workflow).filter(
-                Workflow.status.in_(["active", "paused"])
-            ).all()
+            workflows = (
+                session.query(Workflow)
+                .filter(Workflow.status.in_(["active", "paused"]))
+                .all()
+            )
 
             for workflow in workflows:
                 if workflow.definition_id:
@@ -1467,7 +1799,9 @@ class PhaseManager:
             for defn in definitions:
                 self.definitions[defn.id] = defn
 
-            logger.info(f"Loaded {len(self.active_executions)} active workflow executions")
+            logger.info(
+                f"Loaded {len(self.active_executions)} active workflow executions"
+            )
             logger.info(f"Loaded {len(self.definitions)} workflow definitions")
 
         finally:

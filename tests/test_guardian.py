@@ -1,13 +1,12 @@
 """Unit tests for the Guardian trajectory monitoring system."""
 
-import pytest
-import asyncio
-from unittest.mock import Mock, AsyncMock, patch, MagicMock
 from datetime import datetime, timedelta
-import json
+from unittest.mock import AsyncMock, Mock, patch
 
-from src.monitoring.guardian import Guardian, SteeringType, TrajectoryPhase
-from src.core.database import Agent, Task, AgentLog
+import pytest
+
+from src.core.database import Agent, AgentLog, Task
+from src.monitoring.guardian import Guardian
 
 
 @pytest.fixture
@@ -33,16 +32,18 @@ def mock_agent_manager():
 def mock_llm_provider():
     """Create mock LLM provider."""
     mock = AsyncMock()
-    mock.analyze_agent_trajectory = AsyncMock(return_value={
-        "current_phase": "implementation",
-        "trajectory_aligned": True,
-        "alignment_score": 0.8,
-        "alignment_issues": [],
-        "needs_steering": False,
-        "steering_type": None,
-        "steering_recommendation": None,
-        "trajectory_summary": "Agent implementing task successfully"
-    })
+    mock.analyze_agent_trajectory = AsyncMock(
+        return_value={
+            "current_phase": "implementation",
+            "trajectory_aligned": True,
+            "alignment_score": 0.8,
+            "alignment_issues": [],
+            "needs_steering": False,
+            "steering_type": None,
+            "steering_recommendation": None,
+            "trajectory_summary": "Agent implementing task successfully",
+        }
+    )
     return mock
 
 
@@ -52,7 +53,7 @@ def guardian(mock_db_manager, mock_agent_manager, mock_llm_provider):
     return Guardian(
         db_manager=mock_db_manager,
         agent_manager=mock_agent_manager,
-        llm_provider=mock_llm_provider
+        llm_provider=mock_llm_provider,
     )
 
 
@@ -60,53 +61,61 @@ class TestGuardian:
     """Test the Guardian monitoring system."""
 
     @pytest.mark.asyncio
-    async def test_analyze_agent_with_trajectory_success(self, guardian, mock_llm_provider):
+    async def test_analyze_agent_with_trajectory_success(
+        self, guardian, mock_llm_provider
+    ):
         """Test successful trajectory analysis of an agent."""
         # Setup
         agent = Agent(
             id="test-agent-1",
             current_task_id="task-1",
-            tmux_session_name="agent-test-1"
+            tmux_session_name="agent-test-1",
         )
 
         mock_task = Task(
             id="task-1",
             raw_description="Implement authentication",
             enriched_description="Implement JWT authentication system",
-            done_definition="Authentication working with tests"
+            done_definition="Authentication working with tests",
         )
 
         # Mock accumulated context
-        with patch.object(guardian, '_build_accumulated_context', return_value={
-            "overall_goal": "Implement JWT authentication",
-            "constraints": ["no external libraries"],
-            "lifted_constraints": [],
-            "standing_instructions": ["keep it simple"],
-            "session_start": datetime.utcnow() - timedelta(minutes=5),
-            "conversation_length": 10,
-            "current_focus": "implementation"
-        }):
-            with patch.object(guardian, '_get_agent_task', return_value=mock_task):
+        with patch.object(
+            guardian,
+            "_build_accumulated_context",
+            return_value={
+                "overall_goal": "Implement JWT authentication",
+                "constraints": ["no external libraries"],
+                "lifted_constraints": [],
+                "standing_instructions": ["keep it simple"],
+                "session_start": datetime.utcnow() - timedelta(minutes=5),
+                "conversation_length": 10,
+                "current_focus": "implementation",
+            },
+        ):
+            with patch.object(guardian, "_get_agent_task", return_value=mock_task):
                 # Execute
                 result = await guardian.analyze_agent_with_trajectory(
                     agent=agent,
                     tmux_output="Creating auth module...",
-                    past_summaries=[]
+                    past_summaries=[],
                 )
 
         # Assert
-        assert result['agent_id'] == "test-agent-1"
-        assert result['trajectory_aligned'] is True
-        assert result['alignment_score'] == 0.8
-        assert result['current_phase'] == "implementation"
-        assert "JWT authentication" in result['accumulated_goal']
-        assert "no external libraries" in result['active_constraints']
+        assert result["agent_id"] == "test-agent-1"
+        assert result["trajectory_aligned"] is True
+        assert result["alignment_score"] == 0.8
+        assert result["current_phase"] == "implementation"
+        assert "JWT authentication" in result["accumulated_goal"]
+        assert "no external libraries" in result["active_constraints"]
 
         # Verify LLM was called
         mock_llm_provider.analyze_agent_trajectory.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_analyze_agent_with_steering_needed(self, guardian, mock_llm_provider):
+    async def test_analyze_agent_with_steering_needed(
+        self, guardian, mock_llm_provider
+    ):
         """Test when agent needs steering intervention."""
         # Setup - agent needs steering
         mock_llm_provider.analyze_agent_trajectory.return_value = {
@@ -117,34 +126,34 @@ class TestGuardian:
             "needs_steering": True,
             "steering_type": "violating_constraints",
             "steering_recommendation": "Remember: no external libraries allowed",
-            "trajectory_summary": "Agent violating constraints"
+            "trajectory_summary": "Agent violating constraints",
         }
 
         agent = Agent(id="test-agent-2", current_task_id="task-2")
         mock_task = Task(
-            id="task-2",
-            enriched_description="Build API",
-            done_definition="API working"
+            id="task-2", enriched_description="Build API", done_definition="API working"
         )
 
-        with patch.object(guardian, '_build_accumulated_context', return_value={
-            "overall_goal": "Build API",
-            "constraints": ["no external libraries"],
-            "session_start": datetime.utcnow()
-        }):
-            with patch.object(guardian, '_get_agent_task', return_value=mock_task):
+        with patch.object(
+            guardian,
+            "_build_accumulated_context",
+            return_value={
+                "overall_goal": "Build API",
+                "constraints": ["no external libraries"],
+                "session_start": datetime.utcnow(),
+            },
+        ):
+            with patch.object(guardian, "_get_agent_task", return_value=mock_task):
                 # Execute
                 result = await guardian.analyze_agent_with_trajectory(
-                    agent=agent,
-                    tmux_output="pip install requests",
-                    past_summaries=[]
+                    agent=agent, tmux_output="pip install requests", past_summaries=[]
                 )
 
         # Assert steering needed
-        assert result['trajectory_aligned'] is False
-        assert result['needs_steering'] is True
-        assert result['steering_type'] == "violating_constraints"
-        assert result['steering_message'] == "Remember: no external libraries allowed"
+        assert result["trajectory_aligned"] is False
+        assert result["needs_steering"] is True
+        assert result["steering_type"] == "violating_constraints"
+        assert result["steering_message"] == "Remember: no external libraries allowed"
 
     @pytest.mark.asyncio
     async def test_guardian_caching(self, guardian):
@@ -161,15 +170,15 @@ class TestGuardian:
             "references": {},
             "conversation_length": 0,
             "session_start": datetime.utcnow(),
-            "discovered_blockers": []
+            "discovered_blockers": [],
         }
 
-        with patch.object(guardian, '_build_accumulated_context', return_value=complete_context):
-            with patch.object(guardian, '_get_agent_task', return_value=mock_task):
+        with patch.object(
+            guardian, "_build_accumulated_context", return_value=complete_context
+        ):
+            with patch.object(guardian, "_get_agent_task", return_value=mock_task):
                 await guardian.analyze_agent_with_trajectory(
-                    agent=agent,
-                    tmux_output="test",
-                    past_summaries=[]
+                    agent=agent, tmux_output="test", past_summaries=[]
                 )
 
         # Check cache
@@ -189,9 +198,7 @@ class TestGuardian:
 
         # Execute steering
         await guardian.steer_agent(
-            agent=agent,
-            steering_type="stuck",
-            message="Try checking your imports"
+            agent=agent, steering_type="stuck", message="Try checking your imports"
         )
 
         # Verify message sent
@@ -217,37 +224,39 @@ class TestGuardian:
                 log_type="input",
                 message="Build auth without external libraries",
                 created_at=datetime.utcnow() - timedelta(minutes=10),
-                details={}
+                details={},
             ),
             AgentLog(
                 agent_id="test-agent-5",
                 log_type="output",
                 message="I'll implement JWT from scratch",
                 created_at=datetime.utcnow() - timedelta(minutes=9),
-                details={}
-            )
+                details={},
+            ),
         ]
 
         mock_task = Task(
             id="task-5",
             enriched_description="Build authentication",
-            done_definition="Auth working"
+            done_definition="Auth working",
         )
 
         mock_session = Mock()
         mock_session.query.return_value.filter_by.return_value.order_by.return_value.all.return_value = mock_logs
-        mock_session.query.return_value.filter_by.return_value.first.return_value = mock_task
+        mock_session.query.return_value.filter_by.return_value.first.return_value = (
+            mock_task
+        )
         mock_db_manager.get_session.return_value = mock_session
 
         # Execute
         context = await guardian._build_accumulated_context(agent, [])
 
         # Assert
-        assert context['overall_goal'] == "Build authentication"
-        assert context['done_definition'] == "Auth working"
-        assert context['conversation_length'] == 2
-        assert isinstance(context['constraints'], list)
-        assert isinstance(context['session_start'], datetime)
+        assert context["overall_goal"] == "Build authentication"
+        assert context["done_definition"] == "Auth working"
+        assert context["conversation_length"] == 2
+        assert isinstance(context["constraints"], list)
+        assert isinstance(context["session_start"], datetime)
 
     def test_should_steer_agent(self, guardian):
         """Test steering throttling logic."""
@@ -263,7 +272,7 @@ class TestGuardian:
         assert guardian._should_steer_agent(agent_id) is False
 
         # Simulate time passing (cooldown is 10 minutes)
-        guardian.steering_history[agent_id][0]['timestamp'] = (
+        guardian.steering_history[agent_id][0]["timestamp"] = (
             datetime.utcnow() - timedelta(minutes=11)
         ).isoformat()
 
@@ -288,17 +297,21 @@ class TestGuardian:
         """Test handling when task not found."""
         agent = Agent(id="test-agent-7", current_task_id="missing-task")
 
-        with patch.object(guardian, '_get_agent_task', return_value=None):
-            with patch.object(guardian, '_build_accumulated_context', return_value={"overall_goal": "Unknown"}):
+        with patch.object(guardian, "_get_agent_task", return_value=None):
+            with patch.object(
+                guardian,
+                "_build_accumulated_context",
+                return_value={"overall_goal": "Unknown"},
+            ):
                 result = await guardian.analyze_agent_with_trajectory(
-                    agent=agent,
-                    tmux_output="test",
-                    past_summaries=[]
+                    agent=agent, tmux_output="test", past_summaries=[]
                 )
 
         # Should return default analysis
-        assert result['agent_id'] == "test-agent-7"
-        assert result['trajectory_summary'] == "LLM analysis unavailable - using default"
+        assert result["agent_id"] == "test-agent-7"
+        assert (
+            result["trajectory_summary"] == "LLM analysis unavailable - using default"
+        )
 
     @pytest.mark.asyncio
     async def test_llm_failure_handling(self, guardian, mock_llm_provider):
@@ -309,17 +322,21 @@ class TestGuardian:
         agent = Agent(id="test-agent-8", current_task_id="task-8")
         mock_task = Task(id="task-8", enriched_description="Test")
 
-        with patch.object(guardian, '_build_accumulated_context', return_value={"overall_goal": "Test"}):
-            with patch.object(guardian, '_get_agent_task', return_value=mock_task):
+        with patch.object(
+            guardian,
+            "_build_accumulated_context",
+            return_value={"overall_goal": "Test"},
+        ):
+            with patch.object(guardian, "_get_agent_task", return_value=mock_task):
                 result = await guardian.analyze_agent_with_trajectory(
-                    agent=agent,
-                    tmux_output="test",
-                    past_summaries=[]
+                    agent=agent, tmux_output="test", past_summaries=[]
                 )
 
         # Should return default analysis
-        assert result['trajectory_summary'] == "LLM analysis unavailable - using default"
-        assert result['trajectory_aligned'] is True  # Safe default
+        assert (
+            result["trajectory_summary"] == "LLM analysis unavailable - using default"
+        )
+        assert result["trajectory_aligned"] is True  # Safe default
 
     def test_clear_agent_cache(self, guardian):
         """Test clearing agent cache."""

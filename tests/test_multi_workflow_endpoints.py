@@ -7,10 +7,10 @@ This module tests all MCP endpoint changes for multi-workflow support:
 4. Error handling for missing workflow_id
 """
 
-import pytest
 import os
 import uuid
-from unittest.mock import patch, MagicMock, AsyncMock
+
+import pytest
 from pydantic import ValidationError
 
 # Set test environment before imports
@@ -19,12 +19,12 @@ os.environ["HEPHAESTUS_TEST_DB"] = ":memory:"
 from fastapi.testclient import TestClient
 
 from src.mcp.server import (
-    app,
     CreateTaskRequest,
     CreateTicketRequest,
+    GetTicketsRequest,
     SearchTicketsRequest,
     StartWorkflowRequest,
-    GetTicketsRequest,
+    app,
 )
 
 
@@ -38,7 +38,7 @@ class TestRequestModels:
             task_description="Test task",
             done_definition="Task is done",
             ai_agent_id="test-agent",
-            workflow_id="test-workflow-id"
+            workflow_id="test-workflow-id",
         )
         assert request.workflow_id == "test-workflow-id"
         assert request.task_description == "Test task"
@@ -49,7 +49,7 @@ class TestRequestModels:
             CreateTaskRequest(
                 task_description="Test task",
                 done_definition="Task is done",
-                ai_agent_id="test-agent"
+                ai_agent_id="test-agent",
             )
         assert "workflow_id" in str(exc_info.value)
 
@@ -63,7 +63,7 @@ class TestRequestModels:
             priority="high",
             phase_id="1",
             cwd="/project",
-            ticket_id="ticket-123"
+            ticket_id="ticket-123",
         )
         assert request.priority == "high"
         assert request.phase_id == "1"
@@ -76,7 +76,7 @@ class TestRequestModels:
         request = CreateTicketRequest(
             workflow_id="test-workflow-id",
             title="Test Ticket Title",
-            description="This is a test ticket description."
+            description="This is a test ticket description.",
         )
         assert request.workflow_id == "test-workflow-id"
 
@@ -85,7 +85,7 @@ class TestRequestModels:
         with pytest.raises(ValidationError) as exc_info:
             CreateTicketRequest(
                 title="Test Ticket Title",
-                description="This is a test ticket description."
+                description="This is a test ticket description.",
             )
         assert "workflow_id" in str(exc_info.value)
 
@@ -96,7 +96,7 @@ class TestRequestModels:
             CreateTicketRequest(
                 workflow_id="test-workflow",
                 title="AB",  # min_length=3
-                description="Valid description"
+                description="Valid description",
             )
         error_str = str(exc_info.value)
         assert "title" in error_str.lower()
@@ -106,7 +106,7 @@ class TestRequestModels:
             CreateTicketRequest(
                 workflow_id="test-workflow",
                 title="Valid Title",
-                description="Short"  # min_length=10
+                description="Short",  # min_length=10
             )
         error_str = str(exc_info.value)
         assert "description" in error_str.lower()
@@ -115,8 +115,7 @@ class TestRequestModels:
         """SearchTicketsRequest should require workflow_id field."""
         # Should work with workflow_id
         request = SearchTicketsRequest(
-            workflow_id="test-workflow-id",
-            query="test search query"
+            workflow_id="test-workflow-id", query="test search query"
         )
         assert request.workflow_id == "test-workflow-id"
         assert request.query == "test search query"
@@ -124,16 +123,13 @@ class TestRequestModels:
     def test_search_tickets_request_fails_without_workflow_id(self):
         """SearchTicketsRequest should fail without workflow_id."""
         with pytest.raises(ValidationError) as exc_info:
-            SearchTicketsRequest(
-                query="test search query"
-            )
+            SearchTicketsRequest(query="test search query")
         assert "workflow_id" in str(exc_info.value)
 
     def test_search_tickets_request_default_values(self):
         """SearchTicketsRequest should have correct default values."""
         request = SearchTicketsRequest(
-            workflow_id="test-workflow-id",
-            query="test query"
+            workflow_id="test-workflow-id", query="test query"
         )
         assert request.search_type == "hybrid"
         assert request.limit == 10
@@ -143,9 +139,7 @@ class TestRequestModels:
     def test_get_tickets_request_requires_workflow_id(self):
         """GetTicketsRequest should require workflow_id field."""
         # Should work with workflow_id
-        request = GetTicketsRequest(
-            workflow_id="test-workflow-id"
-        )
+        request = GetTicketsRequest(workflow_id="test-workflow-id")
         assert request.workflow_id == "test-workflow-id"
 
     def test_start_workflow_request_model(self):
@@ -154,7 +148,7 @@ class TestRequestModels:
         request = StartWorkflowRequest(
             definition_id="def-123",
             description="Test workflow execution",
-            working_directory="/path/to/dir"
+            working_directory="/path/to/dir",
         )
         assert request.definition_id == "def-123"
         assert request.description == "Test workflow execution"
@@ -162,8 +156,7 @@ class TestRequestModels:
 
         # Test with only required fields
         request = StartWorkflowRequest(
-            definition_id="def-123",
-            description="Test workflow execution"
+            definition_id="def-123", description="Test workflow execution"
         )
         assert request.definition_id == "def-123"
         assert request.description == "Test workflow execution"
@@ -172,14 +165,10 @@ class TestRequestModels:
     def test_start_workflow_request_requires_fields(self):
         """StartWorkflowRequest should require both definition_id and description."""
         with pytest.raises(ValidationError):
-            StartWorkflowRequest(
-                definition_id="def-123"
-            )
+            StartWorkflowRequest(definition_id="def-123")
 
         with pytest.raises(ValidationError):
-            StartWorkflowRequest(
-                description="Test workflow execution"
-            )
+            StartWorkflowRequest(description="Test workflow execution")
 
 
 class TestWorkflowEndpoints:
@@ -194,31 +183,36 @@ class TestWorkflowEndpoints:
         """GET /api/workflow-definitions endpoint should exist."""
         response = client.get("/api/workflow-definitions")
         # We expect some response (may be 500 if not fully initialized, but not 404)
-        assert response.status_code != 404, "Endpoint /api/workflow-definitions not found"
+        assert response.status_code != 404, (
+            "Endpoint /api/workflow-definitions not found"
+        )
 
     def test_workflow_executions_list_endpoint_exists(self, client):
         """GET /api/workflow-executions endpoint should exist."""
         response = client.get("/api/workflow-executions")
         # We expect some response (may be 500 if not fully initialized, but not 404)
-        assert response.status_code != 404, "Endpoint /api/workflow-executions not found"
+        assert response.status_code != 404, (
+            "Endpoint /api/workflow-executions not found"
+        )
 
     def test_workflow_executions_post_endpoint_exists(self, client):
         """POST /api/workflow-executions endpoint should exist."""
         response = client.post(
             "/api/workflow-executions",
-            json={
-                "definition_id": "test-def",
-                "description": "Test execution"
-            }
+            json={"definition_id": "test-def", "description": "Test execution"},
         )
         # We expect some response (may be 400/500 if not valid, but not 404)
-        assert response.status_code != 404, "Endpoint POST /api/workflow-executions not found"
+        assert response.status_code != 404, (
+            "Endpoint POST /api/workflow-executions not found"
+        )
 
     def test_workflow_execution_get_endpoint_exists(self, client):
         """GET /api/workflow-executions/{workflow_id} endpoint should exist."""
         response = client.get("/api/workflow-executions/test-workflow-id")
         # The route should exist - status could be 200, 404 (for workflow), or 500
-        assert response.status_code in [200, 404, 500], f"Unexpected status: {response.status_code}"
+        assert response.status_code in [200, 404, 500], (
+            f"Unexpected status: {response.status_code}"
+        )
 
 
 class TestEndpointValidation:
@@ -236,10 +230,10 @@ class TestEndpointValidation:
             json={
                 "task_description": "Test task",
                 "done_definition": "Task is done",
-                "ai_agent_id": "test-agent"
+                "ai_agent_id": "test-agent",
                 # Missing workflow_id
             },
-            headers={"X-Agent-ID": "test-agent"}
+            headers={"X-Agent-ID": "test-agent"},
         )
         # Should get 422 (validation error) because workflow_id is missing
         assert response.status_code == 422
@@ -254,9 +248,9 @@ class TestEndpointValidation:
                 "done_definition": "Task is done",
                 "ai_agent_id": "test-agent",
                 "workflow_id": "test-workflow-123",
-                "phase_id": "1"
+                "phase_id": "1",
             },
-            headers={"X-Agent-ID": "test-agent"}
+            headers={"X-Agent-ID": "test-agent"},
         )
         # Should not get 422 validation error - may fail for other reasons
         assert response.status_code != 422
@@ -267,10 +261,10 @@ class TestEndpointValidation:
             "/api/tickets/create",
             json={
                 "title": "Test Ticket",
-                "description": "Test ticket description"
+                "description": "Test ticket description",
                 # Missing workflow_id
             },
-            headers={"X-Agent-ID": "test-agent"}
+            headers={"X-Agent-ID": "test-agent"},
         )
         # Should get 422 (validation error) because workflow_id is missing
         assert response.status_code == 422
@@ -283,9 +277,9 @@ class TestEndpointValidation:
             json={
                 "workflow_id": "test-workflow-123",
                 "title": "Test Ticket",
-                "description": "Test ticket description here"
+                "description": "Test ticket description here",
             },
-            headers={"X-Agent-ID": "test-agent"}
+            headers={"X-Agent-ID": "test-agent"},
         )
         # Should not get 422 validation error
         assert response.status_code != 422
@@ -298,7 +292,7 @@ class TestEndpointValidation:
                 "query": "test search"
                 # Missing workflow_id
             },
-            headers={"X-Agent-ID": "test-agent"}
+            headers={"X-Agent-ID": "test-agent"},
         )
         # Should get 422 (validation error) because workflow_id is missing
         assert response.status_code == 422
@@ -308,11 +302,8 @@ class TestEndpointValidation:
         """POST /api/tickets/search should accept workflow_id."""
         response = client.post(
             "/api/tickets/search",
-            json={
-                "workflow_id": "test-workflow-123",
-                "query": "test search query"
-            },
-            headers={"X-Agent-ID": "test-agent"}
+            json={"workflow_id": "test-workflow-123", "query": "test search query"},
+            headers={"X-Agent-ID": "test-agent"},
         )
         # Should not get 422 validation error
         assert response.status_code != 422
@@ -321,7 +312,7 @@ class TestEndpointValidation:
         """GET /api/tickets should require workflow_id query param."""
         response = client.get(
             "/api/tickets",
-            headers={"X-Agent-ID": "test-agent"}
+            headers={"X-Agent-ID": "test-agent"},
             # Missing workflow_id query param
         )
         # Should get 422 (validation error) because workflow_id is missing
@@ -333,7 +324,7 @@ class TestEndpointValidation:
         response = client.get(
             "/api/tickets",
             params={"workflow_id": "test-workflow-123"},
-            headers={"X-Agent-ID": "test-agent"}
+            headers={"X-Agent-ID": "test-agent"},
         )
         # Should not get 422 validation error
         assert response.status_code != 422
@@ -355,10 +346,10 @@ class TestTaskEndpoints:
                 "task_description": "Test task",
                 "done_definition": "Done when complete",
                 "ai_agent_id": "test-agent",
-                "phase_id": "1"
+                "phase_id": "1",
                 # Missing workflow_id
             },
-            headers={"X-Agent-ID": "test-agent"}
+            headers={"X-Agent-ID": "test-agent"},
         )
         assert response.status_code == 422
         assert "workflow_id" in response.text.lower()
@@ -372,9 +363,9 @@ class TestTaskEndpoints:
                 "done_definition": "Done when complete",
                 "ai_agent_id": "test-agent",
                 "workflow_id": f"workflow-{uuid.uuid4()}",
-                "phase_id": "1"
+                "phase_id": "1",
             },
-            headers={"X-Agent-ID": "test-agent"}
+            headers={"X-Agent-ID": "test-agent"},
         )
         # Should pass validation (might fail later due to workflow not existing)
         assert response.status_code != 422
@@ -388,9 +379,9 @@ class TestTaskEndpoints:
                 "done_definition": "Done when complete",
                 "ai_agent_id": "test-agent",
                 "workflow_id": "test-workflow-id",
-                "priority": "invalid"  # Should be low/medium/high
+                "priority": "invalid",  # Should be low/medium/high
             },
-            headers={"X-Agent-ID": "test-agent"}
+            headers={"X-Agent-ID": "test-agent"},
         )
         assert response.status_code == 422
 
@@ -409,10 +400,10 @@ class TestTicketEndpoints:
             "/api/tickets/create",
             json={
                 "title": "Test ticket",
-                "description": "Test description here"
+                "description": "Test description here",
                 # Missing workflow_id
             },
-            headers={"X-Agent-ID": "test-agent"}
+            headers={"X-Agent-ID": "test-agent"},
         )
         assert response.status_code == 422
 
@@ -423,9 +414,9 @@ class TestTicketEndpoints:
             json={
                 "workflow_id": "test-workflow",
                 "title": "AB",  # Too short - min 3
-                "description": "Valid description here"
+                "description": "Valid description here",
             },
-            headers={"X-Agent-ID": "test-agent"}
+            headers={"X-Agent-ID": "test-agent"},
         )
         assert response.status_code == 422
 
@@ -437,7 +428,7 @@ class TestTicketEndpoints:
                 "query": "test"
                 # Missing workflow_id
             },
-            headers={"X-Agent-ID": "test-agent"}
+            headers={"X-Agent-ID": "test-agent"},
         )
         assert response.status_code == 422
 
@@ -447,9 +438,9 @@ class TestTicketEndpoints:
             "/api/tickets/search",
             json={
                 "workflow_id": "test-workflow",
-                "query": "ab"  # Too short - min 3
+                "query": "ab",  # Too short - min 3
             },
-            headers={"X-Agent-ID": "test-agent"}
+            headers={"X-Agent-ID": "test-agent"},
         )
         assert response.status_code == 422
 
@@ -502,7 +493,9 @@ class TestPhaseManagerIntegration:
 
         assert workflow_id is not None
         assert workflow_id in initialized_phase_manager.active_executions
-        assert initialized_phase_manager.active_executions[workflow_id] == "test-workflow"
+        assert (
+            initialized_phase_manager.active_executions[workflow_id] == "test-workflow"
+        )
 
     def test_start_execution_invalid_definition(self, initialized_phase_manager):
         """Test starting execution with invalid definition ID."""
@@ -513,7 +506,9 @@ class TestPhaseManagerIntegration:
             )
         assert "not found" in str(exc_info.value)
 
-    def test_multiple_concurrent_executions(self, initialized_phase_manager, test_bugfix_definition):
+    def test_multiple_concurrent_executions(
+        self, initialized_phase_manager, test_bugfix_definition
+    ):
         """Test running multiple concurrent executions."""
         # Register second definition
         phases_config = [
@@ -534,9 +529,15 @@ class TestPhaseManagerIntegration:
         )
 
         # Start executions from both definitions
-        result_a1 = initialized_phase_manager.start_execution("test-workflow", "Execution A1")
-        result_a2 = initialized_phase_manager.start_execution("test-workflow", "Execution A2")
-        result_b1 = initialized_phase_manager.start_execution("bugfix-workflow", "Execution B1")
+        result_a1 = initialized_phase_manager.start_execution(
+            "test-workflow", "Execution A1"
+        )
+        result_a2 = initialized_phase_manager.start_execution(
+            "test-workflow", "Execution A2"
+        )
+        result_b1 = initialized_phase_manager.start_execution(
+            "bugfix-workflow", "Execution B1"
+        )
 
         # Handle tuple return (workflow_id, initial_task_info)
         wf_a1 = result_a1[0] if isinstance(result_a1, tuple) else result_a1

@@ -1,6 +1,14 @@
 """heph task — Task management."""
 
-from src.cli.utils import api_get, api_post, output, require_backend, table, truncate, time_ago
+from src.cli.utils import (
+    api_get,
+    api_post,
+    output,
+    require_backend,
+    table,
+    time_ago,
+    truncate,
+)
 
 
 def register(subparsers):
@@ -8,7 +16,9 @@ def register(subparsers):
     sub = p.add_subparsers(dest="subcommand")
 
     ls = sub.add_parser("list", help="List tasks")
-    ls.add_argument("--status", help="Filter by status (pending, in_progress, done, failed)")
+    ls.add_argument(
+        "--status", help="Filter by status (pending, in_progress, done, failed)"
+    )
     ls.add_argument("--limit", type=int, default=20, help="Max results")
     ls.set_defaults(func=list_tasks)
 
@@ -18,7 +28,9 @@ def register(subparsers):
 
     create = sub.add_parser("create", help="Create a task")
     create.add_argument("description", help="Task description")
-    create.add_argument("--priority", default="medium", help="Priority (critical, high, medium, low)")
+    create.add_argument(
+        "--priority", default="medium", help="Priority (critical, high, medium, low)"
+    )
     create.add_argument("--phase", help="Phase ID")
     create.set_defaults(func=create_task)
 
@@ -44,7 +56,7 @@ def list_tasks(args):
     data = api_get(args, endpoint)
     tasks = data if isinstance(data, list) else data.get("tasks", []) if data else []
 
-    tasks = tasks[:args.limit]
+    tasks = tasks[: args.limit]
 
     output(args, tasks, lambda d: _print_tasks(d))
 
@@ -54,8 +66,13 @@ def _print_tasks(tasks):
         print("No tasks.")
         return
     rows = [
-        [t.get("id", "")[:12], t.get("status", ""), t.get("priority", ""),
-         truncate(t.get("description", ""), 50), time_ago(t.get("created_at", ""))]
+        [
+            t.get("id", "")[:12],
+            t.get("status", ""),
+            t.get("priority", ""),
+            truncate(t.get("description", ""), 50),
+            time_ago(t.get("created_at", "")),
+        ]
         for t in tasks
     ]
     table(["ID", "Status", "Priority", "Description", "Created"], rows)

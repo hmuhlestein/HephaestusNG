@@ -1,12 +1,18 @@
 """heph start — Start Hephaestus services."""
 
 import os
+import subprocess
 import sys
 import time
-import subprocess
 from pathlib import Path
 
-from src.cli.utils import check_backend, save_pid, read_pid, is_process_running, is_monitor_running, is_backend_running
+from src.cli.utils import (
+    check_backend,
+    is_monitor_running,
+    is_process_running,
+    read_pid,
+    save_pid,
+)
 from src.core.constants import HEPHAESTUS_LOGS_DIR
 
 HEPHAESTUS_DIR = Path(__file__).parent.parent.parent.parent
@@ -17,7 +23,9 @@ def register(subparsers):
     p.add_argument("--backend-only", action="store_true", help="Start only the backend")
     p.add_argument("--no-monitor", action="store_true", help="Skip monitor")
     p.add_argument("--no-frontend", action="store_true", help="Skip frontend dashboard")
-    p.add_argument("--reload", action="store_true", help="Enable auto-reload for development")
+    p.add_argument(
+        "--reload", action="store_true", help="Enable auto-reload for development"
+    )
     p.set_defaults(func=run)
 
 
@@ -57,7 +65,9 @@ def run(args):
     else:
         python = _find_python(HEPHAESTUS_DIR)
         if not python:
-            print("Error: Python not found. Run 'poetry install' first.", file=sys.stderr)
+            print(
+                "Error: Python not found. Run 'poetry install' first.", file=sys.stderr
+            )
             return 1
 
         backend_proc = _start_backend(python, port, args.reload)
@@ -99,6 +109,7 @@ def _find_python(project_dir: Path) -> str:
 
 def _check_qdrant() -> bool:
     import httpx
+
     try:
         r = httpx.get("http://localhost:6333/", timeout=2)
         return r.status_code == 200
@@ -109,6 +120,7 @@ def _check_qdrant() -> bool:
 def _ensure_qdrant() -> bool:
     """Ensure Qdrant is running (Docker or local)."""
     import httpx
+
     try:
         r = httpx.get("http://localhost:6333/", timeout=2)
         if r.status_code == 200:
@@ -118,10 +130,7 @@ def _ensure_qdrant() -> bool:
 
     # Try starting existing container
     try:
-        subprocess.run(
-            ["docker", "start", "qdrant"],
-            capture_output=True, timeout=10
-        )
+        subprocess.run(["docker", "start", "qdrant"], capture_output=True, timeout=10)
         time.sleep(3)
         r = httpx.get("http://localhost:6333/", timeout=2)
         if r.status_code == 200:
@@ -132,8 +141,18 @@ def _ensure_qdrant() -> bool:
     # Try creating new container
     try:
         subprocess.run(
-            ["docker", "run", "-d", "-p", "6333:6333", "--name", "qdrant", "qdrant/qdrant"],
-            capture_output=True, timeout=30
+            [
+                "docker",
+                "run",
+                "-d",
+                "-p",
+                "6333:6333",
+                "--name",
+                "qdrant",
+                "qdrant/qdrant",
+            ],
+            capture_output=True,
+            timeout=30,
         )
         time.sleep(5)
         r = httpx.get("http://localhost:6333/", timeout=2)
@@ -194,10 +213,13 @@ def _start_monitor(python: str) -> bool:
 def _kill_port(port: int) -> None:
     """Kill any process using the given port."""
     import signal
+
     try:
         result = subprocess.run(
             ["lsof", "-ti", f":{port}"],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True,
+            text=True,
+            timeout=5,
         )
         if result.stdout.strip():
             for pid_str in result.stdout.strip().split("\n"):

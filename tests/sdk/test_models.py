@@ -1,6 +1,5 @@
 """Tests for SDK data models."""
 
-import pytest
 from datetime import datetime, timedelta
 
 from src.sdk.models import Phase, TaskStatus, ValidationCriteria, WorkflowResult
@@ -48,7 +47,11 @@ def test_phase_with_validation():
     criteria = ValidationCriteria(
         enabled=True,
         criteria=[
-            {"description": "File exists", "check_type": "file_exists", "params": {"path": "plan.md"}}
+            {
+                "description": "File exists",
+                "check_type": "file_exists",
+                "params": {"path": "plan.md"},
+            }
         ],
     )
 

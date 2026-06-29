@@ -2,15 +2,14 @@
 Helper utilities and assertions for integration tests.
 """
 
+import logging
 import subprocess
 import time
-import logging
-from pathlib import Path
-from typing import Optional, List, Dict, Any
 from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, List
 
-from sqlalchemy.orm import Session
-from src.core.database import Task, Agent, ValidationReview, AgentWorktree, Memory
+from src.core.database import Agent, AgentWorktree, Memory, Task, ValidationReview
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +36,9 @@ class IntegrationAssertions:
 
             time.sleep(1)
 
-        raise AssertionError(f"Agent did not spawn for task {task_id} within {timeout}s")
+        raise AssertionError(
+            f"Agent did not spawn for task {task_id} within {timeout}s"
+        )
 
     def assert_worktree_exists(self, agent_id: str) -> Path:
         """Assert that worktree exists for an agent."""
@@ -47,13 +48,13 @@ class IntegrationAssertions:
             raise AssertionError(f"Worktree does not exist at {worktree_path}")
 
         if not (worktree_path / ".git").exists():
-            raise AssertionError(f"Worktree at {worktree_path} is not a valid git worktree")
+            raise AssertionError(
+                f"Worktree at {worktree_path} is not a valid git worktree"
+            )
 
         # Check it's registered in git
         result = subprocess.run(
-            ["git", "worktree", "list"],
-            capture_output=True,
-            text=True
+            ["git", "worktree", "list"], capture_output=True, text=True
         )
         if str(worktree_path.absolute()) not in result.stdout:
             raise AssertionError(f"Worktree {worktree_path} not registered in git")
@@ -93,22 +94,31 @@ class IntegrationAssertions:
             session = self.db_manager.get_session()
             task = session.query(Task).filter_by(id=task_id).first()
 
-            if task and task.status in ["under_review", "validation_in_progress", "needs_work"]:
+            if task and task.status in [
+                "under_review",
+                "validation_in_progress",
+                "needs_work",
+            ]:
                 # Check for validator agent
-                validator = session.query(Agent).filter_by(
-                    agent_type="validator",
-                    current_task_id=task_id
-                ).first()
+                validator = (
+                    session.query(Agent)
+                    .filter_by(agent_type="validator", current_task_id=task_id)
+                    .first()
+                )
                 session.close()
 
                 if validator:
-                    logger.info(f"Validation triggered for task {task_id}, validator: {validator.id}")
+                    logger.info(
+                        f"Validation triggered for task {task_id}, validator: {validator.id}"
+                    )
                     return
 
             session.close()
             time.sleep(1)
 
-        raise AssertionError(f"Validation was not triggered for task {task_id} within {timeout}s")
+        raise AssertionError(
+            f"Validation was not triggered for task {task_id} within {timeout}s"
+        )
 
     def assert_tmux_session_alive(self, agent_id: str):
         """Assert that tmux session exists and is alive for an agent."""
@@ -117,7 +127,7 @@ class IntegrationAssertions:
         result = subprocess.run(
             ["tmux", "list-sessions", "-F", "#{session_name}"],
             capture_output=True,
-            text=True
+            text=True,
         )
 
         if result.returncode != 0:
@@ -139,11 +149,7 @@ class IntegrationAssertions:
         """Assert that git branch exists for an agent."""
         branch_name = f"agent-{agent_id}"
 
-        result = subprocess.run(
-            ["git", "branch", "-a"],
-            capture_output=True,
-            text=True
-        )
+        result = subprocess.run(["git", "branch", "-a"], capture_output=True, text=True)
 
         if branch_name not in result.stdout:
             raise AssertionError(
@@ -158,9 +164,11 @@ class IntegrationAssertions:
         start_time = time.time()
         while time.time() - start_time < timeout:
             session = self.db_manager.get_session()
-            memory = session.query(Memory).filter(
-                Memory.content.contains(memory_content)
-            ).first()
+            memory = (
+                session.query(Memory)
+                .filter(Memory.content.contains(memory_content))
+                .first()
+            )
             session.close()
 
             if memory:
@@ -169,7 +177,9 @@ class IntegrationAssertions:
 
             time.sleep(1)
 
-        raise AssertionError(f"Memory with content '{memory_content}' not found within {timeout}s")
+        raise AssertionError(
+            f"Memory with content '{memory_content}' not found within {timeout}s"
+        )
 
     def assert_no_zombie_processes(self):
         """Assert that there are no zombie Hephaestus processes."""
@@ -177,7 +187,7 @@ class IntegrationAssertions:
         result = subprocess.run(
             ["tmux", "list-sessions", "-F", "#{session_name}:#{session_attached}"],
             capture_output=True,
-            text=True
+            text=True,
         )
 
         if result.returncode == 0:
@@ -186,13 +196,21 @@ class IntegrationAssertions:
                     session_name, attached = line.split(":")
                     # Session exists but might be orphaned
                     # Check if corresponding agent exists
-                    agent_id = session_name.replace("hep_agent_", "").replace("agent_", "")
+                    agent_id = session_name.replace("hep_agent_", "").replace(
+                        "agent_", ""
+                    )
                     session = self.db_manager.get_session()
                     agent = session.query(Agent).filter_by(id=agent_id).first()
                     session.close()
 
-                    if not agent or agent.status in ["terminated", "failed", "completed"]:
-                        raise AssertionError(f"Zombie tmux session found: {session_name}")
+                    if not agent or agent.status in [
+                        "terminated",
+                        "failed",
+                        "completed",
+                    ]:
+                        raise AssertionError(
+                            f"Zombie tmux session found: {session_name}"
+                        )
 
         logger.info("No zombie processes detected")
 
@@ -202,33 +220,50 @@ class IntegrationAssertions:
 
         try:
             # Check for orphaned agents
-            orphaned = session.query(Agent).filter(
-                Agent.current_task_id.isnot(None)
-            ).all()
+            orphaned = (
+                session.query(Agent).filter(Agent.current_task_id.isnot(None)).all()
+            )
 
             for agent in orphaned:
                 task = session.query(Task).filter_by(id=agent.current_task_id).first()
                 if not task:
-                    raise AssertionError(f"Agent {agent.id} references non-existent task {agent.current_task_id}")
+                    raise AssertionError(
+                        f"Agent {agent.id} references non-existent task {agent.current_task_id}"
+                    )
 
             # Check for tasks without valid states
-            invalid_tasks = session.query(Task).filter(
-                ~Task.status.in_([
-                    "pending", "assigned", "in_progress",
-                    "under_review", "validation_in_progress", "needs_work",
-                    "done", "failed"
-                ])
-            ).all()
+            invalid_tasks = (
+                session.query(Task)
+                .filter(
+                    ~Task.status.in_(
+                        [
+                            "pending",
+                            "assigned",
+                            "in_progress",
+                            "under_review",
+                            "validation_in_progress",
+                            "needs_work",
+                            "done",
+                            "failed",
+                        ]
+                    )
+                )
+                .all()
+            )
 
             if invalid_tasks:
-                raise AssertionError(f"Tasks with invalid states: {[t.id for t in invalid_tasks]}")
+                raise AssertionError(
+                    f"Tasks with invalid states: {[t.id for t in invalid_tasks]}"
+                )
 
             # Check validation reviews reference valid tasks
             reviews = session.query(ValidationReview).all()
             for review in reviews:
                 task = session.query(Task).filter_by(id=review.task_id).first()
                 if not task:
-                    raise AssertionError(f"ValidationReview {review.id} references non-existent task")
+                    raise AssertionError(
+                        f"ValidationReview {review.id} references non-existent task"
+                    )
 
             logger.info("Database consistency check passed")
 
@@ -266,7 +301,9 @@ class IntegrationAssertions:
 
             time.sleep(1)
 
-        raise AssertionError(f"Worktree for agent {agent_id} was not merged within {timeout}s")
+        raise AssertionError(
+            f"Worktree for agent {agent_id} was not merged within {timeout}s"
+        )
 
     def assert_files_in_worktree(self, agent_id: str, expected_files: List[str]):
         """Assert that specific files exist in agent's worktree."""
@@ -290,7 +327,7 @@ class IntegrationAssertions:
         result = subprocess.run(
             ["git", "log", branch_name, "--oneline", "-n", "10"],
             capture_output=True,
-            text=True
+            text=True,
         )
 
         if result.returncode != 0:
@@ -325,40 +362,46 @@ class SystemStateVerifier:
             "agents": [],
             "worktrees": [],
             "tmux_sessions": [],
-            "git_branches": []
+            "git_branches": [],
         }
 
         # Get all tasks
         tasks = session.query(Task).all()
         for task in tasks:
-            state["tasks"].append({
-                "id": task.id,
-                "status": task.status,
-                "assigned_agent": task.assigned_agent_id,
-                "validation_enabled": task.validation_enabled,
-                "validation_iteration": task.validation_iteration
-            })
+            state["tasks"].append(
+                {
+                    "id": task.id,
+                    "status": task.status,
+                    "assigned_agent": task.assigned_agent_id,
+                    "validation_enabled": task.validation_enabled,
+                    "validation_iteration": task.validation_iteration,
+                }
+            )
 
         # Get all agents
         agents = session.query(Agent).all()
         for agent in agents:
-            state["agents"].append({
-                "id": agent.id,
-                "type": agent.agent_type,
-                "status": agent.status,
-                "current_task": agent.current_task_id,
-                "tmux_session": agent.tmux_session_name
-            })
+            state["agents"].append(
+                {
+                    "id": agent.id,
+                    "type": agent.agent_type,
+                    "status": agent.status,
+                    "current_task": agent.current_task_id,
+                    "tmux_session": agent.tmux_session_name,
+                }
+            )
 
         # Get worktrees
         worktrees = session.query(AgentWorktree).all()
         for worktree in worktrees:
-            state["worktrees"].append({
-                "agent_id": worktree.agent_id,
-                "path": worktree.worktree_path,
-                "branch": worktree.branch_name,
-                "merge_status": worktree.merge_status
-            })
+            state["worktrees"].append(
+                {
+                    "agent_id": worktree.agent_id,
+                    "path": worktree.worktree_path,
+                    "branch": worktree.branch_name,
+                    "merge_status": worktree.merge_status,
+                }
+            )
 
         session.close()
 
@@ -366,21 +409,16 @@ class SystemStateVerifier:
         result = subprocess.run(
             ["tmux", "list-sessions", "-F", "#{session_name}"],
             capture_output=True,
-            text=True
+            text=True,
         )
         if result.returncode == 0:
             state["tmux_sessions"] = result.stdout.strip().split("\n")
 
         # Get git branches
-        result = subprocess.run(
-            ["git", "branch", "-a"],
-            capture_output=True,
-            text=True
-        )
+        result = subprocess.run(["git", "branch", "-a"], capture_output=True, text=True)
         if result.returncode == 0:
             state["git_branches"] = [
-                line.strip() for line in result.stdout.split("\n")
-                if "agent-" in line
+                line.strip() for line in result.stdout.split("\n") if "agent-" in line
             ]
 
         return state
@@ -390,10 +428,13 @@ class SystemStateVerifier:
         state = self.get_system_state()
         state["failed_test"] = test_name
 
-        dump_file = Path(f"tests/integration/logs/failure_{test_name}_{int(time.time())}.json")
+        dump_file = Path(
+            f"tests/integration/logs/failure_{test_name}_{int(time.time())}.json"
+        )
         dump_file.parent.mkdir(parents=True, exist_ok=True)
 
         import json
+
         with open(dump_file, "w") as f:
             json.dump(state, f, indent=2)
 

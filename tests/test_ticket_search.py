@@ -1,14 +1,10 @@
 """Tests for ticket search functionality (Wave 2 - Search & Intelligence)."""
 
-import pytest
 import asyncio
-from datetime import datetime
-from typing import List
 
-from src.services.ticket_service import TicketService
-from src.services.ticket_search_service import TicketSearchService
+import pytest
+
 from src.services.embedding_service import EmbeddingService
-from src.core.database import get_db, Ticket, Workflow, Agent, BoardConfig
 
 
 @pytest.fixture
@@ -36,6 +32,7 @@ class TestEmbeddingService:
         # Note: This test requires OPENAI_API_KEY environment variable
         try:
             import os
+
             if not os.getenv("OPENAI_API_KEY"):
                 pytest.skip("OPENAI_API_KEY not set")
 
@@ -44,7 +41,7 @@ class TestEmbeddingService:
             embedding = await service.generate_ticket_embedding(
                 title="Fix authentication bug",
                 description="Users are experiencing timeout issues with OAuth login",
-                tags=["backend", "auth", "critical"]
+                tags=["backend", "auth", "critical"],
             )
 
             # Verify embedding was generated
@@ -63,6 +60,7 @@ class TestEmbeddingService:
         """Test query embedding generation."""
         try:
             import os
+
             if not os.getenv("OPENAI_API_KEY"):
                 pytest.skip("OPENAI_API_KEY not set")
 

@@ -13,9 +13,13 @@ from src.core.database import DatabaseManager
 def migrate(db_manager):
     """Run schema migrations for existing databases."""
     import sqlalchemy
+
     print("Running migrations...")
     migrations = [
-        ("autopilot_projects.is_active", "ALTER TABLE autopilot_projects ADD COLUMN is_active BOOLEAN DEFAULT 0"),
+        (
+            "autopilot_projects.is_active",
+            "ALTER TABLE autopilot_projects ADD COLUMN is_active BOOLEAN DEFAULT 0",
+        ),
     ]
     for name, sql in migrations:
         try:

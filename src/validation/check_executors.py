@@ -1,13 +1,14 @@
 """Validation check type executors."""
 
-from enum import Enum
-from typing import Dict, Any
 import subprocess
+from enum import Enum
 from pathlib import Path
+from typing import Any, Dict
 
 
 class ValidationCheckType(Enum):
     """Types of validation checks."""
+
     FILE_EXISTS = "file_exists"
     FILE_CONTAINS = "file_contains"
     COMMAND_SUCCESS = "command_success"
@@ -18,9 +19,7 @@ class ValidationCheckType(Enum):
 
 
 def execute_validation_check(
-    check_type: ValidationCheckType,
-    criterion: Dict[str, Any],
-    working_directory: str
+    check_type: ValidationCheckType, criterion: Dict[str, Any], working_directory: str
 ) -> Dict[str, Any]:
     """Execute a validation check based on its type.
 
@@ -48,28 +47,28 @@ def execute_validation_check(
         return {
             "passed": None,  # Validator must determine
             "evidence": "Manual verification required",
-            "requires_manual": True
+            "requires_manual": True,
         }
 
     elif check_type == ValidationCheckType.CODE_REVIEW:
         return {
             "passed": None,  # Validator must determine
             "evidence": f"Code review required for areas: {criterion.get('focus_areas', [])}",
-            "requires_manual": True
+            "requires_manual": True,
         }
 
     elif check_type == ValidationCheckType.PERFORMANCE_METRIC:
         return {
             "passed": None,  # Validator must measure
             "evidence": f"Performance metric check: {criterion.get('metric', 'unknown')}",
-            "requires_manual": True
+            "requires_manual": True,
         }
 
     else:
         return {
             "passed": None,
             "evidence": f"Unknown check type: {check_type}",
-            "error": True
+            "error": True,
         }
 
 
@@ -100,7 +99,7 @@ def _check_file_exists(criterion: Dict[str, Any], working_dir: str) -> Dict[str,
     return {
         "passed": all_exist,
         "evidence": "\n".join(results),
-        "files_checked": targets
+        "files_checked": targets,
     }
 
 
@@ -125,7 +124,7 @@ def _check_file_contains(criterion: Dict[str, Any], working_dir: str) -> Dict[st
         return {
             "passed": False,
             "evidence": f"File {target} does not exist",
-            "error": True
+            "error": True,
         }
 
     try:
@@ -142,18 +141,20 @@ def _check_file_contains(criterion: Dict[str, Any], working_dir: str) -> Dict[st
         return {
             "passed": all_found,
             "evidence": "\n".join(results),
-            "patterns_checked": patterns
+            "patterns_checked": patterns,
         }
 
     except Exception as e:
         return {
             "passed": False,
             "evidence": f"Error reading file: {str(e)}",
-            "error": True
+            "error": True,
         }
 
 
-def _check_command_success(criterion: Dict[str, Any], working_dir: str) -> Dict[str, Any]:
+def _check_command_success(
+    criterion: Dict[str, Any], working_dir: str
+) -> Dict[str, Any]:
     """Check if command executes successfully.
 
     Args:
@@ -165,11 +166,7 @@ def _check_command_success(criterion: Dict[str, Any], working_dir: str) -> Dict[
     """
     command = criterion.get("command", "")
     if not command:
-        return {
-            "passed": False,
-            "evidence": "No command specified",
-            "error": True
-        }
+        return {"passed": False, "evidence": "No command specified", "error": True}
 
     try:
         result = subprocess.run(
@@ -178,7 +175,7 @@ def _check_command_success(criterion: Dict[str, Any], working_dir: str) -> Dict[
             cwd=working_dir,
             capture_output=True,
             text=True,
-            timeout=30
+            timeout=30,
         )
 
         passed = result.returncode == 0
@@ -186,21 +183,21 @@ def _check_command_success(criterion: Dict[str, Any], working_dir: str) -> Dict[
         return {
             "passed": passed,
             "evidence": f"Command: {command}\nExit Code: {result.returncode}\nOutput: {result.stdout}\nError: {result.stderr}",
-            "exit_code": result.returncode
+            "exit_code": result.returncode,
         }
 
     except subprocess.TimeoutExpired:
         return {
             "passed": False,
             "evidence": f"Command timed out after 30 seconds: {command}",
-            "error": True
+            "error": True,
         }
 
     except Exception as e:
         return {
             "passed": False,
             "evidence": f"Error running command: {str(e)}",
-            "error": True
+            "error": True,
         }
 
 
@@ -217,11 +214,7 @@ def _check_test_pass(criterion: Dict[str, Any], working_dir: str) -> Dict[str, A
     # Similar to command_success but with test-specific handling
     test_command = criterion.get("command", "")
     if not test_command:
-        return {
-            "passed": False,
-            "evidence": "No test command specified",
-            "error": True
-        }
+        return {"passed": False, "evidence": "No test command specified", "error": True}
 
     try:
         result = subprocess.run(
@@ -230,7 +223,7 @@ def _check_test_pass(criterion: Dict[str, Any], working_dir: str) -> Dict[str, A
             cwd=working_dir,
             capture_output=True,
             text=True,
-            timeout=120  # Tests may take longer
+            timeout=120,  # Tests may take longer
         )
 
         passed = result.returncode == 0
@@ -243,21 +236,21 @@ def _check_test_pass(criterion: Dict[str, Any], working_dir: str) -> Dict[str, A
             "passed": passed,
             "evidence": f"Test Command: {test_command}\nExit Code: {result.returncode}\n{test_summary}\nFull Output:\n{output[:2000]}",
             "exit_code": result.returncode,
-            "test_summary": test_summary
+            "test_summary": test_summary,
         }
 
     except subprocess.TimeoutExpired:
         return {
             "passed": False,
             "evidence": f"Tests timed out after 120 seconds: {test_command}",
-            "error": True
+            "error": True,
         }
 
     except Exception as e:
         return {
             "passed": False,
             "evidence": f"Error running tests: {str(e)}",
-            "error": True
+            "error": True,
         }
 
 
@@ -276,8 +269,15 @@ def _extract_test_summary(output: str) -> str:
 
     for line in lines:
         # Pytest patterns
-        if "passed" in line.lower() or "failed" in line.lower() or "error" in line.lower():
-            if any(keyword in line.lower() for keyword in ["test", "tests", "passed", "failed", "error", "ok"]):
+        if (
+            "passed" in line.lower()
+            or "failed" in line.lower()
+            or "error" in line.lower()
+        ):
+            if any(
+                keyword in line.lower()
+                for keyword in ["test", "tests", "passed", "failed", "error", "ok"]
+            ):
                 summary_lines.append(line.strip())
 
         # Jest/npm test patterns
@@ -285,7 +285,12 @@ def _extract_test_summary(output: str) -> str:
             summary_lines.append(line.strip())
 
         # Go test patterns
-        if line.startswith("PASS") or line.startswith("FAIL") or "ok\t" in line or "FAIL\t" in line:
+        if (
+            line.startswith("PASS")
+            or line.startswith("FAIL")
+            or "ok\t" in line
+            or "FAIL\t" in line
+        ):
             summary_lines.append(line.strip())
 
     if summary_lines:

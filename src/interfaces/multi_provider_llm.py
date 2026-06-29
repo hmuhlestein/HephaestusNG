@@ -1,14 +1,11 @@
 """Multi-provider LLM implementation using LangChain."""
 
-from typing import Dict, Any, List, Optional
 import logging
+from typing import Any, Dict, List, Optional
 
-from src.interfaces.llm_interface import LLMProviderInterface
-from src.interfaces.langchain_llm_client import (
-    LangChainLLMClient,
-    ComponentType
-)
 from src.core.llm_config import get_config
+from src.interfaces.langchain_llm_client import ComponentType, LangChainLLMClient
+from src.interfaces.llm_interface import LLMProviderInterface
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +49,7 @@ class MultiProviderLLM(LLMProviderInterface):
             task_description=task_description,
             done_definition=done_definition,
             context=context,
-            phase_context=phase_context
+            phase_context=phase_context,
         )
 
     async def classify_complexity(self, design_text: str) -> str:
@@ -67,7 +64,7 @@ class MultiProviderLLM(LLMProviderInterface):
         potential_solutions: List[str],
         ticket_details: Dict[str, Any],
         related_tickets: List[Dict[str, Any]],
-        active_tasks: List[Dict[str, Any]]
+        active_tasks: List[Dict[str, Any]],
     ) -> str:
         """Resolve ticket clarification using LLM arbitration.
 
@@ -90,7 +87,7 @@ class MultiProviderLLM(LLMProviderInterface):
             potential_solutions=potential_solutions,
             ticket_details=ticket_details,
             related_tickets=related_tickets,
-            active_tasks=active_tasks
+            active_tasks=active_tasks,
         )
 
     async def generate_embedding(self, text: str) -> List[float]:
@@ -123,7 +120,7 @@ class MultiProviderLLM(LLMProviderInterface):
         return await self.client.analyze_agent_state(
             agent_output=agent_output,
             task_info=task_info,
-            project_context=project_context
+            project_context=project_context,
         )
 
     async def generate_agent_prompt(
@@ -143,9 +140,7 @@ class MultiProviderLLM(LLMProviderInterface):
             System prompt for the agent
         """
         return await self.client.generate_agent_prompt(
-            task=task,
-            memories=memories,
-            project_context=project_context
+            task=task, memories=memories, project_context=project_context
         )
 
     async def analyze_agent_trajectory(
@@ -191,8 +186,7 @@ class MultiProviderLLM(LLMProviderInterface):
             Dictionary containing coherence analysis
         """
         return await self.client.analyze_system_coherence(
-            guardian_summaries=guardian_summaries,
-            system_goals=system_goals
+            guardian_summaries=guardian_summaries, system_goals=system_goals
         )
 
     async def review_qa_report(

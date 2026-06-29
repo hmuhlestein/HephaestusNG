@@ -27,15 +27,14 @@ Usage:
 """
 
 # Import phase definitions from separate files
+# Import workflow configuration
+from example_workflows.bug_fix.board_config import BUG_FIX_WORKFLOW_CONFIG
 from example_workflows.bug_fix.phase_1_reproduce import PHASE_1_REPRODUCE
 from example_workflows.bug_fix.phase_2_fix import PHASE_2_FIX
 from example_workflows.bug_fix.phase_3_verify import PHASE_3_VERIFY
 
-# Import workflow configuration
-from example_workflows.bug_fix.board_config import BUG_FIX_WORKFLOW_CONFIG
-
 # Import launch template components
-from src.sdk.models import LaunchTemplate, LaunchParameter
+from src.sdk.models import LaunchParameter, LaunchTemplate
 
 # Export phase list
 BUG_FIX_PHASES = [
@@ -52,14 +51,14 @@ BUG_FIX_LAUNCH_TEMPLATE = LaunchTemplate(
             label="Bug Title",
             type="text",
             required=True,
-            description="Short, descriptive title for the bug (e.g., 'Login fails with special characters')"
+            description="Short, descriptive title for the bug (e.g., 'Login fails with special characters')",
         ),
         LaunchParameter(
             name="bug_description",
             label="Bug Description",
             type="textarea",
             required=True,
-            description="Describe the bug: What happens? What should happen instead?"
+            description="Describe the bug: What happens? What should happen instead?",
         ),
         LaunchParameter(
             name="severity",
@@ -68,44 +67,52 @@ BUG_FIX_LAUNCH_TEMPLATE = LaunchTemplate(
             required=True,
             options=["Critical", "High", "Medium", "Low"],
             default="Medium",
-            description="How severe is this bug?"
+            description="How severe is this bug?",
         ),
         LaunchParameter(
             name="bug_type",
             label="Bug Type",
             type="dropdown",
             required=True,
-            options=["Crash/Error", "Wrong Behavior", "Performance", "Security", "UI/UX", "Data Issue", "Other"],
+            options=[
+                "Crash/Error",
+                "Wrong Behavior",
+                "Performance",
+                "Security",
+                "UI/UX",
+                "Data Issue",
+                "Other",
+            ],
             default="Wrong Behavior",
-            description="What type of bug is this?"
+            description="What type of bug is this?",
         ),
         LaunchParameter(
             name="reproduction_steps",
             label="Steps to Reproduce",
             type="textarea",
             required=False,
-            description="Optional: Steps to reproduce the bug (if known)"
+            description="Optional: Steps to reproduce the bug (if known)",
         ),
         LaunchParameter(
             name="expected_behavior",
             label="Expected Behavior",
             type="text",
             required=False,
-            description="What should happen instead?"
+            description="What should happen instead?",
         ),
         LaunchParameter(
             name="affected_component",
             label="Affected Component",
             type="text",
             required=False,
-            description="Optional: Which component/module is affected? (e.g., 'auth', 'api', 'frontend')"
+            description="Optional: Which component/module is affected? (e.g., 'auth', 'api', 'frontend')",
         ),
         LaunchParameter(
             name="error_message",
             label="Error Message",
             type="textarea",
             required=False,
-            description="Optional: Paste any error messages or stack traces"
+            description="Optional: Paste any error messages or stack traces",
         ),
     ],
     phase_1_task_prompt="""Phase 1: Reproduce & Analyze Bug - {bug_title}
@@ -167,4 +174,4 @@ Don't just assume - actually run the reproduction steps!
 )
 
 # Export everything
-__all__ = ['BUG_FIX_PHASES', 'BUG_FIX_WORKFLOW_CONFIG', 'BUG_FIX_LAUNCH_TEMPLATE']
+__all__ = ["BUG_FIX_PHASES", "BUG_FIX_WORKFLOW_CONFIG", "BUG_FIX_LAUNCH_TEMPLATE"]

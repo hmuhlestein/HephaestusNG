@@ -2,11 +2,11 @@
 
 import logging
 import re
-from typing import Dict, Any, List, Optional, Tuple
-from datetime import datetime, timedelta
 from collections import defaultdict
+from datetime import datetime, timedelta
+from typing import Any, Dict, List, Optional, Tuple
 
-from src.core.database import DatabaseManager, AgentLog, Task
+from src.core.database import AgentLog, DatabaseManager, Task
 
 logger = logging.getLogger(__name__)
 
@@ -63,9 +63,12 @@ class TrajectoryContext:
         session = self.db_manager.get_session()
         try:
             # Get all logs for complete understanding
-            logs = session.query(AgentLog).filter_by(
-                agent_id=agent_id
-            ).order_by(AgentLog.created_at).all()
+            logs = (
+                session.query(AgentLog)
+                .filter_by(agent_id=agent_id)
+                .order_by(AgentLog.created_at)
+                .all()
+            )
 
             if not logs:
                 logger.warning(f"No logs found for agent {agent_id}")
@@ -74,8 +77,8 @@ class TrajectoryContext:
             # Get task for initial context
             first_log = logs[0]
             task = None
-            if hasattr(first_log, 'details') and first_log.details:
-                task_id = first_log.details.get('task_id')
+            if hasattr(first_log, "details") and first_log.details:
+                task_id = first_log.details.get("task_id")
                 if task_id:
                     task = session.query(Task).filter_by(id=task_id).first()
 
@@ -89,18 +92,19 @@ class TrajectoryContext:
                 "evolved_goals": self._track_goal_evolution(conversation),
                 "constraints": self._extract_persistent_constraints(conversation),
                 "lifted_constraints": self._identify_lifted_constraints(conversation),
-                "standing_instructions": self._extract_standing_instructions(conversation),
-
+                "standing_instructions": self._extract_standing_instructions(
+                    conversation
+                ),
                 # Reference resolution
                 "references": self._resolve_references(conversation),
                 "context_markers": self._extract_context_markers(conversation),
-
                 # Journey tracking
                 "phases_completed": self._identify_completed_phases(conversation),
                 "current_focus": self._determine_current_focus(conversation),
-                "attempted_approaches": self._extract_attempted_approaches(conversation),
+                "attempted_approaches": self._extract_attempted_approaches(
+                    conversation
+                ),
                 "discovered_blockers": self._find_discovered_blockers(conversation),
-
                 # Meta information
                 "conversation_length": len(conversation),
                 "session_duration": self._calculate_session_duration(logs),
@@ -111,7 +115,9 @@ class TrajectoryContext:
             # Add task-specific context
             if task:
                 context["task_id"] = task.id
-                context["task_description"] = task.enriched_description or task.raw_description
+                context["task_description"] = (
+                    task.enriched_description or task.raw_description
+                )
                 context["done_definition"] = task.done_definition
                 context["task_complexity"] = task.estimated_complexity or 5
 
@@ -147,20 +153,26 @@ class TrajectoryContext:
                 conversation.append(entry)
             elif log.log_type == "intervention" and log.details:
                 # Include interventions as they affect trajectory
-                conversation.append({
-                    **entry,
-                    "intervention_type": log.details.get("type", "unknown"),
-                })
+                conversation.append(
+                    {
+                        **entry,
+                        "intervention_type": log.details.get("type", "unknown"),
+                    }
+                )
 
         # Limit history if requested (but keep key messages)
         if not include_full and len(conversation) > 200:
             # Keep first 50, last 100, and all interventions
             important = conversation[:50]
             recent = conversation[-100:]
-            interventions = [c for c in conversation[50:-100] if c.get("intervention_type")]
+            interventions = [
+                c for c in conversation[50:-100] if c.get("intervention_type")
+            ]
 
             conversation = important + interventions + recent
-            logger.debug(f"Limited conversation from {len(logs)} to {len(conversation)} entries")
+            logger.debug(
+                f"Limited conversation from {len(logs)} to {len(conversation)} entries"
+            )
 
         return conversation
 
@@ -193,7 +205,9 @@ class TrajectoryContext:
         # Find most recent significant goal statement
         if refined_goals and len(refined_goals) > 0:
             # Use the most detailed recent goal
-            recent_goal = max(refined_goals[-5:], key=len) if refined_goals else base_goal
+            recent_goal = (
+                max(refined_goals[-5:], key=len) if refined_goals else base_goal
+            )
             if len(recent_goal) > len(base_goal) * 0.5:  # If it's substantial enough
                 return recent_goal.strip().capitalize()
 
@@ -521,12 +535,27 @@ class TrajectoryContext:
             violation_checks = [
                 ("no external" in constraint_lower and "pip install" in action_lower),
                 ("no external" in constraint_lower and "npm install" in action_lower),
-                ("simple" in constraint_lower and any(term in action_lower for term in ["factory", "abstract", "framework"])),
-                ("don't write" in constraint_lower and any(term in action_lower for term in ["creating", "writing", "implementing"])),
-                ("avoid" in constraint_lower and any(
-                    avoided in action_lower
-                    for avoided in constraint_lower.split("avoid")[1].split()
-                )),
+                (
+                    "simple" in constraint_lower
+                    and any(
+                        term in action_lower
+                        for term in ["factory", "abstract", "framework"]
+                    )
+                ),
+                (
+                    "don't write" in constraint_lower
+                    and any(
+                        term in action_lower
+                        for term in ["creating", "writing", "implementing"]
+                    )
+                ),
+                (
+                    "avoid" in constraint_lower
+                    and any(
+                        avoided in action_lower
+                        for avoided in constraint_lower.split("avoid")[1].split()
+                    )
+                ),
             ]
 
             if any(violation_checks):
@@ -552,10 +581,10 @@ class TrajectoryContext:
             f"Duration: {str(context['session_duration']).split('.')[0]}",
         ]
 
-        if context['constraints']:
+        if context["constraints"]:
             summary_parts.append(f"Constraints: {len(context['constraints'])}")
 
-        if context['discovered_blockers']:
+        if context["discovered_blockers"]:
             summary_parts.append(f"Blockers: {len(context['discovered_blockers'])}")
 
         return " | ".join(summary_parts)

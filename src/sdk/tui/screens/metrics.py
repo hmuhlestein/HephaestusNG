@@ -1,10 +1,10 @@
 """Metrics screen showing system statistics."""
 
-from textual.app import ComposeResult
-from textual.screen import Screen
-from textual.widgets import Static, Footer, DataTable
-from textual.containers import Container, Vertical
 import requests
+from textual.app import ComposeResult
+from textual.containers import Container, Vertical
+from textual.screen import Screen
+from textual.widgets import DataTable, Footer, Static
 
 
 class MetricsScreen(Screen):
@@ -115,12 +115,20 @@ class MetricsScreen(Screen):
                 active_agents = len([a for a in agents if a.get("status") == "working"])
                 total_agents = len(agents)
                 total_tasks = len(tasks)
-                healthy_agents = len([a for a in agents if a.get("health_check_failures", 0) == 0])
+                healthy_agents = len(
+                    [a for a in agents if a.get("health_check_failures", 0) == 0]
+                )
 
                 # Check backend/monitor health
                 health = self.sdk.is_healthy()
-                backend_health = "✓ Online" if health.get("backend_process") and health.get("backend_api") else "✗ Offline"
-                monitor_health = "✓ Online" if health.get("monitor_process") else "✗ Offline"
+                backend_health = (
+                    "✓ Online"
+                    if health.get("backend_process") and health.get("backend_api")
+                    else "✗ Offline"
+                )
+                monitor_health = (
+                    "✓ Online" if health.get("monitor_process") else "✗ Offline"
+                )
                 qdrant_health = "✓ Online" if health.get("qdrant") else "✗ Offline"
 
                 text = f"""[bold cyan]Backend:[/] {backend_health}
@@ -198,5 +206,5 @@ class MetricsScreen(Screen):
                 title="⚠️  EXIT HEPHAESTUS",
                 message="Are you sure you want to exit?\nAll running agents will continue in the background.",
             ),
-            check_quit
+            check_quit,
         )

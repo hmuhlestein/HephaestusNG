@@ -1,17 +1,14 @@
 """Integration tests for the complete monitoring system."""
 
-import pytest
-import asyncio
-from unittest.mock import Mock, AsyncMock, patch, MagicMock
 from datetime import datetime, timedelta
-import json
+from unittest.mock import AsyncMock, Mock
 
-from src.monitoring.guardian import Guardian
+import pytest
+
+from src.core.database import Agent, AgentLog, Task
 from src.monitoring.conductor import Conductor
+from src.monitoring.guardian import Guardian
 from src.monitoring.trajectory_context import TrajectoryContext
-from src.monitoring.prompt_loader import PromptLoader
-from src.core.database import Agent, Task, AgentLog
-from src.agents.manager import AgentManager
 
 
 @pytest.fixture
@@ -48,13 +45,10 @@ def monitoring_system(mock_db_manager, mock_agent_manager, mock_llm_provider):
     guardian = Guardian(
         db_manager=mock_db_manager,
         agent_manager=mock_agent_manager,
-        llm_provider=mock_llm_provider
+        llm_provider=mock_llm_provider,
     )
 
-    conductor = Conductor(
-        db_manager=mock_db_manager,
-        agent_manager=mock_agent_manager
-    )
+    conductor = Conductor(db_manager=mock_db_manager, agent_manager=mock_agent_manager)
 
     trajectory_context = TrajectoryContext(db_manager=mock_db_manager)
 
@@ -62,7 +56,7 @@ def monitoring_system(mock_db_manager, mock_agent_manager, mock_llm_provider):
         "guardian": guardian,
         "conductor": conductor,
         "trajectory_context": trajectory_context,
-        "llm_provider": mock_llm_provider
+        "llm_provider": mock_llm_provider,
     }
 
 
@@ -70,19 +64,33 @@ class TestMonitoringIntegration:
     """Test the complete monitoring system integration."""
 
     @pytest.mark.asyncio
-    async def test_full_monitoring_cycle_healthy_agents(self, monitoring_system, mock_db_manager, mock_agent_manager):
+    async def test_full_monitoring_cycle_healthy_agents(
+        self, monitoring_system, mock_db_manager, mock_agent_manager
+    ):
         """Test full monitoring cycle with healthy, aligned agents."""
         # Setup agents and tasks
         agents = [
             Agent(id="agent-1", current_task_id="task-1", tmux_session_name="agent-1"),
             Agent(id="agent-2", current_task_id="task-2", tmux_session_name="agent-2"),
-            Agent(id="agent-3", current_task_id="task-3", tmux_session_name="agent-3")
+            Agent(id="agent-3", current_task_id="task-3", tmux_session_name="agent-3"),
         ]
 
         tasks = [
-            Task(id="task-1", enriched_description="Build auth API", done_definition="Auth working"),
-            Task(id="task-2", enriched_description="Create frontend", done_definition="UI complete"),
-            Task(id="task-3", enriched_description="Write tests", done_definition="90% coverage")
+            Task(
+                id="task-1",
+                enriched_description="Build auth API",
+                done_definition="Auth working",
+            ),
+            Task(
+                id="task-2",
+                enriched_description="Create frontend",
+                done_definition="UI complete",
+            ),
+            Task(
+                id="task-3",
+                enriched_description="Write tests",
+                done_definition="90% coverage",
+            ),
         ]
 
         # Mock database responses
@@ -99,22 +107,22 @@ class TestMonitoringIntegration:
                 "trajectory_aligned": True,
                 "alignment_score": 0.9,
                 "needs_steering": False,
-                "trajectory_summary": "Agent 1 building auth API successfully"
+                "trajectory_summary": "Agent 1 building auth API successfully",
             },
             {
                 "current_phase": "implementation",
                 "trajectory_aligned": True,
                 "alignment_score": 0.85,
                 "needs_steering": False,
-                "trajectory_summary": "Agent 2 creating frontend components"
+                "trajectory_summary": "Agent 2 creating frontend components",
             },
             {
                 "current_phase": "testing",
                 "trajectory_aligned": True,
                 "alignment_score": 0.8,
                 "needs_steering": False,
-                "trajectory_summary": "Agent 3 writing comprehensive tests"
-            }
+                "trajectory_summary": "Agent 3 writing comprehensive tests",
+            },
         ]
 
         # Mock healthy Conductor analysis
@@ -124,7 +132,7 @@ class TestMonitoringIntegration:
             "alignment_issues": [],
             "termination_recommendations": [],
             "coordination_needs": [],
-            "system_summary": "All 3 agents working efficiently on separate tasks"
+            "system_summary": "All 3 agents working efficiently on separate tasks",
         }
 
         # Execute monitoring cycle
@@ -137,7 +145,7 @@ class TestMonitoringIntegration:
             summary = await guardian.analyze_agent_with_trajectory(
                 agent=agent,
                 tmux_output=f"Working on {agent.current_task_id}",
-                past_summaries=[]
+                past_summaries=[],
             )
             guardian_summaries.append(summary)
 
@@ -159,18 +167,20 @@ class TestMonitoringIntegration:
         mock_agent_manager.terminate_agent.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_monitoring_with_duplicate_detection(self, monitoring_system, mock_db_manager, mock_agent_manager):
+    async def test_monitoring_with_duplicate_detection(
+        self, monitoring_system, mock_db_manager, mock_agent_manager
+    ):
         """Test monitoring detects and handles duplicate work."""
         agents = [
             Agent(id="agent-1", current_task_id="task-1"),
-            Agent(id="agent-2", current_task_id="task-2")
+            Agent(id="agent-2", current_task_id="task-2"),
         ]
 
         # Mock database
         mock_session = Mock()
         mock_session.query.return_value.filter_by.return_value.all.return_value = agents
-        mock_session.query.return_value.filter_by.return_value.first.return_value = Mock(
-            enriched_description="Build auth"
+        mock_session.query.return_value.filter_by.return_value.first.return_value = (
+            Mock(enriched_description="Build auth")
         )
         mock_session.query.return_value.filter_by.return_value.order_by.return_value.all.return_value = []
         mock_db_manager.get_session.return_value = mock_session
@@ -182,15 +192,15 @@ class TestMonitoringIntegration:
                 "trajectory_aligned": True,
                 "alignment_score": 0.8,
                 "needs_steering": False,
-                "trajectory_summary": "Building JWT authentication"
+                "trajectory_summary": "Building JWT authentication",
             },
             {
                 "current_phase": "implementation",
                 "trajectory_aligned": True,
                 "alignment_score": 0.7,
                 "needs_steering": False,
-                "trajectory_summary": "Implementing JWT auth system"
-            }
+                "trajectory_summary": "Implementing JWT auth system",
+            },
         ]
 
         # Mock Conductor detecting duplicates
@@ -201,18 +211,18 @@ class TestMonitoringIntegration:
                     "agent1": "agent-1",
                     "agent2": "agent-2",
                     "similarity": 0.9,
-                    "work": "Both implementing JWT authentication"
+                    "work": "Both implementing JWT authentication",
                 }
             ],
             "termination_recommendations": [
                 {
                     "agent_id": "agent-2",
-                    "reason": "Duplicate with agent-1 who is further along"
+                    "reason": "Duplicate with agent-1 who is further along",
                 }
             ],
             "alignment_issues": ["Two agents duplicating auth work"],
             "coordination_needs": [],
-            "system_summary": "Duplicate work detected on authentication"
+            "system_summary": "Duplicate work detected on authentication",
         }
 
         guardian = monitoring_system["guardian"]
@@ -237,15 +247,19 @@ class TestMonitoringIntegration:
         mock_agent_manager.terminate_agent.assert_called_once_with("agent-2")
 
     @pytest.mark.asyncio
-    async def test_monitoring_with_steering_intervention(self, monitoring_system, mock_db_manager, mock_agent_manager):
+    async def test_monitoring_with_steering_intervention(
+        self, monitoring_system, mock_db_manager, mock_agent_manager
+    ):
         """Test monitoring steers agents that need guidance."""
         agent = Agent(id="agent-stuck", current_task_id="task-1")
 
         # Mock database
         mock_session = Mock()
-        mock_session.query.return_value.filter_by.return_value.all.return_value = [agent]
-        mock_session.query.return_value.filter_by.return_value.first.return_value = Mock(
-            enriched_description="Build API"
+        mock_session.query.return_value.filter_by.return_value.all.return_value = [
+            agent
+        ]
+        mock_session.query.return_value.filter_by.return_value.first.return_value = (
+            Mock(enriched_description="Build API")
         )
         mock_session.query.return_value.filter_by.return_value.order_by.return_value.all.return_value = [
             AgentLog(
@@ -253,7 +267,7 @@ class TestMonitoringIntegration:
                 log_type="input",
                 message="Build API without external libs",
                 created_at=datetime.utcnow() - timedelta(hours=1),
-                details={}
+                details={},
             )
         ]
         mock_db_manager.get_session.return_value = mock_session
@@ -266,16 +280,14 @@ class TestMonitoringIntegration:
             "needs_steering": True,
             "steering_type": "violating_constraints",
             "steering_recommendation": "Remember: no external libraries allowed",
-            "trajectory_summary": "Agent trying to install Flask"
+            "trajectory_summary": "Agent trying to install Flask",
         }
 
         guardian = monitoring_system["guardian"]
 
         # Analyze agent
         summary = await guardian.analyze_agent_with_trajectory(
-            agent=agent,
-            tmux_output="pip install flask",
-            past_summaries=[]
+            agent=agent, tmux_output="pip install flask", past_summaries=[]
         )
 
         # Verify steering needed
@@ -286,7 +298,7 @@ class TestMonitoringIntegration:
         await guardian.steer_agent(
             agent=agent,
             steering_type=summary["steering_type"],
-            message=summary["steering_message"]
+            message=summary["steering_message"],
         )
 
         # Verify steering message sent
@@ -296,18 +308,20 @@ class TestMonitoringIntegration:
         assert "no external libraries" in call_args[1]
 
     @pytest.mark.asyncio
-    async def test_monitoring_with_resource_coordination(self, monitoring_system, mock_db_manager, mock_agent_manager):
+    async def test_monitoring_with_resource_coordination(
+        self, monitoring_system, mock_db_manager, mock_agent_manager
+    ):
         """Test monitoring coordinates resource access between agents."""
         agents = [
             Agent(id="agent-1", current_task_id="task-1"),
-            Agent(id="agent-2", current_task_id="task-2")
+            Agent(id="agent-2", current_task_id="task-2"),
         ]
 
         # Mock database
         mock_session = Mock()
         mock_session.query.return_value.filter_by.return_value.all.return_value = agents
-        mock_session.query.return_value.filter_by.return_value.first.return_value = Mock(
-            enriched_description="Modify schema"
+        mock_session.query.return_value.filter_by.return_value.first.return_value = (
+            Mock(enriched_description="Modify schema")
         )
         mock_session.query.return_value.filter_by.return_value.order_by.return_value.all.return_value = []
         mock_db_manager.get_session.return_value = mock_session
@@ -319,15 +333,15 @@ class TestMonitoringIntegration:
                 "trajectory_aligned": True,
                 "alignment_score": 0.8,
                 "needs_steering": False,
-                "trajectory_summary": "Modifying database schema"
+                "trajectory_summary": "Modifying database schema",
             },
             {
                 "current_phase": "implementation",
                 "trajectory_aligned": True,
                 "alignment_score": 0.8,
                 "needs_steering": False,
-                "trajectory_summary": "Updating schema file"
-            }
+                "trajectory_summary": "Updating schema file",
+            },
         ]
 
         # Mock Conductor detecting resource conflict
@@ -340,10 +354,10 @@ class TestMonitoringIntegration:
                 {
                     "agents": ["agent-1", "agent-2"],
                     "resource": "database/schema.sql",
-                    "action": "agent-1 completes first, then agent-2"
+                    "action": "agent-1 completes first, then agent-2",
                 }
             ],
-            "system_summary": "Agents need coordination for schema access"
+            "system_summary": "Agents need coordination for schema access",
         }
 
         guardian = monitoring_system["guardian"]
@@ -368,15 +382,17 @@ class TestMonitoringIntegration:
         assert mock_agent_manager.send_message_to_agent.call_count == 2
 
     @pytest.mark.asyncio
-    async def test_monitoring_escalation_on_low_coherence(self, monitoring_system, mock_db_manager):
+    async def test_monitoring_escalation_on_low_coherence(
+        self, monitoring_system, mock_db_manager
+    ):
         """Test monitoring escalates when system coherence is too low."""
         agents = [Agent(id=f"agent-{i}", current_task_id=f"task-{i}") for i in range(5)]
 
         # Mock database
         mock_session = Mock()
         mock_session.query.return_value.filter_by.return_value.all.return_value = agents
-        mock_session.query.return_value.filter_by.return_value.first.return_value = Mock(
-            enriched_description="Various tasks"
+        mock_session.query.return_value.filter_by.return_value.first.return_value = (
+            Mock(enriched_description="Various tasks")
         )
         mock_session.query.return_value.filter_by.return_value.order_by.return_value.all.return_value = []
         mock_db_manager.get_session.return_value = mock_session
@@ -387,7 +403,7 @@ class TestMonitoringIntegration:
             "trajectory_aligned": False,
             "alignment_score": 0.2,
             "needs_steering": True,
-            "trajectory_summary": "Agent working on wrong task"
+            "trajectory_summary": "Agent working on wrong task",
         }
 
         # Mock Conductor detecting system chaos
@@ -397,11 +413,11 @@ class TestMonitoringIntegration:
             "alignment_issues": [
                 "Agents working on unrelated tasks",
                 "No coordination",
-                "Multiple conflicts"
+                "Multiple conflicts",
             ],
             "termination_recommendations": [],
             "coordination_needs": [],
-            "system_summary": "System in chaos, needs human intervention"
+            "system_summary": "System in chaos, needs human intervention",
         }
 
         guardian = monitoring_system["guardian"]
@@ -410,14 +426,17 @@ class TestMonitoringIntegration:
         # Execute monitoring
         summaries = []
         for agent in agents:
-            summary = await guardian.analyze_agent_with_trajectory(agent, "confused", [])
+            summary = await guardian.analyze_agent_with_trajectory(
+                agent, "confused", []
+            )
             summaries.append(summary)
 
         system_analysis = await conductor.analyze_system_state(summaries)
 
         # Verify escalation decision
-        escalation = [d for d in system_analysis["decisions"]
-                     if d["type"] == "escalate"]
+        escalation = [
+            d for d in system_analysis["decisions"] if d["type"] == "escalate"
+        ]
         assert len(escalation) == 1
         assert "too low" in escalation[0]["reason"]
 
@@ -428,8 +447,8 @@ class TestMonitoringIntegration:
 
         # Mock database
         mock_session = Mock()
-        mock_session.query.return_value.filter_by.return_value.first.return_value = Mock(
-            enriched_description="Test task"
+        mock_session.query.return_value.filter_by.return_value.first.return_value = (
+            Mock(enriched_description="Test task")
         )
         mock_session.query.return_value.filter_by.return_value.order_by.return_value.all.return_value = []
         mock_db_manager.get_session.return_value = mock_session
@@ -439,18 +458,22 @@ class TestMonitoringIntegration:
             "current_phase": "implementation",
             "trajectory_aligned": True,
             "alignment_score": 0.8,
-            "trajectory_summary": "Working well"
+            "trajectory_summary": "Working well",
         }
 
         guardian = monitoring_system["guardian"]
 
         # First call should hit LLM
         await guardian.analyze_agent_with_trajectory(agent, "working", [])
-        assert monitoring_system["llm_provider"].analyze_agent_trajectory.call_count == 1
+        assert (
+            monitoring_system["llm_provider"].analyze_agent_trajectory.call_count == 1
+        )
 
         # Second call should use cache
         await guardian.analyze_agent_with_trajectory(agent, "working", [])
-        assert monitoring_system["llm_provider"].analyze_agent_trajectory.call_count == 1  # Still 1
+        assert (
+            monitoring_system["llm_provider"].analyze_agent_trajectory.call_count == 1
+        )  # Still 1
 
         # Verify cache exists
         assert "agent-cached" in guardian.trajectory_cache
@@ -473,21 +496,23 @@ class TestMonitoringIntegration:
         assert result["trajectory_aligned"] is True  # Safe default
 
     @pytest.mark.asyncio
-    async def test_full_monitor_loop_simulation(self, monitoring_system, mock_db_manager, mock_agent_manager):
+    async def test_full_monitor_loop_simulation(
+        self, monitoring_system, mock_db_manager, mock_agent_manager
+    ):
         """Simulate a full monitoring loop as would be called by run_monitor.py."""
         # This simulates what run_monitor.py would do
 
         # Setup initial agents
         agents = [
             Agent(id="agent-1", current_task_id="task-1", health_status="healthy"),
-            Agent(id="agent-2", current_task_id="task-2", health_status="healthy")
+            Agent(id="agent-2", current_task_id="task-2", health_status="healthy"),
         ]
 
         mock_session = Mock()
         mock_session.query.return_value.filter.return_value.all.return_value = agents
         mock_session.query.return_value.filter_by.return_value.all.return_value = agents
-        mock_session.query.return_value.filter_by.return_value.first.return_value = Mock(
-            enriched_description="Test task"
+        mock_session.query.return_value.filter_by.return_value.first.return_value = (
+            Mock(enriched_description="Test task")
         )
         mock_session.query.return_value.filter_by.return_value.order_by.return_value.all.return_value = []
         mock_db_manager.get_session.return_value = mock_session
@@ -498,7 +523,7 @@ class TestMonitoringIntegration:
             "trajectory_aligned": True,
             "alignment_score": 0.8,
             "needs_steering": False,
-            "trajectory_summary": "Working well"
+            "trajectory_summary": "Working well",
         }
 
         monitoring_system["llm_provider"].analyze_system_coherence.return_value = {
@@ -507,7 +532,7 @@ class TestMonitoringIntegration:
             "alignment_issues": [],
             "termination_recommendations": [],
             "coordination_needs": [],
-            "system_summary": "System running smoothly"
+            "system_summary": "System running smoothly",
         }
 
         guardian = monitoring_system["guardian"]
@@ -526,9 +551,7 @@ class TestMonitoringIntegration:
             for agent in active_agents:
                 output = mock_agent_manager.get_agent_output(agent.tmux_session_name)
                 summary = await guardian.analyze_agent_with_trajectory(
-                    agent=agent,
-                    tmux_output=output or "",
-                    past_summaries=[]
+                    agent=agent, tmux_output=output or "", past_summaries=[]
                 )
 
                 # Handle steering if needed
@@ -536,14 +559,16 @@ class TestMonitoringIntegration:
                     await guardian.steer_agent(
                         agent=agent,
                         steering_type=summary.get("steering_type", "guidance"),
-                        message=summary.get("steering_message", "")
+                        message=summary.get("steering_message", ""),
                     )
 
                 guardian_summaries.append(summary)
 
             # Conductor system analysis
             if len(guardian_summaries) > 1:
-                system_analysis = await conductor.analyze_system_state(guardian_summaries)
+                system_analysis = await conductor.analyze_system_state(
+                    guardian_summaries
+                )
 
                 # Execute any decisions
                 if system_analysis.get("decisions"):

@@ -5,7 +5,7 @@ import signal
 import subprocess
 import time
 
-from src.cli.utils import output, read_pid, remove_pid, is_process_running
+from src.cli.utils import is_process_running, output, read_pid, remove_pid
 
 
 def register(subparsers):
@@ -20,6 +20,7 @@ def run(args):
     # Read port from config
     try:
         from src.core.simple_config import Config
+
         config = Config()
         port = config.mcp_port or 8300
     except Exception:
@@ -27,7 +28,9 @@ def run(args):
 
     # First, kill ALL processes on the backend port to prevent stale processes
     try:
-        result = subprocess.run(["lsof", "-ti", f":{port}"], capture_output=True, text=True)
+        result = subprocess.run(
+            ["lsof", "-ti", f":{port}"], capture_output=True, text=True
+        )
         if result.stdout.strip():
             pids = result.stdout.strip().split("\n")
             for pid_str in pids:

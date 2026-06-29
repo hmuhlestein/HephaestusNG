@@ -1,14 +1,14 @@
 """Test the Agent Trajectory Monitoring System."""
 
-import asyncio
-import pytest
-from unittest.mock import Mock, AsyncMock, patch
 from datetime import datetime, timedelta
+from unittest.mock import AsyncMock, Mock, patch
 
-from src.monitoring.guardian import Guardian, SteeringType, TrajectoryPhase
+import pytest
+
+from src.core.database import Agent, AgentLog, Task
 from src.monitoring.conductor import Conductor, SystemDecision
+from src.monitoring.guardian import Guardian
 from src.monitoring.trajectory_context import TrajectoryContext
-from src.core.database import Agent, Task, AgentLog
 
 
 @pytest.fixture
@@ -32,17 +32,19 @@ def mock_agent_manager():
 def mock_llm_provider():
     """Create mock LLM provider."""
     mock = AsyncMock()
-    mock.analyze_agent_trajectory = AsyncMock(return_value={
-        "current_phase": "implementation",
-        "trajectory_aligned": True,
-        "alignment_score": 0.8,
-        "alignment_issues": [],
-        "progress_estimate": 60,
-        "needs_steering": False,
-        "steering_type": None,
-        "steering_recommendation": None,
-        "trajectory_summary": "Agent implementing task successfully"
-    })
+    mock.analyze_agent_trajectory = AsyncMock(
+        return_value={
+            "current_phase": "implementation",
+            "trajectory_aligned": True,
+            "alignment_score": 0.8,
+            "alignment_issues": [],
+            "progress_estimate": 60,
+            "needs_steering": False,
+            "steering_type": None,
+            "steering_recommendation": None,
+            "trajectory_summary": "Agent implementing task successfully",
+        }
+    )
     return mock
 
 
@@ -79,12 +81,16 @@ class TestGuardian:
             done_definition="Authentication working with tests",
         )
 
-        with patch.object(guardian, '_get_agent_task', return_value=mock_task):
-            with patch.object(guardian, '_build_accumulated_context', return_value={
-                "overall_goal": "Implement JWT authentication",
-                "constraints": ["no external libraries"],
-                "session_start": datetime.utcnow() - timedelta(minutes=5),
-            }):
+        with patch.object(guardian, "_get_agent_task", return_value=mock_task):
+            with patch.object(
+                guardian,
+                "_build_accumulated_context",
+                return_value={
+                    "overall_goal": "Implement JWT authentication",
+                    "constraints": ["no external libraries"],
+                    "session_start": datetime.utcnow() - timedelta(minutes=5),
+                },
+            ):
                 # Perform analysis
                 result = await guardian.analyze_agent_with_trajectory(
                     agent=agent,
@@ -93,11 +99,11 @@ class TestGuardian:
                 )
 
         # Verify results
-        assert result['agent_id'] == "test-agent-1"
-        assert result['trajectory_aligned'] is True
-        assert result['alignment_score'] == 0.8
-        assert result['current_phase'] == "implementation"
-        assert result['progress_percentage'] == 60
+        assert result["agent_id"] == "test-agent-1"
+        assert result["trajectory_aligned"] is True
+        assert result["alignment_score"] == 0.8
+        assert result["current_phase"] == "implementation"
+        assert result["progress_percentage"] == 60
 
     @pytest.mark.asyncio
     async def test_guardian_detects_constraint_violation(
@@ -125,18 +131,28 @@ class TestGuardian:
         )
 
         # Setup to detect violation
-        with patch.object(guardian, '_get_agent_task', return_value=mock_task):
-            with patch.object(guardian, '_build_accumulated_context', return_value={
-                "overall_goal": "Build simple API",
-                "constraints": ["no external libraries", "keep it simple"],
-                "session_start": datetime.utcnow(),
-            }):
-                with patch.object(guardian, '_check_trajectory_alignment', return_value={
-                    "aligned": False,
-                    "score": 0.3,
-                    "issues": ["Installing packages violates: no external libraries"],
-                    "progress": 20,
-                }):
+        with patch.object(guardian, "_get_agent_task", return_value=mock_task):
+            with patch.object(
+                guardian,
+                "_build_accumulated_context",
+                return_value={
+                    "overall_goal": "Build simple API",
+                    "constraints": ["no external libraries", "keep it simple"],
+                    "session_start": datetime.utcnow(),
+                },
+            ):
+                with patch.object(
+                    guardian,
+                    "_check_trajectory_alignment",
+                    return_value={
+                        "aligned": False,
+                        "score": 0.3,
+                        "issues": [
+                            "Installing packages violates: no external libraries"
+                        ],
+                        "progress": 20,
+                    },
+                ):
                     result = await guardian.analyze_agent_with_trajectory(
                         agent=agent,
                         tmux_output="pip install requests flask sqlalchemy",
@@ -144,8 +160,8 @@ class TestGuardian:
                     )
 
         # Should detect misalignment
-        assert result['trajectory_aligned'] is False
-        assert result['alignment_score'] < 0.5
+        assert result["trajectory_aligned"] is False
+        assert result["alignment_score"] < 0.5
 
     @pytest.mark.asyncio
     async def test_guardian_steering_decision(
@@ -174,7 +190,7 @@ class TestGuardian:
             "needs_steering": True,
             "steering_type": "stuck",
             "steering_recommendation": "Check your imports",
-            "trajectory_summary": "Agent stuck on error"
+            "trajectory_summary": "Agent stuck on error",
         }
 
         await guardian.steer_agent(
@@ -235,10 +251,10 @@ class TestConductor:
         result = await conductor.analyze_system_state(summaries)
 
         # Should detect agents 1 and 2 doing similar work
-        assert len(result['duplicates']) > 0
-        duplicate = result['duplicates'][0]
-        assert 'agent-1' in [duplicate['agent1'], duplicate['agent2']]
-        assert 'agent-2' in [duplicate['agent1'], duplicate['agent2']]
+        assert len(result["duplicates"]) > 0
+        duplicate = result["duplicates"][0]
+        assert "agent-1" in [duplicate["agent1"], duplicate["agent2"]]
+        assert "agent-2" in [duplicate["agent1"], duplicate["agent2"]]
 
     @pytest.mark.asyncio
     async def test_conductor_system_coherence(
@@ -280,10 +296,10 @@ class TestConductor:
         result = await conductor.analyze_system_state(summaries)
 
         # System coherence should be degraded
-        coherence = result['coherence']
-        assert coherence['score'] < 0.7  # Low due to misaligned agents
-        assert coherence['misaligned_agents'] == 2
-        assert len(coherence['issues']) > 0
+        coherence = result["coherence"]
+        assert coherence["score"] < 0.7  # Low due to misaligned agents
+        assert coherence["misaligned_agents"] == 2
+        assert len(coherence["issues"]) > 0
 
     @pytest.mark.asyncio
     async def test_conductor_makes_decisions(
@@ -315,13 +331,13 @@ class TestConductor:
             },
         ]
 
-        with patch.object(conductor, '_calculate_work_similarity', return_value=0.9):
+        with patch.object(conductor, "_calculate_work_similarity", return_value=0.9):
             result = await conductor.analyze_system_state(summaries)
 
         # Should recommend terminating duplicate
-        decisions = result['decisions']
+        decisions = result["decisions"]
         assert len(decisions) > 0
-        assert decisions[0]['type'] == SystemDecision.TERMINATE_DUPLICATE.value
+        assert decisions[0]["type"] == SystemDecision.TERMINATE_DUPLICATE.value
 
 
 class TestTrajectoryContext:

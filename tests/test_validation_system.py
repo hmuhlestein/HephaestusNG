@@ -1,32 +1,25 @@
 """Comprehensive tests for the validation agent system."""
 
-import pytest
-import asyncio
 import uuid
-from datetime import datetime
-from unittest.mock import Mock, patch, MagicMock, AsyncMock
-from pathlib import Path
-import tempfile
-import json
+from unittest.mock import AsyncMock, Mock, patch
+
+import pytest
 
 from src.core.database import (
-    DatabaseManager,
-    Task,
     Agent,
+    Base,
+    DatabaseManager,
     Phase,
+    Task,
     ValidationReview,
-    Base
 )
+from src.validation.check_executors import ValidationCheckType, execute_validation_check
 from src.validation.prompt_builder import ValidationPromptBuilder
-from src.validation.check_executors import (
-    ValidationCheckType,
-    execute_validation_check
-)
 from src.validation.validator_agent import (
     build_validator_prompt,
-    spawn_validator_agent,
+    get_agent_results,
     send_feedback_to_agent,
-    get_agent_results
+    spawn_validator_agent,
 )
 
 
@@ -41,7 +34,7 @@ class TestValidationPromptBuilder:
             "id": "task123",
             "raw_description": "Test task",
             "enriched_description": "Enhanced test task",
-            "done_definition": "Task is complete"
+            "done_definition": "Task is complete",
         }
 
         phase_validation = {
@@ -49,7 +42,7 @@ class TestValidationPromptBuilder:
                 {
                     "description": "File exists",
                     "check_type": "file_exists",
-                    "target": ["test.txt"]
+                    "target": ["test.txt"],
                 }
             ]
         }
@@ -58,7 +51,7 @@ class TestValidationPromptBuilder:
             "files_created": ["test.txt"],
             "files_modified": [],
             "files_deleted": [],
-            "detailed_diff": "Added test.txt"
+            "detailed_diff": "Added test.txt",
         }
 
         prompt = builder.build_prompt(
@@ -67,7 +60,7 @@ class TestValidationPromptBuilder:
             commit_sha="abc123",
             workspace_changes=workspace_changes,
             agent_claims="Task completed",
-            iteration=1
+            iteration=1,
         )
 
         assert "task123" in prompt
@@ -90,7 +83,7 @@ class TestValidationPromptBuilder:
             workspace_changes={},
             agent_claims="Fixed",
             iteration=2,
-            previous_feedback=previous_feedback
+            previous_feedback=previous_feedback,
         )
 
         assert "Please fix the error in line 10" in prompt
@@ -105,14 +98,14 @@ class TestValidationPromptBuilder:
                 {
                     "description": "Tests pass",
                     "check_type": "test_pass",
-                    "command": "pytest"
+                    "command": "pytest",
                 },
                 {
                     "description": "File contains pattern",
                     "check_type": "file_contains",
                     "target": "README.md",
-                    "pattern": "Installation"
-                }
+                    "pattern": "Installation",
+                },
             ]
         }
 
@@ -133,14 +126,10 @@ class TestValidationCheckExecutors:
         test_file = tmp_path / "test.txt"
         test_file.write_text("content")
 
-        criterion = {
-            "target": ["test.txt"]
-        }
+        criterion = {"target": ["test.txt"]}
 
         result = execute_validation_check(
-            ValidationCheckType.FILE_EXISTS,
-            criterion,
-            str(tmp_path)
+            ValidationCheckType.FILE_EXISTS, criterion, str(tmp_path)
         )
 
         assert result["passed"] is True
@@ -148,14 +137,10 @@ class TestValidationCheckExecutors:
 
     def test_file_exists_check_missing(self, tmp_path):
         """Test file existence check when file is missing."""
-        criterion = {
-            "target": ["missing.txt"]
-        }
+        criterion = {"target": ["missing.txt"]}
 
         result = execute_validation_check(
-            ValidationCheckType.FILE_EXISTS,
-            criterion,
-            str(tmp_path)
+            ValidationCheckType.FILE_EXISTS, criterion, str(tmp_path)
         )
 
         assert result["passed"] is False
@@ -166,15 +151,10 @@ class TestValidationCheckExecutors:
         test_file = tmp_path / "test.txt"
         test_file.write_text("Hello World\nTest Pattern\n")
 
-        criterion = {
-            "target": "test.txt",
-            "pattern": ["Hello", "Pattern"]
-        }
+        criterion = {"target": "test.txt", "pattern": ["Hello", "Pattern"]}
 
         result = execute_validation_check(
-            ValidationCheckType.FILE_CONTAINS,
-            criterion,
-            str(tmp_path)
+            ValidationCheckType.FILE_CONTAINS, criterion, str(tmp_path)
         )
 
         assert result["passed"] is True
@@ -182,14 +162,10 @@ class TestValidationCheckExecutors:
 
     def test_command_success_check(self, tmp_path):
         """Test command execution checking."""
-        criterion = {
-            "command": "echo 'test'"
-        }
+        criterion = {"command": "echo 'test'"}
 
         result = execute_validation_check(
-            ValidationCheckType.COMMAND_SUCCESS,
-            criterion,
-            str(tmp_path)
+            ValidationCheckType.COMMAND_SUCCESS, criterion, str(tmp_path)
         )
 
         assert result["passed"] is True
@@ -200,9 +176,7 @@ class TestValidationCheckExecutors:
         criterion = {}
 
         result = execute_validation_check(
-            ValidationCheckType.MANUAL_VERIFICATION,
-            criterion,
-            "/tmp"
+            ValidationCheckType.MANUAL_VERIFICATION, criterion, "/tmp"
         )
 
         assert result["passed"] is None
@@ -230,15 +204,9 @@ class TestValidatorAgent:
         task.last_validation_feedback = None
 
         phase = Mock()
-        phase.validation = {
-            "criteria": [
-                {"description": "Test criterion"}
-            ]
-        }
+        phase.validation = {"criteria": [{"description": "Test criterion"}]}
 
-        workspace_changes = {
-            "files_created": ["new.txt"]
-        }
+        workspace_changes = {"files_created": ["new.txt"]}
 
         prompt = build_validator_prompt(
             task=task,
@@ -247,7 +215,7 @@ class TestValidatorAgent:
             workspace_changes=workspace_changes,
             agent_claims="Done",
             iteration=1,
-            validator_agent_id="validator-123"
+            validator_agent_id="validator-123",
         )
 
         assert "task123" in prompt
@@ -279,16 +247,27 @@ class TestValidatorAgent:
             "files_created": [],
             "files_modified": [],
             "files_deleted": [],
-            "detailed_diff": ""
+            "detailed_diff": "",
         }
         mock_worktree.get_agent_branch_path.return_value = "/tmp/wt_agent123"
 
         # Mock agent manager
         mock_agent_manager = AsyncMock()
 
-        with patch('src.validation.validator_agent.get_agent_results', return_value="Agent did X"), \
-             patch('src.validation.validator_agent.spawn_validator_tmux_session', new_callable=AsyncMock), \
-             patch('src.monitoring.prompt_loader.prompt_loader.format_task_validation_prompt', return_value="Validation prompt"):
+        with (
+            patch(
+                "src.validation.validator_agent.get_agent_results",
+                return_value="Agent did X",
+            ),
+            patch(
+                "src.validation.validator_agent.spawn_validator_tmux_session",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "src.monitoring.prompt_loader.prompt_loader.format_task_validation_prompt",
+                return_value="Validation prompt",
+            ),
+        ):
             validator_id = await spawn_validator_agent(
                 validation_type="task",
                 target_id="task123",
@@ -297,7 +276,7 @@ class TestValidatorAgent:
                 db_manager=mock_db_manager,
                 branch_manager=mock_worktree,
                 agent_manager=mock_agent_manager,
-                original_agent_id="agent-123"
+                original_agent_id="agent-123",
             )
 
         assert validator_id.startswith("task-validator-")
@@ -305,13 +284,11 @@ class TestValidatorAgent:
 
     def test_send_feedback_to_agent(self):
         """Test sending feedback to agent."""
-        with patch('subprocess.run') as mock_run:
+        with patch("subprocess.run") as mock_run:
             mock_run.return_value.returncode = 0
 
             result = send_feedback_to_agent(
-                agent_id="agent123",
-                feedback="Please fix the error",
-                iteration=1
+                agent_id="agent123", feedback="Please fix the error", iteration=1
             )
 
             assert result is True
@@ -361,7 +338,7 @@ class TestDatabaseModels:
             validation_enabled=True,
             validation_iteration=2,
             last_validation_feedback="Fix the error",
-            review_done=False
+            review_done=False,
         )
 
         db_session.add(task)
@@ -381,7 +358,7 @@ class TestDatabaseModels:
             cli_type="claude",
             status="working",
             agent_type="validator",
-            kept_alive_for_validation=True
+            kept_alive_for_validation=True,
         )
 
         db_session.add(agent)
@@ -394,16 +371,12 @@ class TestDatabaseModels:
     def test_validation_review_model(self, db_session):
         """Test ValidationReview model."""
         # Create task and agent first
-        task = Task(
-            id="task123",
-            raw_description="Test",
-            done_definition="Done"
-        )
+        task = Task(id="task123", raw_description="Test", done_definition="Done")
         agent = Agent(
             id="validator123",
             system_prompt="Validate",
             cli_type="claude",
-            agent_type="validator"
+            agent_type="validator",
         )
 
         db_session.add(task)
@@ -419,7 +392,7 @@ class TestDatabaseModels:
             validation_passed=True,
             feedback="All checks passed",
             evidence=[{"check": "file_exists", "result": "passed"}],
-            recommendations=["Create follow-up task"]
+            recommendations=["Create follow-up task"],
         )
 
         db_session.add(review)
@@ -442,10 +415,8 @@ class TestDatabaseModels:
             done_definitions=["Done"],
             validation={
                 "enabled": True,
-                "criteria": [
-                    {"description": "Test passes", "check_type": "test_pass"}
-                ]
-            }
+                "criteria": [{"description": "Test passes", "check_type": "test_pass"}],
+            },
         )
 
         db_session.add(phase)
@@ -463,9 +434,14 @@ class TestValidationStates:
     def test_task_state_transitions(self):
         """Test that task states support validation flow."""
         valid_states = [
-            "pending", "assigned", "in_progress",
-            "under_review", "validation_in_progress", "needs_work",
-            "done", "failed"
+            "pending",
+            "assigned",
+            "in_progress",
+            "under_review",
+            "validation_in_progress",
+            "needs_work",
+            "done",
+            "failed",
         ]
 
         # These should be the valid states for validation flow

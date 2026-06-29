@@ -3,12 +3,26 @@
 
 import sys
 from pathlib import Path
+
 sys.path.append(str(Path(__file__).parent.parent / "src"))
 
-from sqlalchemy import create_engine, Column, String, Integer, Float, Boolean, DateTime, JSON, ForeignKey, Text
+from datetime import datetime
+
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    Column,
+    DateTime,
+    Float,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    create_engine,
+)
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
-from datetime import datetime
+
 from src.core.simple_config import get_config
 
 Base = declarative_base()
@@ -16,6 +30,7 @@ Base = declarative_base()
 
 class GuardianAnalysis(Base):
     """Dedicated table for Guardian trajectory analyses."""
+
     __tablename__ = "guardian_analyses"
 
     id = Column(Integer, primary_key=True)
@@ -46,6 +61,7 @@ class GuardianAnalysis(Base):
 
 class ConductorAnalysis(Base):
     """Dedicated table for Conductor system analyses."""
+
     __tablename__ = "conductor_analyses"
 
     id = Column(Integer, primary_key=True)
@@ -69,6 +85,7 @@ class ConductorAnalysis(Base):
 
 class DetectedDuplicate(Base):
     """Table for tracking detected duplicate work."""
+
     __tablename__ = "detected_duplicates"
 
     id = Column(Integer, primary_key=True)
@@ -87,6 +104,7 @@ class DetectedDuplicate(Base):
 
 class SteeringIntervention(Base):
     """Table for tracking steering interventions."""
+
     __tablename__ = "steering_interventions"
 
     id = Column(Integer, primary_key=True)
@@ -105,7 +123,7 @@ class SteeringIntervention(Base):
 def add_tables():
     """Add the new analysis tables to the existing database."""
     config = get_config()
-    engine = create_engine(f'sqlite:///{config.database_path}')
+    engine = create_engine(f"sqlite:///{config.database_path}")
 
     # Create all tables
     Base.metadata.create_all(engine)

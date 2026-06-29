@@ -1,25 +1,22 @@
 """Unit tests for multi-provider LLM functionality."""
 
-import pytest
-import asyncio
 import os
-from unittest.mock import Mock, patch, AsyncMock, MagicMock
-from pathlib import Path
 import sys
+from pathlib import Path
+from unittest.mock import AsyncMock, Mock, patch
+
+import pytest
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.core.llm_config import (
-    SimpleConfig,
-    MultiProviderLLMConfig,
     ModelAssignment,
-    ProviderConfig
+    MultiProviderLLMConfig,
+    ProviderConfig,
+    SimpleConfig,
 )
-from src.interfaces.langchain_llm_client import (
-    LangChainLLMClient,
-    ComponentType
-)
+from src.interfaces.langchain_llm_client import ComponentType, LangChainLLMClient
 from src.interfaces.multi_provider_llm import MultiProviderLLM
 
 
@@ -144,59 +141,63 @@ class TestLangChainLLMClient:
             embedding_model="text-embedding-3-small",
             providers={
                 "openai": ProviderConfig(
-                    api_key_env="OPENAI_API_KEY",
-                    models=["gpt-5-nano"]
+                    api_key_env="OPENAI_API_KEY", models=["gpt-5-nano"]
                 ),
                 "groq": ProviderConfig(
                     api_key_env="GROQ_API_KEY",
-                    models=["openai/gpt-oss-120b", "llama3-8b-8192"]
+                    models=["openai/gpt-oss-120b", "llama3-8b-8192"],
                 ),
                 "openrouter": ProviderConfig(
                     api_key_env="OPENROUTER_API_KEY",
                     base_url="https://openrouter.ai/api/v1",
-                    models=[{"provider": "cerebras", "model": "openai/gpt-oss-120b"}]
-                )
+                    models=[{"provider": "cerebras", "model": "openai/gpt-oss-120b"}],
+                ),
             },
             model_assignments={
                 "task_enrichment": ModelAssignment(
                     provider="openai",
                     model="gpt-5-nano",
                     temperature=0.7,
-                    max_tokens=2000
+                    max_tokens=2000,
                 ),
                 "agent_monitoring": ModelAssignment(
                     provider="groq",
                     model="openai/gpt-oss-120b",
                     temperature=0.3,
-                    max_tokens=2000
+                    max_tokens=2000,
                 ),
                 "guardian_analysis": ModelAssignment(
                     provider="openrouter",
                     openrouter_provider="cerebras",
                     model="openai/gpt-oss-120b",
                     temperature=0.5,
-                    max_tokens=3000
-                )
-            }
+                    max_tokens=3000,
+                ),
+            },
         )
 
-    @patch.dict(os.environ, {
-        "OPENAI_API_KEY": "test-openai-key",
-        "GROQ_API_KEY": "test-groq-key",
-        "OPENROUTER_API_KEY": "test-openrouter-key"
-    })
+    @patch.dict(
+        os.environ,
+        {
+            "OPENAI_API_KEY": "test-openai-key",
+            "GROQ_API_KEY": "test-groq-key",
+            "OPENROUTER_API_KEY": "test-openrouter-key",
+        },
+    )
     def test_initialize_models(self, mock_config):
         """Test model initialization."""
-        with patch('src.interfaces.langchain_llm_client.ChatOpenAI') as MockOpenAI, \
-             patch('src.interfaces.langchain_llm_client.ChatGroq') as MockGroq, \
-             patch('src.interfaces.langchain_llm_client.OpenAIEmbeddings') as MockEmbeddings:
-
+        with (
+            patch("src.interfaces.langchain_llm_client.ChatOpenAI") as MockOpenAI,
+            patch("src.interfaces.langchain_llm_client.ChatGroq") as MockGroq,
+            patch(
+                "src.interfaces.langchain_llm_client.OpenAIEmbeddings"
+            ) as MockEmbeddings,
+        ):
             client = LangChainLLMClient(mock_config)
 
             # Check embedding model initialized
             MockEmbeddings.assert_called_once_with(
-                model="text-embedding-3-small",
-                openai_api_key="test-openai-key"
+                model="text-embedding-3-small", openai_api_key="test-openai-key"
             )
 
             # Check models created for each component
@@ -204,14 +205,18 @@ class TestLangChainLLMClient:
 
     def test_get_model_for_component(self, mock_config):
         """Test getting model for specific component."""
-        with patch.dict(os.environ, {
-            "OPENAI_API_KEY": "test-key",
-            "GROQ_API_KEY": "test-key",
-            "OPENROUTER_API_KEY": "test-key"
-        }):
-            with patch('src.interfaces.langchain_llm_client.ChatOpenAI'), \
-                 patch('src.interfaces.langchain_llm_client.ChatGroq'):
-
+        with patch.dict(
+            os.environ,
+            {
+                "OPENAI_API_KEY": "test-key",
+                "GROQ_API_KEY": "test-key",
+                "OPENROUTER_API_KEY": "test-key",
+            },
+        ):
+            with (
+                patch("src.interfaces.langchain_llm_client.ChatOpenAI"),
+                patch("src.interfaces.langchain_llm_client.ChatGroq"),
+            ):
                 client = LangChainLLMClient(mock_config)
 
                 # Test getting model for task enrichment
@@ -241,8 +246,10 @@ class TestLangChainLLMClient:
             mock_embeddings = AsyncMock()
             mock_embeddings.aembed_query.return_value = [0.1] * 1536
 
-            with patch('src.interfaces.langchain_llm_client.OpenAIEmbeddings',
-                      return_value=mock_embeddings):
+            with patch(
+                "src.interfaces.langchain_llm_client.OpenAIEmbeddings",
+                return_value=mock_embeddings,
+            ):
                 client = LangChainLLMClient(mock_config)
                 client._embedding_model = mock_embeddings
 
@@ -259,11 +266,7 @@ class TestLangChainLLMClient:
             client = LangChainLLMClient(mock_config)
 
             # Should return default values when models not available
-            result = await client.enrich_task(
-                "Test task",
-                "Task done",
-                ["context"]
-            )
+            result = await client.enrich_task("Test task", "Task done", ["context"])
 
             assert result["enriched_description"] == "Test task"
             assert result["completion_criteria"] == ["Task done"]
@@ -277,23 +280,23 @@ class TestMultiProviderLLM:
     def mock_client(self):
         """Create mock LangChain client."""
         client = Mock(spec=LangChainLLMClient)
-        client.enrich_task = AsyncMock(return_value={
-            "enriched_description": "Enriched task",
-            "completion_criteria": ["Done"],
-            "estimated_complexity": 5
-        })
+        client.enrich_task = AsyncMock(
+            return_value={
+                "enriched_description": "Enriched task",
+                "completion_criteria": ["Done"],
+                "estimated_complexity": 5,
+            }
+        )
         client.generate_embedding = AsyncMock(return_value=[0.1] * 1536)
-        client.analyze_agent_state = AsyncMock(return_value={
-            "state": "healthy",
-            "decision": "continue"
-        })
-        client.analyze_agent_trajectory = AsyncMock(return_value={
-            "trajectory_aligned": True,
-            "alignment_score": 0.8
-        })
-        client.analyze_system_coherence = AsyncMock(return_value={
-            "coherence_score": 0.9
-        })
+        client.analyze_agent_state = AsyncMock(
+            return_value={"state": "healthy", "decision": "continue"}
+        )
+        client.analyze_agent_trajectory = AsyncMock(
+            return_value={"trajectory_aligned": True, "alignment_score": 0.8}
+        )
+        client.analyze_system_coherence = AsyncMock(
+            return_value={"coherence_score": 0.9}
+        )
         client.generate_agent_prompt = AsyncMock(return_value="Agent prompt")
         client.get_model_name = Mock(return_value="test-model")
         return client
@@ -304,15 +307,14 @@ class TestMultiProviderLLM:
         config_file = tmp_path / "test.yaml"
         config_file.write_text("llm: {}")
 
-        with patch('src.interfaces.multi_provider_llm.LangChainLLMClient',
-                  return_value=mock_client):
+        with patch(
+            "src.interfaces.multi_provider_llm.LangChainLLMClient",
+            return_value=mock_client,
+        ):
             llm = MultiProviderLLM(str(config_file))
 
             result = await llm.enrich_task(
-                "Test task",
-                "Done definition",
-                ["context"],
-                "phase context"
+                "Test task", "Done definition", ["context"], "phase context"
             )
 
             assert result["enriched_description"] == "Enriched task"
@@ -324,8 +326,10 @@ class TestMultiProviderLLM:
         config_file = tmp_path / "test.yaml"
         config_file.write_text("llm: {}")
 
-        with patch('src.interfaces.multi_provider_llm.LangChainLLMClient',
-                  return_value=mock_client):
+        with patch(
+            "src.interfaces.multi_provider_llm.LangChainLLMClient",
+            return_value=mock_client,
+        ):
             llm = MultiProviderLLM(str(config_file))
 
             embedding = await llm.generate_embedding("test text")
@@ -339,14 +343,14 @@ class TestMultiProviderLLM:
         config_file = tmp_path / "test.yaml"
         config_file.write_text("llm: {}")
 
-        with patch('src.interfaces.multi_provider_llm.LangChainLLMClient',
-                  return_value=mock_client):
+        with patch(
+            "src.interfaces.multi_provider_llm.LangChainLLMClient",
+            return_value=mock_client,
+        ):
             llm = MultiProviderLLM(str(config_file))
 
             result = await llm.analyze_agent_state(
-                "agent output",
-                {"task": "info"},
-                "project context"
+                "agent output", {"task": "info"}, "project context"
             )
 
             assert result["state"] == "healthy"
@@ -359,16 +363,13 @@ class TestMultiProviderLLM:
         config_file = tmp_path / "test.yaml"
         config_file.write_text("llm: {}")
 
-        with patch('src.interfaces.multi_provider_llm.LangChainLLMClient',
-                  return_value=mock_client):
+        with patch(
+            "src.interfaces.multi_provider_llm.LangChainLLMClient",
+            return_value=mock_client,
+        ):
             llm = MultiProviderLLM(str(config_file))
 
-            result = await llm.analyze_agent_trajectory(
-                "output",
-                {},
-                [],
-                {}
-            )
+            result = await llm.analyze_agent_trajectory("output", {}, [], {})
 
             assert result["trajectory_aligned"] is True
             assert result["alignment_score"] == 0.8
@@ -379,8 +380,10 @@ class TestMultiProviderLLM:
         config_file = tmp_path / "test.yaml"
         config_file.write_text("llm: {}")
 
-        with patch('src.interfaces.multi_provider_llm.LangChainLLMClient',
-                  return_value=mock_client):
+        with patch(
+            "src.interfaces.multi_provider_llm.LangChainLLMClient",
+            return_value=mock_client,
+        ):
             llm = MultiProviderLLM(str(config_file))
 
             model_name = llm.get_model_for_component("task_enrichment")
@@ -425,7 +428,7 @@ llm:
         assert llm_config.embedding_provider == "azure_openai"
 
     @patch.dict(os.environ, {"AZURE_OPENAI_API_KEY": "test-azure-key"})
-    @patch('src.interfaces.langchain_llm_client.AzureChatOpenAI')
+    @patch("src.interfaces.langchain_llm_client.AzureChatOpenAI")
     def test_azure_model_initialization(self, mock_azure_chat, tmp_path):
         """Test Azure OpenAI model initialization with correct parameters."""
         config_file = tmp_path / "azure_config.yaml"
@@ -451,15 +454,15 @@ llm:
         # Verify AzureChatOpenAI was called with correct parameters
         assert mock_azure_chat.called
         call_kwargs = mock_azure_chat.call_args.kwargs
-        assert call_kwargs['model'] == "gpt-4"
-        assert call_kwargs['azure_deployment'] == "gpt-4"
-        assert call_kwargs['api_version'] == "2024-02-01"
-        assert call_kwargs['azure_endpoint'] == "https://test-resource.openai.azure.com"
-        assert call_kwargs['temperature'] == 0.7
-        assert call_kwargs['max_tokens'] == 2000
+        assert call_kwargs["model"] == "gpt-4"
+        assert call_kwargs["azure_deployment"] == "gpt-4"
+        assert call_kwargs["api_version"] == "2024-02-01"
+        assert call_kwargs["azure_endpoint"] == "https://test-resource.openai.azure.com"
+        assert call_kwargs["temperature"] == 0.7
+        assert call_kwargs["max_tokens"] == 2000
 
     @patch.dict(os.environ, {"AZURE_OPENAI_API_KEY": "test-azure-key"})
-    @patch('src.interfaces.langchain_llm_client.AzureOpenAIEmbeddings')
+    @patch("src.interfaces.langchain_llm_client.AzureOpenAIEmbeddings")
     def test_azure_embeddings_initialization(self, mock_azure_embeddings, tmp_path):
         """Test Azure OpenAI embeddings initialization."""
         config_file = tmp_path / "azure_config.yaml"
@@ -481,10 +484,10 @@ llm:
         # Verify AzureOpenAIEmbeddings was called
         assert mock_azure_embeddings.called
         call_kwargs = mock_azure_embeddings.call_args.kwargs
-        assert call_kwargs['model'] == "text-embedding-3-large"
-        assert call_kwargs['azure_deployment'] == "text-embedding-3-large"
-        assert call_kwargs['azure_endpoint'] == "https://test-resource.openai.azure.com"
-        assert call_kwargs['api_version'] == "2024-02-01"
+        assert call_kwargs["model"] == "text-embedding-3-large"
+        assert call_kwargs["azure_deployment"] == "text-embedding-3-large"
+        assert call_kwargs["azure_endpoint"] == "https://test-resource.openai.azure.com"
+        assert call_kwargs["api_version"] == "2024-02-01"
 
 
 class TestGoogleAIProvider:
@@ -522,7 +525,7 @@ llm:
         assert llm_config.embedding_model == "models/embedding-001"
 
     @patch.dict(os.environ, {"GOOGLE_API_KEY": "test-google-key"})
-    @patch('src.interfaces.langchain_llm_client.ChatGoogleGenerativeAI')
+    @patch("src.interfaces.langchain_llm_client.ChatGoogleGenerativeAI")
     def test_google_model_initialization(self, mock_google_chat, tmp_path):
         """Test Google AI model initialization with correct parameters."""
         config_file = tmp_path / "google_config.yaml"
@@ -546,13 +549,13 @@ llm:
         # Verify ChatGoogleGenerativeAI was called with correct parameters
         assert mock_google_chat.called
         call_kwargs = mock_google_chat.call_args.kwargs
-        assert call_kwargs['model'] == "gemini-2.5-flash"
-        assert call_kwargs['google_api_key'] == "test-google-key"
-        assert call_kwargs['temperature'] == 0.7
-        assert call_kwargs['max_tokens'] == 2000
+        assert call_kwargs["model"] == "gemini-2.5-flash"
+        assert call_kwargs["google_api_key"] == "test-google-key"
+        assert call_kwargs["temperature"] == 0.7
+        assert call_kwargs["max_tokens"] == 2000
 
     @patch.dict(os.environ, {"GOOGLE_API_KEY": "test-google-key"})
-    @patch('src.interfaces.langchain_llm_client.GoogleGenerativeAIEmbeddings')
+    @patch("src.interfaces.langchain_llm_client.GoogleGenerativeAIEmbeddings")
     def test_google_embeddings_initialization(self, mock_google_embeddings, tmp_path):
         """Test Google AI embeddings initialization."""
         config_file = tmp_path / "google_config.yaml"
@@ -572,22 +575,27 @@ llm:
         # Verify GoogleGenerativeAIEmbeddings was called
         assert mock_google_embeddings.called
         call_kwargs = mock_google_embeddings.call_args.kwargs
-        assert call_kwargs['model'] == "models/embedding-001"
-        assert call_kwargs['google_api_key'] == "test-google-key"
+        assert call_kwargs["model"] == "models/embedding-001"
+        assert call_kwargs["google_api_key"] == "test-google-key"
 
 
 class TestMultiProviderIntegration:
     """Test multi-provider integration scenarios."""
 
-    @patch.dict(os.environ, {
-        "AZURE_OPENAI_API_KEY": "azure-key",
-        "GOOGLE_API_KEY": "google-key",
-        "OPENAI_API_KEY": "openai-key"
-    })
-    @patch('src.interfaces.langchain_llm_client.AzureChatOpenAI')
-    @patch('src.interfaces.langchain_llm_client.ChatGoogleGenerativeAI')
-    @patch('src.interfaces.langchain_llm_client.OpenAIEmbeddings')
-    def test_mixed_provider_routing(self, mock_openai_emb, mock_google, mock_azure, tmp_path):
+    @patch.dict(
+        os.environ,
+        {
+            "AZURE_OPENAI_API_KEY": "azure-key",
+            "GOOGLE_API_KEY": "google-key",
+            "OPENAI_API_KEY": "openai-key",
+        },
+    )
+    @patch("src.interfaces.langchain_llm_client.AzureChatOpenAI")
+    @patch("src.interfaces.langchain_llm_client.ChatGoogleGenerativeAI")
+    @patch("src.interfaces.langchain_llm_client.OpenAIEmbeddings")
+    def test_mixed_provider_routing(
+        self, mock_openai_emb, mock_google, mock_azure, tmp_path
+    ):
         """Test that different components can use different providers simultaneously."""
         config_file = tmp_path / "mixed_config.yaml"
         config_file.write_text("""
@@ -648,4 +656,7 @@ llm:
         config.validate(strict=False)
 
         # Check warnings were logged
-        assert "Some API keys are missing" in caplog.text or "API key not found" in caplog.text
+        assert (
+            "Some API keys are missing" in caplog.text
+            or "API key not found" in caplog.text
+        )
