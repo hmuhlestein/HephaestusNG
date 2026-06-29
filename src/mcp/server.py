@@ -2782,7 +2782,7 @@ async def update_task_status(
 
         # 3c. Spec gate firing — when a gated phase task completes and the phase
         # is now complete, trigger the gate immediately (don't wait for monitor poll).
-        # The monitor's _check_phase_progression only fires when the next phase is
+        # The orchestrator's _advance_phases only fires when the next phase is
         # pending — if it's already in_progress, the gate is missed. Fix: fire from
         # the completion path itself and actually trigger the evaluation.
         if request.status == "done" and task.phase_id:

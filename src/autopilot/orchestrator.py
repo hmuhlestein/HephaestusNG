@@ -2685,7 +2685,7 @@ def run_single_workflow(
             )
 
             # Phase progression — the single source of truth for advancing phases.
-            # This replaces the monitor's _check_phase_progression.
+            # This replaces the monitor's phase progression logic.
             _advance_phases(exec_id, logger)
 
             # Refresh task counts after potential phase advancement
