@@ -1966,6 +1966,31 @@ class MonitoringLoop:
                 logger.error(f"Target phase not found: {phase_id}")
                 return
 
+            # Guard: ensure the previous phase is complete before creating a task
+            # for this phase. This prevents the race condition where the monitor
+            # creates a task for phase N+1 before phase N is marked complete.
+            if action == "continue" and phase.order > 1:
+                prev_phase = (
+                    session.query(Phase)
+                    .filter(
+                        Phase.workflow_id == workflow_id,
+                        Phase.order == phase.order - 1,
+                    )
+                    .first()
+                )
+                if prev_phase:
+                    prev_exec = (
+                        session.query(PhaseExecution)
+                        .filter_by(phase_id=prev_phase.id)
+                        .first()
+                    )
+                    if prev_exec and prev_exec.status != "completed":
+                        logger.info(
+                            f"[PHASE-TASK] Previous phase {prev_phase.name} is {prev_exec.status}, "
+                            f"not completed — skipping task creation for {phase_name}"
+                        )
+                        return
+
             # Check if phase already has an active task
             existing_task = (
                 session.query(Task)

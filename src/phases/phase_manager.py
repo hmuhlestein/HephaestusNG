@@ -650,6 +650,22 @@ class PhaseManager:
                     "should_continue": True,
                 }
 
+            # Idempotency guard: if phase is already completed, don't re-evaluate.
+            # This prevents race conditions where the monitor and spec gate both
+            # try to mark the same phase complete.
+            if execution.status == "completed":
+                logger.debug(
+                    f"Phase {phase.name} already completed — skipping duplicate mark_phase_complete"
+                )
+                # Return the next phase info so caller can still create task if needed
+                next_phase = self._find_next_phase(session, phase_id)
+                return {
+                    "action": "continue",
+                    "target_phase": next_phase.name if next_phase else None,
+                    "target_phase_id": next_phase.id if next_phase else None,
+                    "should_continue": next_phase is not None,
+                }
+
             # Arbitration override: skip evaluation and use the resolved action.
             if force_action == "continue":
                 execution.status = "completed"
