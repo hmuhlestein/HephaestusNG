@@ -1,23 +1,25 @@
 """Authentication API endpoints for Hephaestus."""
 
+import logging
+import uuid
 from datetime import datetime, timedelta
 from typing import Optional
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy.orm import Session
-import uuid
-import logging
 
 from src.core.database import DatabaseManager
-from src.core.user_models import User, AuthToken, UserSession, LoginAttempt, AuditLog
+from src.core.user_models import AuditLog, AuthToken, LoginAttempt, User, UserSession
+
 from . import (
-    hash_password,
-    verify_password,
     create_token_pair,
-    verify_refresh_token,
-    hash_token,
     generate_secure_token,
+    hash_password,
+    hash_token,
+    verify_password,
+    verify_refresh_token,
 )
 from .auth_config import get_auth_config
 
@@ -94,7 +96,9 @@ def validate_password(password: str) -> bool:
     errors = []
 
     if len(password) < config.min_password_length:
-        errors.append(f"Password must be at least {config.min_password_length} characters")
+        errors.append(
+            f"Password must be at least {config.min_password_length} characters"
+        )
 
     if config.require_uppercase and not any(c.isupper() for c in password):
         errors.append("Password must contain at least one uppercase letter")
@@ -105,13 +109,15 @@ def validate_password(password: str) -> bool:
     if config.require_digit and not any(c.isdigit() for c in password):
         errors.append("Password must contain at least one digit")
 
-    if config.require_special and not any(c in "!@#$%^&*()_+-=[]{}|;:,.<>?" for c in password):
+    if config.require_special and not any(
+        c in "!@#$%^&*()_+-=[]{}|;:,.<>?" for c in password
+    ):
         errors.append("Password must contain at least one special character")
 
     if errors:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail={"message": "Password validation failed", "errors": errors}
+            detail={"message": "Password validation failed", "errors": errors},
         )
 
     return True
@@ -123,7 +129,7 @@ def record_login_attempt(
     ip_address: str,
     user_agent: str,
     success: bool,
-    failure_reason: Optional[str] = None
+    failure_reason: Optional[str] = None,
 ):
     """Record a login attempt for security auditing."""
     attempt = LoginAttempt(
@@ -132,7 +138,7 @@ def record_login_attempt(
         user_agent=user_agent,
         attempt_type="password",
         success=success,
-        failure_reason=failure_reason
+        failure_reason=failure_reason,
     )
     db.add(attempt)
     db.commit()
@@ -149,11 +155,15 @@ def check_login_attempts(db: Session, email: str) -> bool:
 
     # Get recent failed attempts
     cutoff_time = datetime.utcnow() - timedelta(minutes=config.lockout_duration_minutes)
-    recent_attempts = db.query(LoginAttempt).filter(
-        LoginAttempt.email == email,
-        not LoginAttempt.success,
-        LoginAttempt.attempted_at >= cutoff_time
-    ).count()
+    recent_attempts = (
+        db.query(LoginAttempt)
+        .filter(
+            LoginAttempt.email == email,
+            not LoginAttempt.success,
+            LoginAttempt.attempted_at >= cutoff_time,
+        )
+        .count()
+    )
 
     return recent_attempts < config.max_login_attempts
 
@@ -167,7 +177,7 @@ def create_audit_log(
     status_result: str = "success",
     ip_address: Optional[str] = None,
     user_agent: Optional[str] = None,
-    error_message: Optional[str] = None
+    error_message: Optional[str] = None,
 ):
     """Create an audit log entry."""
     audit = AuditLog(
@@ -178,7 +188,7 @@ def create_audit_log(
         status=status_result,
         ip_address=ip_address,
         user_agent=user_agent,
-        error_message=error_message
+        error_message=error_message,
     )
     db.add(audit)
     db.commit()
@@ -199,15 +209,14 @@ async def register(request: UserRegisterRequest):
         if existing_user:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Email already registered"
+                detail="Email already registered",
             )
 
         # Check if username already exists
         existing_user = db.query(User).filter(User.username == request.username).first()
         if existing_user:
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Username already taken"
+                status_code=status.HTTP_400_BAD_REQUEST, detail="Username already taken"
             )
 
         # Create new user
@@ -219,7 +228,7 @@ async def register(request: UserRegisterRequest):
             first_name=request.first_name,
             last_name=request.last_name,
             status="active",
-            email_verified=not config.enable_email_verification  # Auto-verify if verification disabled
+            email_verified=not config.enable_email_verification,  # Auto-verify if verification disabled
         )
 
         db.add(user)
@@ -233,7 +242,7 @@ async def register(request: UserRegisterRequest):
             action="register",
             resource_type="user",
             resource_id=user.id,
-            status_result="success"
+            status_result="success",
         )
 
         logger.info(f"New user registered: {user.email}")
@@ -246,7 +255,7 @@ async def register(request: UserRegisterRequest):
             last_name=user.last_name,
             created_at=user.created_at,
             email_verified=user.email_verified,
-            status=user.status
+            status=user.status,
         )
 
 
@@ -260,7 +269,7 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends()):
         if not check_login_attempts(db, form_data.username):
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail=f"Account locked due to too many failed login attempts. Try again in {config.lockout_duration_minutes} minutes."
+                detail=f"Account locked due to too many failed login attempts. Try again in {config.lockout_duration_minutes} minutes.",
             )
 
         # Find user by email (username field contains email)
@@ -274,7 +283,7 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends()):
                 ip_address="",  # TODO: Get from request
                 user_agent="",  # TODO: Get from request
                 success=False,
-                failure_reason="Invalid credentials"
+                failure_reason="Invalid credentials",
             )
 
             raise HTTPException(
@@ -287,7 +296,7 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends()):
         if user.status != "active":
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Account is {user.status}"
+                detail=f"Account is {user.status}",
             )
 
         # Record successful attempt
@@ -296,7 +305,7 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends()):
             email=form_data.username,
             ip_address="",  # TODO: Get from request
             user_agent="",  # TODO: Get from request
-            success=True
+            success=True,
         )
 
         # Update last login
@@ -307,7 +316,7 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends()):
         tokens = create_token_pair(
             user_id=user.id,
             email=user.email,
-            roles=[]  # TODO: Load user roles
+            roles=[],  # TODO: Load user roles
         )
 
         # Store refresh token
@@ -316,7 +325,8 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends()):
             user_id=user.id,
             token_hash=hash_token(tokens["refresh_token"]),
             token_type="refresh",
-            expires_at=datetime.utcnow() + timedelta(days=config.refresh_token_expire_days)
+            expires_at=datetime.utcnow()
+            + timedelta(days=config.refresh_token_expire_days),
         )
         db.add(refresh_token_record)
 
@@ -327,7 +337,8 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends()):
             session_token_hash=generate_secure_token(),
             ip_address="",  # TODO: Get from request
             user_agent="",  # TODO: Get from request
-            expires_at=datetime.utcnow() + timedelta(minutes=config.session_timeout_minutes)
+            expires_at=datetime.utcnow()
+            + timedelta(minutes=config.session_timeout_minutes),
         )
         db.add(session)
 
@@ -338,7 +349,7 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends()):
             action="login",
             resource_type="user",
             resource_id=user.id,
-            status_result="success"
+            status_result="success",
         )
 
         db.commit()
@@ -349,7 +360,7 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends()):
             access_token=tokens["access_token"],
             refresh_token=tokens["refresh_token"],
             token_type=tokens["token_type"],
-            expires_in=config.access_token_expire_minutes * 60
+            expires_in=config.access_token_expire_minutes * 60,
         )
 
 
@@ -362,34 +373,36 @@ async def refresh_token(request: RefreshTokenRequest):
     payload = verify_refresh_token(request.refresh_token)
     if not payload:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid refresh token"
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid refresh token"
         )
 
     with db_manager.get_session() as db:
         # Check if refresh token exists and is valid
         token_hash = hash_token(request.refresh_token)
-        stored_token = db.query(AuthToken).filter(
-            AuthToken.token_hash == token_hash,
-            AuthToken.token_type == "refresh"
-        ).first()
+        stored_token = (
+            db.query(AuthToken)
+            .filter(
+                AuthToken.token_hash == token_hash, AuthToken.token_type == "refresh"
+            )
+            .first()
+        )
 
         if not stored_token:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Refresh token not found"
+                detail="Refresh token not found",
             )
 
         if stored_token.revoked_at:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Refresh token has been revoked"
+                detail="Refresh token has been revoked",
             )
 
         if stored_token.expires_at and stored_token.expires_at < datetime.utcnow():
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Refresh token has expired"
+                detail="Refresh token has expired",
             )
 
         # Get user
@@ -397,7 +410,7 @@ async def refresh_token(request: RefreshTokenRequest):
         if not user or user.status != "active":
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="User not found or inactive"
+                detail="User not found or inactive",
             )
 
         # Update token last used
@@ -407,7 +420,7 @@ async def refresh_token(request: RefreshTokenRequest):
         tokens = create_token_pair(
             user_id=user.id,
             email=user.email,
-            roles=[]  # TODO: Load user roles
+            roles=[],  # TODO: Load user roles
         )
 
         # Optionally revoke old refresh token and store new one
@@ -420,7 +433,8 @@ async def refresh_token(request: RefreshTokenRequest):
             user_id=user.id,
             token_hash=hash_token(tokens["refresh_token"]),
             token_type="refresh",
-            expires_at=datetime.utcnow() + timedelta(days=config.refresh_token_expire_days)
+            expires_at=datetime.utcnow()
+            + timedelta(days=config.refresh_token_expire_days),
         )
         db.add(new_refresh_token)
 
@@ -432,7 +446,7 @@ async def refresh_token(request: RefreshTokenRequest):
             access_token=tokens["access_token"],
             refresh_token=tokens["refresh_token"],
             token_type=tokens["token_type"],
-            expires_in=config.access_token_expire_minutes * 60
+            expires_in=config.access_token_expire_minutes * 60,
         )
 
 
@@ -449,5 +463,5 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
     # TODO: Implement get current user from token
     raise HTTPException(
         status_code=status.HTTP_501_NOT_IMPLEMENTED,
-        detail="Endpoint not yet implemented"
+        detail="Endpoint not yet implemented",
     )

@@ -3,7 +3,7 @@
 import uuid
 from pathlib import Path
 
-from src.cli.utils import api_get, api_post, api_delete
+from src.cli.utils import api_delete, api_get, api_post
 
 HEPHAESTUS_DIR = Path(__file__).parent.parent.parent.parent
 
@@ -23,7 +23,9 @@ def register(subparsers):
     cr.add_argument("--default", action="store_true", help="Set as default project")
     cr.set_defaults(func=create_project)
 
-    su = sub.add_parser("setup", help="Create and activate a project (alias for create)")
+    su = sub.add_parser(
+        "setup", help="Create and activate a project (alias for create)"
+    )
     su.add_argument("name", help="Project name")
     su.add_argument("path", help="Project directory path")
     su.add_argument("--default", action="store_true", help="Set as default project")
@@ -53,16 +55,19 @@ def list_projects(args):
         return 1
 
     if not projects:
-        print("No projects configured. Create one with: heph project create <name> <path>")
+        print(
+            "No projects configured. Create one with: heph project create <name> <path>"
+        )
         return 0
 
     if args.json:
         import json
+
         print(json.dumps(projects, indent=2))
         return 0
 
     print(f"{'':2s} {'Name':20s} {'Path':40s} {'Status':10s}")
-    print(f"{'':2s} {'─'*20} {'─'*40} {'─'*10}")
+    print(f"{'':2s} {'─' * 20} {'─' * 40} {'─' * 10}")
     for p in projects:
         active = "active" if p.get("is_active") else ""
         default = "default" if p.get("is_default") else ""
@@ -81,11 +86,15 @@ def create_project(args):
     resolved = str(Path(args.path).resolve())
 
     # Try API first
-    result = api_post(args, "/api/projects", {
-        "name": args.name,
-        "base_dir": resolved,
-        "is_default": args.default,
-    })
+    result = api_post(
+        args,
+        "/api/projects",
+        {
+            "name": args.name,
+            "base_dir": resolved,
+            "is_default": args.default,
+        },
+    )
 
     if result is None:
         # Backend not running — offline mode (direct DB write)
@@ -119,7 +128,7 @@ def _create_offline(name: str, path: str, is_default: bool):
         print(f"Run 'git init' in {path} first.")
         return 1
 
-    from src.core.database import DatabaseManager, AutopilotProject
+    from src.core.database import AutopilotProject, DatabaseManager
 
     db_manager = DatabaseManager(str(db_path))
     db_manager.create_tables()
@@ -127,9 +136,11 @@ def _create_offline(name: str, path: str, is_default: bool):
     # Run migration
     try:
         with db_manager.get_session() as session:
-            session.execute(sqlalchemy.text(
-                "ALTER TABLE autopilot_projects ADD COLUMN is_active BOOLEAN DEFAULT 0"
-            ))
+            session.execute(
+                sqlalchemy.text(
+                    "ALTER TABLE autopilot_projects ADD COLUMN is_active BOOLEAN DEFAULT 0"
+                )
+            )
             session.commit()
     except Exception:
         pass
@@ -142,7 +153,9 @@ def _create_offline(name: str, path: str, is_default: bool):
 
         # Clear other active/default if this is default
         if is_default:
-            session.query(AutopilotProject).update({"is_default": False, "is_active": False})
+            session.query(AutopilotProject).update(
+                {"is_default": False, "is_active": False}
+            )
 
         is_first = session.query(AutopilotProject).count() == 0
 
@@ -190,6 +203,7 @@ def current_project(args):
 
     if args.json:
         import json
+
         print(json.dumps(result, indent=2))
     else:
         print(f"Active project: {result['name']}")

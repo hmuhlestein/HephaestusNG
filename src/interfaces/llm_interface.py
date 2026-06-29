@@ -1,11 +1,12 @@
 """Abstract interface for LLM providers."""
 
-from abc import ABC, abstractmethod
-from typing import Dict, Any, List, Optional
+import asyncio
 import json
 import logging
-import asyncio
-from src.monitoring.models import GuardianTrajectoryAnalysis, ConductorSystemAnalysis
+from abc import ABC, abstractmethod
+from typing import Any, Dict, List, Optional
+
+from src.monitoring.models import ConductorSystemAnalysis, GuardianTrajectoryAnalysis
 
 logger = logging.getLogger(__name__)
 
@@ -196,7 +197,12 @@ class LLMProviderInterface(ABC):
 class OpenAIProvider(LLMProviderInterface):
     """OpenAI GPT implementation."""
 
-    def __init__(self, api_key: str, model: str = "gpt-4-turbo-preview", embedding_model: str = "text-embedding-ada-002"):
+    def __init__(
+        self,
+        api_key: str,
+        model: str = "gpt-4-turbo-preview",
+        embedding_model: str = "text-embedding-ada-002",
+    ):
         """Initialize OpenAI provider.
 
         Args:
@@ -204,13 +210,12 @@ class OpenAIProvider(LLMProviderInterface):
             model: Model to use for completions
             embedding_model: Model to use for embeddings
         """
-        import openai
         import httpx
+        import openai
 
         # Create client with explicit httpx client to avoid proxy parameter issues
         self.client = openai.AsyncOpenAI(
-            api_key=api_key,
-            http_client=httpx.AsyncClient()
+            api_key=api_key, http_client=httpx.AsyncClient()
         )
         self.model = model
         self.embedding_model = embedding_model
@@ -227,7 +232,7 @@ class OpenAIProvider(LLMProviderInterface):
 
 Task: {task_description}
 Done Definition: {done_definition}
-Context: {' '.join(context[:10])}  # Limit context to avoid token overflow"""
+Context: {" ".join(context[:10])}  # Limit context to avoid token overflow"""
 
         if phase_context:
             prompt += f"""
@@ -254,8 +259,11 @@ Ensure the enriched description is actionable and the completion criteria are sp
             kwargs = {
                 "model": self.model,
                 "messages": [
-                    {"role": "system", "content": "You are a task analysis expert for an AI orchestration system."},
-                    {"role": "user", "content": prompt}
+                    {
+                        "role": "system",
+                        "content": "You are a task analysis expert for an AI orchestration system.",
+                    },
+                    {"role": "user", "content": prompt},
                 ],
                 "response_format": {"type": "json_object"},
             }
@@ -269,7 +277,9 @@ Ensure the enriched description is actionable and the completion criteria are sp
             response = await self.client.chat.completions.create(**kwargs)
 
             result = json.loads(response.choices[0].message.content)
-            logger.debug(f"Task enriched successfully: {result.get('enriched_description', '')[:100]}...")
+            logger.debug(
+                f"Task enriched successfully: {result.get('enriched_description', '')[:100]}..."
+            )
             return result
 
         except Exception as e:
@@ -311,9 +321,9 @@ AGENT OUTPUT (Last 200 lines):
 ```
 
 TASK INFO:
-- Description: {task_info.get('description', 'Unknown')}
-- Completion Criteria: {task_info.get('done_definition', 'Unknown')}
-- Time on Task: {task_info.get('time_elapsed', 0)} minutes
+- Description: {task_info.get("description", "Unknown")}
+- Completion Criteria: {task_info.get("done_definition", "Unknown")}
+- Time on Task: {task_info.get("time_elapsed", 0)} minutes
 
 PROJECT CONTEXT:
 {project_context}
@@ -332,8 +342,11 @@ Return as JSON with keys: state, decision, message, reasoning, confidence"""
             kwargs = {
                 "model": self.model,
                 "messages": [
-                    {"role": "system", "content": "You are an AI agent monitoring expert."},
-                    {"role": "user", "content": prompt}
+                    {
+                        "role": "system",
+                        "content": "You are an AI agent monitoring expert.",
+                    },
+                    {"role": "user", "content": prompt},
                 ],
                 "response_format": {"type": "json_object"},
             }
@@ -365,18 +378,17 @@ Return as JSON with keys: state, decision, message, reasoning, confidence"""
         project_context: str,
     ) -> str:
         """Generate agent system prompt."""
-        memory_context = "\n".join([
-            f"- {mem.get('content', '')[:200]}"
-            for mem in memories[:10]
-        ])
+        memory_context = "\n".join(
+            [f"- {mem.get('content', '')[:200]}" for mem in memories[:10]]
+        )
 
         return f"""You are an AI agent in the Hephaestus orchestration system.
 
 ═══ TASK ═══
-{task.get('enriched_description', task.get('description', ''))}
+{task.get("enriched_description", task.get("description", ""))}
 
 COMPLETION CRITERIA:
-{task.get('done_definition', 'Complete the assigned task')}
+{task.get("done_definition", "Complete the assigned task")}
 
 ═══ PRE-LOADED CONTEXT ═══
 Top 10 relevant memories (use qdrant-find for more):
@@ -388,7 +400,7 @@ PROJECT:
 ═══ AVAILABLE TOOLS ═══
 
 Hephaestus MCP (task management):
-• create_task - Create sub-tasks (MUST set parent_task_id="{task.get('id', 'unknown')}")
+• create_task - Create sub-tasks (MUST set parent_task_id="{task.get("id", "unknown")}")
 • update_task_status - Mark done/failed when complete (REQUIRED)
 • save_memory - Save discoveries for other agents
 
@@ -404,7 +416,7 @@ Qdrant MCP (memory search):
 3. Save important discoveries via save_memory (error fixes, decisions, warnings)
 4. Call update_task_status when done (status='done') or failed (status='failed')
 
-IDs: Agent={task.get('agent_id', 'unknown')} | Task={task.get('id', 'unknown')}"""
+IDs: Agent={task.get("agent_id", "unknown")} | Task={task.get("id", "unknown")}"""
 
     async def analyze_agent_trajectory(
         self,
@@ -429,13 +441,20 @@ IDs: Agent={task.get('agent_id', 'unknown')} | Task={task.get('id', 'unknown')}"
                 kwargs = {
                     "model": self.model,
                     "messages": [
-                        {"role": "system", "content": "You are a trajectory analysis expert using accumulated context thinking."},
-                        {"role": "user", "content": prompt}
+                        {
+                            "role": "system",
+                            "content": "You are a trajectory analysis expert using accumulated context thinking.",
+                        },
+                        {"role": "user", "content": prompt},
                     ],
                     "response_format": GuardianTrajectoryAnalysis,
                 }
 
-                if "gpt-4o" in self.model or "gpt-5" in self.model or "o1" in self.model:
+                if (
+                    "gpt-4o" in self.model
+                    or "gpt-5" in self.model
+                    or "o1" in self.model
+                ):
                     kwargs["max_completion_tokens"] = 16000
                 else:
                     kwargs["max_tokens"] = 16000
@@ -446,7 +465,9 @@ IDs: Agent={task.get('agent_id', 'unknown')} | Task={task.get('id', 'unknown')}"
                 return response.choices[0].message.parsed.model_dump()
 
             except Exception as e:
-                logger.error(f"Failed to analyze trajectory (attempt {attempt + 1}/3): {e}")
+                logger.error(
+                    f"Failed to analyze trajectory (attempt {attempt + 1}/3): {e}"
+                )
                 if attempt == 2:  # Last attempt
                     # Return fallback with proper structure
                     fallback = GuardianTrajectoryAnalysis(
@@ -457,7 +478,7 @@ IDs: Agent={task.get('agent_id', 'unknown')} | Task={task.get('id', 'unknown')}"
                         needs_steering=False,
                         steering_type=None,
                         steering_recommendation=None,
-                        trajectory_summary="Analysis failed after 3 attempts"
+                        trajectory_summary="Analysis failed after 3 attempts",
                     )
                     return fallback.model_dump()
                 await asyncio.sleep(1)  # Brief delay before retry
@@ -481,13 +502,20 @@ IDs: Agent={task.get('agent_id', 'unknown')} | Task={task.get('id', 'unknown')}"
                 kwargs = {
                     "model": self.model,
                     "messages": [
-                        {"role": "system", "content": "You are a system orchestration expert analyzing multi-agent coherence."},
-                        {"role": "user", "content": prompt}
+                        {
+                            "role": "system",
+                            "content": "You are a system orchestration expert analyzing multi-agent coherence.",
+                        },
+                        {"role": "user", "content": prompt},
                     ],
                     "response_format": ConductorSystemAnalysis,
                 }
 
-                if "gpt-4o" in self.model or "gpt-5" in self.model or "o1" in self.model:
+                if (
+                    "gpt-4o" in self.model
+                    or "gpt-5" in self.model
+                    or "o1" in self.model
+                ):
                     kwargs["max_completion_tokens"] = 16000
                 else:
                     kwargs["max_tokens"] = 16000
@@ -498,7 +526,9 @@ IDs: Agent={task.get('agent_id', 'unknown')} | Task={task.get('id', 'unknown')}"
                 return response.choices[0].message.parsed.model_dump()
 
             except Exception as e:
-                logger.error(f"Failed to analyze system coherence (attempt {attempt + 1}/3): {e}")
+                logger.error(
+                    f"Failed to analyze system coherence (attempt {attempt + 1}/3): {e}"
+                )
                 if attempt == 2:  # Last attempt
                     # Return fallback with proper structure
                     fallback = ConductorSystemAnalysis(
@@ -507,7 +537,7 @@ IDs: Agent={task.get('agent_id', 'unknown')} | Task={task.get('id', 'unknown')}"
                         alignment_issues=[],
                         termination_recommendations=[],
                         coordination_needs=[],
-                        system_summary="Analysis failed after 3 attempts - assuming moderate coherence"
+                        system_summary="Analysis failed after 3 attempts - assuming moderate coherence",
                     )
                     return fallback.model_dump()
                 await asyncio.sleep(1)  # Brief delay before retry
@@ -543,12 +573,13 @@ Respond with JSON: {{"up_to_spec": true/false, "pass_rate": float, "failed_count
                 model=self.model,
                 messages=[
                     {"role": "system", "content": "You are a senior QA engineer."},
-                    {"role": "user", "content": prompt}
+                    {"role": "user", "content": prompt},
                 ],
                 temperature=0.3,
-                response_format={"type": "json_object"}
+                response_format={"type": "json_object"},
             )
             import json
+
             return json.loads(response.choices[0].message.content)
         except Exception as e:
             logger.error(f"review_qa_report failed: {e}")
@@ -587,7 +618,7 @@ class AnthropicProvider(LLMProviderInterface):
 
 Task: {task_description}
 Done Definition: {done_definition}
-Context: {' '.join(context[:10])}{phase_info}
+Context: {" ".join(context[:10])}{phase_info}
 
 Provide a JSON response with these exact keys:
 - enriched_description: Clear, unambiguous task description
@@ -609,7 +640,8 @@ Make the description actionable and criteria verifiable."""
             content = response.content[0].text
             # Try to extract JSON from the response
             import re
-            json_match = re.search(r'\{.*\}', content, re.DOTALL)
+
+            json_match = re.search(r"\{.*\}", content, re.DOTALL)
             if json_match:
                 return json.loads(json_match.group())
             else:
@@ -659,18 +691,17 @@ Make the description actionable and criteria verifiable."""
         project_context: str,
     ) -> str:
         """Generate agent system prompt."""
-        memory_context = "\n".join([
-            f"- {mem.get('content', '')[:200]}"
-            for mem in memories[:10]
-        ])
+        memory_context = "\n".join(
+            [f"- {mem.get('content', '')[:200]}" for mem in memories[:10]]
+        )
 
         return f"""You are an AI agent in the Hephaestus orchestration system.
 
 ═══ TASK ═══
-{task.get('enriched_description', task.get('description', ''))}
+{task.get("enriched_description", task.get("description", ""))}
 
 COMPLETION CRITERIA:
-{task.get('done_definition', 'Complete the assigned task')}
+{task.get("done_definition", "Complete the assigned task")}
 
 ═══ PRE-LOADED CONTEXT ═══
 Top 10 relevant memories (use qdrant-find for more):
@@ -682,7 +713,7 @@ PROJECT:
 ═══ AVAILABLE TOOLS ═══
 
 Hephaestus MCP (task management):
-• create_task - Create sub-tasks (MUST set parent_task_id="{task.get('id', 'unknown')}")
+• create_task - Create sub-tasks (MUST set parent_task_id="{task.get("id", "unknown")}")
 • update_task_status - Mark done/failed when complete (REQUIRED)
 • save_memory - Save discoveries for other agents
 
@@ -698,7 +729,7 @@ Qdrant MCP (memory search):
 3. Save important discoveries via save_memory (error fixes, decisions, warnings)
 4. Call update_task_status when done (status='done') or failed (status='failed')
 
-IDs: Agent={task.get('agent_id', 'unknown')} | Task={task.get('id', 'unknown')}"""
+IDs: Agent={task.get("agent_id", "unknown")} | Task={task.get("id", "unknown")}"""
 
     async def analyze_agent_trajectory(
         self,
@@ -709,7 +740,9 @@ IDs: Agent={task.get('agent_id', 'unknown')} | Task={task.get('id', 'unknown')}"
     ) -> Dict[str, Any]:
         """Analyze agent using trajectory thinking."""
         # For now, return default - can be implemented with Claude API later
-        logger.warning("Trajectory analysis not fully implemented for Anthropic provider")
+        logger.warning(
+            "Trajectory analysis not fully implemented for Anthropic provider"
+        )
         return {
             "current_phase": "implementation",
             "trajectory_aligned": True,
@@ -719,7 +752,7 @@ IDs: Agent={task.get('agent_id', 'unknown')} | Task={task.get('id', 'unknown')}"
             "needs_steering": False,
             "steering_type": None,
             "steering_recommendation": None,
-            "trajectory_summary": "Using default trajectory analysis"
+            "trajectory_summary": "Using default trajectory analysis",
         }
 
     async def analyze_system_coherence(
@@ -729,7 +762,9 @@ IDs: Agent={task.get('agent_id', 'unknown')} | Task={task.get('id', 'unknown')}"
     ) -> Dict[str, Any]:
         """Analyze system-wide coherence from Guardian summaries."""
         # For now, return default - can be implemented with Claude API later
-        logger.warning("System coherence analysis not fully implemented for Anthropic provider")
+        logger.warning(
+            "System coherence analysis not fully implemented for Anthropic provider"
+        )
         return {
             "coherence_score": 0.7,
             "duplicates": [],
@@ -737,7 +772,7 @@ IDs: Agent={task.get('agent_id', 'unknown')} | Task={task.get('id', 'unknown')}"
             "alignment_issues": [],
             "termination_recommendations": [],
             "coordination_needs": [],
-            "system_summary": "Using default coherence analysis"
+            "system_summary": "Using default coherence analysis",
         }
 
     async def review_qa_report(
@@ -752,9 +787,15 @@ IDs: Agent={task.get('agent_id', 'unknown')} | Task={task.get('id', 'unknown')}"
             response = await self.client.messages.create(
                 model=self.model,
                 max_tokens=2000,
-                messages=[{"role": "user", "content": f"Review this QA report against PRD. Report: {qa_report[:4000]} PRD: {prd_content[:2000]} Phase: {phase_intent} Respond with JSON: {{\"up_to_spec\": true/false, \"pass_rate\": float, \"failed_count\": int, \"critical_issues\": [], \"reasoning\": \"string\", \"recommendations\": []}}"}]
+                messages=[
+                    {
+                        "role": "user",
+                        "content": f'Review this QA report against PRD. Report: {qa_report[:4000]} PRD: {prd_content[:2000]} Phase: {phase_intent} Respond with JSON: {{"up_to_spec": true/false, "pass_rate": float, "failed_count": int, "critical_issues": [], "reasoning": "string", "recommendations": []}}',
+                    }
+                ],
             )
             import json
+
             return json.loads(response.content[0].text)
         except Exception as e:
             logger.error(f"review_qa_report failed: {e}")
@@ -781,9 +822,9 @@ def get_llm_provider() -> LLMProviderInterface:
     from ..core.llm_config import get_config as get_llm_config
     from ..core.simple_config import get_config
 
-    logger.info("="*60)
+    logger.info("=" * 60)
     logger.info("🔧 Initializing LLM Provider System")
-    logger.info("="*60)
+    logger.info("=" * 60)
 
     # Check if we have multi-provider configuration
     try:
@@ -794,11 +835,16 @@ def get_llm_provider() -> LLMProviderInterface:
         # If we have model assignments, use multi-provider
         if llm_config._llm_config and llm_config._llm_config.model_assignments:
             from .multi_provider_llm import MultiProviderLLM
-            logger.info("✅ Using MULTI-PROVIDER LLM configuration (from hephaestus_config.yaml)")
-            logger.info("="*60)
+
+            logger.info(
+                "✅ Using MULTI-PROVIDER LLM configuration (from hephaestus_config.yaml)"
+            )
+            logger.info("=" * 60)
             return MultiProviderLLM()
     except Exception as e:
-        logger.warning(f"⚠️ Multi-provider config not available, falling back to single provider: {e}")
+        logger.warning(
+            f"⚠️ Multi-provider config not available, falling back to single provider: {e}"
+        )
 
     # Fallback to single provider configuration
     logger.info("⚠️ Using LEGACY SINGLE-PROVIDER mode")
@@ -807,7 +853,7 @@ def get_llm_provider() -> LLMProviderInterface:
 
     logger.info(f"   Provider: {config.llm_provider}")
     logger.info(f"   Model: {config.llm_model}")
-    logger.info("="*60)
+    logger.info("=" * 60)
 
     provider_class = LLM_PROVIDERS.get(config.llm_provider)
     if not provider_class:
@@ -821,12 +867,9 @@ def get_llm_provider() -> LLMProviderInterface:
         return provider_class(
             api_key=api_key,
             model=config.llm_model,
-            embedding_model=config.embedding_model
+            embedding_model=config.embedding_model,
         )
     elif config.llm_provider == "anthropic":
-        return provider_class(
-            api_key=api_key,
-            model=config.llm_model
-        )
+        return provider_class(api_key=api_key, model=config.llm_model)
     else:
         raise ValueError(f"Unsupported provider: {config.llm_provider}")

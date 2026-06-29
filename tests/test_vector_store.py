@@ -2,16 +2,15 @@
 """Integration tests for Vector Store operations."""
 
 import asyncio
-import uuid
-import time
-from typing import List
-import sys
 import os
+import sys
+import uuid
+
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.memory.vector_store import VectorStoreManager
-from src.interfaces.llm_interface import OpenAIProvider
 from src.core.simple_config import Config
+from src.interfaces.llm_interface import OpenAIProvider
+from src.memory.vector_store import VectorStoreManager
 
 # Test data
 TEST_MEMORIES = [
@@ -48,7 +47,7 @@ async def test_vector_store_operations():
     llm_provider = OpenAIProvider(
         api_key=config.openai_api_key,
         model=config.llm_model,
-        embedding_model=config.embedding_model
+        embedding_model=config.embedding_model,
     )
 
     test_collection = "agent_memories"
@@ -61,7 +60,9 @@ async def test_vector_store_operations():
             embedding = await llm_provider.generate_embedding(memory_data["content"])
 
             # Verify embedding dimension
-            assert len(embedding) == 3072, f"Expected 3072 dimensions, got {len(embedding)}"
+            assert len(embedding) == 3072, (
+                f"Expected 3072 dimensions, got {len(embedding)}"
+            )
 
             # Store memory (use UUID string for Qdrant)
             memory_id = str(uuid.uuid4())
@@ -75,12 +76,14 @@ async def test_vector_store_operations():
                     "tags": memory_data["tags"],
                     "test_run": True,
                     "index": i,
-                }
+                },
             )
 
             assert success, f"Failed to store memory {i}"
             stored_ids.append(memory_id)
-            print(f"   ✅ Stored memory {i+1}/{len(TEST_MEMORIES)}: {memory_data['content'][:50]}...")
+            print(
+                f"   ✅ Stored memory {i + 1}/{len(TEST_MEMORIES)}: {memory_data['content'][:50]}..."
+            )
 
         except Exception as e:
             print(f"   ❌ Failed to store memory {i}: {e}")
@@ -112,7 +115,9 @@ async def test_vector_store_operations():
             print(f"\n   Query: '{query}'")
             print(f"   Found {len(results)} results:")
             for result in results[:2]:
-                print(f"      - Score: {result['score']:.3f} | {result['content'][:60]}...")
+                print(
+                    f"      - Score: {result['score']:.3f} | {result['content'][:60]}..."
+                )
 
         except Exception as e:
             print(f"   ❌ Search failed for '{query}': {e}")
@@ -160,10 +165,12 @@ async def test_vector_store_operations():
             filters={"memory_type": "error_fix"},
         )
 
-        print(f"   Filtered search for memory_type='error_fix':")
+        print("   Filtered search for memory_type='error_fix':")
         print(f"   Found {len(filtered_results)} results")
         for result in filtered_results:
-            assert result["metadata"]["memory_type"] == "error_fix", "Filter not applied correctly"
+            assert result["metadata"]["memory_type"] == "error_fix", (
+                "Filter not applied correctly"
+            )
             print(f"      ✅ {result['content'][:60]}...")
 
     except Exception as e:

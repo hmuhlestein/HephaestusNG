@@ -6,9 +6,9 @@ Discovers components, checks existing docs, and generates/updates markdown docum
 """
 
 from example_workflows.documentation_generation.phases import (
-    DOC_GEN_PHASES,
     DOC_GEN_CONFIG,
     DOC_GEN_LAUNCH_TEMPLATE,
+    DOC_GEN_PHASES,
 )
 
 __all__ = [

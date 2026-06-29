@@ -5,11 +5,11 @@ import os
 import sys
 from datetime import datetime
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from src.core.database import DatabaseManager, Workflow, Agent, BoardConfig, Task, Ticket
-from src.services.ticket_service import TicketService
+from src.core.database import Agent, BoardConfig, DatabaseManager, Task, Workflow
 from src.services.ticket_search_service import TicketSearchService
+from src.services.ticket_service import TicketService
 
 
 async def main():
@@ -51,7 +51,12 @@ async def main():
         columns=[
             {"id": "backlog", "name": "Backlog", "order": 0, "color": "#9ca3af"},
             {"id": "todo", "name": "To Do", "order": 1, "color": "#6b7280"},
-            {"id": "in_progress", "name": "In Progress", "order": 2, "color": "#3b82f6"},
+            {
+                "id": "in_progress",
+                "name": "In Progress",
+                "order": 2,
+                "color": "#3b82f6",
+            },
             {"id": "review", "name": "Review", "order": 3, "color": "#f59e0b"},
             {"id": "done", "name": "Done", "order": 4, "color": "#10b981"},
         ],
@@ -127,7 +132,9 @@ async def main():
         ticket_type="feature",
         priority="medium",
         tags=["backend", "api", "security"],
-        blocked_by_ticket_ids=[ticket1['ticket_id']],  # Blocked by authentication ticket
+        blocked_by_ticket_ids=[
+            ticket1["ticket_id"]
+        ],  # Blocked by authentication ticket
     )
     print(f"✅ Created ticket 3: {ticket3['ticket_id']}")
     print(f"   🔒 Blocked by: {ticket1['ticket_id']}")
@@ -138,20 +145,24 @@ async def main():
     print("=" * 80)
 
     result = await TicketService.change_status(
-        ticket_id=ticket1['ticket_id'],
+        ticket_id=ticket1["ticket_id"],
         agent_id=agent_id,
         new_status="todo",
         comment="Moving to todo - starting work soon",
     )
-    print(f"✅ Changed ticket 1 status: {result['old_status']} → {result['new_status']}")
+    print(
+        f"✅ Changed ticket 1 status: {result['old_status']} → {result['new_status']}"
+    )
 
     result = await TicketService.change_status(
-        ticket_id=ticket1['ticket_id'],
+        ticket_id=ticket1["ticket_id"],
         agent_id=agent_id,
         new_status="in_progress",
         comment="Started working on authentication system",
     )
-    print(f"✅ Changed ticket 1 status: {result['old_status']} → {result['new_status']}")
+    print(
+        f"✅ Changed ticket 1 status: {result['old_status']} → {result['new_status']}"
+    )
 
     # Test 3: Try to move blocked ticket (should fail)
     print("\n" + "=" * 80)
@@ -159,15 +170,17 @@ async def main():
     print("=" * 80)
 
     result = await TicketService.change_status(
-        ticket_id=ticket3['ticket_id'],
+        ticket_id=ticket3["ticket_id"],
         agent_id=agent_id,
         new_status="in_progress",
         comment="Trying to start work",
     )
-    if result['success'] is False and result.get('blocked') is True:
+    if result["success"] is False and result.get("blocked") is True:
         print(f"✅ Blocked ticket protection working: {result['message'][:100]}")
     else:
-        print(f"❌ ERROR: Blocked ticket was allowed to change status! Result: {result}")
+        print(
+            f"❌ ERROR: Blocked ticket was allowed to change status! Result: {result}"
+        )
 
     # Test 4: Add comments
     print("\n" + "=" * 80)
@@ -175,7 +188,7 @@ async def main():
     print("=" * 80)
 
     comment_result = await TicketService.add_comment(
-        ticket_id=ticket1['ticket_id'],
+        ticket_id=ticket1["ticket_id"],
         agent_id=agent_id,
         comment_text="Implemented JWT token generation and validation",
         comment_type="general",
@@ -183,7 +196,7 @@ async def main():
     print(f"✅ Added comment: {comment_result['comment_id']}")
 
     comment_result = await TicketService.add_comment(
-        ticket_id=ticket1['ticket_id'],
+        ticket_id=ticket1["ticket_id"],
         agent_id=agent_id,
         comment_text="Added password hashing with bcrypt",
         comment_type="general",
@@ -196,7 +209,7 @@ async def main():
     print("=" * 80)
 
     commit_result = await TicketService.link_commit(
-        ticket_id=ticket1['ticket_id'],
+        ticket_id=ticket1["ticket_id"],
         agent_id=agent_id,
         commit_sha="abc123def456",
         commit_message="feat: Implement JWT authentication system",
@@ -209,13 +222,15 @@ async def main():
     print("=" * 80)
 
     resolve_result = await TicketService.resolve_ticket(
-        ticket_id=ticket1['ticket_id'],
+        ticket_id=ticket1["ticket_id"],
         agent_id=agent_id,
         resolution_comment="Authentication system complete and tested",
         commit_sha="abc123def456",
     )
     print(f"✅ Resolved ticket: {ticket1['ticket_id']}")
-    print(f"✅ Auto-unblocked {len(resolve_result['unblocked_tickets'])} tickets: {resolve_result['unblocked_tickets']}")
+    print(
+        f"✅ Auto-unblocked {len(resolve_result['unblocked_tickets'])} tickets: {resolve_result['unblocked_tickets']}"
+    )
 
     # Test 7: Verify unblocked ticket can now change status
     print("\n" + "=" * 80)
@@ -223,12 +238,14 @@ async def main():
     print("=" * 80)
 
     result = await TicketService.change_status(
-        ticket_id=ticket3['ticket_id'],
+        ticket_id=ticket3["ticket_id"],
         agent_id=agent_id,
         new_status="in_progress",
         comment="Now starting work - blocker resolved",
     )
-    print(f"✅ Successfully changed unblocked ticket status: {result['old_status']} → {result['new_status']}")
+    print(
+        f"✅ Successfully changed unblocked ticket status: {result['old_status']} → {result['new_status']}"
+    )
 
     # Test 8: Search tickets (hybrid search)
     print("\n" + "=" * 80)
@@ -243,7 +260,9 @@ async def main():
         )
         print(f"✅ Hybrid search found {len(search_results)} results")
         for i, result in enumerate(search_results[:3], 1):
-            print(f"   {i}. {result['title'][:50]} (score: {result.get('relevance_score', 0):.2f})")
+            print(
+                f"   {i}. {result['title'][:50]} (score: {result.get('relevance_score', 0):.2f})"
+            )
     except Exception as e:
         print(f"⚠️  Search test skipped (Qdrant may not be running): {e}")
 
@@ -252,8 +271,8 @@ async def main():
     print("TEST 9: Get Full Ticket Details")
     print("=" * 80)
 
-    ticket_details = await TicketService.get_ticket(ticket1['ticket_id'])
-    print(f"✅ Retrieved full ticket details:")
+    ticket_details = await TicketService.get_ticket(ticket1["ticket_id"])
+    print("✅ Retrieved full ticket details:")
     print(f"   Title: {ticket_details['title']}")
     print(f"   Status: {ticket_details['status']}")
     print(f"   Comments: {len(ticket_details['comments'])}")
@@ -276,7 +295,7 @@ async def main():
         assigned_agent_id=agent_id,
         created_by_agent_id=agent_id,
         workflow_id=workflow_id,
-        ticket_id=ticket3['ticket_id'],
+        ticket_id=ticket3["ticket_id"],
         created_at=datetime.utcnow(),
     )
     session.add(task)
@@ -288,15 +307,15 @@ async def main():
     print("\n" + "=" * 80)
     print("SUMMARY")
     print("=" * 80)
-    print(f"✅ All 10 tests passed!")
+    print("✅ All 10 tests passed!")
     print(f"✅ Created {3} tickets")
-    print(f"✅ Tested blocking/unblocking cascade")
-    print(f"✅ Tested status changes and comments")
-    print(f"✅ Tested commit linking")
-    print(f"✅ Tested ticket resolution")
-    print(f"✅ Tested task-ticket integration")
+    print("✅ Tested blocking/unblocking cascade")
+    print("✅ Tested status changes and comments")
+    print("✅ Tested commit linking")
+    print("✅ Tested ticket resolution")
+    print("✅ Tested task-ticket integration")
     print(f"\n💾 Test database saved as: {db_path}")
-    print(f"📊 You can now inspect the data or test the UI with this database")
+    print("📊 You can now inspect the data or test the UI with this database")
 
 
 if __name__ == "__main__":

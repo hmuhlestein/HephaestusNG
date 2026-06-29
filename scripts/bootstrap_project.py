@@ -28,9 +28,9 @@ from __future__ import annotations
 
 import argparse
 import os
+import subprocess
 import sys
 import time
-import subprocess
 from pathlib import Path
 from typing import Dict
 
@@ -120,7 +120,9 @@ def create_phase1_task(
     }
     headers = {"Content-Type": "application/json", "X-Agent-ID": agent_id}
 
-    r = requests.post(f"{base_url}/create_task", json=payload, headers=headers, timeout=30)
+    r = requests.post(
+        f"{base_url}/create_task", json=payload, headers=headers, timeout=30
+    )
     r.raise_for_status()
     data = r.json()
     print("[task] Created Phase 1 task:")
@@ -132,13 +134,29 @@ def create_phase1_task(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Bootstrap a fresh project and seed Phase 1 task")
-    parser.add_argument("--working-dir", required=True, help="Absolute path to project directory")
-    parser.add_argument("--worktrees", required=True, help="Path for git worktrees (e.g., /tmp/hephaestus_worktrees)")
+    parser = argparse.ArgumentParser(
+        description="Bootstrap a fresh project and seed Phase 1 task"
+    )
+    parser.add_argument(
+        "--working-dir", required=True, help="Absolute path to project directory"
+    )
+    parser.add_argument(
+        "--worktrees",
+        required=True,
+        help="Path for git worktrees (e.g., /tmp/hephaestus_worktrees)",
+    )
     parser.add_argument("--prd", required=True, help="Absolute path to PRD file")
-    parser.add_argument("--clean-qdrant", action="store_true", help="Clean Qdrant collections before starting")
-    parser.add_argument("--drop-db", action="store_true", help="Drop database before starting")
-    parser.add_argument("--mcp-port", default="8300", help="MCP server port (default: 8300)")
+    parser.add_argument(
+        "--clean-qdrant",
+        action="store_true",
+        help="Clean Qdrant collections before starting",
+    )
+    parser.add_argument(
+        "--drop-db", action="store_true", help="Drop database before starting"
+    )
+    parser.add_argument(
+        "--mcp-port", default="8300", help="MCP server port (default: 8300)"
+    )
     args = parser.parse_args()
 
     # Sanity checks
@@ -153,7 +171,15 @@ def main() -> None:
 
     # 2) Clean and reinit Qdrant collections (optional)
     if args.clean_qdrant:
-        code = run([sys.executable, "scripts/clean_qdrant.py", "--force", "--prefix", "hephaestus"])
+        code = run(
+            [
+                sys.executable,
+                "scripts/clean_qdrant.py",
+                "--force",
+                "--prefix",
+                "hephaestus",
+            ]
+        )
         if code != 0:
             raise SystemExit("Failed to clean Qdrant collections")
     code = run([sys.executable, "scripts/init_qdrant.py"])

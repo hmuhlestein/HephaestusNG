@@ -1,13 +1,13 @@
 """Tests for agent communication system."""
 
-import pytest
 import asyncio
-from unittest.mock import Mock, patch, MagicMock, AsyncMock
 from datetime import datetime
-import uuid
+from unittest.mock import AsyncMock, Mock, patch
+
+import pytest
 
 from src.agents.manager import AgentManager
-from src.core.database import DatabaseManager, Agent, AgentLog
+from src.core.database import Agent, AgentLog, DatabaseManager
 
 
 @pytest.fixture
@@ -78,16 +78,19 @@ class TestBroadcastMessage:
     """Tests for broadcast_message_to_all_agents."""
 
     @pytest.mark.asyncio
-    async def test_broadcast_to_multiple_agents(self, agent_manager, sample_agents, db_manager):
+    async def test_broadcast_to_multiple_agents(
+        self, agent_manager, sample_agents, db_manager
+    ):
         """Test broadcasting a message to multiple agents."""
         # Mock send_message_to_agent to avoid tmux interaction
-        with patch.object(agent_manager, 'send_message_to_agent', new_callable=AsyncMock) as mock_send:
+        with patch.object(
+            agent_manager, "send_message_to_agent", new_callable=AsyncMock
+        ) as mock_send:
             sender_id = "agent-0"
             message = "Test broadcast message"
 
             recipient_count = await agent_manager.broadcast_message_to_all_agents(
-                sender_agent_id=sender_id,
-                message=message
+                sender_agent_id=sender_id, message=message
             )
 
             # Should send to 2 other active agents (not sender, not terminated)
@@ -107,12 +110,13 @@ class TestBroadcastMessage:
     @pytest.mark.asyncio
     async def test_broadcast_excludes_sender(self, agent_manager, sample_agents):
         """Test that broadcast doesn't send to the sender."""
-        with patch.object(agent_manager, 'send_message_to_agent', new_callable=AsyncMock) as mock_send:
+        with patch.object(
+            agent_manager, "send_message_to_agent", new_callable=AsyncMock
+        ) as mock_send:
             sender_id = "agent-0"
 
             await agent_manager.broadcast_message_to_all_agents(
-                sender_agent_id=sender_id,
-                message="Test"
+                sender_agent_id=sender_id, message="Test"
             )
 
             # Verify sender didn't receive their own message
@@ -120,12 +124,15 @@ class TestBroadcastMessage:
             assert sender_id not in sent_to_ids
 
     @pytest.mark.asyncio
-    async def test_broadcast_excludes_terminated_agents(self, agent_manager, sample_agents):
+    async def test_broadcast_excludes_terminated_agents(
+        self, agent_manager, sample_agents
+    ):
         """Test that broadcast doesn't send to terminated agents."""
-        with patch.object(agent_manager, 'send_message_to_agent', new_callable=AsyncMock) as mock_send:
+        with patch.object(
+            agent_manager, "send_message_to_agent", new_callable=AsyncMock
+        ) as mock_send:
             await agent_manager.broadcast_message_to_all_agents(
-                sender_agent_id="agent-0",
-                message="Test"
+                sender_agent_id="agent-0", message="Test"
             )
 
             # Verify terminated agent didn't receive message
@@ -133,22 +140,25 @@ class TestBroadcastMessage:
             assert "agent-terminated" not in sent_to_ids
 
     @pytest.mark.asyncio
-    async def test_broadcast_logs_to_database(self, agent_manager, sample_agents, db_manager):
+    async def test_broadcast_logs_to_database(
+        self, agent_manager, sample_agents, db_manager
+    ):
         """Test that broadcasts are logged to database."""
-        with patch.object(agent_manager, 'send_message_to_agent', new_callable=AsyncMock):
+        with patch.object(
+            agent_manager, "send_message_to_agent", new_callable=AsyncMock
+        ):
             sender_id = "agent-0"
             message = "Test broadcast"
 
             await agent_manager.broadcast_message_to_all_agents(
-                sender_agent_id=sender_id,
-                message=message
+                sender_agent_id=sender_id, message=message
             )
 
             # Check database for logs
             session = db_manager.get_session()
-            logs = session.query(AgentLog).filter_by(
-                log_type="agent_communication"
-            ).all()
+            logs = (
+                session.query(AgentLog).filter_by(log_type="agent_communication").all()
+            )
 
             # Should have 2 logs (one per recipient)
             assert len(logs) == 2
@@ -180,10 +190,11 @@ class TestBroadcastMessage:
         session.commit()
         session.close()
 
-        with patch.object(agent_manager, 'send_message_to_agent', new_callable=AsyncMock) as mock_send:
+        with patch.object(
+            agent_manager, "send_message_to_agent", new_callable=AsyncMock
+        ) as mock_send:
             recipient_count = await agent_manager.broadcast_message_to_all_agents(
-                sender_agent_id="only-agent",
-                message="Hello?"
+                sender_agent_id="only-agent", message="Hello?"
             )
 
             # Should return 0 recipients
@@ -194,13 +205,14 @@ class TestBroadcastMessage:
     @pytest.mark.asyncio
     async def test_broadcast_message_format(self, agent_manager, sample_agents):
         """Test that broadcast messages are formatted correctly."""
-        with patch.object(agent_manager, 'send_message_to_agent', new_callable=AsyncMock) as mock_send:
+        with patch.object(
+            agent_manager, "send_message_to_agent", new_callable=AsyncMock
+        ) as mock_send:
             sender_id = "agent-12345678-abcd-efgh"
             message = "This is a test message"
 
             await agent_manager.broadcast_message_to_all_agents(
-                sender_agent_id=sender_id,
-                message=message
+                sender_agent_id=sender_id, message=message
             )
 
             # Get the formatted message from first call
@@ -220,7 +232,9 @@ class TestDirectMessage:
     @pytest.mark.asyncio
     async def test_send_to_valid_recipient(self, agent_manager, sample_agents):
         """Test sending direct message to valid recipient."""
-        with patch.object(agent_manager, 'send_message_to_agent', new_callable=AsyncMock) as mock_send:
+        with patch.object(
+            agent_manager, "send_message_to_agent", new_callable=AsyncMock
+        ) as mock_send:
             sender_id = "agent-0"
             recipient_id = "agent-1"
             message = "Direct message test"
@@ -228,7 +242,7 @@ class TestDirectMessage:
             success = await agent_manager.send_direct_message(
                 sender_agent_id=sender_id,
                 recipient_agent_id=recipient_id,
-                message=message
+                message=message,
             )
 
             assert success is True
@@ -241,11 +255,13 @@ class TestDirectMessage:
     @pytest.mark.asyncio
     async def test_send_to_nonexistent_agent(self, agent_manager, sample_agents):
         """Test sending to non-existent agent returns False."""
-        with patch.object(agent_manager, 'send_message_to_agent', new_callable=AsyncMock):
+        with patch.object(
+            agent_manager, "send_message_to_agent", new_callable=AsyncMock
+        ):
             success = await agent_manager.send_direct_message(
                 sender_agent_id="agent-0",
                 recipient_agent_id="nonexistent-agent",
-                message="Test"
+                message="Test",
             )
 
             assert success is False
@@ -253,19 +269,25 @@ class TestDirectMessage:
     @pytest.mark.asyncio
     async def test_send_to_terminated_agent(self, agent_manager, sample_agents):
         """Test sending to terminated agent returns False."""
-        with patch.object(agent_manager, 'send_message_to_agent', new_callable=AsyncMock):
+        with patch.object(
+            agent_manager, "send_message_to_agent", new_callable=AsyncMock
+        ):
             success = await agent_manager.send_direct_message(
                 sender_agent_id="agent-0",
                 recipient_agent_id="agent-terminated",
-                message="Test"
+                message="Test",
             )
 
             assert success is False
 
     @pytest.mark.asyncio
-    async def test_direct_message_logs_to_database(self, agent_manager, sample_agents, db_manager):
+    async def test_direct_message_logs_to_database(
+        self, agent_manager, sample_agents, db_manager
+    ):
         """Test that direct messages are logged."""
-        with patch.object(agent_manager, 'send_message_to_agent', new_callable=AsyncMock):
+        with patch.object(
+            agent_manager, "send_message_to_agent", new_callable=AsyncMock
+        ):
             sender_id = "agent-0"
             recipient_id = "agent-1"
             message = "Test direct message"
@@ -273,15 +295,16 @@ class TestDirectMessage:
             await agent_manager.send_direct_message(
                 sender_agent_id=sender_id,
                 recipient_agent_id=recipient_id,
-                message=message
+                message=message,
             )
 
             # Check database
             session = db_manager.get_session()
-            log = session.query(AgentLog).filter_by(
-                log_type="agent_communication",
-                agent_id=recipient_id
-            ).first()
+            log = (
+                session.query(AgentLog)
+                .filter_by(log_type="agent_communication", agent_id=recipient_id)
+                .first()
+            )
 
             assert log is not None
             assert log.details["sender_id"] == sender_id
@@ -294,7 +317,9 @@ class TestDirectMessage:
     @pytest.mark.asyncio
     async def test_direct_message_format(self, agent_manager, sample_agents):
         """Test that direct messages are formatted correctly."""
-        with patch.object(agent_manager, 'send_message_to_agent', new_callable=AsyncMock) as mock_send:
+        with patch.object(
+            agent_manager, "send_message_to_agent", new_callable=AsyncMock
+        ) as mock_send:
             # Use actual agent IDs from sample_agents
             sender_id = "agent-0"
             recipient_id = "agent-1"
@@ -303,7 +328,7 @@ class TestDirectMessage:
             await agent_manager.send_direct_message(
                 sender_agent_id=sender_id,
                 recipient_agent_id=recipient_id,
-                message=message
+                message=message,
             )
 
             formatted_message = mock_send.call_args[0][1]
@@ -321,21 +346,26 @@ class TestMessageContent:
     """Tests for message content handling."""
 
     @pytest.mark.asyncio
-    async def test_long_message_truncation_in_log(self, agent_manager, sample_agents, db_manager):
+    async def test_long_message_truncation_in_log(
+        self, agent_manager, sample_agents, db_manager
+    ):
         """Test that long messages are truncated in database logs."""
-        with patch.object(agent_manager, 'send_message_to_agent', new_callable=AsyncMock):
+        with patch.object(
+            agent_manager, "send_message_to_agent", new_callable=AsyncMock
+        ):
             # Create a message longer than 200 characters
             long_message = "x" * 300
 
             await agent_manager.broadcast_message_to_all_agents(
-                sender_agent_id="agent-0",
-                message=long_message
+                sender_agent_id="agent-0", message=long_message
             )
 
             session = db_manager.get_session()
-            log = session.query(AgentLog).filter_by(
-                log_type="agent_communication"
-            ).first()
+            log = (
+                session.query(AgentLog)
+                .filter_by(log_type="agent_communication")
+                .first()
+            )
 
             # Verify truncation to 200 chars
             assert len(log.details["message_content"]) == 200
@@ -344,12 +374,15 @@ class TestMessageContent:
     @pytest.mark.asyncio
     async def test_special_characters_in_message(self, agent_manager, sample_agents):
         """Test that messages with special characters are handled correctly."""
-        with patch.object(agent_manager, 'send_message_to_agent', new_callable=AsyncMock) as mock_send:
-            special_message = "Test with special chars: \n\t\"quotes\" 'apostrophe' $var @user #tag"
+        with patch.object(
+            agent_manager, "send_message_to_agent", new_callable=AsyncMock
+        ) as mock_send:
+            special_message = (
+                "Test with special chars: \n\t\"quotes\" 'apostrophe' $var @user #tag"
+            )
 
             await agent_manager.broadcast_message_to_all_agents(
-                sender_agent_id="agent-0",
-                message=special_message
+                sender_agent_id="agent-0", message=special_message
             )
 
             # Verify message content is preserved
@@ -371,10 +404,11 @@ class TestErrorHandling:
             if call_count == 1:
                 raise Exception("Simulated send failure")
 
-        with patch.object(agent_manager, 'send_message_to_agent', side_effect=mock_send_with_failure):
+        with patch.object(
+            agent_manager, "send_message_to_agent", side_effect=mock_send_with_failure
+        ):
             recipient_count = await agent_manager.broadcast_message_to_all_agents(
-                sender_agent_id="agent-0",
-                message="Test"
+                sender_agent_id="agent-0", message="Test"
             )
 
             # Should still count as successful for agents where send succeeded
@@ -384,14 +418,15 @@ class TestErrorHandling:
     @pytest.mark.asyncio
     async def test_direct_message_handles_exception(self, agent_manager, sample_agents):
         """Test that direct message handles exceptions gracefully."""
+
         async def mock_send_with_exception(agent_id, message):
             raise Exception("Simulated exception")
 
-        with patch.object(agent_manager, 'send_message_to_agent', side_effect=mock_send_with_exception):
+        with patch.object(
+            agent_manager, "send_message_to_agent", side_effect=mock_send_with_exception
+        ):
             success = await agent_manager.send_direct_message(
-                sender_agent_id="agent-0",
-                recipient_agent_id="agent-1",
-                message="Test"
+                sender_agent_id="agent-0", recipient_agent_id="agent-1", message="Test"
             )
 
             # Should return False on exception
@@ -404,10 +439,14 @@ class TestConcurrency:
     @pytest.mark.asyncio
     async def test_multiple_concurrent_broadcasts(self, agent_manager, sample_agents):
         """Test multiple agents broadcasting simultaneously."""
-        with patch.object(agent_manager, 'send_message_to_agent', new_callable=AsyncMock):
+        with patch.object(
+            agent_manager, "send_message_to_agent", new_callable=AsyncMock
+        ):
             # Simulate 3 agents broadcasting at the same time
             tasks = [
-                agent_manager.broadcast_message_to_all_agents(f"agent-{i}", f"Message from {i}")
+                agent_manager.broadcast_message_to_all_agents(
+                    f"agent-{i}", f"Message from {i}"
+                )
                 for i in range(3)
             ]
 
@@ -419,7 +458,9 @@ class TestConcurrency:
     @pytest.mark.asyncio
     async def test_concurrent_direct_messages(self, agent_manager, sample_agents):
         """Test multiple direct messages sent concurrently."""
-        with patch.object(agent_manager, 'send_message_to_agent', new_callable=AsyncMock):
+        with patch.object(
+            agent_manager, "send_message_to_agent", new_callable=AsyncMock
+        ):
             # Multiple agents sending messages simultaneously
             tasks = [
                 agent_manager.send_direct_message("agent-0", "agent-1", "Message 1"),

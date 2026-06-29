@@ -10,9 +10,9 @@ Configure via environment variable:
     QDRANT_URL=http://localhost:6333
 """
 
-import os
 import logging
-from typing import List, Dict, Any, Optional, Protocol, runtime_checkable
+import os
+from typing import Any, Dict, List, Optional, Protocol, runtime_checkable
 
 logger = logging.getLogger(__name__)
 
@@ -95,4 +95,6 @@ def create_vector_store() -> VectorStoreProtocol:
         logger.info(f"Using Qdrant backend (url: {qdrant_url})")
         return store
 
-    raise ValueError(f"Unknown VECTOR_STORE_BACKEND: {backend}. Use 'qdrant' or 'turbovec'.")
+    raise ValueError(
+        f"Unknown VECTOR_STORE_BACKEND: {backend}. Use 'qdrant' or 'turbovec'."
+    )

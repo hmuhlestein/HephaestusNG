@@ -12,7 +12,6 @@ This fixes:
 import asyncio
 import logging
 import time
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -47,9 +46,11 @@ class AutopilotService:
 
     @property
     def running(self) -> bool:
-        task_done = self._task.done() if self._task else 'N/A'
+        task_done = self._task.done() if self._task else "N/A"
         r = self._running and self._task is not None and not self._task.done()
-        logger.warning(f"[SERVICE] running check: _running={self._running}, _task={self._task is not None}, done={task_done}, result={r}")
+        logger.warning(
+            f"[SERVICE] running check: _running={self._running}, _task={self._task is not None}, done={task_done}, result={r}"
+        )
         return r
 
     async def start(
@@ -144,7 +145,11 @@ class AutopilotService:
         Returns:
             Dict with pipeline state
         """
-        elapsed = int(time.time() - self._start_time) if self._start_time and self._running else 0
+        elapsed = (
+            int(time.time() - self._start_time)
+            if self._start_time and self._running
+            else 0
+        )
 
         return {
             "running": self.running,
@@ -172,7 +177,6 @@ class AutopilotService:
             logger.info("=" * 70)
 
             # Import here to avoid circular imports
-            from src.autopilot.orchestrator import run_continuous_pipeline
             import argparse
 
             # Create args namespace matching what run_continuous_pipeline expects
@@ -200,7 +204,10 @@ class AutopilotService:
             self._error = str(e)
         finally:
             import traceback
-            logger.warning(f"[SERVICE] Pipeline task finished. _running was {self._running}. Traceback: {traceback.format_stack()[-3:]}")
+
+            logger.warning(
+                f"[SERVICE] Pipeline task finished. _running was {self._running}. Traceback: {traceback.format_stack()[-3:]}"
+            )
             self._running = False
             logger.info("Pipeline task finished")
 
@@ -209,10 +216,10 @@ class AutopilotService:
 
         This is a thin wrapper that sets up the stop callback.
         """
-        from src.autopilot.orchestrator import run_continuous_pipeline
-
         # Monkey-patch the stop event into the module so the pipeline can check it
         import src.autopilot.orchestrator as orch_module
+        from src.autopilot.orchestrator import run_continuous_pipeline
+
         orch_module._service_stop_event = self._stop_event
 
         try:
@@ -220,7 +227,9 @@ class AutopilotService:
         except KeyboardInterrupt:
             logger.info("Pipeline interrupted")
         finally:
-            logger.warning(f"[SERVICE] _run_pipeline_sync finally: _running={self._running}")
+            logger.warning(
+                f"[SERVICE] _run_pipeline_sync finally: _running={self._running}"
+            )
             self._running = False
 
 

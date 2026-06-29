@@ -6,13 +6,13 @@ existing call sites (server.py, phase_manager.py) don't need to change.
 """
 
 import logging
-import yaml
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+
+import yaml
 
 from src.phases.models import PhasesConfig
-from src.workflow_engine.yaml_loader import load_full_workflow_definition
 from src.sdk.models import WorkflowDefinition
+from src.workflow_engine.yaml_loader import load_full_workflow_definition
 
 logger = logging.getLogger(__name__)
 
@@ -78,11 +78,13 @@ class PhaseLoader:
             return PhasesConfig()
 
         try:
-            with open(config_file, 'r', encoding='utf-8') as f:
+            with open(config_file, "r", encoding="utf-8") as f:
                 content = yaml.safe_load(f)
 
             if content is None:
-                logger.warning(f"Empty phases_config.yaml in {folder_path}, using defaults")
+                logger.warning(
+                    f"Empty phases_config.yaml in {folder_path}, using defaults"
+                )
                 return PhasesConfig()
 
             logger.info(f"Loaded phases config from {config_file}")

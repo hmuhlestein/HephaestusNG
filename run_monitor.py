@@ -19,9 +19,9 @@ from pathlib import Path
 # Add src to path
 sys.path.append(str(Path(__file__).parent / "src"))
 
-from src.core.simple_config import get_config
-from src.core.database import DatabaseManager
 from src.agents.manager import AgentManager
+from src.core.database import DatabaseManager
+from src.core.simple_config import get_config
 from src.interfaces import get_llm_provider
 from src.memory.rag import RAGSystem
 from src.monitoring.monitor import MonitoringLoop
@@ -33,8 +33,8 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     handlers=[
         logging.StreamHandler(sys.stdout),
-        logging.FileHandler("logs/monitor.log", mode="a")
-    ]
+        logging.FileHandler("logs/monitor.log", mode="a"),
+    ],
 )
 
 logger = logging.getLogger(__name__)
@@ -50,7 +50,9 @@ async def setup_monitoring_system():
     try:
         # Get configuration
         config = get_config()
-        logger.info(f"Using monitoring interval: {config.monitoring_interval_seconds} seconds")
+        logger.info(
+            f"Using monitoring interval: {config.monitoring_interval_seconds} seconds"
+        )
 
         # Initialize database manager
         db_manager = DatabaseManager()
@@ -66,9 +68,10 @@ async def setup_monitoring_system():
 
         # Initialize vector store manager
         from src.memory.vector_store import VectorStoreManager
+
         vector_store = VectorStoreManager(
             qdrant_url=config.qdrant_url,
-            collection_prefix=config.qdrant_collection_prefix
+            collection_prefix=config.qdrant_collection_prefix,
         )
         logger.info("Vector store manager initialized")
 
@@ -87,14 +90,24 @@ async def setup_monitoring_system():
             workflow_id = phase_manager.load_active_workflow()
 
             if workflow_id:
-                logger.info(f"[DIAGNOSTIC] ✅ Loaded active workflow: {workflow_id[:8]}...")
-                logger.info(f"[DIAGNOSTIC] ✅ Diagnostic agent monitoring ENABLED for this workflow")
+                logger.info(
+                    f"[DIAGNOSTIC] ✅ Loaded active workflow: {workflow_id[:8]}..."
+                )
+                logger.info(
+                    "[DIAGNOSTIC] ✅ Diagnostic agent monitoring ENABLED for this workflow"
+                )
             else:
-                logger.info(f"[DIAGNOSTIC] ℹ️  No active workflow found - diagnostic agent monitoring disabled")
+                logger.info(
+                    "[DIAGNOSTIC] ℹ️  No active workflow found - diagnostic agent monitoring disabled"
+                )
 
             # DEBUG: Verify the state
-            logger.info(f"[DIAGNOSTIC] PhaseManager.workflow_id = {phase_manager.workflow_id[:8] if phase_manager.workflow_id else 'None'}")
-            logger.info(f"[DIAGNOSTIC] PhaseManager.active_workflow exists = {phase_manager.active_workflow is not None}")
+            logger.info(
+                f"[DIAGNOSTIC] PhaseManager.workflow_id = {phase_manager.workflow_id[:8] if phase_manager.workflow_id else 'None'}"
+            )
+            logger.info(
+                f"[DIAGNOSTIC] PhaseManager.active_workflow exists = {phase_manager.active_workflow is not None}"
+            )
 
         except Exception as e:
             logger.warning(f"Phase manager initialization failed (optional): {e}")
@@ -105,7 +118,7 @@ async def setup_monitoring_system():
             agent_manager=agent_manager,
             llm_provider=llm_provider,
             rag_system=rag_system,
-            phase_manager=phase_manager
+            phase_manager=phase_manager,
         )
 
         logger.info("Monitoring system setup complete")
@@ -120,7 +133,10 @@ def signal_handler(signum, frame):
     """Handle shutdown signals gracefully."""
     logger.critical(f"RECEIVED SIGNAL {signum} — shutting down")
     import traceback
-    logger.critical(f"Stack trace at signal time:\n{''.join(traceback.format_stack(frame))}")
+
+    logger.critical(
+        f"Stack trace at signal time:\n{''.join(traceback.format_stack(frame))}"
+    )
     if monitoring_loop:
         asyncio.create_task(monitoring_loop.stop())
     else:
@@ -188,6 +204,7 @@ if __name__ == "__main__":
     (pid_dir / "monitor.pid").write_text(str(os.getpid()))
 
     import traceback
+
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
@@ -202,7 +219,7 @@ if __name__ == "__main__":
         # Write crash to separate file for diagnosis
         crash_path = Path("logs/monitor_crash.log")
         with open(crash_path, "a") as f:
-            f.write(f"\n\n{'='*60}\n")
+            f.write(f"\n\n{'=' * 60}\n")
             f.write(f"CRASH at {datetime.utcnow()}\n")
             f.write(f"PID: {os.getpid()}\n")
             f.write(f"Type: {type(e).__name__}\n")

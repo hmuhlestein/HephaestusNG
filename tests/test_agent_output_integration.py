@@ -1,14 +1,14 @@
 """Integration tests for agent output capture with real tmux sessions."""
 
-import asyncio
-import uuid
 import time
-import libtmux
-import pytest
+import uuid
 from datetime import datetime
 
+import libtmux
+import pytest
+
 from src.agents.manager import AgentManager
-from src.core.database import DatabaseManager, Agent, AgentLog, Task
+from src.core.database import Agent, AgentLog, DatabaseManager, Task
 from src.interfaces import get_llm_provider
 
 
@@ -20,15 +20,16 @@ class TestAgentOutputIntegration:
     def db_manager(self):
         """Create a real database manager with test database."""
         # Use an in-memory database for testing
-        import tempfile
         import os
+        import tempfile
 
-        with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as tmp:
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
             db_path = tmp.name
 
         # Initialize database
-        from src.core.database import Base, engine
         from sqlalchemy import create_engine
+
+        from src.core.database import Base
 
         test_engine = create_engine(f"sqlite:///{db_path}")
         Base.metadata.create_all(test_engine)
@@ -51,8 +52,12 @@ class TestAgentOutputIntegration:
         return AgentManager(db_manager, llm_provider)
 
     @pytest.mark.asyncio
-    @pytest.mark.skipif(not libtmux.Server().has_session("test"), reason="Requires tmux")
-    async def test_full_agent_lifecycle_with_output_capture(self, agent_manager, db_manager):
+    @pytest.mark.skipif(
+        not libtmux.Server().has_session("test"), reason="Requires tmux"
+    )
+    async def test_full_agent_lifecycle_with_output_capture(
+        self, agent_manager, db_manager
+    ):
         """Test complete agent lifecycle with output capture."""
 
         # Create a task
@@ -67,7 +72,7 @@ class TestAgentOutputIntegration:
             done_definition="Complete the test",
             status="pending",
             priority="medium",
-            created_at=datetime.utcnow()
+            created_at=datetime.utcnow(),
         )
         session.add(task)
         session.commit()
@@ -83,9 +88,7 @@ class TestAgentOutputIntegration:
 
         # Create new session
         tmux_session = tmux_server.new_session(
-            session_name=session_name,
-            window_name="test",
-            attach=False
+            session_name=session_name, window_name="test", attach=False
         )
 
         # Add some output to the session
@@ -94,7 +97,7 @@ class TestAgentOutputIntegration:
             "echo 'Starting test agent'",
             "echo 'Processing task...'",
             "echo 'Task completed successfully'",
-            "echo 'Final result: SUCCESS'"
+            "echo 'Final result: SUCCESS'",
         ]
 
         for cmd in test_commands:
@@ -112,7 +115,7 @@ class TestAgentOutputIntegration:
             current_task_id=task_id,
             last_activity=datetime.utcnow(),
             health_check_failures=0,
-            agent_type="phase"
+            agent_type="phase",
         )
         session.add(agent)
         session.commit()
@@ -132,10 +135,11 @@ class TestAgentOutputIntegration:
         assert agent.status == "terminated"
 
         # Verify output was captured in AgentLog
-        log_entry = session.query(AgentLog).filter_by(
-            agent_id=agent_id,
-            log_type="terminated"
-        ).first()
+        log_entry = (
+            session.query(AgentLog)
+            .filter_by(agent_id=agent_id, log_type="terminated")
+            .first()
+        )
         assert log_entry is not None
         assert log_entry.details is not None
         assert "final_output" in log_entry.details

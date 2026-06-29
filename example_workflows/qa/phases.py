@@ -26,8 +26,7 @@ Usage:
 from example_workflows.qa.phase_1_test_planning import PHASE_1_TEST_PLANNING
 from example_workflows.qa.phase_2_test_implementation import PHASE_2_TEST_IMPLEMENTATION
 from example_workflows.qa.phase_3_test_execution import PHASE_3_TEST_EXECUTION
-
-from src.sdk.models import WorkflowConfig, LaunchTemplate, LaunchParameter
+from src.sdk.models import LaunchParameter, LaunchTemplate, WorkflowConfig
 
 # Export phase list
 QA_PHASES = [
@@ -51,23 +50,29 @@ QA_LAUNCH_TEMPLATE = LaunchTemplate(
             label="Project Name",
             type="text",
             required=True,
-            description="Name of the project to test (e.g., 'Sotto AI Assistant')"
+            description="Name of the project to test (e.g., 'Sotto AI Assistant')",
         ),
         LaunchParameter(
             name="test_scope",
             label="Test Scope",
             type="dropdown",
             required=True,
-            options=["Full Suite", "Unit Tests Only", "Integration Only", "Browser Only", "Smoke Test"],
+            options=[
+                "Full Suite",
+                "Unit Tests Only",
+                "Integration Only",
+                "Browser Only",
+                "Smoke Test",
+            ],
             default="Full Suite",
-            description="What scope of tests to run"
+            description="What scope of tests to run",
         ),
         LaunchParameter(
             name="focus_areas",
             label="Focus Areas",
             type="textarea",
             required=False,
-            description="Optional: Specific areas to focus testing on (e.g., 'authentication, API endpoints, frontend forms')"
+            description="Optional: Specific areas to focus testing on (e.g., 'authentication, API endpoints, frontend forms')",
         ),
         LaunchParameter(
             name="skip_browser",
@@ -76,28 +81,28 @@ QA_LAUNCH_TEMPLATE = LaunchTemplate(
             required=True,
             options=["No", "Yes"],
             default="No",
-            description="Skip Chrome DevTools Protocol browser tests?"
+            description="Skip Chrome DevTools Protocol browser tests?",
         ),
         LaunchParameter(
             name="services_url",
             label="Services URL",
             type="text",
             required=False,
-            description="Base URL for services (default: http://localhost:8300)"
+            description="Base URL for services (default: http://localhost:8300)",
         ),
         LaunchParameter(
             name="frontend_url",
             label="Frontend URL",
             type="text",
             required=False,
-            description="Frontend URL for browser tests (default: http://localhost:5173)"
+            description="Frontend URL for browser tests (default: http://localhost:5173)",
         ),
         LaunchParameter(
             name="known_issues",
             label="Known Issues",
             type="textarea",
             required=False,
-            description="Optional: Known issues to be aware of during testing"
+            description="Optional: Known issues to be aware of during testing",
         ),
     ],
     phase_1_task_prompt="""Phase 1: QA Test Planning - {project_name}
@@ -157,4 +162,4 @@ Mark your task as done with test_plan.md as deliverable.
 )
 
 # Export everything
-__all__ = ['QA_PHASES', 'QA_WORKFLOW_CONFIG', 'QA_LAUNCH_TEMPLATE']
+__all__ = ["QA_PHASES", "QA_WORKFLOW_CONFIG", "QA_LAUNCH_TEMPLATE"]

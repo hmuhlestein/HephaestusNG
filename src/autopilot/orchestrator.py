@@ -11,22 +11,22 @@ A continuous multi-agent workflow engine that:
 Designed to run for days/weeks, processing designs as they arrive.
 """
 
-import os
-import sys
-import git as _git
-import time
+import hashlib
 import json
+import logging
+import os
 import shutil
 import subprocess
-import hashlib
-import logging
-import html as html_mod
-import requests
-from pathlib import Path
-from datetime import datetime
-from typing import Optional, Tuple, List, Dict, Any, Set
+import sys
+import time
 from dataclasses import dataclass, field
+from datetime import datetime
 from enum import Enum
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Set, Tuple
+
+import git as _git
+import requests
 
 # Module-level logger for persistent state operations
 logger = logging.getLogger(__name__)
@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 HEPHAESTUS_DIR = Path(__file__).parent.parent.parent
 API_BASE = os.environ.get("HEPHAESTUS_API_BASE", "http://127.0.0.1:8300")
 
-from src.core.constants import AUTOPILOT_STATE_DIR, CONTEXT_DIR_NAME, WORKTREES_SUBDIR, DESIGN_SUBDIR
+from src.core.constants import AUTOPILOT_STATE_DIR, CONTEXT_DIR_NAME, DESIGN_SUBDIR
 from src.core.simple_config import get_config
 
 POLL_INTERVAL = 15
@@ -42,8 +42,17 @@ STUCK_THRESHOLD = 3
 DESIGN_QUEUE_SCAN_INTERVAL = 60
 HEARTBEAT_INTERVAL = 300
 MAX_WORKFLOW_TIME = 7200  # 2 hours per workflow execution
-ACTIVE_AGENT_STATUSES = {"working", "idle"}  # Excludes 'created' (not yet started), 'stuck', 'terminated'
-PARENT_PEEK_INTERVAL = int(os.environ.get("HEPH_PEEK_INTERVAL", "60"))  # seconds between parent peeks
+ACTIVE_AGENT_STATUSES = {
+    "working",
+    "idle",
+}  # Excludes 'created' (not yet started), 'stuck', 'terminated'
+PARENT_PEEK_INTERVAL = int(
+    os.environ.get("HEPH_PEEK_INTERVAL", "60")
+)  # seconds between parent peeks
+
+# Feature Model constants
+MAX_PHASE0_TIME = 3600  # 1 hour timeout for Phase 0
+MAX_PARALLEL_FEATURES = 4  # max concurrent feature pipelines
 
 # Module-level orchestrator agent ID (set during registration)
 _orchestrator_agent_id: Optional[str] = None
@@ -55,7 +64,8 @@ def get_litellm_config() -> Dict[str, str]:
         "url": os.environ.get("LITELLM_PROXY_URL", ""),
         "api_key": os.environ.get("LITELLM_API_KEY", ""),
         "cost_api_key": os.environ.get("LITELLM_MASTER_KEY", ""),
-        "cost_tracking": os.environ.get("LITELLM_COST_TRACKING", "false").lower() == "true",
+        "cost_tracking": os.environ.get("LITELLM_COST_TRACKING", "false").lower()
+        == "true",
     }
 
 
@@ -85,12 +95,16 @@ class DesignEntry:
     name: str
     content_hash: str
     status: DesignStatus = DesignStatus.PENDING
-    db_id: Optional[str] = None  # autopilot_designs.id — links Workflow back to Design (§9.7)
+    db_id: Optional[str] = (
+        None  # autopilot_designs.id — links Workflow back to Design (§9.7)
+    )
     project_path: Optional[Path] = None
     feature_folder: Optional[Path] = None
     error: Optional[str] = None
     started_at: Optional[str] = None
     completed_at: Optional[str] = None
+    file_path: Optional[str] = None  # absolute path to design file
+    designs_folder: Optional[Path] = None  # path to permanent storage
 
 
 @dataclass
@@ -211,7 +225,9 @@ class PersistentPipelineState:
                 with open(self.state_file) as f:
                     state_data = json.load(f)
                 state = PipelineState.from_dict(state_data)
-                logger.info(f"Loaded pipeline state: {state.designs_processed} designs processed")
+                logger.info(
+                    f"Loaded pipeline state: {state.designs_processed} designs processed"
+                )
             except Exception as e:
                 logger.warning(f"Failed to load pipeline state: {e}")
 
@@ -245,7 +261,9 @@ class PersistentPipelineState:
             current_design = state_data.get("current_design")
             queue_status = state_data.get("queue_status", {})
 
-            return current_design is not None or queue_status.get("status") == "processing"
+            return (
+                current_design is not None or queue_status.get("status") == "processing"
+            )
         except Exception:
             return False
 
@@ -299,14 +317,18 @@ class OrchestratorLogger:
 
     def save_state(self, state: PipelineState):
         with open(self.state_file, "w") as f:
-            json.dump({
-                "designs_processed": state.designs_processed,
-                "designs_succeeded": state.designs_succeeded,
-                "designs_failed": state.designs_failed,
-                "total_elapsed": state.total_elapsed,
-                "current_design": state.current_design,
-                "queue_status": state.queue_status,
-            }, f, indent=2)
+            json.dump(
+                {
+                    "designs_processed": state.designs_processed,
+                    "designs_succeeded": state.designs_succeeded,
+                    "designs_failed": state.designs_failed,
+                    "total_elapsed": state.total_elapsed,
+                    "current_design": state.current_design,
+                    "queue_status": state.queue_status,
+                },
+                f,
+                indent=2,
+            )
 
 
 def file_hash(path: Path) -> str:
@@ -325,9 +347,13 @@ def api_get(endpoint: str, timeout: int = 5) -> Optional[dict]:
     return None
 
 
-def api_post(endpoint: str, data: dict = None, timeout: int = 5, headers: dict = None) -> Optional[dict]:
+def api_post(
+    endpoint: str, data: dict = None, timeout: int = 5, headers: dict = None
+) -> Optional[dict]:
     try:
-        r = requests.post(f"{API_BASE}{endpoint}", json=data, timeout=timeout, headers=headers or {})
+        r = requests.post(
+            f"{API_BASE}{endpoint}", json=data, timeout=timeout, headers=headers or {}
+        )
         if r.status_code == 200:
             return r.json()
         else:
@@ -346,7 +372,8 @@ def _update_orchestrator_status(status: str) -> None:
     if not _orchestrator_agent_id:
         return
     try:
-        from src.core.database import DatabaseManager, Agent
+        from src.core.database import Agent, DatabaseManager
+
         db_manager = DatabaseManager()
         session = db_manager.get_session()
         try:
@@ -391,12 +418,12 @@ def get_agents(workflow_id: str = None) -> list:
     tasks = get_tasks(workflow_id=workflow_id)
     agent_ids = set()
     for t in tasks:
-        if t.get('assigned_agent_id'):
-            agent_ids.add(t['assigned_agent_id'])
-        if t.get('created_by_agent_id'):
-            agent_ids.add(t['created_by_agent_id'])
+        if t.get("assigned_agent_id"):
+            agent_ids.add(t["assigned_agent_id"])
+        if t.get("created_by_agent_id"):
+            agent_ids.add(t["created_by_agent_id"])
 
-    return [a for a in agents if a.get('id') in agent_ids]
+    return [a for a in agents if a.get("id") in agent_ids]
 
 
 def peek_agent_output(agent_id: str, lines: int = 30) -> str:
@@ -412,7 +439,9 @@ def get_task_progress(agent_id: str) -> dict:
     tasks = get_tasks(status="done")
     agent_done = [t for t in tasks if t.get("assigned_agent_id") == agent_id]
     tasks_in_progress = get_tasks(status="in_progress")
-    agent_active = [t for t in tasks_in_progress if t.get("assigned_agent_id") == agent_id]
+    agent_active = [
+        t for t in tasks_in_progress if t.get("assigned_agent_id") == agent_id
+    ]
     return {"done": len(agent_done), "in_progress": len(agent_active)}
 
 
@@ -428,7 +457,9 @@ def get_active_workflows() -> list:
     return [w for w in data if w.get("status") in ("active", "running")]
 
 
-def is_design_fully_complete(workflow_id: str, logger: OrchestratorLogger) -> Tuple[bool, str]:
+def is_design_fully_complete(
+    workflow_id: str, logger: OrchestratorLogger
+) -> Tuple[bool, str]:
     """Check if a design is fully complete:
     1. Workflow DB status is completed (or no active agents/tasks remain)
     2. No active agents
@@ -439,60 +470,76 @@ def is_design_fully_complete(workflow_id: str, logger: OrchestratorLogger) -> Tu
     """
     # Check workflow status — if the server already marked it completed, trust that.
     wf = get_workflow_status(workflow_id)
-    wf_status = wf.get('status', '')
-    if wf_status == 'completed':
+    wf_status = wf.get("status", "")
+    if wf_status == "completed":
         return True, "Workflow status: completed"
-    if wf_status not in ('active', 'running', 'paused'):
+    if wf_status not in ("active", "running", "paused"):
         return False, f"Workflow status: {wf_status}"
 
     # Check task statuses
-    pending = get_tasks(status='pending', workflow_id=workflow_id)
-    queued = get_tasks(status='queued', workflow_id=workflow_id)
-    in_progress = get_tasks(status='in_progress', workflow_id=workflow_id)
-    assigned = get_tasks(status='assigned', workflow_id=workflow_id)
-    failed = get_tasks(status='failed', workflow_id=workflow_id)
-    done = get_tasks(status='done', workflow_id=workflow_id)
+    pending = get_tasks(status="pending", workflow_id=workflow_id)
+    queued = get_tasks(status="queued", workflow_id=workflow_id)
+    in_progress = get_tasks(status="in_progress", workflow_id=workflow_id)
+    assigned = get_tasks(status="assigned", workflow_id=workflow_id)
+    failed = get_tasks(status="failed", workflow_id=workflow_id)
+    done = get_tasks(status="done", workflow_id=workflow_id)
 
     # Pending/active tasks indicate real work remaining.
     # Ignore DIAGNOSTIC tasks (created by the monitor itself when stuck) — they
     # should not block completion detection.
     real_pending = [
-        t for t in (pending + queued + in_progress + assigned)
-        if not (t.get('raw_description') or '').startswith('DIAGNOSTIC:')
+        t
+        for t in (pending + queued + in_progress + assigned)
+        if not (t.get("raw_description") or "").startswith("DIAGNOSTIC:")
     ]
     if real_pending:
-        task_ids = [t.get('id', '')[:8] for t in real_pending[:3]]
+        task_ids = [t.get("id", "")[:8] for t in real_pending[:3]]
         return False, f"{len(real_pending)} task(s) still active: {', '.join(task_ids)}"
 
     # Failed tasks: only block if the same phase has NO subsequent done task
     # (i.e., a retry succeeded → the failure is resolved).
-    done_phase_ids = {t.get('phase_id') for t in done if t.get('phase_id')}
+    done_phase_ids = {t.get("phase_id") for t in done if t.get("phase_id")}
     unresolved_failures = [
-        t for t in failed
-        if t.get('phase_id') not in done_phase_ids
-        and not (t.get('raw_description') or '').startswith('DIAGNOSTIC:')
+        t
+        for t in failed
+        if t.get("phase_id") not in done_phase_ids
+        and not (t.get("raw_description") or "").startswith("DIAGNOSTIC:")
     ]
     if unresolved_failures:
-        task_ids = [t.get('id', '')[:8] for t in unresolved_failures[:3]]
-        return False, f"{len(unresolved_failures)} unresolved failed task(s): {', '.join(task_ids)}"
+        task_ids = [t.get("id", "")[:8] for t in unresolved_failures[:3]]
+        return (
+            False,
+            f"{len(unresolved_failures)} unresolved failed task(s): {', '.join(task_ids)}",
+        )
 
     # Check for active agents
     agents = get_agents(workflow_id=workflow_id)
-    active_agents = [a for a in agents if a.get('status') in ('working', 'starting', 'idle')]
+    active_agents = [
+        a for a in agents if a.get("status") in ("working", "starting", "idle")
+    ]
     if active_agents:
-        agent_ids = [a.get('id', '')[:8] for a in active_agents[:3]]
-        return False, f"{len(active_agents)} agent(s) still active: {', '.join(agent_ids)}"
+        agent_ids = [a.get("id", "")[:8] for a in active_agents[:3]]
+        return (
+            False,
+            f"{len(active_agents)} agent(s) still active: {', '.join(agent_ids)}",
+        )
 
     # Check for unmerged agent branches
     try:
         project_path = os.getenv("PROJECT_PATH", "/Users/hmuhlestein/code/sotto")
         result = subprocess.run(
             ["git", "branch", "--list", "agent-*"],
-            capture_output=True, text=True, timeout=10,
-            cwd=project_path
+            capture_output=True,
+            text=True,
+            timeout=10,
+            cwd=project_path,
         )
         if result.returncode == 0:
-            branches = [b.strip().lstrip('* ') for b in result.stdout.strip().split('\n') if b.strip()]
+            branches = [
+                b.strip().lstrip("* ")
+                for b in result.stdout.strip().split("\n")
+                if b.strip()
+            ]
             if branches:
                 return False, f"{len(branches)} unmerged agent branch(es)"
     except Exception:
@@ -500,7 +547,9 @@ def is_design_fully_complete(workflow_id: str, logger: OrchestratorLogger) -> Tu
 
     # Check done task count vs actual phase count (not hardcoded 10).
     try:
-        from src.core.database import Phase, DatabaseManager as _DbM
+        from src.core.database import DatabaseManager as _DbM
+        from src.core.database import Phase
+
         _db = _DbM()
         _s = _db.get_session()
         try:
@@ -529,16 +578,18 @@ def attempt_recovery(workflow_id: str, logger: OrchestratorLogger) -> Tuple[bool
     recovered = []
 
     # 1. Retry failed tasks
-    failed = get_tasks(status='failed', workflow_id=workflow_id)
+    failed = get_tasks(status="failed", workflow_id=workflow_id)
     for task in failed:
-        task_id = task.get('id')
-        phase_id = task.get('phase_id')
-        task.get('enriched_description') or task.get('raw_description') or ''
+        task_id = task.get("id")
+        phase_id = task.get("phase_id")
+        task.get("enriched_description") or task.get("raw_description") or ""
 
         # Only retry if not retried too many times
-        retry_count = task.get('retry_count', 0)
+        retry_count = task.get("retry_count", 0)
         if retry_count >= 2:
-            logger.info(f"  Task {task_id[:8]} failed {retry_count} times - skipping retry")
+            logger.info(
+                f"  Task {task_id[:8]} failed {retry_count} times - skipping retry"
+            )
             continue
 
         logger.info(f"  Retrying failed task {task_id[:8]} (retry #{retry_count + 1})")
@@ -546,12 +597,15 @@ def attempt_recovery(workflow_id: str, logger: OrchestratorLogger) -> Tuple[bool
             # Reset task status to pending
             api_post(f"/api/tasks/{task_id}/status", {"status": "pending"})
             # Create agent for it
-            agent_data = api_post("/api/create_agent_for_task", {
-                "task_id": task_id,
-                "workflow_id": workflow_id,
-                "phase_id": phase_id,
-            })
-            agent_id = agent_data.get('agent_id', 'unknown')
+            agent_data = api_post(
+                "/api/create_agent_for_task",
+                {
+                    "task_id": task_id,
+                    "workflow_id": workflow_id,
+                    "phase_id": phase_id,
+                },
+            )
+            agent_id = agent_data.get("agent_id", "unknown")
             logger.info(f"  Created agent {agent_id[:8]} for retried task")
             recovered.append(f"retried task {task_id[:8]}")
         except Exception as e:
@@ -566,29 +620,54 @@ def attempt_recovery(workflow_id: str, logger: OrchestratorLogger) -> Tuple[bool
         # Check if repo needs cleanup
         status_result = subprocess.run(
             ["git", "status", "--porcelain"],
-            capture_output=True, text=True, timeout=10, cwd=project_path
+            capture_output=True,
+            text=True,
+            timeout=10,
+            cwd=project_path,
         )
         is_dirty = bool(status_result.stdout.strip())
         merge_in_progress = Path(project_path, ".git", "MERGE_HEAD").exists()
 
         if is_dirty or merge_in_progress:
             # Abort any in-progress merge that's blocking the repo
-            subprocess.run(["git", "merge", "--abort"], capture_output=True, timeout=10, cwd=project_path)
+            subprocess.run(
+                ["git", "merge", "--abort"],
+                capture_output=True,
+                timeout=10,
+                cwd=project_path,
+            )
             # Ensure we're on main
-            subprocess.run(["git", "checkout", "main"], capture_output=True, timeout=10, cwd=project_path)
+            subprocess.run(
+                ["git", "checkout", "main"],
+                capture_output=True,
+                timeout=10,
+                cwd=project_path,
+            )
             # Clean untracked files that accumulate from failed merges
-            subprocess.run(["git", "clean", "-fd"], capture_output=True, timeout=10, cwd=project_path)
+            subprocess.run(
+                ["git", "clean", "-fd"],
+                capture_output=True,
+                timeout=10,
+                cwd=project_path,
+            )
             # Reset any staged but uncommitted changes
-            subprocess.run(["git", "reset", "--hard", "HEAD"], capture_output=True, timeout=10, cwd=project_path)
+            subprocess.run(
+                ["git", "reset", "--hard", "HEAD"],
+                capture_output=True,
+                timeout=10,
+                cwd=project_path,
+            )
             recovered.append("cleaned repo state")
     except Exception as e:
         logger.warning(f"  Failed to clean repo state: {e}")
 
     # 3. Terminate stale agents
     agents = get_agents(workflow_id=workflow_id)
-    active_agents = [a for a in agents if a.get('status') in ('working', 'starting', 'idle')]
+    active_agents = [
+        a for a in agents if a.get("status") in ("working", "starting", "idle")
+    ]
     for agent in active_agents:
-        aid = agent.get('id', '')
+        aid = agent.get("id", "")
         logger.info(f"  Terminating stale agent {aid[:8]}")
         try:
             api_post(f"/api/agents/{aid}/terminate")
@@ -622,7 +701,10 @@ def check_api_credits() -> Tuple[bool, str]:
     ]
     # Error keywords in agent status/error fields (not raw output)
     credit_keywords_in_error = [
-        "credit", "quota", "billing", "payment",
+        "credit",
+        "quota",
+        "billing",
+        "payment",
     ]
 
     agents = get_agents()
@@ -635,7 +717,10 @@ def check_api_credits() -> Tuple[bool, str]:
         if agent_status == "error":
             for keyword in credit_keywords_in_error:
                 if keyword in agent_error:
-                    return True, f"API credit issue in agent {agent.get('id', '')[:8]}: {keyword}"
+                    return (
+                        True,
+                        f"API credit issue in agent {agent.get('id', '')[:8]}: {keyword}",
+                    )
 
         # Check output log for specific phrases (not broad keywords)
         output = (agent.get("output_log", "") or "").lower()
@@ -653,23 +738,24 @@ def check_api_credits() -> Tuple[bool, str]:
     return False, ""
 
 
-def detect_hard_error(agents: list, failed_tasks: list, workflow_id: str = None) -> Tuple[bool, str]:
+def detect_hard_error(
+    agents: list, failed_tasks: list, workflow_id: str = None
+) -> Tuple[bool, str]:
     # Filter to only tasks from the current workflow if provided
     if workflow_id:
         failed_tasks = [t for t in failed_tasks if t.get("workflow_id") == workflow_id]
 
     # Check for crashed/errored agents (agents list is already scoped by get_agents)
-    crashed_agents = [
-        a for a in agents
-        if a.get("status") == "error"
-    ]
+    crashed_agents = [a for a in agents if a.get("status") == "error"]
     if crashed_agents:
         names = [a.get("id", "unknown")[:20] for a in crashed_agents[:3]]
         return True, f"Crashed agents: {', '.join(names)}"
 
     critical_failures = [
-        t for t in failed_tasks
-        if t.get("priority") == "critical" or "architectural" in (t.get("description", "") or "").lower()
+        t
+        for t in failed_tasks
+        if t.get("priority") == "critical"
+        or "architectural" in (t.get("description", "") or "").lower()
     ]
     if critical_failures:
         descs = [t.get("description", "")[:60] for t in critical_failures[:3]]
@@ -678,7 +764,9 @@ def detect_hard_error(agents: list, failed_tasks: list, workflow_id: str = None)
     return False, ""
 
 
-def detect_impasse(agents: list, pending_tasks: list, in_progress_tasks: list, elapsed_seconds: int = 0) -> Tuple[bool, str]:
+def detect_impasse(
+    agents: list, pending_tasks: list, in_progress_tasks: list, elapsed_seconds: int = 0
+) -> Tuple[bool, str]:
     """Detect if the workflow is stuck.
 
     Parent-child model: check if tasks are progressing, not health_check_failures.
@@ -696,16 +784,20 @@ def detect_impasse(agents: list, pending_tasks: list, in_progress_tasks: list, e
     if in_progress_tasks and not pending_tasks:
         # Tasks are in progress - check if they've been stuck
         for task in in_progress_tasks:
-            started = task.get('started_at')
+            started = task.get("started_at")
             if started:
                 from datetime import datetime, timezone
+
                 try:
                     started_dt = datetime.fromisoformat(started)
                     if started_dt.tzinfo is None:
                         started_dt = started_dt.replace(tzinfo=timezone.utc)
                     elapsed = (datetime.now(timezone.utc) - started_dt).total_seconds()
                     if elapsed > 1800:  # 30 minutes
-                        return True, f"Task {task.get('id', '?')[:8]} stuck for {int(elapsed)}s"
+                        return (
+                            True,
+                            f"Task {task.get('id', '?')[:8]} stuck for {int(elapsed)}s",
+                        )
                 except Exception:
                     pass
 
@@ -750,14 +842,17 @@ def prompt_human(reason: str, logger: OrchestratorLogger, timeout: int = 600) ->
     response_file = input_dir / f"input_response_{request_id}.json"
 
     # Atomic write via temp+rename
-    payload = json.dumps({
-        "id": request_id,
-        "reason": reason,
-        "timestamp": datetime.now().isoformat(),
-        "options": ["c", "s", "q"],
-        "labels": {"c": "Continue", "s": "Skip design", "q": "Quit pipeline"},
-        "timeout_seconds": timeout,
-    }, indent=2)
+    payload = json.dumps(
+        {
+            "id": request_id,
+            "reason": reason,
+            "timestamp": datetime.now().isoformat(),
+            "options": ["c", "s", "q"],
+            "labels": {"c": "Continue", "s": "Skip design", "q": "Quit pipeline"},
+            "timeout_seconds": timeout,
+        },
+        indent=2,
+    )
     tmp = request_file.with_suffix(".tmp")
     tmp.write_text(payload)
     os.rename(tmp, request_file)
@@ -791,12 +886,31 @@ def prompt_human(reason: str, logger: OrchestratorLogger, timeout: int = 600) ->
                 if choice == "m" and message:
                     # Log the message and continue waiting for actual decision
                     logger.info(f"Human message: {message}")
-                    logger.event("human_input", {"choice": "m", "message": message, "reason": reason, "source": "web", "request_id": request_id})
-                    response_file.unlink(missing_ok=True)  # Delete response, keep waiting
+                    logger.event(
+                        "human_input",
+                        {
+                            "choice": "m",
+                            "message": message,
+                            "reason": reason,
+                            "source": "web",
+                            "request_id": request_id,
+                        },
+                    )
+                    response_file.unlink(
+                        missing_ok=True
+                    )  # Delete response, keep waiting
                     continue
 
                 if choice in ("c", "s", "q"):
-                    logger.event("human_input", {"choice": choice, "reason": reason, "source": "web", "request_id": request_id})
+                    logger.event(
+                        "human_input",
+                        {
+                            "choice": choice,
+                            "reason": reason,
+                            "source": "web",
+                            "request_id": request_id,
+                        },
+                    )
                     request_file.unlink(missing_ok=True)
                     response_file.unlink(missing_ok=True)
                     return choice
@@ -807,11 +921,20 @@ def prompt_human(reason: str, logger: OrchestratorLogger, timeout: int = 600) ->
         try:
             if sys.platform != "win32" and sys.stdin.isatty():
                 import select as select_mod
+
                 rlist, _, _ = select_mod.select([sys.stdin], [], [], 1.0)
                 if rlist:
                     choice = sys.stdin.readline().strip().lower()
                     if choice in ("c", "s", "q"):
-                        logger.event("human_input", {"choice": choice, "reason": reason, "source": "terminal", "request_id": request_id})
+                        logger.event(
+                            "human_input",
+                            {
+                                "choice": choice,
+                                "reason": reason,
+                                "source": "terminal",
+                                "request_id": request_id,
+                            },
+                        )
                         request_file.unlink(missing_ok=True)
                         response_file.unlink(missing_ok=True)
                         return choice
@@ -822,7 +945,9 @@ def prompt_human(reason: str, logger: OrchestratorLogger, timeout: int = 600) ->
 
     # Timeout - auto-continue
     logger.warning(f"Human input timed out after {timeout}s, auto-continuing")
-    logger.event("human_input", {"choice": "timeout", "reason": reason, "request_id": request_id})
+    logger.event(
+        "human_input", {"choice": "timeout", "reason": reason, "request_id": request_id}
+    )
     request_file.unlink(missing_ok=True)
     return "c"
 
@@ -840,11 +965,13 @@ def scan_design_queue(queue_dir: Path, processed_hashes: Set[str]) -> List[Desig
             if content_hash in processed_hashes:
                 continue
             name = filepath.stem.replace("_", " ").replace("-", " ").title()
-            designs.append(DesignEntry(
-                path=filepath,
-                name=name,
-                content_hash=content_hash,
-            ))
+            designs.append(
+                DesignEntry(
+                    path=filepath,
+                    name=name,
+                    content_hash=content_hash,
+                )
+            )
 
     # Check for manual reorder file — stored in .hephaestus/ (not in docs/design/)
     order_file = queue_dir.parent.parent / CONTEXT_DIR_NAME / ".queue_order.json"
@@ -859,7 +986,9 @@ def scan_design_queue(queue_dir: Path, processed_hashes: Set[str]) -> List[Desig
                 if fname in by_filename:
                     ordered.append(by_filename.pop(fname))
             # Add remaining files (not in saved order) sorted by name
-            ordered.extend(sorted(by_filename.values(), key=lambda d: d.path.name.lower()))
+            ordered.extend(
+                sorted(by_filename.values(), key=lambda d: d.path.name.lower())
+            )
             return ordered
         except (json.JSONDecodeError, KeyError):
             pass  # Fall back to default sort
@@ -868,14 +997,18 @@ def scan_design_queue(queue_dir: Path, processed_hashes: Set[str]) -> List[Desig
     return designs
 
 
-def pick_next_design(queue_dir: Path, processed_hashes: Set[str], logger: OrchestratorLogger) -> Optional[DesignEntry]:
+def pick_next_design(
+    queue_dir: Path, processed_hashes: Set[str], logger: OrchestratorLogger
+) -> Optional[DesignEntry]:
     """Pick the next design to process.
 
     Reads from DB (autopilot_designs) if available, falls back to file scan.
+    Uses file_path column if available, falls back to filename-based path.
     """
     # Try DB-based queue first
     try:
         from src.core.database import AutopilotDesign, AutopilotProject, get_db
+
         with get_db() as db:
             # Find active project
             project = db.query(AutopilotProject).filter_by(is_active=True).first()
@@ -893,16 +1026,35 @@ def pick_next_design(queue_dir: Path, processed_hashes: Set[str], logger: Orches
                     db.commit()
 
                     # Construct DesignEntry from DB record
-                    design_path = Path(project.base_dir) / DESIGN_SUBDIR / design.filename
+                    # Try file_path first, fall back to filename-based path
+                    design_path = None
+                    if design.file_path:
+                        # Use file_path if available (absolute path)
+                        design_path = Path(design.file_path)
+                        if not design_path.exists():
+                            logger.warning(f"file_path does not exist: {design_path}")
+                            design_path = None
+
+                    if design_path is None:
+                        # Fall back to filename-based path
+                        design_path = (
+                            Path(project.base_dir) / DESIGN_SUBDIR / design.filename
+                        )
+
                     if design_path.exists():
                         entry = DesignEntry(
                             path=design_path,
                             name=design.name,
                             content_hash=design.content_hash or file_hash(design_path),
                             db_id=design.id,
+                            file_path=str(design_path),
                         )
-                        logger.info(f"Selected from DB: {design.name} (ordinal={design.ordinal})")
+                        logger.info(
+                            f"Selected from DB: {design.name} (ordinal={design.ordinal})"
+                        )
                         return entry
+                    else:
+                        logger.warning(f"Design file not found: {design_path}")
     except Exception as e:
         logger.warning(f"DB queue read failed, falling back to file scan: {e}")
 
@@ -951,23 +1103,36 @@ def _assess_run_health(
             health["warnings"].append(f"Could not read orchestrator log: {e}")
 
     # Grep tmux logs for error patterns
-    error_patterns = ["ERROR", "Traceback", "FAILED", "ModuleNotFoundError",
-                      "ImportError", "AssertionError", "pytest.*FAILED", "exit code 1"]
+    error_patterns = [
+        "ERROR",
+        "Traceback",
+        "FAILED",
+        "ModuleNotFoundError",
+        "ImportError",
+        "AssertionError",
+        "pytest.*FAILED",
+        "exit code 1",
+    ]
     tmux_dir = project_path / CONTEXT_DIR_NAME / "tmux"
     total_errors = 0
     if tmux_dir.is_dir():
         for log_file in sorted(tmux_dir.glob("*.log")):
             try:
                 text = log_file.read_text(errors="replace")
-                hits = [l.strip() for l in text.splitlines()
-                        if any(p in l for p in error_patterns)]
+                hits = [
+                    l.strip()
+                    for l in text.splitlines()
+                    if any(p in l for p in error_patterns)
+                ]
                 if hits:
                     total_errors += len(hits)
-                    health["tmux_errors"].append({
-                        "file": log_file.name,
-                        "count": len(hits),
-                        "samples": hits[:3],
-                    })
+                    health["tmux_errors"].append(
+                        {
+                            "file": log_file.name,
+                            "count": len(hits),
+                            "samples": hits[:3],
+                        }
+                    )
             except Exception:
                 pass
     health["error_count"] = total_errors
@@ -985,11 +1150,15 @@ def _assess_run_health(
     return health
 
 
-def create_feature_folder(project_path: Path, design_name: str, logger: OrchestratorLogger) -> Path:
+def create_feature_folder(
+    project_path: Path, design_name: str, logger: OrchestratorLogger
+) -> Path:
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     safe_name = design_name.lower().replace(" ", "_")[:40]
     # Features go in .hephaestus/features/ to keep project root clean
-    feature_folder = project_path / CONTEXT_DIR_NAME / "features" / f"{timestamp}_{safe_name}"
+    feature_folder = (
+        project_path / CONTEXT_DIR_NAME / "features" / f"{timestamp}_{safe_name}"
+    )
     feature_folder.mkdir(parents=True, exist_ok=True)
     (feature_folder / "docs").mkdir(exist_ok=True)
 
@@ -1007,6 +1176,506 @@ def copy_design_document(design_entry: DesignEntry, feature_folder: Path) -> Pat
     dest.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(design_entry.path, dest)
     return dest
+
+
+# ── Feature Model Helper Functions ─────────────────────────────────
+
+
+def _create_integration_worktree(
+    project_path: Path,
+    design_id: str,
+    branch: str,
+    logger: OrchestratorLogger,
+) -> Optional[Path]:
+    """Create an integration worktree for a feature pipeline.
+
+    Args:
+        project_path: Path to the project root
+        design_id: Design ID for branch naming
+        branch: Branch name to create
+        logger: Orchestrator logger
+
+    Returns:
+        Path to the worktree, or None on failure
+    """
+    try:
+        from src.core.database import DatabaseManager as DbManager
+        from src.core.simple_config import get_config
+        from src.core.worktree_manager import WorktreeManager
+
+        cfg = get_config()
+        db = DbManager(cfg)
+        wt_mgr = WorktreeManager(db_manager=db)
+        wt_mgr.reload(project_path)
+
+        # Create branch from main if it doesn't exist
+        try:
+            wt_mgr.main_repo.git.branch(branch)
+        except _git.exc.GitCommandError:
+            pass  # Branch exists
+
+        # Create worktree
+        safe_branch = branch.replace("/", "-")
+        wt_path = wt_mgr.worktree_base / f"wt_{safe_branch}"
+        if not wt_path.exists():
+            wt_mgr.main_repo.git.worktree("add", str(wt_path), branch)
+
+        logger.info(f"Created integration worktree: {wt_path} (branch: {branch})")
+        return wt_path
+    except Exception as e:
+        logger.warning(f"Failed to create integration worktree: {e}")
+        return None
+
+
+def _cleanup_worktree(
+    worktree: Path,
+    branch: str,
+    project_path: Path,
+    logger: OrchestratorLogger,
+) -> None:
+    """Clean up a worktree after feature pipeline completes.
+
+    Args:
+        worktree: Path to the worktree
+        branch: Branch name
+        project_path: Path to the project root
+        logger: Orchestrator logger
+    """
+    try:
+        from src.core.database import DatabaseManager as DbManager
+        from src.core.simple_config import get_config
+        from src.core.worktree_manager import WorktreeManager
+
+        cfg = get_config()
+        db = DbManager(cfg)
+        wt_mgr = WorktreeManager(db_manager=db)
+        wt_mgr.reload(project_path)
+
+        # Remove worktree
+        if worktree.exists():
+            try:
+                wt_mgr.main_repo.git.worktree("remove", str(worktree), "--force")
+                logger.info(f"Removed worktree: {worktree}")
+            except Exception as e:
+                logger.warning(f"Failed to remove worktree: {e}")
+    except Exception as e:
+        logger.warning(f"Failed to cleanup worktree: {e}")
+
+
+def _create_designs_folder(
+    project_path: Path,
+    design_entry: DesignEntry,
+    logger: OrchestratorLogger,
+) -> Path:
+    """Create permanent storage folder for design artifacts.
+
+    Args:
+        project_path: Path to the project root
+        design_entry: Design entry being processed
+        logger: Orchestrator logger
+
+    Returns:
+        Path to the designs folder
+    """
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    safe_name = design_entry.name.lower().replace(" ", "_")[:40]
+    designs_folder = (
+        project_path
+        / "designs"
+        / f"{timestamp}_{safe_name}_{design_entry.db_id or 'unknown'}"
+    )
+    designs_folder.mkdir(parents=True, exist_ok=True)
+    (designs_folder / "features").mkdir(exist_ok=True)
+
+    logger.info(f"Created designs folder: {designs_folder}")
+    return designs_folder
+
+
+def _create_feature_records(
+    design_id: Optional[str],
+    features_json: dict,
+    designs_folder: Path,
+    logger: OrchestratorLogger,
+) -> List[dict]:
+    """Create Feature DB records from features.json.
+
+    Args:
+        design_id: Design ID
+        features_json: Parsed features.json content
+        designs_folder: Path to designs folder
+        logger: Orchestrator logger
+
+    Returns:
+        List of feature records created
+    """
+    import uuid
+
+    from src.core.database import Feature, get_db
+
+    feature_records = []
+
+    with get_db() as db:
+        for feat in features_json.get("features", []):
+            feature_id = f"feat-{uuid.uuid4().hex[:8]}"
+            feature_key = feat.get("id", "")
+
+            # Create feature record path
+            feature_record_path = designs_folder / "features" / feature_key
+            feature_record_path.mkdir(parents=True, exist_ok=True)
+
+            # Create scope document path
+            scope_doc_path = feature_record_path / "scope.md"
+
+            feature = Feature(
+                id=feature_id,
+                design_id=design_id,
+                feature_key=feature_key,
+                name=feat.get("name", feature_key),
+                scope=feat.get("scope", ""),
+                files=feat.get("files", []),
+                depends_on=feat.get("depends_on", []),
+                execution=feat.get("execution", "parallel"),
+                status="pending",
+                scope_doc_path=str(scope_doc_path),
+                feature_record_path=str(feature_record_path),
+            )
+            db.add(feature)
+
+            feature_records.append(
+                {
+                    "id": feature_id,
+                    "feature_key": feature_key,
+                    "name": feat.get("name", feature_key),
+                    "scope": feat.get("scope", ""),
+                    "files": feat.get("files", []),
+                    "depends_on": feat.get("depends_on", []),
+                    "execution": feat.get("execution", "parallel"),
+                    "scope_doc_path": str(scope_doc_path),
+                    "feature_record_path": str(feature_record_path),
+                }
+            )
+
+            logger.info(f"Created feature record: {feature_key} ({feature_id})")
+
+        db.commit()
+
+    return feature_records
+
+
+def _update_feature_status(
+    feature_id: str,
+    design_id: Optional[str],
+    status: str,
+    error: Optional[str] = None,
+    logger: OrchestratorLogger = None,
+) -> None:
+    """Update a feature's status in the database.
+
+    Args:
+        feature_id: Feature ID
+        design_id: Design ID
+        status: New status (pending, active, completed, failed, skipped)
+        error: Error message if status is failed
+        logger: Optional logger
+    """
+    from datetime import datetime
+
+    from src.core.database import Feature, get_db
+
+    with get_db() as db:
+        feature = (
+            db.query(Feature).filter_by(id=feature_id, design_id=design_id).first()
+        )
+        if feature:
+            feature.status = status
+            if status == "active":
+                feature.started_at = datetime.utcnow()
+            elif status in ("completed", "failed", "skipped"):
+                feature.completed_at = datetime.utcnow()
+            if error:
+                feature.error = error
+            db.commit()
+            if logger:
+                logger.info(f"Updated feature {feature.feature_key} status to {status}")
+
+
+def _update_design_status(
+    design_id: Optional[str],
+    status: str,
+    logger: OrchestratorLogger = None,
+    **kwargs,
+) -> None:
+    """Update a design's status in the database.
+
+    Args:
+        design_id: Design ID
+        status: New status
+        logger: Optional logger
+        **kwargs: Additional fields to update
+    """
+    from src.core.database import AutopilotDesign, get_db
+
+    with get_db() as db:
+        design = db.query(AutopilotDesign).filter_by(id=design_id).first()
+        if design:
+            design.status = status
+            for key, value in kwargs.items():
+                if hasattr(design, key):
+                    setattr(design, key, value)
+            db.commit()
+            if logger:
+                logger.info(f"Updated design {design_id} status to {status}")
+
+
+def _set_workflow_type(workflow_id: str, workflow_type: str) -> None:
+    """Set the workflow type (design or feature).
+
+    Args:
+        workflow_id: Workflow ID
+        workflow_type: Type of workflow
+    """
+    from src.core.database import Workflow, get_db
+
+    with get_db() as db:
+        workflow = db.query(Workflow).filter_by(id=workflow_id).first()
+        if workflow:
+            workflow.workflow_type = workflow_type
+            db.commit()
+
+
+def _link_workflow_to_feature(workflow_id: str, feature_id: str) -> None:
+    """Link a workflow to a feature.
+
+    Args:
+        workflow_id: Workflow ID
+        feature_id: Feature ID
+    """
+    from src.core.database import Workflow, get_db
+
+    with get_db() as db:
+        workflow = db.query(Workflow).filter_by(id=workflow_id).first()
+        if workflow:
+            workflow.feature_id = feature_id
+            db.commit()
+
+
+def _validate_features_json(features_json: dict) -> None:
+    """Validate features.json structure.
+
+    Args:
+        features_json: Parsed features.json content
+
+    Raises:
+        ValueError: If validation fails
+    """
+    if not isinstance(features_json, dict):
+        raise ValueError("features.json must be a JSON object")
+
+    if "design_name" not in features_json:
+        raise ValueError("features.json missing 'design_name' field")
+
+    if "features" not in features_json:
+        raise ValueError("features.json missing 'features' array")
+
+    features = features_json["features"]
+    if not isinstance(features, list):
+        raise ValueError("'features' must be an array")
+
+    if len(features) < 1 or len(features) > 5:
+        raise ValueError(f"features array must have 1-5 entries, got {len(features)}")
+
+    # Check for required fields and unique IDs
+    ids = set()
+    all_files = []
+
+    for i, feat in enumerate(features):
+        if "id" not in feat:
+            raise ValueError(f"Feature {i} missing 'id' field")
+        if "name" not in feat:
+            raise ValueError(f"Feature {i} missing 'name' field")
+        if "scope" not in feat:
+            raise ValueError(f"Feature {i} missing 'scope' field")
+
+        feat_id = feat["id"]
+        if feat_id in ids:
+            raise ValueError(f"Duplicate feature id: {feat_id}")
+        ids.add(feat_id)
+
+        # Check execution field
+        execution = feat.get("execution", "parallel")
+        if execution not in ("parallel", "sequential"):
+            raise ValueError(f"Feature {feat_id} has invalid execution: {execution}")
+
+        # Check depends_on references
+        depends_on = feat.get("depends_on", [])
+        if not isinstance(depends_on, list):
+            raise ValueError(f"Feature {feat_id} depends_on must be an array")
+
+        # Check files for overlaps
+        files = feat.get("files", [])
+        if not isinstance(files, list):
+            raise ValueError(f"Feature {feat_id} files must be an array")
+
+        for f in files:
+            for existing in all_files:
+                # Check for overlap (one path contains the other)
+                if f.startswith(existing) or existing.startswith(f):
+                    raise ValueError(
+                        f"File overlap between features: {f} and {existing}"
+                    )
+            all_files.append(f)
+
+    # Validate depends_on references
+    for feat in features:
+        depends_on = feat.get("depends_on", [])
+        for dep in depends_on:
+            if dep not in ids:
+                raise ValueError(
+                    f"Feature {feat['id']} depends on unknown feature: {dep}"
+                )
+
+    # Check for cycles
+    def has_cycle(graph: dict) -> bool:
+        """Check for cycles in dependency graph using DFS."""
+        visited = set()
+        rec_stack = set()
+
+        def dfs(node: str) -> bool:
+            visited.add(node)
+            rec_stack.add(node)
+
+            for neighbor in graph.get(node, []):
+                if neighbor not in visited:
+                    if dfs(neighbor):
+                        return True
+                elif neighbor in rec_stack:
+                    return True
+
+            rec_stack.remove(node)
+            return False
+
+        for node in graph:
+            if node not in visited:
+                if dfs(node):
+                    return True
+        return False
+
+    # Build dependency graph
+    dep_graph = {feat["id"]: feat.get("depends_on", []) for feat in features}
+    if has_cycle(dep_graph):
+        raise ValueError("Dependency cycle detected in features")
+
+
+def _should_skip(feature: dict, feature_results: Dict[str, str]) -> bool:
+    """Check if a feature should be skipped due to failed dependencies.
+
+    Args:
+        feature: Feature dict from features.json
+        feature_results: Mapping of feature_key -> status
+
+    Returns:
+        True if feature should be skipped
+    """
+    depends_on = feature.get("depends_on", [])
+    for dep in depends_on:
+        if feature_results.get(dep) == "failed":
+            return True
+    return False
+
+
+def _resolve_execution_order(
+    features: List[dict],
+    logger: OrchestratorLogger,
+) -> List[List[dict]]:
+    """Resolve execution order using Kahn's algorithm with parallel/sequential handling.
+
+    Args:
+        features: List of feature dicts from features.json
+        logger: Orchestrator logger
+
+    Returns:
+        List of execution groups, each group is a list of features
+    """
+    from collections import defaultdict, deque
+
+    # Build dependency graph
+    in_degree = {f["id"]: 0 for f in features}
+    adjacency = defaultdict(list)
+
+    for feat in features:
+        feat_id = feat["id"]
+        depends_on = feat.get("depends_on", [])
+        in_degree[feat_id] = len(depends_on)
+        for dep in depends_on:
+            adjacency[dep].append(feat_id)
+
+    # Kahn's algorithm
+    queue = deque([f["id"] for f in features if in_degree[f["id"]] == 0])
+    execution_groups = []
+    processed = set()
+
+    # Build lookup for quick access
+    feat_map = {f["id"]: f for f in features}
+
+    while queue:
+        # Collect current layer
+        current_layer = []
+        while queue:
+            feat_id = queue.popleft()
+            if feat_id not in processed:
+                current_layer.append(feat_id)
+                processed.add(feat_id)
+
+        if not current_layer:
+            break
+
+        # Separate parallel vs sequential features
+        parallel_features = []
+        sequential_features = []
+
+        for feat_id in current_layer:
+            feat = feat_map[feat_id]
+            if feat.get("execution", "parallel") == "parallel":
+                parallel_features.append(feat)
+            else:
+                sequential_features.append(feat)
+
+        # Parallel features at same depth -> one group
+        if parallel_features:
+            execution_groups.append(parallel_features)
+
+        # Sequential features -> each in own group
+        for feat in sequential_features:
+            execution_groups.append([feat])
+
+        # Reduce in-degrees of dependents
+        for feat_id in current_layer:
+            for neighbor in adjacency[feat_id]:
+                in_degree[neighbor] -= 1
+                if in_degree[neighbor] == 0 and neighbor not in processed:
+                    queue.append(neighbor)
+
+    # Check for cycles (unprocessed features)
+    unprocessed = [f["id"] for f in features if f["id"] not in processed]
+    if unprocessed:
+        logger.warning(
+            "Cycle detected in dependencies, falling back to sequential order"
+        )
+        # Fall back to fully sequential - return all features in order
+        execution_groups = [
+            [feat_map[fid]] for fid in feat_map.keys() if fid not in processed
+        ]
+
+    # Log execution plan
+    logger.info("Execution plan:")
+    for i, group in enumerate(execution_groups):
+        feat_names = [f["name"] for f in group]
+        if len(group) > 1:
+            logger.info(f"  Group {i + 1}: PARALLEL - {', '.join(feat_names)}")
+        else:
+            logger.info(f"  Group {i + 1}: SEQUENTIAL - {feat_names[0]}")
+
+    return execution_groups
 
 
 # ── Stray-file sweep ────────────────────────────────────────────────
@@ -1145,9 +1814,22 @@ def collect_files_created(project_path: Path, feature_folder: Path = None) -> Li
         dirs_to_scan.append(feature_folder)
 
     for scan_dir in dirs_to_scan:
-        for pattern in ["**/*.py", "**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx", "**/*.html", "**/*.css", "**/*.md"]:
+        for pattern in [
+            "**/*.py",
+            "**/*.ts",
+            "**/*.tsx",
+            "**/*.js",
+            "**/*.jsx",
+            "**/*.html",
+            "**/*.css",
+            "**/*.md",
+        ]:
             for f in sorted(scan_dir.glob(pattern)):
-                if ".venv" in str(f) or "node_modules" in str(f) or "__pycache__" in str(f):
+                if (
+                    ".venv" in str(f)
+                    or "node_modules" in str(f)
+                    or "__pycache__" in str(f)
+                ):
                     continue
                 rel = f.relative_to(scan_dir)
                 files.append(str(rel))
@@ -1176,7 +1858,7 @@ def generate_html_feature_report(
     context = {
         "design_name": report.design_name,
         "design_document": report.design_document,
-        "generated_at": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "product_validated": report.product_validated,
         "qa_passed": report.qa_passed,
         "status_text": "VALIDATED" if report.product_validated else "NEEDS REVIEW",
@@ -1232,7 +1914,9 @@ def generate_product_validation_report(
     if validation_path.exists():
         try:
             existing = validation_path.read_text()
-            meets_spec = qa_passed and ("PASS" in existing or "pass" in existing.lower())
+            meets_spec = qa_passed and (
+                "PASS" in existing or "pass" in existing.lower()
+            )
             logger.info("Using existing product validation from Phase 8")
             return meets_spec, existing
         except Exception:
@@ -1250,6 +1934,7 @@ def _update_orchestrator_max_gotos(max_gotos: int, logger: OrchestratorLogger) -
     """
     try:
         from src.core.database import WorkflowDefinition, get_db
+
         with get_db() as db:
             defn = db.query(WorkflowDefinition).filter_by(id="autopilot").first()
             if defn and defn.orchestrator_config:
@@ -1264,12 +1949,17 @@ def _update_orchestrator_max_gotos(max_gotos: int, logger: OrchestratorLogger) -
         logger.warning(f"Failed to update max_total_gotos: {e}")
 
 
-def run_single_workflow(sdk, workflow_id: str, project_path: str, description: str,
-                        logger: OrchestratorLogger,
-                        launch_params: Dict[str, Any] = None,
-                        state: PipelineState = None,
-                        max_iterations: int = 10,
-                        design_id: Optional[str] = None) -> str:
+def run_single_workflow(
+    sdk,
+    workflow_id: str,
+    project_path: str,
+    description: str,
+    logger: OrchestratorLogger,
+    launch_params: Dict[str, Any] = None,
+    state: PipelineState = None,
+    max_iterations: int = 10,
+    design_id: Optional[str] = None,
+) -> str:
     """Run a single workflow execution.
 
     Args:
@@ -1283,17 +1973,21 @@ def run_single_workflow(sdk, workflow_id: str, project_path: str, description: s
     # Check for existing active workflows and stop them
     existing_workflows = get_active_workflows()
     if existing_workflows:
-        logger.info(f"Found {len(existing_workflows)} active workflow(s) - stopping them...")
+        logger.info(
+            f"Found {len(existing_workflows)} active workflow(s) - stopping them..."
+        )
         for wf in existing_workflows:
-            wf_id = wf.get('id', '')
+            wf_id = wf.get("id", "")
             try:
                 # Terminate agents for this workflow
                 agents = get_agents(workflow_id=wf_id)
                 for agent in agents:
-                    if agent.get('status') in ACTIVE_AGENT_STATUSES:
+                    if agent.get("status") in ACTIVE_AGENT_STATUSES:
                         try:
                             api_post(f"/api/agents/{agent['id']}/terminate")
-                            logger.info(f"  Terminated agent {agent['id'][:8]} for workflow {wf_id[:8]}")
+                            logger.info(
+                                f"  Terminated agent {agent['id'][:8]} for workflow {wf_id[:8]}"
+                            )
                         except Exception:
                             pass
                 # Mark workflow as paused
@@ -1305,20 +1999,25 @@ def run_single_workflow(sdk, workflow_id: str, project_path: str, description: s
     logger.info(f"Launching workflow: {workflow_id} (max_iterations={max_iterations})")
     # Extract design document from launch_params for the event
     design_doc = (launch_params or {}).get("design_document", "")
-    design_name = Path(design_doc).stem.replace("_", " ").replace("-", " ") if design_doc else ""
-    logger.event("workflow_launch", {
-        "workflow": workflow_id,
-        "path": project_path,
-        "design": design_name or design_doc,
-    })
+    design_name = (
+        Path(design_doc).stem.replace("_", " ").replace("-", " ") if design_doc else ""
+    )
+    logger.event(
+        "workflow_launch",
+        {
+            "workflow": workflow_id,
+            "path": project_path,
+            "design": design_name or design_doc,
+        },
+    )
 
     # Create a shared worktree for this design (all phases commit here)
     design_worktree_path = None
     design_branch_name = None
     try:
+        from src.core.database import DatabaseManager as DbManager
         from src.core.simple_config import get_config
         from src.core.worktree_manager import WorktreeManager
-        from src.core.database import DatabaseManager as DbManager
 
         cfg = get_config()
         db = DbManager(cfg)
@@ -1328,8 +2027,11 @@ def run_single_workflow(sdk, workflow_id: str, project_path: str, description: s
 
         # Create feature branch from main
         import git as _git
+
         # Use design_entry name if available, otherwise derive from design_doc
-        _design_label = design_name.replace(' ', '-').lower() if design_name else 'design'
+        _design_label = (
+            design_name.replace(" ", "-").lower() if design_name else "design"
+        )
         feature_branch = f"feature/{_design_label}"
         # Ensure branch name is unique (append short hash if needed)
         try:
@@ -1340,13 +2042,15 @@ def run_single_workflow(sdk, workflow_id: str, project_path: str, description: s
 
         # Create worktree for the feature branch
         # Use flattened name for worktree path (branch name has / which creates subdirs)
-        safe_branch = feature_branch.replace('/', '-')
+        safe_branch = feature_branch.replace("/", "-")
         wt_path = wt_mgr.worktree_base / f"wt_{safe_branch}"
         if not wt_path.exists():
             wt_mgr.main_repo.git.worktree("add", str(wt_path), feature_branch)
         design_worktree_path = str(wt_path)
         design_branch_name = feature_branch
-        logger.info(f"Created shared worktree: {design_worktree_path} (branch: {feature_branch})")
+        logger.info(
+            f"Created shared worktree: {design_worktree_path} (branch: {feature_branch})"
+        )
         # Copy design doc into worktree as .hephaestus/design.md so all phases can read it
         wt_heph = wt_path / CONTEXT_DIR_NAME
         wt_heph.mkdir(parents=True, exist_ok=True)
@@ -1354,6 +2058,7 @@ def run_single_workflow(sdk, workflow_id: str, project_path: str, description: s
             _dd = Path(launch_params["design_document"])
             if _dd.exists():
                 import shutil as _shutil
+
                 _shutil.copy2(_dd, wt_heph / "design.md")
                 logger.info(f"Copied design doc to worktree: {wt_heph / 'design.md'}")
     except Exception as e:
@@ -1388,7 +2093,9 @@ def run_single_workflow(sdk, workflow_id: str, project_path: str, description: s
         """Log any phase status changes since last poll, including GOTOs."""
         nonlocal _last_phase_states
         try:
-            from src.core.database import PhaseExecution, Phase, DatabaseManager as _DbM
+            from src.core.database import DatabaseManager as _DbM
+            from src.core.database import Phase, PhaseExecution
+
             _db = _DbM()
             _s = _db.get_session()
             try:
@@ -1408,7 +2115,9 @@ def run_single_workflow(sdk, workflow_id: str, project_path: str, description: s
                         continue
                     # Detect GOTO: a previously completed phase rewound to in_progress
                     if prev == "completed" and status == "in_progress":
-                        logger.info(f"  [GOTO] {name}: completed → in_progress (rewound by earlier phase)")
+                        logger.info(
+                            f"  [GOTO] {name}: completed → in_progress (rewound by earlier phase)"
+                        )
                     else:
                         logger.info(f"  [TRANSITION] {name}: {prev} → {status}")
                 _last_phase_states = current
@@ -1435,7 +2144,9 @@ def run_single_workflow(sdk, workflow_id: str, project_path: str, description: s
             wf_status = get_workflow_status(exec_id)
             # Get agents for this workflow only
             agents = get_agents(workflow_id=exec_id)
-            active_agents = [a for a in agents if a.get("status") in ACTIVE_AGENT_STATUSES]
+            active_agents = [
+                a for a in agents if a.get("status") in ACTIVE_AGENT_STATUSES
+            ]
             # Filter tasks by workflow_id to avoid counting tasks from other workflows
             pending = get_tasks(status="pending", workflow_id=exec_id)
             in_progress = get_tasks(status="in_progress", workflow_id=exec_id)
@@ -1448,14 +2159,15 @@ def run_single_workflow(sdk, workflow_id: str, project_path: str, description: s
             validation = get_tasks(status="validation_in_progress", workflow_id=exec_id)
             needs_work = get_tasks(status="needs_work", workflow_id=exec_id)
             blocked = get_tasks(status="blocked", workflow_id=exec_id)
-            non_terminal = assigned + queued + under_review + validation + needs_work + blocked
+            non_terminal = (
+                assigned + queued + under_review + validation + needs_work + blocked
+            )
 
             _log_phase_transitions(exec_id)
 
             # Log agent spawns and terminations
             current_agent_states = {
-                a["id"]: (a.get("status", ""), a.get("agent_type", ""))
-                for a in agents
+                a["id"]: (a.get("status", ""), a.get("agent_type", "")) for a in agents
             }
             for aid, (status, atype) in current_agent_states.items():
                 prev_status, _ = _last_agent_states.get(aid, (None, None))
@@ -1464,7 +2176,9 @@ def run_single_workflow(sdk, workflow_id: str, project_path: str, description: s
                 elif prev_status in ACTIVE_AGENT_STATUSES and status == "terminated":
                     logger.info(f"  [AGENT DONE]  {aid[:8]} ({atype}) terminated")
                 elif prev_status is not None and prev_status != status:
-                    logger.info(f"  [AGENT]       {aid[:8]} ({atype}): {prev_status} → {status}")
+                    logger.info(
+                        f"  [AGENT]       {aid[:8]} ({atype}): {prev_status} → {status}"
+                    )
             _last_agent_states = current_agent_states
 
             logger.info(
@@ -1480,13 +2194,15 @@ def run_single_workflow(sdk, workflow_id: str, project_path: str, description: s
             # Parent peeks at children's output periodically for observability
             if elapsed > 0 and elapsed % PARENT_PEEK_INTERVAL < POLL_INTERVAL:
                 for agent in active_agents:
-                    aid = agent.get('id', '')
+                    aid = agent.get("id", "")
                     output = peek_agent_output(aid, lines=15)
                     if output:
                         # Show last meaningful lines (skip blank)
-                        lines = [l.strip() for l in output.strip().split('\n') if l.strip()][-8:]
+                        lines = [
+                            l.strip() for l in output.strip().split("\n") if l.strip()
+                        ][-8:]
                         if lines:
-                            preview = ' | '.join(lines[-3:])  # last 3 lines
+                            preview = " | ".join(lines[-3:])  # last 3 lines
                             logger.info(f"  [{aid[:8]}] {preview}")
 
             wf_state = wf_status.get("status", "")
@@ -1496,24 +2212,40 @@ def run_single_workflow(sdk, workflow_id: str, project_path: str, description: s
 
             # Check if workflow should be considered complete:
             # No active agents AND no pending/in-progress/non-terminal tasks
-            if not active_agents and not pending and not in_progress and not non_terminal:
+            if (
+                not active_agents
+                and not pending
+                and not in_progress
+                and not non_terminal
+            ):
                 # All agents done, no more work to do
                 if done:
                     # Verify all phases are completed before declaring workflow done.
                     # This prevents premature completion when the monitor hasn't yet
                     # created the next phase's task.
                     try:
-                        from src.core.database import PhaseExecution, Phase
-                        from src.core.database import DatabaseManager
+                        from src.core.database import (
+                            DatabaseManager,
+                            PhaseExecution,
+                        )
+
                         _db = DatabaseManager()
                         _session = _db.get_session()
                         try:
-                            pending_phases = _session.query(PhaseExecution).filter(
-                                PhaseExecution.workflow_execution_id == exec_id,
-                                PhaseExecution.status.in_(["pending", "in_progress"])
-                            ).count()
+                            pending_phases = (
+                                _session.query(PhaseExecution)
+                                .filter(
+                                    PhaseExecution.workflow_execution_id == exec_id,
+                                    PhaseExecution.status.in_(
+                                        ["pending", "in_progress"]
+                                    ),
+                                )
+                                .count()
+                            )
                             if pending_phases > 0:
-                                logger.info(f"{len(done)} tasks done but {pending_phases} phases still pending/in_progress — waiting")
+                                logger.info(
+                                    f"{len(done)} tasks done but {pending_phases} phases still pending/in_progress — waiting"
+                                )
                                 # Don't declare complete yet; monitor will create next task
                                 time.sleep(POLL_INTERVAL)
                                 continue
@@ -1522,15 +2254,18 @@ def run_single_workflow(sdk, workflow_id: str, project_path: str, description: s
                     except Exception as e:
                         logger.warning(f"Could not check phase status: {e}")
 
-                    logger.info(f"Workflow complete: {len(done)} tasks done, no agents active, all phases done")
+                    logger.info(
+                        f"Workflow complete: {len(done)} tasks done, no agents active, all phases done"
+                    )
 
                     # Final merge: merge the shared design branch into main
                     try:
-                        design_branch = getattr(state, '_design_branch', None)
+                        design_branch = getattr(state, "_design_branch", None)
                         if design_branch:
+                            from src.core.database import DatabaseManager as DbManager
                             from src.core.simple_config import get_config
                             from src.core.worktree_manager import WorktreeManager
-                            from src.core.database import DatabaseManager as DbManager
+
                             cfg = get_config()
                             db = DbManager(cfg)
                             wt_mgr = WorktreeManager(db_manager=db)
@@ -1548,23 +2283,32 @@ def run_single_workflow(sdk, workflow_id: str, project_path: str, description: s
                             # Merge the design branch
                             try:
                                 result = wt_mgr.main_repo.git.merge(
-                                    design_branch, no_ff=True,
-                                    m=f"Merge design branch {design_branch} into main"
+                                    design_branch,
+                                    no_ff=True,
+                                    m=f"Merge design branch {design_branch} into main",
                                 )
                                 merge_sha = wt_mgr.main_repo.head.commit.hexsha
-                                logger.info(f"Final merge complete: {design_branch} -> main ({merge_sha[:8]})")
+                                logger.info(
+                                    f"Final merge complete: {design_branch} -> main ({merge_sha[:8]})"
+                                )
                             except _git.exc.GitCommandError as e:
                                 if "CONFLICT" in str(e):
-                                    logger.warning(f"Merge conflict on {design_branch} -> main, aborting")
+                                    logger.warning(
+                                        f"Merge conflict on {design_branch} -> main, aborting"
+                                    )
                                     wt_mgr.main_repo.git.merge("--abort")
                                     # Create PR instead
-                                    logger.info(f"Conflict detected — branch {design_branch} preserved for manual merge/PR")
+                                    logger.info(
+                                        f"Conflict detected — branch {design_branch} preserved for manual merge/PR"
+                                    )
                                 else:
                                     raise
 
                             # Worktree is intentionally kept — UI references artifacts there
                         else:
-                            logger.info("No design branch tracked — skipping final merge")
+                            logger.info(
+                                "No design branch tracked — skipping final merge"
+                            )
                     except Exception as e:
                         logger.warning(f"Final merge failed: {e}")
 
@@ -1573,7 +2317,9 @@ def run_single_workflow(sdk, workflow_id: str, project_path: str, description: s
                     return "completed"
                 elif elapsed > 300 and not done:
                     # No tasks AND no done tasks after 5 minutes — something is wrong
-                    logger.error(f"No tasks exist after {elapsed}s — workflow appears broken")
+                    logger.error(
+                        f"No tasks exist after {elapsed}s — workflow appears broken"
+                    )
                     return "hard_error"
 
             out_of_credits, credit_reason = check_api_credits()
@@ -1590,12 +2336,16 @@ def run_single_workflow(sdk, workflow_id: str, project_path: str, description: s
             else:
                 credit_stuck_count = 0
 
-            hard_error, error_reason = detect_hard_error(agents, failed, workflow_id=exec_id)
+            hard_error, error_reason = detect_hard_error(
+                agents, failed, workflow_id=exec_id
+            )
             if hard_error:
                 logger.error(f"Hard error detected: {error_reason}")
                 return "hard_error"
 
-            impasse, impasse_reason = detect_impasse(agents, pending, in_progress, elapsed)
+            impasse, impasse_reason = detect_impasse(
+                agents, pending, in_progress, elapsed
+            )
             if impasse:
                 stuck_count += 1
                 if stuck_count >= STUCK_THRESHOLD:
@@ -1609,7 +2359,9 @@ def run_single_workflow(sdk, workflow_id: str, project_path: str, description: s
                             if a.get("status") in ACTIVE_AGENT_STATUSES:
                                 try:
                                     api_post(f"/api/agents/{a['id']}/terminate")
-                                    logger.info(f"Terminated agent {a['id'][:8]} (skip)")
+                                    logger.info(
+                                        f"Terminated agent {a['id'][:8]} (skip)"
+                                    )
                                 except Exception:
                                     pass
                         return "skipped"
@@ -1628,11 +2380,596 @@ def run_single_workflow(sdk, workflow_id: str, project_path: str, description: s
         if exec_id:
             try:
                 wf_status = get_workflow_status(exec_id)
-                if wf_status.get('status') == 'active':
+                if wf_status.get("status") == "active":
                     api_post(f"/api/workflow-executions/{exec_id}/pause")
                     logger.info(f"Paused workflow {exec_id[:8]}")
             except Exception as e:
                 logger.warning(f"Workflow cleanup failed: {e}")
+
+
+def run_phase0(
+    sdk,
+    design_entry: DesignEntry,
+    project_path: Path,
+    logger: OrchestratorLogger,
+    state: Optional[PipelineState] = None,
+) -> Tuple[Optional[dict], Optional[Path]]:
+    """Run Phase 0: Feature Architect to decompose design into features.
+
+    Args:
+        sdk: HephaestusSDK instance
+        design_entry: Design entry being processed
+        project_path: Path to the project root
+        logger: Orchestrator logger
+        state: Pipeline state
+
+    Returns:
+        Tuple of (features_json dict, designs_folder path) or (None, None) on failure
+    """
+    logger.info("=" * 70)
+    logger.info("STAGE 1: PHASE 0 - FEATURE ARCHITECT")
+    logger.info("=" * 70)
+
+    # Update design status to decomposing
+    _update_design_status(design_entry.db_id, "decomposing", logger=logger)
+
+    # Create permanent designs folder
+    designs_folder = _create_designs_folder(project_path, design_entry, logger)
+    design_entry.designs_folder = designs_folder
+
+    # Copy design document to permanent storage
+    dest = designs_folder / design_entry.path.name
+    shutil.copy2(design_entry.path, dest)
+    logger.info(f"Copied design document to: {dest}")
+
+    # Create integration worktree for Phase 0
+    branch = f"autopilot-phase0/{design_entry.db_id or 'unknown'}"
+    worktree = _create_integration_worktree(
+        project_path, design_entry.db_id or "", branch, logger
+    )
+
+    if worktree is None:
+        logger.error("Failed to create worktree for Phase 0")
+        _update_design_status(
+            design_entry.db_id,
+            "failed",
+            error="Worktree creation failed",
+            logger=logger,
+        )
+        return None, None
+
+    try:
+        # Copy design doc into worktree
+        wt_heph = worktree / CONTEXT_DIR_NAME
+        wt_heph.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(design_entry.path, wt_heph / "design.md")
+
+        # Launch Phase 0 workflow
+        launch_params = {
+            "design_document": str(design_entry.path),
+            "project_path": str(project_path),
+            "design_id": design_entry.db_id or "",
+        }
+
+        description = f"Phase 0: Feature Architect for {design_entry.name}"
+
+        wf_status = run_single_workflow(
+            sdk,
+            "autopilot-phase0",
+            str(worktree),
+            description,
+            logger,
+            launch_params=launch_params,
+            state=state,
+            max_iterations=3,
+            design_id=design_entry.db_id,
+        )
+
+        if wf_status != "completed":
+            logger.error(f"Phase 0 workflow failed with status: {wf_status}")
+            _update_design_status(
+                design_entry.db_id,
+                "failed",
+                error=f"Phase 0 failed: {wf_status}",
+                logger=logger,
+            )
+            return None, None
+
+        # Read and validate features.json
+        features_json_path = worktree / CONTEXT_DIR_NAME / "features.json"
+        if not features_json_path.exists():
+            logger.error("Phase 0 completed but features.json not found")
+            _update_design_status(
+                design_entry.db_id,
+                "failed",
+                error="features.json not found",
+                logger=logger,
+            )
+            return None, None
+
+        try:
+            features_json = json.loads(features_json_path.read_text())
+            _validate_features_json(features_json)
+        except (json.JSONDecodeError, ValueError) as e:
+            logger.error(f"Invalid features.json: {e}")
+            _update_design_status(
+                design_entry.db_id,
+                "failed",
+                error=f"Invalid features.json: {e}",
+                logger=logger,
+            )
+            return None, None
+
+        # Copy Phase 0 outputs to permanent storage
+        shutil.copy2(features_json_path, designs_folder / "features.json")
+
+        # Copy scope.md files
+        features_dir = worktree / CONTEXT_DIR_NAME / "features"
+        if features_dir.exists():
+            for feat in features_json.get("features", []):
+                feat_id = feat.get("id", "")
+                scope_src = features_dir / feat_id / "scope.md"
+                scope_dest = designs_folder / "features" / feat_id / "scope.md"
+                scope_dest.parent.mkdir(parents=True, exist_ok=True)
+                if scope_src.exists():
+                    shutil.copy2(scope_src, scope_dest)
+                else:
+                    logger.warning(f"scope.md not found for feature {feat_id}")
+
+        # Create Feature DB records
+        feature_records = _create_feature_records(
+            design_entry.db_id, features_json, designs_folder, logger
+        )
+
+        # Update design status to active
+        _update_design_status(
+            design_entry.db_id,
+            "active",
+            designs_folder=str(designs_folder),
+            logger=logger,
+        )
+
+        logger.info(f"Phase 0 complete: {len(feature_records)} features created")
+        return features_json, designs_folder
+
+    finally:
+        # Cleanup worktree
+        _cleanup_worktree(worktree, branch, project_path, logger)
+
+
+def _run_one_feature(
+    sdk,
+    design_entry: DesignEntry,
+    feature: dict,
+    designs_folder: Path,
+    project_path: Path,
+    logger: OrchestratorLogger,
+    state: Optional[PipelineState] = None,
+    max_iterations: int = 10,
+) -> str:
+    """Run a single feature through the 12-phase pipeline.
+
+    Args:
+        sdk: HephaestusSDK instance
+        design_entry: Design entry being processed
+        feature: Feature dict from features.json
+        designs_folder: Path to permanent storage
+        project_path: Path to the project root
+        logger: Orchestrator logger
+        state: Pipeline state
+        max_iterations: Max iterations for the pipeline
+
+    Returns:
+        Feature status string (completed, failed, skipped)
+    """
+    feature_key = feature.get("id", "unknown")
+    feature_name = feature.get("name", feature_key)
+
+    logger.info(f"Starting feature pipeline: {feature_name} ({feature_key})")
+
+    # Find feature record in DB
+    from src.core.database import Feature, get_db
+
+    feature_id = None
+    with get_db() as db:
+        feat_record = (
+            db.query(Feature)
+            .filter_by(
+                design_id=design_entry.db_id,
+                feature_key=feature_key,
+            )
+            .first()
+        )
+        if feat_record:
+            feature_id = feat_record.id
+            # Update status to active
+            feat_record.status = "active"
+            feat_record.started_at = datetime.utcnow()
+            db.commit()
+
+    if not feature_id:
+        logger.error(f"Feature record not found for {feature_key}")
+        return "failed"
+
+    # Create feature record folder
+    feature_record_path = designs_folder / "features" / feature_key
+    feature_record_path.mkdir(parents=True, exist_ok=True)
+
+    # Create integration worktree for this feature
+    branch = f"feature/{feature_key}"
+    worktree = _create_integration_worktree(project_path, feature_key, branch, logger)
+
+    if worktree is None:
+        logger.error(f"Failed to create worktree for feature {feature_key}")
+        _update_feature_status(
+            feature_id, design_entry.db_id, "failed", "Worktree creation failed", logger
+        )
+        return "failed"
+
+    try:
+        # Populate .hephaestus/ in worktree
+        wt_heph = worktree / CONTEXT_DIR_NAME
+        wt_heph.mkdir(parents=True, exist_ok=True)
+
+        # Copy design document
+        shutil.copy2(design_entry.path, wt_heph / "design.md")
+
+        # Copy features.json
+        features_json_path = designs_folder / "features.json"
+        if features_json_path.exists():
+            shutil.copy2(features_json_path, wt_heph / "features.json")
+
+        # Copy scope.md for this feature
+        scope_src = designs_folder / "features" / feature_key / "scope.md"
+        scope_dest = wt_heph / "features" / feature_key / "scope.md"
+        scope_dest.parent.mkdir(parents=True, exist_ok=True)
+        if scope_src.exists():
+            shutil.copy2(scope_src, scope_dest)
+
+        # Launch autopilot workflow (12-phase)
+        launch_params = {
+            "design_document": str(design_entry.path),
+            "project_path": str(project_path),
+            "feature_id": feature_key,
+            "feature_scope": str(wt_heph / "features" / feature_key / "scope.md"),
+            "project_context": f"Building feature: {feature_name}. Scope: {wt_heph / 'features' / feature_key / 'scope.md'}",
+        }
+
+        description = f"Autopilot: {design_entry.name} - Feature: {feature_name}"
+
+        # Set workflow type and link to feature
+        # Note: We'll do this after workflow is created
+
+        wf_status = run_single_workflow(
+            sdk,
+            "autopilot",
+            str(worktree),
+            description,
+            logger,
+            launch_params=launch_params,
+            state=state,
+            max_iterations=max_iterations,
+            design_id=design_entry.db_id,
+        )
+
+        # Determine final status
+        if wf_status == "completed":
+            # Check if product validation passed
+            # For now, mark as completed if workflow completed
+            final_status = "completed"
+        elif wf_status == "interrupted":
+            final_status = "failed"
+        else:
+            final_status = "failed"
+
+        # Update feature status
+        _update_feature_status(
+            feature_id, design_entry.db_id, final_status, logger=logger
+        )
+
+        # Sweep artifacts to permanent record
+        docs_dir = worktree / "docs"
+        if docs_dir.exists():
+            for f in docs_dir.iterdir():
+                if f.is_file():
+                    dest = feature_record_path / f.name
+                    if not dest.exists():
+                        shutil.copy2(f, dest)
+
+        return final_status
+
+    except Exception as e:
+        logger.error(f"Feature pipeline failed for {feature_key}: {e}")
+        _update_feature_status(feature_id, design_entry.db_id, "failed", str(e), logger)
+        return "failed"
+    finally:
+        # Cleanup worktree
+        _cleanup_worktree(worktree, branch, project_path, logger)
+
+
+def run_feature_pipelines(
+    sdk,
+    design_entry: DesignEntry,
+    features_json: dict,
+    designs_folder: Path,
+    project_path: Path,
+    logger: OrchestratorLogger,
+    state: Optional[PipelineState] = None,
+    max_iterations: int = 10,
+) -> Dict[str, str]:
+    """Run feature pipelines with parallel/sequential execution.
+
+    Args:
+        sdk: HephaestusSDK instance
+        design_entry: Design entry being processed
+        features_json: Parsed features.json content
+        designs_folder: Path to permanent storage
+        project_path: Path to the project root
+        logger: Orchestrator logger
+        state: Pipeline state
+        max_iterations: Max iterations for the pipeline
+
+    Returns:
+        Dict mapping feature_key -> status
+    """
+    logger.info("=" * 70)
+    logger.info("STAGE 2: FEATURE PIPELINES")
+    logger.info("=" * 70)
+
+    features = features_json.get("features", [])
+    feature_results: Dict[str, str] = {}
+
+    # Resolve execution order
+    execution_groups = _resolve_execution_order(features, logger)
+
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    for group in execution_groups:
+        # Check for features that should be skipped
+        features_to_run = []
+        for feat in group:
+            if _should_skip(feat, feature_results):
+                feature_key = feat.get("id", "unknown")
+                logger.info(f"Skipping feature {feature_key} due to failed dependency")
+                feature_results[feature_key] = "skipped"
+                # Update DB
+                from src.core.database import Feature, get_db
+
+                with get_db() as db:
+                    feat_record = (
+                        db.query(Feature)
+                        .filter_by(
+                            design_id=design_entry.db_id,
+                            feature_key=feature_key,
+                        )
+                        .first()
+                    )
+                    if feat_record:
+                        feat_record.status = "skipped"
+                        feat_record.completed_at = datetime.utcnow()
+                        db.commit()
+            else:
+                features_to_run.append(feat)
+
+        if not features_to_run:
+            continue
+
+        # Run features in this group
+        if len(features_to_run) == 1:
+            # Single feature - run directly
+            feat = features_to_run[0]
+            feature_key = feat.get("id", "unknown")
+            status = _run_one_feature(
+                sdk,
+                design_entry,
+                feat,
+                designs_folder,
+                project_path,
+                logger,
+                state,
+                max_iterations,
+            )
+            feature_results[feature_key] = status
+        else:
+            # Multiple parallel features - use ThreadPoolExecutor
+            logger.info(f"Running {len(features_to_run)} features in parallel")
+
+            with ThreadPoolExecutor(max_workers=MAX_PARALLEL_FEATURES) as executor:
+                future_to_feature = {
+                    executor.submit(
+                        _run_one_feature,
+                        sdk,
+                        design_entry,
+                        feat,
+                        designs_folder,
+                        project_path,
+                        logger,
+                        state,
+                        max_iterations,
+                    ): feat
+                    for feat in features_to_run
+                }
+
+                for future in as_completed(future_to_feature):
+                    feat = future_to_feature[future]
+                    feature_key = feat.get("id", "unknown")
+                    try:
+                        status = future.result()
+                        feature_results[feature_key] = status
+                    except Exception as e:
+                        logger.error(f"Feature {feature_key} failed: {e}")
+                        feature_results[feature_key] = "failed"
+
+    # Log summary
+    logger.info("Feature pipeline results:")
+    for feat_key, status in feature_results.items():
+        logger.info(f"  {feat_key}: {status}")
+
+    return feature_results
+
+
+def run_design_aggregate(
+    design_entry: DesignEntry,
+    feature_results: Dict[str, str],
+    designs_folder: Path,
+    logger: OrchestratorLogger,
+) -> Tuple[DesignStatus, FeatureReport]:
+    """Generate aggregate design report and metrics.
+
+    Args:
+        design_entry: Design entry being processed
+        feature_results: Mapping of feature_key -> status
+        designs_folder: Path to permanent storage
+        logger: Orchestrator logger
+
+    Returns:
+        Tuple of (DesignStatus, FeatureReport)
+    """
+    logger.info("=" * 70)
+    logger.info("STAGE 3: DESIGN AGGREGATE")
+    logger.info("=" * 70)
+
+    # Determine overall status
+    all_completed = all(s == "completed" for s in feature_results.values())
+    any_failed = any(s == "failed" for s in feature_results.values())
+
+    if all_completed:
+        status = DesignStatus.COMPLETED
+    elif any_failed:
+        status = DesignStatus.FAILED
+    else:
+        status = DesignStatus.COMPLETED  # Some skipped is OK
+
+    # Calculate total time
+    total_time = 0
+    if design_entry.started_at and design_entry.completed_at:
+        try:
+            start = datetime.fromisoformat(design_entry.started_at)
+            end = datetime.fromisoformat(design_entry.completed_at)
+            total_time = int((end - start).total_seconds())
+        except Exception:
+            pass
+
+    # Create FeatureReport
+    report = FeatureReport(
+        design_name=design_entry.name,
+        project_path=str(design_entry.project_path or ""),
+        feature_folder=str(designs_folder),
+        design_document=str(design_entry.path),
+        iterations=1,
+        total_time_seconds=total_time,
+        qa_passed=all_completed,
+        product_validated=all_completed,
+        stop_reason=status.value,
+    )
+
+    # Write design_metrics.json
+    metrics = {
+        "design_name": design_entry.name,
+        "design_document": str(design_entry.path),
+        "project_path": str(design_entry.project_path),
+        "designs_folder": str(designs_folder),
+        "total_time_seconds": total_time,
+        "status": status.value,
+        "features": feature_results,
+        "completed_at": datetime.utcnow().isoformat(),
+    }
+    metrics_path = designs_folder / "design_metrics.json"
+    metrics_path.write_text(json.dumps(metrics, indent=2))
+    logger.info(f"Design metrics: {metrics_path}")
+
+    # Generate design_report.html
+    try:
+        _generate_design_report_html(
+            design_entry, feature_results, designs_folder, logger
+        )
+    except Exception as e:
+        logger.warning(f"Failed to generate design report: {e}")
+
+    # Update design status
+    _update_design_status(
+        design_entry.db_id,
+        status.value,
+        completed_at=datetime.utcnow(),
+        logger=logger,
+    )
+
+    return status, report
+
+
+def _generate_design_report_html(
+    design_entry: DesignEntry,
+    feature_results: Dict[str, str],
+    designs_folder: Path,
+    logger: OrchestratorLogger,
+) -> None:
+    """Generate HTML design report using Jinja2 template.
+
+    Args:
+        design_entry: Design entry
+        feature_results: Feature results mapping
+        designs_folder: Path to designs folder
+        logger: Orchestrator logger
+    """
+    from jinja2 import Environment, FileSystemLoader
+
+    templates_dir = Path(__file__).parent / "templates"
+    if not templates_dir.exists():
+        logger.warning(f"Templates directory not found: {templates_dir}")
+        return
+
+    env = Environment(loader=FileSystemLoader(str(templates_dir)), autoescape=True)
+
+    try:
+        template = env.get_template("design_report.html")
+    except Exception as e:
+        logger.warning(f"Design report template not found: {e}")
+        return
+
+    # Load feature records from DB
+    from src.core.database import Feature, get_db
+
+    feature_records = []
+    with get_db() as db:
+        for feat_key in feature_results:
+            feat = (
+                db.query(Feature)
+                .filter_by(
+                    design_id=design_entry.db_id,
+                    feature_key=feat_key,
+                )
+                .first()
+            )
+            if feat:
+                feature_records.append(
+                    {
+                        "name": feat.name,
+                        "status": feat.status,
+                        "started_at": feat.started_at.isoformat()
+                        if feat.started_at
+                        else None,
+                        "completed_at": feat.completed_at.isoformat()
+                        if feat.completed_at
+                        else None,
+                    }
+                )
+
+    context = {
+        "design_name": design_entry.name,
+        "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "features": feature_records,
+        "total_features": len(feature_records),
+        "completed_features": sum(
+            1 for f in feature_records if f["status"] == "completed"
+        ),
+        "failed_features": sum(1 for f in feature_records if f["status"] == "failed"),
+        "skipped_features": sum(1 for f in feature_records if f["status"] == "skipped"),
+    }
+
+    html = template.render(**context)
+    html_path = designs_folder / "design_report.html"
+    html_path.write_text(html)
+    logger.info(f"Design report: {html_path}")
 
 
 def run_single_design(
@@ -1696,7 +3033,11 @@ def run_single_design(
     phases_dir = docs_dir / "phase_prompts"
     phases_dir.mkdir(exist_ok=True)
     autopilot_workflow_dir = HEPHAESTUS_DIR / "config" / "workflows" / "autopilot"
-    phase_files = [p for p in sorted(autopilot_workflow_dir.glob("*.yaml")) if p.name != "workflow.yaml"]
+    phase_files = [
+        p
+        for p in sorted(autopilot_workflow_dir.glob("*.yaml"))
+        if p.name != "workflow.yaml"
+    ]
     for pf in phase_files:
         shutil.copy2(pf, phases_dir / pf.name)
     logger.info(f"Copied {len(phase_files)} phase YAML files to {phases_dir}")
@@ -1732,7 +3073,9 @@ def run_single_design(
         # bounded by max_total_gotos (default 10) in AUTOPILOT_ORCHESTRATOR_CONFIG.
         logger.info("")
         logger.info("-" * 60)
-        logger.info(f"DESIGN: {design_entry.name} | Single run (engine-controlled iteration)")
+        logger.info(
+            f"DESIGN: {design_entry.name} | Single run (engine-controlled iteration)"
+        )
         logger.info("-" * 60)
 
         description = (
@@ -1753,14 +3096,16 @@ def run_single_design(
         # Session ID components for persistent agent sessions (§10.1.1).
         # The agent manager uses these to generate deterministic session IDs
         # so pi agents resume with full conversational context on gotos.
-        _project_slug = Path(project_path).name.lower().replace(' ', '-')[:30]
-        _design_slug = design_entry.name.lower().replace(' ', '-')[:30]
+        _project_slug = Path(project_path).name.lower().replace(" ", "-")[:30]
+        _design_slug = design_entry.name.lower().replace(" ", "-")[:30]
 
         # design_document is the absolute SOURCE path; the backend (AgentManager)
         # reads it and copies it into each worktree's .hephaestus/design.md. Agents
         # only ever read the worktree-relative copy.
         launch_params = {
-            "design_document": str(design_entry.path),  # source path, not the features copy
+            "design_document": str(
+                design_entry.path
+            ),  # source path, not the features copy
             "project_path": str(project_path),
             "project_id": _project_slug,
             "design_slug": _design_slug,
@@ -1771,7 +3116,11 @@ def run_single_design(
         }
 
         wf_status = run_single_workflow(
-            sdk, "autopilot", str(project_path), description, logger,
+            sdk,
+            "autopilot",
+            str(project_path),
+            description,
+            logger,
             launch_params=launch_params,
             state=state,
             max_iterations=max_iterations,
@@ -1796,34 +3145,41 @@ def run_single_design(
             logger.info("")
             logger.info("Workflow completed. Reading spec gate results...")
 
-            from src.autopilot.spec import load_spec, read_result, score_qa, score_product_validation
+            from src.autopilot.spec import (
+                load_spec,
+                read_result,
+                score_product_validation,
+                score_qa,
+            )
 
             spec = load_spec()
 
             # Check QA result — prefer the worktree copy but fall back to
             # docs_dir (feature folder) which survives concurrent git clean.
-            qa_result = (
-                read_result(project_path, "qa_result.json")
-                or read_result(docs_dir.parent, "qa_result.json")
+            qa_result = read_result(project_path, "qa_result.json") or read_result(
+                docs_dir.parent, "qa_result.json"
             )
             if qa_result:
                 qa_score, qa_meta = score_qa(qa_result, spec)
                 report.qa_passed = qa_score >= 0.7
-                logger.info(f"QA gate: score={qa_score:.2f}, band={qa_meta.get('band', 'unknown')}")
+                logger.info(
+                    f"QA gate: score={qa_score:.2f}, band={qa_meta.get('band', 'unknown')}"
+                )
             else:
                 # Fallback: check for qa_report.md existence as a weak signal
                 qa_report = _report_path(project_path, "qa_report.md")
                 report.qa_passed = qa_report.exists()
 
             # Check product validation result
-            pv_result = (
-                read_result(project_path, "product_validation.json")
-                or read_result(docs_dir.parent, "product_validation.json")
-            )
+            pv_result = read_result(
+                project_path, "product_validation.json"
+            ) or read_result(docs_dir.parent, "product_validation.json")
             if pv_result:
                 pv_score, pv_meta = score_product_validation(pv_result, spec)
                 report.product_validated = pv_score >= 0.7
-                logger.info(f"Product validation gate: score={pv_score:.2f}, band={pv_meta.get('band', 'unknown')}")
+                logger.info(
+                    f"Product validation gate: score={pv_score:.2f}, band={pv_meta.get('band', 'unknown')}"
+                )
             else:
                 # Fallback: check for product_validation.md existence
                 pv_report = _report_path(project_path, "product_validation.md")
@@ -1835,7 +3191,9 @@ def run_single_design(
             else:
                 # Engine exhausted gotos without passing the gate
                 stop_reason = StopReason.MAX_ITERATIONS
-                logger.info(f"Design did not pass validation gate after engine-controlled iterations")
+                logger.info(
+                    "Design did not pass validation gate after engine-controlled iterations"
+                )
         else:
             # Unknown status
             stop_reason = StopReason.HARD_ERROR
@@ -1849,7 +3207,7 @@ def run_single_design(
     _sweep_stray_files(project_path, feature_folder, docs_dir, logger)
 
     # Assess run health and write run_health.json for forensics agent
-    _orch_log = getattr(logger, 'log_file', None)
+    _orch_log = getattr(logger, "log_file", None)
     run_health = _assess_run_health(project_path, "", _orch_log, logger)
     run_health_path = docs_dir / "run_health.json"
     run_health_path.write_text(json.dumps(run_health, indent=2, default=str))
@@ -1902,10 +3260,15 @@ def run_single_design(
 
     # Fetch cost data from LiteLLM proxy if configured
     litellm_config = get_litellm_config()
-    if litellm_config["cost_tracking"] and litellm_config["url"] and litellm_config["cost_api_key"]:
+    if (
+        litellm_config["cost_tracking"]
+        and litellm_config["url"]
+        and litellm_config["cost_api_key"]
+    ):
         try:
-            from src.interfaces.cost_tracker import CostTracker
             import asyncio
+
+            from src.interfaces.cost_tracker import CostTracker
 
             tracker = CostTracker(
                 proxy_url=litellm_config["url"],
@@ -1957,7 +3320,7 @@ def _should_stop() -> bool:
     Returns True if the in-process AutopilotService has requested a stop
     (via the module-level _service_stop_event).
     """
-    event = globals().get('_service_stop_event')
+    event = globals().get("_service_stop_event")
     if event is not None:
         try:
             # Non-blocking check
@@ -1993,7 +3356,9 @@ def run_continuous_pipeline(args) -> None:
     logger.info("=" * 70)
     logger.info(f"Design Queue: {args.design_queue}")
     logger.info(f"Project Root: {args.project_path}")
-    logger.info(f"Control Model: Engine evaluation points (max_total_gotos={args.max_iterations})")
+    logger.info(
+        f"Control Model: Engine evaluation points (max_total_gotos={args.max_iterations})"
+    )
     logger.info(f"Poll Interval: {DESIGN_QUEUE_SCAN_INTERVAL}s")
     logger.info(f"Run ID: {state.run_id}")
     logger.info(f"Logs: {log_dir}")
@@ -2011,10 +3376,13 @@ def run_continuous_pipeline(args) -> None:
     processed_file = log_dir / "processed.json"
 
     sys.path.insert(0, str(HEPHAESTUS_DIR))
+    from src.autopilot.phases import (
+        AUTOPILOT_LAUNCH_TEMPLATE,
+        AUTOPILOT_PHASES,
+        AUTOPILOT_WORKFLOW_CONFIG,
+    )
     from src.sdk import HephaestusSDK
     from src.sdk.models import WorkflowDefinition
-    from src.autopilot.phases import AUTOPILOT_PHASES, AUTOPILOT_WORKFLOW_CONFIG, AUTOPILOT_LAUNCH_TEMPLATE
-    from src.core.simple_config import get_config
 
     config = get_config()
     cli_tool = os.getenv("HEPHAESTUS_CLI_TOOL") or config.default_cli_tool
@@ -2031,7 +3399,9 @@ def run_continuous_pipeline(args) -> None:
     logger.info("Initializing SDK...")
     sdk = HephaestusSDK(
         workflow_definitions=[autopilot_def],
-        database_path=os.environ.get("DATABASE_PATH", str(HEPHAESTUS_DIR / "hephaestus.db")),
+        database_path=os.environ.get(
+            "DATABASE_PATH", str(HEPHAESTUS_DIR / "hephaestus.db")
+        ),
         qdrant_url=os.environ.get("QDRANT_URL", "http://localhost:6333"),
         working_directory=str(project_path),
         mcp_port=int(os.environ.get("MCP_PORT", "8300")),
@@ -2059,7 +3429,9 @@ def run_continuous_pipeline(args) -> None:
     global _orchestrator_agent_id
     try:
         import uuid
-        from src.core.database import DatabaseManager, Agent
+
+        from src.core.database import Agent, DatabaseManager
+
         db_manager = DatabaseManager()
         session = db_manager.get_session()
         try:
@@ -2086,9 +3458,11 @@ def run_continuous_pipeline(args) -> None:
     try:
         active_workflows = get_active_workflows()
         if active_workflows:
-            logger.info(f"Found {len(active_workflows)} stale active workflow(s) from previous runs - cleaning up...")
+            logger.info(
+                f"Found {len(active_workflows)} stale active workflow(s) from previous runs - cleaning up..."
+            )
             for wf in active_workflows:
-                wf_id = wf.get('id', '')
+                wf_id = wf.get("id", "")
                 try:
                     api_post(f"/api/workflow-executions/{wf_id}/complete")
                     logger.info(f"  Cleaned up stale workflow {wf_id[:8]}")
@@ -2121,9 +3495,15 @@ def run_continuous_pipeline(args) -> None:
                 try:
                     active_workflows = get_active_workflows()
                     if active_workflows:
-                        wf_ids = [wf.get('id', '')[:8] for wf in active_workflows]
-                        logger.info(f"Workflow still active ({', '.join(wf_ids)}) - waiting before picking next design")
-                        state.queue_status = {"status": "waiting", "reason": "workflow_active", "active_workflows": wf_ids}
+                        wf_ids = [wf.get("id", "")[:8] for wf in active_workflows]
+                        logger.info(
+                            f"Workflow still active ({', '.join(wf_ids)}) - waiting before picking next design"
+                        )
+                        state.queue_status = {
+                            "status": "waiting",
+                            "reason": "workflow_active",
+                            "active_workflows": wf_ids,
+                        }
                         logger.save_state(state)
                         persistent_state.save(state, processed_hashes)
                         time.sleep(POLL_INTERVAL)
@@ -2134,49 +3514,72 @@ def run_continuous_pipeline(args) -> None:
                         # First check if workflow still exists in DB
                         try:
                             wf_check = get_workflow_status(state.current_workflow_id)
-                            wf_check_status = wf_check.get('status', '')
+                            wf_check_status = wf_check.get("status", "")
                             if not wf_check_status:
                                 # Workflow no longer exists in DB — clear stale state
-                                logger.info(f"Previous workflow {state.current_workflow_id[:8]} no longer exists in DB, clearing stale state")
+                                logger.info(
+                                    f"Previous workflow {state.current_workflow_id[:8]} no longer exists in DB, clearing stale state"
+                                )
                                 state.current_workflow_id = None
                                 continue
                         except Exception:
-                            logger.info(f"Previous workflow {state.current_workflow_id[:8]} could not be checked, clearing stale state")
+                            logger.info(
+                                f"Previous workflow {state.current_workflow_id[:8]} could not be checked, clearing stale state"
+                            )
                             state.current_workflow_id = None
                             continue
 
-                        is_complete, reason = is_design_fully_complete(state.current_workflow_id, logger)
+                        is_complete, reason = is_design_fully_complete(
+                            state.current_workflow_id, logger
+                        )
                         if not is_complete:
                             logger.info(f"Previous workflow not yet complete: {reason}")
 
                             # Track recovery attempts to prevent infinite loops
-                            if not hasattr(state, '_recovery_attempts'):
+                            if not hasattr(state, "_recovery_attempts"):
                                 state._recovery_attempts = 0
                             state._recovery_attempts += 1
 
                             if state._recovery_attempts > 5:
-                                logger.warning(f"Recovery failed after {state._recovery_attempts} attempts, escalating to impasse for workflow {state.current_workflow_id[:8]}")
+                                logger.warning(
+                                    f"Recovery failed after {state._recovery_attempts} attempts, escalating to impasse for workflow {state.current_workflow_id[:8]}"
+                                )
                                 # Mark workflow as failed — required phase was abandoned
                                 try:
-                                    from src.core.database import get_db, Workflow
+                                    from src.core.database import Workflow, get_db
+
                                     with get_db() as db:
-                                        wf = db.query(Workflow).filter_by(id=state.current_workflow_id).first()
+                                        wf = (
+                                            db.query(Workflow)
+                                            .filter_by(id=state.current_workflow_id)
+                                            .first()
+                                        )
                                         if wf:
                                             wf.status = "failed"
                                             db.commit()
-                                            logger.warning(f"Workflow {state.current_workflow_id[:8]} marked as failed (abandoned phase)")
+                                            logger.warning(
+                                                f"Workflow {state.current_workflow_id[:8]} marked as failed (abandoned phase)"
+                                            )
                                 except Exception as e:
-                                    logger.error(f"Failed to mark workflow as failed: {e}")
+                                    logger.error(
+                                        f"Failed to mark workflow as failed: {e}"
+                                    )
                                 state.current_workflow_id = None
                                 state._recovery_attempts = 0
                                 continue
 
                             # Attempt recovery
-                            success, recovery_msg = attempt_recovery(state.current_workflow_id, logger)
+                            success, recovery_msg = attempt_recovery(
+                                state.current_workflow_id, logger
+                            )
                             if success:
                                 logger.info(f"Recovery actions: {recovery_msg}")
 
-                            state.queue_status = {"status": "waiting", "reason": reason, "recovery": recovery_msg if success else None}
+                            state.queue_status = {
+                                "status": "waiting",
+                                "reason": reason,
+                                "recovery": recovery_msg if success else None,
+                            }
                             logger.save_state(state)
                             persistent_state.save(state, processed_hashes)
                             time.sleep(POLL_INTERVAL)
@@ -2190,8 +3593,13 @@ def run_continuous_pipeline(args) -> None:
                 next_design = pick_next_design(queue_dir, processed_hashes, logger)
 
                 if next_design is None:
-                    logger.info(f"Queue empty. Scanning again in {DESIGN_QUEUE_SCAN_INTERVAL}s...")
-                    state.queue_status = {"status": "empty", "processed": len(processed_hashes)}
+                    logger.info(
+                        f"Queue empty. Scanning again in {DESIGN_QUEUE_SCAN_INTERVAL}s..."
+                    )
+                    state.queue_status = {
+                        "status": "empty",
+                        "processed": len(processed_hashes),
+                    }
                     logger.save_state(state)
                     _update_orchestrator_status("idle")
                     persistent_state.save(state, processed_hashes)
@@ -2200,7 +3608,11 @@ def run_continuous_pipeline(args) -> None:
 
                 next_design.status = DesignStatus.IN_PROGRESS
                 state.current_design = next_design.name
-                state.current_feature_folder = str(next_design.feature_folder) if next_design.feature_folder else None
+                state.current_feature_folder = (
+                    str(next_design.feature_folder)
+                    if next_design.feature_folder
+                    else None
+                )
                 state.queue_status = {
                     "status": "processing",
                     "current": next_design.name,
@@ -2211,7 +3623,11 @@ def run_continuous_pipeline(args) -> None:
                 persistent_state.save(state, processed_hashes)
 
                 status, feature_report = run_single_design(
-                    sdk, next_design, project_path, logger, state,
+                    sdk,
+                    next_design,
+                    project_path,
+                    logger,
+                    state,
                     max_iterations=args.max_iterations,
                 )
 
@@ -2221,16 +3637,34 @@ def run_continuous_pipeline(args) -> None:
 
                 # Update DB design status
                 try:
-                    from src.core.database import AutopilotDesign, AutopilotProject, get_db as _get_db
+                    from src.core.database import AutopilotDesign, AutopilotProject
+                    from src.core.database import get_db as _get_db
+
                     with _get_db() as _db:
-                        _proj = _db.query(AutopilotProject).filter_by(is_active=True).first()
+                        _proj = (
+                            _db.query(AutopilotProject)
+                            .filter_by(is_active=True)
+                            .first()
+                        )
                         if _proj:
-                            _des = _db.query(AutopilotDesign).filter_by(
-                                project_id=_proj.id, filename=next_design.path.name
-                            ).first()
+                            _des = (
+                                _db.query(AutopilotDesign)
+                                .filter_by(
+                                    project_id=_proj.id, filename=next_design.path.name
+                                )
+                                .first()
+                            )
                             if _des:
-                                _des.status = status.value if hasattr(status, 'value') else str(status)
-                                _des.feature_folder = str(next_design.feature_folder) if next_design.feature_folder else None
+                                _des.status = (
+                                    status.value
+                                    if hasattr(status, "value")
+                                    else str(status)
+                                )
+                                _des.feature_folder = (
+                                    str(next_design.feature_folder)
+                                    if next_design.feature_folder
+                                    else None
+                                )
                                 if status == DesignStatus.COMPLETED:
                                     _des.completed_at = datetime.utcnow()
                                 _db.commit()
@@ -2257,18 +3691,23 @@ def run_continuous_pipeline(args) -> None:
                 logger.save_state(state)
                 persistent_state.save(state, processed_hashes)
 
-                logger.event("design_complete", {
-                    "design": next_design.name,
-                    "status": status.value,
-                    "iterations": feature_report.iterations,
-                    "qa_passed": feature_report.qa_passed,
-                    "product_validated": feature_report.product_validated,
-                    "elapsed_seconds": feature_report.total_time_seconds,
-                    "feature_folder": str(next_design.feature_folder),
-                })
+                logger.event(
+                    "design_complete",
+                    {
+                        "design": next_design.name,
+                        "status": status.value,
+                        "iterations": feature_report.iterations,
+                        "qa_passed": feature_report.qa_passed,
+                        "product_validated": feature_report.product_validated,
+                        "elapsed_seconds": feature_report.total_time_seconds,
+                        "feature_folder": str(next_design.feature_folder),
+                    },
+                )
 
                 logger.info("")
-                logger.info(f"Design '{next_design.name}' complete. Status: {status.value}")
+                logger.info(
+                    f"Design '{next_design.name}' complete. Status: {status.value}"
+                )
                 logger.info(f"Total designs processed: {state.designs_processed}")
                 logger.info(f"  Succeeded: {state.designs_succeeded}")
                 logger.info(f"  Failed: {state.designs_failed}")
@@ -2296,19 +3735,22 @@ def run_continuous_pipeline(args) -> None:
 
         logger.save_state(state)
         persistent_state.save(state, processed_hashes)
-        logger.event("pipeline_stop", {
-            "total_designs": state.designs_processed,
-            "succeeded": state.designs_succeeded,
-            "failed": state.designs_failed,
-            "elapsed_seconds": state.total_elapsed,
-        })
+        logger.event(
+            "pipeline_stop",
+            {
+                "total_designs": state.designs_processed,
+                "succeeded": state.designs_succeeded,
+                "failed": state.designs_failed,
+                "elapsed_seconds": state.total_elapsed,
+            },
+        )
         _update_orchestrator_status("terminated")
 
         # Pause all active autopilot workflows
         try:
             active_workflows = get_active_workflows()
             for wf in active_workflows:
-                wf_id = wf.get('id', '')
+                wf_id = wf.get("id", "")
                 try:
                     api_post(f"/api/workflow-executions/{wf_id}/pause")
                     logger.info(f"Paused workflow {wf_id[:8]}")
@@ -2327,14 +3769,25 @@ def main():
     parser = argparse.ArgumentParser(
         description="Autopilot Continuous Pipeline - Design Queue to Validated Software"
     )
-    parser.add_argument("--design-queue", default=None,
-                        help="Directory to watch for design documents (default: <project-path>/docs/design)")
-    parser.add_argument("--project-path", required=True,
-                        help="Project directory for implementation code")
-    parser.add_argument("--max-iterations", type=int, default=3,
-                        help="Maximum review-fix-QA iterations per design")
-    parser.add_argument("--drop-db", action="store_true",
-                        help="Drop database before starting")
+    parser.add_argument(
+        "--design-queue",
+        default=None,
+        help="Directory to watch for design documents (default: <project-path>/docs/design)",
+    )
+    parser.add_argument(
+        "--project-path",
+        required=True,
+        help="Project directory for implementation code",
+    )
+    parser.add_argument(
+        "--max-iterations",
+        type=int,
+        default=3,
+        help="Maximum review-fix-QA iterations per design",
+    )
+    parser.add_argument(
+        "--drop-db", action="store_true", help="Drop database before starting"
+    )
 
     args = parser.parse_args()
 
@@ -2348,7 +3801,9 @@ def main():
             os.kill(existing_pid, 0)
             # Process is alive - check if it's us
             if existing_pid != os.getpid():
-                print(f"Another orchestrator is already running (PID: {existing_pid}). Exiting.")
+                print(
+                    f"Another orchestrator is already running (PID: {existing_pid}). Exiting."
+                )
                 sys.exit(1)
         except (ProcessLookupError, ValueError):
             # Process not alive or invalid PID, clean up
@@ -2366,6 +3821,7 @@ def main():
 
     # Ensure DB tables and migrations are applied
     from src.core.database import DatabaseManager
+
     db_manager = DatabaseManager(str(HEPHAESTUS_DIR / "hephaestus.db"))
     db_manager.create_tables()
 

@@ -1,6 +1,6 @@
 """Build prompts for validator agents."""
 
-from typing import Dict, Any, Optional
+from typing import Any, Dict, Optional
 
 
 class ValidationPromptBuilder:
@@ -73,7 +73,7 @@ After checking all criteria, call mcp__hephaestus__give_validation_review with:
         agent_claims: str,
         iteration: int,
         previous_feedback: Optional[str] = None,
-        validator_agent_id: Optional[str] = None
+        validator_agent_id: Optional[str] = None,
     ) -> str:
         """Build a validation prompt for the validator agent.
 
@@ -110,7 +110,8 @@ After checking all criteria, call mcp__hephaestus__give_validation_review with:
         prompt = self.VALIDATOR_PROMPT_TEMPLATE.format(
             validator_agent_id=validator_agent_id or "validator-unknown",
             task_id=task.get("id", "unknown"),
-            task_description=task.get("enriched_description") or task.get("raw_description", ""),
+            task_description=task.get("enriched_description")
+            or task.get("raw_description", ""),
             iteration=iteration,
             previous_feedback=previous_feedback,
             validation_criteria=validation_criteria,
@@ -119,7 +120,7 @@ After checking all criteria, call mcp__hephaestus__give_validation_review with:
             files_modified=files_modified or "None",
             files_deleted=files_deleted or "None",
             detailed_diff=detailed_diff,
-            agent_results=agent_claims
+            agent_results=agent_claims,
         )
 
         # Add custom validator instructions if provided
@@ -128,7 +129,9 @@ After checking all criteria, call mcp__hephaestus__give_validation_review with:
 
         return prompt
 
-    def _format_validation_criteria(self, phase_validation: Optional[Dict[str, Any]]) -> str:
+    def _format_validation_criteria(
+        self, phase_validation: Optional[Dict[str, Any]]
+    ) -> str:
         """Format validation criteria into readable list.
 
         Args:

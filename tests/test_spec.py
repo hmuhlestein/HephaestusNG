@@ -1,12 +1,18 @@
 """Tests for autopilot/spec.py — scoring, loading, phase output."""
 
-import pytest
 import json
-from pathlib import Path
+
 from src.autopilot.spec import (
-    load_spec, _clamp01, _pass_with_subjective,
-    score_qa, score_product_validation, read_result, build_phase_output,
-    DEFAULT_SPEC, GATED_PHASES, PHASE_OUTPUT_ARTIFACTS,
+    DEFAULT_SPEC,
+    GATED_PHASES,
+    PHASE_OUTPUT_ARTIFACTS,
+    _clamp01,
+    _pass_with_subjective,
+    build_phase_output,
+    load_spec,
+    read_result,
+    score_product_validation,
+    score_qa,
 )
 
 
@@ -246,12 +252,16 @@ class TestBuildPhaseOutput:
     def test_qa_validation_with_result(self, tmp_path):
         docs = tmp_path / "docs"
         docs.mkdir()
-        (docs / "qa_result.json").write_text(json.dumps({
-            "failed_tests": 0,
-            "passed_tests": 50,
-            "pass_rate": 100.0,
-            "critical_issues": 0,
-        }))
+        (docs / "qa_result.json").write_text(
+            json.dumps(
+                {
+                    "failed_tests": 0,
+                    "passed_tests": 50,
+                    "pass_rate": 100.0,
+                    "critical_issues": 0,
+                }
+            )
+        )
         result = build_phase_output("qa_validation", tmp_path)
         assert result["score"] >= 0.7
 

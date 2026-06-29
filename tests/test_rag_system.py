@@ -2,15 +2,16 @@
 """Integration tests for RAG system."""
 
 import asyncio
-import uuid
-import sys
 import os
+import sys
+import uuid
+
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.memory.rag import RAGSystem, MemoryIngestion
-from src.memory.vector_store import VectorStoreManager
-from src.interfaces.llm_interface import OpenAIProvider
 from src.core.simple_config import Config
+from src.interfaces.llm_interface import OpenAIProvider
+from src.memory.rag import MemoryIngestion, RAGSystem
+from src.memory.vector_store import VectorStoreManager
 
 
 async def test_rag_retrieval():
@@ -23,7 +24,7 @@ async def test_rag_retrieval():
     llm_provider = OpenAIProvider(
         api_key=config.openai_api_key,
         model=config.llm_model,
-        embedding_model=config.embedding_model
+        embedding_model=config.embedding_model,
     )
     rag_system = RAGSystem(vector_store, llm_provider)
 
@@ -67,7 +68,7 @@ async def test_rag_retrieval():
                     "memory_type": memory["memory_type"],
                     "agent_id": "test_agent",
                     "test_run": True,
-                }
+                },
             )
 
             if success:
@@ -93,14 +94,14 @@ async def test_rag_retrieval():
             print(f"\n   Task: '{task_desc}'")
 
             memories = await rag_system.retrieve_for_task(
-                task_description=task_desc,
-                requesting_agent_id="test_agent",
-                limit=5
+                task_description=task_desc, requesting_agent_id="test_agent", limit=5
             )
 
             print(f"   Retrieved {len(memories)} relevant memories:")
             for mem in memories[:2]:
-                print(f"      - [{mem['memory_type']}] Score: {mem['relevance_score']:.3f}")
+                print(
+                    f"      - [{mem['memory_type']}] Score: {mem['relevance_score']:.3f}"
+                )
                 print(f"        {mem['content'][:80]}...")
 
         except Exception as e:
@@ -109,13 +110,14 @@ async def test_rag_retrieval():
     print("\n3️⃣ Testing similar task search...")
     try:
         similar_tasks = await rag_system.search_similar_tasks(
-            task_description="Build a REST API with authentication",
-            limit=3
+            task_description="Build a REST API with authentication", limit=3
         )
 
         print(f"   Found {len(similar_tasks)} similar tasks")
         for task in similar_tasks:
-            print(f"      - Score: {task.get('score', 0):.3f} | {task.get('content', '')[:60]}...")
+            print(
+                f"      - Score: {task.get('score', 0):.3f} | {task.get('content', '')[:60]}..."
+            )
 
     except Exception as e:
         print(f"   ❌ Similar task search failed: {e}")
@@ -124,7 +126,7 @@ async def test_rag_retrieval():
     try:
         error_solutions = await rag_system.search_error_solutions(
             error_description="CORS policy: No 'Access-Control-Allow-Origin' header is present",
-            limit=3
+            limit=3,
         )
 
         print(f"   Found {len(error_solutions)} potential solutions")
@@ -138,8 +140,7 @@ async def test_rag_retrieval():
     print("\n5️⃣ Testing domain knowledge retrieval...")
     try:
         knowledge = await rag_system.get_domain_knowledge(
-            query="How is rate limiting implemented in this system?",
-            limit=3
+            query="How is rate limiting implemented in this system?", limit=3
         )
 
         print(f"   Found {len(knowledge)} domain knowledge entries")
@@ -175,7 +176,7 @@ async def test_memory_ingestion():
     llm_provider = OpenAIProvider(
         api_key=config.openai_api_key,
         model=config.llm_model,
-        embedding_model=config.embedding_model
+        embedding_model=config.embedding_model,
     )
     ingestion = MemoryIngestion(vector_store, llm_provider)
 
@@ -214,7 +215,7 @@ Invalidates the refresh token.
 
     print("\n1️⃣ Creating test document...")
     try:
-        with open(test_file_path, 'w') as f:
+        with open(test_file_path, "w") as f:
             f.write(test_content)
         print(f"   ✅ Created test document: {test_file_path}")
     except Exception as e:
@@ -224,10 +225,9 @@ Invalidates the refresh token.
     print("\n2️⃣ Testing document ingestion...")
     try:
         await ingestion.ingest_document(
-            file_path=test_file_path,
-            document_type="documentation"
+            file_path=test_file_path, document_type="documentation"
         )
-        print(f"   ✅ Document ingested successfully")
+        print("   ✅ Document ingested successfully")
     except Exception as e:
         print(f"   ❌ Document ingestion failed: {e}")
         return False
@@ -238,17 +238,17 @@ Invalidates the refresh token.
     print("\n3️⃣ Testing retrieval of ingested content...")
     try:
         # Search for content from the ingested document
-        query_embedding = await llm_provider.generate_embedding("JWT authentication refresh token")
+        query_embedding = await llm_provider.generate_embedding(
+            "JWT authentication refresh token"
+        )
 
         results = await vector_store.search(
-            collection="static_docs",
-            query_vector=query_embedding,
-            limit=5
+            collection="static_docs", query_vector=query_embedding, limit=5
         )
 
         print(f"   Found {len(results)} chunks from ingested document")
         for i, result in enumerate(results[:3]):
-            print(f"      Chunk {i+1} (Score: {result['score']:.3f}):")
+            print(f"      Chunk {i + 1} (Score: {result['score']:.3f}):")
             print(f"         {result['content'][:100]}...")
 
     except Exception as e:
@@ -259,7 +259,7 @@ Invalidates the refresh token.
     try:
         # Clean up test document
         os.remove(test_file_path)
-        print(f"   ✅ Removed test document")
+        print("   ✅ Removed test document")
 
         # Note: In production, you'd also clean up the ingested vectors
         # But for testing, we'll leave them to verify persistence

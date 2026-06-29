@@ -1,11 +1,12 @@
 """Tests for IntelligentMonitor — pure helpers and low-dependency methods."""
 
 import time
-import pytest
 from datetime import datetime, timedelta
-from unittest.mock import Mock, MagicMock, patch, AsyncMock
-from src.core.database import DatabaseManager, Agent, Task, AgentLog
+from unittest.mock import AsyncMock, Mock, patch
 
+import pytest
+
+from src.core.database import Agent, DatabaseManager
 
 # ── Fixtures ──────────────────────────────────────────────────────
 
@@ -41,6 +42,7 @@ def mock_rag():
 @pytest.fixture
 def monitor(mock_db, mock_agent_manager, mock_llm, mock_rag):
     from src.monitoring.monitor import IntelligentMonitor
+
     with patch("src.monitoring.monitor.get_config") as mock_cfg:
         mock_cfg.return_value = Mock(
             stuck_detection_minutes=10,
@@ -58,6 +60,7 @@ def monitor(mock_db, mock_agent_manager, mock_llm, mock_rag):
 @pytest.fixture
 def make_monitoring_loop(mock_db, mock_agent_manager, mock_llm, mock_rag):
     from src.monitoring.monitor import MonitoringLoop
+
     with patch("src.monitoring.monitor.get_config") as mock_cfg:
         mock_cfg.return_value = Mock(
             stuck_detection_minutes=10,
@@ -108,7 +111,9 @@ class TestAppearsStuck:
 class TestIsAgentResponsive:
     def test_responsive_agent(self, make_monitoring_loop, mock_agent_manager):
         agent = Agent(
-            id="a1", status="working", cli_type="claude",
+            id="a1",
+            status="working",
+            cli_type="claude",
             last_activity=datetime.utcnow() - timedelta(minutes=1),
             tmux_session_name="sess-a1",
         )
@@ -118,16 +123,22 @@ class TestIsAgentResponsive:
 
     def test_unresponsive_no_activity(self, make_monitoring_loop, mock_agent_manager):
         agent = Agent(
-            id="a1", status="working", cli_type="claude",
+            id="a1",
+            status="working",
+            cli_type="claude",
             last_activity=datetime.utcnow() - timedelta(minutes=60),
             tmux_session_name="sess-a1",
         )
         assert make_monitoring_loop._is_agent_responsive(agent) is False
 
-    def test_unresponsive_no_tmux_session(self, make_monitoring_loop, mock_agent_manager):
+    def test_unresponsive_no_tmux_session(
+        self, make_monitoring_loop, mock_agent_manager
+    ):
         mock_agent_manager.tmux_server.has_session.return_value = False
         agent = Agent(
-            id="a1", status="working", cli_type="claude",
+            id="a1",
+            status="working",
+            cli_type="claude",
             last_activity=datetime.utcnow(),
             tmux_session_name="sess-a1",
         )
@@ -135,7 +146,9 @@ class TestIsAgentResponsive:
 
     def test_unresponsive_stuck_output(self, make_monitoring_loop, mock_agent_manager):
         agent = Agent(
-            id="a1", status="working", cli_type="claude",
+            id="a1",
+            status="working",
+            cli_type="claude",
             last_activity=datetime.utcnow(),
             tmux_session_name="sess-a1",
         )
@@ -146,7 +159,9 @@ class TestIsAgentResponsive:
     def test_unresponsive_no_output(self, make_monitoring_loop, mock_agent_manager):
         mock_agent_manager.get_agent_output.return_value = ""
         agent = Agent(
-            id="a1", status="working", cli_type="claude",
+            id="a1",
+            status="working",
+            cli_type="claude",
             last_activity=datetime.utcnow(),
             tmux_session_name="sess-a1",
         )
@@ -156,7 +171,9 @@ class TestIsAgentResponsive:
 
     def test_no_last_activity(self, make_monitoring_loop, mock_agent_manager):
         agent = Agent(
-            id="a1", status="working", cli_type="claude",
+            id="a1",
+            status="working",
+            cli_type="claude",
             last_activity=None,
             tmux_session_name="sess-a1",
         )
@@ -172,7 +189,9 @@ class TestIsAgentResponsive:
 class TestIsTaskTimedOut:
     def test_not_timed_out(self, make_monitoring_loop, mock_db):
         session = Mock()
-        task = Mock(started_at=datetime.utcnow() - timedelta(minutes=5), estimated_complexity=5)
+        task = Mock(
+            started_at=datetime.utcnow() - timedelta(minutes=5), estimated_complexity=5
+        )
         session.query.return_value.filter_by.return_value.first.return_value = task
         mock_db.get_session.return_value = session
 
@@ -182,7 +201,10 @@ class TestIsTaskTimedOut:
     def test_timed_out(self, make_monitoring_loop, mock_db):
         session = Mock()
         # 200 minutes on a complexity-5 task with 60min base timeout = 60*(1+5/10)=90 min
-        task = Mock(started_at=datetime.utcnow() - timedelta(minutes=200), estimated_complexity=5)
+        task = Mock(
+            started_at=datetime.utcnow() - timedelta(minutes=200),
+            estimated_complexity=5,
+        )
         session.query.return_value.filter_by.return_value.first.return_value = task
         mock_db.get_session.return_value = session
 
@@ -209,7 +231,10 @@ class TestIsTaskTimedOut:
     def test_high_complexity_longer_timeout(self, make_monitoring_loop, mock_db):
         session = Mock()
         # complexity=10 → timeout = 60*(1+10/10) = 120 min
-        task = Mock(started_at=datetime.utcnow() - timedelta(minutes=100), estimated_complexity=10)
+        task = Mock(
+            started_at=datetime.utcnow() - timedelta(minutes=100),
+            estimated_complexity=10,
+        )
         session.query.return_value.filter_by.return_value.first.return_value = task
         mock_db.get_session.return_value = session
 
@@ -231,8 +256,22 @@ class TestGetPastSummaries:
         logs_result = [log1, log2]
         logs_result.reverse()  # Simulate reversed() in-place
         session.query.return_value.filter.side_effect = [
-            Mock(order_by=Mock(return_value=Mock(limit=Mock(return_value=Mock(all=Mock(return_value=[])))))),  # GuardianAnalysis
-            Mock(order_by=Mock(return_value=Mock(limit=Mock(return_value=Mock(all=Mock(return_value=logs_result)))))),  # AgentLog
+            Mock(
+                order_by=Mock(
+                    return_value=Mock(
+                        limit=Mock(return_value=Mock(all=Mock(return_value=[])))
+                    )
+                )
+            ),  # GuardianAnalysis
+            Mock(
+                order_by=Mock(
+                    return_value=Mock(
+                        limit=Mock(
+                            return_value=Mock(all=Mock(return_value=logs_result))
+                        )
+                    )
+                )
+            ),  # AgentLog
         ]
         mock_db.get_session.return_value = session
 
@@ -279,7 +318,9 @@ class TestBuildSpecPhaseOutput:
 
     def test_returns_empty_on_exception(self, make_monitoring_loop, mock_db):
         session = Mock()
-        session.query.return_value.filter_by.return_value.first.side_effect = Exception("DB error")
+        session.query.return_value.filter_by.return_value.first.side_effect = Exception(
+            "DB error"
+        )
         mock_db.get_session.return_value = session
         make_monitoring_loop.phase_manager = Mock(workflow_id="wf-1")
 
@@ -294,8 +335,11 @@ class TestAnalyzeAgentState:
     @pytest.mark.asyncio
     async def test_returns_trajectory_analysis(self, monitor, mock_agent_manager):
         agent = Agent(
-            id="a1", status="working", cli_type="claude",
-            current_task_id="t1", tmux_session_name="sess-a1",
+            id="a1",
+            status="working",
+            cli_type="claude",
+            current_task_id="t1",
+            tmux_session_name="sess-a1",
             last_activity=datetime.utcnow(),
         )
         mock_agent_manager.get_agent_output.return_value = "Building auth module"
@@ -308,13 +352,15 @@ class TestAnalyzeAgentState:
                     "constraints": [],
                     "current_focus": "implementing",
                 }
-                monitor.llm_provider.analyze_agent_state = AsyncMock(return_value={
-                    "state": "healthy",
-                    "decision": "continue",
-                    "message": "",
-                    "reasoning": "On track",
-                    "confidence": 0.9,
-                })
+                monitor.llm_provider.analyze_agent_state = AsyncMock(
+                    return_value={
+                        "state": "healthy",
+                        "decision": "continue",
+                        "message": "",
+                        "reasoning": "On track",
+                        "confidence": 0.9,
+                    }
+                )
                 result = await monitor.analyze_agent_state(agent)
 
         assert result["state"] == "healthy"
@@ -323,8 +369,11 @@ class TestAnalyzeAgentState:
     @pytest.mark.asyncio
     async def test_handles_llm_failure(self, monitor, mock_agent_manager):
         agent = Agent(
-            id="a1", status="working", cli_type="claude",
-            current_task_id="t1", tmux_session_name="sess-a1",
+            id="a1",
+            status="working",
+            cli_type="claude",
+            current_task_id="t1",
+            tmux_session_name="sess-a1",
             last_activity=datetime.utcnow(),
         )
         mock_agent_manager.get_agent_output.return_value = "Building auth module"
@@ -333,7 +382,9 @@ class TestAnalyzeAgentState:
             mock_cli.return_value = Mock(is_stuck=Mock(return_value=False))
             with patch("src.monitoring.monitor.TrajectoryContext") as mock_tc:
                 mock_tc.return_value.build_accumulated_context.return_value = {}
-                monitor.llm_provider.analyze_agent_state = AsyncMock(side_effect=Exception("LLM error"))
+                monitor.llm_provider.analyze_agent_state = AsyncMock(
+                    side_effect=Exception("LLM error")
+                )
                 result = await monitor.analyze_agent_state(agent)
 
         # Falls back to healthy
@@ -360,7 +411,9 @@ class TestWriteAgentTmuxLog:
         session.query.return_value.filter_by.return_value.first.return_value = wf
         mock_db.get_session.return_value = session
 
-        make_monitoring_loop._write_agent_tmux_log("agent-123", "development", "test output")
+        make_monitoring_loop._write_agent_tmux_log(
+            "agent-123", "development", "test output"
+        )
 
         log_file = tmp_path / ".hephaestus" / "tmux" / "development_agent-.log"
         # File might not exist due to path matching, but no error should occur
@@ -388,11 +441,16 @@ class TestCollectAgentContext:
     @pytest.mark.asyncio
     async def test_collects_context(self, monitor, mock_agent_manager, mock_db):
         agent = Agent(
-            id="a1", status="working", cli_type="claude",
-            current_task_id="t1", tmux_session_name="sess-a1",
+            id="a1",
+            status="working",
+            cli_type="claude",
+            current_task_id="t1",
+            tmux_session_name="sess-a1",
         )
         mock_agent_manager.get_agent_output.return_value = "Working on auth"
-        mock_agent_manager.get_project_context = AsyncMock(return_value="Project context")
+        mock_agent_manager.get_project_context = AsyncMock(
+            return_value="Project context"
+        )
 
         session = Mock()
         task = Mock(
@@ -418,8 +476,11 @@ class TestCollectAgentContext:
     @pytest.mark.asyncio
     async def test_handles_no_task(self, monitor, mock_agent_manager, mock_db):
         agent = Agent(
-            id="a1", status="working", cli_type="claude",
-            current_task_id=None, tmux_session_name="sess-a1",
+            id="a1",
+            status="working",
+            cli_type="claude",
+            current_task_id=None,
+            tmux_session_name="sess-a1",
         )
         mock_agent_manager.get_agent_output.return_value = "Working"
         mock_agent_manager.get_project_context = AsyncMock(return_value="")
@@ -451,7 +512,9 @@ class TestMonitoringLoopGetPastSummaries:
             accumulated_goal="Build auth",
             timestamp=datetime.utcnow(),
         )
-        session.query.return_value.filter.return_value.order_by.return_value.limit.return_value.all.return_value = [analysis]
+        session.query.return_value.filter.return_value.order_by.return_value.limit.return_value.all.return_value = [
+            analysis
+        ]
         mock_db.get_session.return_value = session
 
         result = make_monitoring_loop._get_past_summaries_for_agent("a1")
@@ -500,11 +563,15 @@ class TestExecuteIntervention:
 
 class TestDetectRepetitionLoop:
     @pytest.mark.asyncio
-    async def test_detects_repetition(self, make_monitoring_loop, mock_agent_manager, mock_db):
+    async def test_detects_repetition(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
         agent = Agent(id="a1", cli_type="claude")
         # 6 repeated lines
         repeated = "This is a long enough line that repeats many times in the output"
-        output = "\n".join([repeated] * 6 + ["Normal line that is different and unique here"])
+        output = "\n".join(
+            [repeated] * 6 + ["Normal line that is different and unique here"]
+        )
         mock_agent_manager.get_agent_output.return_value = output
 
         session = Mock()
@@ -516,7 +583,9 @@ class TestDetectRepetitionLoop:
         assert "thought loop" in call_args[0][1].lower()
 
     @pytest.mark.asyncio
-    async def test_ignores_short_lines(self, make_monitoring_loop, mock_agent_manager, mock_db):
+    async def test_ignores_short_lines(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
         agent = Agent(id="a1", cli_type="claude")
         # Lines under 30 chars should not trigger
         output = "\n".join(["short"] * 10)
@@ -526,9 +595,13 @@ class TestDetectRepetitionLoop:
         mock_agent_manager.send_message_to_agent.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_ignores_few_repeats(self, make_monitoring_loop, mock_agent_manager, mock_db):
+    async def test_ignores_few_repeats(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
         agent = Agent(id="a1", cli_type="claude")
-        repeated = "This is a long enough line that should not trigger with fewer repeats"
+        repeated = (
+            "This is a long enough line that should not trigger with fewer repeats"
+        )
         output = "\n".join([repeated] * 3)
         mock_agent_manager.get_agent_output.return_value = output
 
@@ -536,7 +609,9 @@ class TestDetectRepetitionLoop:
         mock_agent_manager.send_message_to_agent.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_empty_output(self, make_monitoring_loop, mock_agent_manager, mock_db):
+    async def test_empty_output(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
         agent = Agent(id="a1", cli_type="claude")
         mock_agent_manager.get_agent_output.return_value = ""
 
@@ -641,7 +716,9 @@ class TestLogDiagnosticStatusReport:
             "stuck_long_enough": True,
         }
         # Should not raise
-        make_monitoring_loop._log_diagnostic_status_report(conditions, True, "Test trigger", 120.0)
+        make_monitoring_loop._log_diagnostic_status_report(
+            conditions, True, "Test trigger", 120.0
+        )
 
     def test_logs_no_trigger(self, make_monitoring_loop):
         conditions = {
@@ -653,7 +730,9 @@ class TestLogDiagnosticStatusReport:
             "cooldown_passed": False,
             "stuck_long_enough": False,
         }
-        make_monitoring_loop._log_diagnostic_status_report(conditions, False, "Not stuck")
+        make_monitoring_loop._log_diagnostic_status_report(
+            conditions, False, "Not stuck"
+        )
 
     def test_logs_with_zero_stuck_time(self, make_monitoring_loop):
         conditions = {
@@ -665,7 +744,9 @@ class TestLogDiagnosticStatusReport:
             "cooldown_passed": True,
             "stuck_long_enough": True,
         }
-        make_monitoring_loop._log_diagnostic_status_report(conditions, True, "Stuck", 0.0)
+        make_monitoring_loop._log_diagnostic_status_report(
+            conditions, True, "Stuck", 0.0
+        )
 
 
 # ── _enrich_answer ────────────────────────────────────────────────
@@ -674,10 +755,12 @@ class TestLogDiagnosticStatusReport:
 class TestEnrichAnswer:
     @pytest.mark.asyncio
     async def test_enriches_with_knowledge(self, monitor, mock_rag):
-        mock_rag.retrieve_for_task = AsyncMock(return_value=[
-            {"content": "Auth requires JWT tokens"},
-            {"content": "Use bcrypt for passwords"},
-        ])
+        mock_rag.retrieve_for_task = AsyncMock(
+            return_value=[
+                {"content": "Auth requires JWT tokens"},
+                {"content": "Use bcrypt for passwords"},
+            ]
+        )
         result = await monitor._enrich_answer("How to implement auth?", "t1")
         assert "Additional context" in result
         assert "JWT" in result
@@ -694,7 +777,9 @@ class TestEnrichAnswer:
 
 class TestRecreateAgentWithNewApproach:
     @pytest.mark.asyncio
-    async def test_recreates_agent(self, monitor, mock_agent_manager, mock_db, mock_rag):
+    async def test_recreates_agent(
+        self, monitor, mock_agent_manager, mock_db, mock_rag
+    ):
         agent = Agent(id="a1", current_task_id="t1")
         session = Mock()
         task = Mock(
@@ -713,8 +798,15 @@ class TestRecreateAgentWithNewApproach:
 
         # Mock second session for phase query
         phase_session = Mock()
-        phase = Mock(cli_tool="pi", cli_model="mimo", glm_api_token_env=None, thinking_level="low")
-        phase_session.query.return_value.filter_by.return_value.first.return_value = phase
+        phase = Mock(
+            cli_tool="pi",
+            cli_model="mimo",
+            glm_api_token_env=None,
+            thinking_level="low",
+        )
+        phase_session.query.return_value.filter_by.return_value.first.return_value = (
+            phase
+        )
         mock_db.get_session.side_effect = [session, phase_session]
 
         await monitor._recreate_agent_with_new_approach(agent, "Stuck too long")
@@ -732,10 +824,14 @@ class TestRecreateAgentWithNewApproach:
         mock_agent_manager.terminate_agent.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_handles_exception(self, monitor, mock_agent_manager, mock_db, mock_rag):
+    async def test_handles_exception(
+        self, monitor, mock_agent_manager, mock_db, mock_rag
+    ):
         agent = Agent(id="a1", current_task_id="t1")
         session = Mock()
-        session.query.return_value.filter_by.return_value.first.side_effect = Exception("DB error")
+        session.query.return_value.filter_by.return_value.first.side_effect = Exception(
+            "DB error"
+        )
         mock_db.get_session.return_value = session
 
         # Should not raise
@@ -754,7 +850,9 @@ class TestMechanicalRecovery:
         mock_agent_manager.send_recovery_keystrokes.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_output_changed(self, make_monitoring_loop, mock_agent_manager, mock_db):
+    async def test_output_changed(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
         agent = Agent(id="a1", cli_type="claude")
         mock_agent_manager.get_agent_output.return_value = "Building feature..."
         await make_monitoring_loop._mechanical_recovery_for_agent(agent)
@@ -762,7 +860,9 @@ class TestMechanicalRecovery:
         mock_agent_manager.send_recovery_keystrokes.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_frozen_triggers_recovery(self, make_monitoring_loop, mock_agent_manager, mock_db):
+    async def test_frozen_triggers_recovery(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
         agent = Agent(id="a1", cli_type="claude")
         frozen_output = "Same output that never changes"
         mock_agent_manager.get_agent_output.return_value = frozen_output
@@ -777,7 +877,9 @@ class TestMechanicalRecovery:
         mock_agent_manager.send_recovery_keystrokes.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_max_recovery_fails_task(self, make_monitoring_loop, mock_agent_manager, mock_db):
+    async def test_max_recovery_fails_task(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
         agent = Agent(id="a1", cli_type="claude")
         frozen_output = "Same output"
         mock_agent_manager.get_agent_output.return_value = frozen_output
@@ -807,7 +909,9 @@ class TestMechanicalRecovery:
 
 class TestHandleStuckAgent:
     @pytest.mark.asyncio
-    async def test_steers_with_blockers(self, make_monitoring_loop, mock_agent_manager, mock_db):
+    async def test_steers_with_blockers(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
         agent = Agent(id="a1", health_check_failures=5)
         make_monitoring_loop.trajectory_context = Mock()
         make_monitoring_loop.trajectory_context.build_accumulated_context.return_value = {
@@ -820,7 +924,9 @@ class TestHandleStuckAgent:
         make_monitoring_loop.guardian.steer_agent.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_logs_blockers_below_threshold(self, make_monitoring_loop, mock_agent_manager, mock_db):
+    async def test_logs_blockers_below_threshold(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
         agent = Agent(id="a1", health_check_failures=1)
         make_monitoring_loop.trajectory_context = Mock()
         make_monitoring_loop.trajectory_context.build_accumulated_context.return_value = {
@@ -829,7 +935,9 @@ class TestHandleStuckAgent:
         make_monitoring_loop.guardian = Mock()
         make_monitoring_loop.guardian.steer_agent = AsyncMock()
         make_monitoring_loop.intelligent_monitor = Mock()
-        make_monitoring_loop.intelligent_monitor.analyze_agent_state = AsyncMock(return_value={"decision": "continue"})
+        make_monitoring_loop.intelligent_monitor.analyze_agent_state = AsyncMock(
+            return_value={"decision": "continue"}
+        )
         make_monitoring_loop.intelligent_monitor.execute_intervention = AsyncMock()
 
         await make_monitoring_loop._handle_stuck_agent(agent)
@@ -837,14 +945,18 @@ class TestHandleStuckAgent:
         make_monitoring_loop.guardian.steer_agent.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_no_blockers_runs_analysis(self, make_monitoring_loop, mock_agent_manager, mock_db):
+    async def test_no_blockers_runs_analysis(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
         agent = Agent(id="a1", health_check_failures=0)
         make_monitoring_loop.trajectory_context = Mock()
         make_monitoring_loop.trajectory_context.build_accumulated_context.return_value = {
             "discovered_blockers": [],
         }
         make_monitoring_loop.intelligent_monitor = Mock()
-        make_monitoring_loop.intelligent_monitor.analyze_agent_state = AsyncMock(return_value={"decision": "continue"})
+        make_monitoring_loop.intelligent_monitor.analyze_agent_state = AsyncMock(
+            return_value={"decision": "continue"}
+        )
         make_monitoring_loop.intelligent_monitor.execute_intervention = AsyncMock()
 
         await make_monitoring_loop._handle_stuck_agent(agent)
@@ -856,7 +968,9 @@ class TestHandleStuckAgent:
 
 class TestHandleMissingTmux:
     @pytest.mark.asyncio
-    async def test_restarts_agent(self, make_monitoring_loop, mock_agent_manager, mock_db):
+    async def test_restarts_agent(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
         agent = Agent(id="a1", tmux_session_name="sess-a1")
         mock_agent_manager.restart_agent = AsyncMock()
         await make_monitoring_loop._handle_missing_tmux_session(agent)
@@ -886,13 +1000,17 @@ class TestCleanupOrphanedSessions:
         mock_db.get_session.return_value = db_session
 
         # Set grace period past check
-        make_monitoring_loop._last_orphan_check_time = datetime.now() - timedelta(seconds=200)
+        make_monitoring_loop._last_orphan_check_time = datetime.now() - timedelta(
+            seconds=200
+        )
 
         await make_monitoring_loop._cleanup_orphaned_tmux_sessions()
         # Session is active, not orphaned — no kill_session called
 
     @pytest.mark.asyncio
-    async def test_kills_orphans(self, make_monitoring_loop, mock_agent_manager, mock_db):
+    async def test_kills_orphans(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
         session_mock = Mock()
         session_mock.name = "agent-orphan"
         session_mock.kill_session = Mock()
@@ -904,7 +1022,9 @@ class TestCleanupOrphanedSessions:
         mock_db.get_session.return_value = db_session
 
         # Set grace period past check
-        make_monitoring_loop._last_orphan_check_time = datetime.now() - timedelta(seconds=200)
+        make_monitoring_loop._last_orphan_check_time = datetime.now() - timedelta(
+            seconds=200
+        )
 
         await make_monitoring_loop._cleanup_orphaned_tmux_sessions()
         session_mock.kill_session.assert_called_once()
@@ -915,14 +1035,18 @@ class TestCleanupOrphanedSessions:
 
 class TestHandleTimeout:
     @pytest.mark.asyncio
-    async def test_recreates_agent(self, make_monitoring_loop, mock_agent_manager, mock_db):
+    async def test_recreates_agent(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
         agent = Agent(id="a1", current_task_id="t1")
         make_monitoring_loop.intelligent_monitor = Mock()
         make_monitoring_loop.intelligent_monitor.execute_intervention = AsyncMock()
 
         await make_monitoring_loop._handle_timeout(agent)
         make_monitoring_loop.intelligent_monitor.execute_intervention.assert_called_once()
-        call_args = make_monitoring_loop.intelligent_monitor.execute_intervention.call_args
+        call_args = (
+            make_monitoring_loop.intelligent_monitor.execute_intervention.call_args
+        )
         assert call_args[0][1]["decision"] == "recreate"
 
 
@@ -935,7 +1059,17 @@ class TestGenerateDiagnosticPrompt:
         context = {
             "workflow_goal": "Build auth",
             "workflow_id": "wf-1",
-            "phases_summary": [{"order": 1, "name": "Dev", "id": "p1", "description": "Build", "done_definitions": ["Done"], "task_count": 5, "done_task_count": 3}],
+            "phases_summary": [
+                {
+                    "order": 1,
+                    "name": "Dev",
+                    "id": "p1",
+                    "description": "Build",
+                    "done_definitions": ["Done"],
+                    "task_count": 5,
+                    "done_task_count": 3,
+                }
+            ],
             "agents_summary": [],
             "conductor_overviews": [],
             "submitted_results": [],
@@ -952,4 +1086,3 @@ class TestGenerateDiagnosticPrompt:
         except FileNotFoundError:
             # Template not found in test environment - expected
             pass
-

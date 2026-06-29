@@ -19,13 +19,24 @@ Commands:
     config      Show and edit configuration
 """
 
-import sys
 import argparse
+import sys
 
-from src.cli.commands import status, start, stop, restart, init
-from src.cli.commands import workflow, agent, task, autopilot, project
-from src.cli.commands import memory, exec_cmd, config
-
+from src.cli.commands import (
+    agent,
+    autopilot,
+    config,
+    exec_cmd,
+    init,
+    memory,
+    project,
+    restart,
+    start,
+    status,
+    stop,
+    task,
+    workflow,
+)
 
 BANNER = r"""
   _   _ _____ ____  _   _ ______   __
@@ -47,9 +58,7 @@ def build_parser() -> argparse.ArgumentParser:
         epilog="Run 'heph <command> --help' for details on a specific command.",
     )
     parser.add_argument("-v", "--version", action="version", version="heph 0.1.0")
-    parser.add_argument(
-        "--json", action="store_true", help="Output in JSON format"
-    )
+    parser.add_argument("--json", action="store_true", help="Output in JSON format")
     parser.add_argument(
         "--host", default="127.0.0.1", help="Backend host (default: 127.0.0.1)"
     )
@@ -115,6 +124,7 @@ def main(argv=None):
     except Exception as e:
         if args.json:
             import json
+
             print(json.dumps({"error": str(e)}))
         else:
             print(f"Error: {e}", file=sys.stderr)

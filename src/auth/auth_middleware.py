@@ -1,13 +1,15 @@
 """Authentication middleware and dependencies for protected routes."""
 
-from typing import Optional, List
+import logging
 from datetime import datetime
+from typing import List, Optional
+
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
-import logging
 
 from src.core.database import DatabaseManager
-from src.core.user_models import User, Role, Permission, UserRole, RolePermission
+from src.core.user_models import Permission, Role, RolePermission, User, UserRole
+
 from . import verify_access_token
 
 logger = logging.getLogger(__name__)
@@ -25,7 +27,7 @@ class CurrentUser:
         email: str,
         username: str,
         roles: List[str] = None,
-        permissions: List[str] = None
+        permissions: List[str] = None,
     ):
         self.id = id
         self.email = email
@@ -87,23 +89,20 @@ async def get_current_user(token: str = Depends(oauth2_scheme)) -> CurrentUser:
 
         if not user:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="User not found"
+                status_code=status.HTTP_404_NOT_FOUND, detail="User not found"
             )
 
         if user.status != "active":
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"User account is {user.status}"
+                detail=f"User account is {user.status}",
             )
 
         # Load user roles and permissions
         roles = []
         permissions = set()
 
-        user_roles = db.query(UserRole).filter(
-            UserRole.user_id == user.id
-        ).all()
+        user_roles = db.query(UserRole).filter(UserRole.user_id == user.id).all()
 
         for user_role in user_roles:
             # Skip expired roles
@@ -115,14 +114,18 @@ async def get_current_user(token: str = Depends(oauth2_scheme)) -> CurrentUser:
                 roles.append(role.name)
 
                 # Load role permissions
-                role_permissions = db.query(RolePermission).filter(
-                    RolePermission.role_id == role.id
-                ).all()
+                role_permissions = (
+                    db.query(RolePermission)
+                    .filter(RolePermission.role_id == role.id)
+                    .all()
+                )
 
                 for role_perm in role_permissions:
-                    perm = db.query(Permission).filter(
-                        Permission.id == role_perm.permission_id
-                    ).first()
+                    perm = (
+                        db.query(Permission)
+                        .filter(Permission.id == role_perm.permission_id)
+                        .first()
+                    )
                     if perm:
                         permissions.add(f"{perm.resource}:{perm.action}")
 
@@ -131,12 +134,12 @@ async def get_current_user(token: str = Depends(oauth2_scheme)) -> CurrentUser:
             email=user.email,
             username=user.username,
             roles=roles,
-            permissions=list(permissions)
+            permissions=list(permissions),
         )
 
 
 async def get_current_active_user(
-    current_user: CurrentUser = Depends(get_current_user)
+    current_user: CurrentUser = Depends(get_current_user),
 ) -> CurrentUser:
     """Ensure the current user is active.
 
@@ -158,8 +161,7 @@ class RequireRole:
         self.roles = roles
 
     async def __call__(
-        self,
-        current_user: CurrentUser = Depends(get_current_user)
+        self, current_user: CurrentUser = Depends(get_current_user)
     ) -> CurrentUser:
         """Check if user has required roles.
 
@@ -175,7 +177,7 @@ class RequireRole:
         if not current_user.has_any_role(list(self.roles)):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Requires one of these roles: {', '.join(self.roles)}"
+                detail=f"Requires one of these roles: {', '.join(self.roles)}",
             )
         return current_user
 
@@ -194,8 +196,7 @@ class RequirePermission:
         self.action = action
 
     async def __call__(
-        self,
-        current_user: CurrentUser = Depends(get_current_user)
+        self, current_user: CurrentUser = Depends(get_current_user)
     ) -> CurrentUser:
         """Check if user has required permission.
 
@@ -211,13 +212,13 @@ class RequirePermission:
         if not current_user.has_permission(self.resource, self.action):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Requires permission: {self.resource}:{self.action}"
+                detail=f"Requires permission: {self.resource}:{self.action}",
             )
         return current_user
 
 
 async def optional_current_user(
-    token: Optional[str] = Depends(oauth2_scheme)
+    token: Optional[str] = Depends(oauth2_scheme),
 ) -> Optional[CurrentUser]:
     """Get current user if authenticated, None otherwise.
 

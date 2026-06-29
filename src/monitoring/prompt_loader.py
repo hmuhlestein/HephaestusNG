@@ -1,8 +1,9 @@
 """Utility for loading and formatting trajectory monitoring prompts."""
 
-from pathlib import Path
-from typing import Dict, Any, Optional
 import json
+from pathlib import Path
+from typing import Any, Dict, Optional
+
 import structlog
 
 logger = structlog.get_logger()
@@ -64,28 +65,27 @@ class PromptLoader:
 
         # Format complex fields
         constraints_str = self._format_list(
-            accumulated_context.get("constraints", []),
-            "No active constraints"
+            accumulated_context.get("constraints", []), "No active constraints"
         )
 
         lifted_constraints_str = self._format_list(
-            accumulated_context.get("lifted_constraints", []),
-            "No lifted constraints"
+            accumulated_context.get("lifted_constraints", []), "No lifted constraints"
         )
 
         standing_instructions_str = self._format_list(
             accumulated_context.get("standing_instructions", []),
-            "No standing instructions"
+            "No standing instructions",
         )
 
         blockers_str = self._format_list(
-            accumulated_context.get("discovered_blockers", []),
-            "No blockers discovered"
+            accumulated_context.get("discovered_blockers", []), "No blockers discovered"
         )
 
         # Format past summaries
         if past_summaries:
-            summaries_str = json.dumps(past_summaries[-5:], indent=2)  # Last 5 summaries
+            summaries_str = json.dumps(
+                past_summaries[-5:], indent=2
+            )  # Last 5 summaries
         else:
             summaries_str = "No previous Guardian summaries"
 
@@ -107,36 +107,39 @@ In the previous monitoring cycle, Claude's last message contained: `{last_messag
         phase_info = task_info.get("phase_info")
         if phase_info:
             # Truncate additional_notes if too long
-            additional_notes = phase_info.get('additional_notes', '')
+            additional_notes = phase_info.get("additional_notes", "")
             if len(additional_notes) > 3000:
-                additional_notes = additional_notes[:3000] + "\n\n[... Additional instructions truncated for brevity ...]"
+                additional_notes = (
+                    additional_notes[:3000]
+                    + "\n\n[... Additional instructions truncated for brevity ...]"
+                )
 
             phase_section = f"""
 **THIS AGENT IS WORKING IN A PHASED WORKFLOW**
 
-The task belongs to **{phase_info['workflow_context']['current_position']}** in the workflow.
+The task belongs to **{phase_info["workflow_context"]["current_position"]}** in the workflow.
 
-### Phase {phase_info['phase_number']}: {phase_info['phase_name']}
+### Phase {phase_info["phase_number"]}: {phase_info["phase_name"]}
 
 **Phase Description**:
-{phase_info['phase_description']}
+{phase_info["phase_description"]}
 
 **Phase Done Definitions** (What this phase must accomplish):
-{chr(10).join(f"- {d}" for d in phase_info.get('done_definitions', []))}
+{chr(10).join(f"- {d}" for d in phase_info.get("done_definitions", []))}
 
 **Phase-Specific Instructions** (Agent MUST follow these):
 {additional_notes}
 
 **Expected Outputs from This Phase**:
-{phase_info.get('outputs') or 'See done definitions'}
+{phase_info.get("outputs") or "See done definitions"}
 
 **What Happens After This Phase**:
-{phase_info.get('next_steps') or 'Move to next phase'}
+{phase_info.get("next_steps") or "Move to next phase"}
 
 **Workflow Context**:
-- Total Phases: {phase_info['workflow_context']['total_phases']}
-- All Phases: {', '.join(phase_info['workflow_context']['all_phase_names'])}
-- Workflow: {phase_info['workflow_context']['workflow_name']}
+- Total Phases: {phase_info["workflow_context"]["total_phases"]}
+- All Phases: {", ".join(phase_info["workflow_context"]["all_phase_names"])}
+- Workflow: {phase_info["workflow_context"]["workflow_name"]}
 
 ⚠️ **CRITICAL FOR TRAJECTORY ANALYSIS** ⚠️
 
@@ -155,7 +158,9 @@ If agent is NOT following phase instructions → needs_steering: true
         # Format the prompt
         formatted = template.format(
             overall_goal=accumulated_context.get("overall_goal", "Unknown"),
-            session_duration=str(accumulated_context.get("session_duration", "Unknown")),
+            session_duration=str(
+                accumulated_context.get("session_duration", "Unknown")
+            ),
             current_focus=accumulated_context.get("current_focus", "Unknown"),
             conversation_length=accumulated_context.get("conversation_length", 0),
             constraints=constraints_str,
@@ -167,17 +172,22 @@ If agent is NOT following phase instructions → needs_steering: true
             done_definition=task_info.get("done_definition", "Unknown"),
             task_id=task_info.get("task_id", "Unknown"),
             agent_id=task_info.get("agent_id", "Unknown"),
-            agent_output=agent_output[-40000:],  # Last 40000 chars to avoid token overflow
+            agent_output=agent_output[
+                -40000:
+            ],  # Last 40000 chars to avoid token overflow
             last_message_marker_section=marker_section,
             phase_context=phase_section,  # NEW
             workflow_id=workflow_id or "N/A (standalone task)",
-            workflow_description=workflow_description or "No workflow description available",
+            workflow_description=workflow_description
+            or "No workflow description available",
             definition_name=definition_name or "N/A",
         )
 
         # Prompt to send
         logger.debug("=" * 60)
-        logger.debug(f"GUARDIAN PROMPT TO LLM for agent {task_info.get('agent_id', 'unknown')}:")
+        logger.debug(
+            f"GUARDIAN PROMPT TO LLM for agent {task_info.get('agent_id', 'unknown')}:"
+        )
         logger.debug("=" * 60)
         logger.debug(formatted)
         logger.debug("=" * 60)
@@ -208,49 +218,71 @@ If agent is NOT following phase instructions → needs_steering: true
             workflows_breakdown = ""
             for wf in workflows:
                 workflows_breakdown += f"""
-### Workflow: {wf.get('workflow_id', 'Unknown')}
-**Description**: {wf.get('description', 'No description')}
-**Definition**: {wf.get('definition_name', 'N/A')}
-**Active Agents**: {', '.join(wf.get('agent_ids', [])) if wf.get('agent_ids') else 'None'}
-**Current Phases**: {', '.join(str(p) for p in wf.get('phases', [])) if wf.get('phases') else 'N/A'}
-**Task Status**: {wf.get('task_summary', 'No tasks')}
+### Workflow: {wf.get("workflow_id", "Unknown")}
+**Description**: {wf.get("description", "No description")}
+**Definition**: {wf.get("definition_name", "N/A")}
+**Active Agents**: {", ".join(wf.get("agent_ids", [])) if wf.get("agent_ids") else "None"}
+**Current Phases**: {", ".join(str(p) for p in wf.get("phases", [])) if wf.get("phases") else "N/A"}
+**Task Status**: {wf.get("task_summary", "No tasks")}
 """
         else:
-            workflows_breakdown = "No active workflows or workflow information not available."
+            workflows_breakdown = (
+                "No active workflows or workflow information not available."
+            )
 
         # Prepare summary data for better readability
         summary_data = []
 
         # Debug logging
-        logger.info(f"DEBUG - format_conductor_prompt received {len(guardian_summaries)} summaries")
+        logger.info(
+            f"DEBUG - format_conductor_prompt received {len(guardian_summaries)} summaries"
+        )
 
         for i, summary in enumerate(guardian_summaries):
             # Debug: log what we're processing
             logger.info(f"DEBUG - Processing summary {i}: keys={list(summary.keys())}")
-            logger.info(f"DEBUG - Summary content: agent_id={summary.get('agent_id')}, "
-                       f"trajectory_summary={summary.get('trajectory_summary', 'MISSING')[:100]}")
+            logger.info(
+                f"DEBUG - Summary content: agent_id={summary.get('agent_id')}, "
+                f"trajectory_summary={summary.get('trajectory_summary', 'MISSING')[:100]}"
+            )
 
-            summary_data.append({
-                "agent_id": summary.get("agent_id"),
-                "agent_type": summary.get("agent_type", "phase"),  # Include agent type for Conductor
-                "summary": summary.get("trajectory_summary", "No summary"),
-                "phase": summary.get("current_phase"),
-                "aligned": summary.get("trajectory_aligned"),
-                "needs_steering": summary.get("needs_steering"),
-                "accumulated_goal": summary.get("accumulated_goal", "")[:100],  # Truncate for readability
-            })
+            summary_data.append(
+                {
+                    "agent_id": summary.get("agent_id"),
+                    "agent_type": summary.get(
+                        "agent_type", "phase"
+                    ),  # Include agent type for Conductor
+                    "summary": summary.get("trajectory_summary", "No summary"),
+                    "phase": summary.get("current_phase"),
+                    "aligned": summary.get("trajectory_aligned"),
+                    "needs_steering": summary.get("needs_steering"),
+                    "accumulated_goal": summary.get("accumulated_goal", "")[
+                        :100
+                    ],  # Truncate for readability
+                }
+            )
 
-        logger.info(f"DEBUG - Prepared summary_data: {json.dumps(summary_data, default=str)[:1000]}")
+        logger.info(
+            f"DEBUG - Prepared summary_data: {json.dumps(summary_data, default=str)[:1000]}"
+        )
 
         # Prepare the JSON string for the template
         summaries_json_str = json.dumps(summary_data, indent=2)
-        logger.info(f"DEBUG - guardian_summaries_json string (first 500 chars): {summaries_json_str[:500]}")
+        logger.info(
+            f"DEBUG - guardian_summaries_json string (first 500 chars): {summaries_json_str[:500]}"
+        )
 
         # Format the prompt
         formatted = template.format(
-            primary_goal=system_goals.get("primary", "Complete all assigned tasks efficiently"),
-            system_constraints=system_goals.get("constraints", "No duplicate work, efficient resource usage"),
-            coordination_requirement=system_goals.get("coordination", "All agents working toward collective objectives"),
+            primary_goal=system_goals.get(
+                "primary", "Complete all assigned tasks efficiently"
+            ),
+            system_constraints=system_goals.get(
+                "constraints", "No duplicate work, efficient resource usage"
+            ),
+            coordination_requirement=system_goals.get(
+                "coordination", "All agents working toward collective objectives"
+            ),
             guardian_summaries_json=summaries_json_str,
             workflows_breakdown=workflows_breakdown,
         )
@@ -259,9 +291,13 @@ If agent is NOT following phase instructions → needs_steering: true
         if "{guardian_summaries_json}" in formatted:
             logger.error("ERROR: guardian_summaries_json placeholder was not replaced!")
         elif summaries_json_str not in formatted:
-            logger.error("ERROR: guardian_summaries_json content not found in formatted prompt!")
+            logger.error(
+                "ERROR: guardian_summaries_json content not found in formatted prompt!"
+            )
         else:
-            logger.info("DEBUG - guardian_summaries_json successfully inserted into prompt")
+            logger.info(
+                "DEBUG - guardian_summaries_json successfully inserted into prompt"
+            )
 
         # Log the full prompt being sent
         logger.info("=" * 60)
@@ -272,10 +308,12 @@ If agent is NOT following phase instructions → needs_steering: true
         if json_start != -1:
             json_end = formatted.find("```", json_start + 7)
             if json_end != -1:
-                json_section = formatted[json_start:json_end + 3]
+                json_section = formatted[json_start : json_end + 3]
                 logger.info(f"JSON SECTION OF PROMPT:\n{json_section}")
             else:
-                logger.info(f"JSON SECTION START:\n{formatted[json_start:json_start + 1000]}")
+                logger.info(
+                    f"JSON SECTION START:\n{formatted[json_start : json_start + 1000]}"
+                )
         else:
             logger.info("WARNING: No JSON section found in prompt!")
         # Also show beginning of prompt
@@ -293,7 +331,7 @@ If agent is NOT following phase instructions → needs_steering: true
         workflow_id: str,
         validation_criteria: str,
         submitted_by_agent: str,
-        submitted_at: str
+        submitted_at: str,
     ) -> str:
         """Format the result validation prompt with specific values.
 
@@ -320,7 +358,7 @@ If agent is NOT following phase instructions → needs_steering: true
             workflow_id=workflow_id,
             validation_criteria=validation_criteria,
             submitted_by_agent=submitted_by_agent,
-            submitted_at=submitted_at
+            submitted_at=submitted_at,
         )
 
     def format_task_validation_prompt(
@@ -373,9 +411,13 @@ Please verify that the previous issues have been addressed.
 
         # Handle iteration-specific guidance
         if iteration == 1:
-            iteration_guidance = "This is the first validation. Be thorough but constructive."
+            iteration_guidance = (
+                "This is the first validation. Be thorough but constructive."
+            )
         elif iteration == 2:
-            iteration_guidance = "This is the second attempt. Check if previous feedback was addressed."
+            iteration_guidance = (
+                "This is the second attempt. Check if previous feedback was addressed."
+            )
         else:
             iteration_guidance = f"This is attempt {iteration}. Focus on whether core requirements are now met."
 
@@ -392,7 +434,8 @@ Please verify that the previous issues have been addressed.
             previous_feedback_section=previous_feedback_section,
             iteration_guidance=iteration_guidance,
             workflow_id=workflow_id or "N/A (standalone task)",
-            workflow_description=workflow_description or "No workflow description available",
+            workflow_description=workflow_description
+            or "No workflow description available",
         )
 
     def _format_list(self, items: list, empty_message: str) -> str:

@@ -2,12 +2,12 @@
 
 import asyncio
 import logging
-from typing import Dict, Any, List, Optional
 from datetime import datetime, timedelta
 from enum import Enum
+from typing import Any, Dict, List, Optional
 
-from src.core.database import DatabaseManager, Agent, Task, AgentLog
 from src.agents.manager import AgentManager
+from src.core.database import Agent, AgentLog, DatabaseManager, Task
 from src.interfaces import LLMProviderInterface
 
 logger = logging.getLogger(__name__)
@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 
 class SteeringType(Enum):
     """Types of steering interventions."""
+
     STUCK = "stuck"
     DRIFTING = "drifting"
     VIOLATING_CONSTRAINTS = "violating_constraints"
@@ -25,6 +26,7 @@ class SteeringType(Enum):
 
 class TrajectoryPhase(Enum):
     """Agent work phases."""
+
     EXPLORATION = "exploration"
     INFORMATION_GATHERING = "information_gathering"
     PLANNING = "planning"
@@ -91,7 +93,9 @@ class Guardian:
         Returns:
             GPT-5 analysis with trajectory-aware summary and steering decision
         """
-        logger.info(f"Guardian GPT-5 analyzing agent {agent.id} with trajectory thinking")
+        logger.info(
+            f"Guardian GPT-5 analyzing agent {agent.id} with trajectory thinking"
+        )
 
         try:
             # Build accumulated context from entire session
@@ -108,9 +112,13 @@ class Guardian:
             # Get Phase context if task has a phase
             phase_info = None
             if task.phase_id and task.workflow_id:
-                phase_info = await self._get_phase_context(task.phase_id, task.workflow_id)
+                phase_info = await self._get_phase_context(
+                    task.phase_id, task.workflow_id
+                )
                 if phase_info:
-                    logger.info(f"📋 Loaded Phase context: {phase_info['workflow_context']['current_position']} - {phase_info['phase_name']}")
+                    logger.info(
+                        f"📋 Loaded Phase context: {phase_info['workflow_context']['current_position']} - {phase_info['phase_name']}"
+                    )
 
             # Call GPT-5 to analyze trajectory
             # This is the CORE - GPT-5 does the trajectory thinking, not static checks
@@ -119,15 +127,21 @@ class Guardian:
             last_message_marker = None
             if past_summaries:
                 # Get the most recent summary's marker
-                last_message_marker = past_summaries[-1].get('last_claude_message_marker')
+                last_message_marker = past_summaries[-1].get(
+                    "last_claude_message_marker"
+                )
 
             # Log summary of what we're sending to GPT-5
             logger.info("=" * 60)
             logger.info(f"🤖 GUARDIAN GPT-5 ANALYSIS for agent {agent.id}")
             logger.info("=" * 60)
-            logger.info(f"Overall Goal: {accumulated_context.get('overall_goal', 'Unknown')[:100]}...")
+            logger.info(
+                f"Overall Goal: {accumulated_context.get('overall_goal', 'Unknown')[:100]}..."
+            )
             logger.info(f"Past Summaries Count: {len(past_summaries)}")
-            logger.info(f"Last Message Marker: {last_message_marker or 'None (first analysis)'}")
+            logger.info(
+                f"Last Message Marker: {last_message_marker or 'None (first analysis)'}"
+            )
             logger.info(f"Task ID: {task.id}")
             logger.info(f"Phase Info: {'Present' if phase_info else 'None'}")
             logger.info("=" * 60)
@@ -143,7 +157,8 @@ class Guardian:
                         accumulated_context=accumulated_context,
                         past_summaries=past_summaries,
                         task_info={
-                            "description": task.enriched_description or task.raw_description,
+                            "description": task.enriched_description
+                            or task.raw_description,
                             "done_definition": task.done_definition,
                             "task_id": task.id,
                             "agent_id": agent.id,
@@ -172,14 +187,18 @@ class Guardian:
             result = {
                 "agent_id": agent.id,
                 "agent_type": agent.agent_type,  # Include agent type for Conductor
-                "trajectory_summary": analysis.get("trajectory_summary", "No summary"),  # Use consistent key name
+                "trajectory_summary": analysis.get(
+                    "trajectory_summary", "No summary"
+                ),  # Use consistent key name
                 "current_phase": analysis.get("current_phase", "unknown"),
                 "trajectory_aligned": analysis.get("trajectory_aligned", True),
                 "alignment_score": analysis.get("alignment_score", 0.5),
                 "alignment_issues": analysis.get("alignment_issues", []),
                 "needs_steering": analysis.get("needs_steering", False),
                 "steering_type": analysis.get("steering_type"),
-                "steering_message": analysis.get("steering_recommendation"),  # Map from LLM response key
+                "steering_message": analysis.get(
+                    "steering_recommendation"
+                ),  # Map from LLM response key
                 "accumulated_goal": accumulated_context["overall_goal"],
                 "active_constraints": accumulated_context["constraints"],
                 # Remove progress_percentage as requested
@@ -225,19 +244,24 @@ class Guardian:
         # Get all agent logs to understand full conversation
         session = self.db_manager.get_session()
         try:
-            logs = session.query(AgentLog).filter_by(
-                agent_id=agent.id
-            ).order_by(AgentLog.created_at).all()
+            logs = (
+                session.query(AgentLog)
+                .filter_by(agent_id=agent.id)
+                .order_by(AgentLog.created_at)
+                .all()
+            )
 
             # Extract conversation history
             conversation_history = []
             for log in logs:
                 if log.log_type in ["input", "output", "message"]:
-                    conversation_history.append({
-                        "type": log.log_type,
-                        "content": log.message,
-                        "timestamp": log.created_at,
-                    })
+                    conversation_history.append(
+                        {
+                            "type": log.log_type,
+                            "content": log.message,
+                            "timestamp": log.created_at,
+                        }
+                    )
 
             # Get task for initial context
             task = session.query(Task).filter_by(id=agent.current_task_id).first()
@@ -285,12 +309,12 @@ class Guardian:
     ):
         """
         PARENT-CHILD MODEL: Guardian acts as last resort.
-        
+
         By default, the parent workflow monitors its children via tmux peek
         and task progress. If the parent detects a problem and prompts the
         human, the human can dismiss — and the Guardian gets ONE chance to
         steer the agent before the parent terminates it.
-        
+
         The Guardian only steers if:
         1. The agent has been flagged multiple times (trajectory analysis)
         2. The parent has already detected impasse and prompted human
@@ -317,7 +341,7 @@ class Guardian:
             self._record_steering(
                 agent.id,
                 f"{steering_type}_DISCARDED",
-                f"Queued message detected: {message[:200]}..."
+                f"Queued message detected: {message[:200]}...",
             )
             return
 
@@ -341,7 +365,7 @@ class Guardian:
                     "message": message,
                     "timestamp": datetime.utcnow().isoformat(),
                     "model": "parent_child_last_resort",
-                }
+                },
             )
             session.add(log_entry)
             session.commit()
@@ -350,7 +374,7 @@ class Guardian:
 
     def _should_steer_agent(self, agent_id: str) -> bool:
         """Check if we should steer agent (avoid over-messaging).
-        
+
         Last-resort model: max 1 steering per 10 minutes.
         """
         if agent_id not in self.steering_history:
@@ -359,40 +383,44 @@ class Guardian:
 
         # Check recent steering
         recent_steerings = [
-            s for s in self.steering_history[agent_id]
-            if datetime.fromisoformat(s["timestamp"]) > datetime.utcnow() - timedelta(minutes=10)
+            s
+            for s in self.steering_history[agent_id]
+            if datetime.fromisoformat(s["timestamp"])
+            > datetime.utcnow() - timedelta(minutes=10)
         ]
 
         return len(recent_steerings) == 0
 
     def detect_agent_exited(self, tmux_output: str) -> bool:
         """Detect if agent has exited to the command line.
-        
+
         Looks for shell prompts like '$', '%', '>>>', 'bquote>' which indicate
         the agent session ended and we're at a shell.
         """
         if not tmux_output:
             return False
-        lines = tmux_output.strip().split('\n')[-5:]  # Check last 5 lines
+        lines = tmux_output.strip().split("\n")[-5:]  # Check last 5 lines
         for line in lines:
             line = line.strip()
             # Shell prompts at start of line
-            if line.startswith(('$ ', '% ', '>>> ', 'bquote> ')):
+            if line.startswith(("$ ", "% ", ">>> ", "bquote> ")):
                 return True
             # Python REPL
-            if line.startswith('>>> '):
+            if line.startswith(">>> "):
                 return True
             # zsh/bash prompt patterns
-            if line.endswith(' %') or line.endswith(' $'):
+            if line.endswith(" %") or line.endswith(" $"):
                 return True
         return False
 
-    def detect_garbled_output(self, tmux_output: str, tui_patterns: Optional[List[str]] = None) -> bool:
+    def detect_garbled_output(
+        self, tmux_output: str, tui_patterns: Optional[List[str]] = None
+    ) -> bool:
         """Detect garbled/repeating TUI output.
-        
+
         Only flags output that is clearly corrupted — not the CLI tool's
         normal status bar rendering.
-        
+
         Args:
             tmux_output: Raw tmux capture-pane output
             tui_patterns: Optional list of regex patterns that are normal
@@ -407,7 +435,8 @@ class Guardian:
         if tui_patterns:
             for pat in tui_patterns:
                 import re
-                clean = re.sub(pat, '', clean, flags=re.IGNORECASE)
+
+                clean = re.sub(pat, "", clean, flags=re.IGNORECASE)
         clean = clean.strip()
         # If most of the output is TUI status, it's not garbled
         if len(clean) < 100:
@@ -418,7 +447,7 @@ class Guardian:
                 continue
             seen = {}
             for i in range(len(clean) - window):
-                chunk = clean[i:i+window]
+                chunk = clean[i : i + window]
                 if chunk.isalpha() and len(chunk) >= 3:
                     seen[chunk] = seen.get(chunk, 0) + 1
             if any(v >= 8 for v in seen.values()):
@@ -430,23 +459,25 @@ class Guardian:
         if agent_id not in self.steering_history:
             self.steering_history[agent_id] = []
 
-        self.steering_history[agent_id].append({
-            "type": steering_type,
-            "message": message,
-            "timestamp": datetime.utcnow().isoformat(),
-        })
+        self.steering_history[agent_id].append(
+            {
+                "type": steering_type,
+                "message": message,
+                "timestamp": datetime.utcnow().isoformat(),
+            }
+        )
 
         # Keep only last 10 steerings
         self.steering_history[agent_id] = self.steering_history[agent_id][-10:]
 
     def _extract_last_error(self, tmux_output: str) -> str:
         """Extract last error message from output."""
-        lines = tmux_output.split('\n')
+        lines = tmux_output.split("\n")
         for i in range(len(lines) - 1, -1, -1):
-            if 'error' in lines[i].lower():
+            if "error" in lines[i].lower():
                 # Get error and next 2 lines for context
-                error_context = lines[i:min(i+3, len(lines))]
-                return ' '.join(error_context)[:200]
+                error_context = lines[i : min(i + 3, len(lines))]
+                return " ".join(error_context)[:200]
         return "The error details are not clear from the output."
 
     async def _get_agent_task(self, agent: Agent) -> Optional[Task]:
@@ -458,7 +489,9 @@ class Guardian:
         finally:
             session.close()
 
-    async def _get_phase_context(self, phase_id: str, workflow_id: str) -> Optional[Dict[str, Any]]:
+    async def _get_phase_context(
+        self, phase_id: str, workflow_id: str
+    ) -> Optional[Dict[str, Any]]:
         """Get phase context for Guardian analysis.
 
         Args:
@@ -481,9 +514,12 @@ class Guardian:
             workflow = session.query(Workflow).filter_by(id=workflow_id).first()
 
             # Get all phases in workflow for position context
-            all_phases = session.query(Phase).filter_by(
-                workflow_id=workflow_id
-            ).order_by(Phase.order).all()
+            all_phases = (
+                session.query(Phase)
+                .filter_by(workflow_id=workflow_id)
+                .order_by(Phase.order)
+                .all()
+            )
 
             return {
                 "phase_id": phase.id,
@@ -501,7 +537,7 @@ class Guardian:
                     "total_phases": len(all_phases),
                     "current_position": f"Phase {phase.order} of {len(all_phases)}",
                     "all_phase_names": [p.name for p in all_phases],
-                }
+                },
             }
         finally:
             session.close()

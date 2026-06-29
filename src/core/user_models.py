@@ -1,20 +1,22 @@
 """User management database models for Hephaestus."""
 
 from datetime import datetime
+
 from sqlalchemy import (
+    JSON,
+    Boolean,
+    CheckConstraint,
     Column,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
     String,
     Text,
-    Integer,
-    DateTime,
-    Boolean,
-    ForeignKey,
-    CheckConstraint,
-    JSON,
     UniqueConstraint,
-    Index,
 )
 from sqlalchemy.orm import relationship
+
 from src.core.database import Base
 
 
@@ -49,12 +51,28 @@ class User(Base):
     deleted_at = Column(DateTime)  # Soft delete support
 
     # Relationships
-    roles = relationship("UserRole", back_populates="user", foreign_keys="[UserRole.user_id]", cascade="all, delete-orphan")
-    teams = relationship("TeamMember", back_populates="user", foreign_keys="[TeamMember.user_id]")
+    roles = relationship(
+        "UserRole",
+        back_populates="user",
+        foreign_keys="[UserRole.user_id]",
+        cascade="all, delete-orphan",
+    )
+    teams = relationship(
+        "TeamMember", back_populates="user", foreign_keys="[TeamMember.user_id]"
+    )
     owned_teams = relationship("Team", back_populates="owner")
-    sessions = relationship("UserSession", back_populates="user", cascade="all, delete-orphan")
-    tokens = relationship("AuthToken", back_populates="user", cascade="all, delete-orphan")
-    preferences = relationship("UserPreferences", back_populates="user", uselist=False, cascade="all, delete-orphan")
+    sessions = relationship(
+        "UserSession", back_populates="user", cascade="all, delete-orphan"
+    )
+    tokens = relationship(
+        "AuthToken", back_populates="user", cascade="all, delete-orphan"
+    )
+    preferences = relationship(
+        "UserPreferences",
+        back_populates="user",
+        uselist=False,
+        cascade="all, delete-orphan",
+    )
     audit_logs = relationship("AuditLog", back_populates="user")
     # Note: User relationships with Agent, Task, Memory are not implemented yet
     # created_agents = relationship("Agent", foreign_keys="Agent.created_by_user_id", backref="creator")
@@ -82,7 +100,9 @@ class Role(Base):
 
     # Relationships
     users = relationship("UserRole", back_populates="role")
-    permissions = relationship("RolePermission", back_populates="role", cascade="all, delete-orphan")
+    permissions = relationship(
+        "RolePermission", back_populates="role", cascade="all, delete-orphan"
+    )
 
 
 class UserRole(Base):
@@ -90,8 +110,12 @@ class UserRole(Base):
 
     __tablename__ = "user_roles"
 
-    user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
-    role_id = Column(String, ForeignKey("roles.id", ondelete="CASCADE"), primary_key=True)
+    user_id = Column(
+        String, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    role_id = Column(
+        String, ForeignKey("roles.id", ondelete="CASCADE"), primary_key=True
+    )
     granted_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     granted_by = Column(String, ForeignKey("users.id", ondelete="SET NULL"))
     expires_at = Column(DateTime)  # Optional role expiration
@@ -115,7 +139,9 @@ class Permission(Base):
 
     id = Column(String, primary_key=True)
     resource = Column(String, nullable=False)  # e.g., 'agents', 'tasks', 'memories'
-    action = Column(String, nullable=False)  # e.g., 'create', 'read', 'update', 'delete'
+    action = Column(
+        String, nullable=False
+    )  # e.g., 'create', 'read', 'update', 'delete'
     description = Column(Text)
     is_system = Column(Boolean, default=False)
 
@@ -133,8 +159,12 @@ class RolePermission(Base):
 
     __tablename__ = "role_permissions"
 
-    role_id = Column(String, ForeignKey("roles.id", ondelete="CASCADE"), primary_key=True)
-    permission_id = Column(String, ForeignKey("permissions.id", ondelete="CASCADE"), primary_key=True)
+    role_id = Column(
+        String, ForeignKey("roles.id", ondelete="CASCADE"), primary_key=True
+    )
+    permission_id = Column(
+        String, ForeignKey("permissions.id", ondelete="CASCADE"), primary_key=True
+    )
 
     # Relationships
     role = relationship("Role", back_populates="permissions")
@@ -151,7 +181,9 @@ class Team(Base):
     id = Column(String, primary_key=True)
     name = Column(String, nullable=False)
     description = Column(Text)
-    owner_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    owner_id = Column(
+        String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
     settings = Column(JSON)  # Team-specific settings
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
@@ -159,7 +191,9 @@ class Team(Base):
 
     # Relationships
     owner = relationship("User", back_populates="owned_teams")
-    members = relationship("TeamMember", back_populates="team", cascade="all, delete-orphan")
+    members = relationship(
+        "TeamMember", back_populates="team", cascade="all, delete-orphan"
+    )
 
     __table_args__ = (
         Index("idx_teams_owner", "owner_id"),
@@ -172,8 +206,12 @@ class TeamMember(Base):
 
     __tablename__ = "team_members"
 
-    team_id = Column(String, ForeignKey("teams.id", ondelete="CASCADE"), primary_key=True)
-    user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    team_id = Column(
+        String, ForeignKey("teams.id", ondelete="CASCADE"), primary_key=True
+    )
+    user_id = Column(
+        String, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
     role = Column(
         String,
         CheckConstraint("role IN ('owner', 'admin', 'member', 'viewer')"),
@@ -201,10 +239,14 @@ class AuthToken(Base):
 
     id = Column(String, primary_key=True)
     user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-    token_hash = Column(String, unique=True, nullable=False, index=True)  # Hashed token for security
+    token_hash = Column(
+        String, unique=True, nullable=False, index=True
+    )  # Hashed token for security
     token_type = Column(
         String,
-        CheckConstraint("token_type IN ('refresh', 'api_key', 'password_reset', 'email_verification')"),
+        CheckConstraint(
+            "token_type IN ('refresh', 'api_key', 'password_reset', 'email_verification')"
+        ),
         nullable=False,
     )
     client_info = Column(JSON)  # User agent, IP, etc.
@@ -286,7 +328,9 @@ class UserPreferences(Base):
 
     __tablename__ = "user_preferences"
 
-    user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    user_id = Column(
+        String, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
     theme = Column(String, default="light")
     notification_settings = Column(JSON)
     dashboard_layout = Column(JSON)

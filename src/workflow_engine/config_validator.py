@@ -101,7 +101,12 @@ def validate_phase_file(
 
     # ID must be an integer
     if not isinstance(phase_id, int):
-        errors.append(_err(filename, f"Phase id must be an integer, got {type(phase_id).__name__}: {phase_id}"))
+        errors.append(
+            _err(
+                filename,
+                f"Phase id must be an integer, got {type(phase_id).__name__}: {phase_id}",
+            )
+        )
         return errors
 
     # ID uniqueness
@@ -128,13 +133,21 @@ def validate_phase_file(
     # done_definitions should be a list if present
     done_defs = phase_data.get("done_definitions")
     if done_defs is not None and not isinstance(done_defs, list):
-        errors.append(_err(filename, f"done_definitions must be a list, got {type(done_defs).__name__}"))
+        errors.append(
+            _err(
+                filename,
+                f"done_definitions must be a list, got {type(done_defs).__name__}",
+            )
+        )
 
     # thinking_level validation if present
     thinking = phase_data.get("thinking_level")
     if thinking is not None and thinking not in ("low", "medium", "high"):
         errors.append(
-            _err(filename, f"Invalid thinking_level: '{thinking}' (must be low, medium, or high)")
+            _err(
+                filename,
+                f"Invalid thinking_level: '{thinking}' (must be low, medium, or high)",
+            )
         )
 
     return errors
@@ -172,7 +185,13 @@ def validate_workflow_yaml(
 
     for key in ORCHESTRATOR_REQUIRED_KEYS:
         if key not in orch:
-            errors.append(_err(filename, f"orchestrator missing required key: '{key}'", path="orchestrator"))
+            errors.append(
+                _err(
+                    filename,
+                    f"orchestrator missing required key: '{key}'",
+                    path="orchestrator",
+                )
+            )
 
     # Validate orchestrator type
     orch_type = orch.get("type")
@@ -187,35 +206,59 @@ def validate_workflow_yaml(
 
     # Validate max_phase_retries
     max_retries = orch.get("max_phase_retries")
-    if max_retries is not None and (not isinstance(max_retries, int) or max_retries < 0):
+    if max_retries is not None and (
+        not isinstance(max_retries, int) or max_retries < 0
+    ):
         errors.append(
-            _err(filename, f"orchestrator.max_phase_retries must be a non-negative integer, got {max_retries}",
-                 path="orchestrator.max_phase_retries")
+            _err(
+                filename,
+                f"orchestrator.max_phase_retries must be a non-negative integer, got {max_retries}",
+                path="orchestrator.max_phase_retries",
+            )
         )
 
     # Validate max_total_gotos
     max_gotos = orch.get("max_total_gotos")
     if max_gotos is not None and (not isinstance(max_gotos, int) or max_gotos < 0):
         errors.append(
-            _err(filename, f"orchestrator.max_total_gotos must be a non-negative integer, got {max_gotos}",
-                 path="orchestrator.max_total_gotos")
+            _err(
+                filename,
+                f"orchestrator.max_total_gotos must be a non-negative integer, got {max_gotos}",
+                path="orchestrator.max_total_gotos",
+            )
         )
 
     # ── Evaluation points ─────────────────────────────────────────
     eval_points = orch.get("evaluation_points", [])
     if not isinstance(eval_points, list):
-        errors.append(_err(filename, "orchestrator.evaluation_points must be a list", path="orchestrator.evaluation_points"))
+        errors.append(
+            _err(
+                filename,
+                "orchestrator.evaluation_points must be a list",
+                path="orchestrator.evaluation_points",
+            )
+        )
     else:
         seen_after_phases = set()
         for i, ep in enumerate(eval_points):
             ep_path = f"orchestrator.evaluation_points[{i}]"
             if not isinstance(ep, dict):
-                errors.append(_err(filename, f"evaluation_point[{i}] must be a dict", path=ep_path))
+                errors.append(
+                    _err(
+                        filename, f"evaluation_point[{i}] must be a dict", path=ep_path
+                    )
+                )
                 continue
 
             for key in EVAL_POINT_REQUIRED_KEYS:
                 if key not in ep:
-                    errors.append(_err(filename, f"evaluation_point[{i}] missing required key: '{key}'", path=ep_path))
+                    errors.append(
+                        _err(
+                            filename,
+                            f"evaluation_point[{i}] missing required key: '{key}'",
+                            path=ep_path,
+                        )
+                    )
 
             # after_phase must reference a valid phase
             after_phase = ep.get("after_phase")
@@ -243,19 +286,33 @@ def validate_workflow_yaml(
             conditions = ep.get("conditions", [])
             if not isinstance(conditions, list):
                 errors.append(
-                    _err(filename, f"evaluation_point[{i}].conditions must be a list", path=f"{ep_path}.conditions")
+                    _err(
+                        filename,
+                        f"evaluation_point[{i}].conditions must be a list",
+                        path=f"{ep_path}.conditions",
+                    )
                 )
             else:
                 for j, cond in enumerate(conditions):
                     cond_path = f"{ep_path}.conditions[{j}]"
                     if not isinstance(cond, dict):
-                        errors.append(_err(filename, f"condition[{j}] must be a dict", path=cond_path))
+                        errors.append(
+                            _err(
+                                filename,
+                                f"condition[{j}] must be a dict",
+                                path=cond_path,
+                            )
+                        )
                         continue
 
                     for key in CONDITION_REQUIRED_KEYS:
                         if key not in cond:
                             errors.append(
-                                _err(filename, f"condition[{j}] missing required key: '{key}'", path=cond_path)
+                                _err(
+                                    filename,
+                                    f"condition[{j}] missing required key: '{key}'",
+                                    path=cond_path,
+                                )
                             )
 
                     action = cond.get("action")
@@ -286,7 +343,13 @@ def validate_workflow_yaml(
     else:
         for key in WORKFLOW_SECTION_REQUIRED_KEYS:
             if key not in wf:
-                errors.append(_err(filename, f"workflow missing required key: '{key}'", path="workflow"))
+                errors.append(
+                    _err(
+                        filename,
+                        f"workflow missing required key: '{key}'",
+                        path="workflow",
+                    )
+                )
 
         # Validate board columns if present
         board = wf.get("board")
@@ -294,13 +357,23 @@ def validate_workflow_yaml(
             columns = board.get("columns")
             if columns is not None:
                 if not isinstance(columns, list):
-                    errors.append(_err(filename, "workflow.board.columns must be a list", path="workflow.board.columns"))
+                    errors.append(
+                        _err(
+                            filename,
+                            "workflow.board.columns must be a list",
+                            path="workflow.board.columns",
+                        )
+                    )
                 else:
                     col_ids = set()
                     for k, col in enumerate(columns):
                         if not isinstance(col, dict):
                             errors.append(
-                                _err(filename, f"board.columns[{k}] must be a dict", path=f"workflow.board.columns[{k}]")
+                                _err(
+                                    filename,
+                                    f"board.columns[{k}] must be a dict",
+                                    path=f"workflow.board.columns[{k}]",
+                                )
                             )
                             continue
                         for req in ("id", "name", "order"):
@@ -316,7 +389,11 @@ def validate_workflow_yaml(
                         if cid:
                             if cid in col_ids:
                                 errors.append(
-                                    _err(filename, f"Duplicate board column id: '{cid}'", path=f"workflow.board.columns[{k}]")
+                                    _err(
+                                        filename,
+                                        f"Duplicate board column id: '{cid}'",
+                                        path=f"workflow.board.columns[{k}]",
+                                    )
                                 )
                             col_ids.add(cid)
 
@@ -328,24 +405,44 @@ def validate_workflow_yaml(
         params = lt.get("parameters")
         if params is not None:
             if not isinstance(params, list):
-                errors.append(_err(filename, "launch_template.parameters must be a list", path="launch_template.parameters"))
+                errors.append(
+                    _err(
+                        filename,
+                        "launch_template.parameters must be a list",
+                        path="launch_template.parameters",
+                    )
+                )
             else:
                 param_names = set()
                 for k, param in enumerate(params):
                     param_path = f"launch_template.parameters[{k}]"
                     if not isinstance(param, dict):
-                        errors.append(_err(filename, f"parameters[{k}] must be a dict", path=param_path))
+                        errors.append(
+                            _err(
+                                filename,
+                                f"parameters[{k}] must be a dict",
+                                path=param_path,
+                            )
+                        )
                         continue
                     for req in LAUNCH_PARAM_REQUIRED_KEYS:
                         if req not in param:
                             errors.append(
-                                _err(filename, f"parameters[{k}] missing required key: '{req}'", path=param_path)
+                                _err(
+                                    filename,
+                                    f"parameters[{k}] missing required key: '{req}'",
+                                    path=param_path,
+                                )
                             )
                     pname = param.get("name")
                     if pname:
                         if pname in param_names:
                             errors.append(
-                                _err(filename, f"Duplicate parameter name: '{pname}'", path=param_path)
+                                _err(
+                                    filename,
+                                    f"Duplicate parameter name: '{pname}'",
+                                    path=param_path,
+                                )
                             )
                         param_names.add(pname)
 
@@ -372,17 +469,20 @@ def validate_all_workflows(
     all_errors = []
 
     if not config_dir.exists():
-        all_errors.append(_err(str(config_dir), "Config directory does not exist", severity="warning"))
+        all_errors.append(
+            _err(str(config_dir), "Config directory does not exist", severity="warning")
+        )
         return all_errors
 
     # Find workflow directories (dirs containing workflow.yaml)
     workflow_dirs = sorted(
-        d for d in config_dir.iterdir()
-        if d.is_dir() and (d / "workflow.yaml").exists()
+        d for d in config_dir.iterdir() if d.is_dir() and (d / "workflow.yaml").exists()
     )
 
     if not workflow_dirs:
-        all_errors.append(_err(str(config_dir), "No workflow directories found", severity="warning"))
+        all_errors.append(
+            _err(str(config_dir), "No workflow directories found", severity="warning")
+        )
         return all_errors
 
     for wf_dir in workflow_dirs:
@@ -395,7 +495,9 @@ def validate_all_workflows(
         else:
             err_count = sum(1 for e in wf_errors if e["severity"] == "error")
             warn_count = sum(1 for e in wf_errors if e["severity"] == "warning")
-            logger.warning(f"[config_validator] Workflow '{wf_name}': {err_count} error(s), {warn_count} warning(s)")
+            logger.warning(
+                f"[config_validator] Workflow '{wf_name}': {err_count} error(s), {warn_count} warning(s)"
+            )
 
     return all_errors
 
@@ -432,7 +534,12 @@ def validate_single_workflow(wf_dir: Path) -> List[Dict[str, Any]]:
             continue
 
         if not isinstance(phase_data, dict):
-            errors.append(_err(fname, f"Phase file must contain a YAML mapping, got {type(phase_data).__name__}"))
+            errors.append(
+                _err(
+                    fname,
+                    f"Phase file must contain a YAML mapping, got {type(phase_data).__name__}",
+                )
+            )
             continue
 
         phase_errors = validate_phase_file(phase_data, fname, seen_ids, seen_names)
@@ -453,7 +560,9 @@ def validate_single_workflow(wf_dir: Path) -> List[Dict[str, Any]]:
         return errors
 
     if not isinstance(wf_cfg, dict):
-        errors.append(_err(f"{wf_name}/workflow.yaml", "Workflow config must be a YAML mapping"))
+        errors.append(
+            _err(f"{wf_name}/workflow.yaml", "Workflow config must be a YAML mapping")
+        )
         return errors
 
     wf_errors = validate_workflow_yaml(wf_cfg, f"{wf_name}/workflow.yaml", phase_names)

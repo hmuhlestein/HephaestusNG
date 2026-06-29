@@ -7,11 +7,11 @@ to match Hephaestus's existing embedding model (text-embedding-3-large, 3072-dim
 
 import os
 import sys
-import asyncio
-from typing import List, Dict, Any
+from typing import Any, Dict, List
+
+from fastmcp import FastMCP
 from openai import AsyncOpenAI
 from qdrant_client import QdrantClient
-from fastmcp import FastMCP
 
 # Initialize FastMCP
 mcp = FastMCP("Qdrant with OpenAI Embeddings")
@@ -28,12 +28,14 @@ qdrant_client = QdrantClient(url=QDRANT_URL)
 
 if OPENROUTER_API_KEY:
     from openai import AsyncOpenAI
+
     openai_client = AsyncOpenAI(
         api_key=OPENROUTER_API_KEY,
         base_url="https://openrouter.ai/api/v1",
     )
 elif OPENAI_API_KEY:
     from openai import AsyncOpenAI
+
     openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 else:
     openai_client = None
@@ -42,7 +44,9 @@ else:
 async def generate_embedding(text: str) -> List[float]:
     """Generate embedding using OpenAI or OpenRouter."""
     if not openai_client:
-        raise Exception("No API key available. Set OPENROUTER_API_KEY or OPENAI_API_KEY.")
+        raise Exception(
+            "No API key available. Set OPENROUTER_API_KEY or OPENAI_API_KEY."
+        )
     try:
         response = await openai_client.embeddings.create(
             model=EMBEDDING_MODEL,
@@ -79,14 +83,16 @@ async def qdrant_find(query: str, limit: int = 5) -> str:
         # Format results
         formatted_results = []
         for i, result in enumerate(results, 1):
-            formatted_results.append({
-                "rank": i,
-                "score": round(result.score, 4),
-                "content": result.payload.get("content", ""),
-                "memory_type": result.payload.get("memory_type", "unknown"),
-                "agent_id": result.payload.get("agent_id", "unknown"),
-                "timestamp": result.payload.get("timestamp", ""),
-            })
+            formatted_results.append(
+                {
+                    "rank": i,
+                    "score": round(result.score, 4),
+                    "content": result.payload.get("content", ""),
+                    "memory_type": result.payload.get("memory_type", "unknown"),
+                    "agent_id": result.payload.get("agent_id", "unknown"),
+                    "timestamp": result.payload.get("timestamp", ""),
+                }
+            )
 
         if not formatted_results:
             return "No relevant memories found for your query."
@@ -124,7 +130,10 @@ async def qdrant_store(content: str, metadata: Dict[str, Any] = None) -> str:
 if __name__ == "__main__":
     # Validate configuration
     if not OPENAI_API_KEY and not OPENROUTER_API_KEY:
-        print("Error: Set OPENROUTER_API_KEY or OPENAI_API_KEY environment variable", file=sys.stderr)
+        print(
+            "Error: Set OPENROUTER_API_KEY or OPENAI_API_KEY environment variable",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     provider = "OpenRouter" if OPENROUTER_API_KEY else "OpenAI"

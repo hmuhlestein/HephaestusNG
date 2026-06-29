@@ -1,24 +1,15 @@
 """Test validation inheritance from phase to task."""
 
-import pytest
-import asyncio
-import uuid
-import json
-from unittest.mock import Mock, patch, AsyncMock, MagicMock
-from datetime import datetime
-
-from src.core.database import (
-    DatabaseManager,
-    Task,
-    Agent,
-    Phase,
-    Workflow,
-    Base
-)
-from src.mcp.server import app, server_state
-from fastapi.testclient import TestClient
-import tempfile
 import os
+import tempfile
+import uuid
+from unittest.mock import AsyncMock, Mock, patch
+
+import pytest
+from fastapi.testclient import TestClient
+
+from src.core.database import Agent, DatabaseManager, Phase, Task, Workflow
+from src.mcp.server import app
 
 
 @pytest.fixture
@@ -39,8 +30,8 @@ def test_db():
 @pytest.fixture
 def test_client(test_db):
     """Create a test client with mocked dependencies."""
-    with patch('src.mcp.server.server_state.db_manager', test_db):
-        with patch('src.mcp.server.server_state.initialized', True):
+    with patch("src.mcp.server.server_state.db_manager", test_db):
+        with patch("src.mcp.server.server_state.initialized", True):
             client = TestClient(app)
             yield client
 
@@ -59,7 +50,7 @@ class TestValidationInheritance:
             id=str(uuid.uuid4()),
             name="Test Workflow",
             phases_folder_path="/test/path",
-            status="active"
+            status="active",
         )
         session.add(workflow)
 
@@ -77,10 +68,10 @@ class TestValidationInheritance:
                     {
                         "description": "Tests pass",
                         "check_type": "command_success",
-                        "command": "pytest"
+                        "command": "pytest",
                     }
-                ]
-            }
+                ],
+            },
         )
         session.add(phase_with_validation)
 
@@ -92,7 +83,7 @@ class TestValidationInheritance:
             name="Phase without Validation",
             description="Test phase without validation",
             done_definitions=["Test complete"],
-            validation=None  # No validation
+            validation=None,  # No validation
         )
         session.add(phase_without_validation)
 
@@ -106,7 +97,7 @@ class TestValidationInheritance:
             enriched_description="Task 1 enriched",
             done_definition="Done when complete",
             status="pending",
-            priority="medium"
+            priority="medium",
         )
         session.add(task1)
         session.commit()
@@ -126,7 +117,7 @@ class TestValidationInheritance:
             enriched_description="Task 2 enriched",
             done_definition="Done when complete",
             status="pending",
-            priority="medium"
+            priority="medium",
         )
         session.add(task2)
         session.commit()
@@ -143,8 +134,12 @@ class TestValidationInheritance:
         task1_check = session.query(Task).filter_by(id=task1.id).first()
         task2_check = session.query(Task).filter_by(id=task2.id).first()
 
-        assert task1_check.validation_enabled == True, "Task with validation phase should have validation_enabled=True"
-        assert task2_check.validation_enabled == False, "Task without validation phase should have validation_enabled=False"
+        assert task1_check.validation_enabled == True, (
+            "Task with validation phase should have validation_enabled=True"
+        )
+        assert task2_check.validation_enabled == False, (
+            "Task without validation phase should have validation_enabled=False"
+        )
 
         session.close()
 
@@ -158,7 +153,7 @@ class TestValidationInheritance:
             id=str(uuid.uuid4()),
             name="Test Workflow",
             phases_folder_path="/test/path",
-            status="active"
+            status="active",
         )
         session.add(workflow)
 
@@ -170,7 +165,7 @@ class TestValidationInheritance:
             name="Phase with Empty Validation",
             description="Test phase",
             done_definitions=["Test complete"],
-            validation={"criteria": []}  # Has validation but no explicit enabled field
+            validation={"criteria": []},  # Has validation but no explicit enabled field
         )
         session.add(phase_with_empty_validation)
         session.commit()
@@ -182,7 +177,7 @@ class TestValidationInheritance:
             enriched_description="Task enriched",
             done_definition="Done when complete",
             status="pending",
-            priority="medium"
+            priority="medium",
         )
         session.add(task)
         session.commit()
@@ -193,13 +188,17 @@ class TestValidationInheritance:
             phase = session.query(Phase).filter_by(id=task.phase_id).first()
             if phase and phase.validation:  # Empty dict is truthy
                 # Check if validation is explicitly disabled
-                if phase.validation.get("enabled", True):  # Default to True if not specified
+                if phase.validation.get(
+                    "enabled", True
+                ):  # Default to True if not specified
                     task.validation_enabled = True
         session.commit()
 
         # Verify
         task_check = session.query(Task).filter_by(id=task.id).first()
-        assert task_check.validation_enabled == True, "Task with empty validation dict should still have validation_enabled=True"
+        assert task_check.validation_enabled == True, (
+            "Task with empty validation dict should still have validation_enabled=True"
+        )
 
         session.close()
 
@@ -213,7 +212,7 @@ class TestValidationInheritance:
             id=str(uuid.uuid4()),
             name="Test Workflow",
             phases_folder_path="/test/path",
-            status="active"
+            status="active",
         )
         session.add(workflow)
 
@@ -225,7 +224,7 @@ class TestValidationInheritance:
             name="Phase with Disabled Validation",
             description="Test phase",
             done_definitions=["Test complete"],
-            validation={"enabled": False}  # Explicitly disabled
+            validation={"enabled": False},  # Explicitly disabled
         )
         session.add(phase_with_disabled_validation)
         session.commit()
@@ -237,7 +236,7 @@ class TestValidationInheritance:
             enriched_description="Task enriched",
             done_definition="Done when complete",
             status="pending",
-            priority="medium"
+            priority="medium",
         )
         session.add(task)
         session.commit()
@@ -248,13 +247,17 @@ class TestValidationInheritance:
             phase = session.query(Phase).filter_by(id=task.phase_id).first()
             if phase and phase.validation:
                 # Check if explicitly disabled
-                if phase.validation.get("enabled", True):  # Default to True if not specified
+                if phase.validation.get(
+                    "enabled", True
+                ):  # Default to True if not specified
                     task.validation_enabled = True
         session.commit()
 
         # Verify
         task_check = session.query(Task).filter_by(id=task.id).first()
-        assert task_check.validation_enabled == False, "Task with explicitly disabled validation should have validation_enabled=False"
+        assert task_check.validation_enabled == False, (
+            "Task with explicitly disabled validation should have validation_enabled=False"
+        )
 
         session.close()
 
@@ -274,7 +277,7 @@ class TestValidationInheritanceIntegration:
             id=str(uuid.uuid4()),
             name="Test Workflow",
             phases_folder_path="/test/path",
-            status="active"
+            status="active",
         )
         session.add(workflow)
 
@@ -290,10 +293,10 @@ class TestValidationInheritanceIntegration:
                     {
                         "description": "Code compiles",
                         "check_type": "command_success",
-                        "command": "make build"
+                        "command": "make build",
                     }
                 ]
-            }
+            },
         )
         session.add(phase)
 
@@ -303,23 +306,29 @@ class TestValidationInheritanceIntegration:
             system_prompt="Test agent prompt",
             status="working",
             cli_type="claude",
-            agent_type="phase"
+            agent_type="phase",
         )
         session.add(agent)
         session.commit()
 
         # Mock the async parts
-        with patch('src.mcp.server.server_state') as mock_state:
+        with patch("src.mcp.server.server_state") as mock_state:
             mock_state.db_manager = test_db
             mock_state.initialized = True
             mock_state.rag_system.retrieve_for_task = AsyncMock(return_value=[])
             mock_state.agent_manager.get_project_context = AsyncMock(return_value="")
-            mock_state.llm_provider.enrich_task = AsyncMock(return_value={
-                "enriched_description": "Enriched task",
-                "estimated_complexity": 5
-            })
-            mock_state.agent_manager.create_agent_for_task = AsyncMock(return_value="new-agent-id")
-            mock_state.phase_manager.get_phase_for_task = Mock(return_value="test-phase-id")
+            mock_state.llm_provider.enrich_task = AsyncMock(
+                return_value={
+                    "enriched_description": "Enriched task",
+                    "estimated_complexity": 5,
+                }
+            )
+            mock_state.agent_manager.create_agent_for_task = AsyncMock(
+                return_value="new-agent-id"
+            )
+            mock_state.phase_manager.get_phase_for_task = Mock(
+                return_value="test-phase-id"
+            )
             mock_state.phase_manager.get_phase_context = Mock(return_value=None)
             mock_state.phase_manager.workflow_id = workflow.id
             mock_state.broadcast_update = AsyncMock()
@@ -334,7 +343,7 @@ class TestValidationInheritanceIntegration:
                 enriched_description="Test task enriched",
                 done_definition="Done when tests pass",
                 status="pending",
-                priority="medium"
+                priority="medium",
             )
             session.add(task)
             session.commit()
@@ -370,7 +379,7 @@ class TestValidationFlowWithInheritance:
             id=str(uuid.uuid4()),
             name="Test Workflow",
             phases_folder_path="/test/path",
-            status="active"
+            status="active",
         )
         session.add(workflow)
 
@@ -383,9 +392,13 @@ class TestValidationFlowWithInheritance:
             done_definitions=["Complete"],
             validation={
                 "criteria": [
-                    {"description": "Tests pass", "check_type": "command_success", "command": "pytest"}
+                    {
+                        "description": "Tests pass",
+                        "check_type": "command_success",
+                        "command": "pytest",
+                    }
                 ]
-            }
+            },
         )
         session.add(phase)
 
@@ -398,7 +411,7 @@ class TestValidationFlowWithInheritance:
             status="in_progress",
             phase_id=phase.id,
             validation_enabled=True,  # This should be set by our fix
-            assigned_agent_id="agent-123"
+            assigned_agent_id="agent-123",
         )
         session.add(task)
 
@@ -408,18 +421,22 @@ class TestValidationFlowWithInheritance:
             status="working",
             cli_type="claude",
             current_task_id=task.id,
-            agent_type="phase"
+            agent_type="phase",
         )
         session.add(agent)
         session.commit()
 
         # Mock spawn_validator_agent from the correct module
-        with patch('src.validation.validator_agent.spawn_validator_agent') as mock_spawn:
+        with patch(
+            "src.validation.validator_agent.spawn_validator_agent"
+        ) as mock_spawn:
+
             async def mock_spawn_func():
                 return "validator-id"
+
             mock_spawn.return_value = mock_spawn_func()
 
-            with patch('src.mcp.server.server_state') as mock_state:
+            with patch("src.mcp.server.server_state") as mock_state:
                 mock_state.db_manager = test_db
                 mock_state.agent_manager.terminate_agent = AsyncMock()
                 mock_state.broadcast_update = AsyncMock()
@@ -469,15 +486,15 @@ def test_phases_with_validation_yaml():
             {
                 "description": "All tests pass",
                 "check_type": "command_success",
-                "command": "pytest"
+                "command": "pytest",
             },
             {
                 "description": "No linting errors",
                 "check_type": "command_success",
-                "command": "flake8 ."
-            }
+                "command": "flake8 .",
+            },
         ],
-        "validator_instructions": "Pay attention to edge cases"
+        "validator_instructions": "Pay attention to edge cases",
     }
 
     # Simulate what initialize_workflow stores in the DB

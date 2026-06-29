@@ -1,12 +1,14 @@
 """Integration test for Qdrant MCP memory search functionality."""
 
-import pytest
 import asyncio
 import uuid
+
+import pytest
+
 from src.core.database import DatabaseManager, Memory
-from src.memory.vector_store import VectorStoreManager
-from src.interfaces import get_llm_provider
 from src.core.simple_config import get_config
+from src.interfaces import get_llm_provider
+from src.memory.vector_store import VectorStoreManager
 
 
 @pytest.fixture
@@ -23,8 +25,7 @@ def vector_store():
     """Create vector store manager."""
     config = get_config()
     return VectorStoreManager(
-        qdrant_url=config.qdrant_url,
-        collection_prefix="test_qdrant_mcp"
+        qdrant_url=config.qdrant_url, collection_prefix="test_qdrant_mcp"
     )
 
 
@@ -36,7 +37,9 @@ def llm_provider():
 
 
 @pytest.mark.asyncio
-async def test_save_and_search_memory_via_qdrant(db_manager, vector_store, llm_provider):
+async def test_save_and_search_memory_via_qdrant(
+    db_manager, vector_store, llm_provider
+):
     """
     Test that memories saved via save_memory can be found via Qdrant search.
     This simulates the flow where one agent saves a memory and another agent
@@ -60,7 +63,7 @@ async def test_save_and_search_memory_via_qdrant(db_manager, vector_store, llm_p
             "agent_id": test_agent_id,
             "memory_type": "error_fix",
             "tags": ["postgresql", "connection", "timeout"],
-        }
+        },
     )
 
     # Store in SQLite
@@ -158,9 +161,13 @@ async def test_semantic_search_across_memory_types(vector_store, llm_provider):
     for result in results:
         if result["id"] in memory_ids:
             found_types.add(result["metadata"]["memory_type"])
-            print(f"Found {result['metadata']['memory_type']}: {result['content'][:60]}... (score: {result['score']:.3f})")
+            print(
+                f"Found {result['metadata']['memory_type']}: {result['content'][:60]}... (score: {result['score']:.3f})"
+            )
 
-    assert "error_fix" in found_types, "Should find the error_fix memory about Redis connection"
+    assert "error_fix" in found_types, (
+        "Should find the error_fix memory about Redis connection"
+    )
     assert len(found_types) >= 1, "Should find at least one relevant memory"
 
 
@@ -205,16 +212,18 @@ def test_agent_prompt_includes_qdrant_instructions():
     project_context = "Test project"
 
     # Generate prompt
-    prompt = asyncio.run(llm_provider.generate_agent_prompt(
-        task=task,
-        memories=memories,
-        project_context=project_context
-    ))
+    prompt = asyncio.run(
+        llm_provider.generate_agent_prompt(
+            task=task, memories=memories, project_context=project_context
+        )
+    )
 
     # Verify prompt includes Qdrant instructions
     assert "qdrant-find" in prompt.lower(), "Prompt should mention qdrant-find tool"
     assert "search" in prompt.lower(), "Prompt should mention searching"
-    assert "pre-loaded context" in prompt.lower() or "preloaded" in prompt.lower(), "Prompt should explain pre-loaded memories"
+    assert "pre-loaded context" in prompt.lower() or "preloaded" in prompt.lower(), (
+        "Prompt should explain pre-loaded memories"
+    )
 
     print("✓ Agent prompt includes Qdrant MCP instructions")
 

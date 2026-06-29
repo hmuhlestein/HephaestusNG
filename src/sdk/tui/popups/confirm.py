@@ -1,9 +1,9 @@
 """Confirmation popup."""
 
 from textual.app import ComposeResult
+from textual.containers import Container, Horizontal
 from textual.screen import ModalScreen
 from textual.widgets import Button, Static
-from textual.containers import Container, Horizontal
 
 
 class ConfirmPopup(ModalScreen):

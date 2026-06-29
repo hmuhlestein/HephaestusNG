@@ -1,17 +1,16 @@
 """Integration test for steering messages with real OpenAI API."""
 
-import asyncio
-import pytest
 import os
-from unittest.mock import Mock, patch
 from datetime import datetime
+from unittest.mock import Mock
+
+import pytest
 from dotenv import load_dotenv
 
-from src.core.database import DatabaseManager, Agent, Task, AgentLog
 from src.agents.manager import AgentManager
-from src.monitoring.guardian import Guardian
+from src.core.database import Agent, DatabaseManager, Task
 from src.interfaces.llm_interface import OpenAIProvider
-from src.memory.rag import RAGSystem
+from src.monitoring.guardian import Guardian
 
 # Load environment variables
 load_dotenv()
@@ -20,7 +19,7 @@ load_dotenv()
 @pytest.fixture
 def openai_api_key():
     """Get OpenAI API key from environment."""
-    api_key = os.getenv('OPENAI_API_KEY')
+    api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
         pytest.skip("OPENAI_API_KEY not found in environment")
     return api_key
@@ -38,7 +37,7 @@ def mock_db_manager():
         raw_description="Fix import error in authentication module",
         enriched_description="Fix the import error in the authentication module by checking the module path and dependencies",
         done_definition="Import error is resolved and authentication module loads correctly",
-        status="in_progress"
+        status="in_progress",
     )
     session_mock.query.return_value.filter_by.return_value.order_by.return_value.all.return_value = []
     session_mock.close = Mock()
@@ -65,7 +64,7 @@ def test_agent():
         current_task_id="test-task-1",
         tmux_session_name="agent-integration-test",
         cli_type="claude_code",
-        last_activity=datetime.utcnow()
+        last_activity=datetime.utcnow(),
     )
     agent.health_check_failures = 0
     return agent
@@ -76,11 +75,7 @@ class TestSteeringOpenAIIntegration:
 
     @pytest.mark.asyncio
     async def test_guardian_steering_with_real_openai_stuck_agent(
-        self,
-        openai_api_key,
-        mock_db_manager,
-        mock_agent_manager,
-        test_agent
+        self, openai_api_key, mock_db_manager, mock_agent_manager, test_agent
     ):
         """Test that Guardian properly generates steering messages for stuck agent using real OpenAI."""
 
@@ -91,7 +86,7 @@ class TestSteeringOpenAIIntegration:
         guardian = Guardian(
             db_manager=mock_db_manager,
             agent_manager=mock_agent_manager,
-            llm_provider=llm_provider
+            llm_provider=llm_provider,
         )
 
         # Simulate agent clearly stuck in a loop with the same error repeatedly
@@ -125,22 +120,20 @@ class TestSteeringOpenAIIntegration:
                 "trajectory_aligned": False,
                 "trajectory_summary": "Agent repeatedly encountering the same ImportError without changing approach",
                 "needs_steering": False,
-                "timestamp": "2024-01-01T10:00:00"
+                "timestamp": "2024-01-01T10:00:00",
             },
             {
                 "current_phase": "implementation",
                 "trajectory_aligned": False,
                 "trajectory_summary": "Still stuck on the same import error, trying identical approach multiple times",
                 "needs_steering": False,
-                "timestamp": "2024-01-01T10:05:00"
-            }
+                "timestamp": "2024-01-01T10:05:00",
+            },
         ]
 
         # Perform analysis with real OpenAI
         analysis = await guardian.analyze_agent_with_trajectory(
-            agent=test_agent,
-            tmux_output=tmux_output,
-            past_summaries=past_summaries
+            agent=test_agent, tmux_output=tmux_output, past_summaries=past_summaries
         )
 
         # Verify the analysis structure
@@ -152,18 +145,29 @@ class TestSteeringOpenAIIntegration:
         assert "trajectory_aligned" in analysis
 
         # Verify steering is recommended for stuck agent
-        assert analysis["needs_steering"] is True, f"Expected steering needed, but got: {analysis}"
-        assert analysis["steering_type"] in ["stuck", "confused", "drifting"], f"Expected valid steering type, got: {analysis['steering_type']}"
-        assert analysis["steering_message"] is not None, "Expected steering message to be provided"
-        assert len(analysis["steering_message"]) > 10, f"Expected meaningful steering message, got: {analysis['steering_message']}"
+        assert analysis["needs_steering"] is True, (
+            f"Expected steering needed, but got: {analysis}"
+        )
+        assert analysis["steering_type"] in ["stuck", "confused", "drifting"], (
+            f"Expected valid steering type, got: {analysis['steering_type']}"
+        )
+        assert analysis["steering_message"] is not None, (
+            "Expected steering message to be provided"
+        )
+        assert len(analysis["steering_message"]) > 10, (
+            f"Expected meaningful steering message, got: {analysis['steering_message']}"
+        )
 
         # Verify the steering message contains helpful guidance
         steering_message = analysis["steering_message"].lower()
-        assert any(keyword in steering_message for keyword in [
-            "import", "path", "module", "check", "try", "look", "find"
-        ]), f"Expected import-related guidance in steering message: {analysis['steering_message']}"
+        assert any(
+            keyword in steering_message
+            for keyword in ["import", "path", "module", "check", "try", "look", "find"]
+        ), (
+            f"Expected import-related guidance in steering message: {analysis['steering_message']}"
+        )
 
-        print(f"\n=== OpenAI Steering Analysis ===")
+        print("\n=== OpenAI Steering Analysis ===")
         print(f"Current Phase: {analysis['current_phase']}")
         print(f"Trajectory Aligned: {analysis['trajectory_aligned']}")
         print(f"Needs Steering: {analysis['needs_steering']}")
@@ -173,11 +177,7 @@ class TestSteeringOpenAIIntegration:
 
     @pytest.mark.asyncio
     async def test_guardian_steering_with_real_openai_healthy_agent(
-        self,
-        openai_api_key,
-        mock_db_manager,
-        mock_agent_manager,
-        test_agent
+        self, openai_api_key, mock_db_manager, mock_agent_manager, test_agent
     ):
         """Test that Guardian doesn't recommend steering for healthy agent using real OpenAI."""
 
@@ -188,7 +188,7 @@ class TestSteeringOpenAIIntegration:
         guardian = Guardian(
             db_manager=mock_db_manager,
             agent_manager=mock_agent_manager,
-            llm_provider=llm_provider
+            llm_provider=llm_provider,
         )
 
         # Simulate healthy agent making progress
@@ -210,17 +210,21 @@ class TestSteeringOpenAIIntegration:
 
         # Perform analysis with real OpenAI
         analysis = await guardian.analyze_agent_with_trajectory(
-            agent=test_agent,
-            tmux_output=tmux_output,
-            past_summaries=[]
+            agent=test_agent, tmux_output=tmux_output, past_summaries=[]
         )
 
         # Verify no steering needed for healthy agent
-        assert analysis["needs_steering"] is False, f"Expected no steering needed for healthy agent, but got: {analysis}"
-        assert analysis["trajectory_aligned"] is True, f"Expected aligned trajectory for healthy agent: {analysis}"
-        assert analysis["steering_message"] is None, f"Expected no steering message for healthy agent: {analysis['steering_message']}"
+        assert analysis["needs_steering"] is False, (
+            f"Expected no steering needed for healthy agent, but got: {analysis}"
+        )
+        assert analysis["trajectory_aligned"] is True, (
+            f"Expected aligned trajectory for healthy agent: {analysis}"
+        )
+        assert analysis["steering_message"] is None, (
+            f"Expected no steering message for healthy agent: {analysis['steering_message']}"
+        )
 
-        print(f"\n=== OpenAI Healthy Agent Analysis ===")
+        print("\n=== OpenAI Healthy Agent Analysis ===")
         print(f"Current Phase: {analysis['current_phase']}")
         print(f"Trajectory Aligned: {analysis['trajectory_aligned']}")
         print(f"Needs Steering: {analysis['needs_steering']}")
@@ -228,11 +232,7 @@ class TestSteeringOpenAIIntegration:
 
     @pytest.mark.asyncio
     async def test_guardian_steering_with_real_openai_constraint_violation(
-        self,
-        openai_api_key,
-        mock_db_manager,
-        mock_agent_manager,
-        test_agent
+        self, openai_api_key, mock_db_manager, mock_agent_manager, test_agent
     ):
         """Test that Guardian detects constraint violations using real OpenAI."""
 
@@ -243,7 +243,7 @@ class TestSteeringOpenAIIntegration:
         guardian = Guardian(
             db_manager=mock_db_manager,
             agent_manager=mock_agent_manager,
-            llm_provider=llm_provider
+            llm_provider=llm_provider,
         )
 
         # Simulate agent violating "no external libraries" constraint
@@ -263,31 +263,51 @@ class TestSteeringOpenAIIntegration:
         """
 
         # Add past summary with constraint
-        past_summaries = [{
-            "constraints": ["No external libraries - use only built-in Python modules"],
-            "current_phase": "implementation",
-            "trajectory_summary": "Agent was instructed to implement JWT without external libraries"
-        }]
+        past_summaries = [
+            {
+                "constraints": [
+                    "No external libraries - use only built-in Python modules"
+                ],
+                "current_phase": "implementation",
+                "trajectory_summary": "Agent was instructed to implement JWT without external libraries",
+            }
+        ]
 
         # Perform analysis with real OpenAI
         analysis = await guardian.analyze_agent_with_trajectory(
-            agent=test_agent,
-            tmux_output=tmux_output,
-            past_summaries=past_summaries
+            agent=test_agent, tmux_output=tmux_output, past_summaries=past_summaries
         )
 
         # Verify constraint violation is detected
-        assert analysis["needs_steering"] is True, f"Expected steering for constraint violation, got: {analysis}"
-        assert analysis["steering_type"] in ["violating_constraints", "drifting", "off_track"], f"Expected constraint-related steering type: {analysis['steering_type']}"
-        assert analysis["steering_message"] is not None, "Expected steering message for constraint violation"
+        assert analysis["needs_steering"] is True, (
+            f"Expected steering for constraint violation, got: {analysis}"
+        )
+        assert analysis["steering_type"] in [
+            "violating_constraints",
+            "drifting",
+            "off_track",
+        ], f"Expected constraint-related steering type: {analysis['steering_type']}"
+        assert analysis["steering_message"] is not None, (
+            "Expected steering message for constraint violation"
+        )
 
         # Check that steering message mentions the constraint
         steering_message = analysis["steering_message"].lower()
-        assert any(keyword in steering_message for keyword in [
-            "external", "library", "constraint", "built-in", "avoid", "without"
-        ]), f"Expected constraint-related guidance in steering message: {analysis['steering_message']}"
+        assert any(
+            keyword in steering_message
+            for keyword in [
+                "external",
+                "library",
+                "constraint",
+                "built-in",
+                "avoid",
+                "without",
+            ]
+        ), (
+            f"Expected constraint-related guidance in steering message: {analysis['steering_message']}"
+        )
 
-        print(f"\n=== OpenAI Constraint Violation Analysis ===")
+        print("\n=== OpenAI Constraint Violation Analysis ===")
         print(f"Current Phase: {analysis['current_phase']}")
         print(f"Trajectory Aligned: {analysis['trajectory_aligned']}")
         print(f"Needs Steering: {analysis['needs_steering']}")
@@ -297,11 +317,7 @@ class TestSteeringOpenAIIntegration:
 
     @pytest.mark.asyncio
     async def test_steering_message_field_consistency_with_openai(
-        self,
-        openai_api_key,
-        mock_db_manager,
-        mock_agent_manager,
-        test_agent
+        self, openai_api_key, mock_db_manager, mock_agent_manager, test_agent
     ):
         """Test that steering message field mapping works correctly with real OpenAI."""
 
@@ -312,7 +328,7 @@ class TestSteeringOpenAIIntegration:
         guardian = Guardian(
             db_manager=mock_db_manager,
             agent_manager=mock_agent_manager,
-            llm_provider=llm_provider
+            llm_provider=llm_provider,
         )
 
         # Simulate agent that needs steering
@@ -323,22 +339,24 @@ class TestSteeringOpenAIIntegration:
 
         # Perform analysis
         analysis = await guardian.analyze_agent_with_trajectory(
-            agent=test_agent,
-            tmux_output=tmux_output,
-            past_summaries=[]
+            agent=test_agent, tmux_output=tmux_output, past_summaries=[]
         )
 
         # Verify field mapping from LLM response to Guardian output
         if analysis["needs_steering"]:
             # Guardian should map steering_recommendation -> steering_message
-            assert "steering_message" in analysis, "Guardian should provide steering_message field"
-            assert analysis["steering_message"] is not None, "Guardian should map steering_recommendation to steering_message"
+            assert "steering_message" in analysis, (
+                "Guardian should provide steering_message field"
+            )
+            assert analysis["steering_message"] is not None, (
+                "Guardian should map steering_recommendation to steering_message"
+            )
 
             # Test the actual steering call
             await guardian.steer_agent(
                 agent=test_agent,
                 steering_type=analysis["steering_type"],
-                message=analysis["steering_message"]
+                message=analysis["steering_message"],
             )
 
             # Verify the agent manager was called with the message
@@ -349,10 +367,14 @@ class TestSteeringOpenAIIntegration:
             message_sent = call_args[0][1]
 
             assert agent_id_called == test_agent.id
-            assert analysis["steering_message"] in message_sent, f"Expected steering message in sent message. Expected: {analysis['steering_message']}, Sent: {message_sent}"
-            assert "GUARDIAN GUIDANCE" in message_sent, "Expected Guardian identifier in message"
+            assert analysis["steering_message"] in message_sent, (
+                f"Expected steering message in sent message. Expected: {analysis['steering_message']}, Sent: {message_sent}"
+            )
+            assert "GUARDIAN GUIDANCE" in message_sent, (
+                "Expected Guardian identifier in message"
+            )
 
-            print(f"\n=== Field Mapping Test ===")
+            print("\n=== Field Mapping Test ===")
             print(f"Steering Message from Guardian: {analysis['steering_message']}")
             print(f"Message sent to agent: {message_sent}")
 

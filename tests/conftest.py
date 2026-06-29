@@ -1,13 +1,16 @@
 """Shared pytest fixtures for Hephaestus tests."""
 
-import pytest
-import tempfile
 import os
+import tempfile
 import uuid
 import builtins
-from datetime import datetime
 from pathlib import Path
 from unittest.mock import MagicMock, AsyncMock, patch
+
+import pytest
+
+# Set test database environment variable before any imports
+os.environ["HEPHAESTUS_TEST_DB"] = ":memory:"
 
 # Set test database environment variable before any imports
 os.environ["HEPHAESTUS_TEST_DB"] = ":memory:"
@@ -103,11 +106,13 @@ def phase_manager(db_manager):
 def mock_llm_provider():
     """Create a mock LLM provider for tests."""
     mock = AsyncMock()
-    mock.enrich_task = AsyncMock(return_value={
-        "enriched_description": "Enriched test task description",
-        "complexity": "medium",
-        "suggested_approach": "Test approach"
-    })
+    mock.enrich_task = AsyncMock(
+        return_value={
+            "enriched_description": "Enriched test task description",
+            "complexity": "medium",
+            "suggested_approach": "Test approach",
+        }
+    )
     mock.generate_agent_prompt = AsyncMock(return_value="System prompt for test agent")
     return mock
 
@@ -230,10 +235,12 @@ def mock_agent_manager():
 def mock_rag_system():
     """Create a mock RAG system."""
     mock = MagicMock()
-    mock.retrieve_for_task = AsyncMock(return_value=[
-        {"content": "Memory 1", "type": "learning"},
-        {"content": "Memory 2", "type": "discovery"},
-    ])
+    mock.retrieve_for_task = AsyncMock(
+        return_value=[
+            {"content": "Memory 1", "type": "learning"},
+            {"content": "Memory 2", "type": "discovery"},
+        ]
+    )
     return mock
 
 
@@ -303,9 +310,12 @@ def workflow_with_execution(initialized_phase_manager):
 def event_loop():
     """Create event loop for async tests."""
     import asyncio
+
     loop = asyncio.new_event_loop()
     yield loop
     loop.close()
+
+
 """Shared mock infrastructure for testing API endpoints without a server.
 
 Provides fixture factories for:
@@ -315,21 +325,17 @@ Provides fixture factories for:
 - FastAPI TestClient with all dependencies overridden
 """
 
-import pytest
 import json
 import os
-import tempfile
-from pathlib import Path
-from datetime import datetime
-from unittest.mock import Mock, AsyncMock, patch, MagicMock
 from typing import Generator
+from unittest.mock import Mock, patch
 
+import pytest
 from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker, Session
+from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from src.core.database import Base, get_db, DatabaseManager
-
+from src.core.database import Base, DatabaseManager
 
 # ── In-memory database ────────────────────────────────────────────
 
@@ -409,11 +415,15 @@ def autopilot_dirs(tmp_path):
     designs_dir.mkdir()
 
     # Write a default state.json
-    (state_dir / "state.json").write_text(json.dumps({
-        "designs_processed": 0,
-        "designs_succeeded": 0,
-        "designs_failed": 0,
-    }))
+    (state_dir / "state.json").write_text(
+        json.dumps(
+            {
+                "designs_processed": 0,
+                "designs_succeeded": 0,
+                "designs_failed": 0,
+            }
+        )
+    )
 
     return {
         "root": tmp_path,
@@ -446,6 +456,7 @@ def sample_design_file(autopilot_dirs):
 def mock_app(autopilot_dirs, mock_autopilot_service):
     """Create a FastAPI app with all dependencies mocked."""
     from fastapi import FastAPI
+
     from src.mcp import autopilot_api as api_mod
 
     app = FastAPI()
@@ -466,6 +477,7 @@ def client(autopilot_dirs):
     """Create a TestClient with mocked dependencies."""
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
+
     from src.mcp import autopilot_api as api_mod
 
     app = FastAPI()
@@ -491,15 +503,19 @@ def client(autopilot_dirs):
         with patch("src.autopilot.service.get_autopilot_service") as mock_svc:
             mock_svc.return_value = Mock(
                 running=False,
-                status=Mock(return_value={
-                    "running": False,
-                    "designs_processed": 0,
-                    "designs_succeeded": 0,
-                    "designs_failed": 0,
-                    "current_design": None,
-                    "elapsed_seconds": 0,
-                    "error": None,
-                }),
+                status=Mock(
+                    return_value={
+                        "running": False,
+                        "designs_processed": 0,
+                        "designs_succeeded": 0,
+                        "designs_failed": 0,
+                        "current_design": None,
+                        "elapsed_seconds": 0,
+                        "error": None,
+                    }
+                ),
             )
-            with patch("src.mcp.autopilot_api._get_active_project_id", return_value=None):
+            with patch(
+                "src.mcp.autopilot_api._get_active_project_id", return_value=None
+            ):
                 yield TestClient(app)

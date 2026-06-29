@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Main entry point for running the Hephaestus MCP server."""
 
-import asyncio
 import logging
 import sys
 from pathlib import Path
@@ -10,6 +9,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 import uvicorn
+
 from src.core.simple_config import get_config
 
 # Configure logging

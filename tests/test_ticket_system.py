@@ -1,27 +1,24 @@
 """Comprehensive tests for the Ticket Tracking System (Wave 1)."""
 
-import pytest
 import os
 import sys
-from datetime import datetime
-import json
+
+import pytest
 
 # Add parent directory to path
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from src.core.database import (
+    Agent,
+    BoardConfig,
     DatabaseManager,
     Ticket,
     TicketComment,
-    TicketHistory,
     TicketCommit,
-    BoardConfig,
     Workflow,
-    Agent,
-    Task,
 )
-from src.services.ticket_service import TicketService
 from src.services.ticket_history_service import TicketHistoryService
+from src.services.ticket_service import TicketService
 
 
 @pytest.fixture
@@ -93,7 +90,12 @@ def test_board_config(db_manager, test_workflow):
             columns=[
                 {"id": "backlog", "name": "Backlog", "order": 0, "color": "#9ca3af"},
                 {"id": "todo", "name": "To Do", "order": 1, "color": "#6b7280"},
-                {"id": "in_progress", "name": "In Progress", "order": 2, "color": "#3b82f6"},
+                {
+                    "id": "in_progress",
+                    "name": "In Progress",
+                    "order": 2,
+                    "color": "#3b82f6",
+                },
                 {"id": "done", "name": "Done", "order": 3, "color": "#10b981"},
             ],
             ticket_types=["bug", "feature", "task", "improvement"],
@@ -108,7 +110,9 @@ def test_board_config(db_manager, test_workflow):
 
 
 @pytest.mark.asyncio
-async def test_create_ticket_basic(db_manager, test_workflow, test_agent, test_board_config):
+async def test_create_ticket_basic(
+    db_manager, test_workflow, test_agent, test_board_config
+):
     """Test basic ticket creation."""
     result = await TicketService.create_ticket(
         workflow_id=test_workflow,
@@ -140,7 +144,9 @@ async def test_create_ticket_basic(db_manager, test_workflow, test_agent, test_b
 
 
 @pytest.mark.asyncio
-async def test_create_ticket_with_blocking(db_manager, test_workflow, test_agent, test_board_config):
+async def test_create_ticket_with_blocking(
+    db_manager, test_workflow, test_agent, test_board_config
+):
     """Test creating a ticket with blocked_by_ticket_ids."""
     # Create first ticket
     ticket1 = await TicketService.create_ticket(
@@ -168,14 +174,18 @@ async def test_create_ticket_with_blocking(db_manager, test_workflow, test_agent
     # Verify blocking relationship
     session = db_manager.get_session()
     try:
-        blocked_ticket = session.query(Ticket).filter_by(id=ticket2["ticket_id"]).first()
+        blocked_ticket = (
+            session.query(Ticket).filter_by(id=ticket2["ticket_id"]).first()
+        )
         assert blocked_ticket.blocked_by_ticket_ids == [ticket1["ticket_id"]]
     finally:
         session.close()
 
 
 @pytest.mark.asyncio
-async def test_blocked_ticket_cannot_change_status(db_manager, test_workflow, test_agent, test_board_config):
+async def test_blocked_ticket_cannot_change_status(
+    db_manager, test_workflow, test_agent, test_board_config
+):
     """Test that blocked tickets cannot change status."""
     # Create blocking ticket
     ticket1 = await TicketService.create_ticket(
@@ -214,7 +224,9 @@ async def test_blocked_ticket_cannot_change_status(db_manager, test_workflow, te
 
 
 @pytest.mark.asyncio
-async def test_resolve_ticket_unblocks_dependencies(db_manager, test_workflow, test_agent, test_board_config):
+async def test_resolve_ticket_unblocks_dependencies(
+    db_manager, test_workflow, test_agent, test_board_config
+):
     """Test that resolving a ticket unblocks dependent tickets."""
     # Create blocking ticket
     ticket1 = await TicketService.create_ticket(
@@ -277,7 +289,9 @@ async def test_resolve_ticket_unblocks_dependencies(db_manager, test_workflow, t
 
 
 @pytest.mark.asyncio
-async def test_update_ticket_fields(db_manager, test_workflow, test_agent, test_board_config):
+async def test_update_ticket_fields(
+    db_manager, test_workflow, test_agent, test_board_config
+):
     """Test updating ticket fields."""
     # Create ticket
     ticket = await TicketService.create_ticket(
@@ -320,7 +334,9 @@ async def test_update_ticket_fields(db_manager, test_workflow, test_agent, test_
 
 
 @pytest.mark.asyncio
-async def test_change_status_unblocked_ticket(db_manager, test_workflow, test_agent, test_board_config):
+async def test_change_status_unblocked_ticket(
+    db_manager, test_workflow, test_agent, test_board_config
+):
     """Test changing status of an unblocked ticket."""
     # Create ticket
     ticket = await TicketService.create_ticket(
@@ -383,7 +399,9 @@ async def test_add_comment(db_manager, test_workflow, test_agent, test_board_con
     # Verify comment in database
     session = db_manager.get_session()
     try:
-        comment = session.query(TicketComment).filter_by(id=result["comment_id"]).first()
+        comment = (
+            session.query(TicketComment).filter_by(id=result["comment_id"]).first()
+        )
         assert comment is not None
         assert comment.comment_text == "This is a test comment"
         assert comment.comment_type == "general"
@@ -393,7 +411,9 @@ async def test_add_comment(db_manager, test_workflow, test_agent, test_board_con
 
 
 @pytest.mark.asyncio
-async def test_get_ticket_full_details(db_manager, test_workflow, test_agent, test_board_config):
+async def test_get_ticket_full_details(
+    db_manager, test_workflow, test_agent, test_board_config
+):
     """Test getting full ticket details."""
     # Create ticket
     ticket = await TicketService.create_ticket(
@@ -426,7 +446,9 @@ async def test_get_ticket_full_details(db_manager, test_workflow, test_agent, te
 
 
 @pytest.mark.asyncio
-async def test_ticket_history_tracking(db_manager, test_workflow, test_agent, test_board_config):
+async def test_ticket_history_tracking(
+    db_manager, test_workflow, test_agent, test_board_config
+):
     """Test that all changes are tracked in history."""
     # Create ticket
     ticket = await TicketService.create_ticket(
@@ -473,7 +495,9 @@ async def test_ticket_history_tracking(db_manager, test_workflow, test_agent, te
 
 
 @pytest.mark.asyncio
-async def test_invalid_ticket_type_rejected(db_manager, test_workflow, test_agent, test_board_config):
+async def test_invalid_ticket_type_rejected(
+    db_manager, test_workflow, test_agent, test_board_config
+):
     """Test that invalid ticket types are rejected."""
     with pytest.raises(ValueError, match="Invalid ticket type"):
         await TicketService.create_ticket(
@@ -487,7 +511,9 @@ async def test_invalid_ticket_type_rejected(db_manager, test_workflow, test_agen
 
 
 @pytest.mark.asyncio
-async def test_invalid_status_rejected(db_manager, test_workflow, test_agent, test_board_config):
+async def test_invalid_status_rejected(
+    db_manager, test_workflow, test_agent, test_board_config
+):
     """Test that invalid statuses are rejected."""
     # Create ticket
     ticket = await TicketService.create_ticket(
@@ -510,7 +536,9 @@ async def test_invalid_status_rejected(db_manager, test_workflow, test_agent, te
 
 
 @pytest.mark.asyncio
-async def test_link_commit_to_ticket(db_manager, test_workflow, test_agent, test_board_config):
+async def test_link_commit_to_ticket(
+    db_manager, test_workflow, test_agent, test_board_config
+):
     """Test linking git commits to tickets."""
     # Create ticket
     ticket = await TicketService.create_ticket(
@@ -537,9 +565,11 @@ async def test_link_commit_to_ticket(db_manager, test_workflow, test_agent, test
     # Verify commit link in database
     session = db_manager.get_session()
     try:
-        commit = session.query(TicketCommit).filter_by(
-            ticket_id=ticket["ticket_id"], commit_sha="abc123def456"
-        ).first()
+        commit = (
+            session.query(TicketCommit)
+            .filter_by(ticket_id=ticket["ticket_id"], commit_sha="abc123def456")
+            .first()
+        )
         assert commit is not None
         assert commit.commit_message == "Fix issue related to ticket"
         assert commit.link_method == "manual"
@@ -548,7 +578,9 @@ async def test_link_commit_to_ticket(db_manager, test_workflow, test_agent, test
 
 
 @pytest.mark.asyncio
-async def test_get_tickets_by_workflow(db_manager, test_workflow, test_agent, test_board_config):
+async def test_get_tickets_by_workflow(
+    db_manager, test_workflow, test_agent, test_board_config
+):
     """Test getting all tickets for a workflow."""
     # Create multiple tickets
     ticket1 = await TicketService.create_ticket(
@@ -579,7 +611,9 @@ async def test_get_tickets_by_workflow(db_manager, test_workflow, test_agent, te
 
 
 @pytest.mark.asyncio
-async def test_get_tickets_by_status(db_manager, test_workflow, test_agent, test_board_config):
+async def test_get_tickets_by_status(
+    db_manager, test_workflow, test_agent, test_board_config
+):
     """Test getting tickets by status."""
     # Create tickets with different statuses
     ticket1 = await TicketService.create_ticket(
@@ -609,12 +643,16 @@ async def test_get_tickets_by_status(db_manager, test_workflow, test_agent, test
     )
 
     # Get backlog tickets
-    backlog_tickets = await TicketService.get_tickets_by_status(test_workflow, "backlog")
+    backlog_tickets = await TicketService.get_tickets_by_status(
+        test_workflow, "backlog"
+    )
     assert len(backlog_tickets) >= 1
     assert any(t["ticket_id"] == ticket1["ticket_id"] for t in backlog_tickets)
 
     # Get in_progress tickets
-    in_progress_tickets = await TicketService.get_tickets_by_status(test_workflow, "in_progress")
+    in_progress_tickets = await TicketService.get_tickets_by_status(
+        test_workflow, "in_progress"
+    )
     assert len(in_progress_tickets) >= 1
     assert any(t["ticket_id"] == ticket2["ticket_id"] for t in in_progress_tickets)
 

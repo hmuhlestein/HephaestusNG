@@ -2,22 +2,18 @@
 
 import os
 import uuid
-import pytest
-import tempfile
 from datetime import datetime
+
+import pytest
 
 # Set test database before imports
 os.environ["HEPHAESTUS_TEST_DB"] = ":memory:"
 
-from src.core.database import (
-    DatabaseManager, Workflow, Phase, Task, WorkflowDefinition as DBWorkflowDefinition,
-    get_db
-)
+from src.core.database import DatabaseManager, Workflow
+from src.core.database import WorkflowDefinition as DBWorkflowDefinition
 from src.phases.phase_manager import PhaseManager
-from src.sdk.models import (
-    Phase as SDKPhase, WorkflowConfig, WorkflowDefinition, WorkflowExecution,
-    ValidationCriteria
-)
+from src.sdk.models import Phase as SDKPhase
+from src.sdk.models import WorkflowConfig, WorkflowDefinition, WorkflowExecution
 
 
 class TestDatabaseModels:
@@ -38,7 +34,11 @@ class TestDatabaseModels:
                 description="Build software from PRD",
                 phases_config=[
                     {"order": 1, "name": "Planning", "description": "Plan the project"},
-                    {"order": 2, "name": "Implementation", "description": "Implement features"},
+                    {
+                        "order": 2,
+                        "name": "Implementation",
+                        "description": "Implement features",
+                    },
                 ],
                 workflow_config={
                     "has_result": True,
@@ -50,7 +50,11 @@ class TestDatabaseModels:
             session.commit()
 
             # Retrieve and verify
-            retrieved = session.query(DBWorkflowDefinition).filter_by(id="prd-to-software").first()
+            retrieved = (
+                session.query(DBWorkflowDefinition)
+                .filter_by(id="prd-to-software")
+                .first()
+            )
             assert retrieved is not None
             assert retrieved.name == "PRD to Software Builder"
             assert len(retrieved.phases_config) == 2
@@ -88,13 +92,17 @@ class TestDatabaseModels:
             session.commit()
 
             # Verify relationship
-            retrieved = session.query(Workflow).filter_by(definition_id="bugfix").first()
+            retrieved = (
+                session.query(Workflow).filter_by(definition_id="bugfix").first()
+            )
             assert retrieved is not None
             assert retrieved.description == "Fixing auth bug #123"
             assert retrieved.working_directory == "/project"
 
             # Verify back-reference
-            definition = session.query(DBWorkflowDefinition).filter_by(id="bugfix").first()
+            definition = (
+                session.query(DBWorkflowDefinition).filter_by(id="bugfix").first()
+            )
             assert len(definition.executions) == 1
             assert definition.executions[0].description == "Fixing auth bug #123"
 
@@ -121,7 +129,7 @@ class TestDatabaseModels:
                 workflow = Workflow(
                     id=str(uuid.uuid4()),
                     name="Feature Build",
-                    description=f"Building feature {i+1}",
+                    description=f"Building feature {i + 1}",
                     definition_id="feature-build",
                     phases_folder_path="/tmp/test",
                     status="active",
@@ -130,7 +138,9 @@ class TestDatabaseModels:
             session.commit()
 
             # Verify
-            executions = session.query(Workflow).filter_by(definition_id="feature-build").all()
+            executions = (
+                session.query(Workflow).filter_by(definition_id="feature-build").all()
+            )
             assert len(executions) == 3
 
         finally:
@@ -233,8 +243,18 @@ class TestPhaseManager:
         """Test that start_execution creates phases in database."""
         # Register definition with phases
         phases_config = [
-            {"order": 1, "name": "Phase 1", "description": "First", "done_definitions": []},
-            {"order": 2, "name": "Phase 2", "description": "Second", "done_definitions": []},
+            {
+                "order": 1,
+                "name": "Phase 1",
+                "description": "First",
+                "done_definitions": [],
+            },
+            {
+                "order": 2,
+                "name": "Phase 2",
+                "description": "Second",
+                "done_definitions": [],
+            },
         ]
 
         self.phase_manager.register_definition(
@@ -317,7 +337,12 @@ class TestPhaseManager:
             definition_id="stats-test",
             name="Stats Test",
             phases_config=[
-                {"order": 1, "name": "Phase 1", "description": "Test", "done_definitions": []},
+                {
+                    "order": 1,
+                    "name": "Phase 1",
+                    "description": "Test",
+                    "done_definitions": [],
+                },
             ],
         )
         workflow_id, _ = self.phase_manager.start_execution(
@@ -644,7 +669,11 @@ class TestWorkflowConfigSerialization:
             session.commit()
 
             # Retrieve
-            retrieved = session.query(DBWorkflowDefinition).filter_by(id="serialize-test").first()
+            retrieved = (
+                session.query(DBWorkflowDefinition)
+                .filter_by(id="serialize-test")
+                .first()
+            )
             assert retrieved.phases_config[0]["name"] == "Planning"
             assert len(retrieved.phases_config[0]["done_definitions"]) == 2
 

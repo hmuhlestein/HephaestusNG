@@ -1,12 +1,12 @@
 """Main forge screen with action menu."""
 
 from textual.app import ComposeResult
+from textual.containers import Container, Horizontal
 from textual.screen import Screen
-from textual.widgets import Static, Footer
-from textual.containers import Horizontal, Container
+from textual.widgets import Footer, Static
 
-from src.sdk.tui.widgets.animated_forge_art import AnimatedForgeArt
 from src.sdk.tui.widgets.action_menu import ActionMenu
+from src.sdk.tui.widgets.animated_forge_art import AnimatedForgeArt
 
 
 class ForgeMainScreen(Screen):
@@ -70,7 +70,11 @@ class ForgeMainScreen(Screen):
         """Update the status bar with system health."""
         if self.sdk:
             health = self.sdk.is_healthy()
-            backend_status = "✓" if health.get("backend_process") and health.get("backend_api") else "✗"
+            backend_status = (
+                "✓"
+                if health.get("backend_process") and health.get("backend_api")
+                else "✗"
+            )
             monitor_status = "✓" if health.get("monitor_process") else "✗"
             qdrant_status = "✓" if health.get("qdrant") else "✗"
             status_text = f"Backend: {backend_status}  Monitor: {monitor_status}  Qdrant: {qdrant_status}  |  Logs: {self.sdk.log_dir}"
@@ -80,7 +84,9 @@ class ForgeMainScreen(Screen):
         status_bar = self.query_one("#status-bar", Static)
         status_bar.update(status_text)
 
-    def on_action_menu_action_selected(self, message: ActionMenu.ActionSelected) -> None:
+    def on_action_menu_action_selected(
+        self, message: ActionMenu.ActionSelected
+    ) -> None:
         """Handle action selection from the menu."""
         action_id = message.action_id
 
@@ -90,31 +96,40 @@ class ForgeMainScreen(Screen):
             self.show_health_check()
         elif action_id == "tasks":
             from src.sdk.tui.screens.tasks import TasksScreen
+
             self.app.push_screen(TasksScreen(self.sdk))
         elif action_id == "agents":
             from src.sdk.tui.screens.agents import AgentsScreen
+
             self.app.push_screen(AgentsScreen(self.sdk))
         elif action_id == "memories":
             from src.sdk.tui.screens.memories import MemoriesScreen
+
             self.app.push_screen(MemoriesScreen(self.sdk))
         elif action_id == "metrics":
             from src.sdk.tui.screens.metrics import MetricsScreen
+
             self.app.push_screen(MetricsScreen(self.sdk))
         elif action_id == "create_task":
             from src.sdk.tui.popups.create_task import CreateTaskPopup
+
             self.app.push_screen(CreateTaskPopup(self.sdk))
         elif action_id == "send_message":
             from src.sdk.tui.popups.send_message import SendMessagePopup
+
             self.app.push_screen(SendMessagePopup(self.sdk))
         elif action_id == "broadcast":
             from src.sdk.tui.popups.broadcast import BroadcastPopup
+
             self.app.push_screen(BroadcastPopup(self.sdk))
         elif action_id == "backend_logs":
             from src.sdk.tui.popups.log_viewer import LogViewerPopup
+
             log_file = f"{self.sdk.log_dir}/backend.log"
             self.app.push_screen(LogViewerPopup(log_file, "Backend Logs"))
         elif action_id == "monitor_logs":
             from src.sdk.tui.popups.log_viewer import LogViewerPopup
+
             log_file = f"{self.sdk.log_dir}/monitor.log"
             self.app.push_screen(LogViewerPopup(log_file, "Monitor Logs"))
 
@@ -128,6 +143,7 @@ class ForgeMainScreen(Screen):
         overall = "✓ Healthy" if health.get("overall") else "✗ Unhealthy"
 
         from src.sdk.tui.popups.info import InfoPopup
+
         self.app.push_screen(
             InfoPopup(
                 title="System Health",
@@ -153,7 +169,7 @@ Qdrant: {qdrant}""",
                 title="⚠️  EXIT HEPHAESTUS",
                 message="Are you sure you want to exit?\nAll running agents will continue in the background.",
             ),
-            check_quit
+            check_quit,
         )
 
     def action_toggle_animations(self) -> None:

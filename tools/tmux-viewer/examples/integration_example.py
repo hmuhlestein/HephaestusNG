@@ -1,9 +1,9 @@
 """Quick-start integration example for the tmux viewer backend."""
 
-import asyncio
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from tmux_viewer.backend.api import router as tmux_router, init_manager
+from tmux_viewer.backend.api import init_manager
+from tmux_viewer.backend.api import router as tmux_router
 from tmux_viewer.backend.tmux_manager import TmuxSessionManager
 
 app = FastAPI(title="Tmux Viewer API")
@@ -35,4 +35,5 @@ async def startup():
 
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(app, host="0.0.0.0", port=8080)

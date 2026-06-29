@@ -3,27 +3,36 @@
 import asyncio
 import logging
 import time
-from pathlib import Path
-from typing import Dict, Any, Optional, List
 from datetime import datetime, timedelta
 from enum import Enum
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
-from src.core.simple_config import get_config
-from src.core.database import DatabaseManager, Agent, Task, AgentLog, GuardianAnalysis, ConductorAnalysis, DetectedDuplicate
-from src.core.constants import WORKTREES_SUBDIR, CONTEXT_DIR_NAME, HEPHAESTUS_LOGS_DIR
 from src.agents.manager import AgentManager
+from src.core.constants import CONTEXT_DIR_NAME, HEPHAESTUS_LOGS_DIR, WORKTREES_SUBDIR
+from src.core.database import (
+    Agent,
+    AgentLog,
+    ConductorAnalysis,
+    DatabaseManager,
+    DetectedDuplicate,
+    GuardianAnalysis,
+    Task,
+)
+from src.core.simple_config import get_config
 from src.interfaces import LLMProviderInterface, get_cli_agent
 from src.memory.rag import RAGSystem
-from src.phases import PhaseManager
-from src.monitoring.guardian import Guardian
 from src.monitoring.conductor import Conductor
+from src.monitoring.guardian import Guardian
 from src.monitoring.trajectory_context import TrajectoryContext
+from src.phases import PhaseManager
 
 logger = logging.getLogger(__name__)
 
 
 class AgentState(Enum):
     """Agent state enumeration."""
+
     HEALTHY = "healthy"
     STUCK_WAITING = "stuck_waiting"
     STUCK_ERROR = "stuck_error"
@@ -33,6 +42,7 @@ class AgentState(Enum):
 
 class MonitoringDecision(Enum):
     """Monitoring decision enumeration."""
+
     CONTINUE = "continue"
     NUDGE = "nudge"
     ANSWER = "answer"
@@ -135,7 +145,11 @@ class IntelligentMonitor:
         else:
             task_description = task.enriched_description or task.raw_description
             done_definition = task.done_definition
-            time_elapsed = int((datetime.utcnow() - task.started_at).total_seconds() / 60) if task.started_at else 0
+            time_elapsed = (
+                int((datetime.utcnow() - task.started_at).total_seconds() / 60)
+                if task.started_at
+                else 0
+            )
 
         # Get project context
         project_context = await self.agent_manager.get_project_context()
@@ -327,9 +341,12 @@ Please try a different approach, considering:
 
             # Preserve the task's phase CLI/thinking config on recovery — otherwise a
             # restarted phase agent silently reverts to the default tool/model/budget.
-            phase_cli_tool = phase_cli_model = phase_glm_token_env = phase_thinking_level = None
+            phase_cli_tool = phase_cli_model = phase_glm_token_env = (
+                phase_thinking_level
+            ) = None
             if task.phase_id:
                 from src.core.database import Phase
+
                 ps = self.db_manager.get_session()
                 try:
                     ph = ps.query(Phase).filter_by(id=task.phase_id).first()
@@ -360,7 +377,9 @@ Please try a different approach, considering:
         finally:
             session.close()
 
-    async def _log_intervention(self, agent: Agent, intervention_type: str, details: str):
+    async def _log_intervention(
+        self, agent: Agent, intervention_type: str, details: str
+    ):
         """Log an intervention.
 
         Args:
@@ -467,10 +486,11 @@ class MonitoringLoop:
         (Esc, polymorphic via CLIAgentInterface) + a short nudge. Bounded by MAX_RECOV;
         beyond that the Guardian / restart path takes over.
         """
-        FROZEN_SECONDS = 300   # >a normal turn; a real loop stays frozen indefinitely
+        FROZEN_SECONDS = 300  # >a normal turn; a real loop stays frozen indefinitely
         MAX_RECOV = 2
         try:
             import re
+
             if not hasattr(self, "_stuck_state"):
                 self._stuck_state = {}
             out = self.agent_manager.get_agent_output(agent.id, lines=40)
@@ -479,11 +499,14 @@ class MonitoringLoop:
             # Drop volatile lines (status bar %/tokens/$/MCP/time, spinner glyphs) so a
             # live spinner or ticking cost doesn't masquerade as real progress.
             sig = "\n".join(
-                ln for ln in out.splitlines()
+                ln
+                for ln in out.splitlines()
                 if not re.search(r"%/[\d.]+M|\$[\d.]+|MCP:|Took |[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏⣿]", ln)
             ).strip()
             now = time.time()
-            st = self._stuck_state.setdefault(agent.id, {"sig": None, "since": None, "recov": 0})
+            st = self._stuck_state.setdefault(
+                agent.id, {"sig": None, "since": None, "recov": 0}
+            )
             if sig and sig == st["sig"]:
                 if st["since"] is None:
                     st["since"] = now
@@ -498,7 +521,9 @@ class MonitoringLoop:
             # prompt.  The output signature changed (so the 5-min clock reset),
             # but the agent won't self-rescue — 30 s is enough to be sure.
             abort_frozen = "Operation aborted" in sig and frozen_for >= 30
-            if (abort_frozen or frozen_for >= FROZEN_SECONDS) and st["recov"] < MAX_RECOV:
+            if (abort_frozen or frozen_for >= FROZEN_SECONDS) and st[
+                "recov"
+            ] < MAX_RECOV:
                 st["recov"] += 1
                 st["since"] = now  # restart the window after an attempt
                 logger.warning(
@@ -514,16 +539,33 @@ class MonitoringLoop:
                     session_name = getattr(agent, "tmux_session_name", None)
                     if session_name:
                         import subprocess as _sp
-                        _sp.run(["tmux", "send-keys", "-t", session_name, "Escape", ""], check=False)
+
+                        _sp.run(
+                            ["tmux", "send-keys", "-t", session_name, "Escape", ""],
+                            check=False,
+                        )
                         await asyncio.sleep(0.5)
-                        _sp.run(["tmux", "send-keys", "-t", session_name, "/mcp", "Enter"], check=False)
+                        _sp.run(
+                            ["tmux", "send-keys", "-t", session_name, "/mcp", "Enter"],
+                            check=False,
+                        )
                         await asyncio.sleep(2.0)
-                        _sp.run(["tmux", "send-keys", "-t", session_name, "C-r", ""], check=False)
+                        _sp.run(
+                            ["tmux", "send-keys", "-t", session_name, "C-r", ""],
+                            check=False,
+                        )
                         await asyncio.sleep(3.0)
-                        _sp.run(["tmux", "send-keys", "-t", session_name, "Escape", ""], check=False)
+                        _sp.run(
+                            ["tmux", "send-keys", "-t", session_name, "Escape", ""],
+                            check=False,
+                        )
                         await asyncio.sleep(0.5)
                 if await self.agent_manager.send_recovery_keystrokes(agent.id):
-                    mcp_note = " MCP was disconnected and has been reconnected." if mcp_disconnected else ""
+                    mcp_note = (
+                        " MCP was disconnected and has been reconnected."
+                        if mcp_disconnected
+                        else ""
+                    )
                     if "Operation aborted" in sig:
                         msg = (
                             "Your last tool call was aborted. Review what you have already "
@@ -549,9 +591,12 @@ class MonitoringLoop:
                 session = self.db_manager.get_session()
                 try:
                     from src.core.database import Task as _Task
-                    stuck_task = session.query(_Task).filter_by(
-                        assigned_agent_id=agent.id, status="in_progress"
-                    ).first()
+
+                    stuck_task = (
+                        session.query(_Task)
+                        .filter_by(assigned_agent_id=agent.id, status="in_progress")
+                        .first()
+                    )
                     if stuck_task:
                         stuck_task.status = "failed"
                         stuck_task.failure_reason = (
@@ -605,6 +650,7 @@ class MonitoringLoop:
                 return
             # Count occurrences of each normalised line.
             from collections import Counter
+
             counts = Counter(lines)
             top_line, top_count = counts.most_common(1)[0]
             if top_count < REPEAT_THRESHOLD:
@@ -627,6 +673,7 @@ class MonitoringLoop:
                 f"interrupting. Phrase: {top_line[:60]!r}"
             )
             from src.interfaces.cli_interface import get_cli_agent
+
             try:
                 cli = get_cli_agent(agent.cli_type)
                 keys = cli.recovery_keystrokes()
@@ -650,9 +697,13 @@ class MonitoringLoop:
         logger.debug("Starting trajectory monitoring cycle")
 
         # DEBUG: Log phase_manager status
-        logger.info(f"[DIAGNOSTIC CYCLE] phase_manager exists: {self.phase_manager is not None}")
+        logger.info(
+            f"[DIAGNOSTIC CYCLE] phase_manager exists: {self.phase_manager is not None}"
+        )
         if self.phase_manager:
-            logger.info(f"[DIAGNOSTIC CYCLE] phase_manager.workflow_id: {self.phase_manager.workflow_id[:8] if self.phase_manager.workflow_id else 'None'}")
+            logger.info(
+                f"[DIAGNOSTIC CYCLE] phase_manager.workflow_id: {self.phase_manager.workflow_id[:8] if self.phase_manager.workflow_id else 'None'}"
+            )
         else:
             logger.info("[DIAGNOSTIC CYCLE] phase_manager is None")
 
@@ -674,37 +725,44 @@ class MonitoringLoop:
 
         for agent in agents:
             # Create async task for each Guardian analysis
-            task = asyncio.create_task(
-                self._guardian_analysis_for_agent(agent)
-            )
+            task = asyncio.create_task(self._guardian_analysis_for_agent(agent))
             guardian_tasks.append(task)
 
         # Wait for all Guardian analyses to complete
         if guardian_tasks:
-            guardian_results = await asyncio.gather(*guardian_tasks, return_exceptions=True)
+            guardian_results = await asyncio.gather(
+                *guardian_tasks, return_exceptions=True
+            )
 
             # Filter out exceptions and None results
             guardian_summaries = [
-                result for result in guardian_results
+                result
+                for result in guardian_results
                 if result and not isinstance(result, Exception)
             ]
 
             # Log any exceptions
             for i, result in enumerate(guardian_results):
                 if isinstance(result, Exception):
-                    logger.error(f"Guardian analysis failed for agent {agents[i].id}: {result}")
+                    logger.error(
+                        f"Guardian analysis failed for agent {agents[i].id}: {result}"
+                    )
 
         # Debug: Log what we collected
         logger.info(f"DEBUG - Collected {len(guardian_summaries)} Guardian summaries")
         for i, summary in enumerate(guardian_summaries):
             if summary:
-                logger.info(f"DEBUG - Summary {i}: agent_id={summary.get('agent_id')}, "
-                           f"has_trajectory_summary={bool(summary.get('trajectory_summary'))}")
+                logger.info(
+                    f"DEBUG - Summary {i}: agent_id={summary.get('agent_id')}, "
+                    f"has_trajectory_summary={bool(summary.get('trajectory_summary'))}"
+                )
 
         # Phase 2: Conductor Analysis (if we have summaries)
         if guardian_summaries:
             try:
-                logger.info(f"DEBUG - Passing {len(guardian_summaries)} summaries to Conductor")
+                logger.info(
+                    f"DEBUG - Passing {len(guardian_summaries)} summaries to Conductor"
+                )
                 conductor_analysis = await self.conductor.analyze_system_state(
                     guardian_summaries
                 )
@@ -716,14 +774,16 @@ class MonitoringLoop:
                 await self._save_conductor_analysis(conductor_analysis)
 
                 # Execute conductor decisions
-                if conductor_analysis.get('decisions'):
+                if conductor_analysis.get("decisions"):
                     await self.conductor.execute_decisions(
-                        conductor_analysis['decisions']
+                        conductor_analysis["decisions"]
                     )
 
                 # Generate and log detailed report if needed
-                if conductor_analysis.get('coherence', {}).get('score', 1.0) < 0.5:
-                    report = await self.conductor.generate_detailed_report(conductor_analysis)
+                if conductor_analysis.get("coherence", {}).get("score", 1.0) < 0.5:
+                    report = await self.conductor.generate_detailed_report(
+                        conductor_analysis
+                    )
                     logger.warning(f"Low system coherence detected:\n{report}")
 
             except Exception as e:
@@ -737,11 +797,15 @@ class MonitoringLoop:
 
         # Auto-discover active workflow if phase_manager has no workflow_id
         if self.phase_manager and not self.phase_manager.workflow_id:
-            logger.info("[AUTO-DISCOVER] phase_manager.workflow_id is None, checking for active workflows...")
+            logger.info(
+                "[AUTO-DISCOVER] phase_manager.workflow_id is None, checking for active workflows..."
+            )
             try:
                 wf_id = self.phase_manager.load_active_workflow()
                 if wf_id:
-                    logger.info(f"[AUTO-DISCOVER] ✅ Loaded active workflow: {wf_id[:8]}...")
+                    logger.info(
+                        f"[AUTO-DISCOVER] ✅ Loaded active workflow: {wf_id[:8]}..."
+                    )
             except Exception as e:
                 logger.warning(f"[AUTO-DISCOVER] Failed to load active workflow: {e}")
 
@@ -758,8 +822,12 @@ class MonitoringLoop:
 
         # Check if workflow is stuck and needs diagnostic agent
         logger.info("[DIAGNOSTIC] Checking if diagnostic agent needed...")
-        logger.info(f"[DIAGNOSTIC] phase_manager exists: {self.phase_manager is not None}")
-        logger.info(f"[DIAGNOSTIC] workflow_id: {self.phase_manager.workflow_id[:8] if (self.phase_manager and self.phase_manager.workflow_id) else 'N/A'}")
+        logger.info(
+            f"[DIAGNOSTIC] phase_manager exists: {self.phase_manager is not None}"
+        )
+        logger.info(
+            f"[DIAGNOSTIC] workflow_id: {self.phase_manager.workflow_id[:8] if (self.phase_manager and self.phase_manager.workflow_id) else 'N/A'}"
+        )
 
         # Phase 3: System Health Audit
         try:
@@ -771,22 +839,41 @@ class MonitoringLoop:
         session = self.db_manager.get_session()
         try:
             from src.core.database import Workflow
-            active_workflows = session.query(Workflow).filter_by(status='active').all()
-            logger.info(f"[DIAGNOSTIC] Active workflows in database: {len(active_workflows)}")
+
+            active_workflows = session.query(Workflow).filter_by(status="active").all()
+            logger.info(
+                f"[DIAGNOSTIC] Active workflows in database: {len(active_workflows)}"
+            )
             for wf in active_workflows:
                 task_count = session.query(Task).filter_by(workflow_id=wf.id).count()
-                done_count = session.query(Task).filter_by(workflow_id=wf.id, status='done').count()
-                failed_count = session.query(Task).filter_by(workflow_id=wf.id, status='failed').count()
-                active_count = session.query(Task).filter(
-                    Task.workflow_id == wf.id,
-                    Task.status.in_(['pending', 'assigned', 'in_progress'])
-                ).count()
-                logger.info(f"[DIAGNOSTIC]   - {wf.name} (ID: {wf.id[:8]}..., {task_count} total: {done_count} done, {failed_count} failed, {active_count} active)")
+                done_count = (
+                    session.query(Task)
+                    .filter_by(workflow_id=wf.id, status="done")
+                    .count()
+                )
+                failed_count = (
+                    session.query(Task)
+                    .filter_by(workflow_id=wf.id, status="failed")
+                    .count()
+                )
+                active_count = (
+                    session.query(Task)
+                    .filter(
+                        Task.workflow_id == wf.id,
+                        Task.status.in_(["pending", "assigned", "in_progress"]),
+                    )
+                    .count()
+                )
+                logger.info(
+                    f"[DIAGNOSTIC]   - {wf.name} (ID: {wf.id[:8]}..., {task_count} total: {done_count} done, {failed_count} failed, {active_count} active)"
+                )
         finally:
             session.close()
 
         if self.phase_manager and self.phase_manager.workflow_id:
-            logger.info(f"[DIAGNOSTIC] ✅ Conditions met - running diagnostic check for workflow {self.phase_manager.workflow_id[:8]}")
+            logger.info(
+                f"[DIAGNOSTIC] ✅ Conditions met - running diagnostic check for workflow {self.phase_manager.workflow_id[:8]}"
+            )
             try:
                 await self._check_workflow_stuck_state()
             except Exception as e:
@@ -795,10 +882,16 @@ class MonitoringLoop:
             if not self.phase_manager:
                 logger.warning("[DIAGNOSTIC] ❌ SKIPPED - No phase_manager")
             elif not self.phase_manager.workflow_id:
-                logger.warning("[DIAGNOSTIC] ❌ SKIPPED - phase_manager.workflow_id is None")
-                logger.warning("[DIAGNOSTIC] 💡 This likely means there's an active workflow in the DB that wasn't loaded on startup")
+                logger.warning(
+                    "[DIAGNOSTIC] ❌ SKIPPED - phase_manager.workflow_id is None"
+                )
+                logger.warning(
+                    "[DIAGNOSTIC] 💡 This likely means there's an active workflow in the DB that wasn't loaded on startup"
+                )
 
-    async def _guardian_analysis_for_agent(self, agent: Agent) -> Optional[Dict[str, Any]]:
+    async def _guardian_analysis_for_agent(
+        self, agent: Agent
+    ) -> Optional[Dict[str, Any]]:
         """Perform Guardian analysis for a single agent.
 
         Args:
@@ -821,18 +914,29 @@ class MonitoringLoop:
             # The orchestrator runs in-process (AutopilotService), not as a tmux
             # agent — never health-check or "recreate" it for a missing tmux session
             # (that was a 60s phantom-restart loop after the Tier 2 in-process move).
-            if agent.agent_type == 'orchestrator':
-                logger.debug(f"Skipping orchestrator agent {agent.id[:8]} (runs in-process)")
+            if agent.agent_type == "orchestrator":
+                logger.debug(
+                    f"Skipping orchestrator agent {agent.id[:8]} (runs in-process)"
+                )
                 return None
 
             # Special handling for agents with missing tmux sessions
-            if agent.tmux_session_name and not self.agent_manager.tmux_server.has_session(agent.tmux_session_name):
+            if (
+                agent.tmux_session_name
+                and not self.agent_manager.tmux_server.has_session(
+                    agent.tmux_session_name
+                )
+            ):
                 # Check if task is already done before restarting
                 task = session.query(Task).filter_by(id=agent.current_task_id).first()
-                if task and task.status == 'done':
-                    logger.info(f"Agent {agent.id} has missing tmux session but task {task.id[:8]} is done — not restarting")
+                if task and task.status == "done":
+                    logger.info(
+                        f"Agent {agent.id} has missing tmux session but task {task.id[:8]} is done — not restarting"
+                    )
                     return None
-                logger.warning(f"Agent {agent.id} has missing tmux session {agent.tmux_session_name}, recreating")
+                logger.warning(
+                    f"Agent {agent.id} has missing tmux session {agent.tmux_session_name}, recreating"
+                )
                 await self._handle_missing_tmux_session(agent)
                 return None
 
@@ -851,11 +955,18 @@ class MonitoringLoop:
             if agent.current_task_id:
                 try:
                     from src.core.database import Phase as _Phase
-                    _task = session.query(Task).filter_by(id=agent.current_task_id).first()
+
+                    _task = (
+                        session.query(Task).filter_by(id=agent.current_task_id).first()
+                    )
                     if _task and _task.phase_id:
-                        _phase = session.query(_Phase).filter_by(id=_task.phase_id).first()
+                        _phase = (
+                            session.query(_Phase).filter_by(id=_task.phase_id).first()
+                        )
                         if _phase:
-                            self._write_agent_tmux_log(agent.id, _phase.name, tmux_output)
+                            self._write_agent_tmux_log(
+                                agent.id, _phase.name, tmux_output
+                            )
                 except Exception:
                     pass  # non-fatal; don't interrupt the monitoring cycle
 
@@ -863,8 +974,10 @@ class MonitoringLoop:
             if self.guardian.detect_agent_exited(tmux_output):
                 # Check if task is already done before restarting
                 task = session.query(Task).filter_by(id=agent.current_task_id).first()
-                if task and task.status == 'done':
-                    logger.info(f"Agent {agent.id[:8]} exited but task {task.id[:8]} is done — not restarting")
+                if task and task.status == "done":
+                    logger.info(
+                        f"Agent {agent.id[:8]} exited but task {task.id[:8]} is done — not restarting"
+                    )
                     return None
                 logger.warning(
                     f"Agent {agent.id[:8]} exited to command line — restarting"
@@ -878,15 +991,20 @@ class MonitoringLoop:
             try:
                 from src.core.simple_config import get_config
                 from src.interfaces.cli_interface import get_cli_agent
+
                 config = get_config()
-                cli_agent = get_cli_agent(getattr(config, 'cli_agent_type', 'pi'))
+                cli_agent = get_cli_agent(getattr(config, "cli_agent_type", "pi"))
                 tui_patterns = cli_agent.get_tui_status_patterns()
             except Exception:
                 pass  # No CLI agent configured — use no patterns (strictest check)
-            if self.guardian.detect_garbled_output(tmux_output, tui_patterns=tui_patterns):
+            if self.guardian.detect_garbled_output(
+                tmux_output, tui_patterns=tui_patterns
+            ):
                 task = session.query(Task).filter_by(id=agent.current_task_id).first()
-                if task and task.status == 'done':
-                    logger.info(f"Agent {agent.id[:8]} garbled but task done — not restarting")
+                if task and task.status == "done":
+                    logger.info(
+                        f"Agent {agent.id[:8]} garbled but task done — not restarting"
+                    )
                     return None
                 logger.warning(
                     f"Agent {agent.id[:8]} has garbled TUI output — restarting"
@@ -911,23 +1029,29 @@ class MonitoringLoop:
             }
 
             # Execute steering if needed
-            if analysis.get('needs_steering', False):
+            if analysis.get("needs_steering", False):
                 await self.guardian.steer_agent(
                     agent=agent,
-                    steering_type=analysis.get('steering_type', 'general'),
-                    message=analysis.get('steering_message'),  # Guardian should map from steering_recommendation
+                    steering_type=analysis.get("steering_type", "general"),
+                    message=analysis.get(
+                        "steering_message"
+                    ),  # Guardian should map from steering_recommendation
                 )
 
                 # Auto-restart if agent keeps ignoring steering
                 past = self._get_past_summaries_for_agent(agent.id, limit=5)
                 consecutive_stuck = sum(
-                    1 for s in past
-                    if s.get('needs_steering') and s.get('steering_type') in ('stuck', 'idle')
+                    1
+                    for s in past
+                    if s.get("needs_steering")
+                    and s.get("steering_type") in ("stuck", "idle")
                 )
                 if consecutive_stuck >= self.config.max_ignored_steering:
                     # Check if agent has recent activity before restarting
                     if agent.last_activity:
-                        idle_seconds = (datetime.utcnow() - agent.last_activity).total_seconds()
+                        idle_seconds = (
+                            datetime.utcnow() - agent.last_activity
+                        ).total_seconds()
                         if idle_seconds < 300:
                             logger.info(
                                 f"Agent {agent.id[:8]} marked stuck but was active {idle_seconds:.0f}s ago — not restarting"
@@ -972,12 +1096,18 @@ class MonitoringLoop:
                 session.close()
 
             # Record the restart
-            self.guardian._record_steering(agent.id, "AUTO_RESTART", "Agent ignored steering too many times, auto-restarted")
+            self.guardian._record_steering(
+                agent.id,
+                "AUTO_RESTART",
+                "Agent ignored steering too many times, auto-restarted",
+            )
 
         except Exception as e:
             logger.error(f"Failed to auto-restart agent {agent.id}: {e}")
 
-    def _get_past_summaries_for_agent(self, agent_id: str, limit: int = 10) -> List[Dict[str, Any]]:
+    def _get_past_summaries_for_agent(
+        self, agent_id: str, limit: int = 10
+    ) -> List[Dict[str, Any]]:
         """Get past Guardian summaries for an agent.
 
         Args:
@@ -990,31 +1120,45 @@ class MonitoringLoop:
         session = self.db_manager.get_session()
         try:
             # Get past Guardian summaries from dedicated table
-            analyses = session.query(GuardianAnalysis).filter(
-                GuardianAnalysis.agent_id == agent_id
-            ).order_by(GuardianAnalysis.timestamp.desc()).limit(limit).all()
+            analyses = (
+                session.query(GuardianAnalysis)
+                .filter(GuardianAnalysis.agent_id == agent_id)
+                .order_by(GuardianAnalysis.timestamp.desc())
+                .limit(limit)
+                .all()
+            )
 
             summaries = []
             for analysis in reversed(analyses):  # Reverse to get chronological order
                 # Convert to dict format expected by Guardian
                 summary = {
-                    'current_phase': analysis.current_phase,
-                    'trajectory_aligned': analysis.trajectory_aligned,
-                    'alignment_score': analysis.alignment_score,
-                    'needs_steering': analysis.needs_steering,
-                    'steering_type': analysis.steering_type,
-                    'trajectory_summary': analysis.trajectory_summary,
-                    'accumulated_goal': analysis.accumulated_goal,
-                    'timestamp': analysis.timestamp.isoformat() if analysis.timestamp else None
+                    "current_phase": analysis.current_phase,
+                    "trajectory_aligned": analysis.trajectory_aligned,
+                    "alignment_score": analysis.alignment_score,
+                    "needs_steering": analysis.needs_steering,
+                    "steering_type": analysis.steering_type,
+                    "trajectory_summary": analysis.trajectory_summary,
+                    "accumulated_goal": analysis.accumulated_goal,
+                    "timestamp": analysis.timestamp.isoformat()
+                    if analysis.timestamp
+                    else None,
                 }
                 summaries.append(summary)
 
             # If new tables don't have data yet, fallback to old AgentLog method
             if not summaries:
-                logs = session.query(AgentLog).filter(
-                    AgentLog.agent_id == agent_id,
-                    AgentLog.log_type.in_(['guardian_analysis', 'guardian_summary'])
-                ).order_by(AgentLog.created_at.desc()).limit(limit).all()
+                logs = (
+                    session.query(AgentLog)
+                    .filter(
+                        AgentLog.agent_id == agent_id,
+                        AgentLog.log_type.in_(
+                            ["guardian_analysis", "guardian_summary"]
+                        ),
+                    )
+                    .order_by(AgentLog.created_at.desc())
+                    .limit(limit)
+                    .all()
+                )
 
                 for log in reversed(logs):
                     if log.details:
@@ -1025,7 +1169,9 @@ class MonitoringLoop:
         finally:
             session.close()
 
-    async def _update_agent_health_from_trajectory(self, agent: Agent, analysis: Dict[str, Any]):
+    async def _update_agent_health_from_trajectory(
+        self, agent: Agent, analysis: Dict[str, Any]
+    ):
         """Update agent health based on trajectory analysis.
 
         PARENT-CHILD MODEL: Parent monitors via tmux peek and task progress.
@@ -1042,11 +1188,11 @@ class MonitoringLoop:
             db_agent.last_activity = datetime.utcnow()
 
             # Track health_check_failures for Guardian last-resort steering
-            if analysis.get('trajectory_aligned', True):
+            if analysis.get("trajectory_aligned", True):
                 # Agent is on track — reset failures so it recovers
                 db_agent.health_check_failures = 0
             else:
-                alignment_score = analysis.get('alignment_score', 0.5)
+                alignment_score = analysis.get("alignment_score", 0.5)
                 if alignment_score < 0.3:
                     db_agent.health_check_failures += 2
                 elif alignment_score < 0.5:
@@ -1055,30 +1201,34 @@ class MonitoringLoop:
             # Save to dedicated Guardian analysis table
             guardian_analysis = GuardianAnalysis(
                 agent_id=agent.id,
-                current_phase=analysis.get('current_phase'),
-                trajectory_aligned=analysis.get('trajectory_aligned', True),
-                alignment_score=analysis.get('alignment_score', 1.0),
-                needs_steering=analysis.get('needs_steering', False),
-                steering_type=analysis.get('steering_type'),
-                steering_recommendation=analysis.get('steering_recommendation'),
-                trajectory_summary=analysis.get('trajectory_summary', 'No summary'),
-                last_claude_message_marker=analysis.get('last_claude_message_marker'),  # NEW
-                accumulated_goal=analysis.get('accumulated_goal'),
-                current_focus=analysis.get('current_focus'),
-                session_duration=analysis.get('session_duration'),
-                conversation_length=analysis.get('conversation_length'),
-                details=analysis
+                current_phase=analysis.get("current_phase"),
+                trajectory_aligned=analysis.get("trajectory_aligned", True),
+                alignment_score=analysis.get("alignment_score", 1.0),
+                needs_steering=analysis.get("needs_steering", False),
+                steering_type=analysis.get("steering_type"),
+                steering_recommendation=analysis.get("steering_recommendation"),
+                trajectory_summary=analysis.get("trajectory_summary", "No summary"),
+                last_claude_message_marker=analysis.get(
+                    "last_claude_message_marker"
+                ),  # NEW
+                accumulated_goal=analysis.get("accumulated_goal"),
+                current_focus=analysis.get("current_focus"),
+                session_duration=analysis.get("session_duration"),
+                conversation_length=analysis.get("conversation_length"),
+                details=analysis,
             )
             session.add(guardian_analysis)
 
             # Also keep a simplified log entry for backwards compatibility
             summary_log = AgentLog(
                 agent_id=agent.id,
-                log_type='guardian_analysis',
+                log_type="guardian_analysis",
                 message=f"Guardian: {analysis.get('current_phase', 'unknown')} phase, "
-                       f"score={analysis.get('alignment_score', 0):.2f}, "
-                       f"aligned={analysis.get('trajectory_aligned', False)}",
-                details={'guardian_analysis_id': guardian_analysis.id}  # Reference to the full analysis
+                f"score={analysis.get('alignment_score', 0):.2f}, "
+                f"aligned={analysis.get('trajectory_aligned', False)}",
+                details={
+                    "guardian_analysis_id": guardian_analysis.id
+                },  # Reference to the full analysis
             )
             session.add(summary_log)
             session.commit()
@@ -1095,23 +1245,27 @@ class MonitoringLoop:
         session = self.db_manager.get_session()
         try:
             # Extract duplicate info
-            duplicates = analysis.get('duplicates', [])
-            coherence_info = analysis.get('coherence', {})
-            decisions = analysis.get('decisions', [])
+            duplicates = analysis.get("duplicates", [])
+            coherence_info = analysis.get("coherence", {})
+            decisions = analysis.get("decisions", [])
 
             # Count decision types
-            termination_count = sum(1 for d in decisions if d.get('type') == 'terminate_duplicate')
-            coordination_count = sum(1 for d in decisions if d.get('type') == 'coordinate_resources')
+            termination_count = sum(
+                1 for d in decisions if d.get("type") == "terminate_duplicate"
+            )
+            coordination_count = sum(
+                1 for d in decisions if d.get("type") == "coordinate_resources"
+            )
 
             # Save main Conductor analysis
             conductor_analysis = ConductorAnalysis(
-                coherence_score=coherence_info.get('score', 0.7),
-                num_agents=analysis.get('num_agents', 0),
-                system_status=analysis.get('system_status', 'Unknown'),
+                coherence_score=coherence_info.get("score", 0.7),
+                num_agents=analysis.get("num_agents", 0),
+                system_status=analysis.get("system_status", "Unknown"),
                 duplicate_count=len(duplicates),
                 termination_count=termination_count,
                 coordination_count=coordination_count,
-                details=analysis
+                details=analysis,
             )
             session.add(conductor_analysis)
             session.flush()  # Get the ID
@@ -1120,20 +1274,20 @@ class MonitoringLoop:
             for dup in duplicates:
                 duplicate_entry = DetectedDuplicate(
                     conductor_analysis_id=conductor_analysis.id,
-                    agent1_id=dup.get('agent1'),
-                    agent2_id=dup.get('agent2'),
-                    similarity_score=dup.get('similarity', 0.0),
-                    work_description=dup.get('work', 'Unknown duplicate work')
+                    agent1_id=dup.get("agent1"),
+                    agent2_id=dup.get("agent2"),
+                    similarity_score=dup.get("similarity", 0.0),
+                    work_description=dup.get("work", "Unknown duplicate work"),
                 )
                 session.add(duplicate_entry)
 
             # Also keep a log entry for backwards compatibility
             log_entry = AgentLog(
                 agent_id=None,  # System-level log
-                log_type='conductor_analysis',
+                log_type="conductor_analysis",
                 message=f"Conductor: coherence={coherence_info.get('score', 0):.2f}, "
-                       f"{len(duplicates)} duplicates, {analysis.get('system_status', 'Unknown')[:50]}",
-                details={'conductor_analysis_id': conductor_analysis.id}
+                f"{len(duplicates)} duplicates, {analysis.get('system_status', 'Unknown')[:50]}",
+                details={"conductor_analysis_id": conductor_analysis.id},
             )
             session.add(log_entry)
 
@@ -1172,7 +1326,9 @@ class MonitoringLoop:
         # Check if tmux session exists first
         if agent.tmux_session_name:
             if not self.agent_manager.tmux_server.has_session(agent.tmux_session_name):
-                logger.warning(f"Agent {agent.id} tmux session {agent.tmux_session_name} missing")
+                logger.warning(
+                    f"Agent {agent.id} tmux session {agent.tmux_session_name} missing"
+                )
                 return False
 
         # Check last activity time
@@ -1234,21 +1390,25 @@ class MonitoringLoop:
 
         # Check for specific issues in trajectory
         # Guardian only steers as last resort (health_check_failures >= 3)
-        blockers = accumulated_context.get('discovered_blockers', [])
+        blockers = accumulated_context.get("discovered_blockers", [])
         if blockers and agent.health_check_failures >= 3:
-            logger.info(f"Agent {agent.id} has blockers ({agent.health_check_failures} failures): {blockers}")
+            logger.info(
+                f"Agent {agent.id} has blockers ({agent.health_check_failures} failures): {blockers}"
+            )
 
             # Last resort: try to help with top 3 blockers
             for blocker in blockers[:3]:
                 message = f"I see you're blocked on: {blocker}. Try a different approach or create a sub-task if it's complex."
                 await self.guardian.steer_agent(
                     agent=agent,
-                    steering_type='last_resort_stuck',
+                    steering_type="last_resort_stuck",
                     message=message,
                 )
         elif blockers:
             # Not enough failures yet — just log for observability
-            logger.info(f"Agent {agent.id} has blockers (will steer after 3+ failures): {blockers[:2]}")
+            logger.info(
+                f"Agent {agent.id} has blockers (will steer after 3+ failures): {blockers[:2]}"
+            )
         else:
             # No blockers — just do trajectory analysis
             analysis = await self.intelligent_monitor.analyze_agent_state(agent)
@@ -1264,8 +1424,7 @@ class MonitoringLoop:
 
         # Use the restart agent functionality which will recreate the tmux session
         await self.agent_manager.restart_agent(
-            agent.id,
-            f"Tmux session {agent.tmux_session_name} was missing, recreating"
+            agent.id, f"Tmux session {agent.tmux_session_name} was missing, recreating"
         )
 
     async def _check_phase_progression(self):
@@ -1311,7 +1470,9 @@ class MonitoringLoop:
                 except Exception:
                     pass
         if wf_db_status != "active":
-            logger.debug(f"[PHASE-PROGRESSION] Workflow is {wf_db_status} — skipping phase advancement")
+            logger.debug(
+                f"[PHASE-PROGRESSION] Workflow is {wf_db_status} — skipping phase advancement"
+            )
             return
 
         phases = workflow_status.get("phases", [])
@@ -1339,27 +1500,39 @@ class MonitoringLoop:
             if has_pending_successor:
                 session = self.db_manager.get_session()
                 try:
-                    from src.core.database import Phase, Task as _T2
+                    from src.core.database import Phase
+                    from src.core.database import Task as _T2
+
                     # Find the completed phase and re-evaluate transition via engine
-                    completed_phase = session.query(Phase).filter_by(
-                        workflow_id=self.phase_manager.workflow_id,
-                        order=last_completed["order"]
-                    ).first()
+                    completed_phase = (
+                        session.query(Phase)
+                        .filter_by(
+                            workflow_id=self.phase_manager.workflow_id,
+                            order=last_completed["order"],
+                        )
+                        .first()
+                    )
                     if completed_phase:
                         # Find the pending successor phase
-                        successor_phase = session.query(Phase).filter_by(
-                            workflow_id=self.phase_manager.workflow_id,
-                            order=last_completed["order"] + 1,
-                        ).first()
+                        successor_phase = (
+                            session.query(Phase)
+                            .filter_by(
+                                workflow_id=self.phase_manager.workflow_id,
+                                order=last_completed["order"] + 1,
+                            )
+                            .first()
+                        )
                         # Skip re-evaluation if the successor already has any tasks
                         # (failed counts — the transition fired but the task didn't
                         # survive). Re-triggering mark_phase_complete here would call
                         # the engine a second time and could produce a spurious retry
                         # of the already-completed phase.
                         if successor_phase:
-                            existing_tasks = session.query(_T2).filter_by(
-                                phase_id=successor_phase.id
-                            ).count()
+                            existing_tasks = (
+                                session.query(_T2)
+                                .filter_by(phase_id=successor_phase.id)
+                                .count()
+                            )
                             if existing_tasks > 0:
                                 logger.debug(
                                     f"[PHASE-PROGRESSION] {completed_phase.name} completed, "
@@ -1368,24 +1541,34 @@ class MonitoringLoop:
                                 )
                                 session.close()
                                 return
-                        logger.info(f"[PHASE-PROGRESSION] Phase {completed_phase.name} (order {completed_phase.order}) completed, "
-                                    f"but next phase is pending. Re-evaluating transition.")
-                        phase_output = self._build_spec_phase_output(completed_phase.name)
+                        logger.info(
+                            f"[PHASE-PROGRESSION] Phase {completed_phase.name} (order {completed_phase.order}) completed, "
+                            f"but next phase is pending. Re-evaluating transition."
+                        )
+                        phase_output = self._build_spec_phase_output(
+                            completed_phase.name
+                        )
                         result = self.phase_manager.mark_phase_complete(
                             completed_phase.id,
                             f"Phase completed with {last_completed['tasks']['completed']} tasks",
                             phase_output=phase_output,
                         )
                         if result.get("action") == "arbitrate":
-                            logger.info(f"[PHASE-PROGRESSION] Arbitration needed for {completed_phase.name}")
+                            logger.info(
+                                f"[PHASE-PROGRESSION] Arbitration needed for {completed_phase.name}"
+                            )
                             await self._spawn_arbitration_agent(
                                 completed_phase.workflow_id,
                                 completed_phase.id,
                                 completed_phase.name,
                                 result.get("arbitration_metadata", {}),
                             )
-                        elif result.get("should_continue") and result.get("target_phase_id"):
-                            logger.info(f"[PHASE-PROGRESSION] Engine decision: {result.get('action')} -> {result.get('target_phase')}")
+                        elif result.get("should_continue") and result.get(
+                            "target_phase_id"
+                        ):
+                            logger.info(
+                                f"[PHASE-PROGRESSION] Engine decision: {result.get('action')} -> {result.get('target_phase')}"
+                            )
                             await self._create_phase_task_and_agent(
                                 completed_phase.workflow_id,
                                 result["target_phase_id"],
@@ -1401,17 +1584,24 @@ class MonitoringLoop:
                 session = self.db_manager.get_session()
                 try:
                     from src.core.database import Phase
-                    phase = session.query(Phase).filter_by(
-                        workflow_id=self.phase_manager.workflow_id,
-                        order=phase_info["order"]
-                    ).first()
+
+                    phase = (
+                        session.query(Phase)
+                        .filter_by(
+                            workflow_id=self.phase_manager.workflow_id,
+                            order=phase_info["order"],
+                        )
+                        .first()
+                    )
 
                     if not phase:
                         continue
 
                     # Check if phase is complete
                     if self.phase_manager.check_phase_completion(phase.id):
-                        logger.info(f"Phase {phase.name} appears complete, evaluating transition")
+                        logger.info(
+                            f"Phase {phase.name} appears complete, evaluating transition"
+                        )
 
                         # Hybrid spec gate (§9.1): for gated phases (QA / product
                         # validation) score the agent's structured result against
@@ -1435,7 +1625,9 @@ class MonitoringLoop:
                                 phase.name,
                                 result.get("arbitration_metadata", {}),
                             )
-                        elif result.get("should_continue") and result.get("target_phase_id"):
+                        elif result.get("should_continue") and result.get(
+                            "target_phase_id"
+                        ):
                             await self._create_phase_task_and_agent(
                                 phase.workflow_id,
                                 result["target_phase_id"],
@@ -1448,41 +1640,81 @@ class MonitoringLoop:
                         # Without this, the phase hangs forever when an agent exits after
                         # getting a rejected update_task_status (§11.2 fix #1).
                         from src.core.database import Task as _T
-                        active_tasks = session.query(_T).filter(
-                            _T.phase_id == phase.id,
-                            _T.status.in_(["pending", "assigned", "in_progress",
-                                           "under_review", "validation_in_progress"]),
-                        ).count()
-                        failed_tasks = session.query(_T).filter_by(
-                            phase_id=phase.id, status="failed"
-                        ).count()
-                        done_tasks = session.query(_T).filter_by(
-                            phase_id=phase.id, status="done"
-                        ).count()
+
+                        active_tasks = (
+                            session.query(_T)
+                            .filter(
+                                _T.phase_id == phase.id,
+                                _T.status.in_(
+                                    [
+                                        "pending",
+                                        "assigned",
+                                        "in_progress",
+                                        "under_review",
+                                        "validation_in_progress",
+                                    ]
+                                ),
+                            )
+                            .count()
+                        )
+                        failed_tasks = (
+                            session.query(_T)
+                            .filter_by(phase_id=phase.id, status="failed")
+                            .count()
+                        )
+                        done_tasks = (
+                            session.query(_T)
+                            .filter_by(phase_id=phase.id, status="done")
+                            .count()
+                        )
                         # Check if an arbitration task just completed for this phase
-                        arb_done = session.query(_T).filter(
-                            _T.phase_id == phase.id,
-                            _T.created_by_agent_id == "arbitration",
-                            _T.status == "done",
-                        ).first()
-                        arb_pending = session.query(_T).filter(
-                            _T.phase_id == phase.id,
-                            _T.created_by_agent_id == "arbitration",
-                            _T.status.in_(["pending", "assigned", "in_progress"]),
-                        ).first()
+                        arb_done = (
+                            session.query(_T)
+                            .filter(
+                                _T.phase_id == phase.id,
+                                _T.created_by_agent_id == "arbitration",
+                                _T.status == "done",
+                            )
+                            .first()
+                        )
+                        arb_pending = (
+                            session.query(_T)
+                            .filter(
+                                _T.phase_id == phase.id,
+                                _T.created_by_agent_id == "arbitration",
+                                _T.status.in_(["pending", "assigned", "in_progress"]),
+                            )
+                            .first()
+                        )
                         if arb_done and not arb_pending:
                             await self._check_arbitration_completion(
                                 phase.workflow_id, phase.id, phase.name
                             )
                         elif active_tasks == 0 and failed_tasks > 0 and done_tasks == 0:
-                            logger.warning(
-                                f"[PHASE-PROGRESSION] Phase {phase.name} stalled: "
-                                f"{failed_tasks} failed task(s), no active tasks — "
-                                f"creating retry (bounded by MAX_PHASE_ATTEMPTS)"
-                            )
-                            await self._create_phase_task_and_agent(
-                                phase.workflow_id, phase.id, phase.name, "retry"
-                            )
+                            # Check if this phase is optional — if so, allow pipeline to continue
+                            from src.autopilot.spec import load_optional_phases
+
+                            optional_phases = load_optional_phases(phase.workflow_id)
+                            if phase.name in optional_phases:
+                                logger.info(
+                                    f"[PHASE-PROGRESSION] Optional phase {phase.name} stalled: "
+                                    f"{failed_tasks} failed task(s) — marking as skipped (optional)"
+                                )
+                                # Mark phase execution as skipped so pipeline continues
+                                if execution:
+                                    execution.status = "skipped"
+                                    execution.completed_at = datetime.utcnow()
+                                    session.commit()
+                            else:
+                                # Required phase — bounded retry with impasse on exhaustion
+                                logger.warning(
+                                    f"[PHASE-PROGRESSION] Required phase {phase.name} stalled: "
+                                    f"{failed_tasks} failed task(s), no active tasks — "
+                                    f"creating retry (bounded by MAX_PHASE_ATTEMPTS)"
+                                )
+                                await self._create_phase_task_and_agent(
+                                    phase.workflow_id, phase.id, phase.name, "retry"
+                                )
 
                 finally:
                     session.close()
@@ -1493,35 +1725,54 @@ class MonitoringLoop:
         # is pending (not in_progress). This catches the gap: if a gated phase
         # completed and the gate hasn't fired yet, fire it now.
         from src.autopilot.spec import GATED_PHASES
+
         for phase_info in phases:
-            if phase_info["status"] == "completed" and phase_info["name"] in GATED_PHASES:
+            if (
+                phase_info["status"] == "completed"
+                and phase_info["name"] in GATED_PHASES
+            ):
                 session = self.db_manager.get_session()
                 try:
                     from src.core.database import Phase, PhaseExecution
-                    phase = session.query(Phase).filter_by(
-                        workflow_id=self.phase_manager.workflow_id,
-                        order=phase_info["order"]
-                    ).first()
+
+                    phase = (
+                        session.query(Phase)
+                        .filter_by(
+                            workflow_id=self.phase_manager.workflow_id,
+                            order=phase_info["order"],
+                        )
+                        .first()
+                    )
                     if not phase:
                         continue
-                    execution = session.query(PhaseExecution).filter_by(phase_id=phase.id).first()
+                    execution = (
+                        session.query(PhaseExecution)
+                        .filter_by(phase_id=phase.id)
+                        .first()
+                    )
                     if execution and execution.status == "completed":
                         # Phase already marked complete — check if we logged the gate
-                        if not hasattr(self, '_gated_phases_fired'):
+                        if not hasattr(self, "_gated_phases_fired"):
                             self._gated_phases_fired = set()
                         if phase.id not in self._gated_phases_fired:
                             phase_output = self._build_spec_phase_output(phase.name)
                             if phase_output:  # Non-empty = gated phase has output
-                                logger.info(f"[SPEC-GATE] {phase.name}: gate fired from completion path (missed by monitor)")
+                                logger.info(
+                                    f"[SPEC-GATE] {phase.name}: gate fired from completion path (missed by monitor)"
+                                )
                                 self._gated_phases_fired.add(phase.id)
                                 # Re-evaluate: if score < 0.7, engine will GOTO dev
                                 result = self.phase_manager.mark_phase_complete(
                                     phase.id,
-                                    f"Phase completed (gate fired from completion path)",
+                                    "Phase completed (gate fired from completion path)",
                                     phase_output=phase_output,
                                 )
-                                if result.get("action") == "goto" and result.get("target_phase_id"):
-                                    logger.info(f"[SPEC-GATE] {phase.name}: GOTO {result.get('target_phase')} (score too low)")
+                                if result.get("action") == "goto" and result.get(
+                                    "target_phase_id"
+                                ):
+                                    logger.info(
+                                        f"[SPEC-GATE] {phase.name}: GOTO {result.get('target_phase')} (score too low)"
+                                    )
                                     await self._create_phase_task_and_agent(
                                         phase.workflow_id,
                                         result["target_phase_id"],
@@ -1529,7 +1780,9 @@ class MonitoringLoop:
                                         result["action"],
                                     )
                                 elif result.get("action") == "continue":
-                                    logger.info(f"[SPEC-GATE] {phase.name}: PASSED (score >= 0.7)")
+                                    logger.info(
+                                        f"[SPEC-GATE] {phase.name}: PASSED (score >= 0.7)"
+                                    )
                 finally:
                     session.close()
 
@@ -1540,48 +1793,66 @@ class MonitoringLoop:
         phases (read from the workflow's working directory), else {}.
         """
         try:
-            from src.autopilot.spec import build_phase_output, GATED_PHASES
+            from src.autopilot.spec import GATED_PHASES, build_phase_output
+
             if phase_name not in GATED_PHASES:
                 return {}
 
             from src.core.database import Workflow
+
             wd = None
             session = self.db_manager.get_session()
             try:
-                wf = session.query(Workflow).filter_by(
-                    id=self.phase_manager.workflow_id
-                ).first()
+                wf = (
+                    session.query(Workflow)
+                    .filter_by(id=self.phase_manager.workflow_id)
+                    .first()
+                )
                 wd = wf.working_directory if wf else None
             finally:
                 session.close()
 
             if not wd:
-                logger.warning(f"[SPEC-GATE] {phase_name}: working_directory is None on workflow {self.phase_manager.workflow_id}, cannot score")
+                logger.warning(
+                    f"[SPEC-GATE] {phase_name}: working_directory is None on workflow {self.phase_manager.workflow_id}, cannot score"
+                )
                 return {}
             phase_output = build_phase_output(phase_name, wd)
             logger.info(f"[SPEC-GATE] {phase_name}: {phase_output}")
             return phase_output
         except Exception as e:
-            logger.warning(f"[SPEC-GATE] could not build phase_output for {phase_name}: {e}")
+            logger.warning(
+                f"[SPEC-GATE] could not build phase_output for {phase_name}: {e}"
+            )
             return {}
 
-    def _write_agent_tmux_log(self, agent_id: str, phase_name: str, tmux_output: str) -> None:
+    def _write_agent_tmux_log(
+        self, agent_id: str, phase_name: str, tmux_output: str
+    ) -> None:
         """Write the agent's full tmux scrollback to docs/tmux/<phase>_<agent_id>.log.
 
         Called on every monitor cycle — overwrites so the file always contains
         the complete captured session up to the most recent poll. The forensics
         phase reads these files for a full picture of what each agent did.
         """
-        if not tmux_output or not self.phase_manager or not self.phase_manager.workflow_id:
+        if (
+            not tmux_output
+            or not self.phase_manager
+            or not self.phase_manager.workflow_id
+        ):
             return
         try:
             from pathlib import Path as _P
+
             from src.core.database import Workflow as _Workflow
+
             session = self.db_manager.get_session()
             try:
-                wf = session.query(_Workflow).filter_by(
-                    id=self.phase_manager.workflow_id
-                ).first()
+                wf = (
+                    session.query(_Workflow)
+                    .filter_by(id=self.phase_manager.workflow_id)
+                    .first()
+                )
                 wd = wf.working_directory if wf else None
             finally:
                 session.close()
@@ -1604,10 +1875,13 @@ class MonitoringLoop:
             tmux_dir.mkdir(parents=True, exist_ok=True)
             log_file = tmux_dir / f"{phase_name}_{agent_id[:8]}.log"
             log_file.write_text(tmux_output)
-            logger.debug(f"[TMUX-LOG] {phase_name}/{agent_id[:8]}: wrote {len(tmux_output)} chars")
+            logger.debug(
+                f"[TMUX-LOG] {phase_name}/{agent_id[:8]}: wrote {len(tmux_output)} chars"
+            )
 
             # Update the manifest so forensics can enumerate logs without ls truncation.
             import json as _json
+
             manifest_path = tmux_dir / "tmux_log_manifest.json"
             manifest: dict = {}
             if manifest_path.exists():
@@ -1636,13 +1910,16 @@ class MonitoringLoop:
         """
         session = self.db_manager.get_session()
         try:
-            from src.core.database import Phase, Task, PhaseExecution, Workflow
             import uuid
+
+            from src.core.database import Phase, PhaseExecution, Task, Workflow
 
             # Bail immediately if the workflow is no longer active.
             wf_check = session.query(Workflow).filter_by(id=workflow_id).first()
             if not wf_check or wf_check.status not in ("active", "paused"):
-                logger.debug(f"[PHASE-TASK] Workflow {workflow_id[:8]} is {getattr(wf_check, 'status', 'missing')} — skipping task creation for {phase_name}")
+                logger.debug(
+                    f"[PHASE-TASK] Workflow {workflow_id[:8]} is {getattr(wf_check, 'status', 'missing')} — skipping task creation for {phase_name}"
+                )
                 return
 
             phase = session.query(Phase).filter_by(id=phase_id).first()
@@ -1651,12 +1928,18 @@ class MonitoringLoop:
                 return
 
             # Check if phase already has an active task
-            existing_task = session.query(Task).filter(
-                Task.phase_id == phase_id,
-                Task.status.in_(["pending", "assigned", "in_progress", "queued"])
-            ).first()
+            existing_task = (
+                session.query(Task)
+                .filter(
+                    Task.phase_id == phase_id,
+                    Task.status.in_(["pending", "assigned", "in_progress", "queued"]),
+                )
+                .first()
+            )
             if existing_task:
-                logger.info(f"Phase {phase_name} already has active task {existing_task.id[:8]}, skipping creation")
+                logger.info(
+                    f"Phase {phase_name} already has active task {existing_task.id[:8]}, skipping creation"
+                )
                 return
 
             # Guard against the timing gap: task is done but its agent cleanup is
@@ -1665,6 +1948,7 @@ class MonitoringLoop:
             # still running — causing 2-3 agents competing on the same phase.
             # Primary: check the agents table directly (covers any action).
             from src.core.database import Agent as _Agent
+
             active_phase_agent = (
                 session.query(_Agent)
                 .filter(_Agent.status.in_(["working", "idle", "starting"]))
@@ -1693,7 +1977,9 @@ class MonitoringLoop:
                 return
             self._phase_last_created[phase_id] = time.time()
 
-            execution = session.query(PhaseExecution).filter_by(phase_id=phase_id).first()
+            execution = (
+                session.query(PhaseExecution).filter_by(phase_id=phase_id).first()
+            )
 
             # Idempotency for forward 'continue': the first continue into a phase sets
             # its execution to 'in_progress' (below). A duplicate continue therefore
@@ -1703,12 +1989,18 @@ class MonitoringLoop:
             # 'completed'/'pending' (not 'in_progress') and uses action != 'continue',
             # so legitimate re-runs still proceed.
             if action == "continue" and execution and execution.status == "in_progress":
-                done_task = session.query(Task).filter(
-                    Task.phase_id == phase_id,
-                    Task.status == "done",
-                ).first()
+                done_task = (
+                    session.query(Task)
+                    .filter(
+                        Task.phase_id == phase_id,
+                        Task.status == "done",
+                    )
+                    .first()
+                )
                 if done_task:
-                    logger.info(f"Phase {phase_name} execution already in_progress with completed task {done_task.id[:8]} — skipping duplicate (continue)")
+                    logger.info(
+                        f"Phase {phase_name} execution already in_progress with completed task {done_task.id[:8]} — skipping duplicate (continue)"
+                    )
                     return
 
             # Bound re-entry (retry/goto). The engine can decide 'retry'/'goto' for a
@@ -1722,11 +2014,15 @@ class MonitoringLoop:
                 # Only count retry/goto tasks — successful 'continue' tasks are
                 # forward progress, not re-entries, and shouldn't count toward
                 # the retry bound.
-                monitor_retries = session.query(Task).filter(
-                    Task.phase_id == phase_id,
-                    Task.created_by_agent_id == "monitor",
-                    Task.action.in_(["retry", "goto"]),
-                ).count()
+                monitor_retries = (
+                    session.query(Task)
+                    .filter(
+                        Task.phase_id == phase_id,
+                        Task.created_by_agent_id == "monitor",
+                        Task.action.in_(["retry", "goto"]),
+                    )
+                    .count()
+                )
                 if monitor_retries >= MAX_PHASE_ATTEMPTS:
                     logger.warning(
                         f"[PHASE-PROGRESSION] Phase {phase_name} hit the {action} bound "
@@ -1737,6 +2033,7 @@ class MonitoringLoop:
                     # continue (§9.4 / §11.2). Pause the run so a human can Resume/Rerun
                     # from the UI rather than accumulating phase tasks indefinitely.
                     from src.core.database import Workflow
+
                     wf = session.query(Workflow).filter_by(id=workflow_id).first()
                     if wf and wf.status == "active":
                         wf.status = "paused"
@@ -1746,7 +2043,11 @@ class MonitoringLoop:
             # Create task
             task_id = str(uuid.uuid4())
             task_description = f"Execute {phase.name}: {phase.description}"
-            done_definition = " AND ".join(phase.done_definitions) if phase.done_definitions else "Complete phase objectives"
+            done_definition = (
+                " AND ".join(phase.done_definitions)
+                if phase.done_definitions
+                else "Complete phase objectives"
+            )
 
             task = Task(
                 id=task_id,
@@ -1766,18 +2067,21 @@ class MonitoringLoop:
             if execution and execution.status in ("pending", "completed"):
                 execution.status = "in_progress"
                 from datetime import datetime
+
                 execution.started_at = datetime.utcnow()
 
             session.commit()
 
-            logger.info(f"[{action.upper()}] Created task for phase {phase_name} (task_id={task_id[:8]})")
+            logger.info(
+                f"[{action.upper()}] Created task for phase {phase_name} (task_id={task_id[:8]})"
+            )
 
             # Create agent
             try:
                 phase_cli_tool = phase.cli_tool
                 phase_cli_model = phase.cli_model
                 phase_glm_token_env = phase.glm_api_token_env
-                phase_thinking_level = getattr(phase, 'thinking_level', None)
+                phase_thinking_level = getattr(phase, "thinking_level", None)
 
                 # Ensure agent_manager has phase_manager so spawned agents get phase context
                 if self.phase_manager and not self.agent_manager.phase_manager:
@@ -1800,16 +2104,22 @@ class MonitoringLoop:
                 task.assigned_agent_id = agent.id
                 task.status = "in_progress"
                 from datetime import datetime
+
                 task.started_at = datetime.utcnow()
                 session.commit()
 
-                logger.info(f"[{action.upper()}] Created agent {agent.id[:8]} for phase {phase_name}")
+                logger.info(
+                    f"[{action.upper()}] Created agent {agent.id[:8]} for phase {phase_name}"
+                )
 
             except Exception as agent_err:
-                logger.error(f"Failed to create agent for task {task_id[:8]}: {agent_err}")
+                logger.error(
+                    f"Failed to create agent for task {task_id[:8]}: {agent_err}"
+                )
                 try:
                     task.status = "queued"
                     from datetime import datetime
+
                     task.queued_at = datetime.utcnow()
                     session.commit()
                 except Exception:
@@ -1846,11 +2156,14 @@ class MonitoringLoop:
         Delegates to shared run_health_audit() function.
         """
         from src.mcp.autopilot_api import run_health_audit
+
         result = run_health_audit(self.db_manager)
 
         # Log findings
         for f in result["findings"]:
-            log_fn = logger.warning if f["severity"] in ("warning", "error") else logger.info
+            log_fn = (
+                logger.warning if f["severity"] in ("warning", "error") else logger.info
+            )
             log_fn(f"[HEALTH] {f['type']}: {f['message']}")
 
         # Store for API access
@@ -1859,19 +2172,29 @@ class MonitoringLoop:
         # Task stuck detection: tasks in_progress > 10min with no active agent
         try:
             session = self.db_manager.get_session()
-            from src.core.database import Task, Agent
             from datetime import datetime, timedelta
+
+            from src.core.database import Agent, Task
+
             stale_cutoff = datetime.utcnow() - timedelta(minutes=10)
-            stuck_tasks = session.query(Task).filter(
-                Task.status == "in_progress",
-                Task.started_at < stale_cutoff,
-                Task.started_at.isnot(None),
-            ).all()
+            stuck_tasks = (
+                session.query(Task)
+                .filter(
+                    Task.status == "in_progress",
+                    Task.started_at < stale_cutoff,
+                    Task.started_at.isnot(None),
+                )
+                .all()
+            )
             for task in stuck_tasks:
                 # Check if agent is still active
-                agent = session.query(Agent).filter_by(
-                    id=task.assigned_agent_id, status="working"
-                ).first() if task.assigned_agent_id else None
+                agent = (
+                    session.query(Agent)
+                    .filter_by(id=task.assigned_agent_id, status="working")
+                    .first()
+                    if task.assigned_agent_id
+                    else None
+                )
                 if not agent:
                     # If the agent called update_task_status(done) but the session
                     # was killed before the response was processed, completion_notes
@@ -1884,9 +2207,13 @@ class MonitoringLoop:
                         task.status = "done"
                         task.completed_at = datetime.utcnow()
                     else:
-                        logger.warning(f"[HEALTH] Task {task.id[:8]} stuck in_progress for >10min with no active agent — marking failed")
+                        logger.warning(
+                            f"[HEALTH] Task {task.id[:8]} stuck in_progress for >10min with no active agent — marking failed"
+                        )
                         task.status = "failed"
-                        task.failure_reason = "Task stuck: no active agent for >10 minutes"
+                        task.failure_reason = (
+                            "Task stuck: no active agent for >10 minutes"
+                        )
                     session.commit()
         except Exception as e:
             logger.error(f"Error in task stuck detection: {e}")
@@ -1902,41 +2229,62 @@ class MonitoringLoop:
             # Get all tmux sessions that start with 'agent' (the new naming convention)
             agent_sessions = []
             for session in self.agent_manager.tmux_server.sessions:
-                if session.name.startswith('agent'):
+                if session.name.startswith("agent"):
                     agent_sessions.append(session.name)
 
             if not agent_sessions:
                 logger.debug("No agent tmux sessions found")
                 return
 
-            logger.debug(f"Found {len(agent_sessions)} agent tmux sessions: {agent_sessions}")
+            logger.debug(
+                f"Found {len(agent_sessions)} agent tmux sessions: {agent_sessions}"
+            )
 
             # Get all active agent session names from database
             session = self.db_manager.get_session()
             try:
-                active_agents = session.query(Agent).filter(
-                    Agent.status.in_(['working', 'pending', 'assigned'])
-                ).all()
+                active_agents = (
+                    session.query(Agent)
+                    .filter(Agent.status.in_(["working", "pending", "assigned"]))
+                    .all()
+                )
 
                 active_session_names = {
-                    agent.tmux_session_name for agent in active_agents
+                    agent.tmux_session_name
+                    for agent in active_agents
                     if agent.tmux_session_name
                 }
 
-                logger.debug(f"Found {len(active_session_names)} active agent sessions: {active_session_names}")
+                logger.debug(
+                    f"Found {len(active_session_names)} active agent sessions: {active_session_names}"
+                )
 
                 # Clean up orphaned agents (working but no active workflow)
                 from src.core.database import Workflow
-                active_workflow_ids = {wf.id for wf in session.query(Workflow).filter(
-                    Workflow.status.in_(['active', 'running'])
-                ).all()}
+
+                active_workflow_ids = {
+                    wf.id
+                    for wf in session.query(Workflow)
+                    .filter(Workflow.status.in_(["active", "running"]))
+                    .all()
+                }
 
                 for agent in active_agents:
                     if agent.current_task_id:
-                        task = session.query(Task).filter_by(id=agent.current_task_id).first()
-                        if task and task.workflow_id and task.workflow_id not in active_workflow_ids:
-                            logger.info(f"Terminating orphaned agent {agent.id[:8]} - workflow {task.workflow_id[:8]} not active")
-                            agent.status = 'terminated'
+                        task = (
+                            session.query(Task)
+                            .filter_by(id=agent.current_task_id)
+                            .first()
+                        )
+                        if (
+                            task
+                            and task.workflow_id
+                            and task.workflow_id not in active_workflow_ids
+                        ):
+                            logger.info(
+                                f"Terminating orphaned agent {agent.id[:8]} - workflow {task.workflow_id[:8]} not active"
+                            )
+                            agent.status = "terminated"
                 session.commit()
 
             finally:
@@ -1946,30 +2294,36 @@ class MonitoringLoop:
             # Use grace period based on last check time to avoid killing newly-created sessions
             GRACE_PERIOD_SECONDS = 120
             current_time = datetime.now()
-            
+
             # Track when we last checked - agents created since last check get grace period
-            if not hasattr(self, '_last_orphan_check_time'):
+            if not hasattr(self, "_last_orphan_check_time"):
                 self._last_orphan_check_time = current_time
-                logger.debug("First orphan check - skipping all sessions for grace period")
+                logger.debug(
+                    "First orphan check - skipping all sessions for grace period"
+                )
                 return
-            
-            time_since_last_check = (current_time - self._last_orphan_check_time).total_seconds()
-            
+
+            time_since_last_check = (
+                current_time - self._last_orphan_check_time
+            ).total_seconds()
+
             orphaned_sessions = []
             for tmux_sess in self.agent_manager.tmux_server.sessions:
                 if tmux_sess.name not in agent_sessions:
                     continue
                 if tmux_sess.name in active_session_names:
                     continue
-                
+
                 # Apply grace period: if we just started monitoring or haven't checked in a while,
                 # skip orphan detection to let new agents get registered in DB
                 if time_since_last_check < GRACE_PERIOD_SECONDS:
-                    logger.debug(f"Skipping session {tmux_sess.name} - within grace period ({time_since_last_check:.0f}s < {GRACE_PERIOD_SECONDS}s)")
+                    logger.debug(
+                        f"Skipping session {tmux_sess.name} - within grace period ({time_since_last_check:.0f}s < {GRACE_PERIOD_SECONDS}s)"
+                    )
                     continue
-                    
+
                 orphaned_sessions.append(tmux_sess.name)
-            
+
             # Update last check time
             self._last_orphan_check_time = current_time
 
@@ -1977,7 +2331,9 @@ class MonitoringLoop:
                 logger.debug("No orphaned tmux sessions found")
                 return
 
-            logger.info(f"Found {len(orphaned_sessions)} orphaned tmux sessions (after grace period): {orphaned_sessions}")
+            logger.info(
+                f"Found {len(orphaned_sessions)} orphaned tmux sessions (after grace period): {orphaned_sessions}"
+            )
 
             # Kill orphaned sessions
             killed_count = 0
@@ -1991,10 +2347,14 @@ class MonitoringLoop:
                             killed_count += 1
                             break
                 except Exception as e:
-                    logger.warning(f"Failed to kill orphaned session {session_name}: {e}")
+                    logger.warning(
+                        f"Failed to kill orphaned session {session_name}: {e}"
+                    )
 
             if killed_count > 0:
-                logger.info(f"Successfully cleaned up {killed_count} orphaned tmux sessions")
+                logger.info(
+                    f"Successfully cleaned up {killed_count} orphaned tmux sessions"
+                )
 
         except Exception as e:
             logger.error(f"Error during tmux session cleanup: {e}")
@@ -2010,9 +2370,13 @@ class MonitoringLoop:
         4. No validated result submitted
         5. Cooldown period has passed since last diagnostic run
         """
-        logger.warning("[DIAGNOSTIC MONITOR] ============================================")
+        logger.warning(
+            "[DIAGNOSTIC MONITOR] ============================================"
+        )
         logger.warning("[DIAGNOSTIC MONITOR] 🔍 _check_workflow_stuck_state() CALLED!")
-        logger.warning("[DIAGNOSTIC MONITOR] ============================================")
+        logger.warning(
+            "[DIAGNOSTIC MONITOR] ============================================"
+        )
         logger.info("[DIAGNOSTIC MONITOR] Starting workflow stuck state check...")
 
         # Condition tracking for debug report
@@ -2028,12 +2392,16 @@ class MonitoringLoop:
 
         if not self.config.diagnostic_agent_enabled:
             logger.info("[DIAGNOSTIC MONITOR] ❌ Diagnostic agent disabled in config")
-            self._log_diagnostic_status_report(conditions, trigger=False, reason="Disabled in config")
+            self._log_diagnostic_status_report(
+                conditions, trigger=False, reason="Disabled in config"
+            )
             return
 
         if not self.phase_manager or not self.phase_manager.workflow_id:
             logger.info("[DIAGNOSTIC MONITOR] ❌ No active workflow")
-            self._log_diagnostic_status_report(conditions, trigger=False, reason="No active workflow")
+            self._log_diagnostic_status_report(
+                conditions, trigger=False, reason="No active workflow"
+            )
             return
 
         conditions["workflow_exists"] = True
@@ -2043,136 +2411,223 @@ class MonitoringLoop:
         session = self.db_manager.get_session()
         try:
             # Step 1: Check if we have tasks
-            from src.core.database import Task, WorkflowResult, DiagnosticRun
+            from src.core.database import DiagnosticRun, Task, WorkflowResult
 
-            tasks = session.query(Task).filter(
-                Task.workflow_id == workflow_id
-            ).all()
+            tasks = session.query(Task).filter(Task.workflow_id == workflow_id).all()
 
             if not tasks:
                 logger.info("[DIAGNOSTIC MONITOR] ❌ No tasks in workflow yet")
-                self._log_diagnostic_status_report(conditions, trigger=False, reason="No tasks in workflow")
+                self._log_diagnostic_status_report(
+                    conditions, trigger=False, reason="No tasks in workflow"
+                )
                 return
 
             conditions["has_tasks"] = True
             logger.info(f"[DIAGNOSTIC MONITOR] ✅ Has tasks: {len(tasks)} total")
 
             # Step 2: Check if all tasks are finished
-            active_statuses = ['pending', 'assigned', 'in_progress',
-                              'under_review', 'validation_in_progress']
+            active_statuses = [
+                "pending",
+                "assigned",
+                "in_progress",
+                "under_review",
+                "validation_in_progress",
+            ]
             active_tasks = [t for t in tasks if t.status in active_statuses]
             finished_tasks = [t for t in tasks if t.status not in active_statuses]
 
             if active_tasks:
-                logger.info(f"[DIAGNOSTIC MONITOR] ❌ Tasks still active: {len(active_tasks)} active, {len(finished_tasks)} finished")
-                self._log_diagnostic_status_report(conditions, trigger=False,
-                                                   reason=f"{len(active_tasks)} active tasks remaining")
+                logger.info(
+                    f"[DIAGNOSTIC MONITOR] ❌ Tasks still active: {len(active_tasks)} active, {len(finished_tasks)} finished"
+                )
+                self._log_diagnostic_status_report(
+                    conditions,
+                    trigger=False,
+                    reason=f"{len(active_tasks)} active tasks remaining",
+                )
                 return
 
             conditions["all_tasks_finished"] = True
-            logger.info(f"[DIAGNOSTIC MONITOR] ✅ All tasks finished: {len(finished_tasks)} tasks")
+            logger.info(
+                f"[DIAGNOSTIC MONITOR] ✅ All tasks finished: {len(finished_tasks)} tasks"
+            )
 
             # Step 2.5: Check if a phase was recently completed (cooldown after phase completion)
             from src.core.database import PhaseExecution
-            recent_phase_completion = session.query(PhaseExecution).filter(
-                PhaseExecution.workflow_execution_id == workflow_id,
-                PhaseExecution.status == 'completed',
-                PhaseExecution.completed_at.isnot(None)
-            ).order_by(PhaseExecution.completed_at.desc()).first()
+
+            recent_phase_completion = (
+                session.query(PhaseExecution)
+                .filter(
+                    PhaseExecution.workflow_execution_id == workflow_id,
+                    PhaseExecution.status == "completed",
+                    PhaseExecution.completed_at.isnot(None),
+                )
+                .order_by(PhaseExecution.completed_at.desc())
+                .first()
+            )
 
             if recent_phase_completion:
-                time_since_completion = (datetime.utcnow() - recent_phase_completion.completed_at).total_seconds()
+                time_since_completion = (
+                    datetime.utcnow() - recent_phase_completion.completed_at
+                ).total_seconds()
                 phase_cooldown = 120  # 2 minutes after phase completion
                 if time_since_completion < phase_cooldown:
-                    logger.info(f"[DIAGNOSTIC MONITOR] ❌ Phase recently completed ({recent_phase_completion.phase_id[:8]}), cooling down: {time_since_completion:.0f}s / {phase_cooldown}s")
-                    self._log_diagnostic_status_report(conditions, trigger=False,
-                                                       reason=f"Phase completed {time_since_completion:.0f}s ago, cooling down")
+                    logger.info(
+                        f"[DIAGNOSTIC MONITOR] ❌ Phase recently completed ({recent_phase_completion.phase_id[:8]}), cooling down: {time_since_completion:.0f}s / {phase_cooldown}s"
+                    )
+                    self._log_diagnostic_status_report(
+                        conditions,
+                        trigger=False,
+                        reason=f"Phase completed {time_since_completion:.0f}s ago, cooling down",
+                    )
                     return
 
             # Step 3: Check if workflow is already marked complete/failed
             from src.core.database import Workflow as _WF
+
             wf_row = session.query(_WF).filter_by(id=workflow_id).first()
-            if wf_row and wf_row.status in ('completed', 'failed', 'cancelled'):
-                logger.info(f"[DIAGNOSTIC MONITOR] ❌ Workflow is {wf_row.status} — no diagnostic needed")
-                self._log_diagnostic_status_report(conditions, trigger=False,
-                                                   reason=f"Workflow status is {wf_row.status}")
+            if wf_row and wf_row.status in ("completed", "failed", "cancelled"):
+                logger.info(
+                    f"[DIAGNOSTIC MONITOR] ❌ Workflow is {wf_row.status} — no diagnostic needed"
+                )
+                self._log_diagnostic_status_report(
+                    conditions,
+                    trigger=False,
+                    reason=f"Workflow status is {wf_row.status}",
+                )
                 return
 
-            validated_result = session.query(WorkflowResult).filter(
-                WorkflowResult.workflow_id == workflow_id,
-                WorkflowResult.status == 'validated'
-            ).first()
+            validated_result = (
+                session.query(WorkflowResult)
+                .filter(
+                    WorkflowResult.workflow_id == workflow_id,
+                    WorkflowResult.status == "validated",
+                )
+                .first()
+            )
 
             if validated_result:
-                logger.info(f"[DIAGNOSTIC MONITOR] ❌ Workflow has validated result: {validated_result.id[:8]}")
-                self._log_diagnostic_status_report(conditions, trigger=False, reason="Validated result exists")
+                logger.info(
+                    f"[DIAGNOSTIC MONITOR] ❌ Workflow has validated result: {validated_result.id[:8]}"
+                )
+                self._log_diagnostic_status_report(
+                    conditions, trigger=False, reason="Validated result exists"
+                )
                 return
 
             conditions["no_validated_result"] = True
 
             # Check for any results (validated or not)
-            all_results = session.query(WorkflowResult).filter(
-                WorkflowResult.workflow_id == workflow_id
-            ).all()
+            all_results = (
+                session.query(WorkflowResult)
+                .filter(WorkflowResult.workflow_id == workflow_id)
+                .all()
+            )
             if all_results:
-                logger.info(f"[DIAGNOSTIC MONITOR] ✅ No validated result ({len(all_results)} unvalidated results exist)")
+                logger.info(
+                    f"[DIAGNOSTIC MONITOR] ✅ No validated result ({len(all_results)} unvalidated results exist)"
+                )
             else:
-                logger.info("[DIAGNOSTIC MONITOR] ✅ No validated result (no results submitted)")
+                logger.info(
+                    "[DIAGNOSTIC MONITOR] ✅ No validated result (no results submitted)"
+                )
 
             # Step 4: Check cooldown period
-            last_diagnostic = session.query(DiagnosticRun).filter(
-                DiagnosticRun.workflow_id == workflow_id
-            ).order_by(DiagnosticRun.triggered_at.desc()).first()
+            last_diagnostic = (
+                session.query(DiagnosticRun)
+                .filter(DiagnosticRun.workflow_id == workflow_id)
+                .order_by(DiagnosticRun.triggered_at.desc())
+                .first()
+            )
 
             if last_diagnostic:
-                time_since_last = (datetime.utcnow() - last_diagnostic.triggered_at).total_seconds()
+                time_since_last = (
+                    datetime.utcnow() - last_diagnostic.triggered_at
+                ).total_seconds()
                 if time_since_last < self.config.diagnostic_cooldown_seconds:
-                    logger.info(f"[DIAGNOSTIC MONITOR] ❌ Cooldown active: {time_since_last:.0f}s / {self.config.diagnostic_cooldown_seconds}s required")
-                    self._log_diagnostic_status_report(conditions, trigger=False,
-                                                       reason=f"Cooldown active ({time_since_last:.0f}s < {self.config.diagnostic_cooldown_seconds}s)")
+                    logger.info(
+                        f"[DIAGNOSTIC MONITOR] ❌ Cooldown active: {time_since_last:.0f}s / {self.config.diagnostic_cooldown_seconds}s required"
+                    )
+                    self._log_diagnostic_status_report(
+                        conditions,
+                        trigger=False,
+                        reason=f"Cooldown active ({time_since_last:.0f}s < {self.config.diagnostic_cooldown_seconds}s)",
+                    )
                     return
                 else:
-                    logger.info(f"[DIAGNOSTIC MONITOR] ✅ Cooldown passed: {time_since_last:.0f}s since last diagnostic")
+                    logger.info(
+                        f"[DIAGNOSTIC MONITOR] ✅ Cooldown passed: {time_since_last:.0f}s since last diagnostic"
+                    )
             else:
-                logger.info("[DIAGNOSTIC MONITOR] ✅ Cooldown passed: No previous diagnostic runs")
+                logger.info(
+                    "[DIAGNOSTIC MONITOR] ✅ Cooldown passed: No previous diagnostic runs"
+                )
 
             conditions["cooldown_passed"] = True
 
             # Step 5: Check how long we've been stuck
             latest_task_time = max(
-                (t.completed_at or t.created_at for t in tasks if t.completed_at or t.created_at),
-                default=None
+                (
+                    t.completed_at or t.created_at
+                    for t in tasks
+                    if t.completed_at or t.created_at
+                ),
+                default=None,
             )
 
             stuck_time = 0
             if latest_task_time:
                 stuck_time = (datetime.utcnow() - latest_task_time).total_seconds()
                 if stuck_time < self.config.diagnostic_min_stuck_time_seconds:
-                    logger.info(f"[DIAGNOSTIC MONITOR] ❌ Not stuck long enough: {stuck_time:.0f}s / {self.config.diagnostic_min_stuck_time_seconds}s required")
-                    self._log_diagnostic_status_report(conditions, trigger=False,
-                                                       reason=f"Not stuck long enough ({stuck_time:.0f}s < {self.config.diagnostic_min_stuck_time_seconds}s)")
+                    logger.info(
+                        f"[DIAGNOSTIC MONITOR] ❌ Not stuck long enough: {stuck_time:.0f}s / {self.config.diagnostic_min_stuck_time_seconds}s required"
+                    )
+                    self._log_diagnostic_status_report(
+                        conditions,
+                        trigger=False,
+                        reason=f"Not stuck long enough ({stuck_time:.0f}s < {self.config.diagnostic_min_stuck_time_seconds}s)",
+                    )
                     return
                 else:
-                    logger.info(f"[DIAGNOSTIC MONITOR] ✅ Stuck long enough: {stuck_time:.0f}s since last activity")
+                    logger.info(
+                        f"[DIAGNOSTIC MONITOR] ✅ Stuck long enough: {stuck_time:.0f}s since last activity"
+                    )
             else:
-                logger.warning("[DIAGNOSTIC MONITOR] ⚠️  Could not determine stuck time (no task timestamps)")
+                logger.warning(
+                    "[DIAGNOSTIC MONITOR] ⚠️  Could not determine stuck time (no task timestamps)"
+                )
 
             conditions["stuck_long_enough"] = True
 
             # ALL CONDITIONS MET - Trigger diagnostic agent
-            logger.warning("[DIAGNOSTIC MONITOR] 🚨 WORKFLOW STUCK DETECTED - All conditions met!")
-            logger.warning(f"[DIAGNOSTIC MONITOR] 🔥 Stuck for {stuck_time:.0f}s with no progress")
-            self._log_diagnostic_status_report(conditions, trigger=True, stuck_time=stuck_time)
+            logger.warning(
+                "[DIAGNOSTIC MONITOR] 🚨 WORKFLOW STUCK DETECTED - All conditions met!"
+            )
+            logger.warning(
+                f"[DIAGNOSTIC MONITOR] 🔥 Stuck for {stuck_time:.0f}s with no progress"
+            )
+            self._log_diagnostic_status_report(
+                conditions, trigger=True, stuck_time=stuck_time
+            )
 
             await self._create_diagnostic_agent(workflow_id, tasks, stuck_time)
 
         except Exception as e:
-            logger.error(f"[DIAGNOSTIC MONITOR] ❌ Error checking workflow stuck state: {e}", exc_info=True)
+            logger.error(
+                f"[DIAGNOSTIC MONITOR] ❌ Error checking workflow stuck state: {e}",
+                exc_info=True,
+            )
             session.rollback()
         finally:
             session.close()
 
-    def _log_diagnostic_status_report(self, conditions: Dict[str, bool], trigger: bool, reason: str = None, stuck_time: float = 0):
+    def _log_diagnostic_status_report(
+        self,
+        conditions: Dict[str, bool],
+        trigger: bool,
+        reason: str = None,
+        stuck_time: float = 0,
+    ):
         """Log a status report of all diagnostic conditions.
 
         Args:
@@ -2186,18 +2641,34 @@ class MonitoringLoop:
         logger.info("[DIAGNOSTIC MONITOR] ───────────────────────────────────────")
 
         # Show all conditions
-        logger.info(f"[DIAGNOSTIC MONITOR] Enabled:              {'✅' if conditions['enabled'] else '❌'}")
-        logger.info(f"[DIAGNOSTIC MONITOR] Workflow Exists:      {'✅' if conditions['workflow_exists'] else '❌'}")
-        logger.info(f"[DIAGNOSTIC MONITOR] Has Tasks:            {'✅' if conditions['has_tasks'] else '❌'}")
-        logger.info(f"[DIAGNOSTIC MONITOR] All Tasks Finished:   {'✅' if conditions['all_tasks_finished'] else '❌'}")
-        logger.info(f"[DIAGNOSTIC MONITOR] No Validated Result:  {'✅' if conditions['no_validated_result'] else '❌'}")
-        logger.info(f"[DIAGNOSTIC MONITOR] Cooldown Passed:      {'✅' if conditions['cooldown_passed'] else '❌'}")
-        logger.info(f"[DIAGNOSTIC MONITOR] Stuck Long Enough:    {'✅' if conditions['stuck_long_enough'] else '❌'}")
+        logger.info(
+            f"[DIAGNOSTIC MONITOR] Enabled:              {'✅' if conditions['enabled'] else '❌'}"
+        )
+        logger.info(
+            f"[DIAGNOSTIC MONITOR] Workflow Exists:      {'✅' if conditions['workflow_exists'] else '❌'}"
+        )
+        logger.info(
+            f"[DIAGNOSTIC MONITOR] Has Tasks:            {'✅' if conditions['has_tasks'] else '❌'}"
+        )
+        logger.info(
+            f"[DIAGNOSTIC MONITOR] All Tasks Finished:   {'✅' if conditions['all_tasks_finished'] else '❌'}"
+        )
+        logger.info(
+            f"[DIAGNOSTIC MONITOR] No Validated Result:  {'✅' if conditions['no_validated_result'] else '❌'}"
+        )
+        logger.info(
+            f"[DIAGNOSTIC MONITOR] Cooldown Passed:      {'✅' if conditions['cooldown_passed'] else '❌'}"
+        )
+        logger.info(
+            f"[DIAGNOSTIC MONITOR] Stuck Long Enough:    {'✅' if conditions['stuck_long_enough'] else '❌'}"
+        )
 
         logger.info("[DIAGNOSTIC MONITOR] ───────────────────────────────────────")
 
         if trigger:
-            logger.warning("[DIAGNOSTIC MONITOR] 🚨 RESULT: TRIGGERING DIAGNOSTIC AGENT")
+            logger.warning(
+                "[DIAGNOSTIC MONITOR] 🚨 RESULT: TRIGGERING DIAGNOSTIC AGENT"
+            )
             logger.warning(f"[DIAGNOSTIC MONITOR] 🔥 Stuck Time: {stuck_time:.0f}s")
         else:
             logger.info("[DIAGNOSTIC MONITOR] ✋ RESULT: NOT TRIGGERING")
@@ -2206,7 +2677,9 @@ class MonitoringLoop:
 
         logger.info("[DIAGNOSTIC MONITOR] ═══════════════════════════════════════")
 
-    async def _create_diagnostic_agent(self, workflow_id: str, workflow_tasks: List, stuck_time: float):
+    async def _create_diagnostic_agent(
+        self, workflow_id: str, workflow_tasks: List, stuck_time: float
+    ):
         """Create and spawn a diagnostic agent.
 
         Args:
@@ -2215,26 +2688,35 @@ class MonitoringLoop:
             stuck_time: How long we've been stuck (seconds)
         """
         import uuid
-        from src.core.database import Task, DiagnosticRun
 
-        logger.info(f"[DIAGNOSTIC MONITOR] 🔍 Creating diagnostic agent for workflow {workflow_id[:8]}")
+        from src.core.database import DiagnosticRun, Task
+
+        logger.info(
+            f"[DIAGNOSTIC MONITOR] 🔍 Creating diagnostic agent for workflow {workflow_id[:8]}"
+        )
 
         session = self.db_manager.get_session()
         try:
             # Gather context for diagnostic agent
             logger.info("[DIAGNOSTIC MONITOR] Gathering diagnostic context...")
-            context = await self._gather_diagnostic_context(workflow_id, workflow_tasks, stuck_time)
-            logger.info(f"[DIAGNOSTIC MONITOR] Context gathered: {len(context['phases_summary'])} phases, {len(context['agents_summary'])} agents reviewed")
+            context = await self._gather_diagnostic_context(
+                workflow_id, workflow_tasks, stuck_time
+            )
+            logger.info(
+                f"[DIAGNOSTIC MONITOR] Context gathered: {len(context['phases_summary'])} phases, {len(context['agents_summary'])} agents reviewed"
+            )
 
             # Create diagnostic task on the most-recent active/done phase, not the first.
             current_phase_id = None
             for t in reversed(workflow_tasks):
-                if t.phase_id and t.status in ('done', 'in_progress', 'failed'):
+                if t.phase_id and t.status in ("done", "in_progress", "failed"):
                     current_phase_id = t.phase_id
                     break
-            
+
             if not current_phase_id:
-                logger.warning("[DIAGNOSTIC MONITOR] No phase_id found on any task, skipping diagnostic creation")
+                logger.warning(
+                    "[DIAGNOSTIC MONITOR] No phase_id found on any task, skipping diagnostic creation"
+                )
                 return
 
             task_id = str(uuid.uuid4())
@@ -2260,12 +2742,16 @@ class MonitoringLoop:
                 workflow_id=workflow_id,
                 diagnostic_task_id=task_id,
                 total_tasks_at_trigger=len(workflow_tasks),
-                done_tasks_at_trigger=len([t for t in workflow_tasks if t.status == 'done']),
-                failed_tasks_at_trigger=len([t for t in workflow_tasks if t.status == 'failed']),
+                done_tasks_at_trigger=len(
+                    [t for t in workflow_tasks if t.status == "done"]
+                ),
+                failed_tasks_at_trigger=len(
+                    [t for t in workflow_tasks if t.status == "failed"]
+                ),
                 time_since_last_task_seconds=int(stuck_time),
-                workflow_goal=context['workflow_goal'],
-                phases_analyzed=context['phases_summary'],
-                agents_reviewed=context['agents_summary'],
+                workflow_goal=context["workflow_goal"],
+                phases_analyzed=context["phases_summary"],
+                agents_reviewed=context["agents_summary"],
                 status="created",
             )
             session.add(diagnostic_run)
@@ -2276,14 +2762,16 @@ class MonitoringLoop:
             logger.info("[DIAGNOSTIC MONITOR] Generating diagnostic prompt...")
             diagnostic_prompt = await self._generate_diagnostic_prompt(context)
             prompt_size = len(diagnostic_prompt)
-            logger.info(f"[DIAGNOSTIC MONITOR] Prompt generated: {prompt_size} characters")
+            logger.info(
+                f"[DIAGNOSTIC MONITOR] Prompt generated: {prompt_size} characters"
+            )
 
             # Spawn diagnostic agent (no worktree, works in main repo)
             enriched_data = {
-                'enriched_description': diagnostic_task.enriched_description,
-                'completion_criteria': [diagnostic_task.done_definition],
-                'diagnostic_context': context,
-                'validation_prompt': diagnostic_prompt,  # Use validation_prompt field for custom prompt
+                "enriched_description": diagnostic_task.enriched_description,
+                "completion_criteria": [diagnostic_task.done_definition],
+                "diagnostic_context": context,
+                "validation_prompt": diagnostic_prompt,  # Use validation_prompt field for custom prompt
             }
 
             logger.info("[DIAGNOSTIC MONITOR] Spawning diagnostic agent...")
@@ -2302,14 +2790,19 @@ class MonitoringLoop:
             diagnostic_run.status = "running"
             session.commit()
 
-            logger.info("[DIAGNOSTIC MONITOR] ✅ Diagnostic agent created successfully!")
+            logger.info(
+                "[DIAGNOSTIC MONITOR] ✅ Diagnostic agent created successfully!"
+            )
             logger.info(f"[DIAGNOSTIC MONITOR] Agent ID: {agent.id[:8]}")
             logger.info(f"[DIAGNOSTIC MONITOR] Task ID: {task_id[:8]}")
             logger.info(f"[DIAGNOSTIC MONITOR] Run ID: {run_id[:8]}")
             logger.info(f"[DIAGNOSTIC MONITOR] Workflow: {workflow_id[:8]}")
 
         except Exception as e:
-            logger.error(f"[DIAGNOSTIC MONITOR] ❌ Failed to create diagnostic agent: {e}", exc_info=True)
+            logger.error(
+                f"[DIAGNOSTIC MONITOR] ❌ Failed to create diagnostic agent: {e}",
+                exc_info=True,
+            )
             session.rollback()
             raise
         finally:
@@ -2330,6 +2823,7 @@ class MonitoringLoop:
         calls mark_phase_complete(force_action=...) to resume the pipeline.
         """
         import uuid
+
         from src.core.database import Task
 
         logger.warning(f"[ARBITRATE] Spawning arbitration agent for phase {phase_name}")
@@ -2341,22 +2835,31 @@ class MonitoringLoop:
             sample_task = session.query(Task).filter_by(workflow_id=workflow_id).first()
             if sample_task and sample_task.raw_description:
                 import re
-                m = re.search(r"Docs Path[:\s]+([^\s]+)", sample_task.raw_description or "")
+
+                m = re.search(
+                    r"Docs Path[:\s]+([^\s]+)", sample_task.raw_description or ""
+                )
                 if m:
                     docs_dir_str = m.group(1)
 
             # Guard: if arbitration task already pending/done for this phase, skip
-            existing = session.query(Task).filter(
-                Task.phase_id == phase_id,
-                Task.created_by_agent_id == "arbitration",
-                Task.status.in_(["pending", "assigned", "in_progress", "done"]),
-            ).first()
+            existing = (
+                session.query(Task)
+                .filter(
+                    Task.phase_id == phase_id,
+                    Task.created_by_agent_id == "arbitration",
+                    Task.status.in_(["pending", "assigned", "in_progress", "done"]),
+                )
+                .first()
+            )
             if existing:
-                logger.info(f"[ARBITRATE] Arbitration task already exists for {phase_name} ({existing.id[:8]}) — skipping")
+                logger.info(
+                    f"[ARBITRATE] Arbitration task already exists for {phase_name} ({existing.id[:8]}) — skipping"
+                )
                 return
 
             prompt = f"""You are an ARBITRATION AGENT. The scope_review → product_requirements
-GOTO loop has exhausted its retry budget ({metadata.get('retries', '?')}/{metadata.get('max_retries', '?')} attempts).
+GOTO loop has exhausted its retry budget ({metadata.get("retries", "?")}/{metadata.get("max_retries", "?")} attempts).
 
 Your job: read the design doc and the current requirements_analysis.md, then decide:
 - PROCEED: requirements are close enough — the pipeline should continue to architecture.
@@ -2396,7 +2899,9 @@ CRITICAL: Write the JSON and mark the task done. Do NOT rewrite requirements_ana
             )
             session.add(task)
             session.commit()
-            logger.info(f"[ARBITRATE] Created arbitration task {task_id[:8]} for phase {phase_name}")
+            logger.info(
+                f"[ARBITRATE] Created arbitration task {task_id[:8]} for phase {phase_name}"
+            )
 
             enriched_data = {
                 "enriched_description": prompt,
@@ -2412,15 +2917,21 @@ CRITICAL: Write the JSON and mark the task done. Do NOT rewrite requirements_ana
                 use_existing_worktree=True,
                 working_directory=str(self.config.main_repo_path),
             )
-            logger.info(f"[ARBITRATE] ✅ Arbitration agent {agent.id[:8]} spawned for phase {phase_name}")
+            logger.info(
+                f"[ARBITRATE] ✅ Arbitration agent {agent.id[:8]} spawned for phase {phase_name}"
+            )
 
         except Exception as e:
-            logger.error(f"[ARBITRATE] Failed to spawn arbitration agent: {e}", exc_info=True)
+            logger.error(
+                f"[ARBITRATE] Failed to spawn arbitration agent: {e}", exc_info=True
+            )
             session.rollback()
         finally:
             session.close()
 
-    async def _check_arbitration_completion(self, workflow_id: str, phase_id: str, phase_name: str):
+    async def _check_arbitration_completion(
+        self, workflow_id: str, phase_id: str, phase_name: str
+    ):
         """Poll for a completed arbitration task; if found, resolve the phase.
 
         Called from _check_phases() when a phase is in_progress with only arbitration
@@ -2428,15 +2939,20 @@ CRITICAL: Write the JSON and mark the task done. Do NOT rewrite requirements_ana
         """
         import json
         from pathlib import Path
+
         from src.core.database import Task, Workflow
 
         session = self.db_manager.get_session()
         try:
-            done_arb = session.query(Task).filter(
-                Task.phase_id == phase_id,
-                Task.created_by_agent_id == "arbitration",
-                Task.status == "done",
-            ).first()
+            done_arb = (
+                session.query(Task)
+                .filter(
+                    Task.phase_id == phase_id,
+                    Task.created_by_agent_id == "arbitration",
+                    Task.status == "done",
+                )
+                .first()
+            )
             if not done_arb:
                 return
 
@@ -2444,13 +2960,18 @@ CRITICAL: Write the JSON and mark the task done. Do NOT rewrite requirements_ana
             result_path = None
             for task in session.query(Task).filter_by(workflow_id=workflow_id).all():
                 import re
+
                 m = re.search(r"Docs Path[:\s]+(\S+)", task.raw_description or "")
                 if m:
                     result_path = Path(m.group(1)) / "arbitration_result.json"
                     break
             # Fallback: check main repo docs/
             if not result_path:
-                result_path = Path(str(self.config.main_repo_path)) / "docs" / "arbitration_result.json"
+                result_path = (
+                    Path(str(self.config.main_repo_path))
+                    / "docs"
+                    / "arbitration_result.json"
+                )
 
             decision = "IMPASSE"  # safe default
             reasoning = "arbitration_result.json not found"
@@ -2460,9 +2981,13 @@ CRITICAL: Write the JSON and mark the task done. Do NOT rewrite requirements_ana
                     decision = str(data.get("decision", "IMPASSE")).upper()
                     reasoning = data.get("reasoning", "")
                 except Exception as e:
-                    logger.error(f"[ARBITRATE] Could not read arbitration_result.json: {e}")
+                    logger.error(
+                        f"[ARBITRATE] Could not read arbitration_result.json: {e}"
+                    )
 
-            logger.warning(f"[ARBITRATE] Arbitration decision for {phase_name}: {decision} — {reasoning[:100]}")
+            logger.warning(
+                f"[ARBITRATE] Arbitration decision for {phase_name}: {decision} — {reasoning[:100]}"
+            )
 
             if decision == "PROCEED":
                 phase_output = self._build_spec_phase_output(phase_name)
@@ -2491,11 +3016,15 @@ CRITICAL: Write the JSON and mark the task done. Do NOT rewrite requirements_ana
                 )
 
         except Exception as e:
-            logger.error(f"[ARBITRATE] _check_arbitration_completion error: {e}", exc_info=True)
+            logger.error(
+                f"[ARBITRATE] _check_arbitration_completion error: {e}", exc_info=True
+            )
         finally:
             session.close()
 
-    async def _gather_diagnostic_context(self, workflow_id: str, workflow_tasks: List, stuck_time: float) -> Dict[str, Any]:
+    async def _gather_diagnostic_context(
+        self, workflow_id: str, workflow_tasks: List, stuck_time: float
+    ) -> Dict[str, Any]:
         """Gather all context needed for diagnostic agent.
 
         Returns:
@@ -2507,104 +3036,139 @@ CRITICAL: Write the JSON and mark the task done. Do NOT rewrite requirements_ana
             - workflow_status
             - submitted_results
         """
-        from src.core.database import Agent, ConductorAnalysis, WorkflowResult, Phase
+        from src.core.database import Agent, ConductorAnalysis, Phase, WorkflowResult
 
         session = self.db_manager.get_session()
         try:
             # Get workflow config
             workflow_config = self.phase_manager.get_workflow_config(workflow_id)
-            workflow_goal = workflow_config.result_criteria if workflow_config else "Unknown goal"
+            workflow_goal = (
+                workflow_config.result_criteria if workflow_config else "Unknown goal"
+            )
 
             # Get all phases
-            phases = session.query(Phase).filter(
-                Phase.workflow_id == workflow_id
-            ).order_by(Phase.order).all()
+            phases = (
+                session.query(Phase)
+                .filter(Phase.workflow_id == workflow_id)
+                .order_by(Phase.order)
+                .all()
+            )
 
             phases_summary = []
             for phase in phases:
-                phases_summary.append({
-                    'id': phase.id,
-                    'name': phase.name,
-                    'order': phase.order,
-                    'description': phase.description,
-                    'done_definitions': phase.done_definitions,
-                    'task_count': len([t for t in workflow_tasks if t.phase_id == phase.id]),
-                    'done_task_count': len([t for t in workflow_tasks if t.phase_id == phase.id and t.status == 'done']),
-                })
+                phases_summary.append(
+                    {
+                        "id": phase.id,
+                        "name": phase.name,
+                        "order": phase.order,
+                        "description": phase.description,
+                        "done_definitions": phase.done_definitions,
+                        "task_count": len(
+                            [t for t in workflow_tasks if t.phase_id == phase.id]
+                        ),
+                        "done_task_count": len(
+                            [
+                                t
+                                for t in workflow_tasks
+                                if t.phase_id == phase.id and t.status == "done"
+                            ]
+                        ),
+                    }
+                )
 
             # Get recent agents (last N completed/failed)
             task_ids = [t.id for t in workflow_tasks]
-            recent_agents = session.query(Agent).filter(
-                Agent.current_task_id.in_(task_ids),
-                Agent.status.in_(['terminated'])
-            ).order_by(Agent.created_at.desc()).limit(self.config.diagnostic_max_agents_to_analyze).all()
+            recent_agents = (
+                session.query(Agent)
+                .filter(
+                    Agent.current_task_id.in_(task_ids),
+                    Agent.status.in_(["terminated"]),
+                )
+                .order_by(Agent.created_at.desc())
+                .limit(self.config.diagnostic_max_agents_to_analyze)
+                .all()
+            )
 
             agents_summary = []
             for agent in recent_agents:
                 task = session.query(Task).filter_by(id=agent.current_task_id).first()
                 if task:
-                    agents_summary.append({
-                        'agent_id': agent.id,
-                        'task_id': task.id,
-                        'task_description': task.enriched_description or task.raw_description,
-                        'task_status': task.status,
-                        'completion_notes': task.completion_notes,
-                        'failure_reason': task.failure_reason,
-                        'phase_id': task.phase_id,
-                        'created_at': agent.created_at.isoformat(),
-                        'agent_type': agent.agent_type,
-                    })
+                    agents_summary.append(
+                        {
+                            "agent_id": agent.id,
+                            "task_id": task.id,
+                            "task_description": task.enriched_description
+                            or task.raw_description,
+                            "task_status": task.status,
+                            "completion_notes": task.completion_notes,
+                            "failure_reason": task.failure_reason,
+                            "phase_id": task.phase_id,
+                            "created_at": agent.created_at.isoformat(),
+                            "agent_type": agent.agent_type,
+                        }
+                    )
 
             # Get recent Conductor analyses
-            conductor_analyses = session.query(ConductorAnalysis).order_by(
-                ConductorAnalysis.timestamp.desc()
-            ).limit(self.config.diagnostic_max_conductor_analyses).all()
+            conductor_analyses = (
+                session.query(ConductorAnalysis)
+                .order_by(ConductorAnalysis.timestamp.desc())
+                .limit(self.config.diagnostic_max_conductor_analyses)
+                .all()
+            )
 
             conductor_overviews = []
             for analysis in conductor_analyses:
-                conductor_overviews.append({
-                    'timestamp': analysis.timestamp.isoformat(),
-                    'system_status': analysis.system_status,
-                    'coherence_score': analysis.coherence_score,
-                    'num_agents': analysis.num_agents,
-                    'duplicate_count': analysis.duplicate_count,
-                })
+                conductor_overviews.append(
+                    {
+                        "timestamp": analysis.timestamp.isoformat(),
+                        "system_status": analysis.system_status,
+                        "coherence_score": analysis.coherence_score,
+                        "num_agents": analysis.num_agents,
+                        "duplicate_count": analysis.duplicate_count,
+                    }
+                )
 
             # Get submitted results (even if rejected)
-            submitted_results = session.query(WorkflowResult).filter(
-                WorkflowResult.workflow_id == workflow_id
-            ).all()
+            submitted_results = (
+                session.query(WorkflowResult)
+                .filter(WorkflowResult.workflow_id == workflow_id)
+                .all()
+            )
 
             results_summary = []
             for result in submitted_results:
-                results_summary.append({
-                    'result_id': result.id,
-                    'status': result.status,
-                    'submitted_at': result.created_at.isoformat() if result.created_at else None,
-                    'validation_feedback': result.validation_feedback,
-                    'agent_id': result.agent_id,
-                })
+                results_summary.append(
+                    {
+                        "result_id": result.id,
+                        "status": result.status,
+                        "submitted_at": result.created_at.isoformat()
+                        if result.created_at
+                        else None,
+                        "validation_feedback": result.validation_feedback,
+                        "agent_id": result.agent_id,
+                    }
+                )
 
             # Calculate task statistics by phase
             tasks_by_phase = {}
             for phase in phases:
                 phase_tasks = [t for t in workflow_tasks if t.phase_id == phase.id]
                 tasks_by_phase[phase.name] = {
-                    'total': len(phase_tasks),
-                    'done': len([t for t in phase_tasks if t.status == 'done']),
-                    'failed': len([t for t in phase_tasks if t.status == 'failed']),
+                    "total": len(phase_tasks),
+                    "done": len([t for t in phase_tasks if t.status == "done"]),
+                    "failed": len([t for t in phase_tasks if t.status == "failed"]),
                 }
 
             return {
-                'workflow_goal': workflow_goal,
-                'workflow_id': workflow_id,
-                'phases_summary': phases_summary,
-                'agents_summary': agents_summary,
-                'conductor_overviews': conductor_overviews,
-                'submitted_results': results_summary,
-                'total_tasks': len(workflow_tasks),
-                'tasks_by_phase': tasks_by_phase,
-                'time_since_last_task': stuck_time,
+                "workflow_goal": workflow_goal,
+                "workflow_id": workflow_id,
+                "phases_summary": phases_summary,
+                "agents_summary": agents_summary,
+                "conductor_overviews": conductor_overviews,
+                "submitted_results": results_summary,
+                "total_tasks": len(workflow_tasks),
+                "tasks_by_phase": tasks_by_phase,
+                "time_since_last_task": stuck_time,
             }
 
         finally:
@@ -2622,89 +3186,95 @@ CRITICAL: Write the JSON and mark the task done. Do NOT rewrite requirements_ana
         from pathlib import Path
 
         # Load template
-        template_path = Path(__file__).parent.parent / "prompts" / "diagnostic_agent_analysis.md"
-        with open(template_path, 'r') as f:
+        template_path = (
+            Path(__file__).parent.parent / "prompts" / "diagnostic_agent_analysis.md"
+        )
+        with open(template_path, "r") as f:
             template = f.read()
 
         # Format phases info
         phases_info = []
-        for phase in context['phases_summary']:
+        for phase in context["phases_summary"]:
             phases_info.append(f"""
-### Phase {phase['order']}: {phase['name']} (ID: {phase['id'][:8]})
+### Phase {phase["order"]}: {phase["name"]} (ID: {phase["id"][:8]})
 
-**Description**: {phase['description']}
+**Description**: {phase["description"]}
 
 **Done Definitions**:
-{chr(10).join(f"- {d}" for d in phase['done_definitions'])}
+{chr(10).join(f"- {d}" for d in phase["done_definitions"])}
 
-**Progress**: {phase['done_task_count']}/{phase['task_count']} tasks completed
+**Progress**: {phase["done_task_count"]}/{phase["task_count"]} tasks completed
 """)
 
         # Format agent history
         agents_history = []
-        for i, agent in enumerate(context['agents_summary'], 1):
-            status_marker = "✅" if agent['task_status'] == 'done' else "❌"
+        for i, agent in enumerate(context["agents_summary"], 1):
+            status_marker = "✅" if agent["task_status"] == "done" else "❌"
             agents_history.append(f"""
-**Agent {i}** (ID: {agent['agent_id'][:8]}, Type: {agent['agent_type']})
-- **Task**: {agent['task_description']}
-- **Status**: {status_marker} {agent['task_status']}
-- **Phase**: {agent['phase_id'][:8] if agent['phase_id'] else 'None'}
-- **Completed at**: {agent['created_at']}
-{f"- **Notes**: {agent['completion_notes']}" if agent['completion_notes'] else ""}
-{f"- **Failure reason**: {agent['failure_reason']}" if agent['failure_reason'] else ""}
+**Agent {i}** (ID: {agent["agent_id"][:8]}, Type: {agent["agent_type"]})
+- **Task**: {agent["task_description"]}
+- **Status**: {status_marker} {agent["task_status"]}
+- **Phase**: {agent["phase_id"][:8] if agent["phase_id"] else "None"}
+- **Completed at**: {agent["created_at"]}
+{f"- **Notes**: {agent['completion_notes']}" if agent["completion_notes"] else ""}
+{f"- **Failure reason**: {agent['failure_reason']}" if agent["failure_reason"] else ""}
 """)
 
         # Format conductor overviews
         conductor_overviews = []
-        for i, overview in enumerate(context['conductor_overviews'], 1):
+        for i, overview in enumerate(context["conductor_overviews"], 1):
             conductor_overviews.append(f"""
-**Analysis {i}** ({overview['timestamp']}):
-- System status: {overview['system_status']}
-- Coherence score: {overview['coherence_score']:.2f}
-- Active agents: {overview['num_agents']}
-- Duplicates detected: {overview['duplicate_count']}
+**Analysis {i}** ({overview["timestamp"]}):
+- System status: {overview["system_status"]}
+- Coherence score: {overview["coherence_score"]:.2f}
+- Active agents: {overview["num_agents"]}
+- Duplicates detected: {overview["duplicate_count"]}
 """)
 
         # Format tasks by phase
         tasks_by_phase_str = []
-        for phase_name, stats in context['tasks_by_phase'].items():
+        for phase_name, stats in context["tasks_by_phase"].items():
             tasks_by_phase_str.append(
                 f"  - {phase_name}: {stats['done']}/{stats['total']} done, {stats['failed']} failed"
             )
 
         # Format submitted results
-        if context['submitted_results']:
+        if context["submitted_results"]:
             results_info = []
-            for result in context['submitted_results']:
-                status_marker = "✅" if result['status'] == 'validated' else "❌"
+            for result in context["submitted_results"]:
+                status_marker = "✅" if result["status"] == "validated" else "❌"
                 results_info.append(f"""
-- {status_marker} Result {result['result_id'][:8]}: {result['status']}
-  - Submitted: {result['submitted_at']}
-  - Feedback: {result['validation_feedback'] or 'None'}
+- {status_marker} Result {result["result_id"][:8]}: {result["status"]}
+  - Submitted: {result["submitted_at"]}
+  - Feedback: {result["validation_feedback"] or "None"}
 """)
-            submitted_results_info = '\n'.join(results_info)
+            submitted_results_info = "\n".join(results_info)
         else:
             submitted_results_info = "No results have been submitted yet."
 
         # Calculate stuck time formatting
-        stuck_seconds = context.get('time_since_last_task', 0)
+        stuck_seconds = context.get("time_since_last_task", 0)
         if stuck_seconds >= 3600:
-            stuck_time_formatted = f"{stuck_seconds/3600:.1f} hours"
+            stuck_time_formatted = f"{stuck_seconds / 3600:.1f} hours"
         elif stuck_seconds >= 60:
-            stuck_time_formatted = f"{stuck_seconds/60:.1f} minutes"
+            stuck_time_formatted = f"{stuck_seconds / 60:.1f} minutes"
         else:
             stuck_time_formatted = f"{stuck_seconds} seconds"
 
         # Replace placeholders
         prompt = template.format(
-            workflow_goal=context['workflow_goal'],
-            workflow_id=context['workflow_id'],
-            phases_info='\n'.join(phases_info),
-            agent_count=len(context['agents_summary']),
-            agents_history='\n'.join(agents_history) if agents_history else "No agents have run yet.",
-            conductor_overviews='\n'.join(conductor_overviews) if conductor_overviews else "No conductor analyses available.",
-            total_tasks=context['total_tasks'],
-            tasks_by_phase='\n'.join(tasks_by_phase_str),
+            workflow_goal=context["workflow_goal"],
+            workflow_id=context["workflow_id"],
+            phases_info="\n".join(phases_info),
+            agent_count=len(context["agents_summary"]),
+            agents_history="\n".join(agents_history)
+            if agents_history
+            else "No agents have run yet.",
+            conductor_overviews="\n".join(conductor_overviews)
+            if conductor_overviews
+            else "No conductor analyses available.",
+            total_tasks=context["total_tasks"],
+            tasks_by_phase="\n".join(tasks_by_phase_str),
             stuck_time_formatted=stuck_time_formatted,
             submitted_results_info=submitted_results_info,
             agent_id="{agent_id}",  # Will be replaced by agent manager

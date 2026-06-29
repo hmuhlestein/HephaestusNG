@@ -3,9 +3,9 @@
 import os
 import uuid
 from datetime import datetime
-from typing import List, Optional, Dict, Any
+from typing import Any, Dict, List, Optional
 
-from src.core.database import get_db, WorkflowResult, Workflow, Agent
+from src.core.database import Agent, Workflow, WorkflowResult, get_db
 from src.services.validation_helpers import (
     validate_file_path,
     validate_file_size,
@@ -88,7 +88,7 @@ class WorkflowResultService:
                     # Continue processing other files
 
         # Read markdown content
-        with open(markdown_file_path, 'r', encoding='utf-8') as f:
+        with open(markdown_file_path, "r", encoding="utf-8") as f:
             markdown_content = f.read()
 
         with get_db() as db:
@@ -103,10 +103,11 @@ class WorkflowResultService:
                 raise ValueError(f"Agent not found: {agent_id}")
 
             # Check if workflow already has a validated result
-            existing_result = db.query(WorkflowResult).filter_by(
-                workflow_id=workflow_id,
-                status="validated"
-            ).first()
+            existing_result = (
+                db.query(WorkflowResult)
+                .filter_by(workflow_id=workflow_id, status="validated")
+                .first()
+            )
 
             if existing_result:
                 return {
@@ -163,7 +164,9 @@ class WorkflowResultService:
                     "status": result.status,
                     "validation_feedback": result.validation_feedback,
                     "created_at": result.created_at.isoformat(),
-                    "validated_at": result.validated_at.isoformat() if result.validated_at else None,
+                    "validated_at": result.validated_at.isoformat()
+                    if result.validated_at
+                    else None,
                     "validated_by_agent_id": result.validated_by_agent_id,
                     "result_file_path": result.result_file_path,
                     "extra_files": result.extra_files or [],
@@ -196,7 +199,9 @@ class WorkflowResultService:
             ValueError: If result not found or invalid status
         """
         if status not in ["validated", "rejected"]:
-            raise ValueError(f"Invalid status: {status}. Must be 'validated' or 'rejected'")
+            raise ValueError(
+                f"Invalid status: {status}. Must be 'validated' or 'rejected'"
+            )
 
         with get_db() as db:
             result = db.query(WorkflowResult).filter_by(id=result_id).first()
@@ -271,10 +276,11 @@ class WorkflowResultService:
             Validated result dictionary or None
         """
         with get_db() as db:
-            result = db.query(WorkflowResult).filter_by(
-                workflow_id=workflow_id,
-                status="validated"
-            ).first()
+            result = (
+                db.query(WorkflowResult)
+                .filter_by(workflow_id=workflow_id, status="validated")
+                .first()
+            )
 
             if not result:
                 return None

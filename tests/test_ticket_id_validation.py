@@ -7,15 +7,17 @@ This test verifies:
 3. MCP agents CANNOT create tasks WITHOUT ticket_id when ticket tracking is enabled
 """
 
+import os
+import sys
+
 import pytest
 import requests
-import sys
-import os
 
 # Add parent directory to path
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 BASE_URL = "http://localhost:8300"
+
 
 class TestTicketIDValidation:
     """Test ticket_id validation in create_task endpoint."""
@@ -35,7 +37,7 @@ class TestTicketIDValidation:
             response = requests.get(
                 f"{BASE_URL}/api/workflows",
                 headers={"X-Agent-ID": "test-user"},
-                timeout=5
+                timeout=5,
             )
             workflows = response.json()
             cls.workflow_id = None
@@ -46,15 +48,19 @@ class TestTicketIDValidation:
                     board_check = requests.get(
                         f"{BASE_URL}/tickets/stats/{wf['id']}",
                         headers={"X-Agent-ID": "test-user"},
-                        timeout=5
+                        timeout=5,
                     )
                     if board_check.status_code == 200:
-                        cls.workflow_id = wf['id']
-                        print(f"✓ Found workflow with ticket tracking: {cls.workflow_id}")
+                        cls.workflow_id = wf["id"]
+                        print(
+                            f"✓ Found workflow with ticket tracking: {cls.workflow_id}"
+                        )
                         break
 
             if not cls.workflow_id:
-                print("⚠ No workflow with ticket tracking found - validation tests may not run")
+                print(
+                    "⚠ No workflow with ticket tracking found - validation tests may not run"
+                )
         except Exception as e:
             print(f"⚠ Could not verify workflows: {e}")
             cls.workflow_id = None
@@ -69,7 +75,7 @@ class TestTicketIDValidation:
             "ai_agent_id": "main-session-agent",
             "phase_id": "1",
             "priority": "medium",
-            "workflow_id": self.workflow_id or "test-workflow"
+            "workflow_id": self.workflow_id or "test-workflow",
         }
 
         response = requests.post(
@@ -77,15 +83,17 @@ class TestTicketIDValidation:
             json=payload,
             headers={
                 "Content-Type": "application/json",
-                "X-Agent-ID": "main-session-agent"
+                "X-Agent-ID": "main-session-agent",
             },
-            timeout=30
+            timeout=30,
         )
 
         print(f"Status Code: {response.status_code}")
         print(f"Response: {response.text[:200]}")
 
-        assert response.status_code == 200, f"SDK task creation should succeed: {response.text}"
+        assert response.status_code == 200, (
+            f"SDK task creation should succeed: {response.text}"
+        )
         data = response.json()
         assert "task_id" in data, "Response should contain task_id"
         print(f"✓ SDK agent created task without ticket_id: {data['task_id']}")
@@ -105,7 +113,7 @@ class TestTicketIDValidation:
             "title": "Test Ticket for Task Creation",
             "description": "This ticket is for testing task creation with ticket_id",
             "ticket_type": "task",
-            "priority": "medium"
+            "priority": "medium",
         }
 
         ticket_response = requests.post(
@@ -113,12 +121,14 @@ class TestTicketIDValidation:
             json=ticket_payload,
             headers={
                 "Content-Type": "application/json",
-                "X-Agent-ID": "test-mcp-agent"
+                "X-Agent-ID": "test-mcp-agent",
             },
-            timeout=10
+            timeout=10,
         )
 
-        assert ticket_response.status_code == 200, f"Ticket creation failed: {ticket_response.text}"
+        assert ticket_response.status_code == 200, (
+            f"Ticket creation failed: {ticket_response.text}"
+        )
         ticket_data = ticket_response.json()
         ticket_id = ticket_data["ticket_id"]
         print(f"✓ Created ticket: {ticket_id}")
@@ -130,7 +140,7 @@ class TestTicketIDValidation:
             "ai_agent_id": "test-mcp-agent",
             "phase_id": "1",
             "priority": "medium",
-            "ticket_id": ticket_id  # Include ticket_id
+            "ticket_id": ticket_id,  # Include ticket_id
         }
 
         response = requests.post(
@@ -138,15 +148,17 @@ class TestTicketIDValidation:
             json=task_payload,
             headers={
                 "Content-Type": "application/json",
-                "X-Agent-ID": "test-mcp-agent"
+                "X-Agent-ID": "test-mcp-agent",
             },
-            timeout=30
+            timeout=30,
         )
 
         print(f"Status Code: {response.status_code}")
         print(f"Response: {response.text[:200]}")
 
-        assert response.status_code == 200, f"MCP task creation with ticket_id should succeed: {response.text}"
+        assert response.status_code == 200, (
+            f"MCP task creation with ticket_id should succeed: {response.text}"
+        )
         data = response.json()
         assert "task_id" in data, "Response should contain task_id"
         print(f"✓ MCP agent created task with ticket_id: {data['task_id']}")
@@ -165,7 +177,7 @@ class TestTicketIDValidation:
             "done_definition": "Task completed successfully",
             "ai_agent_id": "test-mcp-agent",  # MCP agent, not SDK
             "phase_id": "1",
-            "priority": "medium"
+            "priority": "medium",
             # NO ticket_id provided
         }
 
@@ -174,18 +186,24 @@ class TestTicketIDValidation:
             json=payload,
             headers={
                 "Content-Type": "application/json",
-                "X-Agent-ID": "test-mcp-agent"
+                "X-Agent-ID": "test-mcp-agent",
             },
-            timeout=30
+            timeout=30,
         )
 
         print(f"Status Code: {response.status_code}")
         print(f"Response: {response.text[:300]}")
 
         # Should fail with 400 error
-        assert response.status_code == 400, f"MCP task creation without ticket_id should fail with 400, got {response.status_code}"
-        assert "ticket_id" in response.text.lower(), "Error message should mention ticket_id"
-        assert "mcp agents must provide" in response.text.lower(), "Error should specify MCP agents must provide ticket_id"
+        assert response.status_code == 400, (
+            f"MCP task creation without ticket_id should fail with 400, got {response.status_code}"
+        )
+        assert "ticket_id" in response.text.lower(), (
+            "Error message should mention ticket_id"
+        )
+        assert "mcp agents must provide" in response.text.lower(), (
+            "Error should specify MCP agents must provide ticket_id"
+        )
         print("✓ MCP agent correctly blocked from creating task without ticket_id")
 
     def test_4_sdk_agent_variants(self):
@@ -194,8 +212,8 @@ class TestTicketIDValidation:
 
         sdk_agent_ids = [
             "main-session-agent",  # Primary SDK agent
-            "sdk-test-agent",      # Agent with 'sdk' in name
-            "main-workflow-agent"  # Agent with 'main' in name
+            "sdk-test-agent",  # Agent with 'sdk' in name
+            "main-workflow-agent",  # Agent with 'main' in name
         ]
 
         for agent_id in sdk_agent_ids:
@@ -206,20 +224,19 @@ class TestTicketIDValidation:
                 "done_definition": "Task completed successfully",
                 "ai_agent_id": agent_id,
                 "phase_id": "1",
-                "priority": "medium"
+                "priority": "medium",
             }
 
             response = requests.post(
                 f"{BASE_URL}/create_task",
                 json=payload,
-                headers={
-                    "Content-Type": "application/json",
-                    "X-Agent-ID": agent_id
-                },
-                timeout=30
+                headers={"Content-Type": "application/json", "X-Agent-ID": agent_id},
+                timeout=30,
             )
 
-            assert response.status_code == 200, f"SDK agent '{agent_id}' should be able to create task: {response.text}"
+            assert response.status_code == 200, (
+                f"SDK agent '{agent_id}' should be able to create task: {response.text}"
+            )
             print(f"  ✓ {agent_id} created task successfully")
 
 

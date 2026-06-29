@@ -8,9 +8,9 @@ Other workflows (bug fix, feature development) can then retrieve this knowledge 
 """
 
 from example_workflows.index_repo.phases import (
-    INDEX_REPO_PHASES,
     INDEX_REPO_CONFIG,
     INDEX_REPO_LAUNCH_TEMPLATE,
+    INDEX_REPO_PHASES,
 )
 
 __all__ = [

@@ -14,10 +14,25 @@ BUG_FIX_WORKFLOW_CONFIG = WorkflowConfig(
         "columns": [
             {"id": "backlog", "name": "📋 Backlog", "order": 1, "color": "#94a3b8"},
             {"id": "building", "name": "🔨 Fixing", "order": 2, "color": "#f59e0b"},
-            {"id": "building-done", "name": "✅ Fix Ready", "order": 3, "color": "#fcd34d"},
-            {"id": "validating", "name": "🧪 Verifying", "order": 4, "color": "#8b5cf6"},
-            {"id": "validating-done", "name": "✅ Verified", "order": 5, "color": "#c4b5fd"},
-            {"id": "done", "name": "✅ Done", "order": 6, "color": "#22c55e"}
+            {
+                "id": "building-done",
+                "name": "✅ Fix Ready",
+                "order": 3,
+                "color": "#fcd34d",
+            },
+            {
+                "id": "validating",
+                "name": "🧪 Verifying",
+                "order": 4,
+                "color": "#8b5cf6",
+            },
+            {
+                "id": "validating-done",
+                "name": "✅ Verified",
+                "order": 5,
+                "color": "#c4b5fd",
+            },
+            {"id": "done", "name": "✅ Done", "order": 6, "color": "#22c55e"},
         ],
         "ticket_types": ["bug", "regression", "hotfix"],
         "default_ticket_type": "bug",
@@ -26,7 +41,6 @@ BUG_FIX_WORKFLOW_CONFIG = WorkflowConfig(
         "require_comments_on_status_change": True,
         "allow_reopen": True,
         "track_time": True,
-
         # Human Approval Configuration
         "ticket_human_review": False,  # Set to True for critical bugs requiring approval
         "approval_timeout_seconds": 1800,  # 30 minutes

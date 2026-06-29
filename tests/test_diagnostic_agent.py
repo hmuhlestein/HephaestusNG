@@ -1,27 +1,31 @@
 """Unit tests for the diagnostic agent system."""
 
-import pytest
-import asyncio
-from datetime import datetime, timedelta
-from unittest.mock import Mock, AsyncMock, patch, MagicMock
 import sys
+from datetime import datetime, timedelta
 from pathlib import Path
+from unittest.mock import AsyncMock, Mock
+
+import pytest
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from src.monitoring.monitor import MonitoringLoop
 from src.core.database import (
-    DatabaseManager, Agent, Task, Workflow, Phase, WorkflowResult, DiagnosticRun
+    DatabaseManager,
+    DiagnosticRun,
+    Phase,
+    Task,
+    Workflow,
+    WorkflowResult,
 )
-from src.core.simple_config import get_config
+from src.monitoring.monitor import MonitoringLoop
 
 
 @pytest.fixture
 def db_manager():
     """Create a test database manager."""
-    import tempfile
     import os
+    import tempfile
 
     # Create temp database
     fd, path = tempfile.mkstemp(suffix=".db")
@@ -78,7 +82,13 @@ def mock_phase_manager(db_manager):
 
 
 @pytest.fixture
-def monitoring_loop(db_manager, mock_agent_manager, mock_llm_provider, mock_rag_system, mock_phase_manager):
+def monitoring_loop(
+    db_manager,
+    mock_agent_manager,
+    mock_llm_provider,
+    mock_rag_system,
+    mock_phase_manager,
+):
     """Create a monitoring loop for testing."""
     loop = MonitoringLoop(
         db_manager=db_manager,
@@ -144,7 +154,9 @@ class TestDiagnosticAgentTriggers:
         monitoring_loop.agent_manager.create_agent_for_task.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_no_trigger_when_no_tasks(self, monitoring_loop, workflow_with_phases):
+    async def test_no_trigger_when_no_tasks(
+        self, monitoring_loop, workflow_with_phases
+    ):
         """Should not trigger when no tasks exist."""
         await monitoring_loop._check_workflow_stuck_state()
 
@@ -152,7 +164,9 @@ class TestDiagnosticAgentTriggers:
         monitoring_loop.agent_manager.create_agent_for_task.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_no_trigger_when_tasks_active(self, monitoring_loop, workflow_with_phases, db_manager):
+    async def test_no_trigger_when_tasks_active(
+        self, monitoring_loop, workflow_with_phases, db_manager
+    ):
         """Should not trigger when tasks are still active."""
         session = db_manager.get_session()
         try:
@@ -177,7 +191,9 @@ class TestDiagnosticAgentTriggers:
         monitoring_loop.agent_manager.create_agent_for_task.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_no_trigger_when_validated_result_exists(self, monitoring_loop, workflow_with_phases, db_manager):
+    async def test_no_trigger_when_validated_result_exists(
+        self, monitoring_loop, workflow_with_phases, db_manager
+    ):
         """Should not trigger when workflow has validated result."""
         session = db_manager.get_session()
         try:
@@ -214,7 +230,9 @@ class TestDiagnosticAgentTriggers:
         monitoring_loop.agent_manager.create_agent_for_task.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_no_trigger_during_cooldown(self, monitoring_loop, workflow_with_phases, db_manager):
+    async def test_no_trigger_during_cooldown(
+        self, monitoring_loop, workflow_with_phases, db_manager
+    ):
         """Should not trigger if cooldown hasn't passed."""
         session = db_manager.get_session()
         try:
@@ -235,7 +253,8 @@ class TestDiagnosticAgentTriggers:
             diagnostic = DiagnosticRun(
                 id="diag-1",
                 workflow_id="test-workflow-123",
-                triggered_at=datetime.utcnow() - timedelta(seconds=30),  # 30s ago < 60s cooldown
+                triggered_at=datetime.utcnow()
+                - timedelta(seconds=30),  # 30s ago < 60s cooldown
                 total_tasks_at_trigger=1,
                 done_tasks_at_trigger=1,
                 failed_tasks_at_trigger=0,
@@ -253,7 +272,9 @@ class TestDiagnosticAgentTriggers:
         monitoring_loop.agent_manager.create_agent_for_task.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_no_trigger_when_not_stuck_long_enough(self, monitoring_loop, workflow_with_phases, db_manager):
+    async def test_no_trigger_when_not_stuck_long_enough(
+        self, monitoring_loop, workflow_with_phases, db_manager
+    ):
         """Should not trigger if stuck time is too short."""
         session = db_manager.get_session()
         try:
@@ -266,7 +287,8 @@ class TestDiagnosticAgentTriggers:
                 status="done",
                 workflow_id="test-workflow-123",
                 phase_id="phase-1",
-                completed_at=datetime.utcnow() - timedelta(seconds=30),  # 30s ago < 60s minimum
+                completed_at=datetime.utcnow()
+                - timedelta(seconds=30),  # 30s ago < 60s minimum
             )
             session.add(task)
             session.commit()
@@ -279,7 +301,9 @@ class TestDiagnosticAgentTriggers:
         monitoring_loop.agent_manager.create_agent_for_task.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_triggers_when_all_conditions_met(self, monitoring_loop, workflow_with_phases, db_manager):
+    async def test_triggers_when_all_conditions_met(
+        self, monitoring_loop, workflow_with_phases, db_manager
+    ):
         """Should trigger diagnostic when all conditions are met."""
         session = db_manager.get_session()
         try:
@@ -292,7 +316,8 @@ class TestDiagnosticAgentTriggers:
                 status="done",
                 workflow_id="test-workflow-123",
                 phase_id="phase-1",
-                completed_at=datetime.utcnow() - timedelta(minutes=5),  # 5 min ago > 60s minimum
+                completed_at=datetime.utcnow()
+                - timedelta(minutes=5),  # 5 min ago > 60s minimum
             )
             session.add(task)
             session.commit()
@@ -314,7 +339,9 @@ class TestDiagnosticContextGathering:
     """Test context gathering for diagnostic agents."""
 
     @pytest.mark.asyncio
-    async def test_gathers_workflow_goal(self, monitoring_loop, workflow_with_phases, db_manager):
+    async def test_gathers_workflow_goal(
+        self, monitoring_loop, workflow_with_phases, db_manager
+    ):
         """Should gather workflow goal from config."""
         # Create a completed task
         session = db_manager.get_session()
@@ -336,17 +363,17 @@ class TestDiagnosticContextGathering:
             tasks = [task]
 
             context = await monitoring_loop._gather_diagnostic_context(
-                "test-workflow-123",
-                tasks,
-                120.0
+                "test-workflow-123", tasks, 120.0
             )
 
-            assert context['workflow_goal'] == "Test workflow goal: solve the puzzle"
+            assert context["workflow_goal"] == "Test workflow goal: solve the puzzle"
         finally:
             session.close()
 
     @pytest.mark.asyncio
-    async def test_gathers_phases_summary(self, monitoring_loop, workflow_with_phases, db_manager):
+    async def test_gathers_phases_summary(
+        self, monitoring_loop, workflow_with_phases, db_manager
+    ):
         """Should gather all phases with progress."""
         session = db_manager.get_session()
         try:
@@ -367,16 +394,14 @@ class TestDiagnosticContextGathering:
             tasks = [task]
 
             context = await monitoring_loop._gather_diagnostic_context(
-                "test-workflow-123",
-                tasks,
-                120.0
+                "test-workflow-123", tasks, 120.0
             )
 
-            assert len(context['phases_summary']) == 2
-            phase1 = context['phases_summary'][0]
-            assert phase1['name'] == "Phase 1"
-            assert phase1['task_count'] == 1
-            assert phase1['done_task_count'] == 1
+            assert len(context["phases_summary"]) == 2
+            phase1 = context["phases_summary"][0]
+            assert phase1["name"] == "Phase 1"
+            assert phase1["task_count"] == 1
+            assert phase1["done_task_count"] == 1
         finally:
             session.close()
 
@@ -388,33 +413,37 @@ class TestDiagnosticPromptGeneration:
     async def test_generates_valid_prompt(self, monitoring_loop):
         """Should generate prompt from template."""
         context = {
-            'workflow_goal': "Test goal",
-            'workflow_id': "workflow-123",
-            'phases_summary': [{
-                'id': 'phase-1',
-                'name': 'Phase 1',
-                'order': 1,
-                'description': 'Test phase',
-                'done_definitions': ['Task 1', 'Task 2'],
-                'task_count': 5,
-                'done_task_count': 3,
-            }],
-            'agents_summary': [{
-                'agent_id': 'agent-1',
-                'task_id': 'task-1',
-                'task_description': 'Do something',
-                'task_status': 'done',
-                'completion_notes': 'Completed successfully',
-                'failure_reason': None,
-                'phase_id': 'phase-1',
-                'created_at': '2025-01-01T10:00:00',
-                'agent_type': 'phase',
-            }],
-            'conductor_overviews': [],
-            'submitted_results': [],
-            'total_tasks': 5,
-            'tasks_by_phase': {'Phase 1': {'total': 5, 'done': 3, 'failed': 0}},
-            'time_since_last_task': 120,
+            "workflow_goal": "Test goal",
+            "workflow_id": "workflow-123",
+            "phases_summary": [
+                {
+                    "id": "phase-1",
+                    "name": "Phase 1",
+                    "order": 1,
+                    "description": "Test phase",
+                    "done_definitions": ["Task 1", "Task 2"],
+                    "task_count": 5,
+                    "done_task_count": 3,
+                }
+            ],
+            "agents_summary": [
+                {
+                    "agent_id": "agent-1",
+                    "task_id": "task-1",
+                    "task_description": "Do something",
+                    "task_status": "done",
+                    "completion_notes": "Completed successfully",
+                    "failure_reason": None,
+                    "phase_id": "phase-1",
+                    "created_at": "2025-01-01T10:00:00",
+                    "agent_type": "phase",
+                }
+            ],
+            "conductor_overviews": [],
+            "submitted_results": [],
+            "total_tasks": 5,
+            "tasks_by_phase": {"Phase 1": {"total": 5, "done": 3, "failed": 0}},
+            "time_since_last_task": 120,
         }
 
         prompt = await monitoring_loop._generate_diagnostic_prompt(context)

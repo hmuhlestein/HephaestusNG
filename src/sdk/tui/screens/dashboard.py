@@ -1,10 +1,11 @@
 """Main dashboard screen with tabs."""
 
-from textual.app import ComposeResult
-from textual.screen import Screen
-from textual.widgets import Header, Footer, TabbedContent, TabPane, Static, DataTable
-from textual.containers import Container, Vertical, Horizontal
 from datetime import datetime
+
+from textual.app import ComposeResult
+from textual.containers import Container, Horizontal, Vertical
+from textual.screen import Screen
+from textual.widgets import DataTable, Footer, Header, Static, TabbedContent, TabPane
 
 
 class SystemStatus(Static):
@@ -127,7 +128,9 @@ class TasksTab(Container):
         """Compose the tasks tab."""
         table = DataTable(id="tasks-table")
         table.add_columns("ID", "Description", "Status", "Agent", "Phase")
-        yield Static("[bold]Tasks[/bold]\n\nFilters: [All] Pending  In Progress  Done  Failed\n")
+        yield Static(
+            "[bold]Tasks[/bold]\n\nFilters: [All] Pending  In Progress  Done  Failed\n"
+        )
         yield table
 
 
@@ -147,7 +150,9 @@ class MemoryTab(Container):
 
     def compose(self) -> ComposeResult:
         """Compose the memory tab."""
-        yield Static("[bold]Memory Store[/bold]\n\n[dim]Search and browse stored memories[/dim]")
+        yield Static(
+            "[bold]Memory Store[/bold]\n\n[dim]Search and browse stored memories[/dim]"
+        )
 
 
 class MetricsTab(Container):
@@ -155,7 +160,9 @@ class MetricsTab(Container):
 
     def compose(self) -> ComposeResult:
         """Compose the metrics tab."""
-        yield Static("[bold]System Metrics[/bold]\n\n[dim]Performance metrics and statistics[/dim]")
+        yield Static(
+            "[bold]System Metrics[/bold]\n\n[dim]Performance metrics and statistics[/dim]"
+        )
 
 
 class DashboardScreen(Screen):

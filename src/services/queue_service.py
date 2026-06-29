@@ -1,11 +1,12 @@
 """Queue service for managing agent concurrency and task queueing."""
 
 import logging
-from typing import Optional, Dict, Any, List
 from datetime import datetime
+from typing import Any, Dict, List, Optional
+
 from sqlalchemy import and_
 
-from src.core.database import DatabaseManager, Task, Agent
+from src.core.database import Agent, DatabaseManager, Task
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +23,9 @@ class QueueService:
         """
         self.db_manager = db_manager
         self.max_concurrent_agents = max_concurrent_agents
-        logger.info(f"QueueService initialized with max_concurrent_agents={max_concurrent_agents}")
+        logger.info(
+            f"QueueService initialized with max_concurrent_agents={max_concurrent_agents}"
+        )
 
     def get_active_agent_count(self) -> int:
         """Get count of currently active agents (not terminated).
@@ -32,9 +35,11 @@ class QueueService:
         """
         session = self.db_manager.get_session()
         try:
-            count = session.query(Agent).filter(
-                Agent.status.in_(["working", "starting", "idle"])
-            ).count()
+            count = (
+                session.query(Agent)
+                .filter(Agent.status.in_(["working", "starting", "idle"]))
+                .count()
+            )
             logger.debug(f"Active agent count: {count}")
             return count
         finally:
@@ -48,7 +53,9 @@ class QueueService:
         """
         active_count = self.get_active_agent_count()
         should_queue = active_count >= self.max_concurrent_agents
-        logger.debug(f"Should queue: {should_queue} (active={active_count}, max={self.max_concurrent_agents})")
+        logger.debug(
+            f"Should queue: {should_queue} (active={active_count}, max={self.max_concurrent_agents})"
+        )
         return should_queue
 
     def enqueue_task(self, task_id: str) -> None:
@@ -75,7 +82,9 @@ class QueueService:
                     task.status = "blocked"
                     task.queued_at = None  # Don't set queued_at for blocked tasks
 
-                    blocker_titles = [t["title"] for t in blocking_info["blocking_tickets"]]
+                    blocker_titles = [
+                        t["title"] for t in blocking_info["blocking_tickets"]
+                    ]
                     reason = f"Blocked by tickets: {', '.join(blocker_titles)}"
 
                     # Store blocking reason in completion_notes
@@ -101,7 +110,9 @@ class QueueService:
             # Get updated position
             session_refresh = self.db_manager.get_session()
             try:
-                task_refreshed = session_refresh.query(Task).filter_by(id=task_id).first()
+                task_refreshed = (
+                    session_refresh.query(Task).filter_by(id=task_id).first()
+                )
                 position = task_refreshed.queue_position if task_refreshed else None
                 logger.info(f"Task {task_id} queued at position {position}")
             finally:
@@ -136,41 +147,51 @@ class QueueService:
             (Task.priority == "high", 3),
             (Task.priority == "medium", 2),
             (Task.priority == "low", 1),
-            else_=2
+            else_=2,
         )
 
-        new_priority_value = {"high": 3, "medium": 2, "low": 1}.get(new_task.priority, 2)
+        new_priority_value = {"high": 3, "medium": 2, "low": 1}.get(
+            new_task.priority, 2
+        )
 
         # Count tasks ahead in the queue
         # A task is ahead if:
         # 1. It's boosted (and new task is not boosted), OR
         # 2. It has higher priority value, OR
         # 3. It has same priority value but was queued earlier
-        ahead_count = session.query(Task).filter(
-            Task.status == "queued",
-            Task.id != new_task.id,
-            or_(
-                # Boosted tasks are always ahead (unless new task is also boosted)
-                and_(Task.priority_boosted, not new_task.priority_boosted),
-                # Among non-boosted or both boosted: higher priority is ahead
-                and_(
-                    or_(
-                        and_(Task.priority_boosted, new_task.priority_boosted),
-                        and_(not Task.priority_boosted, not new_task.priority_boosted),
+        ahead_count = (
+            session.query(Task)
+            .filter(
+                Task.status == "queued",
+                Task.id != new_task.id,
+                or_(
+                    # Boosted tasks are always ahead (unless new task is also boosted)
+                    and_(Task.priority_boosted, not new_task.priority_boosted),
+                    # Among non-boosted or both boosted: higher priority is ahead
+                    and_(
+                        or_(
+                            and_(Task.priority_boosted, new_task.priority_boosted),
+                            and_(
+                                not Task.priority_boosted, not new_task.priority_boosted
+                            ),
+                        ),
+                        priority_order > new_priority_value,
                     ),
-                    priority_order > new_priority_value
+                    # Same priority level and boost status: earlier queued_at is ahead
+                    and_(
+                        or_(
+                            and_(Task.priority_boosted, new_task.priority_boosted),
+                            and_(
+                                not Task.priority_boosted, not new_task.priority_boosted
+                            ),
+                        ),
+                        priority_order == new_priority_value,
+                        Task.queued_at < new_task.queued_at,
+                    ),
                 ),
-                # Same priority level and boost status: earlier queued_at is ahead
-                and_(
-                    or_(
-                        and_(Task.priority_boosted, new_task.priority_boosted),
-                        and_(not Task.priority_boosted, not new_task.priority_boosted),
-                    ),
-                    priority_order == new_priority_value,
-                    Task.queued_at < new_task.queued_at
-                )
             )
-        ).count()
+            .count()
+        )
 
         return ahead_count + 1
 
@@ -196,18 +217,24 @@ class QueueService:
                 (Task.priority == "high", 3),
                 (Task.priority == "medium", 2),
                 (Task.priority == "low", 1),
-                else_=2
+                else_=2,
             )
 
             # Get all queued tasks (excluding blocked)
             # Note: We only look at "queued" status, blocked tasks have status="blocked"
-            tasks = session.query(Task).filter(
-                Task.status == "queued"  # Blocked tasks have status='blocked', not 'queued'
-            ).order_by(
-                Task.priority_boosted.desc(),
-                priority_order.desc(),
-                Task.queued_at.asc()
-            ).all()
+            tasks = (
+                session.query(Task)
+                .filter(
+                    Task.status
+                    == "queued"  # Blocked tasks have status='blocked', not 'queued'
+                )
+                .order_by(
+                    Task.priority_boosted.desc(),
+                    priority_order.desc(),
+                    Task.queued_at.asc(),
+                )
+                .all()
+            )
 
             # Filter out any tasks that shouldn't be processed
             # (additional safety check in case a task is queued but its ticket is blocked)
@@ -226,7 +253,9 @@ class QueueService:
                         continue
 
                 # Task is valid, return it
-                logger.info(f"Next queued task: {task.id} (priority={task.priority}, boosted={task.priority_boosted})")
+                logger.info(
+                    f"Next queued task: {task.id} (priority={task.priority}, boosted={task.priority_boosted})"
+                )
                 return task
 
             logger.debug("No queued tasks found")
@@ -277,16 +306,19 @@ class QueueService:
                 (Task.priority == "high", 3),
                 (Task.priority == "medium", 2),
                 (Task.priority == "low", 1),
-                else_=2
+                else_=2,
             )
 
-            queued_tasks = session.query(Task).filter(
-                Task.status == "queued"
-            ).order_by(
-                Task.priority_boosted.desc(),
-                priority_order.desc(),
-                Task.queued_at.asc()
-            ).all()
+            queued_tasks = (
+                session.query(Task)
+                .filter(Task.status == "queued")
+                .order_by(
+                    Task.priority_boosted.desc(),
+                    priority_order.desc(),
+                    Task.queued_at.asc(),
+                )
+                .all()
+            )
 
             for position, task in enumerate(queued_tasks, start=1):
                 task.queue_position = position
@@ -309,11 +341,12 @@ class QueueService:
         try:
             active_agents = self.get_active_agent_count()
 
-            queued_tasks = session.query(Task).filter(
-                Task.status == "queued"
-            ).order_by(
-                Task.queue_position.asc()
-            ).all()
+            queued_tasks = (
+                session.query(Task)
+                .filter(Task.status == "queued")
+                .order_by(Task.queue_position.asc())
+                .all()
+            )
 
             queued_task_details = [
                 {
@@ -358,7 +391,9 @@ class QueueService:
                 return False
 
             if task.status != "queued":
-                logger.warning(f"Cannot boost task {task_id} - not queued (status={task.status})")
+                logger.warning(
+                    f"Cannot boost task {task_id} - not queued (status={task.status})"
+                )
                 return False
 
             task.priority_boosted = True
@@ -392,16 +427,19 @@ class QueueService:
                 (Task.priority == "high", 3),
                 (Task.priority == "medium", 2),
                 (Task.priority == "low", 1),
-                else_=2
+                else_=2,
             )
 
-            tasks = session.query(Task).filter(
-                Task.status == "queued"
-            ).order_by(
-                Task.priority_boosted.desc(),
-                priority_order.desc(),
-                Task.queued_at.asc()
-            ).all()
+            tasks = (
+                session.query(Task)
+                .filter(Task.status == "queued")
+                .order_by(
+                    Task.priority_boosted.desc(),
+                    priority_order.desc(),
+                    Task.queued_at.asc(),
+                )
+                .all()
+            )
 
             return tasks
         finally:

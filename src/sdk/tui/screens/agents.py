@@ -1,10 +1,10 @@
 """Agents screen showing all agents with live output."""
 
-from textual.app import ComposeResult
-from textual.screen import Screen
-from textual.widgets import DataTable, Static, Footer, RichLog
-from textual.containers import Container, Vertical
 import requests
+from textual.app import ComposeResult
+from textual.containers import Container, Vertical
+from textual.screen import Screen
+from textual.widgets import DataTable, Footer, RichLog, Static
 
 
 class AgentsScreen(Screen):
@@ -102,16 +102,22 @@ class AgentsScreen(Screen):
 
                     # Get current task description
                     current_task = agent.get("current_task", {})
-                    task_desc = current_task.get("description", "")[:30] if current_task else ""
+                    task_desc = (
+                        current_task.get("description", "")[:30] if current_task else ""
+                    )
                     if current_task and len(current_task.get("description", "")) > 30:
                         task_desc += "..."
 
-                    health_icon = "✓" if agent.get("health_check_failures", 0) == 0 else "✗"
+                    health_icon = (
+                        "✓" if agent.get("health_check_failures", 0) == 0 else "✗"
+                    )
 
                     row_data = [
                         agent_id[:12],
                         agent.get("status", ""),
-                        agent.get("current_task_id", "")[:8] if agent.get("current_task_id") else "-",
+                        agent.get("current_task_id", "")[:8]
+                        if agent.get("current_task_id")
+                        else "-",
                         task_desc if task_desc else "-",
                         health_icon,
                     ]
@@ -155,25 +161,45 @@ class AgentsScreen(Screen):
 
                 if agent:
                     output_log.write(f"[bold cyan]Agent ID:[/] {agent_id[:12]}...\n")
-                    output_log.write(f"[bold cyan]Status:[/] {agent.get('status', 'unknown')}\n")
-                    output_log.write(f"[bold cyan]CLI Type:[/] {agent.get('cli_type', 'unknown')}\n")
-                    output_log.write(f"[bold cyan]Health:[/] {'✓ Healthy' if agent.get('health_check_failures', 0) == 0 else '✗ Unhealthy'}\n")
-                    output_log.write(f"[bold cyan]Created:[/] {agent.get('created_at', 'unknown')}\n")
-                    output_log.write(f"[bold cyan]Last Activity:[/] {agent.get('last_activity', 'unknown')}\n\n")
+                    output_log.write(
+                        f"[bold cyan]Status:[/] {agent.get('status', 'unknown')}\n"
+                    )
+                    output_log.write(
+                        f"[bold cyan]CLI Type:[/] {agent.get('cli_type', 'unknown')}\n"
+                    )
+                    output_log.write(
+                        f"[bold cyan]Health:[/] {'✓ Healthy' if agent.get('health_check_failures', 0) == 0 else '✗ Unhealthy'}\n"
+                    )
+                    output_log.write(
+                        f"[bold cyan]Created:[/] {agent.get('created_at', 'unknown')}\n"
+                    )
+                    output_log.write(
+                        f"[bold cyan]Last Activity:[/] {agent.get('last_activity', 'unknown')}\n\n"
+                    )
 
                     current_task = agent.get("current_task", {})
                     if current_task:
                         output_log.write("[bold yellow]Current Task:[/]\n")
-                        output_log.write(f"[bold yellow]Task ID:[/] {current_task.get('id', 'N/A')}\n")
-                        output_log.write(f"[bold yellow]Status:[/] {current_task.get('status', 'N/A')}\n")
-                        output_log.write(f"[bold yellow]Priority:[/] {current_task.get('priority', 'N/A')}\n\n")
-                        output_log.write(f"[bold yellow]Description:[/]\n{current_task.get('description', 'N/A')}\n")
+                        output_log.write(
+                            f"[bold yellow]Task ID:[/] {current_task.get('id', 'N/A')}\n"
+                        )
+                        output_log.write(
+                            f"[bold yellow]Status:[/] {current_task.get('status', 'N/A')}\n"
+                        )
+                        output_log.write(
+                            f"[bold yellow]Priority:[/] {current_task.get('priority', 'N/A')}\n\n"
+                        )
+                        output_log.write(
+                            f"[bold yellow]Description:[/]\n{current_task.get('description', 'N/A')}\n"
+                        )
                     else:
                         output_log.write("[dim]No current task[/]\n")
                 else:
                     output_log.write(f"[red]Agent {agent_id} not found[/]")
             else:
-                output_log.write(f"[red]Failed to load agent: HTTP {response.status_code}[/]")
+                output_log.write(
+                    f"[red]Failed to load agent: HTTP {response.status_code}[/]"
+                )
         except Exception as e:
             output_log.write(f"[red]Error loading agent: {str(e)}[/]")
 
@@ -200,5 +226,5 @@ class AgentsScreen(Screen):
                 title="⚠️  EXIT HEPHAESTUS",
                 message="Are you sure you want to exit?\nAll running agents will continue in the background.",
             ),
-            check_quit
+            check_quit,
         )

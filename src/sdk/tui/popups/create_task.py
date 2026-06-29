@@ -1,10 +1,10 @@
 """Redesigned create task popup with better UX."""
 
-from textual.app import ComposeResult
-from textual.screen import ModalScreen
-from textual.widgets import Input, TextArea, Button, Static, Label
-from textual.containers import Container, Vertical, Horizontal, VerticalScroll
 import requests
+from textual.app import ComposeResult
+from textual.containers import Container, Horizontal, Vertical, VerticalScroll
+from textual.screen import ModalScreen
+from textual.widgets import Button, Input, Label, Static, TextArea
 
 
 class CreateTaskPopup(ModalScreen):
@@ -103,17 +103,27 @@ class CreateTaskPopup(ModalScreen):
             with VerticalScroll(id="form-container"):
                 with Vertical(classes="field-group"):
                     yield Label("Phase ID", classes="field-label")
-                    yield Label("Which phase does this task belong to? (e.g., 1, 2, 3)", classes="field-help")
+                    yield Label(
+                        "Which phase does this task belong to? (e.g., 1, 2, 3)",
+                        classes="field-help",
+                    )
                     yield Input(placeholder="1", value="1", id="phase-input")
 
                 with Vertical(classes="field-group"):
                     yield Label("Priority", classes="field-label")
-                    yield Label("Task priority: low, medium, or high", classes="field-help")
-                    yield Input(placeholder="medium", value="medium", id="priority-input")
+                    yield Label(
+                        "Task priority: low, medium, or high", classes="field-help"
+                    )
+                    yield Input(
+                        placeholder="medium", value="medium", id="priority-input"
+                    )
 
                 with Vertical(classes="field-group"):
                     yield Label("Task Description", classes="field-label")
-                    yield Label("Detailed description of what needs to be done", classes="field-help")
+                    yield Label(
+                        "Detailed description of what needs to be done",
+                        classes="field-help",
+                    )
                     yield TextArea(id="description-input")
 
             with Container(id="button-container"):
@@ -184,7 +194,11 @@ class CreateTaskPopup(ModalScreen):
                 # Close popup after 1.5 seconds
                 self.set_timer(1.5, self.app.pop_screen)
             else:
-                error_msg = response.text[:100] if response.text else f"HTTP {response.status_code}"
+                error_msg = (
+                    response.text[:100]
+                    if response.text
+                    else f"HTTP {response.status_code}"
+                )
                 status_bar.update(f"[red]✗ Error: {error_msg}[/]")
         except Exception as e:
             status_bar.update(f"[red]✗ Error: {str(e)[:100]}[/]")

@@ -61,7 +61,9 @@ class PerformanceMetrics:
 
 def validate_session_id(session_id: str) -> str:
     if not session_id or len(session_id) > MAX_SESSION_ID_LEN:
-        raise ValueError(f"session_id must be 1-{MAX_SESSION_ID_LEN} alphanumeric/hyphen/underscore chars")
+        raise ValueError(
+            f"session_id must be 1-{MAX_SESSION_ID_LEN} alphanumeric/hyphen/underscore chars"
+        )
     if not SESSION_ID_PATTERN.match(session_id):
         raise ValueError(f"session_id contains invalid characters: {session_id!r}")
     return session_id
@@ -92,7 +94,9 @@ class CDPBrowser:
         self._response_futures: Dict[int, asyncio.Future] = {}
         self._pending_event_ids: Set[int] = set()
 
-    async def _open_websocket(self, url: str) -> websockets.asyncio.client.ClientConnection:
+    async def _open_websocket(
+        self, url: str
+    ) -> websockets.asyncio.client.ClientConnection:
         return await websockets.asyncio.client.connect(
             url,
             max_size=50 * 1024 * 1024,
@@ -117,9 +121,13 @@ class CDPBrowser:
         targets = await self.discover_targets()
         page_targets = [t for t in targets if t.get("type") == "page"]
         if not page_targets:
-            raise RuntimeError("No page targets found. Is Chrome running with --remote-debugging-port?")
+            raise RuntimeError(
+                "No page targets found. Is Chrome running with --remote-debugging-port?"
+            )
         if target_index >= len(page_targets):
-            raise IndexError(f"target_index {target_index} out of range (found {len(page_targets)} pages)")
+            raise IndexError(
+                f"target_index {target_index} out of range (found {len(page_targets)} pages)"
+            )
         target = page_targets[target_index]
         self.ws_url = target["webSocketDebuggerUrl"]
         self.ws = await self._open_websocket(self.ws_url)
@@ -228,7 +236,9 @@ class CDPBrowser:
     def is_connected(self) -> bool:
         return self._connected and self.ws is not None and self.ws.open
 
-    async def send(self, method: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    async def send(
+        self, method: str, params: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
         if not self.ws or not self._connected:
             raise RuntimeError("Not connected. Call connect() first.")
         self.msg_id += 1
@@ -272,11 +282,14 @@ class CDPBrowser:
                 self.console_callbacks.remove(on_load)
 
     async def evaluate(self, expression: str, return_by_value: bool = True) -> Any:
-        result = await self.send("Runtime.evaluate", {
-            "expression": expression,
-            "returnByValue": return_by_value,
-            "awaitPromise": True,
-        })
+        result = await self.send(
+            "Runtime.evaluate",
+            {
+                "expression": expression,
+                "returnByValue": return_by_value,
+                "awaitPromise": True,
+            },
+        )
         remote = result.get("result", {})
         if remote.get("type") == "undefined":
             return None
@@ -284,7 +297,9 @@ class CDPBrowser:
             return remote.get("value")
         return remote
 
-    async def screenshot(self, path: Optional[str] = None, format: str = "png", quality: int = 80) -> str:
+    async def screenshot(
+        self, path: Optional[str] = None, format: str = "png", quality: int = 80
+    ) -> str:
         params: Dict[str, Any] = {"format": format}
         if format == "jpeg":
             params["quality"] = quality
@@ -349,7 +364,9 @@ class CDPBrowser:
             await asyncio.sleep(0.05)
         return False
 
-    async def get_console_logs(self, level: Optional[str] = None) -> List[Dict[str, Any]]:
+    async def get_console_logs(
+        self, level: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
         logs = list(self.console_logs)
         if level:
             logs = [l for l in logs if l.level == level]
@@ -422,7 +439,9 @@ class CDPBrowser:
         result = await self.send("Network.getCookies")
         return result.get("cookies", [])
 
-    async def set_cookie(self, name: str, value: str, domain: str = "", path: str = "/") -> None:
+    async def set_cookie(
+        self, name: str, value: str, domain: str = "", path: str = "/"
+    ) -> None:
         params: Dict[str, Any] = {"name": name, "value": value, "path": path}
         if domain:
             params["domain"] = domain
@@ -436,7 +455,12 @@ class CDPBrowser:
 
     async def get_dom_content(self, selector: str = "body") -> str:
         js_selector = _safe_js_string(selector)
-        return await self.evaluate(f"document.querySelector({js_selector})?.innerHTML || ''") or ""
+        return (
+            await self.evaluate(
+                f"document.querySelector({js_selector})?.innerHTML || ''"
+            )
+            or ""
+        )
 
     async def check_broken_images(self) -> List[Dict[str, Any]]:
         raw = await self.evaluate("""
@@ -478,7 +502,9 @@ class DevToolsManager:
     def __init__(self):
         self._browsers: Dict[str, CDPBrowser] = {}
 
-    async def connect(self, session_id: str, debug_url: str = "http://localhost:9222") -> CDPBrowser:
+    async def connect(
+        self, session_id: str, debug_url: str = "http://localhost:9222"
+    ) -> CDPBrowser:
         session_id = validate_session_id(session_id)
         if session_id in self._browsers:
             await self.close(session_id)
@@ -487,7 +513,9 @@ class DevToolsManager:
         self._browsers[session_id] = browser
         return browser
 
-    async def connect_new_tab(self, session_id: str, url: str, debug_url: str = "http://localhost:9222") -> CDPBrowser:
+    async def connect_new_tab(
+        self, session_id: str, url: str, debug_url: str = "http://localhost:9222"
+    ) -> CDPBrowser:
         session_id = validate_session_id(session_id)
         if session_id in self._browsers:
             await self.close(session_id)

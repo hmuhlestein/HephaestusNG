@@ -3,13 +3,13 @@
 import os
 import subprocess
 import sys
-import time
 import threading
-from typing import Optional, Callable, Dict
+import time
 from pathlib import Path
+from typing import Callable, Dict, Optional
 
-from src.sdk.exceptions import ProcessSpawnError, RestartError
 from src.sdk.config import HephaestusConfig
+from src.sdk.exceptions import ProcessSpawnError, RestartError
 
 
 class ProcessInfo:
@@ -114,9 +114,7 @@ class ProcessManager:
         process_info = self.processes[name]
         return process_info.process.poll() is None
 
-    def stop_process(
-        self, name: str, graceful: bool = True, timeout: int = 10
-    ) -> None:
+    def stop_process(self, name: str, graceful: bool = True, timeout: int = 10) -> None:
         """Stop a specific process."""
         if name not in self.processes:
             return
