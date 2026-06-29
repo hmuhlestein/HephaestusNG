@@ -276,7 +276,7 @@ const Agents: React.FC = () => {
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [messageAgent, setMessageAgent] = useState<Agent | null>(null);
   const [activeAgentIds, setActiveAgentIds] = useState<Set<string>>(new Set());
-  const [showAll, setShowAll] = useState(false);
+  const [showAll, setShowAll] = useState(!!urlAgentId);
   const [page, setPage] = useState(1);
   const { subscribe } = useWebSocket();
 
@@ -295,9 +295,10 @@ const Agents: React.FC = () => {
         setSelectedAgent(agent);
         navigate('/agents', { replace: true });
       } else if (agents.length > 0 && !showAll) {
-        // Not found, try all agents view
+        // Not found in active view — switch to All to find it
         setShowAll(true);
-      } else if (agents.length > 0) {
+        // Don't navigate away yet — let the All fetch find the agent
+      } else if (agents.length > 0 && showAll) {
         // Still not found after switching to all, fetch directly
         apiService.getAgent(urlAgentId).then(foundAgent => {
           if (foundAgent) {
