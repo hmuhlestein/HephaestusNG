@@ -1893,6 +1893,7 @@ async def get_project_design_status(project_id: str, filename: str):
     from src.core.database import (
         Agent,
         AgentBranch,
+        AutopilotDesign,
         AutopilotProject,
         Phase,
         Task,
@@ -2012,8 +2013,21 @@ async def get_project_design_status(project_id: str, filename: str):
                         }
                     )
 
-        # Determine overall status
-        if not matching_workflows:
+        # Determine overall status — prefer the design-level status from
+        # autopilot_designs (set by run_design_aggregate / continuous pipeline)
+        # over workflow-level heuristics, because workflow statuses may include
+        # retries, gotos, or partial failures that don't reflect final outcome.
+        with get_db() as _db:
+            _design = (
+                _db.query(AutopilotDesign)
+                .filter_by(project_id=project_id, filename=filename)
+                .first()
+            )
+            design_status = _design.status if _design else None
+
+        if design_status and design_status not in ("pending", "unknown"):
+            overall_status = design_status
+        elif not matching_workflows:
             overall_status = "pending"
         else:
             statuses = [wf.status for wf in matching_workflows]

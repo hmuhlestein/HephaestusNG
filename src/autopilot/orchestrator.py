@@ -1723,10 +1723,12 @@ SWEEP_ENABLED = False
 # to be swept.  Everything else in the project root is left alone.
 _SWEEP_REPORT_NAMES = {
     "review_findings.md",
+    "review_report.md",
     "security_report.md",
     "test_failures.md",
     "doc_review_report.md",
     "adversarial_review.md",
+    "adversarial_review_report.md",
     "forensics_report.md",
     "architecture.md",
     "run_health.json",
