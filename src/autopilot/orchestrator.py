@@ -2014,6 +2014,339 @@ def _update_orchestrator_max_gotos(max_gotos: int, logger: OrchestratorLogger) -
         logger.warning(f"Failed to update max_total_gotos: {e}")
 
 
+def _advance_phases(workflow_id: str, logger: OrchestratorLogger) -> bool:
+    """Check for completed phases and advance to the next one.
+
+    This is the single source of truth for phase progression. Called from
+    the polling loop in run_single_workflow.
+
+    Returns True if a phase was advanced, False otherwise.
+    """
+    try:
+        from src.core.database import (
+            Agent,
+            Phase,
+            PhaseExecution,
+            Task,
+            Workflow,
+            get_db,
+        )
+        from src.phases import PhaseManager
+
+        with get_db() as db:
+            # Get workflow
+            wf = db.query(Workflow).filter_by(id=workflow_id).first()
+            if not wf or wf.status not in ("active", "paused"):
+                return False
+
+            # Auto-resume paused workflow if it has a done task in the stalled phase
+            if wf.status == "paused":
+                phases = (
+                    db.query(Phase)
+                    .filter_by(workflow_id=workflow_id)
+                    .order_by(Phase.order)
+                    .all()
+                )
+                for phase in phases:
+                    exec = db.query(PhaseExecution).filter_by(phase_id=phase.id).first()
+                    if exec and exec.status == "in_progress":
+                        done_task = (
+                            db.query(Task)
+                            .filter_by(phase_id=phase.id, status="done")
+                            .first()
+                        )
+                        if done_task:
+                            logger.info(
+                                f"[PHASE-ADVANCE] Auto-resuming paused workflow — "
+                                f"{phase.name} has done task {done_task.id[:8]}"
+                            )
+                            wf.status = "active"
+                            db.commit()
+                            break
+                if wf.status == "paused":
+                    return False  # Still paused, nothing to do
+
+            # Get all phases and their statuses
+            phases = (
+                db.query(Phase)
+                .filter_by(workflow_id=workflow_id)
+                .order_by(Phase.order)
+                .all()
+            )
+
+            phase_statuses = []
+            for phase in phases:
+                exec = db.query(PhaseExecution).filter_by(phase_id=phase.id).first()
+                phase_statuses.append({
+                    "phase": phase,
+                    "execution": exec,
+                    "status": exec.status if exec else "pending",
+                })
+
+            completed = [p for p in phase_statuses if p["status"] == "completed"]
+            pending = [p for p in phase_statuses if p["status"] == "pending"]
+            in_progress = [p for p in phase_statuses if p["status"] == "in_progress"]
+
+            # Case 1: Completed phase with pending successor (phase N done, N+1 never started)
+            if completed and pending and not in_progress:
+                completed.sort(key=lambda p: p["phase"].order)
+                last_completed = completed[-1]
+                has_pending_successor = any(
+                    p["phase"].order == last_completed["phase"].order + 1
+                    for p in pending
+                )
+                if has_pending_successor:
+                    successor = next(
+                        p for p in pending
+                        if p["phase"].order == last_completed["phase"].order + 1
+                    )
+                    # Check if successor already has tasks (transition already fired)
+                    existing_tasks = (
+                        db.query(Task)
+                        .filter_by(phase_id=successor["phase"].id)
+                        .count()
+                    )
+                    if existing_tasks > 0:
+                        return False  # Already fired
+
+                    logger.info(
+                        f"[PHASE-ADVANCE] {last_completed['phase'].name} completed, "
+                        f"advancing to {successor['phase'].name}"
+                    )
+                    return _fire_phase_transition(
+                        workflow_id, last_completed["phase"], logger
+                    )
+
+            # Case 2: In-progress phase that is now complete
+            for ps in in_progress:
+                phase = ps["phase"]
+                # Check if all tasks are done
+                incomplete = (
+                    db.query(Task)
+                    .filter(
+                        Task.phase_id == phase.id,
+                        Task.status.in_(["pending", "assigned", "in_progress"]),
+                    )
+                    .count()
+                )
+                if incomplete > 0:
+                    continue  # Still has active tasks
+
+                done_count = (
+                    db.query(Task)
+                    .filter_by(phase_id=phase.id, status="done")
+                    .count()
+                )
+                if done_count == 0:
+                    continue  # No completed tasks yet
+
+                # Phase is complete — fire transition
+                logger.info(
+                    f"[PHASE-ADVANCE] {phase.name} appears complete "
+                    f"({done_count} tasks done, 0 active), evaluating transition"
+                )
+                return _fire_phase_transition(workflow_id, phase, logger)
+
+    except Exception as e:
+        logger.warning(f"[PHASE-ADVANCE] Error: {e}")
+    return False
+
+
+def _fire_phase_transition(
+    workflow_id: str, phase, logger: OrchestratorLogger
+) -> bool:
+    """Fire the phase transition: mark complete, evaluate, create next task/agent.
+
+    Returns True if something was done.
+    """
+    try:
+        from src.autopilot.spec import GATED_PHASES, build_phase_output
+        from src.core.database import Phase, PhaseExecution, Workflow, get_db
+        from src.phases import PhaseManager
+
+        # Build phase output for gated phases
+        phase_output = {}
+        if phase.name in GATED_PHASES:
+            with get_db() as db:
+                wf = db.query(Workflow).filter_by(id=workflow_id).first()
+                if wf and wf.working_directory:
+                    from pathlib import Path
+
+                    phase_output = build_phase_output(
+                        phase.name, Path(wf.working_directory)
+                    )
+
+        # Mark phase complete and get engine decision
+        pm = PhaseManager(workflow_id)
+        result = pm.mark_phase_complete(
+            phase.id,
+            f"Phase completed",
+            phase_output=phase_output,
+        )
+
+        action = result.get("action", "continue")
+        target_phase_id = result.get("target_phase_id")
+        target_phase_name = result.get("target_phase")
+
+        logger.info(
+            f"[PHASE-ADVANCE] Engine decision for {phase.name}: {action}" +
+            (f" -> {target_phase_name}" if target_phase_name else "")
+        )
+
+        if action == "arbitrate":
+            # TODO: spawn arbitration agent via API
+            logger.warning(f"[PHASE-ADVANCE] Arbitration needed for {phase.name}")
+            return True
+
+        if not target_phase_id:
+            # Workflow complete or no next phase
+            return True
+
+        # Create task and agent for the next phase
+        return _create_phase_task(workflow_id, target_phase_id, target_phase_name, action, logger)
+
+    except Exception as e:
+        logger.warning(f"[PHASE-ADVANCE] Transition error: {e}")
+        return False
+
+
+def _create_phase_task(
+    workflow_id: str,
+    phase_id: str,
+    phase_name: str,
+    action: str,
+    logger: OrchestratorLogger,
+) -> bool:
+    """Create a task and agent for a phase via API."""
+    try:
+        import uuid
+
+        from src.core.database import (
+            Agent,
+            Phase,
+            PhaseExecution,
+            Task,
+            Workflow,
+            get_db,
+        )
+
+        with get_db() as db:
+            # Check if phase already has an active task
+            existing = (
+                db.query(Task)
+                .filter(
+                    Task.phase_id == phase_id,
+                    Task.status.in_(["pending", "assigned", "in_progress", "queued"]),
+                )
+                .first()
+            )
+            if existing:
+                logger.info(
+                    f"[PHASE-TASK] {phase_name} already has active task {existing.id[:8]}, skipping"
+                )
+                return False
+
+            # Check for active agent on this phase
+            active_agent = (
+                db.query(Agent)
+                .filter(Agent.status.in_(["working", "idle", "starting"]))
+                .join(Task, Task.assigned_agent_id == Agent.id)
+                .filter(Task.phase_id == phase_id)
+                .first()
+            )
+            if active_agent:
+                logger.info(
+                    f"[PHASE-TASK] {phase_name} has active agent {active_agent.id[:8]}, skipping"
+                )
+                return False
+
+            # Check retry/goto bounds
+            MAX_PHASE_ATTEMPTS = 3
+            if action in ("retry", "goto"):
+                retries = (
+                    db.query(Task)
+                    .filter(
+                        Task.phase_id == phase_id,
+                        Task.created_by_agent_id == "orchestrator",
+                        Task.action.in_(["retry", "goto"]),
+                    )
+                    .count()
+                )
+                if retries >= MAX_PHASE_ATTEMPTS:
+                    logger.warning(
+                        f"[PHASE-TASK] {phase_name} hit retry bound ({retries}/{MAX_PHASE_ATTEMPTS}), pausing"
+                    )
+                    wf = db.query(Workflow).filter_by(id=workflow_id).first()
+                    if wf and wf.status == "active":
+                        wf.status = "paused"
+                        db.commit()
+                    return False
+
+            # Get phase info
+            phase = db.query(Phase).filter_by(id=phase_id).first()
+            if not phase:
+                return False
+
+            # Create task
+            task_id = str(uuid.uuid4())
+            task = Task(
+                id=task_id,
+                raw_description=f"Execute {phase.name}: {phase.description}",
+                enriched_description=f"Execute {phase.name}: {phase.description}",
+                done_definition=(
+                    " AND ".join(phase.done_definitions)
+                    if phase.done_definitions
+                    else "Complete phase objectives"
+                ),
+                status="pending",
+                priority="high",
+                phase_id=phase.id,
+                workflow_id=workflow_id,
+                created_by_agent_id="orchestrator",
+                action=action,
+            )
+            db.add(task)
+
+            # Update phase execution to in_progress
+            execution = db.query(PhaseExecution).filter_by(phase_id=phase_id).first()
+            if execution and execution.status in ("pending", "completed"):
+                execution.status = "in_progress"
+                from datetime import datetime
+                execution.started_at = datetime.utcnow()
+
+            db.commit()
+
+        # Create agent via API
+        agent_data = api_post(
+            "/api/create_agent_for_task",
+            {
+                "task_id": task_id,
+                "workflow_id": workflow_id,
+                "phase_id": phase_id,
+            },
+        )
+        agent_id = agent_data.get("agent_id", "unknown")
+
+        # Update task with agent
+        with get_db() as db:
+            task = db.query(Task).filter_by(id=task_id).first()
+            if task:
+                task.assigned_agent_id = agent_id
+                task.status = "in_progress"
+                from datetime import datetime
+                task.started_at = datetime.utcnow()
+                db.commit()
+
+        logger.info(
+            f"[PHASE-TASK] Created task {task_id[:8]} and agent {agent_id[:8]} for {phase_name}"
+        )
+        return True
+
+    except Exception as e:
+        logger.warning(f"[PHASE-TASK] Error creating task for {phase_name}: {e}")
+        return False
+
+
 def run_single_workflow(
     sdk,
     workflow_id: str,
@@ -2260,6 +2593,14 @@ def run_single_workflow(
                 f"Tasks: {len(pending)} pending, {len(in_progress)} active, "
                 f"{len(done)} done, {len(failed)} failed"
             )
+
+            # Phase progression — the single source of truth for advancing phases.
+            # This replaces the monitor's _check_phase_progression.
+            _advance_phases(exec_id, logger)
+
+            # Refresh task counts after potential phase advancement
+            pending = get_tasks(status="pending", workflow_id=exec_id)
+            in_progress = get_tasks(status="in_progress", workflow_id=exec_id)
 
             # Agent scheduling is handled by the server's background_queue_processor.
             # Stuck-agent detection is handled by Guardian/Conductor.
