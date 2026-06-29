@@ -1431,14 +1431,29 @@ class MonitoringLoop:
                                 phase.workflow_id, phase.id, phase.name
                             )
                         elif active_tasks == 0 and failed_tasks > 0 and done_tasks == 0:
-                            logger.warning(
-                                f"[PHASE-PROGRESSION] Phase {phase.name} stalled: "
-                                f"{failed_tasks} failed task(s), no active tasks — "
-                                f"creating retry (bounded by MAX_PHASE_ATTEMPTS)"
-                            )
-                            await self._create_phase_task_and_agent(
-                                phase.workflow_id, phase.id, phase.name, "retry"
-                            )
+                            # Check if this phase is optional — if so, allow pipeline to continue
+                            from src.autopilot.spec import load_optional_phases
+                            optional_phases = load_optional_phases(phase.workflow_id)
+                            if phase.name in optional_phases:
+                                logger.info(
+                                    f"[PHASE-PROGRESSION] Optional phase {phase.name} stalled: "
+                                    f"{failed_tasks} failed task(s) — marking as skipped (optional)"
+                                )
+                                # Mark phase execution as skipped so pipeline continues
+                                if execution:
+                                    execution.status = "skipped"
+                                    execution.completed_at = datetime.utcnow()
+                                    session.commit()
+                            else:
+                                # Required phase — bounded retry with impasse on exhaustion
+                                logger.warning(
+                                    f"[PHASE-PROGRESSION] Required phase {phase.name} stalled: "
+                                    f"{failed_tasks} failed task(s), no active tasks — "
+                                    f"creating retry (bounded by MAX_PHASE_ATTEMPTS)"
+                                )
+                                await self._create_phase_task_and_agent(
+                                    phase.workflow_id, phase.id, phase.name, "retry"
+                                )
 
                 finally:
                     session.close()

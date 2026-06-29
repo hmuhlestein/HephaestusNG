@@ -3,153 +3,266 @@
 **Feature ID:** feature-model-implementation  
 **Feature Name:** Feature Model Implementation  
 **Status:** Requirements Extracted  
-**Date:** 2026-06-27  
-**Design Document:** `.hephaestus/design.md`
+**Date:** 2026-06-29  
+**Design Document:** `.hephaestus/design.md`  
+**References:** `docs/autopilot.md`, `design_docs/autopilot_architecture_review.md`
 
 ---
 
 ## 1. Executive Summary
 
-Implement the Feature model for HephaestusNG's autopilot pipeline. Decomposes complex designs into independently shippable slices before code is written. Each slice runs its own 12-phase pipeline in its own git worktree with controlled parallelism.
+Implement the Feature model for HephaestusNG's autopilot pipeline. The Feature model decomposes complex designs into independently shippable slices before code is written. Each slice (Feature) runs its own 12-phase pipeline in its own git worktree with controlled parallelism. This addresses context window overflow, agent scope loss, and failure isolation issues in the current flat pipeline.
 
 ---
 
-## 2. Functional Requirements
+## 2. Prerequisites (Run B Fixes)
+
+### PR-1: Spec Gate Must Fire on QA Completion
+- **Problem:** `_build_spec_phase_output` not called when `qa_validation` completes
+- **Fix A:** Instrument task completion paths in `src/monitoring/monitor.py`
+- **Fix B:** Output-existence completion floor in `update_task_status` handler (`src/mcp/server.py`)
+- **Acceptance:** Seeded failing test triggers GOTO
+
+### PR-2: Abandoned Required Phase Must Escalate to Impasse
+- **Problem:** `security_review` abandoned after 6 attempts, pipeline continued silently
+- **Fix:** In `src/monitoring/monitor.py`, set phase status to `failed`, workflow to `impasse`
+- **Acceptance:** Abandoned phase triggers human intervention flow
+- **Optional phases:** `forensics_analysis`, `git_commit_push`
+
+---
+
+## 3. Functional Requirements
 
 ### FR-1: Feature Database Table
-New `Feature` SQLAlchemy table with columns: id, design_id, feature_key, name, scope, files (JSON), depends_on (JSON), execution, status, workflow_id, scope_doc_path, feature_record_path, timestamps, error.
+- **Requirement:** New `Feature` SQLAlchemy table
+- **Columns:** id, design_id, feature_key, name, scope, files (JSON), depends_on (JSON), execution, status, workflow_id, scope_doc_path, feature_record_path, created_at, started_at, completed_at, error
+- **Check Constraints:** execution IN ('parallel', 'sequential'), status IN ('pending', 'active', 'completed', 'failed', 'skipped')
+- **Relationships:** belongs_to AutopilotDesign, has_one Workflow
+- **Acceptance:** `from src.core.database import Feature` succeeds; table created on startup
 
 ### FR-2: AutopilotDesign Table Modifications
-Add columns: file_path (Text), designs_folder (Text), phase0_workflow_id (FK). Extend status constraint: `pending | processing | decomposing | active | completed | failed | skipped`.
+- **Requirement:** Add columns: file_path (Text), designs_folder (Text), phase0_workflow_id (FK to workflows)
+- **Requirement:** Extend status check constraint: `pending | processing | decomposing | active | completed | failed | skipped`
+- **Acceptance:** New columns exist; design status transitions work
 
 ### FR-3: Workflow Table Modifications
-Add columns: workflow_type (design/feature), feature_id (FK to features).
+- **Requirement:** Add columns: workflow_type (design/feature), feature_id (FK to features)
+- **Acceptance:** Workflow type tracking works; feature linkage established
 
 ### FR-4: Database Migration
-Idempotent `_migrate_feature_model_columns()` function in `src/core/database.py`.
+- **Requirement:** Idempotent `_migrate_feature_model_columns()` function in `src/core/database.py`
+- **Call location:** `DatabaseManager.__init__` alongside existing migrations
+- **Acceptance:** Safe to call on every startup; creates Feature table and adds columns
 
 ### FR-5: Phase 0 Workflow Definition
-New `config/workflows/autopilot-phase0/` with workflow.yaml and 01_feature_architect.yaml.
+- **Requirement:** New `config/workflows/autopilot-phase0/` directory with:
+  - `workflow.yaml`: default_model, execution_order, orchestrator config, launch_template
+  - `01_feature_architect.yaml`: phase definition with done_definitions, outputs, instructions
+- **Agent role:** feature_architect
+- **Acceptance:** Phase 0 runs standalone; produces valid features.json and scope.md files
 
 ### FR-6: Workflow Registry Update
-Register `autopilot-phase0` in `src/workflow_registry.py`.
+- **Requirement:** Register `autopilot-phase0` in `src/workflow_registry.py`
+- **Acceptance:** Phase 0 workflow launchable via SDK
 
 ### FR-7: Orchestrator - run_phase0 (Stage 1)
-Create integration worktree, launch Phase 0, validate features.json, create permanent designs/ folder.
+- **Requirement:** Create integration worktree, copy design.md, launch Phase 0, poll until complete, validate features.json, create permanent designs/ folder, copy outputs, create Feature DB records
+- **Constants:** MAX_PHASE0_TIME = 3600, MAX_PARALLEL_FEATURES = 4
+- **Acceptance:** Phase 0 completes; features.json valid; Feature records created
 
 ### FR-8: Orchestrator - run_feature_pipelines (Stage 2)
-Topological sort (Kahn's algorithm), ThreadPoolExecutor with MAX_PARALLEL_FEATURES=4.
+- **Requirement:** Resolve execution order via topological sort (Kahn's algorithm), run features in parallel groups or sequential based on depends_on and execution fields
+- **Algorithm:** Build dependency graph, process in layers, separate parallel from sequential features
+- **Acceptance:** Parallel features run concurrently; sequential features respect ordering
 
 ### FR-9: Orchestrator - run_design_aggregate (Stage 3)
-Generate design_report.html via Jinja2, design_metrics.json.
+- **Requirement:** Aggregate results, generate design_metrics.json, generate design_report.html via Jinja2, update final design status
+- **Acceptance:** design_report.html written; final status correct
 
 ### FR-10: Helper Functions
-Create: _create_integration_worktree, _cleanup_worktree, _create_designs_folder, _create_feature_records, _update_feature_status, _update_design_status, _set_workflow_type, _link_workflow_to_feature, _validate_features_json, _should_skip.
+- **Requirement:** Implement helpers:
+  - `_create_integration_worktree`: Create git worktree for feature isolation
+  - `_cleanup_worktree`: Remove worktree after feature completes
+  - `_create_designs_folder`: Create permanent record folder with timestamp
+  - `_create_feature_records`: Create Feature DB records from features.json
+  - `_update_feature_status`: Update Feature status in DB
+  - `_update_design_status`: Update AutopilotDesign status in DB
+  - `_set_workflow_type`: Mark workflow as design or feature type
+  - `_link_workflow_to_feature`: Associate workflow with Feature
+  - `_validate_features_json`: Validate features.json schema
+  - `_should_skip`: Check if feature dependency failed
+- **Acceptance:** All helpers functional; orchestrator uses them
 
 ### FR-11: CLI Changes - add_to_queue
-Store file_path in DB, do not copy file.
+- **Requirement:** Store file_path in DB, do not copy file. Resolve absolute path, create AutopilotDesign record with file_path = str(abs_path)
+- **Acceptance:** `heph autopilot add <path>` registers design without copying
 
 ### FR-12: API Endpoint - POST /api/autopilot/designs/add
-Accept file_path and project_path, create design record.
+- **Requirement:** Accept file_path and project_path, find/create project, check duplicates, create design record
+- **Acceptance:** API returns design id, name, status
 
 ### FR-13: pick_next_design Update
-Prefer file_path column over filename.
+- **Requirement:** Prefer file_path column over filename; fallback to filename relative to project base dir + DESIGN_SUBDIR
+- **Acceptance:** Designs with file_path work; fallback works for legacy
 
 ### FR-14: Phase YAML Updates
-Pass feature_scope and feature_id; reference scope.md as primary input.
+- **Requirement:** Update workflow.yaml launch_template to pass feature_scope and feature_id; update phase YAMLs to reference scope.md as primary input
+- **Acceptance:** Phase 1 receives feature_scope; reads scope.md first
 
 ### FR-15: Design Report Template
-Create `src/autopilot/templates/design_report.html` using Jinja2.
+- **Requirement:** Create `src/autopilot/templates/design_report.html` using Jinja2
+- **Content:** Summary table, aggregate metrics, PRs merged, forensics highlights
+- **Acceptance:** HTML generated with all required sections
 
 ---
 
-## 3. Non-Functional Requirements
+## 4. Non-Functional Requirements
 
 ### NFR-1: Backward Compatibility
-Existing autopilot workflow continues for designs without Feature model.
+- **Requirement:** Existing autopilot workflow continues to work for designs without Feature model
+- **Acceptance:** Old flow still runs; feature_scope and feature_id parameters optional
 
 ### NFR-2: Performance
-MAX_PARALLEL_FEATURES = 4 concurrent feature pipelines.
+- **Requirement:** MAX_PARALLEL_FEATURES = 4 concurrent feature pipelines
+- **Acceptance:** System doesn't exceed resource limits
 
 ### NFR-3: Reliability
-MAX_PHASE0_TIME = 3600 seconds timeout.
+- **Requirement:** Phase 0 timeout: MAX_PHASE0_TIME = 3600 seconds
+- **Acceptance:** Long-running Phase 0 doesn't block indefinitely
 
 ### NFR-4: Idempotency
-Database migrations safe to call on every startup.
+- **Requirement:** Database migrations safe to call on every startup
+- **Acceptance:** No errors on repeated startup
 
 ---
 
-## 4. Integration Points
+## 5. Integration Points
 
 | Component | Type | Description |
 |-----------|------|-------------|
-| `src/core/database.py` | Modify | Add Feature class, columns, migration |
-| `src/autopilot/orchestrator.py` | Modify | Three-stage coordinator refactor |
+| `src/core/database.py` | Modify | Add Feature class, new columns, migration function |
+| `src/autopilot/orchestrator.py` | Modify | Refactor run_single_design to three-stage coordinator |
 | `src/cli/commands/autopilot.py` | Modify | Rewrite add_to_queue |
 | `src/mcp/autopilot_api.py` | Modify | Add POST /api/autopilot/designs/add |
 | `src/workflow_registry.py` | Modify | Register autopilot-phase0 |
+| `src/monitoring/monitor.py` | Modify | Fix spec gate and impasse handling (Prerequisites) |
 | `config/workflows/autopilot-phase0/` | New | workflow.yaml + 01_feature_architect.yaml |
 | `src/autopilot/templates/` | New | design_report.html (Jinja2) |
 
----
-
-## 5. Technology Constraints
-
-1. Python 3 (existing stack)
-2. SQLAlchemy (existing ORM)
-3. Jinja2 (existing template engine)
-4. pytest with 74 existing tests
-5. Git worktrees for isolation
-6. No new external dependencies
+**No new external dependencies required.** All changes use existing stack (SQLAlchemy, Jinja2, Python stdlib).
 
 ---
 
-## 6. Acceptance Criteria
+## 6. Technology Constraints
+
+1. **Language:** Python 3 (existing HephaestusNG stack)
+2. **ORM:** SQLAlchemy (existing)
+3. **Template Engine:** Jinja2 (existing)
+4. **Testing:** pytest with existing test suite (74 tests)
+5. **Version Control:** Git worktrees for feature isolation
+6. **No new dependencies:** Pure extensions of existing patterns
+
+---
+
+## 7. File Structure (Permanent Storage)
+
+```
+<project>/
+  designs/
+    <timestamp>_<name>_<design-id>/
+      design.md
+      features.json
+      design_report.html
+      design_metrics.json
+      features/
+        <feature-id>/
+          scope.md
+          feature_report.html
+          docs/
+            requirements_analysis.md
+            architecture.md
+            review_report.md
+            doc_review_report.md
+            security_report.md
+            qa_report.md
+            qa_result.json
+            product_validation.md
+            product_validation.json
+            forensics_report.md
+            pipeline_metrics.json
+            phase_prompts/
+```
+
+---
+
+## 8. Acceptance Criteria Summary
 
 | ID | Criterion | Verification |
 |----|-----------|--------------|
-| AC-1 | Feature table created | `from src.core.database import Feature` |
+| AC-1 | Feature table created | `python -c "from src.core.database import Feature; print('OK')"` |
 | AC-2 | Phase 0 workflow registered | Workflow launchable via SDK |
-| AC-3 | Phase 0 produces valid features.json | JSON schema validation |
+| AC-3 | Phase 0 produces valid features.json | JSON parsing + schema validation |
 | AC-4 | Phase 0 produces scope.md per feature | File existence check |
-| AC-5 | Parallel features execute concurrently | ThreadPoolExecutor |
-| AC-6 | Sequential features respect depends_on | Topological sort |
-| AC-7 | design_report.html generated | HTML file written |
-| AC-8 | CLI add_to_queue stores file_path | DB record check |
-| AC-9 | API endpoint works | POST returns 200 |
-| AC-10 | Backward compatible | Old flow runs |
+| AC-5 | Parallel features execute concurrently | ThreadPoolExecutor with MAX_PARALLEL_FEATURES |
+| AC-6 | Sequential features respect depends_on | Topological sort ordering |
+| AC-7 | design_report.html generated | HTML file written to designs_folder |
+| AC-8 | CLI add_to_queue stores file_path | DB record has file_path column |
+| AC-9 | API endpoint works | POST /api/autopilot/designs/add returns 200 |
+| AC-10 | Backward compatible | Old flow still runs without feature_scope |
 | AC-11 | Existing tests pass | All 74 tests green |
+| AC-12 | Spec gate fires | Seeded failing test triggers GOTO |
+| AC-13 | Impasse on abandoned phase | Abandoned required phase escalates to human |
 
 ---
 
-## 7. Implementation Order
+## 9. Implementation Order (Prerequisites)
 
-1. **Step 0:** Run B fixes (spec gate + impasse) - MUST be green first
-2. **Step 1:** DB schema (Feature table + columns + migration)
+1. **Step 0:** Run B fixes (spec gate + abandoned phase impasse) - MUST be green first
+2. **Step 1:** DB schema (Feature table + column additions + migration)
 3. **Step 2:** Phase 0 YAML and workflow registration
 4. **Step 3:** Orchestrator refactor (three-stage coordinator)
 5. **Step 4:** CLI and API changes
-6. **Step 5:** Phase YAML updates
+6. **Step 5:** Phase YAML updates (scope.md references)
 7. **Step 6:** Feature report (Jinja2 template)
 
 ---
 
-## 8. Testing Requirements
+## 10. Testing Requirements
 
 ### Unit Tests
-- `test_resolve_execution_order.py`
-- `test_validate_features_json.py`
-- `test_create_feature_records.py`
+- `test_resolve_execution_order.py`: parallel, sequential, depends_on DAG, cycles
+- `test_validate_features_json.py`: valid JSON, missing fields, duplicate IDs, cycles, overlapping files
+- `test_create_feature_records.py`: DB records created, status starts pending
 
 ### Integration Tests
-- `test_phase0_workflow.py`
-- `test_feature_model_single.py`
-- `test_feature_model_parallel.py`
-- `test_feature_model_sequential.py`
-- `test_feature_dependency_failed.py`
+- `test_phase0_workflow.py`: Phase 0 runs against real design doc
+- `test_feature_model_single.py`: Single-feature design end-to-end
+- `test_feature_model_parallel.py`: Two-feature parallel design
+- `test_feature_model_sequential.py`: Feature A → Feature B sequential
+- `test_feature_dependency_failed.py`: Dependency failure propagation
 
 ### Regression
-- All 74 existing tests must pass
+- All existing 74 tests must pass
+- Smoke test with calculator project (single-feature design)
+
+---
+
+## 11. Risk Assessment
+
+| Risk | Likelihood | Impact | Mitigation |
+|------|-----------|--------|------------|
+| Run B not green | High | Blocker | Must fix spec gate + impasse first |
+| Context overflow in Phase 0 | Low | High | Design doc size; may need chunking |
+| Worktree cleanup failures | Medium | Medium | Robust cleanup helpers with error handling |
+| Backward compatibility break | Medium | High | Optional parameters; fallback logic |
+
+---
+
+## 12. Open Questions
+
+1. What is the current status of Run B (spec gate fix + abandoned phase impasse fix)?
+2. Are there existing designs/ folders to reference for scope boundary patterns?
+3. What Jinja2 version is available in the environment?
 
 ---
 

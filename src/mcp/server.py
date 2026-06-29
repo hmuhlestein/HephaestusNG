@@ -2115,9 +2115,11 @@ async def update_task_status(
         # Same class as ruff/tests: mechanical check, hard floor.
         if request.status == "done" and task.phase_id:
             from pathlib import Path as _Path
-            from src.autopilot.spec import PHASE_OUTPUT_ARTIFACTS
+            from src.autopilot.spec import load_phase_output_artifacts
+            # Load required_output from workflow.yaml for this workflow
+            required_output = load_phase_output_artifacts(task.workflow_id)
             phase = session.query(Phase).filter_by(id=task.phase_id).first()
-            if phase and phase.name in PHASE_OUTPUT_ARTIFACTS:
+            if phase and phase.name in required_output:
                 declared_output = PHASE_OUTPUT_ARTIFACTS[phase.name]
                 # Search for the artifact in the shared worktree (or feature folder)
                 agent = session.query(Agent).filter_by(id=agent_id).first()
@@ -2144,17 +2146,23 @@ async def update_task_status(
                                 found = True
                                 break
                 if not found:
-                    logger.warning(f"Agent {agent_id[:8]} claimed done on {phase.name} but {declared_output} not found — rejecting")
-                    task.status = "failed"
-                    task.failure_reason = f"Agent claimed completion but {declared_output} was not created."
-                    session.commit()
-                    return {"status": "failed", "message": f"Output validation failed: {declared_output} not found"}
+                    # Check if this phase is optional — if so, allow completion without output
+                    from src.autopilot.spec import load_optional_phases
+                    optional_phases = load_optional_phases(task.workflow_id)
+                    if phase.name in optional_phases:
+                        logger.info(f"Agent {agent_id[:8]} completed optional phase {phase.name} without {declared_output} — allowing")
+                    else:
+                        logger.warning(f"Agent {agent_id[:8]} claimed done on {phase.name} but {declared_output} not found — rejecting")
+                        task.status = "failed"
+                        task.failure_reason = f"Agent claimed completion but {declared_output} was not created."
+                        session.commit()
+                        return {"status": "failed", "message": f"Output validation failed: {declared_output} not found"}
 
         # 3c. Spec gate firing — when a gated phase task completes and the phase
         # is now complete, trigger the gate immediately (don't wait for monitor poll).
         # The monitor's _check_phase_progression only fires when the next phase is
         # pending — if it's already in_progress, the gate is missed. Fix: fire from
-        # the completion path itself.
+        # the completion path itself and actually trigger the evaluation.
         if request.status == "done" and task.phase_id:
             from src.autopilot.spec import GATED_PHASES, build_phase_output
             phase = session.query(Phase).filter_by(id=task.phase_id).first()
@@ -2170,9 +2178,23 @@ async def update_task_status(
                         from pathlib import Path as _P
                         phase_output = build_phase_output(phase.name, _P(wf.working_directory))
                         logger.info(f"[SPEC-GATE] {phase.name}: gate fired from completion path, phase_output={phase_output}")
-                        # The monitor's _check_phases will also call mark_phase_complete
-                        # with this phase_output on its next poll. But log here so we
-                        # know the gate fired even if the monitor misses it.
+                        # Actually trigger the evaluation by calling mark_phase_complete
+                        # This ensures the GOTO/retry/continue decision is made immediately
+                        from src.phases import PhaseManager
+                        pm = PhaseManager(task.workflow_id)
+                        result = pm.mark_phase_complete(
+                            phase.id,
+                            f"Phase completed (spec gate fired from update_task_status)",
+                            phase_output=phase_output,
+                        )
+                        if result.get("action") == "goto" and result.get("target_phase_id"):
+                            logger.info(f"[SPEC-GATE] {phase.name}: GOTO {result.get('target_phase')} (score too low)")
+                            # Store the GOTO action so the monitor can create the target phase task
+                            task.action = "goto"
+                            task.has_results = True
+                            session.commit()
+                        elif result.get("action") == "continue":
+                            logger.info(f"[SPEC-GATE] {phase.name}: PASSED (score >= 0.7)")
 
         # 4. Check if task has validation enabled
         validation_spawned = False
