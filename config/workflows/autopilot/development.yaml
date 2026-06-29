@@ -1,6 +1,6 @@
 id: 4
 name: development
-thinking_level: high
+thinking_level: low
 description: |
   Implement all components according to the architecture.
 
@@ -80,9 +80,28 @@ additional_notes: |
   - Commit format (feat:, fix:, chore: prefixes)
   
   ═══════════════════════════════════════════════════════════════════════
-  STEP 2: IMPLEMENT YOUR COMPONENT
+  STEP 2: BREAK LARGE WORK INTO SUBTASKS FIRST
   ═══════════════════════════════════════════════════════════════════════
-  
+
+  If the implementation spans multiple files or >3 distinct components,
+  use hephaestus_create_task to create one subtask per component BEFORE
+  writing any code. Each subtask should cover exactly one file or one
+  logical unit (e.g. "Add Feature class to database.py", "Add run_phase0
+  function to orchestrator.py"). Then implement them one at a time:
+  implement → commit → next.
+
+  LARGE FILE RULE: If a file is >300 lines, never try to write all
+  additions in a single edit. Add one function or class at a time, run
+  tests, then commit before moving to the next addition.
+
+  COMMIT AFTER EACH COMPONENT: `git add -p && git commit` after every
+  logical unit of work. Small commits = recoverable progress if the
+  session is interrupted.
+
+  ═══════════════════════════════════════════════════════════════════════
+  STEP 3: IMPLEMENT YOUR COMPONENT
+  ═══════════════════════════════════════════════════════════════════════
+
   For your assigned component:
   
   1. **Set up project structure** (if infrastructure task)
@@ -110,7 +129,7 @@ additional_notes: |
      - Verify component works as specified
   
   ═══════════════════════════════════════════════════════════════════════
-  STEP 3: CREATE PHASE 4 REVIEW TASKS
+  STEP 4: CREATE PHASE 4 REVIEW TASKS
   ═══════════════════════════════════════════════════════════════════════
   
   After implementing, create tasks for Phase 4 (Adversarial Review):
@@ -119,7 +138,7 @@ additional_notes: |
   - Note any areas of concern
   
   ═══════════════════════════════════════════════════════════════════════
-  STEP 4: SAVE TO MEMORY
+  STEP 5: SAVE TO MEMORY
   ═══════════════════════════════════════════════════════════════════════
   
   Save implementation notes to memory:
