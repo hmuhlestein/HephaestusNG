@@ -2071,8 +2071,13 @@ async def get_project_design_status(project_id: str, filename: str):
         # Also scan filesystem for features matching this design
         # Feature dirs are named like <timestamp>_<design_slug>
         design_slug = filename.replace(".md", "").replace("-", "_").lower()
-        if FEATURES_DIR and Path(FEATURES_DIR).exists():
-            for feature_dir in sorted(Path(FEATURES_DIR).iterdir(), reverse=True):
+        try:
+            effective_features_dir = _get_effective_features_dir()
+        except Exception:
+            effective_features_dir = None
+        if effective_features_dir and Path(effective_features_dir).exists():
+            FEATURES_DIR = effective_features_dir
+            for feature_dir in sorted(Path(effective_features_dir).iterdir(), reverse=True):
                 if not feature_dir.is_dir():
                     continue
                 # Check if this feature dir matches the design
