@@ -50,76 +50,23 @@ class PhaseContext(BaseModel):
     def to_prompt_context(self) -> str:
         """Generate context string for agent prompts."""
         current = self.phase
-        context = f"""
-## WORKFLOW PHASE INFORMATION
-
-### Current Phase: {current.name} (Phase {current.id})
-
-**Description:**
-{current.description}
-
-**Completion Criteria:**
-"""
-        for criterion in current.done_definitions:
-            context += f"- {criterion}\n"
-
-        if current.additional_notes:
-            context += f"\n**Additional Notes:**\n{current.additional_notes}\n"
+        context = f"## PHASE: {current.name} (Phase {current.id} of {len(self.all_phases)})\n"
 
         if current.outputs:
             if isinstance(current.outputs, list):
-                outputs_str = "\n".join(current.outputs)
+                outputs_str = ", ".join(current.outputs)
             else:
                 outputs_str = current.outputs
-            context += f"\n**Expected Outputs:**\n{outputs_str}\n"
+            context += f"Outputs: {outputs_str}\n"
 
-        context += "\n### All Workflow Phases:\n"
+        context += "\nPipeline:\n"
         for phase in self.all_phases:
             status_indicator = "✓" if phase.id < current.id else (
                 "→" if phase.id == current.id else "○"
             )
-            context += f"{status_indicator} Phase {phase.id}: {phase.name}\n"
+            context += f"  {status_indicator} Phase {phase.id}: {phase.name}\n"
 
-        # Add detailed phase summaries for cross-phase awareness
-        context += "\n### Phase Details for Cross-Phase Task Creation:\n\n"
-        for phase in self.all_phases:
-            if phase.id != current.id:  # Skip current phase (already detailed above)
-                context += f"**Phase {phase.id}: {phase.name}**\n"
-                context += f"- Purpose: {phase.description}{'...' if len(phase.description) > 20099 else ''}\n"
-
-                if isinstance(phase.outputs, list):
-                    outputs_display = "\n".join(phase.outputs) if phase.outputs else "Not specified"
-                else:
-                    outputs_display = phase.outputs or "Not specified"
-                context += f"- Key Outputs: {outputs_display}{'...' if outputs_display and len(outputs_display) > 15099 else ''}\n"
-
-                # Show completion criteria for context
-                if phase.done_definitions:
-                    context += "- Main Goals:\n"
-                    for criterion in phase.done_definitions:
-                        context += f"  • {criterion}\n"
-                context += "\n"
-
-        context += """
-### Creating Tasks for Different Phases:
-When creating tasks, ALWAYS specify the phase number: phase=1, phase=2, etc.
-
-**Phase Assignment Guidelines:**
-"""
-        # Provide specific guidance for each phase
-        for phase in self.all_phases:
-            context += f"- **Phase {phase.id}** ({phase.name}): {phase.description[:150]}...\n"
-
-        context += f"""
-**Examples:**
-- create_task(description="Design API endpoints", done_definition="API spec complete", phase=1)
-- create_task(description="Implement user auth", done_definition="Auth working", phase=2)
-
-**Important:** You're currently in Phase {current.id}. You can create tasks for:
-- Your own phase (phase={current.id}) for parallel work
-- Earlier phases (phase < {current.id}) if you discover gaps
-- Later phases (phase > {current.id}) for future work
-"""
+        context += f"\nTask creation: always pass phase=N (e.g. phase={current.id} for this phase).\n"
 
         return context
 
