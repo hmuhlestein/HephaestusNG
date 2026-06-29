@@ -1267,10 +1267,39 @@ class MonitoringLoop:
         if not workflow_status or "error" in workflow_status:
             return
 
-        # Don't advance a paused/failed workflow — it's awaiting human intervention.
-        # (Paused = impasse from MAX_PHASE_ATTEMPTS exhaustion or a manual pause.)
-        # A human Resume sets wf.status back to "active"; only then does progression resume.
+        # Don't advance a paused/failed workflow, unless it auto-recovers.
         wf_db_status = workflow_status.get("workflow_status", "active")
+        if wf_db_status == "paused":
+            # Auto-resume: if the stalled phase now has a done task, un-pause and continue.
+            try:
+                from src.core.database import Workflow, Task as DBTask
+                session_check = self.db_manager.get_session()
+                wf_obj = session_check.query(Workflow).filter_by(
+                    id=self.phase_manager.workflow_id
+                ).first()
+                if wf_obj:
+                    phases_status = workflow_status.get("phases", [])
+                    in_prog = [p for p in phases_status if p["status"] == "in_progress"]
+                    if in_prog:
+                        stalled_phase_id = in_prog[0].get("id")
+                        done_task = session_check.query(DBTask).filter_by(
+                            phase_id=stalled_phase_id, status="done"
+                        ).first()
+                        if done_task:
+                            logger.info(
+                                f"[PHASE-PROGRESSION] Paused workflow has done task in stalled phase "
+                                f"— auto-resuming."
+                            )
+                            wf_obj.status = "active"
+                            session_check.commit()
+                            wf_db_status = "active"
+            except Exception as _e:
+                logger.debug(f"[PHASE-PROGRESSION] Auto-resume check failed: {_e}")
+            finally:
+                try:
+                    session_check.close()
+                except Exception:
+                    pass
         if wf_db_status != "active":
             logger.debug(f"[PHASE-PROGRESSION] Workflow is {wf_db_status} — skipping phase advancement")
             return
