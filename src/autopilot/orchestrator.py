@@ -530,7 +530,21 @@ def is_design_fully_complete(
 
     # Check for unmerged agent branches
     try:
-        project_path = os.getenv("PROJECT_PATH", "/Users/hmuhlestein/code/sotto")
+        # Get project path from workflow's working directory
+        wf_data = get_workflow_status(workflow_id)
+        project_path = wf_data.get("working_directory") or os.getenv("PROJECT_PATH")
+        if not project_path:
+            # Fallback: try to get from DB
+            try:
+                from src.core.database import Workflow, get_db
+                with get_db() as _db:
+                    _wf = _db.query(Workflow).filter_by(id=workflow_id).first()
+                    if _wf and _wf.working_directory:
+                        project_path = _wf.working_directory
+            except Exception:
+                pass
+        if not project_path:
+            return False, "Cannot determine project path for branch check"
         result = subprocess.run(
             ["git", "branch", "--list", "agent-*"],
             capture_output=True,
