@@ -1,22 +1,18 @@
 """Live integration test for the monitoring system with database verification."""
 
 import asyncio
-import sys
 import os
-import time
+import sys
 from datetime import datetime, timedelta
-import json
-from pathlib import Path
 
 # Add parent directory to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.core.database import DatabaseManager, Agent, Task, AgentLog, get_db
 from src.agents.manager import AgentManager
-from src.monitoring.guardian import Guardian
-from src.monitoring.conductor import Conductor
-from src.monitoring.trajectory_context import TrajectoryContext
+from src.core.database import Agent, AgentLog, DatabaseManager, Task, get_db
 from src.interfaces.llm_interface import get_llm_provider
+from src.monitoring.conductor import Conductor
+from src.monitoring.guardian import Guardian
 
 
 async def setup_test_environment():
@@ -40,7 +36,7 @@ async def setup_test_environment():
             done_definition="Authentication endpoints working with tests passing",
             status="in_progress",
             estimated_complexity=8,
-            assigned_agent_id="test-agent-1"
+            assigned_agent_id="test-agent-1",
         )
 
         task2 = Task(
@@ -50,7 +46,7 @@ async def setup_test_environment():
             done_definition="All profile endpoints tested and documented",
             status="in_progress",
             estimated_complexity=6,
-            assigned_agent_id="test-agent-2"
+            assigned_agent_id="test-agent-2",
         )
 
         task3 = Task(
@@ -60,7 +56,7 @@ async def setup_test_environment():
             done_definition="JWT tokens working correctly",
             status="in_progress",
             estimated_complexity=7,
-            assigned_agent_id="test-agent-3"
+            assigned_agent_id="test-agent-3",
         )
 
         db.add_all([task1, task2, task3])
@@ -74,7 +70,7 @@ async def setup_test_environment():
             status="working",
             system_prompt="Build authentication system",
             cli_type="claude",
-            created_at=datetime.utcnow() - timedelta(hours=2)
+            created_at=datetime.utcnow() - timedelta(hours=2),
         )
 
         agent2 = Agent(
@@ -84,7 +80,7 @@ async def setup_test_environment():
             status="working",
             system_prompt="Create user profile management",
             cli_type="claude",
-            created_at=datetime.utcnow() - timedelta(hours=1, minutes=30)
+            created_at=datetime.utcnow() - timedelta(hours=1, minutes=30),
         )
 
         agent3 = Agent(
@@ -94,7 +90,7 @@ async def setup_test_environment():
             status="stuck",  # This one is stuck!
             system_prompt="Implement authentication logic",
             cli_type="claude",
-            created_at=datetime.utcnow() - timedelta(minutes=45)
+            created_at=datetime.utcnow() - timedelta(minutes=45),
         )
 
         db.add_all([agent1, agent2, agent3])
@@ -107,59 +103,57 @@ async def setup_test_environment():
                 agent_id="test-agent-1",
                 log_type="input",
                 message="Build authentication without external frameworks",
-                details={"task_id": "test-task-1"}
+                details={"task_id": "test-task-1"},
             ),
             AgentLog(
                 agent_id="test-agent-1",
                 log_type="output",
                 message="I'll implement JWT authentication from scratch using only standard library",
-                details={}
+                details={},
             ),
             AgentLog(
                 agent_id="test-agent-1",
                 log_type="output",
                 message="Currently implementing the token generation logic",
-                details={}
+                details={},
             ),
-
             # Agent 2 logs
             AgentLog(
                 agent_id="test-agent-2",
                 log_type="input",
                 message="Create user profile CRUD operations with proper validation",
-                details={"task_id": "test-task-2"}
+                details={"task_id": "test-task-2"},
             ),
             AgentLog(
                 agent_id="test-agent-2",
                 log_type="output",
                 message="I'm building the profile endpoints with input validation",
-                details={}
+                details={},
             ),
             AgentLog(
                 agent_id="test-agent-2",
                 log_type="output",
                 message="Working on the UPDATE profile endpoint now",
-                details={}
+                details={},
             ),
-
             # Agent 3 logs (duplicate work)
             AgentLog(
                 agent_id="test-agent-3",
                 log_type="input",
                 message="Implement JWT token handling",
-                details={"task_id": "test-task-3"}
+                details={"task_id": "test-task-3"},
             ),
             AgentLog(
                 agent_id="test-agent-3",
                 log_type="output",
                 message="I'm creating JWT token generation and validation functions",
-                details={}
+                details={},
             ),
             AgentLog(
                 agent_id="test-agent-3",
                 log_type="error",
                 message="Error: Having trouble with token signature validation",
-                details={"error_type": "implementation"}
+                details={"error_type": "implementation"},
             ),
         ]
 
@@ -177,20 +171,13 @@ async def run_monitoring_cycle(db_manager, agent_manager):
     # Initialize monitoring components
     llm_provider = get_llm_provider()
     guardian = Guardian(
-        db_manager=db_manager,
-        agent_manager=agent_manager,
-        llm_provider=llm_provider
+        db_manager=db_manager, agent_manager=agent_manager, llm_provider=llm_provider
     )
-    conductor = Conductor(
-        db_manager=db_manager,
-        agent_manager=agent_manager
-    )
+    conductor = Conductor(db_manager=db_manager, agent_manager=agent_manager)
 
     with get_db() as db:
         # Get all active agents
-        agents = db.query(Agent).filter(
-            Agent.status.in_(["working", "stuck"])
-        ).all()
+        agents = db.query(Agent).filter(Agent.status.in_(["working", "stuck"])).all()
 
         print(f"📊 Found {len(agents)} active agents to monitor")
 
@@ -205,9 +192,7 @@ async def run_monitoring_cycle(db_manager, agent_manager):
             try:
                 # Run Guardian analysis
                 summary = await guardian.analyze_agent_with_trajectory(
-                    agent=agent,
-                    tmux_output=tmux_output,
-                    past_summaries=[]
+                    agent=agent, tmux_output=tmux_output, past_summaries=[]
                 )
 
                 print(f"  - Phase: {summary.get('current_phase', 'unknown')}")
@@ -221,42 +206,60 @@ async def run_monitoring_cycle(db_manager, agent_manager):
                     await guardian.steer_agent(
                         agent=agent,
                         steering_type=summary.get("steering_type", "guidance"),
-                        message=summary.get("steering_message", "Please review your approach")
+                        message=summary.get(
+                            "steering_message", "Please review your approach"
+                        ),
                     )
 
                 guardian_summaries.append(summary)
 
             except Exception as e:
                 print(f"  ❌ Guardian analysis failed: {e}")
-                guardian_summaries.append({
-                    "agent_id": agent.id,
-                    "error": str(e),
-                    "trajectory_aligned": True,  # Safe default
-                    "needs_steering": False
-                })
+                guardian_summaries.append(
+                    {
+                        "agent_id": agent.id,
+                        "error": str(e),
+                        "trajectory_aligned": True,  # Safe default
+                        "needs_steering": False,
+                    }
+                )
 
         # Conductor system analysis
         if len(guardian_summaries) > 1:
-            print(f"\n🎼 Conductor analyzing system with {len(guardian_summaries)} agents...")
+            print(
+                f"\n🎼 Conductor analyzing system with {len(guardian_summaries)} agents..."
+            )
 
             try:
-                system_analysis = await conductor.analyze_system_state(guardian_summaries)
+                system_analysis = await conductor.analyze_system_state(
+                    guardian_summaries
+                )
 
-                print(f"  - System coherence: {system_analysis['coherence']['score']:.2f}")
-                print(f"  - Duplicates found: {len(system_analysis.get('duplicates', []))}")
-                print(f"  - Decisions to execute: {len(system_analysis.get('decisions', []))}")
+                print(
+                    f"  - System coherence: {system_analysis['coherence']['score']:.2f}"
+                )
+                print(
+                    f"  - Duplicates found: {len(system_analysis.get('duplicates', []))}"
+                )
+                print(
+                    f"  - Decisions to execute: {len(system_analysis.get('decisions', []))}"
+                )
 
                 # Show duplicates if found
-                for dup in system_analysis.get('duplicates', []):
-                    print(f"  ⚠️ Duplicate: {dup['agent1']} and {dup['agent2']} - {dup['work']}")
+                for dup in system_analysis.get("duplicates", []):
+                    print(
+                        f"  ⚠️ Duplicate: {dup['agent1']} and {dup['agent2']} - {dup['work']}"
+                    )
 
                 # Execute decisions
-                if system_analysis.get('decisions'):
+                if system_analysis.get("decisions"):
                     print("\n📋 Executing Conductor decisions...")
-                    await conductor.execute_decisions(system_analysis['decisions'])
+                    await conductor.execute_decisions(system_analysis["decisions"])
 
-                    for decision in system_analysis['decisions']:
-                        print(f"  - {decision['type']}: {decision.get('target', decision.get('reason', ''))}")
+                    for decision in system_analysis["decisions"]:
+                        print(
+                            f"  - {decision['type']}: {decision.get('target', decision.get('reason', ''))}"
+                        )
 
                 # Generate and save report
                 report = await conductor.generate_detailed_report(system_analysis)
@@ -277,27 +280,23 @@ async def verify_database_logs():
 
     with get_db() as db:
         # Check Guardian steering logs
-        steering_logs = db.query(AgentLog).filter(
-            AgentLog.log_type == "steering"
-        ).all()
+        steering_logs = db.query(AgentLog).filter(AgentLog.log_type == "steering").all()
         print(f"  - Steering interventions logged: {len(steering_logs)}")
 
         # Check Guardian analysis logs
-        analysis_logs = db.query(AgentLog).filter(
-            AgentLog.log_type == "analysis"
-        ).all()
+        analysis_logs = db.query(AgentLog).filter(AgentLog.log_type == "analysis").all()
         print(f"  - Guardian analyses logged: {len(analysis_logs)}")
 
         # Check Conductor decision logs
-        conductor_logs = db.query(AgentLog).filter(
-            AgentLog.log_type == "conductor_decision"
-        ).all()
+        conductor_logs = (
+            db.query(AgentLog).filter(AgentLog.log_type == "conductor_decision").all()
+        )
         print(f"  - Conductor decisions logged: {len(conductor_logs)}")
 
         # Check for termination logs
-        termination_logs = db.query(AgentLog).filter(
-            AgentLog.log_type == "termination"
-        ).all()
+        termination_logs = (
+            db.query(AgentLog).filter(AgentLog.log_type == "termination").all()
+        )
         print(f"  - Agent terminations logged: {len(termination_logs)}")
 
         # Show sample logs
@@ -375,6 +374,7 @@ async def main():
     except Exception as e:
         print(f"\n❌ Integration test failed: {e}")
         import traceback
+
         traceback.print_exc()
         sys.exit(1)
 
@@ -382,24 +382,28 @@ async def main():
 if __name__ == "__main__":
     # Run with real LLM if available, otherwise mock
     import os
+
     if not os.getenv("OPENAI_API_KEY") and not os.getenv("ANTHROPIC_API_KEY"):
         print("⚠️ No LLM API keys found, using mock responses")
 
         # Mock the LLM provider for testing
         from unittest.mock import AsyncMock
+
         import src.interfaces.llm_interface as llm_interface
 
         mock_provider = AsyncMock()
-        mock_provider.analyze_agent_trajectory = AsyncMock(return_value={
-            "current_phase": "implementation",
-            "trajectory_aligned": True,
-            "alignment_score": 0.8,
-            "alignment_issues": [],
-            "needs_steering": False,
-            "steering_type": None,
-            "steering_recommendation": None,
-            "trajectory_summary": "Agent working on task successfully"
-        })
+        mock_provider.analyze_agent_trajectory = AsyncMock(
+            return_value={
+                "current_phase": "implementation",
+                "trajectory_aligned": True,
+                "alignment_score": 0.8,
+                "alignment_issues": [],
+                "needs_steering": False,
+                "steering_type": None,
+                "steering_recommendation": None,
+                "trajectory_summary": "Agent working on task successfully",
+            }
+        )
 
         # Make agent 3 need steering (it has errors)
         def trajectory_side_effect(*args, **kwargs):
@@ -412,32 +416,34 @@ if __name__ == "__main__":
                     "needs_steering": True,
                     "steering_type": "stuck",
                     "steering_recommendation": "Check token signature algorithm",
-                    "trajectory_summary": "Agent stuck on JWT validation error"
+                    "trajectory_summary": "Agent stuck on JWT validation error",
                 }
             return mock_provider.analyze_agent_trajectory.return_value
 
         mock_provider.analyze_agent_trajectory.side_effect = trajectory_side_effect
 
-        mock_provider.analyze_system_coherence = AsyncMock(return_value={
-            "coherence_score": 0.6,
-            "duplicates": [
-                {
-                    "agent1": "test-agent-1",
-                    "agent2": "test-agent-3",
-                    "similarity": 0.85,
-                    "work": "Both implementing JWT authentication"
-                }
-            ],
-            "alignment_issues": ["Two agents working on authentication"],
-            "termination_recommendations": [
-                {
-                    "agent_id": "test-agent-3",
-                    "reason": "Duplicate with test-agent-1 who started earlier"
-                }
-            ],
-            "coordination_needs": [],
-            "system_summary": "System has duplicate work on authentication needing resolution"
-        })
+        mock_provider.analyze_system_coherence = AsyncMock(
+            return_value={
+                "coherence_score": 0.6,
+                "duplicates": [
+                    {
+                        "agent1": "test-agent-1",
+                        "agent2": "test-agent-3",
+                        "similarity": 0.85,
+                        "work": "Both implementing JWT authentication",
+                    }
+                ],
+                "alignment_issues": ["Two agents working on authentication"],
+                "termination_recommendations": [
+                    {
+                        "agent_id": "test-agent-3",
+                        "reason": "Duplicate with test-agent-1 who started earlier",
+                    }
+                ],
+                "coordination_needs": [],
+                "system_summary": "System has duplicate work on authentication needing resolution",
+            }
+        )
 
         llm_interface.get_llm_provider = lambda: mock_provider
 

@@ -8,10 +8,10 @@
 - discard-on-failure removes the worktree+branch, leaving main clean
 """
 
-import sys
-import uuid
-import tempfile
 import shutil
+import sys
+import tempfile
+import uuid
 from pathlib import Path
 
 sys.path.append(str(Path(__file__).parent.parent))
@@ -19,7 +19,7 @@ sys.path.append(str(Path(__file__).parent.parent))
 import pytest
 from git import Repo
 
-from src.core.database import DatabaseManager, Agent
+from src.core.database import Agent, DatabaseManager
 from src.core.worktree_manager import WorktreeManager
 
 
@@ -50,6 +50,7 @@ def test_db():
 @pytest.fixture
 def manager(test_db, temp_repo, monkeypatch):
     import src.core.simple_config
+
     config = src.core.simple_config.Config()
     config.main_repo_path = Path(temp_repo.working_dir)
     config.project_root = Path(temp_repo.working_dir)
@@ -66,7 +67,9 @@ def manager(test_db, temp_repo, monkeypatch):
 
 def _make_agent(test_db, agent_id):
     session = test_db.get_session()
-    session.add(Agent(id=agent_id, system_prompt="t", status="working", cli_type="test"))
+    session.add(
+        Agent(id=agent_id, system_prompt="t", status="working", cli_type="test")
+    )
     session.commit()
     session.close()
 
@@ -138,7 +141,7 @@ def test_discard_on_failure_leaves_main_clean(manager, test_db, temp_repo):
 
     assert disc["status"] == "cleaned"
     assert disc["branch_preserved"] is False
-    assert not wt_path.exists()                      # worktree gone
+    assert not wt_path.exists()  # worktree gone
     assert branch not in [b.name for b in temp_repo.branches]  # branch gone
     assert "broken.py" not in temp_repo.git.ls_files().splitlines()  # main clean
 

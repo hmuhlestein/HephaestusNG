@@ -1,13 +1,19 @@
-"""Validation check type executors."""
+"""Validation check type executors.
 
-from enum import Enum
-from typing import Dict, Any
+SECURITY: This module executes validation commands and checks file operations.
+All subprocess calls use shell=False with argument lists to prevent command injection.
+"""
+
+import shlex
 import subprocess
+from enum import Enum
 from pathlib import Path
+from typing import Any, Dict, Optional
 
 
 class ValidationCheckType(Enum):
     """Types of validation checks."""
+
     FILE_EXISTS = "file_exists"
     FILE_CONTAINS = "file_contains"
     COMMAND_SUCCESS = "command_success"
@@ -17,10 +23,56 @@ class ValidationCheckType(Enum):
     PERFORMANCE_METRIC = "performance_metric"
 
 
+# SECURITY: Patterns that indicate dangerous commands
+DANGEROUS_PATTERNS = [
+    ";",
+    "&&",
+    "||",
+    "|",
+    "$(",
+    "`",
+    "${",
+    "rm -rf",
+    "mkfs",
+    "dd if=",
+    "/etc/passwd",
+    "/etc/shadow",
+    "sudo",
+    "su -",
+    "chmod 777",
+    "eval ",
+    "exec ",
+    "curl |",
+    "wget |",
+    "python -c",
+    "python3 -c",
+]
+
+
+def _validate_command_safety(command: str) -> Optional[str]:
+    """Validate that a command doesn't contain dangerous patterns.
+
+    Args:
+        command: Command string to validate
+
+    Returns:
+        Error message if dangerous, None if safe
+    """
+    command_lower = command.lower().strip()
+
+    for pattern in DANGEROUS_PATTERNS:
+        if pattern in command_lower:
+            return f"Command rejected: contains dangerous pattern '{pattern}'"
+
+    # Additional checks
+    if not command.strip():
+        return "Empty command"
+
+    return None
+
+
 def execute_validation_check(
-    check_type: ValidationCheckType,
-    criterion: Dict[str, Any],
-    working_directory: str
+    check_type: ValidationCheckType, criterion: Dict[str, Any], working_directory: str
 ) -> Dict[str, Any]:
     """Execute a validation check based on its type.
 
@@ -48,28 +100,28 @@ def execute_validation_check(
         return {
             "passed": None,  # Validator must determine
             "evidence": "Manual verification required",
-            "requires_manual": True
+            "requires_manual": True,
         }
 
     elif check_type == ValidationCheckType.CODE_REVIEW:
         return {
             "passed": None,  # Validator must determine
             "evidence": f"Code review required for areas: {criterion.get('focus_areas', [])}",
-            "requires_manual": True
+            "requires_manual": True,
         }
 
     elif check_type == ValidationCheckType.PERFORMANCE_METRIC:
         return {
             "passed": None,  # Validator must measure
             "evidence": f"Performance metric check: {criterion.get('metric', 'unknown')}",
-            "requires_manual": True
+            "requires_manual": True,
         }
 
     else:
         return {
             "passed": None,
             "evidence": f"Unknown check type: {check_type}",
-            "error": True
+            "error": True,
         }
 
 
@@ -91,7 +143,13 @@ def _check_file_exists(criterion: Dict[str, Any], working_dir: str) -> Dict[str,
     all_exist = True
 
     for target in targets:
-        file_path = Path(working_dir) / target
+        # SECURITY: Validate target path doesn't escape working directory
+        file_path = (Path(working_dir) / target).resolve()
+        if not str(file_path).startswith(str(Path(working_dir).resolve())):
+            results.append(f"{target}: PATH TRAVERSAL BLOCKED")
+            all_exist = False
+            continue
+
         exists = file_path.exists()
         results.append(f"{target}: {'EXISTS' if exists else 'MISSING'}")
         if not exists:
@@ -100,7 +158,7 @@ def _check_file_exists(criterion: Dict[str, Any], working_dir: str) -> Dict[str,
     return {
         "passed": all_exist,
         "evidence": "\n".join(results),
-        "files_checked": targets
+        "files_checked": targets,
     }
 
 
@@ -119,13 +177,21 @@ def _check_file_contains(criterion: Dict[str, Any], working_dir: str) -> Dict[st
     if isinstance(patterns, str):
         patterns = [patterns]
 
-    file_path = Path(working_dir) / target
+    # SECURITY: Validate target path doesn't escape working directory
+    file_path = (Path(working_dir) / target).resolve()
+    if not str(file_path).startswith(str(Path(working_dir).resolve())):
+        return {
+            "passed": False,
+            "evidence": f"Path traversal blocked for: {target}",
+            "error": True,
+            "security_rejection": True,
+        }
 
     if not file_path.exists():
         return {
             "passed": False,
             "evidence": f"File {target} does not exist",
-            "error": True
+            "error": True,
         }
 
     try:
@@ -142,19 +208,24 @@ def _check_file_contains(criterion: Dict[str, Any], working_dir: str) -> Dict[st
         return {
             "passed": all_found,
             "evidence": "\n".join(results),
-            "patterns_checked": patterns
+            "patterns_checked": patterns,
         }
 
     except Exception as e:
         return {
             "passed": False,
             "evidence": f"Error reading file: {str(e)}",
-            "error": True
+            "error": True,
         }
 
 
-def _check_command_success(criterion: Dict[str, Any], working_dir: str) -> Dict[str, Any]:
+def _check_command_success(
+    criterion: Dict[str, Any], working_dir: str
+) -> Dict[str, Any]:
     """Check if command executes successfully.
+
+    SECURITY: Uses shell=False with argument list to prevent command injection.
+    Commands are validated against dangerous patterns before execution.
 
     Args:
         criterion: Check criterion with 'command' field
@@ -165,20 +236,36 @@ def _check_command_success(criterion: Dict[str, Any], working_dir: str) -> Dict[
     """
     command = criterion.get("command", "")
     if not command:
+        return {"passed": False, "evidence": "No command specified", "error": True}
+
+    # SECURITY: Validate command safety
+    safety_error = _validate_command_safety(command)
+    if safety_error:
         return {
             "passed": False,
-            "evidence": "No command specified",
-            "error": True
+            "evidence": safety_error,
+            "error": True,
+            "security_rejection": True,
         }
 
     try:
+        # SECURITY: Use shell=False with argument list (shlex.split)
+        cmd_args = shlex.split(command)
+
+        if not cmd_args:
+            return {
+                "passed": False,
+                "evidence": "Empty command after parsing",
+                "error": True,
+            }
+
         result = subprocess.run(
-            command,
-            shell=True,
+            cmd_args,
+            shell=False,  # SECURITY: Never use shell=True
             cwd=working_dir,
             capture_output=True,
             text=True,
-            timeout=30
+            timeout=30,
         )
 
         passed = result.returncode == 0
@@ -186,26 +273,29 @@ def _check_command_success(criterion: Dict[str, Any], working_dir: str) -> Dict[
         return {
             "passed": passed,
             "evidence": f"Command: {command}\nExit Code: {result.returncode}\nOutput: {result.stdout}\nError: {result.stderr}",
-            "exit_code": result.returncode
+            "exit_code": result.returncode,
         }
 
     except subprocess.TimeoutExpired:
         return {
             "passed": False,
             "evidence": f"Command timed out after 30 seconds: {command}",
-            "error": True
+            "error": True,
         }
 
     except Exception as e:
         return {
             "passed": False,
             "evidence": f"Error running command: {str(e)}",
-            "error": True
+            "error": True,
         }
 
 
 def _check_test_pass(criterion: Dict[str, Any], working_dir: str) -> Dict[str, Any]:
     """Check if tests pass.
+
+    SECURITY: Uses shell=False with argument list to prevent command injection.
+    Test commands are validated against dangerous patterns before execution.
 
     Args:
         criterion: Check criterion with 'command' field
@@ -214,23 +304,38 @@ def _check_test_pass(criterion: Dict[str, Any], working_dir: str) -> Dict[str, A
     Returns:
         Check result
     """
-    # Similar to command_success but with test-specific handling
     test_command = criterion.get("command", "")
     if not test_command:
+        return {"passed": False, "evidence": "No test command specified", "error": True}
+
+    # SECURITY: Validate command safety
+    safety_error = _validate_command_safety(test_command)
+    if safety_error:
         return {
             "passed": False,
-            "evidence": "No test command specified",
-            "error": True
+            "evidence": f"Test command rejected: {safety_error}",
+            "error": True,
+            "security_rejection": True,
         }
 
     try:
+        # SECURITY: Use shell=False with argument list (shlex.split)
+        cmd_args = shlex.split(test_command)
+
+        if not cmd_args:
+            return {
+                "passed": False,
+                "evidence": "Empty command after parsing",
+                "error": True,
+            }
+
         result = subprocess.run(
-            test_command,
-            shell=True,
+            cmd_args,
+            shell=False,  # SECURITY: Never use shell=True
             cwd=working_dir,
             capture_output=True,
             text=True,
-            timeout=120  # Tests may take longer
+            timeout=120,  # Tests may take longer
         )
 
         passed = result.returncode == 0
@@ -243,21 +348,21 @@ def _check_test_pass(criterion: Dict[str, Any], working_dir: str) -> Dict[str, A
             "passed": passed,
             "evidence": f"Test Command: {test_command}\nExit Code: {result.returncode}\n{test_summary}\nFull Output:\n{output[:2000]}",
             "exit_code": result.returncode,
-            "test_summary": test_summary
+            "test_summary": test_summary,
         }
 
     except subprocess.TimeoutExpired:
         return {
             "passed": False,
             "evidence": f"Tests timed out after 120 seconds: {test_command}",
-            "error": True
+            "error": True,
         }
 
     except Exception as e:
         return {
             "passed": False,
             "evidence": f"Error running tests: {str(e)}",
-            "error": True
+            "error": True,
         }
 
 
@@ -265,30 +370,28 @@ def _extract_test_summary(output: str) -> str:
     """Extract test summary from output.
 
     Args:
-        output: Test output
+        output: Test output string
 
     Returns:
         Summary string
     """
-    # Look for common test result patterns
-    lines = output.split("\n")
-    summary_lines = []
+    lines = output.strip().split("\n")
 
-    for line in lines:
-        # Pytest patterns
-        if "passed" in line.lower() or "failed" in line.lower() or "error" in line.lower():
-            if any(keyword in line.lower() for keyword in ["test", "tests", "passed", "failed", "error", "ok"]):
-                summary_lines.append(line.strip())
+    # Common test framework patterns
+    for line in reversed(lines):
+        # pytest summary
+        if "passed" in line and "failed" in line:
+            return line.strip()
+        # Jest summary
+        if "Tests:" in line:
+            return line.strip()
+        # Generic test count
+        if any(x in line.lower() for x in ["test", "spec", "assertion"]):
+            return line.strip()
 
-        # Jest/npm test patterns
-        if "test suites" in line.lower() or "tests passed" in line.lower():
-            summary_lines.append(line.strip())
+    # Return last non-empty line as fallback
+    for line in reversed(lines):
+        if line.strip():
+            return line.strip()
 
-        # Go test patterns
-        if line.startswith("PASS") or line.startswith("FAIL") or "ok\t" in line or "FAIL\t" in line:
-            summary_lines.append(line.strip())
-
-    if summary_lines:
-        return "Test Summary:\n" + "\n".join(summary_lines[:10])  # Limit to 10 lines
-    else:
-        return "No test summary found in output"
+    return "No summary found"

@@ -2,9 +2,10 @@
 
 import json
 import sys
-import httpx
 from pathlib import Path
-from typing import Optional, Dict, Any, List
+from typing import Any, Dict, List, Optional
+
+import httpx
 
 from src.core.constants import HEPHAESTUS_PIDS_DIR
 
@@ -24,7 +25,9 @@ def api_get(args, endpoint: str, timeout: int = 5) -> Optional[Dict]:
         return {"error": str(e)}
 
 
-def api_post(args, endpoint: str, data: dict = None, timeout: int = 10) -> Optional[Dict]:
+def api_post(
+    args, endpoint: str, data: dict = None, timeout: int = 10
+) -> Optional[Dict]:
     """POST request to the Hephaestus API."""
     try:
         r = httpx.post(f"{args.api_base}{endpoint}", json=data or {}, timeout=timeout)
@@ -73,9 +76,15 @@ def require_backend(args) -> bool:
     """Require backend to be running, print error if not."""
     if not check_backend(args):
         if args.json:
-            print(json.dumps({"error": "Backend not running", "hint": "Run 'heph start' first"}))
+            print(
+                json.dumps(
+                    {"error": "Backend not running", "hint": "Run 'heph start' first"}
+                )
+            )
         else:
-            print("Error: Backend not running. Run 'heph start' first.", file=sys.stderr)
+            print(
+                "Error: Backend not running. Run 'heph start' first.", file=sys.stderr
+            )
         return False
     return True
 
@@ -107,6 +116,7 @@ def remove_pid(name: str):
 def is_process_running(pid: int) -> bool:
     """Check if a process with the given PID is running."""
     import os
+
     try:
         os.kill(pid, 0)
         return True
@@ -117,10 +127,10 @@ def is_process_running(pid: int) -> bool:
 def is_monitor_running() -> bool:
     """Check if a monitor process is actually running (not just a reused PID)."""
     import subprocess
+
     try:
         result = subprocess.run(
-            ["pgrep", "-f", "run_monitor.py"],
-            capture_output=True, text=True, timeout=5
+            ["pgrep", "-f", "run_monitor.py"], capture_output=True, text=True, timeout=5
         )
         return result.returncode == 0
     except Exception:
@@ -130,10 +140,10 @@ def is_monitor_running() -> bool:
 def is_backend_running() -> bool:
     """Check if a backend process is actually running (not just a reused PID)."""
     import subprocess
+
     try:
         result = subprocess.run(
-            ["pgrep", "-f", "run_server.py"],
-            capture_output=True, text=True, timeout=5
+            ["pgrep", "-f", "run_server.py"], capture_output=True, text=True, timeout=5
         )
         return result.returncode == 0
     except Exception:
@@ -172,7 +182,15 @@ def table(headers: List[str], rows: List[List[str]], indent: int = 0):
 def status_icon(status: str) -> str:
     """Return a text icon for a status."""
     status = (status or "").lower()
-    if status in ("done", "completed", "healthy", "running", "pass", "passed", "validated"):
+    if status in (
+        "done",
+        "completed",
+        "healthy",
+        "running",
+        "pass",
+        "passed",
+        "validated",
+    ):
         return "OK"
     elif status in ("failed", "error", "crashed", "unhealthy"):
         return "FAIL"
@@ -188,6 +206,7 @@ def time_ago(iso_str: str) -> str:
         return "never"
     try:
         from datetime import datetime, timezone
+
         dt = datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
         now = datetime.now(timezone.utc)
         diff = (now - dt).total_seconds()

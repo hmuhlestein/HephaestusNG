@@ -15,41 +15,29 @@ WARNING: This test is destructive! It will:
 - Clean git branches
 """
 
-import asyncio
-import json
 import logging
 import os
 import shutil
 import subprocess
 import sys
-import tempfile
 import time
 import uuid
-from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Any
-from unittest.mock import Mock, patch
+from typing import Any, Dict, List, Optional
+from unittest.mock import patch
 
-import pytest
 import requests
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
 
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from src.core.database import (
-    DatabaseManager,
-    Base,
-    Task,
     Agent,
+    DatabaseManager,
     Phase,
-    ValidationReview,
+    Task,
     Workflow,
-    Memory,
-    AgentWorktree,
 )
-from src.core.simple_config import Config
 from src.interfaces.llm_interface import LLMProviderInterface
 
 # Configure logging
@@ -71,7 +59,9 @@ class MockLLMProvider(LLMProviderInterface):
         self.call_count = 0
         self.responses = {}
 
-    async def generate_agent_prompt(self, task: Dict, memories: List, project_context: str) -> str:
+    async def generate_agent_prompt(
+        self, task: Dict, memories: List, project_context: str
+    ) -> str:
         """Generate a test prompt."""
         self.call_count += 1
         return f"Test prompt for task {task.get('id', 'unknown')}. Complete the task and update status."
@@ -85,14 +75,11 @@ class MockLLMProvider(LLMProviderInterface):
     ) -> Dict[str, Any]:
         """Return enhanced task data."""
         return {
-            "specifications": [
-                "Test specification 1",
-                "Test specification 2"
-            ],
+            "specifications": ["Test specification 1", "Test specification 2"],
             "estimated_complexity": 3,
             "suggested_approach": "Test approach",
             "potential_challenges": ["Test challenge"],
-            "relevant_files": []
+            "relevant_files": [],
         }
 
     async def analyze_stuck_agent(self, agent_context: Dict) -> Dict[str, Any]:
@@ -101,7 +88,7 @@ class MockLLMProvider(LLMProviderInterface):
             "likely_issue": "Test issue",
             "suggested_intervention": "restart",
             "confidence": 0.8,
-            "reasoning": "Test reasoning"
+            "reasoning": "Test reasoning",
         }
 
     async def generate_intervention_message(
@@ -224,7 +211,7 @@ class HephaestusIntegrationTest:
         result = subprocess.run(
             ["tmux", "list-sessions", "-F", "#{session_name}"],
             capture_output=True,
-            text=True
+            text=True,
         )
         if result.returncode == 0:
             for session in result.stdout.strip().split("\n"):
@@ -263,9 +250,7 @@ class HephaestusIntegrationTest:
 
         # Run init script
         result = subprocess.run(
-            [sys.executable, "scripts/init_db.py"],
-            capture_output=True,
-            text=True
+            [sys.executable, "scripts/init_db.py"], capture_output=True, text=True
         )
         if result.returncode != 0:
             logger.error(f"Database init failed: {result.stderr}")
@@ -282,22 +267,24 @@ class HephaestusIntegrationTest:
 
         # Set test environment variables
         env = os.environ.copy()
-        env.update({
-            "DATABASE_PATH": "./hephaestus_test.db",
-            "MCP_PORT": "8300",
-            "MONITORING_INTERVAL_SECONDS": "5",
-            "LLM_PROVIDER": "openai",  # Will be mocked
-            "OPENAI_API_KEY": "test-key",
-            "WORKTREE_BASE_PATH": "./worktrees",
-            "MAIN_REPO_PATH": str(Path.cwd()),
-        })
+        env.update(
+            {
+                "DATABASE_PATH": "./hephaestus_test.db",
+                "MCP_PORT": "8300",
+                "MONITORING_INTERVAL_SECONDS": "5",
+                "LLM_PROVIDER": "openai",  # Will be mocked
+                "OPENAI_API_KEY": "test-key",
+                "WORKTREE_BASE_PATH": "./worktrees",
+                "MAIN_REPO_PATH": str(Path.cwd()),
+            }
+        )
 
         # Start MCP server
         self.server_process = subprocess.Popen(
             [sys.executable, "run_server.py"],
             env=env,
             stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE
+            stderr=subprocess.PIPE,
         )
         logger.info("Started MCP server")
 
@@ -309,7 +296,7 @@ class HephaestusIntegrationTest:
             [sys.executable, "run_monitor.py"],
             env=env,
             stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE
+            stderr=subprocess.PIPE,
         )
         logger.info("Started monitor")
 
@@ -337,7 +324,7 @@ class HephaestusIntegrationTest:
         result = subprocess.run(
             ["tmux", "list-sessions", "-F", "#{session_name}"],
             capture_output=True,
-            text=True
+            text=True,
         )
         if result.returncode == 0:
             for session in result.stdout.strip().split("\n"):
@@ -353,27 +340,20 @@ class HephaestusIntegrationTest:
                     # Remove from git
                     subprocess.run(
                         ["git", "worktree", "remove", str(worktree), "--force"],
-                        capture_output=True
+                        capture_output=True,
                     )
 
         # Clean up test branches
-        result = subprocess.run(
-            ["git", "branch", "-a"],
-            capture_output=True,
-            text=True
-        )
+        result = subprocess.run(["git", "branch", "-a"], capture_output=True, text=True)
         if result.returncode == 0:
             for line in result.stdout.split("\n"):
                 if "agent-" in line or "test-" in line:
                     branch = line.strip().replace("*", "").strip()
-                    subprocess.run(
-                        ["git", "branch", "-D", branch],
-                        capture_output=True
-                    )
+                    subprocess.run(["git", "branch", "-D", branch], capture_output=True)
 
     # ========== Test Scenarios ==========
 
-    @patch('src.interfaces.llm_interface.get_llm_provider')
+    @patch("src.interfaces.llm_interface.get_llm_provider")
     def test_basic_agent_task_completion(self, mock_get_llm):
         """Test Scenario 1: Basic agent completes a task without validation."""
         logger.info("\n" + "=" * 80)
@@ -391,9 +371,9 @@ class HephaestusIntegrationTest:
             json={
                 "task_description": "Create a test file",
                 "done_definition": "test.txt exists",
-                "ai_agent_id": "test-agent"
+                "ai_agent_id": "test-agent",
             },
-            headers={"X-Agent-ID": "test-agent"}
+            headers={"X-Agent-ID": "test-agent"},
         )
         assert response.status_code == 200
         task_data = response.json()
@@ -417,12 +397,14 @@ class HephaestusIntegrationTest:
                 "task_id": task_id,
                 "status": "done",
                 "summary": "Created test file",
-                "key_learnings": []
+                "key_learnings": [],
             },
-            headers={"X-Agent-ID": agent_id}
+            headers={"X-Agent-ID": agent_id},
         )
         if response.status_code != 200:
-            logger.error(f"Update task status failed: {response.status_code} - {response.text}")
+            logger.error(
+                f"Update task status failed: {response.status_code} - {response.text}"
+            )
         assert response.status_code == 200
 
         # 6. Verify task completed
@@ -438,7 +420,7 @@ class HephaestusIntegrationTest:
 
         logger.info("✅ Scenario 1 PASSED")
 
-    @patch('src.interfaces.llm_interface.get_llm_provider')
+    @patch("src.interfaces.llm_interface.get_llm_provider")
     def test_validation_single_pass(self, mock_get_llm):
         """Test Scenario 2: Task with validation that passes on first try."""
         logger.info("\n" + "=" * 80)
@@ -458,9 +440,9 @@ class HephaestusIntegrationTest:
                 "task_description": "Create validated test file",
                 "done_definition": "test.txt exists with content",
                 "ai_agent_id": "test-agent",
-                "phase": 1
+                "phase": 1,
             },
-            headers={"X-Agent-ID": "test-agent"}
+            headers={"X-Agent-ID": "test-agent"},
         )
         assert response.status_code == 200
         task_id = response.json()["task_id"]
@@ -481,12 +463,14 @@ class HephaestusIntegrationTest:
                 "task_id": task_id,
                 "status": "done",
                 "summary": "Created test file with content",
-                "key_learnings": []
+                "key_learnings": [],
             },
-            headers={"X-Agent-ID": agent_id}
+            headers={"X-Agent-ID": agent_id},
         )
         if response.status_code != 200:
-            logger.error(f"Update task status failed (validation test): {response.status_code} - {response.text}")
+            logger.error(
+                f"Update task status failed (validation test): {response.status_code} - {response.text}"
+            )
         assert response.status_code == 200
 
         # 6. Verify validation triggered
@@ -507,9 +491,9 @@ class HephaestusIntegrationTest:
                 "validator_agent_id": validator_id,
                 "validation_passed": True,
                 "feedback": "All checks passed",
-                "evidence": [{"check": "file_exists", "result": "passed"}]
+                "evidence": [{"check": "file_exists", "result": "passed"}],
             },
-            headers={"X-Agent-ID": validator_id}
+            headers={"X-Agent-ID": validator_id},
         )
         assert response.status_code == 200
 
@@ -521,7 +505,7 @@ class HephaestusIntegrationTest:
 
         logger.info("✅ Scenario 2 PASSED")
 
-    @patch('src.interfaces.llm_interface.get_llm_provider')
+    @patch("src.interfaces.llm_interface.get_llm_provider")
     def test_validation_with_feedback_loop(self, mock_get_llm):
         """Test Scenario 3: Validation fails first, succeeds after fix."""
         logger.info("\n" + "=" * 80)
@@ -540,9 +524,9 @@ class HephaestusIntegrationTest:
                 "task_description": "Create file with tests",
                 "done_definition": "File and tests exist",
                 "ai_agent_id": "test-agent",
-                "phase": 1
+                "phase": 1,
             },
-            headers={"X-Agent-ID": "test-agent"}
+            headers={"X-Agent-ID": "test-agent"},
         )
         task_id = response.json()["task_id"]
         self._enable_task_validation(task_id)
@@ -553,8 +537,13 @@ class HephaestusIntegrationTest:
 
         response = requests.post(
             f"{self.base_url}/update_task_status",
-            json={"task_id": task_id, "status": "done", "summary": "Created main.py", "key_learnings": []},
-            headers={"X-Agent-ID": agent_id}
+            json={
+                "task_id": task_id,
+                "status": "done",
+                "summary": "Created main.py",
+                "key_learnings": [],
+            },
+            headers={"X-Agent-ID": agent_id},
         )
 
         # 3. Validator fails
@@ -566,9 +555,9 @@ class HephaestusIntegrationTest:
                 "validator_agent_id": validator_id,
                 "validation_passed": False,
                 "feedback": "Missing test file - please add test.py",
-                "evidence": [{"check": "test_file", "result": "missing"}]
+                "evidence": [{"check": "test_file", "result": "missing"}],
             },
-            headers={"X-Agent-ID": validator_id}
+            headers={"X-Agent-ID": validator_id},
         )
 
         # 4. Verify agent receives feedback
@@ -584,8 +573,13 @@ class HephaestusIntegrationTest:
         # 6. Agent tries again
         response = requests.post(
             f"{self.base_url}/update_task_status",
-            json={"task_id": task_id, "status": "done", "summary": "Added tests", "key_learnings": []},
-            headers={"X-Agent-ID": agent_id}
+            json={
+                "task_id": task_id,
+                "status": "done",
+                "summary": "Added tests",
+                "key_learnings": [],
+            },
+            headers={"X-Agent-ID": agent_id},
         )
 
         # 7. New validator passes
@@ -597,9 +591,9 @@ class HephaestusIntegrationTest:
                 "validator_agent_id": validator_id_2,
                 "validation_passed": True,
                 "feedback": "Tests now present",
-                "evidence": [{"check": "test_file", "result": "passed"}]
+                "evidence": [{"check": "test_file", "result": "passed"}],
             },
-            headers={"X-Agent-ID": validator_id_2}
+            headers={"X-Agent-ID": validator_id_2},
         )
 
         # 8. Verify completion
@@ -610,7 +604,7 @@ class HephaestusIntegrationTest:
 
         logger.info("✅ Scenario 3 PASSED")
 
-    @patch('src.interfaces.llm_interface.get_llm_provider')
+    @patch("src.interfaces.llm_interface.get_llm_provider")
     def test_parallel_agents_isolation(self, mock_get_llm):
         """Test Scenario 4: Multiple agents work in parallel without interference."""
         logger.info("\n" + "=" * 80)
@@ -630,9 +624,9 @@ class HephaestusIntegrationTest:
                 json={
                     "task_description": f"Create file{i}.txt",
                     "done_definition": f"file{i}.txt exists",
-                    "ai_agent_id": f"test-agent-{i}"
+                    "ai_agent_id": f"test-agent-{i}",
                 },
-                headers={"X-Agent-ID": f"test-agent-{i}"}
+                headers={"X-Agent-ID": f"test-agent-{i}"},
             )
             task_ids.append(response.json()["task_id"])
             logger.info(f"Created task {i}: {task_ids[i]}")
@@ -665,9 +659,9 @@ class HephaestusIntegrationTest:
                     "task_id": task_ids[i],
                     "status": "done",
                     "summary": f"Created file{i}.txt",
-                    "key_learnings": []
+                    "key_learnings": [],
                 },
-                headers={"X-Agent-ID": agent_ids[i]}
+                headers={"X-Agent-ID": agent_ids[i]},
             )
             assert response.status_code == 200
             logger.info(f"Task {i} completed")
@@ -706,10 +700,11 @@ class HephaestusIntegrationTest:
         start_time = time.time()
         while time.time() - start_time < timeout:
             session = self.db_manager.get_session()
-            validators = session.query(Agent).filter_by(
-                agent_type="validator",
-                current_task_id=task_id
-            ).all()
+            validators = (
+                session.query(Agent)
+                .filter_by(agent_type="validator", current_task_id=task_id)
+                .all()
+            )
             session.close()
             if validators:
                 return validators[0].id
@@ -724,7 +719,9 @@ class HephaestusIntegrationTest:
         logger.info(f"Worktree exists: {worktree_path}")
         return worktree_path
 
-    def _simulate_agent_work(self, agent_id: str, files: List[str], content: str = "test"):
+    def _simulate_agent_work(
+        self, agent_id: str, files: List[str], content: str = "test"
+    ):
         """Simulate agent creating files in worktree."""
         worktree_path = Path(f"worktrees/wt_{agent_id}")
         for filename in files:
@@ -733,15 +730,11 @@ class HephaestusIntegrationTest:
             logger.info(f"Created {filename} in {worktree_path}")
 
         # Commit the changes
-        subprocess.run(
-            ["git", "add", "-A"],
-            cwd=worktree_path,
-            capture_output=True
-        )
+        subprocess.run(["git", "add", "-A"], cwd=worktree_path, capture_output=True)
         subprocess.run(
             ["git", "commit", "-m", "Test commit"],
             cwd=worktree_path,
-            capture_output=True
+            capture_output=True,
         )
 
     def _get_task_from_db(self, task_id: str) -> Optional[Task]:
@@ -767,7 +760,7 @@ class HephaestusIntegrationTest:
             id=str(uuid.uuid4()),
             name="Test Workflow",
             phases_folder_path="tests/fixtures/test_workflows",
-            status="active"
+            status="active",
         )
         session.add(workflow)
 
@@ -785,10 +778,10 @@ class HephaestusIntegrationTest:
                     {
                         "description": "File exists",
                         "check_type": "file_exists",
-                        "target": ["test.txt"]
+                        "target": ["test.txt"],
                     }
-                ]
-            }
+                ],
+            },
         )
         session.add(phase)
         session.commit()

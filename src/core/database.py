@@ -1,25 +1,26 @@
 """Database models and schema for Hephaestus."""
 
-import os
 import logging
+import os
 from datetime import datetime
 from typing import Optional
+
 from sqlalchemy import (
-    create_engine,
-    Column,
-    String,
-    Text,
-    Integer,
-    Float,
-    DateTime,
-    ForeignKey,
-    CheckConstraint,
-    UniqueConstraint,
     JSON,
     Boolean,
+    CheckConstraint,
+    Column,
+    DateTime,
+    Float,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    create_engine,
 )
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import relationship, sessionmaker, backref
+from sqlalchemy.orm import backref, relationship, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 Base = declarative_base()
@@ -61,7 +62,9 @@ class Agent(Base):
 
     # Relationships
     created_tasks = relationship(
-        "Task", back_populates="created_by_agent", foreign_keys="Task.created_by_agent_id"
+        "Task",
+        back_populates="created_by_agent",
+        foreign_keys="Task.created_by_agent_id",
     )
     assigned_tasks = relationship("Task", foreign_keys="Task.assigned_agent_id")
     memories = relationship("Memory", back_populates="agent")
@@ -95,7 +98,9 @@ class Task(Base):
     parent_task_id = Column(String, ForeignKey("tasks.id"))
     created_by_agent_id = Column(String, ForeignKey("agents.id"))
     phase_id = Column(String, ForeignKey("phases.id"))  # Phase this task belongs to
-    workflow_id = Column(String, ForeignKey("workflows.id"))  # Workflow this task is part of
+    workflow_id = Column(
+        String, ForeignKey("workflows.id")
+    )  # Workflow this task is part of
     started_at = Column(DateTime)
     completed_at = Column(DateTime)
     completion_notes = Column(Text)
@@ -121,12 +126,18 @@ class Task(Base):
     # Queue management fields
     queued_at = Column(DateTime)  # When task was queued
     queue_position = Column(Integer)  # Position in queue (for UI display)
-    priority_boosted = Column(Boolean, default=False)  # If manually boosted to bypass queue
+    priority_boosted = Column(
+        Boolean, default=False
+    )  # If manually boosted to bypass queue
 
     # Task dependency and concurrency fields
     depends_on = Column(JSON)  # List of task IDs that must complete before this one
-    parallel_group = Column(String)  # Tasks in same group can run in parallel; different groups are sequential
-    max_concurrent = Column(Integer, default=1)  # Max agents working on this task simultaneously
+    parallel_group = Column(
+        String
+    )  # Tasks in same group can run in parallel; different groups are sequential
+    max_concurrent = Column(
+        Integer, default=1
+    )  # Max agents working on this task simultaneously
 
     # Ticket tracking integration
     ticket_id = Column(
@@ -224,8 +235,12 @@ class WorkflowDefinition(Base):
     name = Column(String, nullable=False)  # "PRD to Software Builder"
     description = Column(String)
     phases_config = Column(JSON)  # Serialized phase definitions
-    workflow_config = Column(JSON)  # has_result, result_criteria, on_result_found, launch_template, etc.
-    orchestrator_config = Column(JSON)  # Orchestrator config for phase evaluation and flow control
+    workflow_config = Column(
+        JSON
+    )  # has_result, result_criteria, on_result_found, launch_template, etc.
+    orchestrator_config = Column(
+        JSON
+    )  # Orchestrator config for phase evaluation and flow control
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     # Relationships
@@ -239,7 +254,9 @@ class Workflow(Base):
 
     id = Column(String, primary_key=True)
     name = Column(String, nullable=False)
-    description = Column(String)  # User-provided name/description for this execution (e.g., "My URL Shortener")
+    description = Column(
+        String
+    )  # User-provided name/description for this execution (e.g., "My URL Shortener")
     phases_folder_path = Column(String, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     status = Column(
@@ -266,12 +283,26 @@ class Workflow(Base):
     result_id = Column(String, ForeignKey("workflow_results.id"))
     completed_by_result = Column(Boolean, default=False)
 
+    # New columns for Feature Model
+    workflow_type = Column(
+        String,
+        CheckConstraint("workflow_type IN ('design', 'feature')"),
+        nullable=True,
+        default="feature",
+    )
+    feature_id = Column(String, ForeignKey("features.id"), nullable=True)
+
     # Relationships
     definition = relationship("WorkflowDefinition", back_populates="executions")
-    design = relationship("AutopilotDesign", foreign_keys=[design_id], backref="workflows")
+    design = relationship(
+        "AutopilotDesign", foreign_keys=[design_id], backref="workflows"
+    )
     phases = relationship("Phase", back_populates="workflow", order_by="Phase.order")
     result = relationship("WorkflowResult", foreign_keys=[result_id])
-    all_results = relationship("WorkflowResult", foreign_keys="WorkflowResult.workflow_id")
+    all_results = relationship(
+        "WorkflowResult", foreign_keys="WorkflowResult.workflow_id"
+    )
+    feature = relationship("Feature", foreign_keys=[feature_id])
 
 
 class Phase(Base):
@@ -288,16 +319,26 @@ class Phase(Base):
     additional_notes = Column(Text)
     outputs = Column(Text)  # Expected outputs description
     next_steps = Column(Text)  # Instructions for next phase
-    working_directory = Column(String)  # Default working directory for agents in this phase
+    working_directory = Column(
+        String
+    )  # Default working directory for agents in this phase
 
     # Validation configuration
     validation = Column(JSON)  # Stores validation criteria and settings
 
     # Per-phase CLI configuration (optional - falls back to global defaults)
-    cli_tool = Column(String, nullable=True)           # "claude", "opencode", "droid", "codex", "pi", "swarm"
-    cli_model = Column(String, nullable=True)          # "sonnet", "opus", "haiku", "GLM-4.6", etc.
-    glm_api_token_env = Column(String, nullable=True)  # Environment variable name for GLM token
-    thinking_level = Column(String, nullable=True)     # pi reasoning budget: off|minimal|low|medium|high|xhigh
+    cli_tool = Column(
+        String, nullable=True
+    )  # "claude", "opencode", "droid", "codex", "pi", "swarm"
+    cli_model = Column(
+        String, nullable=True
+    )  # "sonnet", "opus", "haiku", "GLM-4.6", etc.
+    glm_api_token_env = Column(
+        String, nullable=True
+    )  # Environment variable name for GLM token
+    thinking_level = Column(
+        String, nullable=True
+    )  # pi reasoning budget: off|minimal|low|medium|high|xhigh
 
     # Relationships
     workflow = relationship("Workflow", back_populates="phases")
@@ -315,7 +356,9 @@ class PhaseExecution(Base):
     workflow_execution_id = Column(String)  # For tracking multiple workflow runs
     status = Column(
         String,
-        CheckConstraint("status IN ('pending', 'in_progress', 'completed', 'failed', 'skipped')"),
+        CheckConstraint(
+            "status IN ('pending', 'in_progress', 'completed', 'failed', 'skipped')"
+        ),
         default="pending",
         nullable=False,
     )
@@ -329,6 +372,7 @@ class PhaseExecution(Base):
 
 class AgentWorktree(Base):
     """Track git worktree isolation for agents."""
+
     # TODO: Rename column worktree_path → branch_path (pending migration)
 
     __tablename__ = "agent_worktrees"
@@ -442,7 +486,9 @@ class MergeConflictResolution(Base):
     commit_sha = Column(String, ForeignKey("worktree_commits.commit_sha"))
 
     # Relationships
-    agent = relationship("Agent", backref="conflict_resolutions", overlaps="conflict_resolutions")
+    agent = relationship(
+        "Agent", backref="conflict_resolutions", overlaps="conflict_resolutions"
+    )
     worktree = relationship(
         "AgentWorktree",
         back_populates="conflict_resolutions",
@@ -473,7 +519,9 @@ class AgentResult(Base):
     summary = Column(Text, nullable=False)
     verification_status = Column(
         String,
-        CheckConstraint("verification_status IN ('unverified', 'verified', 'disputed')"),
+        CheckConstraint(
+            "verification_status IN ('unverified', 'verified', 'disputed')"
+        ),
         default="unverified",
         nullable=False,
     )
@@ -497,7 +545,9 @@ class WorkflowResult(Base):
     agent_id = Column(String, ForeignKey("agents.id"), nullable=False)
     result_file_path = Column(Text, nullable=False)
     result_content = Column(Text, nullable=False)
-    extra_files = Column(JSON, nullable=True, default=list)  # List of additional file paths (e.g., patches, reproduction scripts)
+    extra_files = Column(
+        JSON, nullable=True, default=list
+    )  # List of additional file paths (e.g., patches, reproduction scripts)
     status = Column(
         String,
         CheckConstraint("status IN ('pending_validation', 'validated', 'rejected')"),
@@ -511,7 +561,9 @@ class WorkflowResult(Base):
     validated_at = Column(DateTime)
 
     # Relationships
-    workflow = relationship("Workflow", foreign_keys=[workflow_id], back_populates="all_results")
+    workflow = relationship(
+        "Workflow", foreign_keys=[workflow_id], back_populates="all_results"
+    )
     agent = relationship("Agent", foreign_keys=[agent_id], backref="workflow_results")
     validator_agent = relationship("Agent", foreign_keys=[validated_by_agent_id])
 
@@ -533,7 +585,9 @@ class GuardianAnalysis(Base):
     steering_type = Column(String)
     steering_recommendation = Column(Text)
     trajectory_summary = Column(Text)
-    last_claude_message_marker = Column(String(100))  # NEW: Marker for next cycle to identify new content
+    last_claude_message_marker = Column(
+        String(100)
+    )  # NEW: Marker for next cycle to identify new content
 
     # Accumulated context fields
     accumulated_goal = Column(Text)
@@ -587,8 +641,12 @@ class DetectedDuplicate(Base):
 
     # Relationships
     conductor_analysis = relationship("ConductorAnalysis", backref="duplicates")
-    agent1 = relationship("Agent", foreign_keys=[agent1_id], backref="duplicates_as_agent1")
-    agent2 = relationship("Agent", foreign_keys=[agent2_id], backref="duplicates_as_agent2")
+    agent1 = relationship(
+        "Agent", foreign_keys=[agent1_id], backref="duplicates_as_agent1"
+    )
+    agent2 = relationship(
+        "Agent", foreign_keys=[agent2_id], backref="duplicates_as_agent2"
+    )
 
 
 class SteeringIntervention(Base):
@@ -645,8 +703,12 @@ class DiagnosticRun(Base):
 
     # Relationships
     workflow = relationship("Workflow", backref="diagnostic_runs")
-    agent = relationship("Agent", foreign_keys=[diagnostic_agent_id], backref="diagnostic_runs")
-    task = relationship("Task", foreign_keys=[diagnostic_task_id], backref="diagnostic_runs")
+    agent = relationship(
+        "Agent", foreign_keys=[diagnostic_agent_id], backref="diagnostic_runs"
+    )
+    task = relationship(
+        "Task", foreign_keys=[diagnostic_task_id], backref="diagnostic_runs"
+    )
 
 
 class Ticket(Base):
@@ -662,7 +724,9 @@ class Ticket(Base):
     # Core Fields
     title = Column(String(500), nullable=False)
     description = Column(Text, nullable=False)
-    ticket_type = Column(String(50), nullable=False)  # bug, feature, improvement, task, spike, etc.
+    ticket_type = Column(
+        String(50), nullable=False
+    )  # bug, feature, improvement, task, spike, etc.
     priority = Column(String(20), nullable=False)  # low, medium, high, critical
     status = Column(
         String(50), nullable=False
@@ -670,14 +734,20 @@ class Ticket(Base):
 
     # Metadata
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    updated_at = Column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+    )
     started_at = Column(DateTime)  # When work begins
     completed_at = Column(DateTime)  # When marked complete
 
     # Links & References
     parent_ticket_id = Column(String, ForeignKey("tickets.id"))
-    task_id = Column(String, ForeignKey("tasks.id"))  # Primary task this ticket relates to
-    phase_id = Column(String, ForeignKey("phases.id"))  # Phase where this ticket was created
+    task_id = Column(
+        String, ForeignKey("tasks.id")
+    )  # Primary task this ticket relates to
+    phase_id = Column(
+        String, ForeignKey("phases.id")
+    )  # Phase where this ticket was created
     related_task_ids = Column(JSON)  # List of related task IDs
     related_ticket_ids = Column(JSON)  # List of related ticket IDs for context
     tags = Column(JSON)  # List of tags
@@ -693,9 +763,7 @@ class Ticket(Base):
 
     # Human Approval
     approval_status = Column(
-        String(20),
-        default="auto_approved",
-        nullable=False
+        String(20), default="auto_approved", nullable=False
     )  # auto_approved, pending_review, approved, rejected
     approval_requested_at = Column(DateTime)  # When approval was requested
     approval_decided_at = Column(DateTime)  # When human made decision
@@ -711,7 +779,10 @@ class Ticket(Base):
         "Agent", foreign_keys=[assigned_agent_id], backref="assigned_tickets"
     )
     parent_ticket = relationship(
-        "Ticket", remote_side=[id], foreign_keys=[parent_ticket_id], backref="sub_tickets"
+        "Ticket",
+        remote_side=[id],
+        foreign_keys=[parent_ticket_id],
+        backref="sub_tickets",
     )
     task = relationship("Task", foreign_keys=[task_id], backref="tickets")
     phase = relationship("Phase", foreign_keys=[phase_id], backref="tickets")
@@ -731,7 +802,9 @@ class TicketComment(Base):
     __tablename__ = "ticket_comments"
 
     id = Column(String, primary_key=True)  # Format: comment-{uuid}
-    ticket_id = Column(String, ForeignKey("tickets.id", ondelete="CASCADE"), nullable=False)
+    ticket_id = Column(
+        String, ForeignKey("tickets.id", ondelete="CASCADE"), nullable=False
+    )
     agent_id = Column(String, ForeignKey("agents.id"), nullable=False)
 
     # Content
@@ -760,7 +833,9 @@ class TicketHistory(Base):
     __tablename__ = "ticket_history"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    ticket_id = Column(String, ForeignKey("tickets.id", ondelete="CASCADE"), nullable=False)
+    ticket_id = Column(
+        String, ForeignKey("tickets.id", ondelete="CASCADE"), nullable=False
+    )
     agent_id = Column(String, ForeignKey("agents.id"), nullable=False)
 
     # Change Information
@@ -789,7 +864,9 @@ class TicketCommit(Base):
     __tablename__ = "ticket_commits"
 
     id = Column(String, primary_key=True)  # Format: tc-{uuid}
-    ticket_id = Column(String, ForeignKey("tickets.id", ondelete="CASCADE"), nullable=False)
+    ticket_id = Column(
+        String, ForeignKey("tickets.id", ondelete="CASCADE"), nullable=False
+    )
     agent_id = Column(String, ForeignKey("agents.id"), nullable=False)
 
     # Commit Information
@@ -805,7 +882,9 @@ class TicketCommit(Base):
 
     # Linking
     linked_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    link_method = Column(String(50), default="manual")  # manual, auto_detected, worktree
+    link_method = Column(
+        String(50), default="manual"
+    )  # manual, auto_detected, worktree
 
     # Relationships
     ticket = relationship("Ticket", back_populates="commits")
@@ -819,7 +898,10 @@ class BoardConfig(Base):
 
     id = Column(String, primary_key=True)  # Format: board-{uuid}
     workflow_id = Column(
-        String, ForeignKey("workflows.id", ondelete="CASCADE"), unique=True, nullable=False
+        String,
+        ForeignKey("workflows.id", ondelete="CASCADE"),
+        unique=True,
+        nullable=False,
     )
 
     # Board Configuration
@@ -827,7 +909,9 @@ class BoardConfig(Base):
     columns = Column(JSON, nullable=False)  # Array of {id, name, order, color}
     ticket_types = Column(JSON, nullable=False)  # Array of allowed ticket types
     default_ticket_type = Column(String(50))
-    initial_status = Column(String(50), nullable=False)  # Default status for new tickets
+    initial_status = Column(
+        String(50), nullable=False
+    )  # Default status for new tickets
 
     # Settings
     auto_assign = Column(Boolean, default=False)
@@ -836,12 +920,16 @@ class BoardConfig(Base):
     track_time = Column(Boolean, default=False)
 
     # Human Review Settings
-    ticket_human_review = Column(Boolean, default=False)  # Enable human approval for tickets
+    ticket_human_review = Column(
+        Boolean, default=False
+    )  # Enable human approval for tickets
     approval_timeout_seconds = Column(Integer, default=1800)  # 30 minutes default
 
     # Metadata
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    updated_at = Column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+    )
 
     # Relationships
     workflow = relationship("Workflow", backref="board_config")
@@ -858,9 +946,58 @@ class AutopilotProject(Base):
     is_default = Column(Boolean, default=False)
     is_active = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    updated_at = Column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+    )
 
-    designs = relationship("AutopilotDesign", back_populates="project", cascade="all, delete-orphan")
+    designs = relationship(
+        "AutopilotDesign", back_populates="project", cascade="all, delete-orphan"
+    )
+
+
+class Feature(Base):
+    """Feature model representing a decomposed feature from a design document."""
+
+    __tablename__ = "features"
+
+    id = Column(String, primary_key=True)  # feat-<uuid8>
+    design_id = Column(String, ForeignKey("autopilot_designs.id"), nullable=False)
+    feature_key = Column(
+        String(100), nullable=False
+    )  # slug from features.json "id" field
+    name = Column(String, nullable=False)
+    scope = Column(Text, nullable=False)  # one-paragraph summary
+    files = Column(JSON, nullable=True)  # list of file paths owned
+    depends_on = Column(JSON, nullable=True)  # list of feature_key strings
+    execution = Column(
+        String,
+        CheckConstraint("execution IN ('parallel', 'sequential')"),
+        nullable=False,
+        default="parallel",
+    )
+    status = Column(
+        String,
+        CheckConstraint(
+            "status IN ('pending', 'active', 'completed', 'failed', 'skipped')"
+        ),
+        nullable=False,
+        default="pending",
+    )
+    workflow_id = Column(String, ForeignKey("workflows.id"), nullable=True)
+    scope_doc_path = Column(
+        Text, nullable=True
+    )  # abs path to scope.md in permanent record
+    feature_record_path = Column(
+        Text, nullable=True
+    )  # abs path to designs/.../features/<key>/
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    started_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+    error = Column(Text, nullable=True)
+
+    # Relationships
+    design = relationship("AutopilotDesign", back_populates="features")
+    workflow = relationship("Workflow", foreign_keys=[workflow_id])
 
 
 class AutopilotDesign(Base):
@@ -869,20 +1006,35 @@ class AutopilotDesign(Base):
     __tablename__ = "autopilot_designs"
 
     id = Column(String, primary_key=True)  # Format: des-{uuid}
-    project_id = Column(String, ForeignKey("autopilot_projects.id", ondelete="CASCADE"), nullable=False)
+    project_id = Column(
+        String, ForeignKey("autopilot_projects.id", ondelete="CASCADE"), nullable=False
+    )
     filename = Column(String(500), nullable=False)
     name = Column(String(500), nullable=False)
     ordinal = Column(Integer, nullable=False, default=0)
     size_bytes = Column(Integer, nullable=False, default=0)
     extension = Column(String(10), nullable=False, default=".md")
     content_hash = Column(String(64), nullable=True)  # SHA-256 for dedup
-    status = Column(String(20), nullable=False, default="pending")  # pending, processing, completed, failed
-    feature_folder = Column(Text, nullable=True)  # Path to feature folder after processing
+    status = Column(
+        String(20), nullable=False, default="pending"
+    )  # pending, processing, decomposing, active, completed, failed, skipped
+    feature_folder = Column(
+        Text, nullable=True
+    )  # Path to feature folder after processing
     completed_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     modified_at = Column(DateTime, default=datetime.utcnow)
 
+    # New columns for Feature Model
+    file_path = Column(Text, nullable=True)  # absolute path to design file
+    designs_folder = Column(Text, nullable=True)  # path to designs/<ts>_<name>_<id>/
+    phase0_workflow_id = Column(String, ForeignKey("workflows.id"), nullable=True)
+
+    # Relationships
     project = relationship("AutopilotProject", back_populates="designs")
+    features = relationship(
+        "Feature", back_populates="design", cascade="all, delete-orphan"
+    )
 
     __table_args__ = (
         UniqueConstraint("project_id", "filename", name="uq_design_project_filename"),
@@ -924,9 +1076,7 @@ class PhasePromptVersion(Base):
     # Relationships
     phase = relationship("Phase", backref="prompt_versions")
 
-    __table_args__ = (
-        UniqueConstraint("phase_id", "version", name="uq_phase_version"),
-    )
+    __table_args__ = (UniqueConstraint("phase_id", "version", name="uq_phase_version"),)
 
 
 class TaskPromptOverride(Base):
@@ -940,8 +1090,10 @@ class TaskPromptOverride(Base):
 
     task_id = Column(String, ForeignKey("tasks.id"), primary_key=True)
     system_prompt = Column(Text)  # NULL = use phase default
-    user_prompt = Column(Text)    # NULL = use phase default
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    user_prompt = Column(Text)  # NULL = use phase default
+    updated_at = Column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+    )
     updated_by = Column(String, nullable=False, default="ui-user")
 
     # Relationships
@@ -961,7 +1113,9 @@ class PhasePromptTemplate(Base):
     name = Column(String, nullable=False, unique=True)  # e.g. "project_name"
     description = Column(Text, nullable=False)
     example_value = Column(Text)  # e.g. "hephaestus"
-    resolver = Column(String, nullable=False)  # Python path, e.g. "src.prompts.resolvers.project_name"
+    resolver = Column(
+        String, nullable=False
+    )  # Python path, e.g. "src.prompts.resolvers.project_name"
     category = Column(String, default="general")  # general, workflow, phase, task
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
@@ -978,7 +1132,9 @@ class DatabaseManager:
             poolclass=StaticPool,
             echo=False,
         )
-        self.SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=self.engine)
+        self.SessionLocal = sessionmaker(
+            autocommit=False, autoflush=False, bind=self.engine
+        )
 
     def create_tables(self):
         """Create all database tables."""
@@ -993,6 +1149,7 @@ class DatabaseManager:
         # Migrate new columns for existing databases
         self._migrate_task_dependency_columns()
         self._migrate_autopilot_designs_columns()
+        self._migrate_feature_model_columns()
 
     def _create_fts5_tables(self):
         """Create FTS5 virtual tables and triggers for ticket search."""
@@ -1163,13 +1320,19 @@ class DatabaseManager:
 
                 # Add parallel_group column
                 try:
-                    conn.execute(text("ALTER TABLE tasks ADD COLUMN parallel_group TEXT"))
+                    conn.execute(
+                        text("ALTER TABLE tasks ADD COLUMN parallel_group TEXT")
+                    )
                 except Exception:
                     pass  # Column already exists
 
                 # Add max_concurrent column
                 try:
-                    conn.execute(text("ALTER TABLE tasks ADD COLUMN max_concurrent INTEGER DEFAULT 1"))
+                    conn.execute(
+                        text(
+                            "ALTER TABLE tasks ADD COLUMN max_concurrent INTEGER DEFAULT 1"
+                        )
+                    )
                 except Exception:
                     pass  # Column already exists
 
@@ -1184,25 +1347,41 @@ class DatabaseManager:
             with self.engine.connect() as conn:
                 # Add content_hash column
                 try:
-                    conn.execute(text("ALTER TABLE autopilot_designs ADD COLUMN content_hash VARCHAR(64)"))
+                    conn.execute(
+                        text(
+                            "ALTER TABLE autopilot_designs ADD COLUMN content_hash VARCHAR(64)"
+                        )
+                    )
                 except Exception:
                     pass  # Column already exists
 
                 # Add status column
                 try:
-                    conn.execute(text("ALTER TABLE autopilot_designs ADD COLUMN status VARCHAR(20) NOT NULL DEFAULT 'pending'"))
+                    conn.execute(
+                        text(
+                            "ALTER TABLE autopilot_designs ADD COLUMN status VARCHAR(20) NOT NULL DEFAULT 'pending'"
+                        )
+                    )
                 except Exception:
                     pass  # Column already exists
 
                 # Add feature_folder column
                 try:
-                    conn.execute(text("ALTER TABLE autopilot_designs ADD COLUMN feature_folder TEXT"))
+                    conn.execute(
+                        text(
+                            "ALTER TABLE autopilot_designs ADD COLUMN feature_folder TEXT"
+                        )
+                    )
                 except Exception:
                     pass  # Column already exists
 
                 # Add completed_at column
                 try:
-                    conn.execute(text("ALTER TABLE autopilot_designs ADD COLUMN completed_at DATETIME"))
+                    conn.execute(
+                        text(
+                            "ALTER TABLE autopilot_designs ADD COLUMN completed_at DATETIME"
+                        )
+                    )
                 except Exception:
                     pass  # Column already exists
 
@@ -1215,7 +1394,9 @@ class DatabaseManager:
         try:
             with self.engine.connect() as conn:
                 try:
-                    conn.execute(text("ALTER TABLE phases ADD COLUMN thinking_level VARCHAR"))
+                    conn.execute(
+                        text("ALTER TABLE phases ADD COLUMN thinking_level VARCHAR")
+                    )
                 except Exception:
                     pass  # Column already exists
                 conn.commit()
@@ -1226,7 +1407,11 @@ class DatabaseManager:
         try:
             with self.engine.connect() as conn:
                 try:
-                    conn.execute(text("ALTER TABLE workflows ADD COLUMN design_id VARCHAR REFERENCES autopilot_designs(id)"))
+                    conn.execute(
+                        text(
+                            "ALTER TABLE workflows ADD COLUMN design_id VARCHAR REFERENCES autopilot_designs(id)"
+                        )
+                    )
                 except Exception:
                     pass  # Column already exists
                 conn.commit()
@@ -1245,6 +1430,86 @@ class DatabaseManager:
         except Exception as e:
             logger.debug(f"agents.cli_model migration (may already exist): {e}")
 
+    def _migrate_feature_model_columns(self):
+        """Add Feature model columns to autopilot_designs and workflows for existing databases.
+
+        Idempotent - safe to call on every startup.
+        """
+        # Add new columns to autopilot_designs
+        try:
+            with self.engine.connect() as conn:
+                # Add file_path column
+                try:
+                    conn.execute(
+                        text("ALTER TABLE autopilot_designs ADD COLUMN file_path TEXT")
+                    )
+                except Exception:
+                    pass  # Column already exists
+
+                # Add designs_folder column
+                try:
+                    conn.execute(
+                        text(
+                            "ALTER TABLE autopilot_designs ADD COLUMN designs_folder TEXT"
+                        )
+                    )
+                except Exception:
+                    pass  # Column already exists
+
+                # Add phase0_workflow_id column
+                try:
+                    conn.execute(
+                        text(
+                            "ALTER TABLE autopilot_designs ADD COLUMN phase0_workflow_id VARCHAR REFERENCES workflows(id)"
+                        )
+                    )
+                except Exception:
+                    pass  # Column already exists
+
+                conn.commit()
+                logger.info("Migrated autopilot_designs feature model columns")
+        except Exception as e:
+            logger.debug(
+                f"autopilot_designs feature model migration (may already exist): {e}"
+            )
+
+        # Add new columns to workflows
+        try:
+            with self.engine.connect() as conn:
+                # Add workflow_type column
+                try:
+                    conn.execute(
+                        text(
+                            "ALTER TABLE workflows ADD COLUMN workflow_type VARCHAR DEFAULT 'feature'"
+                        )
+                    )
+                except Exception:
+                    pass  # Column already exists
+
+                # Add feature_id column
+                try:
+                    conn.execute(
+                        text(
+                            "ALTER TABLE workflows ADD COLUMN feature_id VARCHAR REFERENCES features(id)"
+                        )
+                    )
+                except Exception:
+                    pass  # Column already exists
+
+                conn.commit()
+                logger.info("Migrated workflows feature model columns")
+        except Exception as e:
+            logger.debug(f"workflows feature model migration (may already exist): {e}")
+
+        # Create features table if it doesn't exist
+        try:
+            Base.metadata.create_all(
+                self.engine, tables=[Feature.__table__], checkfirst=True
+            )
+            logger.info("Ensured features table exists")
+        except Exception as e:
+            logger.debug(f"features table creation (may already exist): {e}")
+
     def get_session(self):
         """Get a database session."""
         return self.SessionLocal()
@@ -1256,6 +1521,7 @@ class DatabaseManager:
 
 # Context manager for database sessions
 from contextlib import contextmanager
+
 from sqlalchemy.sql import text
 
 

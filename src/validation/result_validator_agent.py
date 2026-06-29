@@ -3,6 +3,7 @@
 import asyncio
 import logging
 from typing import Optional
+
 import libtmux
 
 from src.interfaces import get_cli_agent
@@ -15,7 +16,7 @@ async def spawn_result_validator_tmux_session(
     working_directory: str,
     prompt: str,
     result_file_path: str,
-    read_only: bool = True
+    read_only: bool = True,
 ) -> None:
     """Spawn a tmux session for result validator agent.
 
@@ -35,9 +36,7 @@ async def spawn_result_validator_tmux_session(
         logger.info(f"Creating tmux session: {session_name}")
 
         session = server.new_session(
-            session_name=session_name,
-            start_directory=working_directory,
-            attach=False
+            session_name=session_name, start_directory=working_directory, attach=False
         )
 
         # Get the default pane
@@ -48,8 +47,12 @@ async def spawn_result_validator_tmux_session(
 
         # Set up read-only environment
         if read_only:
-            pane.send_keys("echo 'READ-ONLY MODE: Result validator starting...'", enter=True)
-            pane.send_keys(f"echo 'Validating result file: {result_file_path}'", enter=True)
+            pane.send_keys(
+                "echo 'READ-ONLY MODE: Result validator starting...'", enter=True
+            )
+            pane.send_keys(
+                f"echo 'Validating result file: {result_file_path}'", enter=True
+            )
             await asyncio.sleep(1)
 
         # Get CLI agent command (use 'claude' for result validators)
@@ -68,7 +71,7 @@ async def spawn_result_validator_tmux_session(
         await asyncio.sleep(8)
 
         # Send the validation prompt
-        lines = prompt.split('\n')
+        lines = prompt.split("\n")
         for line in lines:
             if line.strip():  # Skip empty lines
                 pane.send_keys(line, enter=False)
@@ -114,10 +117,7 @@ def terminate_result_validator_session(agent_id: str) -> bool:
         return False
 
 
-def send_feedback_to_result_validator(
-    agent_id: str,
-    feedback: str
-) -> bool:
+def send_feedback_to_result_validator(agent_id: str, feedback: str) -> bool:
     """Send feedback to a running result validator agent.
 
     Args:
@@ -187,7 +187,7 @@ def get_result_validator_status(agent_id: str) -> Optional[dict]:
             "session_id": session.session_id,
             "panes_count": len(panes),
             "active_pane_id": active_pane.pane_id if active_pane else None,
-            "status": "running"
+            "status": "running",
         }
 
     except Exception as e:

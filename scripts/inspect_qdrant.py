@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Inspect Qdrant collections and record counts."""
 
-import sys
 import os
+import sys
 
 # Add parent directory to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -16,8 +16,7 @@ def main():
 
     # Initialize the vector store manager
     vector_store = VectorStoreManager(
-        qdrant_url="http://localhost:6333",
-        collection_prefix="hephaestus"
+        qdrant_url="http://localhost:6333", collection_prefix="hephaestus"
     )
 
     # Get statistics for all collections

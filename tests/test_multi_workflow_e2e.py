@@ -8,26 +8,28 @@ This module tests end-to-end workflow scenarios including:
 5. Backward compatibility
 """
 
-import pytest
 import os
 import uuid
 from datetime import datetime
 
+import pytest
+
 # Set test environment before imports
 os.environ["HEPHAESTUS_TEST_DB"] = ":memory:"
 
-from src.core.database import DatabaseManager, Task, Agent, Workflow
+from src.core.database import Task, Workflow
 from src.phases.phase_manager import PhaseManager
-from src.sdk.models import (
-    Phase as SDKPhase, WorkflowConfig, WorkflowDefinition, WorkflowExecution
-)
+from src.sdk.models import Phase as SDKPhase
+from src.sdk.models import WorkflowConfig, WorkflowDefinition, WorkflowExecution
 
 
 class TestMultiWorkflowE2E:
     """End-to-end tests for multiple concurrent workflows."""
 
     @pytest.fixture
-    def multi_definition_phase_manager(self, db_manager, test_workflow_definition, test_bugfix_definition):
+    def multi_definition_phase_manager(
+        self, db_manager, test_workflow_definition, test_bugfix_definition
+    ):
         """Create phase manager with multiple workflow definitions."""
         manager = PhaseManager(db_manager)
 
@@ -87,7 +89,9 @@ class TestMultiWorkflowE2E:
 
         yield manager
 
-    def test_concurrent_workflows_different_definitions(self, multi_definition_phase_manager):
+    def test_concurrent_workflows_different_definitions(
+        self, multi_definition_phase_manager
+    ):
         """Test running two workflows concurrently from different definitions."""
         manager = multi_definition_phase_manager
 
@@ -116,7 +120,9 @@ class TestMultiWorkflowE2E:
         manager = multi_definition_phase_manager
 
         # Start two workflows from the same definition
-        wf1_id, _ = manager.start_execution("test-workflow", "Project A - URL Shortener")
+        wf1_id, _ = manager.start_execution(
+            "test-workflow", "Project A - URL Shortener"
+        )
         wf2_id, _ = manager.start_execution("test-workflow", "Project B - Chat App")
 
         # Verify IDs are different
@@ -387,7 +393,9 @@ class TestSDKClientMultiWorkflow:
 
         with pytest.raises(ValueError) as exc_info:
             HephaestusSDK()
-        assert "workflow_definitions" in str(exc_info.value) or "phases" in str(exc_info.value)
+        assert "workflow_definitions" in str(exc_info.value) or "phases" in str(
+            exc_info.value
+        )
 
     def test_sdk_validation_error_both_phases_and_dir(self):
         """Test that SDK raises error when both phases and phases_dir provided."""
@@ -535,7 +543,11 @@ class TestWorkflowConfigSerialization:
             session.commit()
 
             # Retrieve
-            retrieved = session.query(DBWorkflowDefinition).filter_by(id="serialize-test").first()
+            retrieved = (
+                session.query(DBWorkflowDefinition)
+                .filter_by(id="serialize-test")
+                .first()
+            )
             assert retrieved.phases_config[0]["name"] == "Planning"
             assert len(retrieved.phases_config[0]["done_definitions"]) == 2
 
@@ -558,7 +570,11 @@ class TestDatabaseModels:
                 description="Build software from PRD",
                 phases_config=[
                     {"order": 1, "name": "Planning", "description": "Plan the project"},
-                    {"order": 2, "name": "Implementation", "description": "Implement features"},
+                    {
+                        "order": 2,
+                        "name": "Implementation",
+                        "description": "Implement features",
+                    },
                 ],
                 workflow_config={
                     "has_result": True,
@@ -570,7 +586,11 @@ class TestDatabaseModels:
             session.commit()
 
             # Retrieve and verify
-            retrieved = session.query(DBWorkflowDefinition).filter_by(id="prd-to-software").first()
+            retrieved = (
+                session.query(DBWorkflowDefinition)
+                .filter_by(id="prd-to-software")
+                .first()
+            )
             assert retrieved is not None
             assert retrieved.name == "PRD to Software Builder"
             assert len(retrieved.phases_config) == 2
@@ -601,7 +621,7 @@ class TestDatabaseModels:
                 workflow = Workflow(
                     id=str(uuid.uuid4()),
                     name="Feature Build",
-                    description=f"Building feature {i+1}",
+                    description=f"Building feature {i + 1}",
                     definition_id="feature-build",
                     phases_folder_path="/tmp/test",
                     status="active",
@@ -610,7 +630,9 @@ class TestDatabaseModels:
             session.commit()
 
             # Verify
-            executions = session.query(Workflow).filter_by(definition_id="feature-build").all()
+            executions = (
+                session.query(Workflow).filter_by(definition_id="feature-build").all()
+            )
             assert len(executions) == 3
 
         finally:

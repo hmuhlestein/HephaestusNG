@@ -26,6 +26,7 @@ validate_workflow_yaml = _config_validator.validate_workflow_yaml
 
 # ── Fixtures ──────────────────────────────────────────────────────
 
+
 @pytest.fixture
 def valid_phase():
     """A minimal valid phase config."""
@@ -70,7 +71,12 @@ def valid_workflow_cfg(valid_phase, valid_phase_2):
                     "max_retries": 2,
                     "conditions": [
                         {"if": "score >= 0.6", "action": "continue", "reason": "OK"},
-                        {"if": "score < 0.6", "action": "goto", "target": "second_phase", "reason": "Retry"},
+                        {
+                            "if": "score < 0.6",
+                            "action": "goto",
+                            "target": "second_phase",
+                            "reason": "Retry",
+                        },
                     ],
                 },
             ],
@@ -132,8 +138,8 @@ def phase_names():
 
 # ── Phase file validation ─────────────────────────────────────────
 
-class TestPhaseFileValidation:
 
+class TestPhaseFileValidation:
     def test_valid_phase(self, valid_phase, seen_ids, seen_names):
         errors = validate_phase_file(valid_phase, "test.yaml", seen_ids, seen_names)
         assert errors == []
@@ -197,7 +203,9 @@ class TestPhaseFileValidation:
     def test_empty_description(self, valid_phase, seen_ids, seen_names):
         valid_phase["description"] = ""
         errors = validate_phase_file(valid_phase, "test.yaml", seen_ids, seen_names)
-        assert any("description must be a non-empty string" in e["message"] for e in errors)
+        assert any(
+            "description must be a non-empty string" in e["message"] for e in errors
+        )
 
     def test_done_definitions_not_list(self, valid_phase, seen_ids, seen_names):
         valid_phase["done_definitions"] = "not a list"
@@ -230,150 +238,256 @@ class TestPhaseFileValidation:
 
 # ── Workflow YAML validation ──────────────────────────────────────
 
-class TestWorkflowYamlValidation:
 
+class TestWorkflowYamlValidation:
     def test_valid_workflow(self, valid_workflow_cfg, phase_names):
-        errors = validate_workflow_yaml(valid_workflow_cfg, "workflow.yaml", phase_names)
+        errors = validate_workflow_yaml(
+            valid_workflow_cfg, "workflow.yaml", phase_names
+        )
         assert errors == []
 
     def test_missing_orchestrator(self, valid_workflow_cfg, phase_names):
         del valid_workflow_cfg["orchestrator"]
-        errors = validate_workflow_yaml(valid_workflow_cfg, "workflow.yaml", phase_names)
-        assert any("Missing required top-level key: 'orchestrator'" in e["message"] for e in errors)
+        errors = validate_workflow_yaml(
+            valid_workflow_cfg, "workflow.yaml", phase_names
+        )
+        assert any(
+            "Missing required top-level key: 'orchestrator'" in e["message"]
+            for e in errors
+        )
 
     def test_missing_workflow_section(self, valid_workflow_cfg, phase_names):
         del valid_workflow_cfg["workflow"]
-        errors = validate_workflow_yaml(valid_workflow_cfg, "workflow.yaml", phase_names)
-        assert any("Missing required top-level key: 'workflow'" in e["message"] for e in errors)
+        errors = validate_workflow_yaml(
+            valid_workflow_cfg, "workflow.yaml", phase_names
+        )
+        assert any(
+            "Missing required top-level key: 'workflow'" in e["message"] for e in errors
+        )
 
     def test_missing_launch_template(self, valid_workflow_cfg, phase_names):
         del valid_workflow_cfg["launch_template"]
-        errors = validate_workflow_yaml(valid_workflow_cfg, "workflow.yaml", phase_names)
-        assert any("Missing required top-level key: 'launch_template'" in e["message"] for e in errors)
+        errors = validate_workflow_yaml(
+            valid_workflow_cfg, "workflow.yaml", phase_names
+        )
+        assert any(
+            "Missing required top-level key: 'launch_template'" in e["message"]
+            for e in errors
+        )
 
     def test_orchestrator_not_dict(self, valid_workflow_cfg, phase_names):
         valid_workflow_cfg["orchestrator"] = "not a dict"
-        errors = validate_workflow_yaml(valid_workflow_cfg, "workflow.yaml", phase_names)
+        errors = validate_workflow_yaml(
+            valid_workflow_cfg, "workflow.yaml", phase_names
+        )
         assert any("orchestrator must be a dict" in e["message"] for e in errors)
 
     def test_orchestrator_missing_type(self, valid_workflow_cfg, phase_names):
         del valid_workflow_cfg["orchestrator"]["type"]
-        errors = validate_workflow_yaml(valid_workflow_cfg, "workflow.yaml", phase_names)
-        assert any("orchestrator missing required key: 'type'" in e["message"] for e in errors)
+        errors = validate_workflow_yaml(
+            valid_workflow_cfg, "workflow.yaml", phase_names
+        )
+        assert any(
+            "orchestrator missing required key: 'type'" in e["message"] for e in errors
+        )
 
     def test_invalid_orchestrator_type(self, valid_workflow_cfg, phase_names):
         valid_workflow_cfg["orchestrator"]["type"] = "invalid_type"
-        errors = validate_workflow_yaml(valid_workflow_cfg, "workflow.yaml", phase_names)
+        errors = validate_workflow_yaml(
+            valid_workflow_cfg, "workflow.yaml", phase_names
+        )
         assert any("Invalid orchestrator type" in e["message"] for e in errors)
 
     def test_max_phase_retries_negative(self, valid_workflow_cfg, phase_names):
         valid_workflow_cfg["orchestrator"]["max_phase_retries"] = -1
-        errors = validate_workflow_yaml(valid_workflow_cfg, "workflow.yaml", phase_names)
-        assert any("max_phase_retries must be a non-negative integer" in e["message"] for e in errors)
+        errors = validate_workflow_yaml(
+            valid_workflow_cfg, "workflow.yaml", phase_names
+        )
+        assert any(
+            "max_phase_retries must be a non-negative integer" in e["message"]
+            for e in errors
+        )
 
     def test_max_total_gotos_non_int(self, valid_workflow_cfg, phase_names):
         valid_workflow_cfg["orchestrator"]["max_total_gotos"] = "ten"
-        errors = validate_workflow_yaml(valid_workflow_cfg, "workflow.yaml", phase_names)
-        assert any("max_total_gotos must be a non-negative integer" in e["message"] for e in errors)
+        errors = validate_workflow_yaml(
+            valid_workflow_cfg, "workflow.yaml", phase_names
+        )
+        assert any(
+            "max_total_gotos must be a non-negative integer" in e["message"]
+            for e in errors
+        )
 
     def test_eval_point_references_unknown_phase(self, valid_workflow_cfg, phase_names):
-        valid_workflow_cfg["orchestrator"]["evaluation_points"][0]["after_phase"] = "nonexistent"
-        errors = validate_workflow_yaml(valid_workflow_cfg, "workflow.yaml", phase_names)
-        assert any("references unknown phase: 'nonexistent'" in e["message"] for e in errors)
+        valid_workflow_cfg["orchestrator"]["evaluation_points"][0]["after_phase"] = (
+            "nonexistent"
+        )
+        errors = validate_workflow_yaml(
+            valid_workflow_cfg, "workflow.yaml", phase_names
+        )
+        assert any(
+            "references unknown phase: 'nonexistent'" in e["message"] for e in errors
+        )
 
     def test_eval_point_duplicate_after_phase(self, valid_workflow_cfg, phase_names):
-        valid_workflow_cfg["orchestrator"]["evaluation_points"].append({
-            "after_phase": "test_phase",  # Duplicate
-            "evaluator": "heuristic",
-            "conditions": [{"if": "score >= 0.0", "action": "continue"}],
-        })
-        errors = validate_workflow_yaml(valid_workflow_cfg, "workflow.yaml", phase_names)
+        valid_workflow_cfg["orchestrator"]["evaluation_points"].append(
+            {
+                "after_phase": "test_phase",  # Duplicate
+                "evaluator": "heuristic",
+                "conditions": [{"if": "score >= 0.0", "action": "continue"}],
+            }
+        )
+        errors = validate_workflow_yaml(
+            valid_workflow_cfg, "workflow.yaml", phase_names
+        )
         assert any("duplicates 'test_phase'" in e["message"] for e in errors)
 
     def test_eval_point_goto_unknown_target(self, valid_workflow_cfg, phase_names):
-        valid_workflow_cfg["orchestrator"]["evaluation_points"][0]["conditions"][1]["target"] = "nonexistent"
-        errors = validate_workflow_yaml(valid_workflow_cfg, "workflow.yaml", phase_names)
-        assert any("references unknown phase: 'nonexistent'" in e["message"] for e in errors)
+        valid_workflow_cfg["orchestrator"]["evaluation_points"][0]["conditions"][1][
+            "target"
+        ] = "nonexistent"
+        errors = validate_workflow_yaml(
+            valid_workflow_cfg, "workflow.yaml", phase_names
+        )
+        assert any(
+            "references unknown phase: 'nonexistent'" in e["message"] for e in errors
+        )
 
     def test_condition_invalid_action(self, valid_workflow_cfg, phase_names):
-        valid_workflow_cfg["orchestrator"]["evaluation_points"][0]["conditions"][0]["action"] = "skip"
-        errors = validate_workflow_yaml(valid_workflow_cfg, "workflow.yaml", phase_names)
-        assert any("condition[0].action invalid: 'skip'" in e["message"] for e in errors)
+        valid_workflow_cfg["orchestrator"]["evaluation_points"][0]["conditions"][0][
+            "action"
+        ] = "skip"
+        errors = validate_workflow_yaml(
+            valid_workflow_cfg, "workflow.yaml", phase_names
+        )
+        assert any(
+            "condition[0].action invalid: 'skip'" in e["message"] for e in errors
+        )
 
     def test_condition_missing_action(self, valid_workflow_cfg, phase_names):
-        del valid_workflow_cfg["orchestrator"]["evaluation_points"][0]["conditions"][0]["action"]
-        errors = validate_workflow_yaml(valid_workflow_cfg, "workflow.yaml", phase_names)
-        assert any("condition[0] missing required key: 'action'" in e["message"] for e in errors)
+        del valid_workflow_cfg["orchestrator"]["evaluation_points"][0]["conditions"][0][
+            "action"
+        ]
+        errors = validate_workflow_yaml(
+            valid_workflow_cfg, "workflow.yaml", phase_names
+        )
+        assert any(
+            "condition[0] missing required key: 'action'" in e["message"]
+            for e in errors
+        )
 
     def test_workflow_section_not_dict(self, valid_workflow_cfg, phase_names):
         valid_workflow_cfg["workflow"] = "bad"
-        errors = validate_workflow_yaml(valid_workflow_cfg, "workflow.yaml", phase_names)
+        errors = validate_workflow_yaml(
+            valid_workflow_cfg, "workflow.yaml", phase_names
+        )
         assert any("workflow must be a dict" in e["message"] for e in errors)
 
     def test_workflow_missing_result_criteria(self, valid_workflow_cfg, phase_names):
         del valid_workflow_cfg["workflow"]["result_criteria"]
-        errors = validate_workflow_yaml(valid_workflow_cfg, "workflow.yaml", phase_names)
-        assert any("workflow missing required key: 'result_criteria'" in e["message"] for e in errors)
+        errors = validate_workflow_yaml(
+            valid_workflow_cfg, "workflow.yaml", phase_names
+        )
+        assert any(
+            "workflow missing required key: 'result_criteria'" in e["message"]
+            for e in errors
+        )
 
     def test_workflow_missing_on_result_found(self, valid_workflow_cfg, phase_names):
         del valid_workflow_cfg["workflow"]["on_result_found"]
-        errors = validate_workflow_yaml(valid_workflow_cfg, "workflow.yaml", phase_names)
-        assert any("workflow missing required key: 'on_result_found'" in e["message"] for e in errors)
+        errors = validate_workflow_yaml(
+            valid_workflow_cfg, "workflow.yaml", phase_names
+        )
+        assert any(
+            "workflow missing required key: 'on_result_found'" in e["message"]
+            for e in errors
+        )
 
     def test_launch_template_not_dict(self, valid_workflow_cfg, phase_names):
         valid_workflow_cfg["launch_template"] = "bad"
-        errors = validate_workflow_yaml(valid_workflow_cfg, "workflow.yaml", phase_names)
+        errors = validate_workflow_yaml(
+            valid_workflow_cfg, "workflow.yaml", phase_names
+        )
         assert any("launch_template must be a dict" in e["message"] for e in errors)
 
     def test_launch_param_missing_name(self, valid_workflow_cfg, phase_names):
         del valid_workflow_cfg["launch_template"]["parameters"][0]["name"]
-        errors = validate_workflow_yaml(valid_workflow_cfg, "workflow.yaml", phase_names)
-        assert any("parameters[0] missing required key: 'name'" in e["message"] for e in errors)
+        errors = validate_workflow_yaml(
+            valid_workflow_cfg, "workflow.yaml", phase_names
+        )
+        assert any(
+            "parameters[0] missing required key: 'name'" in e["message"] for e in errors
+        )
 
     def test_launch_param_missing_required_field(self, valid_workflow_cfg, phase_names):
         del valid_workflow_cfg["launch_template"]["parameters"][0]["required"]
-        errors = validate_workflow_yaml(valid_workflow_cfg, "workflow.yaml", phase_names)
-        assert any("parameters[0] missing required key: 'required'" in e["message"] for e in errors)
+        errors = validate_workflow_yaml(
+            valid_workflow_cfg, "workflow.yaml", phase_names
+        )
+        assert any(
+            "parameters[0] missing required key: 'required'" in e["message"]
+            for e in errors
+        )
 
     def test_duplicate_launch_param_name(self, valid_workflow_cfg, phase_names):
-        valid_workflow_cfg["launch_template"]["parameters"].append({
-            "name": "design_document",  # Duplicate
-            "label": "Duplicate",
-            "type": "text",
-            "required": True,
-        })
-        errors = validate_workflow_yaml(valid_workflow_cfg, "workflow.yaml", phase_names)
-        assert any("Duplicate parameter name: 'design_document'" in e["message"] for e in errors)
+        valid_workflow_cfg["launch_template"]["parameters"].append(
+            {
+                "name": "design_document",  # Duplicate
+                "label": "Duplicate",
+                "type": "text",
+                "required": True,
+            }
+        )
+        errors = validate_workflow_yaml(
+            valid_workflow_cfg, "workflow.yaml", phase_names
+        )
+        assert any(
+            "Duplicate parameter name: 'design_document'" in e["message"]
+            for e in errors
+        )
 
     def test_board_column_missing_id(self, valid_workflow_cfg, phase_names):
         del valid_workflow_cfg["workflow"]["board"]["columns"][0]["id"]
-        errors = validate_workflow_yaml(valid_workflow_cfg, "workflow.yaml", phase_names)
+        errors = validate_workflow_yaml(
+            valid_workflow_cfg, "workflow.yaml", phase_names
+        )
         assert any("missing required key: 'id'" in e["message"] for e in errors)
 
     def test_board_duplicate_column_id(self, valid_workflow_cfg, phase_names):
-        valid_workflow_cfg["workflow"]["board"]["columns"].append({
-            "id": valid_workflow_cfg["workflow"]["board"]["columns"][0]["id"],
-            "name": "Duplicate",
-            "order": 99,
-        })
-        errors = validate_workflow_yaml(valid_workflow_cfg, "workflow.yaml", phase_names)
+        valid_workflow_cfg["workflow"]["board"]["columns"].append(
+            {
+                "id": valid_workflow_cfg["workflow"]["board"]["columns"][0]["id"],
+                "name": "Duplicate",
+                "order": 99,
+            }
+        )
+        errors = validate_workflow_yaml(
+            valid_workflow_cfg, "workflow.yaml", phase_names
+        )
         assert any("Duplicate board column id" in e["message"] for e in errors)
 
     def test_eval_points_not_list(self, valid_workflow_cfg, phase_names):
         valid_workflow_cfg["orchestrator"]["evaluation_points"] = "not a list"
-        errors = validate_workflow_yaml(valid_workflow_cfg, "workflow.yaml", phase_names)
+        errors = validate_workflow_yaml(
+            valid_workflow_cfg, "workflow.yaml", phase_names
+        )
         assert any("evaluation_points must be a list" in e["message"] for e in errors)
 
     def test_eval_point_missing_conditions(self, valid_workflow_cfg, phase_names):
         del valid_workflow_cfg["orchestrator"]["evaluation_points"][0]["conditions"]
-        errors = validate_workflow_yaml(valid_workflow_cfg, "workflow.yaml", phase_names)
-        assert any("evaluation_point[0] missing required key: 'conditions'" in e["message"] for e in errors)
+        errors = validate_workflow_yaml(
+            valid_workflow_cfg, "workflow.yaml", phase_names
+        )
+        assert any(
+            "evaluation_point[0] missing required key: 'conditions'" in e["message"]
+            for e in errors
+        )
 
 
 # ── Single workflow directory validation ──────────────────────────
 
-class TestSingleWorkflowValidation:
 
+class TestSingleWorkflowValidation:
     def test_valid_workflow_dir(self, valid_workflow_dir):
         errors = validate_single_workflow(valid_workflow_dir)
         assert errors == []
@@ -427,8 +541,8 @@ class TestSingleWorkflowValidation:
 
 # ── Full scan validation ──────────────────────────────────────────
 
-class TestValidateAllWorkflows:
 
+class TestValidateAllWorkflows:
     def test_valid_workflows_dir(self, valid_workflow_dir):
         # Parent of the workflow dir acts as config_dir
         errors = validate_all_workflows(valid_workflow_dir.parent)
@@ -446,7 +560,9 @@ class TestValidateAllWorkflows:
         assert len(errors) == 1
         assert "No workflow directories found" in errors[0]["message"]
 
-    def test_mixed_valid_and_invalid(self, tmp_path, valid_workflow_cfg, valid_phase, valid_phase_2):
+    def test_mixed_valid_and_invalid(
+        self, tmp_path, valid_workflow_cfg, valid_phase, valid_phase_2
+    ):
         # Valid workflow — include both phases so goto target resolves
         good = tmp_path / "good_workflow"
         good.mkdir()
@@ -472,6 +588,7 @@ class TestValidateAllWorkflows:
 
 # ── Integration: validate the actual project configs ──────────────
 
+
 class TestRealProjectConfigs:
     """Validate the actual config files in the repo.
 
@@ -494,7 +611,9 @@ class TestRealProjectConfigs:
         errors = validate_single_workflow(autopilot_dir)
         real_errors = [e for e in errors if e["severity"] == "error"]
         if real_errors:
-            msg = "\n".join(f"  [{e['severity']}] {e['file']}: {e['message']}" for e in real_errors)
+            msg = "\n".join(
+                f"  [{e['severity']}] {e['file']}: {e['message']}" for e in real_errors
+            )
             pytest.fail(f"Autopilot workflow has config errors:\n{msg}")
 
     def test_all_workflows_valid(self):
@@ -503,5 +622,7 @@ class TestRealProjectConfigs:
         errors = validate_all_workflows(config_dir)
         real_errors = [e for e in errors if e["severity"] == "error"]
         if real_errors:
-            msg = "\n".join(f"  [{e['severity']}] {e['file']}: {e['message']}" for e in real_errors)
+            msg = "\n".join(
+                f"  [{e['severity']}] {e['file']}: {e['message']}" for e in real_errors
+            )
             pytest.fail(f"Workflow config errors:\n{msg}")

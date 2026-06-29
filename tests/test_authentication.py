@@ -1,28 +1,27 @@
 """Tests for authentication functionality."""
 
-import pytest
 import uuid
-from datetime import datetime, timedelta
-from jose import jwt
+from datetime import timedelta
+from unittest.mock import Mock
+
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
-from unittest.mock import Mock
 
-from src.core.database import Base, DatabaseManager
-from src.core.user_models import User
 from src.auth import (
-    hash_password,
-    verify_password,
     create_access_token,
     create_refresh_token,
-    verify_access_token,
-    verify_refresh_token,
     create_token_pair,
+    hash_password,
     hash_token,
+    verify_access_token,
+    verify_password,
+    verify_refresh_token,
 )
 from src.auth.auth_config import get_auth_config
+from src.core.database import Base, DatabaseManager
 
 
 class TestPasswordHashing:
@@ -128,6 +127,7 @@ class TestJWTTokens:
 
         # Wait for expiration
         import time
+
         time.sleep(2)
 
         # Should be invalid after expiry
@@ -196,8 +196,8 @@ def test_session(test_db):
 @pytest.fixture
 def test_client(test_db, monkeypatch):
     """Create a test client with test database."""
-    from src.mcp.server import app, auth_router
     from src.auth import auth_api
+    from src.mcp.server import app, auth_router
 
     # Override the auth API's get_db_manager to use test DB
     monkeypatch.setattr(auth_api, "get_db_manager", lambda: test_db)
@@ -221,8 +221,8 @@ class TestAuthenticationAPI:
                 "username": "newuser",
                 "password": "SecurePassword123!",
                 "first_name": "John",
-                "last_name": "Doe"
-            }
+                "last_name": "Doe",
+            },
         )
 
         assert response.status_code == 200
@@ -242,8 +242,8 @@ class TestAuthenticationAPI:
             json={
                 "email": "duplicate@example.com",
                 "username": "user1",
-                "password": "SecurePassword123!"
-            }
+                "password": "SecurePassword123!",
+            },
         )
 
         # Try to register with same email
@@ -252,8 +252,8 @@ class TestAuthenticationAPI:
             json={
                 "email": "duplicate@example.com",
                 "username": "user2",
-                "password": "SecurePassword123!"
-            }
+                "password": "SecurePassword123!",
+            },
         )
 
         assert response.status_code in (400, 422)
@@ -266,13 +266,17 @@ class TestAuthenticationAPI:
             json={
                 "email": "weakpass@example.com",
                 "username": "weakuser",
-                "password": "weak"  # Too short
-            }
+                "password": "weak",  # Too short
+            },
         )
 
         assert response.status_code in (400, 422)
         error = response.json()["detail"]
-        assert "password" in str(error).lower() or "too short" in str(error).lower() or "at least" in str(error).lower()
+        assert (
+            "password" in str(error).lower()
+            or "too short" in str(error).lower()
+            or "at least" in str(error).lower()
+        )
 
     def test_login_success(self, test_client, test_session):
         """Test successful login."""
@@ -285,7 +289,7 @@ class TestAuthenticationAPI:
             username="testuser",
             password_hash=hash_password("TestPassword123!"),
             status="active",
-            email_verified=True
+            email_verified=True,
         )
         test_session.add(user)
         test_session.commit()
@@ -293,10 +297,7 @@ class TestAuthenticationAPI:
         # Login
         response = test_client.post(
             "/api/auth/login",
-            data={
-                "username": "testuser@example.com",
-                "password": "TestPassword123!"
-            }
+            data={"username": "testuser@example.com", "password": "TestPassword123!"},
         )
 
         assert response.status_code == 200
@@ -316,7 +317,7 @@ class TestAuthenticationAPI:
             email="wrongpass@example.com",
             username="wrongpassuser",
             password_hash=hash_password("CorrectPassword123!"),
-            status="active"
+            status="active",
         )
         test_session.add(user)
         test_session.commit()
@@ -324,10 +325,7 @@ class TestAuthenticationAPI:
         # Try login with wrong password
         response = test_client.post(
             "/api/auth/login",
-            data={
-                "username": "wrongpass@example.com",
-                "password": "WrongPassword456!"
-            }
+            data={"username": "wrongpass@example.com", "password": "WrongPassword456!"},
         )
 
         assert response.status_code == 401
@@ -337,10 +335,7 @@ class TestAuthenticationAPI:
         """Test login with non-existent user."""
         response = test_client.post(
             "/api/auth/login",
-            data={
-                "username": "nonexistent@example.com",
-                "password": "AnyPassword123!"
-            }
+            data={"username": "nonexistent@example.com", "password": "AnyPassword123!"},
         )
 
         assert response.status_code == 401
@@ -348,7 +343,7 @@ class TestAuthenticationAPI:
 
     def test_refresh_token_valid(self, test_client, test_session):
         """Test refreshing token with valid refresh token."""
-        from src.core.user_models import User as UserModel, AuthToken
+        from src.core.user_models import User as UserModel
 
         # Create user and login
         user = UserModel(
@@ -356,7 +351,7 @@ class TestAuthenticationAPI:
             email="refresh@example.com",
             username="refreshuser",
             password_hash=hash_password("TestPassword123!"),
-            status="active"
+            status="active",
         )
         test_session.add(user)
         test_session.commit()
@@ -364,19 +359,13 @@ class TestAuthenticationAPI:
         # Login to get tokens
         login_response = test_client.post(
             "/api/auth/login",
-            data={
-                "username": "refresh@example.com",
-                "password": "TestPassword123!"
-            }
+            data={"username": "refresh@example.com", "password": "TestPassword123!"},
         )
         tokens = login_response.json()
 
         # Refresh token
         response = test_client.post(
-            "/api/auth/refresh",
-            json={
-                "refresh_token": tokens["refresh_token"]
-            }
+            "/api/auth/refresh", json={"refresh_token": tokens["refresh_token"]}
         )
 
         assert response.status_code == 200
@@ -388,10 +377,7 @@ class TestAuthenticationAPI:
     def test_refresh_token_invalid(self, test_client):
         """Test refreshing with invalid refresh token."""
         response = test_client.post(
-            "/api/auth/refresh",
-            json={
-                "refresh_token": "invalid.refresh.token"
-            }
+            "/api/auth/refresh", json={"refresh_token": "invalid.refresh.token"}
         )
 
         assert response.status_code == 401

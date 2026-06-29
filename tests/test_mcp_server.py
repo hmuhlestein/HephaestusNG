@@ -2,12 +2,13 @@
 """Integration tests for MCP server endpoints."""
 
 import asyncio
-import aiohttp
-import uuid
-import json
-import sys
 import os
+import sys
 import time
+import uuid
+
+import aiohttp
+
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
@@ -28,7 +29,7 @@ async def test_health_endpoint():
                 print(f"   Status: {data.get('status')}")
                 print(f"   Uptime: {data.get('uptime_seconds', 0):.1f} seconds")
                 print(f"   Active agents: {data.get('active_agents', 0)}")
-                print(f"   ✅ Health check passed")
+                print("   ✅ Health check passed")
 
                 return True
 
@@ -47,18 +48,13 @@ async def test_create_task():
             task_data = {
                 "task_description": "Write unit tests for the authentication module",
                 "done_definition": "All auth functions have >90% test coverage with passing tests",
-                "priority": "medium"
+                "priority": "medium",
             }
 
-            headers = {
-                "Content-Type": "application/json",
-                "X-Agent-ID": TEST_AGENT_ID
-            }
+            headers = {"Content-Type": "application/json", "X-Agent-ID": TEST_AGENT_ID}
 
             async with session.post(
-                f"{BASE_URL}/create_task",
-                json=task_data,
-                headers=headers
+                f"{BASE_URL}/create_task", json=task_data, headers=headers
             ) as response:
                 assert response.status == 200, f"Expected 200, got {response.status}"
                 data = await response.json()
@@ -69,7 +65,7 @@ async def test_create_task():
                 print(f"   Task ID: {task_id}")
                 print(f"   Status: {data.get('status')}")
                 print(f"   Enriched: {data.get('enriched_description', '')[:80]}...")
-                print(f"   ✅ Task created successfully")
+                print("   ✅ Task created successfully")
 
                 return task_id
 
@@ -88,18 +84,13 @@ async def test_save_memory():
                 "memory_content": "Always validate user input on both client and server side to prevent XSS attacks",
                 "memory_type": "learning",
                 "tags": ["security", "validation", "xss"],
-                "related_files": ["src/validators.js", "src/middleware/auth.js"]
+                "related_files": ["src/validators.js", "src/middleware/auth.js"],
             }
 
-            headers = {
-                "Content-Type": "application/json",
-                "X-Agent-ID": TEST_AGENT_ID
-            }
+            headers = {"Content-Type": "application/json", "X-Agent-ID": TEST_AGENT_ID}
 
             async with session.post(
-                f"{BASE_URL}/save_memory",
-                json=memory_data,
-                headers=headers
+                f"{BASE_URL}/save_memory", json=memory_data, headers=headers
             ) as response:
                 assert response.status == 200, f"Expected 200, got {response.status}"
                 data = await response.json()
@@ -114,7 +105,7 @@ async def test_save_memory():
                 if data.get("similar_memories"):
                     print(f"   Found {len(data['similar_memories'])} similar memories")
 
-                print(f"   ✅ Memory saved successfully")
+                print("   ✅ Memory saved successfully")
                 return memory_id
 
         except Exception as e:
@@ -143,31 +134,29 @@ async def test_task_status_update():
                 "key_learnings": [
                     "Use mock JWT tokens for testing authentication",
                     "Test both success and failure cases for each endpoint",
-                    "Include edge cases like expired tokens and malformed requests"
+                    "Include edge cases like expired tokens and malformed requests",
                 ],
-                "code_changes": ["tests/auth.test.js", "tests/fixtures/tokens.js"]
+                "code_changes": ["tests/auth.test.js", "tests/fixtures/tokens.js"],
             }
 
             headers = {
                 "Content-Type": "application/json",
-                "X-Agent-ID": TEST_AGENT_ID  # Must match the agent that created the task
+                "X-Agent-ID": TEST_AGENT_ID,  # Must match the agent that created the task
             }
 
             async with session.post(
-                f"{BASE_URL}/update_task_status",
-                json=update_data,
-                headers=headers
+                f"{BASE_URL}/update_task_status", json=update_data, headers=headers
             ) as response:
                 # Note: This might fail if the task wasn't assigned to our test agent
                 if response.status == 403:
-                    print(f"   ⚠️  Task not assigned to test agent (expected behavior)")
+                    print("   ⚠️  Task not assigned to test agent (expected behavior)")
                     return True
 
                 if response.status == 200:
                     data = await response.json()
                     print(f"   Task marked as: {update_data['status']}")
                     print(f"   Memories saved: {data.get('memories_saved', 0)}")
-                    print(f"   ✅ Task status updated successfully")
+                    print("   ✅ Task status updated successfully")
                     return True
                 else:
                     text = await response.text()
@@ -195,9 +184,11 @@ async def test_agent_status():
                 for agent in agents[:3]:  # Show first 3 agents
                     print(f"      - Agent {agent.get('id', 'unknown')[:8]}...")
                     print(f"        Status: {agent.get('status')}")
-                    print(f"        Task: {agent.get('current_task', {}).get('description', 'None')[:50]}...")
+                    print(
+                        f"        Task: {agent.get('current_task', {}).get('description', 'None')[:50]}..."
+                    )
 
-                print(f"   ✅ Agent status retrieved successfully")
+                print("   ✅ Agent status retrieved successfully")
                 return True
 
         except Exception as e:
@@ -216,7 +207,7 @@ async def test_task_progress():
                 data = await response.json()
 
                 tasks = data.get("tasks", {})
-                print(f"   Task summary:")
+                print("   Task summary:")
                 print(f"      Pending: {tasks.get('pending', 0)}")
                 print(f"      Assigned: {tasks.get('assigned', 0)}")
                 print(f"      In Progress: {tasks.get('in_progress', 0)}")
@@ -225,11 +216,13 @@ async def test_task_progress():
 
                 recent = data.get("recent_tasks", [])
                 if recent:
-                    print(f"   Recent tasks:")
+                    print("   Recent tasks:")
                     for task in recent[:3]:
-                        print(f"      - [{task.get('status')}] {task.get('description', '')[:50]}...")
+                        print(
+                            f"      - [{task.get('status')}] {task.get('description', '')[:50]}..."
+                        )
 
-                print(f"   ✅ Task progress retrieved successfully")
+                print("   ✅ Task progress retrieved successfully")
                 return True
 
         except Exception as e:
@@ -248,7 +241,7 @@ async def test_sse_connection():
                 assert response.status == 200, f"Expected 200, got {response.status}"
                 assert response.headers.get("Content-Type") == "text/event-stream"
 
-                print(f"   ✅ SSE endpoint accessible")
+                print("   ✅ SSE endpoint accessible")
                 print(f"   Content-Type: {response.headers.get('Content-Type')}")
 
                 # Read a few events (with timeout)
@@ -259,7 +252,7 @@ async def test_sse_connection():
                     if time.time() - start_time > 3:  # Read for max 3 seconds
                         break
 
-                    decoded = line.decode('utf-8').strip()
+                    decoded = line.decode("utf-8").strip()
                     if decoded.startswith("data:"):
                         events_received += 1
                         if events_received <= 2:  # Show first 2 events
@@ -270,7 +263,7 @@ async def test_sse_connection():
                 return True
 
     except asyncio.TimeoutError:
-        print(f"   ✅ SSE connection established (timed out as expected)")
+        print("   ✅ SSE connection established (timed out as expected)")
         return True
     except Exception as e:
         print(f"   ❌ SSE connection failed: {e}")
@@ -292,7 +285,7 @@ async def run_all_tests():
                     print("❌ MCP server is not responding properly")
                     print("Please start the server with: python run_server.py")
                     return False
-    except Exception as e:
+    except Exception:
         print(f"❌ Cannot connect to MCP server at {BASE_URL}")
         print("Please start the server with: python run_server.py")
         return False

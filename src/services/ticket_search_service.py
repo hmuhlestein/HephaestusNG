@@ -1,17 +1,16 @@
 """Service for searching tickets using hybrid (semantic + keyword) approach."""
 
-import os
 import json
-import time
-from typing import List, Dict, Any, Optional
-from datetime import datetime
 import logging
+import time
+from datetime import datetime
+from typing import Any, Dict, List, Optional
 
 from sqlalchemy.sql import text
 
-from src.core.database import get_db, Ticket, TicketComment
-from src.memory.store_factory import create_vector_store
+from src.core.database import Ticket, TicketComment, get_db
 from src.memory.embedding_factory import create_embedding_provider
+from src.memory.store_factory import create_vector_store
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +48,10 @@ class TicketSearchService:
 
     @staticmethod
     async def semantic_search(
-        query_text: str, workflow_id: str, limit: int = 10, filters: Optional[Dict[str, Any]] = None
+        query_text: str,
+        workflow_id: str,
+        limit: int = 10,
+        filters: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
         """
         Semantic search using the configurable vector store (turbovec).
@@ -92,9 +94,15 @@ class TicketSearchService:
                                 return False
                         elif val != want:
                             return False
-                if "assigned_agent_id" in filters and meta.get("assigned_agent_id") != filters["assigned_agent_id"]:
+                if (
+                    "assigned_agent_id" in filters
+                    and meta.get("assigned_agent_id") != filters["assigned_agent_id"]
+                ):
                     return False
-                if "is_blocked" in filters and meta.get("is_blocked") != filters["is_blocked"]:
+                if (
+                    "is_blocked" in filters
+                    and meta.get("is_blocked") != filters["is_blocked"]
+                ):
                     return False
                 return True
 
@@ -127,11 +135,16 @@ class TicketSearchService:
             return results
 
         except Exception as e:
-            logger.warning(f"Semantic search failed, falling back to keyword-only search: {e}")
+            logger.warning(
+                f"Semantic search failed, falling back to keyword-only search: {e}"
+            )
             # Gracefully degrade to keyword search
             try:
                 return await TicketSearchService.keyword_search(
-                    keywords=query_text, workflow_id=workflow_id, limit=limit, filters=filters
+                    keywords=query_text,
+                    workflow_id=workflow_id,
+                    limit=limit,
+                    filters=filters,
                 )
             except Exception as fallback_error:
                 logger.error(f"Keyword fallback search also failed: {fallback_error}")
@@ -139,7 +152,10 @@ class TicketSearchService:
 
     @staticmethod
     async def keyword_search(
-        keywords: str, workflow_id: str, limit: int = 10, filters: Optional[Dict[str, Any]] = None
+        keywords: str,
+        workflow_id: str,
+        limit: int = 10,
+        filters: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
         """
         Keyword-based search using SQLite FTS5.
@@ -183,7 +199,8 @@ class TicketSearchService:
                 )
 
                 result = db.execute(
-                    sql, {"query": fts_query, "workflow_id": workflow_id, "limit": limit}
+                    sql,
+                    {"query": fts_query, "workflow_id": workflow_id, "limit": limit},
                 )
 
                 rows = result.fetchall()
@@ -335,7 +352,9 @@ class TicketSearchService:
         return final_results
 
     @staticmethod
-    async def find_related_tickets(ticket_id: str, limit: int = 5) -> List[Dict[str, Any]]:
+    async def find_related_tickets(
+        ticket_id: str, limit: int = 5
+    ) -> List[Dict[str, Any]]:
         """
         Find semantically similar tickets for duplicate detection and context.
 
@@ -519,7 +538,10 @@ class TicketSearchService:
                 updated_at = ticket.updated_at.isoformat() + "Z"
                 created_by_agent_id = ticket.created_by_agent_id
                 assigned_agent_id = ticket.assigned_agent_id
-                is_blocked = bool(ticket.blocked_by_ticket_ids and len(ticket.blocked_by_ticket_ids) > 0)
+                is_blocked = bool(
+                    ticket.blocked_by_ticket_ids
+                    and len(ticket.blocked_by_ticket_ids) > 0
+                )
 
             # Generate new embedding via the configurable provider (fastembed)
             provider = TicketSearchService._get_embedding_provider()

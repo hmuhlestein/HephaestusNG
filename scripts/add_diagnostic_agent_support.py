@@ -8,11 +8,13 @@ This migration script:
 
 import sys
 from pathlib import Path
+
 sys.path.append(str(Path(__file__).parent.parent / "src"))
 
-from src.core.database import DatabaseManager, Base, DiagnosticRun
-from src.core.simple_config import get_config
 import logging
+
+from src.core.database import DatabaseManager, DiagnosticRun
+from src.core.simple_config import get_config
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -27,6 +29,7 @@ def migrate():
 
     # Create new table
     from sqlalchemy import create_engine
+
     engine = create_engine(f"sqlite:///{config.database_path}")
 
     # Create DiagnosticRun table if it doesn't exist

@@ -7,7 +7,7 @@ from pathlib import Path
 # Add project root to path
 sys.path.append(str(Path(__file__).parent.parent))
 
-from src.core.database import DatabaseManager, Base
+from src.core.database import Base, DatabaseManager
 
 
 def migrate_add_worktrees():
@@ -32,7 +32,11 @@ def migrate_add_worktrees():
         session = db_manager.get_session()
         try:
             # Check if tables exist by querying them
-            from src.core.database import AgentWorktree, WorktreeCommit, MergeConflictResolution
+            from src.core.database import (
+                AgentWorktree,
+                MergeConflictResolution,
+                WorktreeCommit,
+            )
 
             # These queries will fail if tables don't exist
             session.query(AgentWorktree).count()

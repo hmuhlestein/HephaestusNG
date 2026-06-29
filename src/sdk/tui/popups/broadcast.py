@@ -1,10 +1,10 @@
 """Redesigned broadcast popup with better UX."""
 
-from textual.app import ComposeResult
-from textual.screen import ModalScreen
-from textual.widgets import TextArea, Button, Static, Label
-from textual.containers import Container, Vertical, Horizontal, VerticalScroll
 import requests
+from textual.app import ComposeResult
+from textual.containers import Container, Horizontal, Vertical, VerticalScroll
+from textual.screen import ModalScreen
+from textual.widgets import Button, Label, Static, TextArea
 
 
 class BroadcastPopup(ModalScreen):
@@ -98,7 +98,10 @@ class BroadcastPopup(ModalScreen):
             with VerticalScroll(id="form-container"):
                 with Vertical(classes="field-group"):
                     yield Label("Message", classes="field-label")
-                    yield Label("This message will be sent to all active agents", classes="field-help")
+                    yield Label(
+                        "This message will be sent to all active agents",
+                        classes="field-help",
+                    )
                     yield TextArea(id="message-input")
 
             with Container(id="button-container"):
@@ -152,7 +155,11 @@ class BroadcastPopup(ModalScreen):
                 # Close popup after 1 second
                 self.set_timer(1.0, self.app.pop_screen)
             else:
-                error_msg = response.text[:100] if response.text else f"HTTP {response.status_code}"
+                error_msg = (
+                    response.text[:100]
+                    if response.text
+                    else f"HTTP {response.status_code}"
+                )
                 status_bar.update(f"[red]✗ Error: {error_msg}[/]")
         except Exception as e:
             status_bar.update(f"[red]✗ Error: {str(e)[:100]}[/]")

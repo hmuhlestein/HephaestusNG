@@ -1,20 +1,16 @@
 """Validator agent spawning and management."""
 
-import uuid
-import logging
 import asyncio
-from typing import Dict, Any
+import logging
+import uuid
+from typing import Any, Dict
 
 from sqlalchemy.orm import Session
 
-from src.core.database import (
-    DatabaseManager,
-    Task,
-    Phase
-)
+from src.agents.manager import AgentManager
+from src.core.database import DatabaseManager, Phase, Task
 from src.core.worktree_manager import WorktreeManager
 from src.validation.prompt_builder import ValidationPromptBuilder
-from src.agents.manager import AgentManager
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +22,7 @@ def build_validator_prompt(
     workspace_changes: Dict[str, Any],
     agent_claims: str,
     iteration: int,
-    validator_agent_id: str
+    validator_agent_id: str,
 ) -> str:
     """Build a prompt for the validator agent.
 
@@ -49,7 +45,7 @@ def build_validator_prompt(
         "id": task.id,
         "raw_description": task.raw_description,
         "enriched_description": task.enriched_description,
-        "done_definition": task.done_definition
+        "done_definition": task.done_definition,
     }
 
     # Get phase validation config
@@ -66,7 +62,7 @@ def build_validator_prompt(
         agent_claims=agent_claims,
         iteration=iteration,
         previous_feedback=previous_feedback,
-        validator_agent_id=validator_agent_id
+        validator_agent_id=validator_agent_id,
     )
 
 
@@ -79,7 +75,7 @@ async def spawn_validator_agent(
     branch_manager: WorktreeManager,
     agent_manager: AgentManager,
     original_agent_id: str,
-    criteria: str = None
+    criteria: str = None,
 ) -> str:
     """Spawn a validator agent for either task or result validation.
 
@@ -117,7 +113,7 @@ async def spawn_validator_agent(
             # Get workspace changes
             branch_manager.get_workspace_changes(
                 agent_id=original_agent_id,
-                since_commit=None  # Get all changes
+                since_commit=None,  # Get all changes
             )
 
             # Get agent claims/results
@@ -127,7 +123,7 @@ async def spawn_validator_agent(
             from src.monitoring.prompt_loader import prompt_loader
 
             # Get previous feedback if any
-            previous_feedback = getattr(task, 'last_validation_feedback', None)
+            previous_feedback = getattr(task, "last_validation_feedback", None)
 
             validator_prompt = prompt_loader.format_task_validation_prompt(
                 validator_agent_id=validator_agent_id,
@@ -137,9 +133,12 @@ async def spawn_validator_agent(
                 enriched_description=task.enriched_description or task.raw_description,
                 original_agent_id=original_agent_id,
                 iteration=task.validation_iteration,
-                working_directory=branch_manager.get_agent_branch_path(original_agent_id) or "/tmp",
+                working_directory=branch_manager.get_agent_branch_path(
+                    original_agent_id
+                )
+                or "/tmp",
                 commit_sha=commit_sha,
-                previous_feedback=previous_feedback
+                previous_feedback=previous_feedback,
             )
 
             # Create validation task for task validator
@@ -155,13 +154,14 @@ async def spawn_validator_agent(
                 parent_task_id=target_id,
                 phase_id=task.phase_id,
                 workflow_id=workflow_id,
-                validation_enabled=False
+                validation_enabled=False,
             )
             session.add(validation_task)
 
         elif validation_type == "result":
             # Get result and workflow for result validation
-            from src.core.database import WorkflowResult, Workflow
+            from src.core.database import Workflow, WorkflowResult
+
             result = session.query(WorkflowResult).filter_by(id=target_id).first()
             if not result:
                 raise ValueError(f"Result {target_id} not found")
@@ -181,7 +181,7 @@ async def spawn_validator_agent(
                 workflow_id=workflow_id,
                 validation_criteria=criteria,
                 submitted_by_agent=original_agent_id,
-                submitted_at=result.created_at.isoformat()
+                submitted_at=result.created_at.isoformat(),
             )
 
             # Create validation task for result validator
@@ -195,7 +195,7 @@ async def spawn_validator_agent(
                 priority="high",
                 assigned_agent_id=validator_agent_id,
                 workflow_id=workflow_id,
-                validation_enabled=False
+                validation_enabled=False,
             )
             session.add(validation_task)
 
@@ -212,18 +212,22 @@ async def spawn_validator_agent(
             enriched_data={
                 "type": f"{validation_type}_validation",
                 "target_id": target_id,
-                "validation_prompt": validator_prompt  # Pass the formatted prompt
+                "validation_prompt": validator_prompt,  # Pass the formatted prompt
             },
             memories=[],  # Validators don't need memories
             project_context="",  # Validators have read-only access
             cli_type="claude",
             working_directory=None,  # Will be created from commit
-            agent_type="result_validator" if validation_type == "result" else "validator",
+            agent_type="result_validator"
+            if validation_type == "result"
+            else "validator",
             use_existing_worktree=False,  # Create new worktree from commit
-            commit_sha=commit_sha  # Create worktree from this commit
+            commit_sha=commit_sha,  # Create worktree from this commit
         )
 
-        logger.info(f"Spawned {validation_type} validator agent {validator_agent_id} for {target_id}")
+        logger.info(
+            f"Spawned {validation_type} validator agent {validator_agent_id} for {target_id}"
+        )
         return validator_agent_id
 
     except Exception as e:
@@ -235,10 +239,7 @@ async def spawn_validator_agent(
 
 
 async def spawn_validator_tmux_session(
-    agent_id: str,
-    working_directory: str,
-    prompt: str,
-    read_only: bool = True
+    agent_id: str, working_directory: str, prompt: str, read_only: bool = True
 ) -> None:
     """Spawn a tmux session for validator agent.
 
@@ -249,6 +250,7 @@ async def spawn_validator_tmux_session(
         read_only: Whether agent has read-only access
     """
     import libtmux
+
     from src.interfaces.cli_interface import get_cli_agent
 
     session_name = f"agent_{agent_id}"
@@ -267,7 +269,7 @@ async def spawn_validator_tmux_session(
         tmux_session = tmux_server.new_session(
             session_name=session_name,
             window_name="validator",
-            start_directory=working_directory
+            start_directory=working_directory,
         )
 
         # Get the pane
@@ -275,7 +277,9 @@ async def spawn_validator_tmux_session(
 
         # If read-only, show indicator (optional)
         if read_only:
-            pane.send_keys("echo 'READ-ONLY MODE: Validator agent starting...'", enter=True)
+            pane.send_keys(
+                "echo 'READ-ONLY MODE: Validator agent starting...'", enter=True
+            )
             await asyncio.sleep(1)
 
         # Get CLI agent (use 'claude' for validators)
@@ -284,7 +288,7 @@ async def spawn_validator_tmux_session(
         # Generate launch command with minimal system prompt (like normal agents)
         launch_command = cli_agent.get_launch_command(
             system_prompt="You are a validation agent for the Hephaestus system.",
-            task_id=agent_id
+            task_id=agent_id,
         )
 
         # Launch Claude Code
@@ -301,7 +305,7 @@ async def spawn_validator_tmux_session(
 
         # Wait a moment then send Enter to submit the message
         await asyncio.sleep(1)
-        pane.send_keys('', enter=True)  # Send Enter to submit
+        pane.send_keys("", enter=True)  # Send Enter to submit
 
         logger.info(f"Sent validation prompt to validator agent {agent_id}")
         logger.debug(f"Validator prompt preview:\n{prompt[:500]}...")
@@ -345,11 +349,7 @@ def get_agent_results(task_id: str, session: Session) -> str:
         return "Agent has not provided specific results yet"
 
 
-def send_feedback_to_agent(
-    agent_id: str,
-    feedback: str,
-    iteration: int
-) -> bool:
+def send_feedback_to_agent(agent_id: str, feedback: str, iteration: int) -> bool:
     """Send validation feedback to a running agent via tmux.
 
     Args:
@@ -378,15 +378,14 @@ When ready, you can claim completion again.
 """
 
         # Write to temporary file
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
             f.write(feedback_content)
             feedback_file = f.name
 
         # Send to tmux pane
         cmd = f"cat {feedback_file}"
         subprocess.run(
-            ["tmux", "send-keys", "-t", session_name, cmd, "Enter"],
-            check=True
+            ["tmux", "send-keys", "-t", session_name, cmd, "Enter"], check=True
         )
 
         logger.info(f"Sent feedback to agent {agent_id}")

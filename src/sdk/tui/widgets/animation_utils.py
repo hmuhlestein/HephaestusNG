@@ -1,6 +1,7 @@
 """Animation utilities for managing frame sequences and timing."""
 
 from typing import List
+
 from .animation_frames import Frame
 
 
@@ -132,8 +133,8 @@ def overlay_text(base: str, overlay: str, position: tuple) -> str:
     Returns:
         Combined text with overlay applied
     """
-    base_lines = base.split('\n')
-    overlay_lines = overlay.split('\n')
+    base_lines = base.split("\n")
+    overlay_lines = overlay.split("\n")
 
     x, y = position
 
@@ -144,11 +145,11 @@ def overlay_text(base: str, overlay: str, position: tuple) -> str:
             base_line = base_lines[line_index]
             # Ensure base line is long enough
             if len(base_line) < x:
-                base_line += ' ' * (x - len(base_line))
+                base_line += " " * (x - len(base_line))
 
             # Replace characters at position
             left = base_line[:x]
-            right = base_line[x + len(overlay_line):]
+            right = base_line[x + len(overlay_line) :]
             base_lines[line_index] = left + overlay_line + right
 
-    return '\n'.join(base_lines)
+    return "\n".join(base_lines)

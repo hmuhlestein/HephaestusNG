@@ -1,12 +1,12 @@
 """Unit tests for the MCP report_results endpoint."""
 
-import pytest
-import tempfile
 import os
-import asyncio
-from unittest.mock import Mock, patch, AsyncMock, MagicMock
+import tempfile
 from datetime import datetime
+from unittest.mock import AsyncMock, patch
+
 import httpx
+import pytest
 
 
 class TestReportResultsEndpoint:
@@ -21,7 +21,7 @@ class TestReportResultsEndpoint:
     @pytest.fixture
     def valid_markdown_file(self):
         """Create a valid markdown file for testing."""
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.md', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
             f.write("# Test Results\n\nThis is a test result.")
             temp_path = f.name
         yield temp_path
@@ -30,15 +30,15 @@ class TestReportResultsEndpoint:
     @pytest.fixture
     def large_markdown_file(self):
         """Create a large markdown file for testing."""
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.md', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
             # Write 101KB of data
             f.write("# Large File\n" + "x" * (101 * 1024))
             temp_path = f.name
         yield temp_path
         os.unlink(temp_path)
 
-    @patch('src.mcp.server.ResultService.create_result')
-    @patch('src.mcp.server.server_state.broadcast_update')
+    @patch("src.mcp.server.ResultService.create_result")
+    @patch("src.mcp.server.server_state.broadcast_update")
     def test_report_results_success(
         self, mock_broadcast, mock_create_result, client, valid_markdown_file
     ):
@@ -84,11 +84,13 @@ class TestReportResultsEndpoint:
             summary="Test implementation completed",
         )
 
-    @patch('src.mcp.server.ResultService.create_result')
+    @patch("src.mcp.server.ResultService.create_result")
     def test_report_results_missing_file(self, mock_create_result, client):
         """Test result reporting with missing file."""
         # Setup mock to raise FileNotFoundError
-        mock_create_result.side_effect = FileNotFoundError("Markdown file not found: /missing.md")
+        mock_create_result.side_effect = FileNotFoundError(
+            "Markdown file not found: /missing.md"
+        )
 
         # Make request
         response = client.post(
@@ -106,8 +108,10 @@ class TestReportResultsEndpoint:
         assert response.status_code == 404
         assert "Markdown file not found" in response.json()["detail"]
 
-    @patch('src.mcp.server.ResultService.create_result')
-    def test_report_results_invalid_task(self, mock_create_result, client, valid_markdown_file):
+    @patch("src.mcp.server.ResultService.create_result")
+    def test_report_results_invalid_task(
+        self, mock_create_result, client, valid_markdown_file
+    ):
         """Test result reporting with invalid task."""
         # Setup mock to raise ValueError
         mock_create_result.side_effect = ValueError("Task not found: invalid-task")
@@ -128,8 +132,10 @@ class TestReportResultsEndpoint:
         assert response.status_code == 400
         assert "Task not found" in response.json()["detail"]
 
-    @patch('src.mcp.server.ResultService.create_result')
-    def test_report_results_wrong_agent(self, mock_create_result, client, valid_markdown_file):
+    @patch("src.mcp.server.ResultService.create_result")
+    def test_report_results_wrong_agent(
+        self, mock_create_result, client, valid_markdown_file
+    ):
         """Test result reporting by wrong agent."""
         # Setup mock to raise ValueError
         mock_create_result.side_effect = ValueError(
@@ -152,11 +158,15 @@ class TestReportResultsEndpoint:
         assert response.status_code == 400
         assert "not assigned to agent" in response.json()["detail"]
 
-    @patch('src.mcp.server.ResultService.create_result')
-    def test_report_results_file_too_large(self, mock_create_result, client, large_markdown_file):
+    @patch("src.mcp.server.ResultService.create_result")
+    def test_report_results_file_too_large(
+        self, mock_create_result, client, large_markdown_file
+    ):
         """Test result reporting with file too large."""
         # Setup mock to raise ValueError
-        mock_create_result.side_effect = ValueError("File too large: 101.00KB exceeds maximum of 100KB")
+        mock_create_result.side_effect = ValueError(
+            "File too large: 101.00KB exceeds maximum of 100KB"
+        )
 
         # Make request
         response = client.post(
@@ -184,7 +194,7 @@ class TestReportResultsEndpoint:
                 "markdown_file_path": valid_markdown_file,
                 "result_type": "implementation",
                 "summary": "Test",
-            }
+            },
         )
 
         # Assertions
@@ -209,11 +219,13 @@ class TestReportResultsEndpoint:
         assert response.status_code == 422  # Validation error
         assert "String should match pattern" in str(response.json())
 
-    @patch('src.mcp.server.ResultService.create_result')
+    @patch("src.mcp.server.ResultService.create_result")
     def test_report_results_path_traversal_attack(self, mock_create_result, client):
         """Test protection against path traversal attacks."""
         # Setup mock to raise ValueError
-        mock_create_result.side_effect = ValueError("Invalid file path - directory traversal detected")
+        mock_create_result.side_effect = ValueError(
+            "Invalid file path - directory traversal detected"
+        )
 
         # Make request with path traversal attempt
         response = client.post(
@@ -231,8 +243,8 @@ class TestReportResultsEndpoint:
         assert response.status_code == 400
         assert "directory traversal" in response.json()["detail"].lower()
 
-    @patch('src.mcp.server.ResultService.create_result')
-    @patch('src.mcp.server.server_state.broadcast_update')
+    @patch("src.mcp.server.ResultService.create_result")
+    @patch("src.mcp.server.server_state.broadcast_update")
     def test_multiple_results_per_task(
         self, mock_broadcast, mock_create_result, client, valid_markdown_file
     ):

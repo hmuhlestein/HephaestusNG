@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Design Report: {{ design_name }}</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f8fafc; color: #1e293b; line-height: 1.6; padding: 2rem; }
+        .container { max-width: 1200px; margin: 0 auto; }
+        h1 { font-size: 2rem; margin-bottom: 0.5rem; color: #0f172a; }
+        h2 { font-size: 1.5rem; margin: 2rem 0 1rem; color: #1e293b; border-bottom: 2px solid #e2e8f0; padding-bottom: 0.5rem; }
+        .meta { color: #64748b; font-size: 0.9rem; margin-bottom: 2rem; }
+        .summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin-bottom: 2rem; }
+        .summary-card { background: white; border-radius: 8px; padding: 1.5rem; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+        .summary-card h3 { font-size: 0.875rem; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.5rem; }
+        .summary-card .value { font-size: 2rem; font-weight: 700; }
+        .summary-card .value.completed { color: #22c55e; }
+        .summary-card .value.failed { color: #ef4444; }
+        .summary-card .value.pending { color: #f59e0b; }
+        table { width: 100%; border-collapse: collapse; background: white; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+        th, td { padding: 1rem; text-align: left; border-bottom: 1px solid #e2e8f0; }
+        th { background: #f8fafc; font-weight: 600; color: #475569; }
+        tr:hover { background: #f8fafc; }
+        .status { display: inline-block; padding: 0.25rem 0.75rem; border-radius: 9999px; font-size: 0.875rem; font-weight: 500; }
+        .status.completed { background: #dcfce7; color: #166534; }
+        .status.failed { background: #fee2e2; color: #991b1b; }
+        .status.pending { background: #fef3c7; color: #92400e; }
+        .status.skipped { background: #e2e8f0; color: #475569; }
+        .status.active { background: #dbeafe; color: #1e40af; }
+        footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid #e2e8f0; color: #64748b; font-size: 0.875rem; text-align: center; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Design Report: {{ design_name }}</h1>
+        <p class="meta">Generated: {{ generated_at }}</p>
+
+        <div class="summary-grid">
+            <div class="summary-card">
+                <h3>Total Features</h3>
+                <div class="value">{{ total_features }}</div>
+            </div>
+            <div class="summary-card">
+                <h3>Completed</h3>
+                <div class="value completed">{{ completed_features }}</div>
+            </div>
+            <div class="summary-card">
+                <h3>Failed</h3>
+                <div class="value failed">{{ failed_features }}</div>
+            </div>
+            <div class="summary-card">
+                <h3>Skipped</h3>
+                <div class="value pending">{{ skipped_features }}</div>
+            </div>
+        </div>
+
+        <h2>Feature Details</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th>Feature</th>
+                    <th>Status</th>
+                    <th>Started</th>
+                    <th>Completed</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for feature in features %}
+                <tr>
+                    <td>{{ feature.name }}</td>
+                    <td><span class="status {{ feature.status }}">{{ feature.status }}</span></td>
+                    <td>{{ feature.started_at or 'N/A' }}</td>
+                    <td>{{ feature.completed_at or 'N/A' }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+
+        <footer>
+            <p>Hephaestus Autopilot - Design Report</p>
+        </footer>
+    </div>
+</body>
+</html>

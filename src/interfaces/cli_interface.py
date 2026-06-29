@@ -7,11 +7,11 @@ and the agent manager uses the interface without knowing which tool is running.
 To add a new CLI tool: subclass CLIAgentInterface and register in CLI_AGENTS.
 """
 
-from abc import ABC, abstractmethod
-from typing import List, Optional, Dict, Any
-import re
-import os
 import logging
+import os
+import re
+from abc import ABC, abstractmethod
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -112,13 +112,13 @@ class CLIAgentInterface(ABC):
         Returns:
             Path to the saved file
         """
-        prompt_file = f'/tmp/{prefix}_{task_id}.txt'
-        with open(prompt_file, 'w') as f:
+        prompt_file = f"/tmp/{prefix}_{task_id}.txt"
+        with open(prompt_file, "w") as f:
             f.write(prompt)
         os.chmod(prompt_file, 0o644)
         return prompt_file
 
-    def _get_model(self, kwargs: dict, config: Any, default: str = 'sonnet') -> str:
+    def _get_model(self, kwargs: dict, config: Any, default: str = "sonnet") -> str:
         """Get model from kwargs or config.
 
         Args:
@@ -129,7 +129,7 @@ class CLIAgentInterface(ABC):
         Returns:
             Model name string
         """
-        return kwargs.get('model') or getattr(config, 'cli_model', default)
+        return kwargs.get("model") or getattr(config, "cli_model", default)
 
     def _extract_id(self, text: str, prefix: str) -> Optional[str]:
         """Extract an ID value from text like 'IDs: Agent=xxx | Task=yyy'.
@@ -141,7 +141,7 @@ class CLIAgentInterface(ABC):
         Returns:
             Extracted ID or None
         """
-        match = re.search(rf'{prefix}\s*(\S+)', text)
+        match = re.search(rf"{prefix}\s*(\S+)", text)
         return match.group(1) if match else None
 
     def _extract_ids_from_prompt(self, system_prompt: str) -> Dict[str, Optional[str]]:
@@ -153,10 +153,10 @@ class CLIAgentInterface(ABC):
             Dict with keys: agent_id, task_id, workflow_id, phase_id
         """
         return {
-            'agent_id': self._extract_id(system_prompt, 'Agent='),
-            'task_id': self._extract_id(system_prompt, 'Task='),
-            'workflow_id': self._extract_id(system_prompt, 'Workflow='),
-            'phase_id': self._extract_id(system_prompt, 'Phase='),
+            "agent_id": self._extract_id(system_prompt, "Agent="),
+            "task_id": self._extract_id(system_prompt, "Task="),
+            "workflow_id": self._extract_id(system_prompt, "Workflow="),
+            "phase_id": self._extract_id(system_prompt, "Phase="),
         }
 
     def _build_ids_line(self, ids: Dict[str, Optional[str]]) -> str:
@@ -169,12 +169,12 @@ class CLIAgentInterface(ABC):
             IDs line string (empty if no IDs found)
         """
         parts = []
-        for key in ['agent_id', 'task_id', 'workflow_id', 'phase_id']:
+        for key in ["agent_id", "task_id", "workflow_id", "phase_id"]:
             val = ids.get(key)
             if val:
-                label = key.replace('_id', '').title()
-                parts.append(f'{label}={val}')
-        return 'IDs: ' + ' '.join(parts) if parts else ''
+                label = key.replace("_id", "").title()
+                parts.append(f"{label}={val}")
+        return "IDs: " + " ".join(parts) if parts else ""
 
     def _build_user_prompt(self, system_prompt: str, **kwargs) -> str:
         """Build a minimal user prompt from system prompt.
@@ -192,20 +192,22 @@ class CLIAgentInterface(ABC):
         # Extract task section from system prompt
         task_lines = []
         in_task_section = False
-        for line in system_prompt.split('\n'):
-            if line.startswith('=== TASK ===') or line.startswith('═══ TASK ═══'):
+        for line in system_prompt.split("\n"):
+            if line.startswith("=== TASK ===") or line.startswith("═══ TASK ═══"):
                 in_task_section = True
-            elif (line.startswith('=== ') or line.startswith('═══ ')) and in_task_section:
+            elif (
+                line.startswith("=== ") or line.startswith("═══ ")
+            ) and in_task_section:
                 in_task_section = False
             elif in_task_section:
                 task_lines.append(line)
 
-        task_text = '\n'.join(task_lines).strip()
+        task_text = "\n".join(task_lines).strip()
 
         # Build IDs line
         ids = self._extract_ids_from_prompt(system_prompt)
         # Override with kwargs
-        for key in ['agent_id', 'task_id', 'workflow_id', 'phase_id']:
+        for key in ["agent_id", "task_id", "workflow_id", "phase_id"]:
             if key in kwargs and kwargs[key]:
                 ids[key] = kwargs[key]
         ids_line = self._build_ids_line(ids)
@@ -217,7 +219,7 @@ class CLIAgentInterface(ABC):
         if ids_line:
             parts.append(ids_line)
 
-        return '\n'.join(parts) if parts else system_prompt
+        return "\n".join(parts) if parts else system_prompt
 
     def get_tui_status_patterns(self) -> List[str]:
         """Return patterns that are normal TUI status bar rendering.
@@ -273,26 +275,40 @@ class ClaudeCodeAgent(CLIAgentInterface):
 
     def get_launch_command(self, system_prompt: str, **kwargs) -> str:
         from src.core.simple_config import get_config
+
         config = get_config()
 
-        task_id = kwargs.get('task_id', 'default')
-        prompt_file = self._save_prompt_to_file(system_prompt, 'claude_prompt', task_id)
-        model = self._get_model(kwargs, config, 'sonnet')
+        task_id = kwargs.get("task_id", "default")
+        prompt_file = self._save_prompt_to_file(system_prompt, "claude_prompt", task_id)
+        model = self._get_model(kwargs, config, "sonnet")
 
         # Reasoning budget
-        effort_map = {"off": "low", "minimal": "low", "low": "low",
-                      "medium": "medium", "high": "high", "xhigh": "high"}
-        thinking = str(kwargs.get('thinking_level') or getattr(config, 'cli_thinking_level', 'medium')).lower().strip()
+        effort_map = {
+            "off": "low",
+            "minimal": "low",
+            "low": "low",
+            "medium": "medium",
+            "high": "high",
+            "xhigh": "high",
+        }
+        thinking = (
+            str(
+                kwargs.get("thinking_level")
+                or getattr(config, "cli_thinking_level", "medium")
+            )
+            .lower()
+            .strip()
+        )
         effort = effort_map.get(thinking)
         effort_flag = f" --effort {effort}" if effort else ""
 
         mcp_config = os.path.expanduser("~/.config/mcp/mcp.json")
         mcp_flag = f"--mcp-config {mcp_config}" if os.path.exists(mcp_config) else ""
 
-        if 'GLM' in model.upper():
-            command = f"claude --model sonnet{effort_flag} --dangerously-skip-permissions {mcp_flag} --append-system-prompt \"$(cat {prompt_file})\" --verbose"
+        if "GLM" in model.upper():
+            command = f'claude --model sonnet{effort_flag} --dangerously-skip-permissions {mcp_flag} --append-system-prompt "$(cat {prompt_file})" --verbose'
         else:
-            command = f"claude --model {model}{effort_flag} --dangerously-skip-permissions {mcp_flag} --append-system-prompt \"$(cat {prompt_file})\" --verbose"
+            command = f'claude --model {model}{effort_flag} --dangerously-skip-permissions {mcp_flag} --append-system-prompt "$(cat {prompt_file})" --verbose'
 
         return command
 
@@ -304,13 +320,17 @@ class ClaudeCodeAgent(CLIAgentInterface):
 
     def get_stuck_patterns(self) -> List[str]:
         return [
-            r"rate limit exceeded", r"waiting for user input",
-            r"API error", r"connection timeout",
-            r"Error:.*API", r"Failed to connect", r"Maximum retries exceeded",
+            r"rate limit exceeded",
+            r"waiting for user input",
+            r"API error",
+            r"connection timeout",
+            r"Error:.*API",
+            r"Failed to connect",
+            r"Maximum retries exceeded",
         ]
 
     def parse_output(self, output: str) -> Dict[str, Any]:
-        lines = output.strip().split('\n')
+        lines = output.strip().split("\n")
         last_message = ""
         is_waiting = False
         for i in range(len(lines) - 1, -1, -1):
@@ -324,7 +344,11 @@ class ClaudeCodeAgent(CLIAgentInterface):
                 break
         if lines and ("›" in lines[-1] or "Human:" in lines[-1]):
             is_waiting = True
-        return {"last_message": last_message, "is_waiting": is_waiting, "total_lines": len(lines)}
+        return {
+            "last_message": last_message,
+            "is_waiting": is_waiting,
+            "total_lines": len(lines),
+        }
 
 
 class OpenCodeAgent(CLIAgentInterface):
@@ -332,13 +356,16 @@ class OpenCodeAgent(CLIAgentInterface):
 
     def get_launch_command(self, system_prompt: str, **kwargs) -> str:
         from src.core.simple_config import get_config
+
         config = get_config()
 
-        task_id = kwargs.get('task_id', 'default')
-        prompt_file = self._save_prompt_to_file(system_prompt, 'opencode_prompt', task_id)
-        model = self._get_model(kwargs, config, 'anthropic/claude-sonnet-4')
+        task_id = kwargs.get("task_id", "default")
+        prompt_file = self._save_prompt_to_file(
+            system_prompt, "opencode_prompt", task_id
+        )
+        model = self._get_model(kwargs, config, "anthropic/claude-sonnet-4")
 
-        return f"opencode run \"$(cat {prompt_file})\" --model {model}"
+        return f'opencode run "$(cat {prompt_file})" --model {model}'
 
     def get_health_check_pattern(self) -> str:
         return r"(›|>|opencode>)"
@@ -348,13 +375,19 @@ class OpenCodeAgent(CLIAgentInterface):
 
     def get_stuck_patterns(self) -> List[str]:
         return [
-            r"rate limit exceeded", r"rate limit", r"API error",
-            r"connection timeout", r"Error:.*API", r"Failed to connect",
-            r"Maximum retries exceeded", r"authentication failed", r"invalid API key",
+            r"rate limit exceeded",
+            r"rate limit",
+            r"API error",
+            r"connection timeout",
+            r"Error:.*API",
+            r"Failed to connect",
+            r"Maximum retries exceeded",
+            r"authentication failed",
+            r"invalid API key",
         ]
 
     def parse_output(self, output: str) -> Dict[str, Any]:
-        lines = output.strip().split('\n')
+        lines = output.strip().split("\n")
         last_message = ""
         is_waiting = False
         for i in range(len(lines) - 1, -1, -1):
@@ -368,7 +401,11 @@ class OpenCodeAgent(CLIAgentInterface):
                     message_lines.insert(0, lines[j])
                 last_message = "\n".join(message_lines).strip()
                 break
-        return {"last_message": last_message, "is_waiting": is_waiting, "total_lines": len(lines)}
+        return {
+            "last_message": last_message,
+            "is_waiting": is_waiting,
+            "total_lines": len(lines),
+        }
 
 
 class DroidAgent(CLIAgentInterface):
@@ -385,13 +422,19 @@ class DroidAgent(CLIAgentInterface):
 
     def get_stuck_patterns(self) -> List[str]:
         return [
-            r"rate limit exceeded", r"rate limit", r"API error",
-            r"connection timeout", r"Error:.*API", r"Failed to connect",
-            r"Maximum retries exceeded", r"authentication failed", r"invalid API key",
+            r"rate limit exceeded",
+            r"rate limit",
+            r"API error",
+            r"connection timeout",
+            r"Error:.*API",
+            r"Failed to connect",
+            r"Maximum retries exceeded",
+            r"authentication failed",
+            r"invalid API key",
         ]
 
     def parse_output(self, output: str) -> Dict[str, Any]:
-        lines = output.strip().split('\n')
+        lines = output.strip().split("\n")
         last_message = ""
         is_waiting = False
         for i in range(len(lines) - 1, -1, -1):
@@ -405,7 +448,11 @@ class DroidAgent(CLIAgentInterface):
                     message_lines.insert(0, lines[j])
                 last_message = "\n".join(message_lines).strip()
                 break
-        return {"last_message": last_message, "is_waiting": is_waiting, "total_lines": len(lines)}
+        return {
+            "last_message": last_message,
+            "is_waiting": is_waiting,
+            "total_lines": len(lines),
+        }
 
 
 class CodexAgent(CLIAgentInterface):
@@ -424,12 +471,16 @@ class CodexAgent(CLIAgentInterface):
 
     def get_stuck_patterns(self) -> List[str]:
         return [
-            r"error:", r"connection failed", r"timeout",
-            r"invalid response", r"Authentication failed", r"Rate limit",
+            r"error:",
+            r"connection failed",
+            r"timeout",
+            r"invalid response",
+            r"Authentication failed",
+            r"Rate limit",
         ]
 
     def parse_output(self, output: str) -> Dict[str, Any]:
-        lines = output.strip().split('\n')
+        lines = output.strip().split("\n")
         last_response = ""
         is_ready = False
         for i in range(len(lines) - 1, -1, -1):
@@ -443,7 +494,11 @@ class CodexAgent(CLIAgentInterface):
                         response_lines.insert(0, lines[j])
                     last_response = "\n".join(response_lines).strip()
                 break
-        return {"last_response": last_response, "is_ready": is_ready, "total_lines": len(lines)}
+        return {
+            "last_response": last_response,
+            "is_ready": is_ready,
+            "total_lines": len(lines),
+        }
 
 
 class PiAgent(CLIAgentInterface):
@@ -464,54 +519,62 @@ class PiAgent(CLIAgentInterface):
         Pi handles storage internally — we just pass the ID.
         """
         if session_id:
-            return f'--session-id {session_id}'
-        return '--no-session'
+            return f"--session-id {session_id}"
+        return "--no-session"
 
     def get_launch_command(self, system_prompt: str, **kwargs) -> str:
         from src.core.simple_config import get_config
+
         config = get_config()
 
         # Check for pi agent file for this phase
-        phase_name = kwargs.get('phase_name', '')
-        pi_agents_dir = os.path.expanduser('~/.pi/agent/agents')
-        agent_name = phase_name.replace('_', '-') if phase_name else None
-        agent_file = os.path.join(pi_agents_dir, f'hephaestus-{agent_name}.md') if agent_name else None
+        phase_name = kwargs.get("phase_name", "")
+        pi_agents_dir = os.path.expanduser("~/.pi/agent/agents")
+        agent_name = phase_name.replace("_", "-") if phase_name else None
+        agent_file = (
+            os.path.join(pi_agents_dir, f"hephaestus-{agent_name}.md")
+            if agent_name
+            else None
+        )
 
-        model = self._get_model(kwargs, config, 'openrouter/xiaomi/mimo-v2.5')
+        model = self._get_model(kwargs, config, "openrouter/xiaomi/mimo-v2.5")
 
         # Thinking budget
         valid_thinking = {"off", "minimal", "low", "medium", "high", "xhigh"}
-        thinking = kwargs.get('thinking_level') or getattr(config, 'cli_thinking_level', 'medium')
+        thinking = kwargs.get("thinking_level") or getattr(
+            config, "cli_thinking_level", "medium"
+        )
         thinking = str(thinking).lower().strip()
-        thinking_flag = f' --thinking {thinking}' if thinking in valid_thinking else ''
+        thinking_flag = f" --thinking {thinking}" if thinking in valid_thinking else ""
 
         if agent_file and os.path.exists(agent_file):
             # Parse the agent file: strip YAML frontmatter so only the body
             # (identity + completion instructions) reaches --append-system-prompt.
             # Also honour the model declared in frontmatter when present.
             raw = open(agent_file).read()
-            if raw.startswith('---'):
-                parts = raw.split('---', 2)
+            if raw.startswith("---"):
+                parts = raw.split("---", 2)
                 body = parts[2].strip() if len(parts) >= 3 else raw
                 # Pull model from frontmatter if declared
                 import re as _re
-                fm_model = _re.search(r'^model:\s*(\S+)', parts[1], _re.MULTILINE)
+
+                fm_model = _re.search(r"^model:\s*(\S+)", parts[1], _re.MULTILINE)
                 if fm_model:
                     model = fm_model.group(1)
             else:
                 body = raw
 
-            task_id = kwargs.get('task_id', 'default')
-            body_file = self._save_prompt_to_file(body, 'pi_agent_body', task_id)
-            session_args = self.get_session_args(kwargs.get('session_id', ''))
+            task_id = kwargs.get("task_id", "default")
+            body_file = self._save_prompt_to_file(body, "pi_agent_body", task_id)
+            session_args = self.get_session_args(kwargs.get("session_id", ""))
 
             # Launch interactively (no -p/--print). Initial message sent via tmux.
             command = f'pi --append-system-prompt "$(cat {body_file})" --model {model}{thinking_flag} --approve --no-context-files {session_args}'
         else:
             # Fallback: inject full prompt from file
-            task_id = kwargs.get('task_id', 'default')
-            prompt_file = self._save_prompt_to_file(system_prompt, 'pi_prompt', task_id)
-            session_args = self.get_session_args(kwargs.get('session_id', ''))
+            task_id = kwargs.get("task_id", "default")
+            prompt_file = self._save_prompt_to_file(system_prompt, "pi_prompt", task_id)
+            session_args = self.get_session_args(kwargs.get("session_id", ""))
             command = f'pi --append-system-prompt "$(cat {prompt_file})" --model {model}{thinking_flag} --approve --no-context-files {session_args}'
 
         return command
@@ -519,14 +582,22 @@ class PiAgent(CLIAgentInterface):
     def get_tui_status_patterns(self) -> List[str]:
         """Pi TUI status bar patterns that look like garbled output but aren't."""
         return [
-            'Your working', 'Your worked', 'king Your',
-            'worki', 'workin', 'MCP:', 'openrouter',
-            '/.worktrees/', 'model.*medium', '%',
+            "Your working",
+            "Your worked",
+            "king Your",
+            "worki",
+            "workin",
+            "MCP:",
+            "openrouter",
+            "/.worktrees/",
+            "model.*medium",
+            "%",
         ]
 
     # Braille spinner frames used by the pi TUI progress indicator.
-    _PI_SPINNERS = frozenset('⠀⠁⠂⠃⠄⠅⠆⠇⠈⠉⠊⠋⠌⠍⠎⠏⠐⠑⠒⠓⠔⠕⠖⠗⠘⠙⠚⠛⠜⠝⠞⠟'
-                             '⠠⠡⠢⠣⠤⠥⠦⠧⠨⠩⠪⠫⠬⠭⠮⠯⠰⠱⠲⠳⠴⠵⠶⠷⠸⠹⠺⠻⠼⠽⠾⠿')
+    _PI_SPINNERS = frozenset(
+        "⠀⠁⠂⠃⠄⠅⠆⠇⠈⠉⠊⠋⠌⠍⠎⠏⠐⠑⠒⠓⠔⠕⠖⠗⠘⠙⠚⠛⠜⠝⠞⠟⠠⠡⠢⠣⠤⠥⠦⠧⠨⠩⠪⠫⠬⠭⠮⠯⠰⠱⠲⠳⠴⠵⠶⠷⠸⠹⠺⠻⠼⠽⠾⠿"
+    )
 
     def strip_tui_chrome(self, text: str) -> str:
         """Strip the pi TUI frame from the tail of a capture-pane snapshot.
@@ -540,22 +611,22 @@ class PiAgent(CLIAgentInterface):
 
         We walk backwards discarding these lines until we hit real content.
         """
-        lines = text.split('\n')
+        lines = text.split("\n")
         end = len(lines)
         while end > 0:
             stripped = lines[end - 1].strip()
             if (
-                stripped == ''
-                or stripped == '~'
-                or re.match(r'^─+$', stripped)
-                or stripped.startswith('MCP:')
-                or re.search(r'↑\d+[km].*↓\d+', stripped, re.IGNORECASE)
+                stripped == ""
+                or stripped == "~"
+                or re.match(r"^─+$", stripped)
+                or stripped.startswith("MCP:")
+                or re.search(r"↑\d+[km].*↓\d+", stripped, re.IGNORECASE)
                 or (stripped and stripped[0] in self._PI_SPINNERS)
             ):
                 end -= 1
             else:
                 break
-        return '\n'.join(lines[:end])
+        return "\n".join(lines[:end])
 
     def get_health_check_pattern(self) -> str:
         return r"(›|>|pi>)"
@@ -565,9 +636,15 @@ class PiAgent(CLIAgentInterface):
 
     def get_stuck_patterns(self) -> List[str]:
         return [
-            r"rate limit exceeded", r"rate limit", r"API error",
-            r"connection timeout", r"Error:.*API", r"Failed to connect",
-            r"Maximum retries exceeded", r"authentication failed", r"invalid API key",
+            r"rate limit exceeded",
+            r"rate limit",
+            r"API error",
+            r"connection timeout",
+            r"Error:.*API",
+            r"Failed to connect",
+            r"Maximum retries exceeded",
+            r"authentication failed",
+            r"invalid API key",
         ]
 
     def recovery_keystrokes(self) -> List[str]:
@@ -576,7 +653,7 @@ class PiAgent(CLIAgentInterface):
         return ["Escape"]
 
     def parse_output(self, output: str) -> Dict[str, Any]:
-        lines = output.strip().split('\n')
+        lines = output.strip().split("\n")
         last_message = ""
         is_waiting = False
         for i in range(len(lines) - 1, -1, -1):
@@ -590,7 +667,11 @@ class PiAgent(CLIAgentInterface):
                     message_lines.insert(0, lines[j])
                 last_message = "\n".join(message_lines).strip()
                 break
-        return {"last_message": last_message, "is_waiting": is_waiting, "total_lines": len(lines)}
+        return {
+            "last_message": last_message,
+            "is_waiting": is_waiting,
+            "total_lines": len(lines),
+        }
 
 
 class SwarmCodeAgent(CLIAgentInterface):
@@ -638,5 +719,7 @@ def get_cli_agent(agent_type: str) -> CLIAgentInterface:
         ValueError: If agent type is not supported
     """
     if agent_type not in CLI_AGENTS:
-        raise ValueError(f"Unsupported CLI agent type: {agent_type}. Available: {list(CLI_AGENTS.keys())}")
+        raise ValueError(
+            f"Unsupported CLI agent type: {agent_type}. Available: {list(CLI_AGENTS.keys())}"
+        )
     return CLI_AGENTS[agent_type]()

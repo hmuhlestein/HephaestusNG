@@ -5,8 +5,9 @@ Verify Hephaestus setup and dependencies.
 Run this script after installation to ensure all dependencies are correctly installed
 and there are no version conflicts.
 """
-import sys
+
 import subprocess
+import sys
 
 
 def check_python_version():
@@ -25,23 +26,22 @@ def check_package_version(package_name, expected_version):
     """Check if package is installed with correct version"""
     try:
         result = subprocess.run(
-            ["pip", "show", package_name],
-            capture_output=True,
-            text=True,
-            check=False
+            ["pip", "show", package_name], capture_output=True, text=True, check=False
         )
         if result.returncode != 0:
             print(f"❌ {package_name} not installed")
             return False
 
-        for line in result.stdout.split('\n'):
-            if line.startswith('Version:'):
-                installed_version = line.split(':', 1)[1].strip()
+        for line in result.stdout.split("\n"):
+            if line.startswith("Version:"):
+                installed_version = line.split(":", 1)[1].strip()
                 if installed_version == expected_version:
                     print(f"✅ {package_name}=={installed_version}")
                     return True
                 else:
-                    print(f"❌ {package_name}: expected {expected_version}, got {installed_version}")
+                    print(
+                        f"❌ {package_name}: expected {expected_version}, got {installed_version}"
+                    )
                     return False
 
         print(f"❌ Could not determine {package_name} version")
@@ -98,8 +98,7 @@ def main():
     }
 
     packages_ok = all(
-        check_package_version(pkg, ver)
-        for pkg, ver in critical_packages.items()
+        check_package_version(pkg, ver) for pkg, ver in critical_packages.items()
     )
     print()
 
@@ -122,7 +121,9 @@ def main():
         print("❌ Some checks failed. Please fix the issues above.")
         print()
         print("To fix dependency issues:")
-        print("  pip uninstall -y anyio pydantic pydantic-core pydantic-settings fastapi mcp")
+        print(
+            "  pip uninstall -y anyio pydantic pydantic-core pydantic-settings fastapi mcp"
+        )
         print("  pip install --no-cache-dir -r requirements.txt")
         print("  find . -type d -name __pycache__ -exec rm -rf {} +")
         return 1

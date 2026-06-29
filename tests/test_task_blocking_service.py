@@ -1,12 +1,12 @@
 """Tests for task_blocking_service.py — blocking logic."""
 
-import pytest
 from unittest.mock import Mock, patch
 
 
 class TestCheckTaskBlocked:
     def test_task_not_found(self):
         from src.services.task_blocking_service import TaskBlockingService
+
         with patch("src.services.task_blocking_service.get_db") as mock_db:
             mock_session = Mock()
             mock_session.query.return_value.filter_by.return_value.first.return_value = None
@@ -18,6 +18,7 @@ class TestCheckTaskBlocked:
 
     def test_task_no_ticket(self):
         from src.services.task_blocking_service import TaskBlockingService
+
         with patch("src.services.task_blocking_service.get_db") as mock_db:
             mock_session = Mock()
             mock_task = Mock(ticket_id=None)
@@ -29,12 +30,16 @@ class TestCheckTaskBlocked:
 
     def test_task_not_blocked(self):
         from src.services.task_blocking_service import TaskBlockingService
+
         with patch("src.services.task_blocking_service.get_db") as mock_db:
             mock_session = Mock()
             mock_task = Mock(ticket_id="ticket-1")
             mock_ticket = Mock(blocked_by_ticket_ids=[])
             # First query returns task, second returns ticket
-            mock_session.query.return_value.filter_by.return_value.first.side_effect = [mock_task, mock_ticket]
+            mock_session.query.return_value.filter_by.return_value.first.side_effect = [
+                mock_task,
+                mock_ticket,
+            ]
             mock_db.return_value.__enter__ = Mock(return_value=mock_session)
             mock_db.return_value.__exit__ = Mock(return_value=False)
             result = TaskBlockingService.check_task_blocked("task1")
@@ -42,14 +47,26 @@ class TestCheckTaskBlocked:
 
     def test_task_blocked(self):
         from src.services.task_blocking_service import TaskBlockingService
+
         with patch("src.services.task_blocking_service.get_db") as mock_db:
             mock_session = Mock()
             mock_task = Mock(ticket_id="ticket-1")
             mock_ticket = Mock(blocked_by_ticket_ids=["ticket-2"])
-            mock_blocker = Mock(id="ticket-2", title="Blocker", status="open", priority="high", is_resolved=False)
+            mock_blocker = Mock(
+                id="ticket-2",
+                title="Blocker",
+                status="open",
+                priority="high",
+                is_resolved=False,
+            )
             # First query: task, second: ticket, third: blockers
-            mock_session.query.return_value.filter_by.return_value.first.side_effect = [mock_task, mock_ticket]
-            mock_session.query.return_value.filter.return_value.all.return_value = [mock_blocker]
+            mock_session.query.return_value.filter_by.return_value.first.side_effect = [
+                mock_task,
+                mock_ticket,
+            ]
+            mock_session.query.return_value.filter.return_value.all.return_value = [
+                mock_blocker
+            ]
             mock_db.return_value.__enter__ = Mock(return_value=mock_session)
             mock_db.return_value.__exit__ = Mock(return_value=False)
             result = TaskBlockingService.check_task_blocked("task1")
@@ -60,6 +77,7 @@ class TestCheckTaskBlocked:
 class TestBlockTask:
     def test_blocks_task(self):
         from src.services.task_blocking_service import TaskBlockingService
+
         with patch("src.services.task_blocking_service.get_db") as mock_db:
             mock_session = Mock()
             mock_task = Mock(status="pending")
@@ -74,6 +92,7 @@ class TestBlockTask:
 class TestUnblockTask:
     def test_unblocks_task(self):
         from src.services.task_blocking_service import TaskBlockingService
+
         with patch("src.services.task_blocking_service.get_db") as mock_db:
             mock_session = Mock()
             mock_task = Mock(status="blocked")
@@ -88,6 +107,7 @@ class TestUnblockTask:
 class TestGetAllBlockedTasks:
     def test_returns_empty_list(self):
         from src.services.task_blocking_service import TaskBlockingService
+
         with patch("src.services.task_blocking_service.get_db") as mock_db:
             mock_session = Mock()
             mock_session.query.return_value.filter_by.return_value.all.return_value = []

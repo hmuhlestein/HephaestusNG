@@ -19,7 +19,9 @@ def validate_file_path(file_path: str) -> None:
 
     # Check for path traversal attempts
     if ".." in str(file_path):
-        raise ValueError(f"Invalid file path - directory traversal detected: {file_path}")
+        raise ValueError(
+            f"Invalid file path - directory traversal detected: {file_path}"
+        )
 
     # Ensure path is absolute and normalized
     if not path.is_absolute():
@@ -68,7 +70,7 @@ def validate_markdown_format(file_path: str) -> None:
     path = Path(file_path)
 
     # Check file extension
-    if not path.suffix.lower() == '.md':
+    if not path.suffix.lower() == ".md":
         raise ValueError(f"File must be markdown (.md), got: {path.suffix}")
 
     # Could add additional validation here (e.g., check for valid markdown syntax)

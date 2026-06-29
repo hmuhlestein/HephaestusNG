@@ -3,9 +3,9 @@
 import os
 import uuid
 from datetime import datetime
-from typing import List, Optional, Dict, Any
+from typing import Any, Dict, List, Optional
 
-from src.core.database import get_db, AgentResult, Task
+from src.core.database import AgentResult, Task, get_db
 from src.services.validation_helpers import (
     validate_file_path,
     validate_file_size,
@@ -56,7 +56,7 @@ class ResultService:
         validate_markdown_format(markdown_file_path)
 
         # Read markdown content
-        with open(markdown_file_path, 'r', encoding='utf-8') as f:
+        with open(markdown_file_path, "r", encoding="utf-8") as f:
             markdown_content = f.read()
 
         with get_db() as db:
@@ -118,7 +118,9 @@ class ResultService:
                     "summary": result.summary,
                     "verification_status": result.verification_status,
                     "created_at": result.created_at.isoformat(),
-                    "verified_at": result.verified_at.isoformat() if result.verified_at else None,
+                    "verified_at": result.verified_at.isoformat()
+                    if result.verified_at
+                    else None,
                     "markdown_file_path": result.markdown_file_path,
                 }
                 for result in results
@@ -147,7 +149,9 @@ class ResultService:
                     "summary": result.summary,
                     "verification_status": result.verification_status,
                     "created_at": result.created_at.isoformat(),
-                    "verified_at": result.verified_at.isoformat() if result.verified_at else None,
+                    "verified_at": result.verified_at.isoformat()
+                    if result.verified_at
+                    else None,
                 }
                 for result in results
             ]

@@ -1,22 +1,22 @@
 """Integration tests for Wave 3: Ticket Tracking MCP Client & SDK Integration."""
 
-import pytest
 import os
 import sys
 from datetime import datetime
-import json
+
+import pytest
 
 # Add parent directory to path
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from src.core.database import (
-    DatabaseManager,
-    Ticket,
-    BoardConfig,
-    Workflow,
     Agent,
+    BoardConfig,
+    DatabaseManager,
     Task,
+    Ticket,
     TicketCommit,
+    Workflow,
 )
 from src.services.ticket_service import TicketService
 
@@ -88,7 +88,12 @@ def board_config(db_manager, test_workflow):
         name="Test Board",
         columns=[
             {"id": "todo", "name": "To Do", "order": 0, "color": "#6b7280"},
-            {"id": "in_progress", "name": "In Progress", "order": 1, "color": "#3b82f6"},
+            {
+                "id": "in_progress",
+                "name": "In Progress",
+                "order": 1,
+                "color": "#3b82f6",
+            },
             {"id": "done", "name": "Done", "order": 2, "color": "#10b981"},
         ],
         ticket_types=[
@@ -146,7 +151,9 @@ class TestTicketMCPIntegration:
         session.close()
 
     @pytest.mark.asyncio
-    async def test_get_tickets_endpoint(self, db_manager, test_workflow, test_agent, board_config):
+    async def test_get_tickets_endpoint(
+        self, db_manager, test_workflow, test_agent, board_config
+    ):
         """Test the get_tickets endpoint functionality."""
         # Create some test tickets
         result1 = await TicketService.create_ticket(
@@ -176,7 +183,9 @@ class TestTicketMCPIntegration:
         )
 
         assert len(tickets) == 2
-        assert tickets[0]["ticket_id"] == result2["ticket_id"]  # Should be ordered by created_at desc
+        assert (
+            tickets[0]["ticket_id"] == result2["ticket_id"]
+        )  # Should be ordered by created_at desc
         assert tickets[1]["ticket_id"] == result1["ticket_id"]
 
     @pytest.mark.asyncio
@@ -209,7 +218,9 @@ class TestTicketMCPIntegration:
 
         # Verify blocked ticket cannot change status
         session = db_manager.get_session()
-        blocked_ticket = session.query(Ticket).filter_by(id=blocked["ticket_id"]).first()
+        blocked_ticket = (
+            session.query(Ticket).filter_by(id=blocked["ticket_id"]).first()
+        )
         assert len(blocked_ticket.blocked_by_ticket_ids) == 1
         session.close()
 
@@ -228,12 +239,16 @@ class TestTicketMCPIntegration:
 
         # Verify in database
         session = db_manager.get_session()
-        unblocked_ticket = session.query(Ticket).filter_by(id=blocked["ticket_id"]).first()
+        unblocked_ticket = (
+            session.query(Ticket).filter_by(id=blocked["ticket_id"]).first()
+        )
         assert len(unblocked_ticket.blocked_by_ticket_ids) == 0
         session.close()
 
     @pytest.mark.asyncio
-    async def test_link_commit_to_ticket(self, db_manager, test_workflow, test_agent, board_config):
+    async def test_link_commit_to_ticket(
+        self, db_manager, test_workflow, test_agent, board_config
+    ):
         """Test linking a commit to a ticket."""
         # Create a ticket
         ticket = await TicketService.create_ticket(
@@ -260,7 +275,9 @@ class TestTicketMCPIntegration:
 
         # Verify in database
         session = db_manager.get_session()
-        commits = session.query(TicketCommit).filter_by(ticket_id=ticket["ticket_id"]).all()
+        commits = (
+            session.query(TicketCommit).filter_by(ticket_id=ticket["ticket_id"]).all()
+        )
         assert len(commits) == 1
         assert commits[0].commit_sha == "abc123def456"
         assert commits[0].link_method == "manual"
@@ -318,7 +335,9 @@ class TestTicketMCPIntegration:
 
         # Verify ticket is resolved
         session = db_manager.get_session()
-        resolved_ticket = session.query(Ticket).filter_by(id=ticket["ticket_id"]).first()
+        resolved_ticket = (
+            session.query(Ticket).filter_by(id=ticket["ticket_id"]).first()
+        )
         assert resolved_ticket.is_resolved is True
         assert resolved_ticket.resolved_at is not None
         session.close()

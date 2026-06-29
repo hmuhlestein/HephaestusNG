@@ -31,7 +31,9 @@ from src.workflow_engine.yaml_loader import (
     load_workflow_from_dir,
 )
 
-_WORKFLOW_DIR = Path(__file__).parent.parent.parent / "config" / "workflows" / "autopilot"
+_WORKFLOW_DIR = (
+    Path(__file__).parent.parent.parent / "config" / "workflows" / "autopilot"
+)
 
 # Load config once at module level
 _cfg = load_workflow_from_dir(_WORKFLOW_DIR)
@@ -54,7 +56,7 @@ def get_session_id(project_id: str, design_slug: str, phase_name: str) -> str:
     Pi handles storage internally — we just pass the ID via --session-id.
     """
     role = SESSION_ROLES.get(phase_name, phase_name)
-    safe = lambda s: re.sub(r'[^a-z0-9\-_]', '', s.lower().replace(' ', '-'))[:30]
+    safe = lambda s: re.sub(r"[^a-z0-9\-_]", "", s.lower().replace(" ", "-"))[:30]
     # Stable hash suffix prevents collisions between similar names
     # e.g. 'my-proj-add-calc' vs 'my-proj-add-calculator'
     raw = f"{project_id}:{design_slug}:{role}"

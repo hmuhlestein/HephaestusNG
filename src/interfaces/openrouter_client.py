@@ -6,7 +6,8 @@ instead of directly to OpenRouter, enabling per-feature cost tracking.
 """
 
 import logging
-from typing import Dict, Any, List, Optional
+from typing import Any, Dict, List, Optional
+
 import httpx
 
 logger = logging.getLogger(__name__)
@@ -77,9 +78,7 @@ class OpenRouterClient:
             logger.info(f"Cost tracking user set to: {user}")
 
     async def generate(
-        self,
-        messages: List[Dict[str, str]],
-        response_format: Optional[str] = None
+        self, messages: List[Dict[str, str]], response_format: Optional[str] = None
     ) -> Dict[str, Any]:
         """Generate a response from OpenRouter or LiteLLM proxy.
 
@@ -154,7 +153,9 @@ class OpenRouterClient:
                         "user": self.litellm_user,
                     }
                 else:
-                    error_msg = f"API error: {response.status_code} - {response.text[:200]}"
+                    error_msg = (
+                        f"API error: {response.status_code} - {response.text[:200]}"
+                    )
                     logger.error(error_msg)
                     raise Exception(error_msg)
 

@@ -1,11 +1,12 @@
 """Tasks screen showing all tasks with details."""
 
-from textual.app import ComposeResult
-from textual.screen import Screen
-from textual.widgets import DataTable, Static, Footer
-from textual.containers import Container, Vertical
 from typing import Any
+
 import requests
+from textual.app import ComposeResult
+from textual.containers import Container, Vertical
+from textual.screen import Screen
+from textual.widgets import DataTable, Footer, Static
 
 
 class TasksScreen(Screen):
@@ -109,7 +110,9 @@ class TasksScreen(Screen):
                         key=task.get("id", ""),
                     )
         except Exception as e:
-            table.add_row("ERROR", "-", "-", "-", "-", f"Failed to load tasks: {str(e)}")
+            table.add_row(
+                "ERROR", "-", "-", "-", "-", f"Failed to load tasks: {str(e)}"
+            )
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         """Handle row selection to show task details."""
@@ -128,18 +131,18 @@ class TasksScreen(Screen):
         """Display task details in the details panel."""
         details = self.query_one("#details-content", Static)
 
-        text = f"""[bold yellow]Task ID:[/] {task.get('id', 'N/A')}
-[bold yellow]Phase:[/] {task.get('phase_id', 'N/A')}
-[bold yellow]Status:[/] {task.get('status', 'N/A')}
-[bold yellow]Priority:[/] {task.get('priority', 'N/A')}
-[bold yellow]Agent:[/] {task.get('agent_id', 'N/A')}
-[bold yellow]Created:[/] {task.get('created_at', 'N/A')}
+        text = f"""[bold yellow]Task ID:[/] {task.get("id", "N/A")}
+[bold yellow]Phase:[/] {task.get("phase_id", "N/A")}
+[bold yellow]Status:[/] {task.get("status", "N/A")}
+[bold yellow]Priority:[/] {task.get("priority", "N/A")}
+[bold yellow]Agent:[/] {task.get("agent_id", "N/A")}
+[bold yellow]Created:[/] {task.get("created_at", "N/A")}
 
 [bold yellow]Description:[/]
-{task.get('description', 'N/A')}
+{task.get("description", "N/A")}
 
 [bold yellow]Done Definition:[/]
-{task.get('done_definition', 'N/A')}
+{task.get("done_definition", "N/A")}
 """
         details.update(text)
 
@@ -169,5 +172,5 @@ class TasksScreen(Screen):
                 title="⚠️  EXIT HEPHAESTUS",
                 message="Are you sure you want to exit?\nAll running agents will continue in the background.",
             ),
-            check_quit
+            check_quit,
         )

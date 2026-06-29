@@ -1,13 +1,15 @@
 """Validation helpers for workflow result content."""
 
 import re
-from typing import Dict, Any, List
+from typing import Any, Dict, List
 
 
 class ValidationResult:
     """Result of content validation against criteria."""
 
-    def __init__(self, passed: bool, feedback: str, evidence: List[Dict[str, Any]] = None):
+    def __init__(
+        self, passed: bool, feedback: str, evidence: List[Dict[str, Any]] = None
+    ):
         self.passed = passed
         self.feedback = feedback
         self.evidence = evidence or []
@@ -38,15 +40,19 @@ def validate_markdown_structure(content: str) -> List[str]:
         errors.append("Result content is too short (minimum 100 characters)")
 
     # Check for basic markdown headers
-    if not re.search(r'^#+\s+', content, re.MULTILINE):
+    if not re.search(r"^#+\s+", content, re.MULTILINE):
         errors.append("No markdown headers found - results should have clear sections")
 
     # Check for code blocks or evidence
-    has_code_block = '```' in content
-    has_evidence_section = re.search(r'(evidence|proof|result|solution)', content, re.IGNORECASE)
+    has_code_block = "```" in content
+    has_evidence_section = re.search(
+        r"(evidence|proof|result|solution)", content, re.IGNORECASE
+    )
 
     if not (has_code_block or has_evidence_section):
-        errors.append("No code blocks or evidence sections found - results should include proof")
+        errors.append(
+            "No code blocks or evidence sections found - results should include proof"
+        )
 
     return errors
 
@@ -77,44 +83,52 @@ def validate_result_criteria(content: str, criteria: str) -> ValidationResult:
     for keyword in keywords:
         if keyword.lower() in content_lower:
             found_keywords.append(keyword)
-            evidence.append({
-                "type": "keyword_match",
-                "keyword": keyword,
-                "found": True,
-            })
+            evidence.append(
+                {
+                    "type": "keyword_match",
+                    "keyword": keyword,
+                    "found": True,
+                }
+            )
         else:
             missing_keywords.append(keyword)
-            evidence.append({
-                "type": "keyword_match",
-                "keyword": keyword,
-                "found": False,
-            })
+            evidence.append(
+                {
+                    "type": "keyword_match",
+                    "keyword": keyword,
+                    "found": False,
+                }
+            )
 
     # Analyze structure
     structure_errors = validate_markdown_structure(content)
     if structure_errors:
         feedback_parts.extend(structure_errors)
-        evidence.append({
-            "type": "structure_validation",
-            "errors": structure_errors,
-        })
+        evidence.append(
+            {
+                "type": "structure_validation",
+                "errors": structure_errors,
+            }
+        )
 
     # Check for specific evidence patterns
     evidence_patterns = [
-        (r'```[\s\S]*?```', "code_block", "Code examples/outputs"),
-        (r'!\[.*?\]\(.*?\)', "image", "Screenshots/images"),
-        (r'https?://[^\s]+', "url", "External links"),
-        (r'\$.*?\$|\$\$[\s\S]*?\$\$', "command", "Commands/execution"),
+        (r"```[\s\S]*?```", "code_block", "Code examples/outputs"),
+        (r"!\[.*?\]\(.*?\)", "image", "Screenshots/images"),
+        (r"https?://[^\s]+", "url", "External links"),
+        (r"\$.*?\$|\$\$[\s\S]*?\$\$", "command", "Commands/execution"),
     ]
 
     for pattern, evidence_type, description in evidence_patterns:
         matches = re.findall(pattern, content)
         if matches:
-            evidence.append({
-                "type": evidence_type,
-                "count": len(matches),
-                "description": description,
-            })
+            evidence.append(
+                {
+                    "type": evidence_type,
+                    "count": len(matches),
+                    "description": description,
+                }
+            )
 
     # Generate feedback
     if found_keywords:
@@ -130,7 +144,9 @@ def validate_result_criteria(content: str, criteria: str) -> ValidationResult:
     # Simple heuristic: must have some keywords and good structure
     has_keywords = len(found_keywords) > 0
     has_good_structure = len(structure_errors) == 0
-    has_evidence = any(e["type"] in ["code_block", "image", "command"] for e in evidence)
+    has_evidence = any(
+        e["type"] in ["code_block", "image", "command"] for e in evidence
+    )
 
     passed = has_keywords and has_good_structure and has_evidence
 
@@ -159,9 +175,9 @@ def extract_keywords_from_criteria(criteria: str) -> List[str]:
     """
     # Common important words to look for
     important_patterns = [
-        r'\b(password|flag|key|solution|result|output|proof|evidence)\b',
-        r'\b(working|successful|complete|implement|fix|solve)\b',
-        r'\b(test|verify|demonstrate|show|provide)\b',
+        r"\b(password|flag|key|solution|result|output|proof|evidence)\b",
+        r"\b(working|successful|complete|implement|fix|solve)\b",
+        r"\b(test|verify|demonstrate|show|provide)\b",
     ]
 
     keywords = set()
@@ -188,7 +204,7 @@ def validate_file_contains_solution(file_path: str, criteria: str) -> Validation
         ValidationResult with validation outcome
     """
     try:
-        with open(file_path, 'r', encoding='utf-8') as f:
+        with open(file_path, "r", encoding="utf-8") as f:
             content = f.read()
 
         return validate_result_criteria(content, criteria)
@@ -197,13 +213,13 @@ def validate_file_contains_solution(file_path: str, criteria: str) -> Validation
         return ValidationResult(
             False,
             f"Result file not found: {file_path}",
-            [{"type": "file_error", "error": "File not found"}]
+            [{"type": "file_error", "error": "File not found"}],
         )
     except Exception as e:
         return ValidationResult(
             False,
             f"Error reading result file: {str(e)}",
-            [{"type": "file_error", "error": str(e)}]
+            [{"type": "file_error", "error": str(e)}],
         )
 
 
@@ -222,21 +238,30 @@ def validate_evidence_sections(content: str) -> ValidationResult:
 
     # Look for common evidence section headers
     evidence_headers = [
-        "solution", "result", "proof", "evidence", "demonstration",
-        "output", "execution", "verification", "testing"
+        "solution",
+        "result",
+        "proof",
+        "evidence",
+        "demonstration",
+        "output",
+        "execution",
+        "verification",
+        "testing",
     ]
 
     found_sections = []
     for header in evidence_headers:
-        pattern = rf'^#+\s*{re.escape(header)}'
+        pattern = rf"^#+\s*{re.escape(header)}"
         if re.search(pattern, content, re.IGNORECASE | re.MULTILINE):
             found_sections.append(header)
 
-    evidence.append({
-        "type": "evidence_sections",
-        "found_sections": found_sections,
-        "count": len(found_sections),
-    })
+    evidence.append(
+        {
+            "type": "evidence_sections",
+            "found_sections": found_sections,
+            "count": len(found_sections),
+        }
+    )
 
     if found_sections:
         feedback_parts.append(f"Found evidence sections: {', '.join(found_sections)}")
@@ -244,14 +269,16 @@ def validate_evidence_sections(content: str) -> ValidationResult:
         feedback_parts.append("No clear evidence sections found")
 
     # Check for step-by-step explanations
-    numbered_steps = len(re.findall(r'^\d+\.', content, re.MULTILINE))
-    bullet_points = len(re.findall(r'^\s*[-*+]', content, re.MULTILINE))
+    numbered_steps = len(re.findall(r"^\d+\.", content, re.MULTILINE))
+    bullet_points = len(re.findall(r"^\s*[-*+]", content, re.MULTILINE))
 
-    evidence.append({
-        "type": "structured_explanation",
-        "numbered_steps": numbered_steps,
-        "bullet_points": bullet_points,
-    })
+    evidence.append(
+        {
+            "type": "structured_explanation",
+            "numbered_steps": numbered_steps,
+            "bullet_points": bullet_points,
+        }
+    )
 
     if numbered_steps > 0:
         feedback_parts.append(f"Contains {numbered_steps} numbered steps")
@@ -264,6 +291,8 @@ def validate_evidence_sections(content: str) -> ValidationResult:
 
     passed = has_sections and has_structure
 
-    feedback = "; ".join(feedback_parts) if feedback_parts else "Basic evidence structure"
+    feedback = (
+        "; ".join(feedback_parts) if feedback_parts else "Basic evidence structure"
+    )
 
     return ValidationResult(passed, feedback, evidence)

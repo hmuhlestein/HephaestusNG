@@ -1,16 +1,17 @@
 """Vector store management for RAG system using Qdrant."""
 
-from typing import List, Dict, Any, Optional
-from datetime import datetime
 import logging
+from datetime import datetime
+from typing import Any, Dict, List, Optional
+
 from qdrant_client import QdrantClient
 from qdrant_client.models import (
     Distance,
-    VectorParams,
-    PointStruct,
-    Filter,
     FieldCondition,
+    Filter,
     MatchValue,
+    PointStruct,
+    VectorParams,
 )
 
 logger = logging.getLogger(__name__)
@@ -51,7 +52,11 @@ class VectorStoreManager:
         },
     }
 
-    def __init__(self, qdrant_url: str = "http://localhost:6333", collection_prefix: str = "hephaestus"):
+    def __init__(
+        self,
+        qdrant_url: str = "http://localhost:6333",
+        collection_prefix: str = "hephaestus",
+    ):
         """Initialize Qdrant client and collections.
 
         Args:
@@ -86,7 +91,9 @@ class VectorStoreManager:
                             distance=Distance.COSINE,
                         ),
                     )
-                    logger.info(f"Created collection '{full_name}': {config['description']}")
+                    logger.info(
+                        f"Created collection '{full_name}': {config['description']}"
+                    )
             except Exception:
                 # If listing fails, try to create anyway
                 try:
@@ -97,7 +104,9 @@ class VectorStoreManager:
                             distance=Distance.COSINE,
                         ),
                     )
-                    logger.info(f"Created collection '{full_name}': {config['description']}")
+                    logger.info(
+                        f"Created collection '{full_name}': {config['description']}"
+                    )
                 except Exception:
                     # Collection likely already exists
                     logger.debug(f"Collection '{full_name}' initialization handled")
@@ -293,17 +302,13 @@ class VectorStoreManager:
             count = self.client.count(collection_name=full_name)
             return {
                 "name": collection,
-                "vectors_count": count.count if hasattr(count, 'count') else 0,
-                "indexed_vectors_count": count.count if hasattr(count, 'count') else 0,
+                "vectors_count": count.count if hasattr(count, "count") else 0,
+                "indexed_vectors_count": count.count if hasattr(count, "count") else 0,
                 "status": "green",
             }
         except Exception:
             # Suppress verbose error logging for stats
-            return {
-                "name": collection,
-                "vectors_count": 0,
-                "status": "green"
-            }
+            return {"name": collection, "vectors_count": 0, "status": "green"}
 
     def get_all_stats(self) -> Dict[str, Any]:
         """Get statistics for all collections.

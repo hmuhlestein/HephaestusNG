@@ -1,28 +1,33 @@
 """Integration tests for the diagnostic agent system."""
 
-import pytest
-import asyncio
-import tempfile
-import os
-from datetime import datetime, timedelta
-from unittest.mock import Mock, AsyncMock, patch, MagicMock
-import sys
-from pathlib import Path
 import logging
+import os
+import sys
+import tempfile
+from datetime import datetime, timedelta
+from pathlib import Path
+from unittest.mock import AsyncMock, Mock
+
+import pytest
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from src.monitoring.monitor import MonitoringLoop
 from src.core.database import (
-    DatabaseManager, Agent, Task, Workflow, Phase, WorkflowResult, DiagnosticRun
+    Agent,
+    DatabaseManager,
+    DiagnosticRun,
+    Phase,
+    Task,
+    Workflow,
 )
-from src.core.simple_config import get_config
+from src.monitoring.monitor import MonitoringLoop
 
 
 # Capture logs for verification
 class LogCapture(logging.Handler):
     """Custom logging handler to capture logs."""
+
     def __init__(self):
         super().__init__()
         self.records = []
@@ -94,8 +99,15 @@ def mock_agent_manager():
     manager = Mock()
 
     # Mock agent creation
-    async def create_agent_mock(task, enriched_data, memories, project_context, agent_type,
-                                use_existing_worktree=False, working_directory=None):
+    async def create_agent_mock(
+        task,
+        enriched_data,
+        memories,
+        project_context,
+        agent_type,
+        use_existing_worktree=False,
+        working_directory=None,
+    ):
         mock_agent = Mock()
         mock_agent.id = f"diagnostic-agent-{task.id[:8]}"
         mock_agent.agent_type = agent_type
@@ -163,14 +175,18 @@ def mock_phase_manager(temp_db):
 
     # Mock workflow config
     workflow_config = Mock()
-    workflow_config.result_criteria = "Successfully solve the test problem and submit evidence"
+    workflow_config.result_criteria = (
+        "Successfully solve the test problem and submit evidence"
+    )
     manager.get_workflow_config = Mock(return_value=workflow_config)
 
     return manager
 
 
 @pytest.fixture
-def monitoring_loop(temp_db, mock_agent_manager, mock_llm_provider, mock_rag_system, mock_phase_manager):
+def monitoring_loop(
+    temp_db, mock_agent_manager, mock_llm_provider, mock_rag_system, mock_phase_manager
+):
     """Create a monitoring loop for integration testing."""
     loop = MonitoringLoop(
         db_manager=temp_db,
@@ -186,7 +202,9 @@ class TestDiagnosticIntegration:
     """Integration tests for diagnostic agent system."""
 
     @pytest.mark.asyncio
-    async def test_diagnostic_not_triggered_no_tasks(self, monitoring_loop, log_capture):
+    async def test_diagnostic_not_triggered_no_tasks(
+        self, monitoring_loop, log_capture
+    ):
         """Test that diagnostic is not triggered when there are no tasks."""
         log_capture.clear()
 
@@ -204,7 +222,9 @@ class TestDiagnosticIntegration:
         assert any("Has Tasks:            ❌" in m for m in messages)
 
     @pytest.mark.asyncio
-    async def test_diagnostic_not_triggered_active_tasks(self, monitoring_loop, temp_db, log_capture):
+    async def test_diagnostic_not_triggered_active_tasks(
+        self, monitoring_loop, temp_db, log_capture
+    ):
         """Test that diagnostic is not triggered when tasks are still active."""
         # Create an active task
         session = temp_db.get_session()
@@ -237,7 +257,9 @@ class TestDiagnosticIntegration:
         assert any("All Tasks Finished:   ❌" in m for m in messages)
 
     @pytest.mark.asyncio
-    async def test_diagnostic_not_triggered_too_recent(self, monitoring_loop, temp_db, log_capture):
+    async def test_diagnostic_not_triggered_too_recent(
+        self, monitoring_loop, temp_db, log_capture
+    ):
         """Test that diagnostic is not triggered when task completed too recently."""
         # Create a recently completed task
         session = temp_db.get_session()
@@ -250,7 +272,8 @@ class TestDiagnosticIntegration:
                 status="done",
                 workflow_id="integration-test-workflow",
                 phase_id="phase-1",
-                completed_at=datetime.utcnow() - timedelta(seconds=30),  # 30s ago, less than 60s threshold
+                completed_at=datetime.utcnow()
+                - timedelta(seconds=30),  # 30s ago, less than 60s threshold
             )
             session.add(task)
             session.commit()
@@ -271,7 +294,9 @@ class TestDiagnosticIntegration:
         assert any("Stuck Long Enough:    ❌" in m for m in messages)
 
     @pytest.mark.asyncio
-    async def test_diagnostic_triggered_workflow_stuck(self, monitoring_loop, temp_db, log_capture):
+    async def test_diagnostic_triggered_workflow_stuck(
+        self, monitoring_loop, temp_db, log_capture
+    ):
         """Test that diagnostic agent is triggered when workflow is stuck."""
         # Create a task that completed long ago
         session = temp_db.get_session()
@@ -324,12 +349,14 @@ class TestDiagnosticIntegration:
             assert run.workflow_id == "integration-test-workflow"
             assert run.total_tasks_at_trigger == 1
             assert run.done_tasks_at_trigger == 1
-            assert run.status in ['created', 'running']
+            assert run.status in ["created", "running"]
         finally:
             session.close()
 
     @pytest.mark.asyncio
-    async def test_diagnostic_respects_cooldown(self, monitoring_loop, temp_db, log_capture):
+    async def test_diagnostic_respects_cooldown(
+        self, monitoring_loop, temp_db, log_capture
+    ):
         """Test that diagnostic respects cooldown period."""
         # Create a completed task
         session = temp_db.get_session()
@@ -376,7 +403,9 @@ class TestDiagnosticIntegration:
         assert any("Cooldown Passed:      ❌" in m for m in messages)
 
     @pytest.mark.asyncio
-    async def test_full_diagnostic_flow_with_logging(self, monitoring_loop, temp_db, log_capture):
+    async def test_full_diagnostic_flow_with_logging(
+        self, monitoring_loop, temp_db, log_capture
+    ):
         """Test the complete diagnostic flow and verify all logs."""
         # Setup: Create multiple completed tasks representing a stuck workflow
         session = temp_db.get_session()
@@ -442,70 +471,90 @@ class TestDiagnosticIntegration:
         # Verify logs in detail
         messages = log_capture.get_messages("[DIAGNOSTIC MONITOR]")
 
-        print("\n" + "="*80)
+        print("\n" + "=" * 80)
         print("CAPTURED DIAGNOSTIC MONITOR LOGS:")
-        print("="*80)
+        print("=" * 80)
         for msg in messages:
             print(msg)
-        print("="*80 + "\n")
+        print("=" * 80 + "\n")
 
         # 1. Check initial detection
-        assert any("Starting workflow stuck state check" in m for m in messages), \
+        assert any("Starting workflow stuck state check" in m for m in messages), (
             "Should log start of check"
+        )
 
         # 2. Check condition evaluations
-        assert any("Workflow exists:" in m for m in messages), \
+        assert any("Workflow exists:" in m for m in messages), (
             "Should log workflow existence"
-        assert any("Has tasks: 2 total" in m for m in messages), \
-            "Should log task count"
-        assert any("All tasks finished: 2 tasks" in m for m in messages), \
+        )
+        assert any("Has tasks: 2 total" in m for m in messages), "Should log task count"
+        assert any("All tasks finished: 2 tasks" in m for m in messages), (
             "Should log all tasks finished"
-        assert any("No validated result" in m for m in messages), \
+        )
+        assert any("No validated result" in m for m in messages), (
             "Should log no validated result"
-        assert any("Cooldown passed" in m for m in messages), \
+        )
+        assert any("Cooldown passed" in m for m in messages), (
             "Should log cooldown status"
-        assert any("Stuck long enough" in m for m in messages), \
-            "Should log stuck time"
+        )
+        assert any("Stuck long enough" in m for m in messages), "Should log stuck time"
 
         # 3. Check status report
-        assert any("DIAGNOSTIC STATUS REPORT" in m for m in messages), \
+        assert any("DIAGNOSTIC STATUS REPORT" in m for m in messages), (
             "Should have status report"
-        assert any("Enabled:              ✅" in m for m in messages), \
+        )
+        assert any("Enabled:              ✅" in m for m in messages), (
             "Should show enabled"
-        assert any("Workflow Exists:      ✅" in m for m in messages), \
+        )
+        assert any("Workflow Exists:      ✅" in m for m in messages), (
             "Should show workflow exists"
-        assert any("Has Tasks:            ✅" in m for m in messages), \
+        )
+        assert any("Has Tasks:            ✅" in m for m in messages), (
             "Should show has tasks"
-        assert any("All Tasks Finished:   ✅" in m for m in messages), \
+        )
+        assert any("All Tasks Finished:   ✅" in m for m in messages), (
             "Should show all finished"
-        assert any("No Validated Result:  ✅" in m for m in messages), \
+        )
+        assert any("No Validated Result:  ✅" in m for m in messages), (
             "Should show no result"
-        assert any("Cooldown Passed:      ✅" in m for m in messages), \
+        )
+        assert any("Cooldown Passed:      ✅" in m for m in messages), (
             "Should show cooldown passed"
-        assert any("Stuck Long Enough:    ✅" in m for m in messages), \
+        )
+        assert any("Stuck Long Enough:    ✅" in m for m in messages), (
             "Should show stuck long enough"
+        )
 
         # 4. Check trigger decision
-        assert any("TRIGGERING DIAGNOSTIC AGENT" in m for m in messages), \
+        assert any("TRIGGERING DIAGNOSTIC AGENT" in m for m in messages), (
             "Should show triggering decision"
+        )
 
         # 5. Check agent creation process
-        assert any("Creating diagnostic agent" in m for m in messages), \
+        assert any("Creating diagnostic agent" in m for m in messages), (
             "Should log agent creation start"
-        assert any("Gathering diagnostic context" in m for m in messages), \
+        )
+        assert any("Gathering diagnostic context" in m for m in messages), (
             "Should log context gathering"
-        assert any("Context gathered: 2 phases" in m for m in messages), \
+        )
+        assert any("Context gathered: 2 phases" in m for m in messages), (
             "Should log context details"
-        assert any("Created diagnostic task:" in m for m in messages), \
+        )
+        assert any("Created diagnostic task:" in m for m in messages), (
             "Should log task creation"
-        assert any("Created diagnostic run:" in m for m in messages), \
+        )
+        assert any("Created diagnostic run:" in m for m in messages), (
             "Should log run creation"
-        assert any("Generating diagnostic prompt" in m for m in messages), \
+        )
+        assert any("Generating diagnostic prompt" in m for m in messages), (
             "Should log prompt generation"
-        assert any("Spawning diagnostic agent" in m for m in messages), \
+        )
+        assert any("Spawning diagnostic agent" in m for m in messages), (
             "Should log agent spawning"
-        assert any("Diagnostic agent created successfully" in m for m in messages), \
+        )
+        assert any("Diagnostic agent created successfully" in m for m in messages), (
             "Should log success"
+        )
 
         # 6. Verify database state
         session = temp_db.get_session()
@@ -519,12 +568,14 @@ class TestDiagnosticIntegration:
             assert run.total_tasks_at_trigger == 2
             assert run.done_tasks_at_trigger == 2
             assert run.failed_tasks_at_trigger == 0
-            assert run.status in ['created', 'running']
+            assert run.status in ["created", "running"]
 
             # Should have created diagnostic task
-            diagnostic_tasks = session.query(Task).filter(
-                Task.raw_description.like("DIAGNOSTIC%")
-            ).all()
+            diagnostic_tasks = (
+                session.query(Task)
+                .filter(Task.raw_description.like("DIAGNOSTIC%"))
+                .all()
+            )
             assert len(diagnostic_tasks) == 1, "Should create one diagnostic task"
 
             diagnostic_task = diagnostic_tasks[0]

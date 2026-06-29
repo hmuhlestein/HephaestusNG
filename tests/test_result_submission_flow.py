@@ -2,12 +2,11 @@
 
 import os
 import tempfile
-import pytest
-from unittest.mock import patch, MagicMock, AsyncMock
 from datetime import datetime
+from unittest.mock import MagicMock, patch
 
-from src.services.workflow_result_service import WorkflowResultService
 from src.services.result_validator_service import ResultValidatorService
+from src.services.workflow_result_service import WorkflowResultService
 from src.workflow.termination_handler import WorkflowTerminationHandler
 
 
@@ -18,9 +17,7 @@ class TestResultSubmissionFlow:
         """Set up test fixtures."""
         # Create temporary test result file
         self.temp_file = tempfile.NamedTemporaryFile(
-            mode='w',
-            suffix='.md',
-            delete=False
+            mode="w", suffix=".md", delete=False
         )
         self.temp_file.write("""# Crackme Solution
 
@@ -68,9 +65,11 @@ Used reverse engineering tools to analyze the binary:
         if os.path.exists(self.temp_file_path):
             os.unlink(self.temp_file_path)
 
-    @patch('src.services.workflow_result_service.get_db')
-    @patch('src.services.result_validator_service.PhaseManager')
-    async def test_complete_submission_flow_stop_all(self, mock_phase_manager, mock_get_db):
+    @patch("src.services.workflow_result_service.get_db")
+    @patch("src.services.result_validator_service.PhaseManager")
+    async def test_complete_submission_flow_stop_all(
+        self, mock_phase_manager, mock_get_db
+    ):
         """Test complete flow: submit result -> validate -> terminate workflow."""
 
         # Mock database setup
@@ -84,16 +83,28 @@ Used reverse engineering tools to analyze the binary:
         mock_agent.id = "agent-456"
 
         mock_db.query.side_effect = [
-            MagicMock(filter_by=MagicMock(return_value=MagicMock(first=MagicMock(return_value=mock_workflow)))),
-            MagicMock(filter_by=MagicMock(return_value=MagicMock(first=MagicMock(return_value=mock_agent)))),
-            MagicMock(filter_by=MagicMock(return_value=MagicMock(first=MagicMock(return_value=None))))  # No existing result
+            MagicMock(
+                filter_by=MagicMock(
+                    return_value=MagicMock(first=MagicMock(return_value=mock_workflow))
+                )
+            ),
+            MagicMock(
+                filter_by=MagicMock(
+                    return_value=MagicMock(first=MagicMock(return_value=mock_agent))
+                )
+            ),
+            MagicMock(
+                filter_by=MagicMock(
+                    return_value=MagicMock(first=MagicMock(return_value=None))
+                )
+            ),  # No existing result
         ]
 
         # Step 1: Submit result
         result = WorkflowResultService.submit_result(
             agent_id="agent-456",
             workflow_id="workflow-123",
-            markdown_file_path=self.temp_file_path
+            markdown_file_path=self.temp_file_path,
         )
 
         assert result["status"] == "submitted"
@@ -103,17 +114,20 @@ Used reverse engineering tools to analyze the binary:
         mock_phase_manager_instance = MagicMock()
         mock_config = MagicMock()
         mock_config.has_result = True
-        mock_config.result_criteria = "Must provide correct password with execution proof"
+        mock_config.result_criteria = (
+            "Must provide correct password with execution proof"
+        )
         mock_config.on_result_found = "stop_all"
         mock_phase_manager_instance.get_workflow_config.return_value = mock_config
         mock_phase_manager.return_value = mock_phase_manager_instance
 
         validator_service = ResultValidatorService(
-            db_manager=MagicMock(),
-            phase_manager=mock_phase_manager_instance
+            db_manager=MagicMock(), phase_manager=mock_phase_manager_instance
         )
 
-        should_validate, criteria = validator_service.should_spawn_validator("workflow-123")
+        should_validate, criteria = validator_service.should_spawn_validator(
+            "workflow-123"
+        )
 
         assert should_validate == True
         assert criteria == "Must provide correct password with execution proof"
@@ -126,10 +140,14 @@ Used reverse engineering tools to analyze the binary:
 
         # Mock the database query for result
         mock_db.query.side_effect = [
-            MagicMock(filter_by=MagicMock(return_value=MagicMock(first=MagicMock(return_value=mock_result))))
+            MagicMock(
+                filter_by=MagicMock(
+                    return_value=MagicMock(first=MagicMock(return_value=mock_result))
+                )
+            )
         ]
 
-        with patch.object(WorkflowResultService, 'update_result_status') as mock_update:
+        with patch.object(WorkflowResultService, "update_result_status") as mock_update:
             mock_update.return_value = {
                 "result_id": result_id,
                 "status": "validated",
@@ -143,11 +161,23 @@ Used reverse engineering tools to analyze the binary:
                 passed=True,
                 feedback="All criteria met - found correct flag with execution proof",
                 evidence=[
-                    {"type": "criteria_check", "criterion": "correct password", "passed": True},
-                    {"type": "criteria_check", "criterion": "execution proof", "passed": True},
-                    {"type": "evidence_found", "evidence": "FLAG{test_flag_123}", "location": "result file"}
+                    {
+                        "type": "criteria_check",
+                        "criterion": "correct password",
+                        "passed": True,
+                    },
+                    {
+                        "type": "criteria_check",
+                        "criterion": "execution proof",
+                        "passed": True,
+                    },
+                    {
+                        "type": "evidence_found",
+                        "evidence": "FLAG{test_flag_123}",
+                        "location": "result file",
+                    },
                 ],
-                validator_agent_id="validator-789"
+                validator_agent_id="validator-789",
             )
 
         assert outcome["validation_passed"] == True
@@ -157,12 +187,11 @@ Used reverse engineering tools to analyze the binary:
         # Step 4: Workflow termination would be triggered
         # (In real flow, this would be called by the MCP endpoint)
         termination_handler = WorkflowTerminationHandler(
-            db_manager=MagicMock(),
-            agent_manager=MagicMock()
+            db_manager=MagicMock(), agent_manager=MagicMock()
         )
 
         # Mock the termination
-        with patch.object(termination_handler, 'terminate_workflow') as mock_terminate:
+        with patch.object(termination_handler, "terminate_workflow") as mock_terminate:
             mock_terminate.return_value = {
                 "workflow_id": "workflow-123",
                 "terminated_agents": ["agent-456"],
@@ -172,14 +201,18 @@ Used reverse engineering tools to analyze the binary:
                 "terminated_at": datetime.utcnow().isoformat(),
             }
 
-            termination_result = await termination_handler.terminate_workflow("workflow-123")
+            termination_result = await termination_handler.terminate_workflow(
+                "workflow-123"
+            )
 
         assert termination_result["workflow_id"] == "workflow-123"
         assert "agent-456" in termination_result["terminated_agents"]
 
-    @patch('src.services.workflow_result_service.get_db')
-    @patch('src.services.result_validator_service.PhaseManager')
-    async def test_complete_submission_flow_do_nothing(self, mock_phase_manager, mock_get_db):
+    @patch("src.services.workflow_result_service.get_db")
+    @patch("src.services.result_validator_service.PhaseManager")
+    async def test_complete_submission_flow_do_nothing(
+        self, mock_phase_manager, mock_get_db
+    ):
         """Test complete flow: submit result -> validate -> continue workflow."""
 
         # Mock database setup (similar to previous test)
@@ -192,16 +225,28 @@ Used reverse engineering tools to analyze the binary:
         mock_agent.id = "agent-456"
 
         mock_db.query.side_effect = [
-            MagicMock(filter_by=MagicMock(return_value=MagicMock(first=MagicMock(return_value=mock_workflow)))),
-            MagicMock(filter_by=MagicMock(return_value=MagicMock(first=MagicMock(return_value=mock_agent)))),
-            MagicMock(filter_by=MagicMock(return_value=MagicMock(first=MagicMock(return_value=None))))
+            MagicMock(
+                filter_by=MagicMock(
+                    return_value=MagicMock(first=MagicMock(return_value=mock_workflow))
+                )
+            ),
+            MagicMock(
+                filter_by=MagicMock(
+                    return_value=MagicMock(first=MagicMock(return_value=mock_agent))
+                )
+            ),
+            MagicMock(
+                filter_by=MagicMock(
+                    return_value=MagicMock(first=MagicMock(return_value=None))
+                )
+            ),
         ]
 
         # Submit result
         result = WorkflowResultService.submit_result(
             agent_id="agent-456",
             workflow_id="workflow-123",
-            markdown_file_path=self.temp_file_path
+            markdown_file_path=self.temp_file_path,
         )
 
         # Configure for "do_nothing" action
@@ -213,8 +258,7 @@ Used reverse engineering tools to analyze the binary:
         mock_phase_manager_instance.get_workflow_config.return_value = mock_config
 
         validator_service = ResultValidatorService(
-            db_manager=MagicMock(),
-            phase_manager=mock_phase_manager_instance
+            db_manager=MagicMock(), phase_manager=mock_phase_manager_instance
         )
 
         # Process validation outcome
@@ -223,18 +267,25 @@ Used reverse engineering tools to analyze the binary:
         mock_result.workflow_id = "workflow-123"
 
         mock_db.query.side_effect = [
-            MagicMock(filter_by=MagicMock(return_value=MagicMock(first=MagicMock(return_value=mock_result))))
+            MagicMock(
+                filter_by=MagicMock(
+                    return_value=MagicMock(first=MagicMock(return_value=mock_result))
+                )
+            )
         ]
 
-        with patch.object(WorkflowResultService, 'update_result_status') as mock_update:
-            mock_update.return_value = {"result_id": result["result_id"], "status": "validated"}
+        with patch.object(WorkflowResultService, "update_result_status") as mock_update:
+            mock_update.return_value = {
+                "result_id": result["result_id"],
+                "status": "validated",
+            }
 
             outcome = validator_service.process_validation_outcome(
                 result_id=result["result_id"],
                 passed=True,
                 feedback="Research findings meet criteria",
                 evidence=[],
-                validator_agent_id="validator-789"
+                validator_agent_id="validator-789",
             )
 
         # Verify workflow continues
@@ -242,8 +293,8 @@ Used reverse engineering tools to analyze the binary:
         assert "continue_workflow" in outcome["next_actions"]
         assert "terminate_workflow" not in outcome["next_actions"]
 
-    @patch('src.services.workflow_result_service.get_db')
-    @patch('src.services.result_validator_service.PhaseManager')
+    @patch("src.services.workflow_result_service.get_db")
+    @patch("src.services.result_validator_service.PhaseManager")
     async def test_validation_failure_flow(self, mock_phase_manager, mock_get_db):
         """Test flow when validation fails."""
 
@@ -255,16 +306,28 @@ Used reverse engineering tools to analyze the binary:
         mock_agent = MagicMock()
 
         mock_db.query.side_effect = [
-            MagicMock(filter_by=MagicMock(return_value=MagicMock(first=MagicMock(return_value=mock_workflow)))),
-            MagicMock(filter_by=MagicMock(return_value=MagicMock(first=MagicMock(return_value=mock_agent)))),
-            MagicMock(filter_by=MagicMock(return_value=MagicMock(first=MagicMock(return_value=None))))
+            MagicMock(
+                filter_by=MagicMock(
+                    return_value=MagicMock(first=MagicMock(return_value=mock_workflow))
+                )
+            ),
+            MagicMock(
+                filter_by=MagicMock(
+                    return_value=MagicMock(first=MagicMock(return_value=mock_agent))
+                )
+            ),
+            MagicMock(
+                filter_by=MagicMock(
+                    return_value=MagicMock(first=MagicMock(return_value=None))
+                )
+            ),
         ]
 
         # Submit result
         result = WorkflowResultService.submit_result(
             agent_id="agent-456",
             workflow_id="workflow-123",
-            markdown_file_path=self.temp_file_path
+            markdown_file_path=self.temp_file_path,
         )
 
         # Configure validation
@@ -276,8 +339,7 @@ Used reverse engineering tools to analyze the binary:
         mock_phase_manager_instance.get_workflow_config.return_value = mock_config
 
         validator_service = ResultValidatorService(
-            db_manager=MagicMock(),
-            phase_manager=mock_phase_manager_instance
+            db_manager=MagicMock(), phase_manager=mock_phase_manager_instance
         )
 
         # Process validation failure
@@ -286,21 +348,36 @@ Used reverse engineering tools to analyze the binary:
         mock_result.workflow_id = "workflow-123"
 
         mock_db.query.side_effect = [
-            MagicMock(filter_by=MagicMock(return_value=MagicMock(first=MagicMock(return_value=mock_result))))
+            MagicMock(
+                filter_by=MagicMock(
+                    return_value=MagicMock(first=MagicMock(return_value=mock_result))
+                )
+            )
         ]
 
-        with patch.object(WorkflowResultService, 'update_result_status') as mock_update:
-            mock_update.return_value = {"result_id": result["result_id"], "status": "rejected"}
+        with patch.object(WorkflowResultService, "update_result_status") as mock_update:
+            mock_update.return_value = {
+                "result_id": result["result_id"],
+                "status": "rejected",
+            }
 
             outcome = validator_service.process_validation_outcome(
                 result_id=result["result_id"],
                 passed=False,
                 feedback="Insufficient evidence - missing execution proof",
                 evidence=[
-                    {"type": "criteria_check", "criterion": "verified solution", "passed": False},
-                    {"type": "missing_evidence", "evidence": "execution proof", "required": True}
+                    {
+                        "type": "criteria_check",
+                        "criterion": "verified solution",
+                        "passed": False,
+                    },
+                    {
+                        "type": "missing_evidence",
+                        "evidence": "execution proof",
+                        "required": True,
+                    },
                 ],
-                validator_agent_id="validator-789"
+                validator_agent_id="validator-789",
             )
 
         # Verify no workflow termination
@@ -316,11 +393,12 @@ Used reverse engineering tools to analyze the binary:
         mock_phase_manager.get_workflow_config.return_value = mock_config
 
         validator_service = ResultValidatorService(
-            db_manager=MagicMock(),
-            phase_manager=mock_phase_manager
+            db_manager=MagicMock(), phase_manager=mock_phase_manager
         )
 
-        should_validate, criteria = validator_service.should_spawn_validator("workflow-123")
+        should_validate, criteria = validator_service.should_spawn_validator(
+            "workflow-123"
+        )
 
         assert should_validate == False
         assert criteria is None

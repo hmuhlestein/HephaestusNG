@@ -5,11 +5,11 @@ Does NOT require a running backend.
 """
 
 import json
-import sys
 import os
+import sys
 import tempfile
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -18,13 +18,24 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.cli.main import build_parser, main
 from src.cli.utils import (
-    api_get, api_post, api_delete, check_backend, require_backend,
-    save_pid, read_pid, remove_pid, is_process_running,
-    truncate, table, status_icon, time_ago, PID_DIR,
+    PID_DIR,
+    api_delete,
+    api_get,
+    api_post,
+    check_backend,
+    is_process_running,
+    read_pid,
+    remove_pid,
+    require_backend,
+    save_pid,
+    status_icon,
+    table,
+    time_ago,
+    truncate,
 )
 
-
 # ─── Fixtures ───────────────────────────────────────────────────────
+
 
 @pytest.fixture
 def args():
@@ -58,6 +69,7 @@ def mock_health():
 
 
 # ─── Parser Tests ───────────────────────────────────────────────────
+
 
 class TestParser:
     def test_parser_creates(self):
@@ -101,9 +113,18 @@ class TestParser:
     def test_all_commands_registered(self):
         parser = build_parser()
         commands = [
-            "status", "start", "stop", "restart", "init",
-            "workflow", "agent", "task", "autopilot",
-            "memory", "exec", "config",
+            "status",
+            "start",
+            "stop",
+            "restart",
+            "init",
+            "workflow",
+            "agent",
+            "task",
+            "autopilot",
+            "memory",
+            "exec",
+            "config",
         ]
         for cmd in commands:
             args = parser.parse_args([cmd])
@@ -111,6 +132,7 @@ class TestParser:
 
 
 # ─── Utility Tests ──────────────────────────────────────────────────
+
 
 class TestTruncate:
     def test_short_string(self):
@@ -160,6 +182,7 @@ class TestTimeAgo:
 
     def test_recent_seconds(self):
         from datetime import datetime, timezone
+
         ts = datetime.now(timezone.utc).isoformat()
         result = time_ago(ts)
         assert "s ago" in result or "0s ago" in result
@@ -180,6 +203,7 @@ class TestTable:
 
 
 # ─── PID Management Tests ──────────────────────────────────────────
+
 
 class TestPidManagement:
     def setup_method(self):
@@ -221,6 +245,7 @@ class TestIsProcessRunning:
 
 
 # ─── API Helper Tests ───────────────────────────────────────────────
+
 
 class TestApiHelpers:
     def test_api_get_connection_refused(self, args):
@@ -281,9 +306,11 @@ class TestApiHelpers:
 
 # ─── Status Command Tests ───────────────────────────────────────────
 
+
 class TestStatusCommand:
     def test_status_when_backend_down(self, args, capsys):
         from src.cli.commands.status import run
+
         result = run(args)
         assert result == 1
         out = capsys.readouterr().out
@@ -291,6 +318,7 @@ class TestStatusCommand:
 
     def test_status_json_when_backend_down(self, args_json, capsys):
         from src.cli.commands.status import run
+
         result = run(args_json)
         assert result == 1
         captured = capsys.readouterr()
@@ -323,25 +351,31 @@ class TestStatusCommand:
 
 # ─── Workflow Command Tests ─────────────────────────────────────────
 
+
 class TestWorkflowCommand:
     def test_list_definitions_when_backend_down(self, args, capsys):
         from src.cli.commands.workflow import list_definitions
+
         result = list_definitions(args)
         assert result == 1
 
     def test_list_executions_when_backend_down(self, args, capsys):
         from src.cli.commands.workflow import list_executions
+
         args.status = None
         result = list_executions(args)
         assert result == 1
 
     def test_list_definitions_with_data(self, args, capsys):
         from src.cli.commands.workflow import list_definitions
+
         mock_data = [
             {"id": "wf1", "name": "Test WF", "description": "A test"},
         ]
-        with patch("src.cli.commands.workflow.api_get", return_value=mock_data), \
-             patch("src.cli.commands.workflow.require_backend", return_value=True):
+        with (
+            patch("src.cli.commands.workflow.api_get", return_value=mock_data),
+            patch("src.cli.commands.workflow.require_backend", return_value=True),
+        ):
             result = list_definitions(args)
         assert result == 0
         out = capsys.readouterr().out
@@ -349,6 +383,7 @@ class TestWorkflowCommand:
 
     def test_launch_when_backend_down(self, args, capsys):
         from src.cli.commands.workflow import launch
+
         args.definition_id = "test"
         args.description = "test desc"
         args.path = None
@@ -358,15 +393,18 @@ class TestWorkflowCommand:
 
 # ─── Agent Command Tests ────────────────────────────────────────────
 
+
 class TestAgentCommand:
     def test_list_agents_when_backend_down(self, args, capsys):
         from src.cli.commands.agent import list_agents
+
         args.status = None
         result = list_agents(args)
         assert result == 1
 
     def test_terminate_when_backend_down(self, args, capsys):
         from src.cli.commands.agent import terminate
+
         args.agent_id = "test_agent"
         result = terminate(args)
         assert result == 1
@@ -374,9 +412,11 @@ class TestAgentCommand:
 
 # ─── Task Command Tests ─────────────────────────────────────────────
 
+
 class TestTaskCommand:
     def test_list_tasks_when_backend_down(self, args, capsys):
         from src.cli.commands.task import list_tasks
+
         args.status = None
         args.limit = 20
         result = list_tasks(args)
@@ -384,6 +424,7 @@ class TestTaskCommand:
 
     def test_create_task_when_backend_down(self, args, capsys):
         from src.cli.commands.task import create_task
+
         args.description = "test task"
         args.priority = "medium"
         args.phase = None
@@ -393,9 +434,11 @@ class TestTaskCommand:
 
 # ─── Autopilot Command Tests ───────────────────────────────────────
 
+
 class TestAutopilotCommand:
     def test_show_queue_nonexistent_dir(self, args, capsys):
         from src.cli.commands.autopilot import show_queue
+
         args.project_path = "/tmp/nonexistent_project_xyz"
         result = show_queue(args)
         assert result == 0
@@ -404,6 +447,7 @@ class TestAutopilotCommand:
 
     def test_show_queue_empty(self, args, capsys):
         from src.cli.commands.autopilot import show_queue
+
         with tempfile.TemporaryDirectory() as tmpdir:
             queue_dir = Path(tmpdir) / "docs" / "design-queue"
             queue_dir.mkdir(parents=True)
@@ -415,6 +459,7 @@ class TestAutopilotCommand:
 
     def test_show_queue_with_files(self, args, capsys):
         from src.cli.commands.autopilot import show_queue
+
         with tempfile.TemporaryDirectory() as tmpdir:
             queue_dir = Path(tmpdir) / "docs" / "design-queue"
             queue_dir.mkdir(parents=True)
@@ -429,6 +474,7 @@ class TestAutopilotCommand:
 
     def test_add_to_queue(self, args, capsys):
         from src.cli.commands.autopilot import add_to_queue
+
         with tempfile.TemporaryDirectory() as tmpdir:
             # Create source file
             source = Path(tmpdir) / "source.md"
@@ -443,6 +489,7 @@ class TestAutopilotCommand:
 
     def test_add_nonexistent_file(self, args, capsys):
         from src.cli.commands.autopilot import add_to_queue
+
         args.file = "/tmp/nonexistent_xyz.md"
         args.project_path = "/tmp/test"
         result = add_to_queue(args)
@@ -450,15 +497,18 @@ class TestAutopilotCommand:
 
     def test_pipeline_status_when_not_running(self, args, capsys):
         from src.cli.commands.autopilot import pipeline_status
+
         result = pipeline_status(args)
         assert result == 0
 
 
 # ─── Memory Command Tests ──────────────────────────────────────────
 
+
 class TestMemoryCommand:
     def test_search_when_backend_down(self, args, capsys):
         from src.cli.commands.memory import search
+
         args.query = "test query"
         args.limit = 10
         args.memory_type = None
@@ -467,6 +517,7 @@ class TestMemoryCommand:
 
     def test_save_when_backend_down(self, args, capsys):
         from src.cli.commands.memory import save
+
         args.content = "test memory"
         args.memory_type = "discovery"
         args.tags = ["test"]
@@ -476,9 +527,11 @@ class TestMemoryCommand:
 
 # ─── Exec Command Tests ────────────────────────────────────────────
 
+
 class TestExecCommand:
     def test_ping_when_backend_down(self, args, capsys):
         from src.cli.commands.exec_cmd import ping
+
         result = ping(args)
         assert result == 1
         out = capsys.readouterr().out
@@ -486,12 +539,14 @@ class TestExecCommand:
 
     def test_run_command_no_args(self, args, capsys):
         from src.cli.commands.exec_cmd import run_command
+
         args.command = []
         result = run_command(args)
         assert result == 1
 
     def test_raw_request_path_traversal_blocked(self, args, capsys):
         from src.cli.commands.exec_cmd import raw_request
+
         args.method = "GET"
         args.path = "../../etc/passwd"
         args.data = None
@@ -503,9 +558,11 @@ class TestExecCommand:
 
 # ─── Config Command Tests ──────────────────────────────────────────
 
+
 class TestConfigCommand:
     def test_show_paths(self, args, capsys):
         from src.cli.commands.config import show_paths
+
         result = show_paths(args)
         assert result == 0
         out = capsys.readouterr().out
@@ -515,6 +572,7 @@ class TestConfigCommand:
 
     def test_show_config(self, args, capsys):
         from src.cli.commands.config import show
+
         result = show(args)
         # Config file exists in this project
         assert result == 0
@@ -524,9 +582,11 @@ class TestConfigCommand:
 
 # ─── Output Formatting Tests ────────────────────────────────────────
 
+
 class TestOutput:
     def test_json_output(self, args_json, capsys):
         from src.cli.utils import output
+
         output(args_json, {"key": "value"})
         out = capsys.readouterr().out
         data = json.loads(out)
@@ -534,12 +594,14 @@ class TestOutput:
 
     def test_human_output_with_formatter(self, args, capsys):
         from src.cli.utils import output
+
         output(args, {"key": "value"}, lambda d: print(f"Formatted: {d['key']}"))
         out = capsys.readouterr().out
         assert "Formatted: value" in out
 
     def test_human_output_without_formatter(self, args, capsys):
         from src.cli.utils import output
+
         output(args, {"key": "value"})
         out = capsys.readouterr().out
         data = json.loads(out)
@@ -547,6 +609,7 @@ class TestOutput:
 
 
 # ─── Integration: Full CLI Invocation ───────────────────────────────
+
 
 class TestFullInvocation:
     def test_help(self, capsys):

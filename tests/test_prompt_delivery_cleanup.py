@@ -1,11 +1,11 @@
 """Tests for agent and task cleanup when prompt delivery fails."""
 
+from unittest.mock import AsyncMock, Mock
+
 import pytest
-from unittest.mock import Mock, AsyncMock, patch, MagicMock, call
-from datetime import datetime
 
 from src.agents.manager import AgentManager
-from src.core.database import DatabaseManager, Agent, Task
+from src.core.database import Agent, DatabaseManager, Task
 from src.interfaces import LLMProviderInterface
 
 
@@ -39,10 +39,12 @@ def mock_llm_provider():
 def mock_worktree_manager():
     """Create a mock worktree manager."""
     worktree_manager = Mock()
-    worktree_manager.create_agent_worktree = Mock(return_value={
-        "working_directory": "/tmp/test-worktree",
-        "branch_name": "agent/test-branch"
-    })
+    worktree_manager.create_agent_worktree = Mock(
+        return_value={
+            "working_directory": "/tmp/test-worktree",
+            "branch_name": "agent/test-branch",
+        }
+    )
     return worktree_manager
 
 
@@ -76,8 +78,7 @@ async def test_agent_and_task_cleanup_on_prompt_delivery_failure(
 
     # Create agent manager with mocks
     agent_manager = AgentManager(
-        db_manager=mock_db_manager,
-        llm_provider=mock_llm_provider
+        db_manager=mock_db_manager, llm_provider=mock_llm_provider
     )
 
     # Replace worktree manager and tmux server with mocks
@@ -90,12 +91,14 @@ async def test_agent_and_task_cleanup_on_prompt_delivery_failure(
         raw_description="Test task",
         enriched_description="Test task enriched",
         done_definition="Complete the test",
-        status="pending"
+        status="pending",
     )
 
     # Mock _send_initial_prompt_with_retry to always fail
     agent_manager._send_initial_prompt_with_retry = AsyncMock(
-        side_effect=Exception("Failed to deliver initial prompt to agent test-agent after 3 attempts")
+        side_effect=Exception(
+            "Failed to deliver initial prompt to agent test-agent after 3 attempts"
+        )
     )
 
     # Mock database query results
@@ -113,10 +116,7 @@ async def test_agent_and_task_cleanup_on_prompt_delivery_failure(
     # Try to create agent - should fail and clean up
     with pytest.raises(Exception) as exc_info:
         await agent_manager.create_agent_for_task(
-            task=task,
-            enriched_data={},
-            memories=[],
-            project_context="Test context"
+            task=task, enriched_data={}, memories=[], project_context="Test context"
         )
 
     # Verify the exception was raised
@@ -128,7 +128,9 @@ async def test_agent_and_task_cleanup_on_prompt_delivery_failure(
 
     # Verify database cleanup was attempted
     # Should get a new session for cleanup
-    assert mock_db_manager.get_session.call_count >= 2  # Once for agent creation, once for cleanup
+    assert (
+        mock_db_manager.get_session.call_count >= 2
+    )  # Once for agent creation, once for cleanup
 
     # Verify agent was marked as terminated
     assert mock_agent_record.status == "terminated"
@@ -152,8 +154,7 @@ async def test_cleanup_handles_database_errors_gracefully(
 
     # Create agent manager with mocks
     agent_manager = AgentManager(
-        db_manager=mock_db_manager,
-        llm_provider=mock_llm_provider
+        db_manager=mock_db_manager, llm_provider=mock_llm_provider
     )
 
     # Replace worktree manager and tmux server with mocks
@@ -166,27 +167,26 @@ async def test_cleanup_handles_database_errors_gracefully(
         raw_description="Test task",
         enriched_description="Test task enriched",
         done_definition="Complete the test",
-        status="pending"
+        status="pending",
     )
 
     # Mock _send_initial_prompt_with_retry to always fail
     agent_manager._send_initial_prompt_with_retry = AsyncMock(
-        side_effect=Exception("Failed to deliver initial prompt to agent test-agent after 3 attempts")
+        side_effect=Exception(
+            "Failed to deliver initial prompt to agent test-agent after 3 attempts"
+        )
     )
 
     # Mock database to raise an error during cleanup
     mock_db_manager.get_session.side_effect = [
         Mock(),  # First call during agent creation
-        Exception("Database connection error")  # Second call during cleanup
+        Exception("Database connection error"),  # Second call during cleanup
     ]
 
     # Try to create agent - should fail and attempt cleanup
     with pytest.raises(Exception) as exc_info:
         await agent_manager.create_agent_for_task(
-            task=task,
-            enriched_data={},
-            memories=[],
-            project_context="Test context"
+            task=task, enriched_data={}, memories=[], project_context="Test context"
         )
 
     # Verify an exception was raised (could be original or cleanup error)
@@ -205,8 +205,7 @@ async def test_cleanup_handles_tmux_kill_errors_gracefully(
 
     # Create agent manager with mocks
     agent_manager = AgentManager(
-        db_manager=mock_db_manager,
-        llm_provider=mock_llm_provider
+        db_manager=mock_db_manager, llm_provider=mock_llm_provider
     )
 
     # Replace worktree manager and tmux server with mocks
@@ -219,17 +218,21 @@ async def test_cleanup_handles_tmux_kill_errors_gracefully(
         raw_description="Test task",
         enriched_description="Test task enriched",
         done_definition="Complete the test",
-        status="pending"
+        status="pending",
     )
 
     # Mock _send_initial_prompt_with_retry to always fail
     agent_manager._send_initial_prompt_with_retry = AsyncMock(
-        side_effect=Exception("Failed to deliver initial prompt to agent test-agent after 3 attempts")
+        side_effect=Exception(
+            "Failed to deliver initial prompt to agent test-agent after 3 attempts"
+        )
     )
 
     # Mock tmux session kill to raise an error
     tmux_session = mock_tmux_server.new_session.return_value
-    tmux_session.kill_session = Mock(side_effect=Exception("Failed to kill tmux session"))
+    tmux_session.kill_session = Mock(
+        side_effect=Exception("Failed to kill tmux session")
+    )
 
     # Mock database query results for cleanup
     mock_agent_record = Mock(spec=Agent)
@@ -246,10 +249,7 @@ async def test_cleanup_handles_tmux_kill_errors_gracefully(
     # Try to create agent - should fail and attempt cleanup
     with pytest.raises(Exception) as exc_info:
         await agent_manager.create_agent_for_task(
-            task=task,
-            enriched_data={},
-            memories=[],
-            project_context="Test context"
+            task=task, enriched_data={}, memories=[], project_context="Test context"
         )
 
     # Verify the original exception was raised (not the tmux error)

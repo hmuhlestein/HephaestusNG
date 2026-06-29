@@ -1,8 +1,9 @@
 """Additional tests to improve coverage for result service."""
 
-import pytest
-from unittest.mock import Mock, patch, MagicMock
 from datetime import datetime
+from unittest.mock import MagicMock, Mock, patch
+
+import pytest
 
 from src.services.result_service import ResultService
 
@@ -10,7 +11,7 @@ from src.services.result_service import ResultService
 class TestResultServiceAdditionalCoverage:
     """Additional tests to reach 90% coverage."""
 
-    @patch('src.services.result_service.get_db')
+    @patch("src.services.result_service.get_db")
     def test_get_results_for_agent(self, mock_get_db):
         """Test retrieving results for a specific agent."""
         # Setup mock results
@@ -37,7 +38,8 @@ class TestResultServiceAdditionalCoverage:
 
         mock_db = MagicMock()
         mock_db.query.return_value.filter_by.return_value.all.return_value = [
-            mock_result1, mock_result2
+            mock_result1,
+            mock_result2,
         ]
         mock_get_db.return_value.__enter__.return_value = mock_db
 
@@ -55,19 +57,22 @@ class TestResultServiceAdditionalCoverage:
         assert results[1]["verification_status"] == "unverified"
 
         # Verify correct query was made
-        mock_db.query.return_value.filter_by.assert_called_once_with(agent_id="agent-123")
+        mock_db.query.return_value.filter_by.assert_called_once_with(
+            agent_id="agent-123"
+        )
 
-    @patch('src.services.result_service.get_db')
+    @patch("src.services.result_service.get_db")
     def test_get_result_content(self, mock_get_db):
         """Test retrieving markdown content of a specific result."""
         # Setup mock result
         mock_result = Mock(
-            id="result-1",
-            markdown_content="# Test Result\n\nThis is the content."
+            id="result-1", markdown_content="# Test Result\n\nThis is the content."
         )
 
         mock_db = MagicMock()
-        mock_db.query.return_value.filter_by.return_value.first.return_value = mock_result
+        mock_db.query.return_value.filter_by.return_value.first.return_value = (
+            mock_result
+        )
         mock_get_db.return_value.__enter__.return_value = mock_db
 
         # Call get_result_content
@@ -79,7 +84,7 @@ class TestResultServiceAdditionalCoverage:
         # Verify correct query was made
         mock_db.query.return_value.filter_by.assert_called_once_with(id="result-1")
 
-    @patch('src.services.result_service.get_db')
+    @patch("src.services.result_service.get_db")
     def test_get_result_content_not_found(self, mock_get_db):
         """Test retrieving content for non-existent result."""
         # Setup mock to return None
@@ -93,7 +98,7 @@ class TestResultServiceAdditionalCoverage:
         # Assertions
         assert content is None
 
-    @patch('src.services.result_service.get_db')
+    @patch("src.services.result_service.get_db")
     def test_verify_result_not_found(self, mock_get_db):
         """Test verifying a result that doesn't exist."""
         # Setup mock to return None
@@ -106,10 +111,10 @@ class TestResultServiceAdditionalCoverage:
             ResultService.verify_result(
                 result_id="nonexistent",
                 validation_review_id="review-123",
-                verified=True
+                verified=True,
             )
 
-    @patch('src.services.result_service.get_db')
+    @patch("src.services.result_service.get_db")
     def test_verify_result_as_disputed(self, mock_get_db):
         """Test marking a result as disputed instead of verified."""
         # Setup mock result
@@ -121,7 +126,9 @@ class TestResultServiceAdditionalCoverage:
         )
 
         mock_db = MagicMock()
-        mock_db.query.return_value.filter_by.return_value.first.return_value = mock_result
+        mock_db.query.return_value.filter_by.return_value.first.return_value = (
+            mock_result
+        )
         mock_get_db.return_value.__enter__.return_value = mock_db
 
         # Call verify_result with verified=False

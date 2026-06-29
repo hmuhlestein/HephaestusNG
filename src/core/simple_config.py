@@ -1,9 +1,10 @@
 """Simplified configuration for Hephaestus."""
 
 import os
-import yaml
 from pathlib import Path
-from typing import Dict, Any
+from typing import Any, Dict
+
+import yaml
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -28,7 +29,7 @@ class Config:
         yaml_path = Path(os.getenv("HEPHAESTUS_CONFIG", "./hephaestus_config.yaml"))
 
         if yaml_path.exists():
-            with open(yaml_path, 'r') as f:
+            with open(yaml_path, "r") as f:
                 yaml_config = yaml.safe_load(f)
                 self._apply_yaml_config(yaml_config)
         else:
@@ -38,93 +39,109 @@ class Config:
     def _apply_yaml_config(self, config: Dict[str, Any]):
         """Apply configuration from YAML dictionary."""
         # Server settings
-        server = config.get('server', {})
-        self.mcp_host = server.get('host', '0.0.0.0')
-        self.mcp_port = server.get('port', 8300)
-        self.enable_cors = server.get('enable_cors', True)
+        server = config.get("server", {})
+        self.mcp_host = server.get("host", "0.0.0.0")
+        self.mcp_port = server.get("port", 8300)
+        self.enable_cors = server.get("enable_cors", True)
 
         # Paths settings
-        paths = config.get('paths', {})
-        self.database_path = Path(paths.get('database', './hephaestus.db'))
-        self.phases_folder = paths.get('phases_folder', './sample-phases')
-        self.branch_base_path = Path(paths.get('worktree_base', '/tmp/hephaestus_worktrees'))
+        paths = config.get("paths", {})
+        self.database_path = Path(paths.get("database", "./hephaestus.db"))
+        self.phases_folder = paths.get("phases_folder", "./sample-phases")
+        self.branch_base_path = Path(
+            paths.get("worktree_base", "/tmp/hephaestus_worktrees")
+        )
         # Worktree isolation base. None => WorktreeManager computes <repo>/.worktrees
         # (in-repo, git-excluded). Set an explicit path only to override.
-        _wt_base = paths.get('worktree_base_path')
+        _wt_base = paths.get("worktree_base_path")
         self.worktree_base_path = Path(_wt_base) if _wt_base else None
-        self.project_root = Path(paths.get('project_root', str(Path.cwd())))
+        self.project_root = Path(paths.get("project_root", str(Path.cwd())))
 
         # Git settings
-        git = config.get('git', {})
-        self.main_repo_path = Path(git.get('main_repo_path', str(Path.cwd())))
-        self.base_branch = git.get('base_branch', 'main')  # Base branch/commit for merging
-        self.branch_prefix = git.get('branch_prefix', 'agent-')
-        self.auto_commit = git.get('auto_commit', True)
-        self.conflict_resolution_strategy = git.get('conflict_resolution', 'newest_file_wins')
+        git = config.get("git", {})
+        self.main_repo_path = Path(git.get("main_repo_path", str(Path.cwd())))
+        self.base_branch = git.get(
+            "base_branch", "main"
+        )  # Base branch/commit for merging
+        self.branch_prefix = git.get("branch_prefix", "agent-")
+        self.auto_commit = git.get("auto_commit", True)
+        self.conflict_resolution_strategy = git.get(
+            "conflict_resolution", "newest_file_wins"
+        )
 
         # LLM settings
-        llm = config.get('llm', {})
+        llm = config.get("llm", {})
         # Use new default_* fields for fallback/legacy mode (replaces LLM_MODEL env var)
-        self.llm_provider = llm.get('default_provider', 'openrouter')
-        self.llm_model = llm.get('default_model', 'openai/gpt-oss-120b')
-        self.default_openrouter_provider = llm.get('default_openrouter_provider', 'cerebras')
-        self.default_temperature = llm.get('default_temperature', 0.7)
-        self.default_max_tokens = llm.get('default_max_tokens', 4000)
-        self.embedding_model = llm.get('embedding_model', 'text-embedding-3-large')
-        self.system_prompt_max_length = llm.get('system_prompt_max_length', 8000)
+        self.llm_provider = llm.get("default_provider", "openrouter")
+        self.llm_model = llm.get("default_model", "openai/gpt-oss-120b")
+        self.default_openrouter_provider = llm.get(
+            "default_openrouter_provider", "cerebras"
+        )
+        self.default_temperature = llm.get("default_temperature", 0.7)
+        self.default_max_tokens = llm.get("default_max_tokens", 4000)
+        self.embedding_model = llm.get("embedding_model", "text-embedding-3-large")
+        self.system_prompt_max_length = llm.get("system_prompt_max_length", 8000)
 
         # Agent settings
-        agents = config.get('agents', {})
-        self.default_cli_tool = agents.get('default_cli_tool', DEFAULT_CLI_TOOL)
-        self.cli_model = agents.get('cli_model', 'sonnet')
+        agents = config.get("agents", {})
+        self.default_cli_tool = agents.get("default_cli_tool", DEFAULT_CLI_TOOL)
+        self.cli_model = agents.get("cli_model", "sonnet")
         # Per-turn reasoning budget for pi agents (off|minimal|low|medium|high|xhigh).
         # Bounds rumination; per-phase `thinking_level` overrides this.
-        self.cli_thinking_level = agents.get('cli_thinking_level', 'medium')
-        self.glm_api_token_env = agents.get('glm_api_token_env', 'GLM_API_TOKEN')
-        self.tmux_session_prefix = agents.get('tmux_session_prefix', 'agent')
-        self.agent_health_check_interval = agents.get('health_check_interval', 60)
-        self.max_health_check_failures = agents.get('max_health_failures', 3)
-        self.agent_termination_delay = agents.get('termination_delay', 5)
+        self.cli_thinking_level = agents.get("cli_thinking_level", "medium")
+        self.glm_api_token_env = agents.get("glm_api_token_env", "GLM_API_TOKEN")
+        self.tmux_session_prefix = agents.get("tmux_session_prefix", "agent")
+        self.agent_health_check_interval = agents.get("health_check_interval", 60)
+        self.max_health_check_failures = agents.get("max_health_failures", 3)
+        self.agent_termination_delay = agents.get("termination_delay", 5)
 
         # Vector store settings
-        vector_store = config.get('vector_store', {})
-        self.vector_store_backend = vector_store.get('backend', 'turbovec')
-        self.qdrant_url = vector_store.get('qdrant_url', 'http://localhost:6333')
-        self.qdrant_collection_prefix = vector_store.get('collection_prefix', 'hephaestus')
-        self.embedding_dimension = vector_store.get('embedding_dimension', 384)
-        self.turbovec_data_dir = vector_store.get('turbovec_data_dir', 'data/turbovec')
+        vector_store = config.get("vector_store", {})
+        self.vector_store_backend = vector_store.get("backend", "turbovec")
+        self.qdrant_url = vector_store.get("qdrant_url", "http://localhost:6333")
+        self.qdrant_collection_prefix = vector_store.get(
+            "collection_prefix", "hephaestus"
+        )
+        self.embedding_dimension = vector_store.get("embedding_dimension", 384)
+        self.turbovec_data_dir = vector_store.get("turbovec_data_dir", "data/turbovec")
 
         # Monitoring settings
-        monitoring = config.get('monitoring', {})
-        self.monitoring_enabled = monitoring.get('enabled', True)
-        self.monitoring_interval_seconds = monitoring.get('interval_seconds', 60)
-        self.log_level = monitoring.get('log_level', 'INFO')
-        self.log_format = monitoring.get('log_format', 'json')
-        self.stuck_agent_threshold = monitoring.get('stuck_agent_threshold', 300)
-        self.guardian_min_agent_age_seconds = monitoring.get('guardian_min_agent_age_seconds', 60)
-        self.max_ignored_steering = monitoring.get('max_ignored_steering', 3)
+        monitoring = config.get("monitoring", {})
+        self.monitoring_enabled = monitoring.get("enabled", True)
+        self.monitoring_interval_seconds = monitoring.get("interval_seconds", 60)
+        self.log_level = monitoring.get("log_level", "INFO")
+        self.log_format = monitoring.get("log_format", "json")
+        self.stuck_agent_threshold = monitoring.get("stuck_agent_threshold", 300)
+        self.guardian_min_agent_age_seconds = monitoring.get(
+            "guardian_min_agent_age_seconds", 60
+        )
+        self.max_ignored_steering = monitoring.get("max_ignored_steering", 3)
 
         # MCP settings
-        mcp = config.get('mcp', {})
+        mcp = config.get("mcp", {})
         # SECURITY: auth_required defaults to True now. Set mcp.auth_required: false
         # ONLY in local development. Never disable auth in production.
-        self.auth_required = mcp.get('auth_required', True)
-        self.session_timeout = mcp.get('session_timeout', 3600)
-        self.max_concurrent_agents = mcp.get('max_concurrent_agents', 10)
+        self.auth_required = mcp.get("auth_required", True)
+        self.session_timeout = mcp.get("session_timeout", 3600)
+        self.max_concurrent_agents = mcp.get("max_concurrent_agents", 10)
 
         # Task deduplication settings
-        dedup = config.get('task_deduplication', {})
-        self.task_dedup_enabled = dedup.get('enabled', True)
-        self.task_similarity_threshold = dedup.get('similarity_threshold', 0.7)
-        self.task_related_threshold = dedup.get('related_threshold', 0.4)
-        self.task_embedding_model = dedup.get('embedding_model', 'BAAI/bge-small-en-v1.5')
-        self.task_embedding_dimension = dedup.get('embedding_dimension', 384)
-        self.task_embedding_backend = dedup.get('embedding_backend', 'fastembed')
-        self.task_dedup_batch_size = dedup.get('batch_size', 100)
+        dedup = config.get("task_deduplication", {})
+        self.task_dedup_enabled = dedup.get("enabled", True)
+        self.task_similarity_threshold = dedup.get("similarity_threshold", 0.7)
+        self.task_related_threshold = dedup.get("related_threshold", 0.4)
+        self.task_embedding_model = dedup.get(
+            "embedding_model", "BAAI/bge-small-en-v1.5"
+        )
+        self.task_embedding_dimension = dedup.get("embedding_dimension", 384)
+        self.task_embedding_backend = dedup.get("embedding_backend", "fastembed")
+        self.task_dedup_batch_size = dedup.get("batch_size", 100)
 
         # Additional settings from original config
         self.agent_max_retries = 3
-        self.tmux_output_lines = 200  # Used by Guardian/monitoring for performance (UI uses 2000)
+        self.tmux_output_lines = (
+            200  # Used by Guardian/monitoring for performance (UI uses 2000)
+        )
         self.stuck_detection_minutes = 5
         self.agent_timeout_minutes = 30
         self.max_context_memories = 20
@@ -144,7 +161,7 @@ class Config:
             "merged": 1,
             "failed": 24,
             "abandoned": 6,
-            "active": -1
+            "active": -1,
         }
         self.auto_checkpoint_enabled = True
         self.checkpoint_interval_minutes = 30
@@ -159,19 +176,27 @@ class Config:
         self.docs_path = Path("./docs")
 
         # Diagnostic agent settings
-        diagnostic = config.get('diagnostic_agent', {})
-        self.diagnostic_agent_enabled = diagnostic.get('enabled', True)
-        self.diagnostic_cooldown_seconds = diagnostic.get('cooldown_seconds', 60)
-        self.diagnostic_min_stuck_time_seconds = diagnostic.get('min_stuck_time_seconds', 60)
-        self.diagnostic_max_agents_to_analyze = diagnostic.get('max_agents_to_analyze', 15)
-        self.diagnostic_max_conductor_analyses = diagnostic.get('max_conductor_analyses', 5)
-        self.diagnostic_max_tasks_per_run = diagnostic.get('max_tasks_per_run', 5)
+        diagnostic = config.get("diagnostic_agent", {})
+        self.diagnostic_agent_enabled = diagnostic.get("enabled", True)
+        self.diagnostic_cooldown_seconds = diagnostic.get("cooldown_seconds", 60)
+        self.diagnostic_min_stuck_time_seconds = diagnostic.get(
+            "min_stuck_time_seconds", 60
+        )
+        self.diagnostic_max_agents_to_analyze = diagnostic.get(
+            "max_agents_to_analyze", 15
+        )
+        self.diagnostic_max_conductor_analyses = diagnostic.get(
+            "max_conductor_analyses", 5
+        )
+        self.diagnostic_max_tasks_per_run = diagnostic.get("max_tasks_per_run", 5)
 
         # Ticket tracking settings
-        ticket_tracking = config.get('ticket_tracking', {})
-        self.ticket_tracking_enabled = ticket_tracking.get('enabled', True)
-        self.default_human_review = ticket_tracking.get('default_human_review', False)
-        self.default_approval_timeout = ticket_tracking.get('default_approval_timeout', 1800)
+        ticket_tracking = config.get("ticket_tracking", {})
+        self.ticket_tracking_enabled = ticket_tracking.get("enabled", True)
+        self.default_human_review = ticket_tracking.get("default_human_review", False)
+        self.default_approval_timeout = ticket_tracking.get(
+            "default_approval_timeout", 1800
+        )
 
     def _apply_defaults(self):
         """Apply default configuration values."""
@@ -207,7 +232,9 @@ class Config:
 
         # Monitoring settings
         if os.getenv("MONITORING_INTERVAL_SECONDS"):
-            self.monitoring_interval_seconds = int(os.getenv("MONITORING_INTERVAL_SECONDS"))
+            self.monitoring_interval_seconds = int(
+                os.getenv("MONITORING_INTERVAL_SECONDS")
+            )
         if os.getenv("MAX_HEALTH_CHECK_FAILURES"):
             self.max_health_check_failures = int(os.getenv("MAX_HEALTH_CHECK_FAILURES"))
         if os.getenv("AGENT_TIMEOUT_MINUTES"):
@@ -215,7 +242,9 @@ class Config:
         # Note: max_concurrent_agents is ONLY configurable via hephaestus_config.yaml or SDK
         # Not overridable by environment variables for consistency
         if os.getenv("GUARDIAN_MIN_AGENT_AGE_SECONDS"):
-            self.guardian_min_agent_age_seconds = int(os.getenv("GUARDIAN_MIN_AGENT_AGE_SECONDS"))
+            self.guardian_min_agent_age_seconds = int(
+                os.getenv("GUARDIAN_MIN_AGENT_AGE_SECONDS")
+            )
 
         # Agent settings
         if os.getenv("DEFAULT_CLI_TOOL"):
@@ -247,31 +276,53 @@ class Config:
         if os.getenv("WORKTREE_CONFLICT_STRATEGY"):
             self.conflict_resolution_strategy = os.getenv("WORKTREE_CONFLICT_STRATEGY")
         if os.getenv("WORKTREE_PREFER_CHILD_ON_TIE"):
-            self.prefer_child_on_tie = os.getenv("WORKTREE_PREFER_CHILD_ON_TIE").lower() == "true"
+            self.prefer_child_on_tie = (
+                os.getenv("WORKTREE_PREFER_CHILD_ON_TIE").lower() == "true"
+            )
         if os.getenv("WORKTREE_LOG_RESOLUTIONS"):
-            self.log_all_resolutions = os.getenv("WORKTREE_LOG_RESOLUTIONS").lower() == "true"
+            self.log_all_resolutions = (
+                os.getenv("WORKTREE_LOG_RESOLUTIONS").lower() == "true"
+            )
 
         # Worktree cleanup settings
         if os.getenv("BRANCH_AUTO_CLEANUP"):
-            self.branch_auto_cleanup_enabled = os.getenv("BRANCH_AUTO_CLEANUP").lower() == "true"
+            self.branch_auto_cleanup_enabled = (
+                os.getenv("BRANCH_AUTO_CLEANUP").lower() == "true"
+            )
         if os.getenv("BRANCH_CLEANUP_INTERVAL_HOURS"):
-            self.branch_cleanup_interval_hours = int(os.getenv("BRANCH_CLEANUP_INTERVAL_HOURS"))
+            self.branch_cleanup_interval_hours = int(
+                os.getenv("BRANCH_CLEANUP_INTERVAL_HOURS")
+            )
         if os.getenv("BRANCH_RETENTION_MERGED"):
-            self.branch_retention_hours["merged"] = int(os.getenv("BRANCH_RETENTION_MERGED"))
+            self.branch_retention_hours["merged"] = int(
+                os.getenv("BRANCH_RETENTION_MERGED")
+            )
         if os.getenv("BRANCH_RETENTION_FAILED"):
-            self.branch_retention_hours["failed"] = int(os.getenv("BRANCH_RETENTION_FAILED"))
+            self.branch_retention_hours["failed"] = int(
+                os.getenv("BRANCH_RETENTION_FAILED")
+            )
         if os.getenv("BRANCH_RETENTION_ABANDONED"):
-            self.branch_retention_hours["abandoned"] = int(os.getenv("BRANCH_RETENTION_ABANDONED"))
+            self.branch_retention_hours["abandoned"] = int(
+                os.getenv("BRANCH_RETENTION_ABANDONED")
+            )
 
         # Worktree commit settings
         if os.getenv("WORKTREE_AUTO_CHECKPOINT"):
-            self.auto_checkpoint_enabled = os.getenv("WORKTREE_AUTO_CHECKPOINT").lower() == "true"
+            self.auto_checkpoint_enabled = (
+                os.getenv("WORKTREE_AUTO_CHECKPOINT").lower() == "true"
+            )
         if os.getenv("WORKTREE_CHECKPOINT_INTERVAL"):
-            self.checkpoint_interval_minutes = int(os.getenv("WORKTREE_CHECKPOINT_INTERVAL"))
+            self.checkpoint_interval_minutes = int(
+                os.getenv("WORKTREE_CHECKPOINT_INTERVAL")
+            )
         if os.getenv("WORKTREE_CHECKPOINT_ON_ERROR"):
-            self.checkpoint_on_error = os.getenv("WORKTREE_CHECKPOINT_ON_ERROR").lower() == "true"
+            self.checkpoint_on_error = (
+                os.getenv("WORKTREE_CHECKPOINT_ON_ERROR").lower() == "true"
+            )
         if os.getenv("WORKTREE_CHECKPOINT_BEFORE_CHILD"):
-            self.checkpoint_before_child = os.getenv("WORKTREE_CHECKPOINT_BEFORE_CHILD").lower() == "true"
+            self.checkpoint_before_child = (
+                os.getenv("WORKTREE_CHECKPOINT_BEFORE_CHILD").lower() == "true"
+            )
 
         # Worktree branch settings
         if os.getenv("BRANCH_PREFIX"):
@@ -281,7 +332,9 @@ class Config:
         if os.getenv("WORKTREE_ARCHIVE_AFTER_DAYS"):
             self.archive_after_days = int(os.getenv("WORKTREE_ARCHIVE_AFTER_DAYS"))
         if os.getenv("WORKTREE_DELETE_ARCHIVES_AFTER_DAYS"):
-            self.delete_archives_after_days = int(os.getenv("WORKTREE_DELETE_ARCHIVES_AFTER_DAYS"))
+            self.delete_archives_after_days = int(
+                os.getenv("WORKTREE_DELETE_ARCHIVES_AFTER_DAYS")
+            )
 
         # General settings
         if os.getenv("DEBUG"):
@@ -297,7 +350,9 @@ class Config:
         if os.getenv("TASK_DEDUP_ENABLED"):
             self.task_dedup_enabled = os.getenv("TASK_DEDUP_ENABLED").lower() == "true"
         if os.getenv("TASK_SIMILARITY_THRESHOLD"):
-            self.task_similarity_threshold = float(os.getenv("TASK_SIMILARITY_THRESHOLD"))
+            self.task_similarity_threshold = float(
+                os.getenv("TASK_SIMILARITY_THRESHOLD")
+            )
         if os.getenv("TASK_RELATED_THRESHOLD"):
             self.task_related_threshold = float(os.getenv("TASK_RELATED_THRESHOLD"))
         if os.getenv("TASK_EMBEDDING_MODEL"):
@@ -305,11 +360,17 @@ class Config:
 
         # Diagnostic agent settings from environment
         if os.getenv("DIAGNOSTIC_AGENT_ENABLED"):
-            self.diagnostic_agent_enabled = os.getenv("DIAGNOSTIC_AGENT_ENABLED").lower() == "true"
+            self.diagnostic_agent_enabled = (
+                os.getenv("DIAGNOSTIC_AGENT_ENABLED").lower() == "true"
+            )
         if os.getenv("DIAGNOSTIC_COOLDOWN_SECONDS"):
-            self.diagnostic_cooldown_seconds = int(os.getenv("DIAGNOSTIC_COOLDOWN_SECONDS"))
+            self.diagnostic_cooldown_seconds = int(
+                os.getenv("DIAGNOSTIC_COOLDOWN_SECONDS")
+            )
         if os.getenv("DIAGNOSTIC_MIN_STUCK_TIME"):
-            self.diagnostic_min_stuck_time_seconds = int(os.getenv("DIAGNOSTIC_MIN_STUCK_TIME"))
+            self.diagnostic_min_stuck_time_seconds = int(
+                os.getenv("DIAGNOSTIC_MIN_STUCK_TIME")
+            )
 
     def get_api_key(self):
         """Get the appropriate API key based on provider."""
@@ -324,41 +385,43 @@ class Config:
         if self.llm_provider == "openai" and not self.openai_api_key:
             raise ValueError("OPENAI_API_KEY is required when using OpenAI provider")
         if self.llm_provider == "anthropic" and not self.anthropic_api_key:
-            raise ValueError("ANTHROPIC_API_KEY is required when using Anthropic provider")
+            raise ValueError(
+                "ANTHROPIC_API_KEY is required when using Anthropic provider"
+            )
         return True
 
     def to_env_dict(self) -> dict:
         """Export configuration as environment variables dict for subprocess.
-        
+
         Returns:
             Dictionary of environment variables for spawned processes
         """
         env = {}
-        
+
         # Database and storage paths
         if self.database_path:
             env["DATABASE_PATH"] = str(self.database_path)
-        if hasattr(self, 'vector_store_backend') and self.vector_store_backend:
+        if hasattr(self, "vector_store_backend") and self.vector_store_backend:
             env["VECTOR_STORE_BACKEND"] = self.vector_store_backend
-        if hasattr(self, 'turbovec_data_dir') and self.turbovec_data_dir:
+        if hasattr(self, "turbovec_data_dir") and self.turbovec_data_dir:
             env["TURBOVEC_DATA_DIR"] = self.turbovec_data_dir
         if self.qdrant_url:
             env["QDRANT_URL"] = self.qdrant_url
         if self.qdrant_collection_prefix:
             env["QDRANT_COLLECTION_PREFIX"] = self.qdrant_collection_prefix
-        
-        # Server settings  
+
+        # Server settings
         if self.mcp_host:
             env["MCP_HOST"] = self.mcp_host
         if self.mcp_port:
             env["MCP_PORT"] = str(self.mcp_port)
-        
+
         # Worktree settings
         if self.branch_base_path:
             env["BRANCH_BASE_PATH"] = str(self.branch_base_path)
-        if hasattr(self, 'working_directory') and self.working_directory:
+        if hasattr(self, "working_directory") and self.working_directory:
             env["WORKING_DIRECTORY"] = str(self.working_directory)
-        
+
         return env
 
 

@@ -5,16 +5,15 @@ This test suite verifies that all 11 ticket-related MCP endpoints work correctly
 and that create_task properly validates ticket_id when tracking is enabled.
 """
 
-import pytest
 import os
 import sys
-from datetime import datetime
+
+import pytest
 from fastapi.testclient import TestClient
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from src.mcp.server import app
-from src.core.database import DatabaseManager, get_db, Workflow, Agent, BoardConfig
 
 
 @pytest.fixture(scope="module")
@@ -69,7 +68,7 @@ class TestMCPTicketEndpoints:
                 "ticket_type": "feature",
                 "priority": "high",
                 "tags": ["mcp", "testing"],
-            }
+            },
         )
 
         assert response.status_code == 200
@@ -84,7 +83,7 @@ class TestMCPTicketEndpoints:
 
     def test_02_get_ticket(self, client, headers):
         """Test GET /tickets/{ticket_id} - Get ticket details."""
-        if not hasattr(TestMCPTicketEndpoints, 'ticket_id_1'):
+        if not hasattr(TestMCPTicketEndpoints, "ticket_id_1"):
             pytest.skip("Requires ticket from test_01")
 
         response = client.get(
@@ -109,7 +108,7 @@ class TestMCPTicketEndpoints:
 
     def test_04_add_comment(self, client, headers):
         """Test POST /tickets/comment - Add comment to ticket."""
-        if not hasattr(TestMCPTicketEndpoints, 'ticket_id_1'):
+        if not hasattr(TestMCPTicketEndpoints, "ticket_id_1"):
             pytest.skip("Requires ticket from test_01")
 
         response = client.post(
@@ -119,7 +118,7 @@ class TestMCPTicketEndpoints:
                 "ticket_id": TestMCPTicketEndpoints.ticket_id_1,
                 "comment_text": "This is a test comment via MCP endpoint",
                 "comment_type": "general",
-            }
+            },
         )
 
         assert response.status_code == 200
@@ -130,7 +129,7 @@ class TestMCPTicketEndpoints:
 
     def test_05_update_ticket(self, client, headers):
         """Test POST /tickets/update - Update ticket fields."""
-        if not hasattr(TestMCPTicketEndpoints, 'ticket_id_1'):
+        if not hasattr(TestMCPTicketEndpoints, "ticket_id_1"):
             pytest.skip("Requires ticket from test_01")
 
         response = client.post(
@@ -143,12 +142,14 @@ class TestMCPTicketEndpoints:
                     "tags": ["mcp", "testing", "updated"],
                 },
                 "update_comment": "Updated priority to critical",
-            }
+            },
         )
 
         # May fail if already resolved
         if response.status_code != 200:
-            print(f"⚠️  Update failed (expected if ticket already resolved): {response.json()}")
+            print(
+                f"⚠️  Update failed (expected if ticket already resolved): {response.json()}"
+            )
             pytest.skip("Ticket may already be resolved")
 
         data = response.json()
@@ -157,7 +158,7 @@ class TestMCPTicketEndpoints:
 
     def test_06_change_status(self, client, headers):
         """Test POST /tickets/change-status - Change ticket status."""
-        if not hasattr(TestMCPTicketEndpoints, 'ticket_id_1'):
+        if not hasattr(TestMCPTicketEndpoints, "ticket_id_1"):
             pytest.skip("Requires ticket from test_01")
 
         response = client.post(
@@ -167,7 +168,7 @@ class TestMCPTicketEndpoints:
                 "ticket_id": TestMCPTicketEndpoints.ticket_id_1,
                 "new_status": "todo",
                 "comment": "Moving to todo via MCP endpoint",
-            }
+            },
         )
 
         assert response.status_code == 200
@@ -185,7 +186,7 @@ class TestMCPTicketEndpoints:
                 "workflow_id": "workflow-e2e-test",
                 "query": "authentication",  # Search for tickets from e2e test
                 "search_mode": "keyword",
-            }
+            },
         )
 
         assert response.status_code == 200
@@ -197,7 +198,7 @@ class TestMCPTicketEndpoints:
 
     def test_08_link_commit(self, client, headers):
         """Test POST /tickets/link-commit - Link commit to ticket."""
-        if not hasattr(TestMCPTicketEndpoints, 'ticket_id_1'):
+        if not hasattr(TestMCPTicketEndpoints, "ticket_id_1"):
             pytest.skip("Requires ticket from test_01")
 
         response = client.post(
@@ -208,7 +209,7 @@ class TestMCPTicketEndpoints:
                 "commit_sha": "mcp123abc456",
                 "commit_message": "feat: Add MCP test feature",
                 "link_method": "manual",
-            }
+            },
         )
 
         assert response.status_code == 200
@@ -225,7 +226,7 @@ class TestMCPTicketEndpoints:
         )
 
         if response.status_code == 500:
-            print(f"⚠️  Stats endpoint returned 500 (may need implementation fixes)")
+            print("⚠️  Stats endpoint returned 500 (may need implementation fixes)")
             pytest.skip("Stats endpoint error - needs investigation")
 
         assert response.status_code == 200
@@ -236,11 +237,13 @@ class TestMCPTicketEndpoints:
 
     def test_10_resolve_ticket(self, client, headers):
         """Test POST /tickets/resolve - Resolve a ticket."""
-        if not hasattr(TestMCPTicketEndpoints, 'ticket_id_1'):
+        if not hasattr(TestMCPTicketEndpoints, "ticket_id_1"):
             pytest.skip("Requires ticket from test_01")
 
         # First check if ticket is already in 'done' status
-        get_response = client.get(f"/tickets/{TestMCPTicketEndpoints.ticket_id_1}", headers=headers)
+        get_response = client.get(
+            f"/tickets/{TestMCPTicketEndpoints.ticket_id_1}", headers=headers
+        )
         if get_response.status_code == 200:
             ticket_data = get_response.json()
             if ticket_data.get("status") != "done":
@@ -252,7 +255,7 @@ class TestMCPTicketEndpoints:
                         "ticket_id": TestMCPTicketEndpoints.ticket_id_1,
                         "new_status": "done",
                         "comment": "Moving to done for resolve test",
-                    }
+                    },
                 )
 
         response = client.post(
@@ -262,13 +265,13 @@ class TestMCPTicketEndpoints:
                 "ticket_id": TestMCPTicketEndpoints.ticket_id_1,
                 "resolution_comment": "Resolved via MCP endpoint test",
                 "commit_sha": "mcp123abc456",
-            }
+            },
         )
 
         if response.status_code == 400:
             error_msg = response.json().get("detail", "").lower()
             if "already resolved" in error_msg:
-                print(f"⚠️  Ticket already resolved (expected in repeated test runs)")
+                print("⚠️  Ticket already resolved (expected in repeated test runs)")
                 pytest.skip("Ticket already resolved")
 
         assert response.status_code == 200
@@ -291,17 +294,21 @@ class TestMCPTicketEndpoints:
         if response.status_code == 200:
             data = response.json()
             assert "commit_sha" in data
-            print(f"✅ Retrieved commit diff for mcp123abc456")
+            print("✅ Retrieved commit diff for mcp123abc456")
         elif response.status_code == 404:
-            print(f"⚠️  Commit diff not found (expected for test commit)")
+            print("⚠️  Commit diff not found (expected for test commit)")
         else:
-            print(f"⚠️  Git command failed (expected - test commit doesn't exist in repo)")
+            print(
+                "⚠️  Git command failed (expected - test commit doesn't exist in repo)"
+            )
 
 
 class TestCreateTaskValidation:
     """Test that create_task validates ticket_id when tracking is enabled."""
 
-    def test_create_task_requires_ticket_id_when_tracking_enabled(self, client, headers):
+    def test_create_task_requires_ticket_id_when_tracking_enabled(
+        self, client, headers
+    ):
         """Test that create_task rejects requests without ticket_id when tracking enabled."""
         # First, create a ticket to use
         ticket_response = client.post(
@@ -313,7 +320,7 @@ class TestCreateTaskValidation:
                 "description": "Testing task-ticket integration with proper description length",
                 "ticket_type": "task",
                 "priority": "medium",
-            }
+            },
         )
         assert ticket_response.status_code == 200
         ticket_id = ticket_response.json()["ticket_id"]
@@ -327,12 +334,14 @@ class TestCreateTaskValidation:
                 "done_definition": "Task is done",
                 "workflow_id": "workflow-e2e-test",
                 # ticket_id is missing!
-            }
+            },
         )
 
         # Should return 400 or error indicating ticket_id is required
         assert response_without_ticket.status_code in [400, 422]
-        print(f"✅ Correctly rejected task without ticket_id: {response_without_ticket.status_code}")
+        print(
+            f"✅ Correctly rejected task without ticket_id: {response_without_ticket.status_code}"
+        )
 
         # Now create a task WITH ticket_id (should succeed)
         response_with_ticket = client.post(
@@ -343,7 +352,7 @@ class TestCreateTaskValidation:
                 "done_definition": "Task is done",
                 "workflow_id": "workflow-e2e-test",
                 "ticket_id": ticket_id,
-            }
+            },
         )
 
         # Should succeed
@@ -366,13 +375,15 @@ class TestCreateTaskValidation:
                 "done_definition": "Task is done",
                 "workflow_id": "workflow-no-tracking",
                 # No ticket_id - this is allowed when tracking is disabled
-            }
+            },
         )
 
         assert response.status_code == 200
         data = response.json()
         assert "task_id" in data
-        print(f"✅ Created task without ticket_id (tracking disabled): {data['task_id']}")
+        print(
+            f"✅ Created task without ticket_id (tracking disabled): {data['task_id']}"
+        )
 
 
 def test_summary():

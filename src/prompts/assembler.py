@@ -36,7 +36,6 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set
 
-
 # ── Template variable detection ─────────────────────────────────────────────
 
 _VAR_RE = re.compile(r"\{(\w+)\}")
@@ -56,6 +55,7 @@ def substitute_variables(text: str, variables: Dict[str, str]) -> str:
 
 # ── Preview result ──────────────────────────────────────────────────────────
 
+
 @dataclass
 class RenderedPrompt:
     """Output of ``PromptAssembler.render()``."""
@@ -68,6 +68,7 @@ class RenderedPrompt:
 
 
 # ── Assembler ───────────────────────────────────────────────────────────────
+
 
 class PromptAssembler:
     """Assemble phase fields into the prompts agents receive.
@@ -170,9 +171,15 @@ class PromptAssembler:
         # Resolve all phase fields through variable substitution
         description = self._resolve(self.phase_description, variables)
         done_defs = [self._resolve(d, variables) for d in self.done_definitions]
-        notes = self._resolve(self.additional_notes, variables) if self.additional_notes else None
+        notes = (
+            self._resolve(self.additional_notes, variables)
+            if self.additional_notes
+            else None
+        )
         outputs_text = self._resolve(self.outputs, variables) if self.outputs else None
-        next_steps_text = self._resolve(self.next_steps, variables) if self.next_steps else None
+        next_steps_text = (
+            self._resolve(self.next_steps, variables) if self.next_steps else None
+        )
 
         # Build system prompt
         system_prompt = self._build_system_prompt(
@@ -205,7 +212,13 @@ class PromptAssembler:
             user_prompt = task_user_prompt
 
         # Track variable usage
-        all_text = self.phase_description + " ".join(self.done_definitions) + (self.additional_notes or "") + (self.outputs or "") + (self.next_steps or "")
+        all_text = (
+            self.phase_description
+            + " ".join(self.done_definitions)
+            + (self.additional_notes or "")
+            + (self.outputs or "")
+            + (self.next_steps or "")
+        )
         defined_vars = set(variables.keys())
         requested_vars = detect_variables(all_text)
         variables_used = sorted(requested_vars & defined_vars)
@@ -234,7 +247,12 @@ class PromptAssembler:
     ) -> Dict[str, Any]:
         """Return a structured diff between two assembler states."""
         variables = variables or {}
-        result: Dict[str, Any] = {"field_changes": {}, "added_lines": 0, "removed_lines": 0, "changed_fields": []}
+        result: Dict[str, Any] = {
+            "field_changes": {},
+            "added_lines": 0,
+            "removed_lines": 0,
+            "changed_fields": [],
+        }
 
         fields_to_compare = {
             "description": (self.phase_description, other.phase_description),
@@ -282,16 +300,19 @@ class PromptAssembler:
         Mirrors the structure in ``LLMInterface.generate_agent_prompt``
         but uses the phase description as the root.
         """
-        memory_context = "\n".join([
-            f"- {mem.get('content', '')[:200]}"
-            for mem in memories[:10]
-        ]) if memories else "(no memories loaded)"
+        memory_context = (
+            "\n".join([f"- {mem.get('content', '')[:200]}" for mem in memories[:10]])
+            if memories
+            else "(no memories loaded)"
+        )
 
         task_desc = task_description or "(no task description)"
         task_done = task_done_definition or "Complete the assigned task"
 
         # Phase description becomes the agent identity
-        identity = description or "You are an AI agent in the Hephaestus orchestration system."
+        identity = (
+            description or "You are an AI agent in the Hephaestus orchestration system."
+        )
 
         return f"""{identity}
 
@@ -306,12 +327,12 @@ Top 10 relevant memories (use search_memory for more):
 {memory_context}
 
 PROJECT:
-{project_context or '(no project context loaded)'}
+{project_context or "(no project context loaded)"}
 
 ═══ AVAILABLE TOOLS ═══
 
 Hephaestus MCP (task management):
-• create_task - Create sub-tasks (MUST set parent_task_id="{task_id or 'unknown'}")
+• create_task - Create sub-tasks (MUST set parent_task_id="{task_id or "unknown"}")
 • update_task_status - Mark done/failed when complete (REQUIRED)
 • save_memory - Save discoveries for other agents
 • spawn_agent - Spawn a specialized Hephaestus subagent (see below)
@@ -343,7 +364,7 @@ Note: workflow_id is required for task creation. Use your current workflow_id.
 4. Spawn subagents for specialized work (architecture, development, review, etc.)
 5. Call update_task_status when done (status='done') or failed (status='failed')
 
-IDs: Agent={agent_id or 'unknown'} | Task={task_id or 'unknown'} | Phase={phase_id or 'unknown'}"""
+IDs: Agent={agent_id or "unknown"} | Task={task_id or "unknown"} | Phase={phase_id or "unknown"}"""
 
     def _build_user_prompt(
         self,
@@ -366,7 +387,9 @@ IDs: Agent={agent_id or 'unknown'} | Task={task_id or 'unknown'} | Phase={phase_
         parts.append("## WORKFLOW PHASE INFORMATION\n")
 
         if self.phase_name and self.phase_order:
-            parts.append(f"### Current Phase: {self.phase_name} (Phase {self.phase_order})\n")
+            parts.append(
+                f"### Current Phase: {self.phase_name} (Phase {self.phase_order})\n"
+            )
         parts.append(f"**Description:**\n{description}\n")
 
         if done_definitions:
@@ -413,7 +436,9 @@ IDs: Agent={agent_id or 'unknown'} | Task={task_id or 'unknown'} | Phase={phase_
                     phase_done_defs = phase.get("done_definitions", [])
 
                     parts.append(f"**Phase {order}: {name}**")
-                    parts.append(f"- Purpose: {desc[:200]}{'...' if len(desc) > 200 else ''}")
+                    parts.append(
+                        f"- Purpose: {desc[:200]}{'...' if len(desc) > 200 else ''}"
+                    )
                     parts.append(f"- Key Outputs: {phase_outputs}")
                     if phase_done_defs:
                         parts.append("- Main Goals:")
@@ -423,7 +448,9 @@ IDs: Agent={agent_id or 'unknown'} | Task={task_id or 'unknown'} | Phase={phase_
 
         if self.phase_order:
             parts.append("### Creating Tasks for Different Phases:")
-            parts.append("When creating tasks, ALWAYS specify the phase number: phase=1, phase=2, etc.\n")
+            parts.append(
+                "When creating tasks, ALWAYS specify the phase number: phase=1, phase=2, etc.\n"
+            )
             parts.append("**Phase Assignment Guidelines:**")
             if all_phases:
                 for phase in all_phases:
@@ -432,9 +459,15 @@ IDs: Agent={agent_id or 'unknown'} | Task={task_id or 'unknown'} | Phase={phase_
                     desc = phase.get("description", "")[:150]
                     parts.append(f"- **Phase {order}** ({name}): {desc}...")
             parts.append("")
-            parts.append(f"**Important:** You're currently in Phase {self.phase_order}. You can create tasks for:")
-            parts.append(f"- Your own phase (phase={self.phase_order}) for parallel work")
-            parts.append(f"- Earlier phases (phase < {self.phase_order}) if you discover gaps")
+            parts.append(
+                f"**Important:** You're currently in Phase {self.phase_order}. You can create tasks for:"
+            )
+            parts.append(
+                f"- Your own phase (phase={self.phase_order}) for parallel work"
+            )
+            parts.append(
+                f"- Earlier phases (phase < {self.phase_order}) if you discover gaps"
+            )
             parts.append(f"- Later phases (phase > {self.phase_order}) for future work")
 
         return "\n".join(parts)
@@ -475,6 +508,7 @@ IDs: Agent={agent_id or 'unknown'} | Task={task_id or 'unknown'} | Phase={phase_
 
 # ── Convenience functions ───────────────────────────────────────────────────
 
+
 def assemble_phase_prompt(
     phase_id: str,
     variables: Optional[Dict[str, str]] = None,
@@ -509,7 +543,12 @@ def assemble_phase_prompt(
         )
 
         # Get all phases for cross-phase context
-        all_phases = session.query(Phase).filter_by(workflow_id=phase.workflow_id).order_by(Phase.order).all()
+        all_phases = (
+            session.query(Phase)
+            .filter_by(workflow_id=phase.workflow_id)
+            .order_by(Phase.order)
+            .all()
+        )
         phases_list = [
             {
                 "order": p.order,
@@ -538,7 +577,7 @@ def assemble_task_prompt(
 
     This is used at agent creation time.
     """
-    from src.core.database import DatabaseManager, Task, Phase, TaskPromptOverride
+    from src.core.database import DatabaseManager, Phase, Task, TaskPromptOverride
 
     if db_manager is None:
         db_manager = DatabaseManager("hephaestus.db")
@@ -574,9 +613,20 @@ def assemble_task_prompt(
         # Get all phases for cross-phase context
         all_phases = None
         if phase:
-            all_phases_list = session.query(Phase).filter_by(workflow_id=phase.workflow_id).order_by(Phase.order).all()
+            all_phases_list = (
+                session.query(Phase)
+                .filter_by(workflow_id=phase.workflow_id)
+                .order_by(Phase.order)
+                .all()
+            )
             all_phases = [
-                {"order": p.order, "name": p.name, "description": p.description, "done_definitions": p.done_definitions or [], "outputs": p.outputs}
+                {
+                    "order": p.order,
+                    "name": p.name,
+                    "description": p.description,
+                    "done_definitions": p.done_definitions or [],
+                    "outputs": p.outputs,
+                }
                 for p in all_phases_list
             ]
 

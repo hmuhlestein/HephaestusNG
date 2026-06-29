@@ -1,7 +1,8 @@
 """FastAPI router exposing tmux session output and control via HTTP endpoints."""
 
-from typing import Dict, Any, List, Optional
-from fastapi import APIRouter, Query, HTTPException
+from typing import Dict, Optional
+
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
 from .tmux_manager import TmuxSessionManager
@@ -60,11 +61,14 @@ async def kill_session(session_name: str):
     """Kill a tmux session."""
     # SECURITY: Validate session name
     import re
-    if not re.match(r'^[a-zA-Z0-9_\-\.]+$', session_name):
+
+    if not re.match(r"^[a-zA-Z0-9_\-\.]+$", session_name):
         raise HTTPException(status_code=400, detail="Invalid session name")
     killed = get_manager().kill_session(session_name)
     if not killed:
-        raise HTTPException(status_code=404, detail=f"Session '{session_name}' not found")
+        raise HTTPException(
+            status_code=404, detail=f"Session '{session_name}' not found"
+        )
     return {"session_name": session_name, "status": "killed"}
 
 
@@ -76,7 +80,8 @@ async def get_session_output(
     """Get terminal output from a tmux session."""
     # SECURITY: Validate session name
     import re
-    if not re.match(r'^[a-zA-Z0-9_\-\.]+$', session_name):
+
+    if not re.match(r"^[a-zA-Z0-9_\-\.]+$", session_name):
         raise HTTPException(status_code=400, detail="Invalid session name")
     output = get_manager().get_output(session_name, lines=lines)
     return {
@@ -89,21 +94,22 @@ async def get_session_output(
 @router.post("/sessions/{session_name}/send")
 async def send_to_session(session_name: str, req: SendMessageRequest):
     """Send a message to a tmux session.
-    
+
     SECURITY: Validates and sanitizes input to prevent command injection.
     Session names are restricted to safe characters.
     """
     # SECURITY: Validate session name to prevent injection
     import re
-    if not re.match(r'^[a-zA-Z0-9_\-\.]+$', session_name):
+
+    if not re.match(r"^[a-zA-Z0-9_\-\.]+$", session_name):
         raise HTTPException(
             status_code=400,
-            detail="Invalid session name: only alphanumeric, hyphens, underscores, and dots allowed"
+            detail="Invalid session name: only alphanumeric, hyphens, underscores, and dots allowed",
         )
-    
+
     # SECURITY: Log the command being sent for audit trail
     logger.info(f"TMUX send to session '{session_name}' ({len(req.message)} chars)")
-    
+
     sent = get_manager().send_message(session_name, req.message, enter=req.enter)
     if not sent:
         raise HTTPException(

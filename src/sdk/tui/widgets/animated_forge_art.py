@@ -1,14 +1,14 @@
 """Animated ASCII art for peaceful medieval village."""
 
-from textual.widgets import Static
-from rich.text import Text
 from rich.align import Align
+from rich.text import Text
+from textual.widgets import Static
 
 from .animation_frames import (
     GRASS_FRAMES,
     TREE_LEAVES_FRAMES,
-    WIND_FRAMES,
     VILLAGE_SCENE,
+    WIND_FRAMES,
 )
 from .animation_utils import AnimationSequence
 
@@ -37,9 +37,9 @@ class AnimatedForgeArt(Static):
         """Set up animation timers when widget is mounted."""
         if self.enable_animations:
             # Different speeds for natural movement
-            self.set_interval(0.5, self.animate_grass)       # Slow grass sway
-            self.set_interval(0.8, self.animate_tree_leaves) # Gentle leaf rustle
-            self.set_interval(1.5, self.animate_wind)        # Slow wind drift
+            self.set_interval(0.5, self.animate_grass)  # Slow grass sway
+            self.set_interval(0.8, self.animate_tree_leaves)  # Gentle leaf rustle
+            self.set_interval(1.5, self.animate_wind)  # Slow wind drift
 
     def animate_grass(self) -> None:
         """Advance grass animation and refresh display."""

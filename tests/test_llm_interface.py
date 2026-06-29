@@ -2,13 +2,13 @@
 """Integration tests for LLM interface operations."""
 
 import asyncio
-import json
-import sys
 import os
+import sys
+
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.interfaces.llm_interface import OpenAIProvider
 from src.core.simple_config import Config
+from src.interfaces.llm_interface import OpenAIProvider
 
 
 async def test_embedding_generation():
@@ -19,7 +19,7 @@ async def test_embedding_generation():
     llm_provider = OpenAIProvider(
         api_key=config.openai_api_key,
         model=config.llm_model,
-        embedding_model=config.embedding_model
+        embedding_model=config.embedding_model,
     )
 
     test_texts = [
@@ -41,14 +41,19 @@ async def test_embedding_generation():
 
             # Validate embedding
             assert isinstance(embedding, list), "Embedding should be a list"
-            assert len(embedding) == 3072, f"Expected 3072 dimensions, got {len(embedding)}"
-            assert all(isinstance(x, float) for x in embedding[:10]), "Embedding should contain floats"
+            assert len(embedding) == 3072, (
+                f"Expected 3072 dimensions, got {len(embedding)}"
+            )
+            assert all(isinstance(x, float) for x in embedding[:10]), (
+                "Embedding should contain floats"
+            )
 
             # Check that it's not all zeros (fallback case)
             assert any(x != 0.0 for x in embedding), "Embedding should not be all zeros"
 
             # Calculate basic statistics
             import statistics
+
             mean = statistics.mean(embedding)
             stdev = statistics.stdev(embedding)
 
@@ -71,20 +76,23 @@ async def test_task_enrichment():
     llm_provider = OpenAIProvider(
         api_key=config.openai_api_key,
         model=config.llm_model,
-        embedding_model=config.embedding_model
+        embedding_model=config.embedding_model,
     )
 
     test_tasks = [
         {
             "description": "Fix the login bug",
             "done": "Login works",
-            "context": ["Users report login fails with 500 error", "Check auth middleware"]
+            "context": [
+                "Users report login fails with 500 error",
+                "Check auth middleware",
+            ],
         },
         {
             "description": "Add dark mode to the application",
             "done": "Dark mode toggle works and persists user preference",
-            "context": ["Use CSS variables", "Store preference in localStorage"]
-        }
+            "context": ["Use CSS variables", "Store preference in localStorage"],
+        },
     ]
 
     print(f"   Using model: {llm_provider.model}")
@@ -96,7 +104,7 @@ async def test_task_enrichment():
             result = await llm_provider.enrich_task(
                 task_description=task["description"],
                 done_definition=task["done"],
-                context=task["context"]
+                context=task["context"],
             )
 
             # Validate response structure
@@ -107,7 +115,7 @@ async def test_task_enrichment():
                 "completion_criteria",
                 "agent_prompt",
                 "required_capabilities",
-                "estimated_complexity"
+                "estimated_complexity",
             ]
 
             for key in required_keys:
@@ -124,12 +132,14 @@ async def test_task_enrichment():
             print(f"      ✅ Enriched: {result['enriched_description'][:80]}...")
             print(f"      ✅ Complexity: {result['estimated_complexity']}/10")
             print(f"      ✅ Criteria: {len(result['completion_criteria'])} items")
-            print(f"      ✅ Capabilities: {', '.join(result['required_capabilities'][:3])}")
+            print(
+                f"      ✅ Capabilities: {', '.join(result['required_capabilities'][:3])}"
+            )
 
         except Exception as e:
             print(f"      ❌ Failed: {e}")
             # Don't fail the whole test if enrichment fails - GPT-5 might not exist
-            print(f"      ⚠️  Continuing with fallback values")
+            print("      ⚠️  Continuing with fallback values")
 
     print("\n✅ Task enrichment tests completed!")
     return True
@@ -143,7 +153,7 @@ async def test_agent_state_analysis():
     llm_provider = OpenAIProvider(
         api_key=config.openai_api_key,
         model=config.llm_model,
-        embedding_model=config.embedding_model
+        embedding_model=config.embedding_model,
     )
 
     test_scenarios = [
@@ -158,7 +168,7 @@ Building application...
 Build successful!
             """,
             "task": {"description": "Set up development environment"},
-            "expected_state": "healthy"
+            "expected_state": "healthy",
         },
         {
             "output": """
@@ -170,7 +180,7 @@ npm install
 npm install
             """,
             "task": {"description": "Start the server"},
-            "expected_state": "stuck_error"
+            "expected_state": "stuck_error",
         },
         {
             "output": """
@@ -181,8 +191,8 @@ Please enter your choice:
 >
             """,
             "task": {"description": "Automated testing"},
-            "expected_state": "stuck_waiting"
-        }
+            "expected_state": "stuck_waiting",
+        },
     ]
 
     for i, scenario in enumerate(test_scenarios, 1):
@@ -192,7 +202,7 @@ Please enter your choice:
             result = await llm_provider.analyze_agent_state(
                 agent_output=scenario["output"],
                 task_info=scenario["task"],
-                project_context="Testing environment"
+                project_context="Testing environment",
             )
 
             # Validate response structure
@@ -203,8 +213,20 @@ Please enter your choice:
                 assert key in result, f"Missing required key: {key}"
 
             # Validate data types
-            assert result["state"] in ["healthy", "stuck_waiting", "stuck_error", "stuck_confused", "unrecoverable"]
-            assert result["decision"] in ["continue", "nudge", "answer", "restart", "recreate"]
+            assert result["state"] in [
+                "healthy",
+                "stuck_waiting",
+                "stuck_error",
+                "stuck_confused",
+                "unrecoverable",
+            ]
+            assert result["decision"] in [
+                "continue",
+                "nudge",
+                "answer",
+                "restart",
+                "recreate",
+            ]
             assert isinstance(result["confidence"], (int, float))
             assert 0 <= result["confidence"] <= 1
 
@@ -214,14 +236,16 @@ Please enter your choice:
             print(f"      Reasoning: {result['reasoning'][:80]}...")
 
             if result["state"] == scenario["expected_state"]:
-                print(f"      ✅ Correct state detection")
+                print("      ✅ Correct state detection")
             else:
-                print(f"      ⚠️  Different state detected (model interpretation may vary)")
+                print(
+                    "      ⚠️  Different state detected (model interpretation may vary)"
+                )
 
         except Exception as e:
             print(f"      ❌ Failed: {e}")
             # Continue testing even if one fails
-            print(f"      ⚠️  Continuing with next scenario")
+            print("      ⚠️  Continuing with next scenario")
 
     print("\n✅ Agent state analysis tests completed!")
     return True
@@ -235,7 +259,7 @@ async def test_agent_prompt_generation():
     llm_provider = OpenAIProvider(
         api_key=config.openai_api_key,
         model=config.llm_model,
-        embedding_model=config.embedding_model
+        embedding_model=config.embedding_model,
     )
 
     test_task = {
@@ -245,19 +269,19 @@ async def test_agent_prompt_generation():
             "Login endpoint validates credentials",
             "JWT tokens are generated with proper expiry",
             "Refresh token rotation is implemented",
-            "Logout invalidates tokens"
-        ]
+            "Logout invalidates tokens",
+        ],
     }
 
     test_memories = [
         {
             "content": "Use bcrypt for password hashing with salt rounds of 10",
-            "memory_type": "learning"
+            "memory_type": "learning",
         },
         {
             "content": "Store refresh tokens in httpOnly cookies for security",
-            "memory_type": "best_practice"
-        }
+            "memory_type": "best_practice",
+        },
     ]
 
     project_context = "Node.js Express API with PostgreSQL database"
@@ -268,9 +292,7 @@ async def test_agent_prompt_generation():
         print(f"   Memories: {len(test_memories)} relevant memories")
 
         prompt = await llm_provider.generate_agent_prompt(
-            task=test_task,
-            memories=test_memories,
-            project_context=project_context
+            task=test_task, memories=test_memories, project_context=project_context
         )
 
         # Validate prompt
@@ -278,11 +300,13 @@ async def test_agent_prompt_generation():
         assert len(prompt) > 100, "Prompt should be substantial"
 
         # Check that key elements are included
-        assert "JWT" in prompt or "authentication" in prompt.lower(), "Should mention authentication"
+        assert "JWT" in prompt or "authentication" in prompt.lower(), (
+            "Should mention authentication"
+        )
 
-        print(f"\n   Generated prompt preview:")
+        print("\n   Generated prompt preview:")
         print(f"   {'-' * 50}")
-        lines = prompt.split('\n')[:5]  # First 5 lines
+        lines = prompt.split("\n")[:5]  # First 5 lines
         for line in lines:
             if line.strip():
                 print(f"   {line[:100]}...")
@@ -308,7 +332,7 @@ async def test_error_handling():
     invalid_provider = OpenAIProvider(
         api_key="sk-invalid-key-test",
         model="gpt-5",
-        embedding_model="text-embedding-3-large"
+        embedding_model="text-embedding-3-large",
     )
 
     try:
@@ -331,7 +355,7 @@ async def test_error_handling():
     valid_provider = OpenAIProvider(
         api_key=config.openai_api_key,
         model=config.llm_model,
-        embedding_model=config.embedding_model
+        embedding_model=config.embedding_model,
     )
 
     try:
