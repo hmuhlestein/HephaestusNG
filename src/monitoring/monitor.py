@@ -852,12 +852,8 @@ class MonitoringLoop:
         if self.phase_manager and self.agent_manager and not self.agent_manager.phase_manager:
             self.agent_manager.phase_manager = self.phase_manager
 
-        # Check phase progression if workflow is active
-        if self.phase_manager and self.phase_manager.workflow_id:
-            try:
-                await self._check_phase_progression()
-            except Exception as e:
-                logger.error(f"Error checking phase progression: {e}")
+        # Phase progression is now handled by the orchestrator (_advance_phases).
+        # The monitor no longer creates tasks or advances phases.
 
         # Check if workflow is stuck and needs diagnostic agent
         logger.info("[DIAGNOSTIC] Checking if diagnostic agent needed...")
