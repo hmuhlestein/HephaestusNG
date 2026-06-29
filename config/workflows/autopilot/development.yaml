@@ -62,6 +62,11 @@ additional_notes: |
   - Your task description for "Docs Path:" and "Project Path:" locations
   - AGENTS.md - Coding style, naming conventions, test commands, commit format
   - architecture.md (from Docs Path) - Component interfaces and contracts
+  - architectural_review_report.md (from Docs Path, if it exists) — findings from the
+    architectural reviewer. Fix every BLOCKER and FIX before marking done.
+  - adversarial_review_report.md (from Docs Path, if it exists) — findings from the
+    adversarial reviewer. Fix every BLOCKER and WARNING before marking done.
+    Each finding includes a "Recommended fix" — follow it precisely.
   - pyproject.toml (if present) — check `requires-python` or `python_requires` before writing
     type hints: `X | Y` union syntax requires Python ≥ 3.10; `list[str]` / `dict[k,v]`
     builtins require ≥ 3.9. Use `Union[X, Y]` / `Optional[X]` / `List[str]` from `typing`

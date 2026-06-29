@@ -8,7 +8,8 @@ description: |
   context about the design decisions, trade-offs, and invariants. Review the
   implementation for architecture compliance, design violations, and over-engineering.
   Classify findings as BLOCKER (architecture violated), FIX (design deviation), or
-  DEFER (nice to have). Fix BLOCKER and FIX issues directly.
+  DEFER (nice to have). Report findings clearly — do NOT edit production code.
+  The developer will fix based on your report.
 done_definitions:
   - "architecture.md reviewed and design rationale understood"
   - "requirements_analysis.md reviewed and requirements verified"
@@ -17,10 +18,8 @@ done_definitions:
   - "Interface contracts verified"
   - "Data flow verified against design"
   - "Design patterns and naming conventions checked"
-  - "BLOCKER issues identified and fixed"
-  - "FIX issues identified and fixed"
+  - "All BLOCKER and FIX findings documented with file:line and recommended fix"
   - "DEFER issues documented"
-  - "Architecture deviations corrected"
   - "architectural_review_report.md created with BLOCKER/FIX/DEFER findings"
   - "Memory saved with review findings"
   - "Task marked as done"
@@ -52,8 +51,8 @@ additional_notes: |
   CRITICAL PATH RULE: Your current working directory IS the project root (an isolated git worktree).
   - Read the design document and prior inputs from ./.hephaestus/ (design.md, context.md, qa_spec.json).
   - Do NOT use absolute paths outside your working directory. Do NOT write into ./.hephaestus/ (it is never merged to main).
-  - ALL docs/reports go in "Docs Path:" (review_report.md, etc.).
-  - Code fixes go in "Project Path:" (src/, tests/, etc.).
+  - ALL docs/reports go in "Docs Path:".
+  - Do NOT edit any source code or tests. Your only output is the report.
   - Your task description contains the exact paths — copy them exactly.
   
   Read:
@@ -114,99 +113,78 @@ additional_notes: |
   - Are error messages helpful?
   
   ### Code Quality
-  - Run `ruff check` on changed files — fix lint errors
+  - Run `ruff check <file>` (read-only) — note lint errors in the report, do not auto-fix
   - Check for unused imports, variables, or dead code
   - Verify type hints are present and correct
-  
-  ═══════════════════════════════════════════════════════════════════════
-  STEP 3: RUN LINT AND TEST YOUR FINDINGS
-  ═══════════════════════════════════════════════════════════════════════
-  
-  First, run lint checks on changed files:
-  - `ruff check <file>` — fix any lint errors
-  - `ruff check --fix <file>` — auto-fix simple issues
-  
-  If you find a potential issue, try to reproduce it:
-  - Write a small test case
-  - Run the code to confirm the bug
-  - Document the exact steps to reproduce
-  
-  **Before classifying any documentation discrepancy as BLOCKER/FIX:** re-read the
-  exact file and line you are about to cite. Documentation issues are the most
-  common source of false positives — a value you read in one file may already be
-  correct; always confirm by opening the file again immediately before writing the
-  finding.
-  
-  ═══════════════════════════════════════════════════════════════════════
-  STEP 4: CREATE REVIEW REPORT
-  ═══════════════════════════════════════════════════════════════════════
-  
-  Write architectural_review_report.md with:
 
-  # Architecture Review Report
-  
+  ═══════════════════════════════════════════════════════════════════════
+  STEP 3: VERIFY FINDINGS BEFORE REPORTING
+  ═══════════════════════════════════════════════════════════════════════
+
+  **Before classifying any issue as BLOCKER/FIX:** re-read the exact file and line
+  you are about to cite. Documentation discrepancies are the most common source of
+  false positives — confirm by opening the file again immediately before writing the
+  finding. Do not rely on memory.
+
+  If you find a potential issue, trace the code path to confirm it is real:
+  - Follow the call chain from the function to its callers
+  - Check if a higher level already handles it
+  - If you cannot confirm the issue is real, downgrade to DEFER with a note
+
+  ═══════════════════════════════════════════════════════════════════════
+  STEP 4: WRITE THE REPORT
+  ═══════════════════════════════════════════════════════════════════════
+
+  Write architectural_review_report.md to the Docs Path. This is your ONLY output.
+  Do NOT edit any source files or tests.
+
+  # Architectural Review Report
+
   **Reviewer:** Architect (design author)
   **Target:** {what was reviewed}
   **Date:** {date}
   **Design artifacts:** architecture.md, requirements_analysis.md
-  
+
   ## Summary
-  - **BLOCKERS:** [count] — must fix before proceeding (architecture violated)
-  - **FIXES:** [count] — should fix (design deviation)
-  - **DEFERRED:** [count] — nice to have (minor improvement)
-  - **Overall assessment:** [PASS/FAIL/NEEDS_WORK]
-  
+  - **BLOCKERS:** [count] — architecture violated; developer must fix before next phase
+  - **FIX:** [count] — design deviation; developer should fix
+  - **DEFER:** [count] — nice to have; can fix later
+  - **Overall:** PASS / NEEDS_WORK / FAIL
+
   ## Findings
-  
+
   ### [BLOCKER] {title}
   - **File:** {path}:{line}
   - **Design intent:** {what you designed}
-  - **Evidence:** {what's wrong, include code snippet}
-  - **Impact:** {what could go wrong}
-  - **Recommended Fix:** {direction for fixing}
-  
+  - **Evidence:** {what's wrong — include a short code snippet}
+  - **Impact:** {what breaks if left unfixed}
+  - **Recommended fix:** {clear direction — specific enough that the developer
+    can act without guessing}
+
   ### [FIX] {title}
   - **File:** {path}:{line}
   - **Design intent:** {what you designed}
   - **Evidence:** {what's wrong}
-  - **Fix Applied:** {what you changed to fix it}
-  - **Status:** FIXED
-  
+  - **Recommended fix:** {direction}
+
   ### [DEFER] {title}
   - **File:** {path}:{line}
   - **Reason:** {why deferred}
-  
+
   ## Architecture Deviations
   [Deviations from the planned architecture — what was different and why it matters]
-  
+
   ## Design Invariants
-  [Which invariants hold, which are violated, and the impact]
-  
+  [Which invariants hold, which are violated]
+
   ## Assumptions & Gaps
   [Unstated assumptions, missing requirements, design gaps]
-  
+
   ## Positive Observations
-  [What was implemented well — important for morale]
-  
+  [What was implemented well]
+
   ═══════════════════════════════════════════════════════════════════════
-  STEP 5: FIX BLOCKER AND FIX ISSUES (MANDATORY)
-  ═══════════════════════════════════════════════════════════════════════
-  
-  For EVERY BLOCKER and FIX issue you find, you MUST fix it:
-  
-  1. Read the affected file
-  2. Understand the issue
-  3. Write the fix directly in the code
-  4. Run existing tests to verify no regressions
-  5. Document what you changed in the review report
-  
-  DO NOT just report issues - FIX THEM. You have write access to the code.
-  
-  If an issue requires a major refactor that would break other components,
-  document it in the report as DEFER but do not attempt the fix.
-  
-  ═══════════════════════════════════════════════════════════════════════
-  STEP 6: SAVE TO MEMORY
+  STEP 5: SAVE TO MEMORY
   ═══════════════════════════════════════════════════════════════════════
   
   Save review findings to memory:
@@ -228,19 +206,18 @@ additional_notes: |
   
   DO:
   - Review against YOUR design, not generic best practices
-  - Show evidence. File path + line number.
-  - Classify honestly: BLOCKER, FIX, or DEFER.
+  - Show evidence — file path + line number for every finding
+  - Classify honestly: BLOCKER, FIX, or DEFER
   - Check architecture compliance: component boundaries, interface contracts
   - Check design invariants: constraints you specified must be enforced
-  - Don't trust the worker — inspect actual code
-  
+  - Give specific, actionable recommended fixes so the developer knows exactly what to do
+
   DO NOT:
-  - Be vague ("this code is bad")
+  - Edit any source code or test files — your only output is the report
+  - Be vague ("this code is bad") — evidence and recommended fix required
   - Skip architecture compliance checks
-  - Ignore design deviations
-  - Review without reading the code
   - Inflate severity — classify honestly
-  - Fix security issues — that's Phase 6's responsibility
+  - Report issues without confirming they are real
   
   
   ═══════════════════════════════════════════════════════════════════════
