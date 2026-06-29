@@ -583,8 +583,8 @@ class MonitoringLoop:
         loop resumes it will be caught again on the next cycle.
         """
         MIN_LINE_LEN = 30
-        WINDOW_LINES = 80
-        REPEAT_THRESHOLD = 5
+        WINDOW_LINES = 120
+        REPEAT_THRESHOLD = 12
         try:
             if not hasattr(self, "_rep_loop_state"):
                 self._rep_loop_state = {}
@@ -592,9 +592,14 @@ class MonitoringLoop:
             if not out:
                 return
             # Normalise: strip leading whitespace, drop blank/trivial lines.
+            # Also exclude bare filesystem paths and shell prompts — these repeat
+            # legitimately in ls output, shell prompts, and long file writes.
+            import re as _re
+            _fs_path = _re.compile(r"^[/~][\w./\-]+$")
             lines = [
                 ln.strip() for ln in out.splitlines()
                 if len(ln.strip()) >= MIN_LINE_LEN
+                and not _fs_path.match(ln.strip())
             ]
             if not lines:
                 return
