@@ -2777,7 +2777,13 @@ def run_health_audit(db_manager=None):
 
     # 2. Unmerged branches
     try:
-        project_path = os.getenv("PROJECT_PATH", "/Users/hmuhlestein/code/sotto")
+        # Get project path from active autopilot project
+        with get_db() as _db:
+            from src.core.database import AutopilotProject
+            _proj = _db.query(AutopilotProject).filter_by(is_active=True).first()
+            project_path = _proj.base_dir if _proj else os.getenv("PROJECT_PATH")
+        if not project_path:
+            return findings  # Can't check without a project path
         result = subprocess.run(
             ["git", "branch", "--list", "agent-*"],
             capture_output=True,
