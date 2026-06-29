@@ -1,10 +1,10 @@
 """Redesigned send message popup with better UX."""
 
-from textual.app import ComposeResult
-from textual.screen import ModalScreen
-from textual.widgets import Input, TextArea, Button, Static, Label
-from textual.containers import Container, Vertical, Horizontal, VerticalScroll
 import requests
+from textual.app import ComposeResult
+from textual.containers import Container, Horizontal, Vertical, VerticalScroll
+from textual.screen import ModalScreen
+from textual.widgets import Button, Input, Label, Static, TextArea
 
 
 class SendMessagePopup(ModalScreen):
@@ -103,7 +103,10 @@ class SendMessagePopup(ModalScreen):
             with VerticalScroll(id="form-container"):
                 with Vertical(classes="field-group"):
                     yield Label("Recipient Agent ID", classes="field-label")
-                    yield Label("The agent ID to send the message to (e.g., agent-xxx)", classes="field-help")
+                    yield Label(
+                        "The agent ID to send the message to (e.g., agent-xxx)",
+                        classes="field-help",
+                    )
                     yield Input(placeholder="agent-xxx", id="recipient-input")
 
                 with Vertical(classes="field-group"):
@@ -169,7 +172,11 @@ class SendMessagePopup(ModalScreen):
                 # Close popup after 1 second
                 self.set_timer(1.0, self.app.pop_screen)
             else:
-                error_msg = response.text[:100] if response.text else f"HTTP {response.status_code}"
+                error_msg = (
+                    response.text[:100]
+                    if response.text
+                    else f"HTTP {response.status_code}"
+                )
                 status_bar.update(f"[red]✗ Error: {error_msg}[/]")
         except Exception as e:
             status_bar.update(f"[red]✗ Error: {str(e)[:100]}[/]")

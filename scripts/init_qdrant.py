@@ -55,8 +55,7 @@ def main():
             from src.memory.vector_store import VectorStoreManager
 
             vector_store = VectorStoreManager(
-                qdrant_url="http://localhost:6333",
-                collection_prefix="hephaestus"
+                qdrant_url="http://localhost:6333", collection_prefix="hephaestus"
             )
 
             print("Qdrant collections initialized successfully!")

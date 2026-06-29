@@ -1,0 +1,47 @@
+default_model: xiaomi/mimo-v2.5
+default_thinking_level: low
+
+# Phase 0: Feature Architect - decomposes design into features
+execution_order: [1]
+
+session_roles:
+  feature_architect: architect
+
+orchestrator:
+  type: evaluating
+  max_phase_retries: 1
+  max_total_gotos: 3
+  evaluation_points:
+    - after_phase: Feature Architect
+      evaluator: heuristic
+      max_retries: 1
+      conditions:
+        - if: "score < 0.5"
+          action: retry
+          reason: "Feature decomposition incomplete or invalid"
+        - if: "score >= 0.5"
+          action: continue
+          reason: "Feature decomposition validated"
+
+workflow:
+  result_criteria: "features.json created with valid feature decomposition and scope.md files for each feature"
+  on_result_found: do_nothing
+  enable_tickets: false
+
+launch_template:
+  parameters:
+    - name: design_document
+      label: Design Document Path
+      type: text
+      required: true
+      description: "Path to the design document (PRD, DESIGN.md, etc.)"
+    - name: project_path
+      label: Project Working Directory
+      type: text
+      required: true
+      description: "Where the project lives"
+    - name: design_id
+      label: Design ID
+      type: text
+      required: true
+      description: "Database ID of the design being processed"

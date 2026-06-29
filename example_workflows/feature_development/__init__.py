@@ -7,9 +7,9 @@ and validates it works without breaking existing functionality.
 """
 
 from example_workflows.feature_development.phases import (
-    FEATURE_DEV_PHASES,
     FEATURE_DEV_CONFIG,
     FEATURE_DEV_LAUNCH_TEMPLATE,
+    FEATURE_DEV_PHASES,
 )
 
 __all__ = [

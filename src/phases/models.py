@@ -1,6 +1,7 @@
 """Data models for phase system."""
 
-from typing import List, Optional, Dict, Any, Literal
+from typing import Any, Dict, List, Literal, Optional
+
 from pydantic import BaseModel, Field, field_validator
 
 from src.sdk.models import Phase
@@ -41,16 +42,24 @@ class PhaseContext(BaseModel):
     workflow_id: str = Field(..., description="Workflow ID in database")
     phase: Phase = Field(..., description="Phase definition")
     all_phases: List[Phase] = Field(..., description="All phases in workflow")
-    current_status: str = Field(default="pending", description="Current execution status")
-    active_tasks: int = Field(default=0, description="Number of active tasks in this phase")
-    completed_tasks: int = Field(default=0, description="Number of completed tasks in this phase")
+    current_status: str = Field(
+        default="pending", description="Current execution status"
+    )
+    active_tasks: int = Field(
+        default=0, description="Number of active tasks in this phase"
+    )
+    completed_tasks: int = Field(
+        default=0, description="Number of completed tasks in this phase"
+    )
 
     model_config = {"arbitrary_types_allowed": True}
 
     def to_prompt_context(self) -> str:
         """Generate context string for agent prompts."""
         current = self.phase
-        context = f"## PHASE: {current.name} (Phase {current.id} of {len(self.all_phases)})\n"
+        context = (
+            f"## PHASE: {current.name} (Phase {current.id} of {len(self.all_phases)})\n"
+        )
 
         if current.outputs:
             if isinstance(current.outputs, list):
@@ -61,11 +70,17 @@ class PhaseContext(BaseModel):
 
         context += "\nPipeline (use phase=N when creating tasks):\n"
         for phase in self.all_phases:
-            status_indicator = "✓" if phase.id < current.id else (
-                "→" if phase.id == current.id else "○"
+            status_indicator = (
+                "✓"
+                if phase.id < current.id
+                else ("→" if phase.id == current.id else "○")
             )
-            desc_short = phase.description[:80].split("\n")[0] if phase.description else ""
-            context += f"  {status_indicator} Phase {phase.id}: {phase.name} — {desc_short}\n"
+            desc_short = (
+                phase.description[:80].split("\n")[0] if phase.description else ""
+            )
+            context += (
+                f"  {status_indicator} Phase {phase.id}: {phase.name} — {desc_short}\n"
+            )
 
         return context
 
@@ -75,30 +90,30 @@ class PhasesConfig(BaseModel):
 
     has_result: bool = Field(
         default=False,
-        description="Whether this workflow expects a definitive result/solution"
+        description="Whether this workflow expects a definitive result/solution",
     )
     result_criteria: Optional[str] = Field(
         default=None,
-        description="Clear criteria that submitted results must meet for validation"
+        description="Clear criteria that submitted results must meet for validation",
     )
     on_result_found: Literal["stop_all", "do_nothing"] = Field(
         default="do_nothing",
-        description="Action to take when a valid result is found and validated"
+        description="Action to take when a valid result is found and validated",
     )
     enable_tickets: bool = Field(
         default=False,
-        description="Whether Kanban board ticket tracking is enabled for this workflow"
+        description="Whether Kanban board ticket tracking is enabled for this workflow",
     )
     board_config: Optional[Dict[str, Any]] = Field(
         default=None,
-        description="Kanban board configuration (columns, ticket types, etc.)"
+        description="Kanban board configuration (columns, ticket types, etc.)",
     )
 
-    @field_validator('result_criteria')
+    @field_validator("result_criteria")
     @classmethod
     def validate_result_criteria(cls, v: Optional[str], info) -> Optional[str]:
         """Validate that result_criteria is provided when has_result is True."""
-        has_result = info.data.get('has_result', False)
+        has_result = info.data.get("has_result", False)
         if has_result and not v:
             raise ValueError("result_criteria must be provided when has_result is True")
         return v
@@ -114,9 +129,9 @@ class PhasesConfig(BaseModel):
             PhasesConfig instance with defaults for missing fields
         """
         return cls(
-            has_result=content.get('has_result', False),
-            result_criteria=content.get('result_criteria'),
-            on_result_found=content.get('on_result_found', 'do_nothing'),
-            enable_tickets=content.get('enable_tickets', False),
-            board_config=content.get('board_config')
+            has_result=content.get("has_result", False),
+            result_criteria=content.get("result_criteria"),
+            on_result_found=content.get("on_result_found", "do_nothing"),
+            enable_tickets=content.get("enable_tickets", False),
+            board_config=content.get("board_config"),
         )

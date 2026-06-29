@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import List, Optional, Dict, Any
+from typing import Any, Dict, List, Optional
 
 
 @dataclass
@@ -32,16 +32,26 @@ class Phase:
     validation: Optional[ValidationCriteria] = None
 
     # Per-phase CLI configuration (optional - falls back to global defaults)
-    cli_tool: Optional[str] = None           # "claude", "opencode", "droid", "codex", "pi", "swarm"
-    cli_model: Optional[str] = None          # "sonnet", "opus", "haiku", "GLM-4.6", etc.
+    cli_tool: Optional[str] = (
+        None  # "claude", "opencode", "droid", "codex", "pi", "swarm"
+    )
+    cli_model: Optional[str] = None  # "sonnet", "opus", "haiku", "GLM-4.6", etc.
     glm_api_token_env: Optional[str] = None  # Environment variable name for GLM token
-    thinking_level: Optional[str] = None     # pi reasoning budget: off|minimal|low|medium|high|xhigh
+    thinking_level: Optional[str] = (
+        None  # pi reasoning budget: off|minimal|low|medium|high|xhigh
+    )
 
     def to_yaml_dict(self) -> Dict[str, Any]:
         """Convert Phase to YAML-compatible dictionary."""
         # Convert lists to multiline strings for outputs and next_steps
-        outputs_str = "\n".join(f"- {item}" for item in self.outputs) if self.outputs else ""
-        next_steps_str = "\n".join(f"- {item}" for item in self.next_steps) if self.next_steps else ""
+        outputs_str = (
+            "\n".join(f"- {item}" for item in self.outputs) if self.outputs else ""
+        )
+        next_steps_str = (
+            "\n".join(f"- {item}" for item in self.next_steps)
+            if self.next_steps
+            else ""
+        )
 
         data = {
             "id": self.id,
@@ -215,7 +225,9 @@ class LaunchTemplate:
     """
 
     parameters: List[LaunchParameter]
-    phase_1_task_prompt: str  # Template for first task, e.g., "Analyze bug: {bug_description}"
+    phase_1_task_prompt: (
+        str  # Template for first task, e.g., "Analyze bug: {bug_description}"
+    )
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization."""
@@ -260,8 +272,12 @@ class WorkflowDefinition:
     phases: List[Phase]  # List of phases in this workflow
     config: Optional[WorkflowConfig] = None  # Workflow configuration
     description: str = ""  # Description of what this workflow does
-    launch_template: Optional[LaunchTemplate] = None  # Template for UI-based workflow launching
-    orchestrator_config: Optional[Dict[str, Any]] = None  # Orchestrator config for phase evaluation and flow control
+    launch_template: Optional[LaunchTemplate] = (
+        None  # Template for UI-based workflow launching
+    )
+    orchestrator_config: Optional[Dict[str, Any]] = (
+        None  # Orchestrator config for phase evaluation and flow control
+    )
 
 
 @dataclass

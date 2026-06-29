@@ -2,11 +2,7 @@
 
 import json
 import os
-import tempfile
-import time
-from datetime import datetime, timezone, timedelta
-from pathlib import Path
-from unittest.mock import patch
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -22,6 +18,7 @@ def autopilot_dirs(tmp_path):
     state_dir.mkdir()
 
     import src.mcp.autopilot_api as api_mod
+
     api_mod._cache.clear()
 
     old_state = api_mod.AUTOPILOT_STATE_DIR
@@ -48,8 +45,9 @@ def autopilot_dirs(tmp_path):
 
 @pytest.fixture
 def client(autopilot_dirs, monkeypatch):
-    from fastapi.testclient import TestClient
     from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
     from src.mcp import autopilot_api
     from src.mcp.autopilot_api import router
 
@@ -57,12 +55,13 @@ def client(autopilot_dirs, monkeypatch):
     app.include_router(router)
 
     # Mock _get_active_project_id to return None (no DB needed)
-    monkeypatch.setattr(autopilot_api, '_get_active_project_id', lambda: None)
+    monkeypatch.setattr(autopilot_api, "_get_active_project_id", lambda: None)
 
     return TestClient(app)
 
 
 # ── Path Traversal ───────────────────────────────────────────────
+
 
 class TestPathTraversal:
     def test_queue_delete_rejects_traversal(self, client):
@@ -86,16 +85,20 @@ class TestPathTraversal:
         assert resp.status_code in (400, 404)
 
     def test_queue_add_rejects_path_in_name(self, client):
-        resp = client.post("/api/autopilot/queue", json={
-            "name": "../../etc/cron",
-            "content": "test",
-        })
+        resp = client.post(
+            "/api/autopilot/queue",
+            json={
+                "name": "../../etc/cron",
+                "content": "test",
+            },
+        )
         if resp.status_code == 200:
             data = resp.json()
             assert ".." not in data["filename"]
 
 
 # ── Design Queue ─────────────────────────────────────────────────
+
 
 class TestDesignQueue:
     def test_empty_queue(self, client):
@@ -104,10 +107,13 @@ class TestDesignQueue:
         assert resp.json() == []
 
     def test_add_and_list(self, client):
-        resp = client.post("/api/autopilot/queue", json={
-            "name": "Test Feature",
-            "content": "# Design\nHello world",
-        })
+        resp = client.post(
+            "/api/autopilot/queue",
+            json={
+                "name": "Test Feature",
+                "content": "# Design\nHello world",
+            },
+        )
         assert resp.status_code == 200
         data = resp.json()
         assert data["name"] == "Test Feature"
@@ -118,14 +124,20 @@ class TestDesignQueue:
         assert resp.json()[0]["filename"] == data["filename"]
 
     def test_add_duplicate_rejects(self, client):
-        client.post("/api/autopilot/queue", json={
-            "name": "Dup Test",
-            "content": "content",
-        })
-        resp = client.post("/api/autopilot/queue", json={
-            "name": "Dup Test",
-            "content": "content",
-        })
+        client.post(
+            "/api/autopilot/queue",
+            json={
+                "name": "Dup Test",
+                "content": "content",
+            },
+        )
+        resp = client.post(
+            "/api/autopilot/queue",
+            json={
+                "name": "Dup Test",
+                "content": "content",
+            },
+        )
         assert resp.status_code == 409
 
     def test_delete(self, client, autopilot_dirs):
@@ -152,9 +164,9 @@ class TestDesignQueue:
         for name in ["a.md", "b.md", "c.md"]:
             (autopilot_dirs["queue"] / name).write_text(name)
 
-        resp = client.post("/api/autopilot/queue/reorder", json={
-            "filenames": ["c.md", "a.md", "b.md"]
-        })
+        resp = client.post(
+            "/api/autopilot/queue/reorder", json={"filenames": ["c.md", "a.md", "b.md"]}
+        )
         assert resp.status_code == 200
 
         resp = client.get("/api/autopilot/queue")
@@ -164,17 +176,19 @@ class TestDesignQueue:
     def test_reorder_rejects_unknown(self, client, autopilot_dirs):
         (autopilot_dirs["queue"] / "a.md").write_text("a")
 
-        resp = client.post("/api/autopilot/queue/reorder", json={
-            "filenames": ["a.md", "ghost.md"]
-        })
+        resp = client.post(
+            "/api/autopilot/queue/reorder", json={"filenames": ["a.md", "ghost.md"]}
+        )
         assert resp.status_code == 400
 
 
 # ── Caching ──────────────────────────────────────────────────────
 
+
 class TestCaching:
     def test_queue_caching(self, client, autopilot_dirs):
         import src.mcp.autopilot_api as api_mod
+
         api_mod._cache.clear()
 
         (autopilot_dirs["queue"] / "cached.md").write_text("x")
@@ -188,20 +202,25 @@ class TestCaching:
 
     def test_add_invalidates_cache(self, client, autopilot_dirs):
         import src.mcp.autopilot_api as api_mod
+
         api_mod._cache.clear()
 
         client.get("/api/autopilot/queue")
 
-        client.post("/api/autopilot/queue", json={
-            "name": "Cache Test",
-            "content": "x",
-        })
+        client.post(
+            "/api/autopilot/queue",
+            json={
+                "name": "Cache Test",
+                "content": "x",
+            },
+        )
 
         resp = client.get("/api/autopilot/queue")
         assert len(resp.json()) == 1
 
 
 # ── Features ─────────────────────────────────────────────────────
+
 
 class TestFeatures:
     def test_empty_features(self, client):
@@ -214,12 +233,16 @@ class TestFeatures:
         feature_dir.mkdir()
         docs = feature_dir / "docs"
         docs.mkdir()
-        (docs / "pipeline_metrics.json").write_text(json.dumps({
-            "product_validated": True,
-            "iterations": 2,
-            "total_time_seconds": 300,
-            "stop_reason": "completed",
-        }))
+        (docs / "pipeline_metrics.json").write_text(
+            json.dumps(
+                {
+                    "product_validated": True,
+                    "iterations": 2,
+                    "total_time_seconds": 300,
+                    "stop_reason": "completed",
+                }
+            )
+        )
         (feature_dir / "feature_report.html").write_text("<html>report</html>")
 
         resp = client.get("/api/autopilot/features")
@@ -232,11 +255,15 @@ class TestFeatures:
         feature_dir.mkdir()
         docs = feature_dir / "docs"
         docs.mkdir()
-        (docs / "pipeline_metrics.json").write_text(json.dumps({
-            "product_validated": False,
-            "stop_reason": "max_iterations",
-            "qa_passed": False,
-        }))
+        (docs / "pipeline_metrics.json").write_text(
+            json.dumps(
+                {
+                    "product_validated": False,
+                    "stop_reason": "max_iterations",
+                    "qa_passed": False,
+                }
+            )
+        )
         (docs / "qa_report.md").write_text("# QA Report\nSome content here")
 
         resp = client.get("/api/autopilot/features/20260101-120000_detail_test")
@@ -264,6 +291,7 @@ class TestFeatures:
 
 # ── Human Input ──────────────────────────────────────────────────
 
+
 class TestHumanInput:
     def test_no_pending_input(self, client):
         resp = client.get("/api/autopilot/input")
@@ -273,13 +301,17 @@ class TestHumanInput:
     def test_submit_and_read(self, client, autopilot_dirs):
         state_dir = autopilot_dirs["state"]
         request_file = state_dir / "input_request_abc123.json"
-        request_file.write_text(json.dumps({
-            "id": "abc123",
-            "reason": "Test impasse",
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "options": ["c", "s", "q"],
-            "labels": {"c": "Continue", "s": "Skip", "q": "Quit"},
-        }))
+        request_file.write_text(
+            json.dumps(
+                {
+                    "id": "abc123",
+                    "reason": "Test impasse",
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "options": ["c", "s", "q"],
+                    "labels": {"c": "Continue", "s": "Skip", "q": "Quit"},
+                }
+            )
+        )
 
         resp = client.get("/api/autopilot/input")
         assert resp.status_code == 200
@@ -290,18 +322,25 @@ class TestHumanInput:
     def test_submit_response(self, client, autopilot_dirs):
         state_dir = autopilot_dirs["state"]
         request_file = state_dir / "input_request_def456.json"
-        request_file.write_text(json.dumps({
-            "id": "def456",
-            "reason": "Credits exhausted",
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "options": ["c", "s", "q"],
-            "labels": {},
-        }))
+        request_file.write_text(
+            json.dumps(
+                {
+                    "id": "def456",
+                    "reason": "Credits exhausted",
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "options": ["c", "s", "q"],
+                    "labels": {},
+                }
+            )
+        )
 
-        resp = client.post("/api/autopilot/input", json={
-            "request_id": "def456",
-            "choice": "c",
-        })
+        resp = client.post(
+            "/api/autopilot/input",
+            json={
+                "request_id": "def456",
+                "choice": "c",
+            },
+        )
         assert resp.status_code == 200
 
         response_file = state_dir / "input_response_def456.json"
@@ -311,34 +350,51 @@ class TestHumanInput:
 
     def test_submit_invalid_choice(self, client, autopilot_dirs):
         state_dir = autopilot_dirs["state"]
-        (state_dir / "input_request_x.json").write_text(json.dumps({
-            "id": "x", "reason": "r",
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "options": [], "labels": {},
-        }))
+        (state_dir / "input_request_x.json").write_text(
+            json.dumps(
+                {
+                    "id": "x",
+                    "reason": "r",
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "options": [],
+                    "labels": {},
+                }
+            )
+        )
 
-        resp = client.post("/api/autopilot/input", json={
-            "request_id": "x",
-            "choice": "invalid",
-        })
+        resp = client.post(
+            "/api/autopilot/input",
+            json={
+                "request_id": "x",
+                "choice": "invalid",
+            },
+        )
         assert resp.status_code == 400
 
     def test_submit_to_missing_request(self, client):
-        resp = client.post("/api/autopilot/input", json={
-            "request_id": "nonexistent",
-            "choice": "c",
-        })
+        resp = client.post(
+            "/api/autopilot/input",
+            json={
+                "request_id": "nonexistent",
+                "choice": "c",
+            },
+        )
         assert resp.status_code == 404
 
     def test_dismiss(self, client, autopilot_dirs):
         state_dir = autopilot_dirs["state"]
         request_file = state_dir / "input_request_dismiss_me.json"
-        request_file.write_text(json.dumps({
-            "id": "dismiss_me",
-            "reason": "test",
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "options": [], "labels": {},
-        }))
+        request_file.write_text(
+            json.dumps(
+                {
+                    "id": "dismiss_me",
+                    "reason": "test",
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "options": [],
+                    "labels": {},
+                }
+            )
+        )
 
         resp = client.delete("/api/autopilot/input/dismiss_me")
         assert resp.status_code == 200
@@ -349,12 +405,17 @@ class TestHumanInput:
 
         old_ts = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
         request_file = state_dir / "input_request_stale.json"
-        request_file.write_text(json.dumps({
-            "id": "stale",
-            "reason": "old request",
-            "timestamp": old_ts,
-            "options": [], "labels": {},
-        }))
+        request_file.write_text(
+            json.dumps(
+                {
+                    "id": "stale",
+                    "reason": "old request",
+                    "timestamp": old_ts,
+                    "options": [],
+                    "labels": {},
+                }
+            )
+        )
 
         resp = client.get("/api/autopilot/input")
         assert resp.status_code == 200
@@ -363,6 +424,7 @@ class TestHumanInput:
 
 
 # ── Pipeline Status ──────────────────────────────────────────────
+
 
 class TestPipelineStatus:
     def test_status_default(self, client):
@@ -374,18 +436,23 @@ class TestPipelineStatus:
 
     def test_status_with_state(self, client, autopilot_dirs):
         import src.mcp.autopilot_api as api_mod
+
         api_mod._cache.clear()
 
         state_dir = autopilot_dirs["state"]
         run_dir = state_dir / "run-20260101"
         run_dir.mkdir(parents=True)
-        (run_dir / "state.json").write_text(json.dumps({
-            "designs_processed": 5,
-            "designs_succeeded": 4,
-            "designs_failed": 1,
-            "current_design": "My Feature",
-            "total_elapsed": 3600,
-        }))
+        (run_dir / "state.json").write_text(
+            json.dumps(
+                {
+                    "designs_processed": 5,
+                    "designs_succeeded": 4,
+                    "designs_failed": 1,
+                    "current_design": "My Feature",
+                    "total_elapsed": 3600,
+                }
+            )
+        )
 
         resp = client.get("/api/autopilot/status")
         data = resp.json()
@@ -395,9 +462,11 @@ class TestPipelineStatus:
 
 # ── Messages ─────────────────────────────────────────────────────
 
+
 class TestMessages:
     def test_messages_empty(self, client, autopilot_dirs):
         import src.mcp.autopilot_api as api_mod
+
         api_mod._cache.clear()
 
         resp = client.get("/api/autopilot/messages")
@@ -406,6 +475,7 @@ class TestMessages:
 
     def test_messages_with_events(self, client, autopilot_dirs):
         import src.mcp.autopilot_api as api_mod
+
         api_mod._cache.clear()
 
         state_dir = autopilot_dirs["state"]
@@ -413,8 +483,22 @@ class TestMessages:
         run_dir.mkdir(parents=True)
         events_file = run_dir / "events.jsonl"
         events_file.write_text(
-            json.dumps({"timestamp": "2026-01-01T00:00:00", "type": "design_started", "name": "A"}) + "\n" +
-            json.dumps({"timestamp": "2026-01-01T00:01:00", "type": "design_completed", "name": "A"}) + "\n"
+            json.dumps(
+                {
+                    "timestamp": "2026-01-01T00:00:00",
+                    "type": "design_started",
+                    "name": "A",
+                }
+            )
+            + "\n"
+            + json.dumps(
+                {
+                    "timestamp": "2026-01-01T00:01:00",
+                    "type": "design_completed",
+                    "name": "A",
+                }
+            )
+            + "\n"
         )
 
         resp = client.get("/api/autopilot/messages?limit=10")
@@ -424,9 +508,11 @@ class TestMessages:
 
 # ── Logs ─────────────────────────────────────────────────────────
 
+
 class TestLogs:
     def test_logs_empty(self, client, autopilot_dirs):
         import src.mcp.autopilot_api as api_mod
+
         api_mod._cache.clear()
 
         resp = client.get("/api/autopilot/logs")
@@ -435,6 +521,7 @@ class TestLogs:
 
     def test_logs_with_content(self, client, autopilot_dirs):
         import src.mcp.autopilot_api as api_mod
+
         api_mod._cache.clear()
 
         state_dir = autopilot_dirs["state"]
@@ -450,6 +537,7 @@ class TestLogs:
 
 
 # ── Projects ─────────────────────────────────────────────────────
+
 
 @pytest.fixture
 def project_dirs(tmp_path):
@@ -471,16 +559,17 @@ def project_dirs(tmp_path):
 @pytest.fixture
 def project_client(tmp_path, project_dirs):
     """Test client with a temporary database for project tests."""
-    import os
     db_path = str(tmp_path / "test.db")
     os.environ["HEPHAESTUS_TEST_DB"] = db_path
 
     from src.core.database import DatabaseManager
+
     db_manager = DatabaseManager(db_path)
     db_manager.create_tables()
 
-    from fastapi.testclient import TestClient
     from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
     from src.mcp.autopilot_api import router
 
     app = FastAPI()
@@ -488,6 +577,7 @@ def project_client(tmp_path, project_dirs):
     client = TestClient(app)
 
     import src.mcp.autopilot_api as api_mod
+
     api_mod._cache.clear()
 
     yield client, project_dirs
@@ -499,10 +589,13 @@ def project_client(tmp_path, project_dirs):
 class TestProjects:
     def test_create_project(self, project_client):
         client, dirs = project_client
-        resp = client.post("/api/autopilot/projects", json={
-            "name": "Test Project",
-            "base_dir": str(dirs["project_dir"]),
-        })
+        resp = client.post(
+            "/api/autopilot/projects",
+            json={
+                "name": "Test Project",
+                "base_dir": str(dirs["project_dir"]),
+            },
+        )
         assert resp.status_code == 200
         data = resp.json()
         assert data["name"] == "Test Project"
@@ -511,10 +604,13 @@ class TestProjects:
 
     def test_create_project_auto_syncs_designs(self, project_client):
         client, dirs = project_client
-        resp = client.post("/api/autopilot/projects", json={
-            "name": "Test",
-            "base_dir": str(dirs["project_dir"]),
-        })
+        resp = client.post(
+            "/api/autopilot/projects",
+            json={
+                "name": "Test",
+                "base_dir": str(dirs["project_dir"]),
+            },
+        )
         project_id = resp.json()["id"]
 
         resp = client.get(f"/api/autopilot/projects/{project_id}/designs")
@@ -529,30 +625,42 @@ class TestProjects:
 
     def test_create_project_nonexistent_dir(self, project_client):
         client, _ = project_client
-        resp = client.post("/api/autopilot/projects", json={
-            "name": "Bad",
-            "base_dir": "/nonexistent/path",
-        })
+        resp = client.post(
+            "/api/autopilot/projects",
+            json={
+                "name": "Bad",
+                "base_dir": "/nonexistent/path",
+            },
+        )
         assert resp.status_code == 400
 
     def test_create_project_duplicate_dir(self, project_client):
         client, dirs = project_client
-        client.post("/api/autopilot/projects", json={
-            "name": "First",
-            "base_dir": str(dirs["project_dir"]),
-        })
-        resp = client.post("/api/autopilot/projects", json={
-            "name": "Second",
-            "base_dir": str(dirs["project_dir"]),
-        })
+        client.post(
+            "/api/autopilot/projects",
+            json={
+                "name": "First",
+                "base_dir": str(dirs["project_dir"]),
+            },
+        )
+        resp = client.post(
+            "/api/autopilot/projects",
+            json={
+                "name": "Second",
+                "base_dir": str(dirs["project_dir"]),
+            },
+        )
         assert resp.status_code == 409
 
     def test_list_projects(self, project_client):
         client, dirs = project_client
-        client.post("/api/autopilot/projects", json={
-            "name": "P1",
-            "base_dir": str(dirs["project_dir"]),
-        })
+        client.post(
+            "/api/autopilot/projects",
+            json={
+                "name": "P1",
+                "base_dir": str(dirs["project_dir"]),
+            },
+        )
         resp = client.get("/api/autopilot/projects")
         assert resp.status_code == 200
         assert len(resp.json()) == 1
@@ -560,10 +668,13 @@ class TestProjects:
 
     def test_get_project(self, project_client):
         client, dirs = project_client
-        create = client.post("/api/autopilot/projects", json={
-            "name": "Test",
-            "base_dir": str(dirs["project_dir"]),
-        })
+        create = client.post(
+            "/api/autopilot/projects",
+            json={
+                "name": "Test",
+                "base_dir": str(dirs["project_dir"]),
+            },
+        )
         project_id = create.json()["id"]
 
         resp = client.get(f"/api/autopilot/projects/{project_id}")
@@ -577,38 +688,53 @@ class TestProjects:
 
     def test_update_project_name(self, project_client):
         client, dirs = project_client
-        create = client.post("/api/autopilot/projects", json={
-            "name": "Old Name",
-            "base_dir": str(dirs["project_dir"]),
-        })
+        create = client.post(
+            "/api/autopilot/projects",
+            json={
+                "name": "Old Name",
+                "base_dir": str(dirs["project_dir"]),
+            },
+        )
         project_id = create.json()["id"]
 
-        resp = client.put(f"/api/autopilot/projects/{project_id}", json={
-            "name": "New Name",
-        })
+        resp = client.put(
+            f"/api/autopilot/projects/{project_id}",
+            json={
+                "name": "New Name",
+            },
+        )
         assert resp.status_code == 200
         assert resp.json()["name"] == "New Name"
 
     def test_update_project_is_default(self, project_client):
         client, dirs = project_client
-        create = client.post("/api/autopilot/projects", json={
-            "name": "Test",
-            "base_dir": str(dirs["project_dir"]),
-        })
+        create = client.post(
+            "/api/autopilot/projects",
+            json={
+                "name": "Test",
+                "base_dir": str(dirs["project_dir"]),
+            },
+        )
         project_id = create.json()["id"]
 
-        resp = client.put(f"/api/autopilot/projects/{project_id}", json={
-            "is_default": True,
-        })
+        resp = client.put(
+            f"/api/autopilot/projects/{project_id}",
+            json={
+                "is_default": True,
+            },
+        )
         assert resp.status_code == 200
         assert resp.json()["is_default"] is True
 
     def test_delete_project(self, project_client):
         client, dirs = project_client
-        create = client.post("/api/autopilot/projects", json={
-            "name": "To Delete",
-            "base_dir": str(dirs["project_dir"]),
-        })
+        create = client.post(
+            "/api/autopilot/projects",
+            json={
+                "name": "To Delete",
+                "base_dir": str(dirs["project_dir"]),
+            },
+        )
         project_id = create.json()["id"]
 
         resp = client.delete(f"/api/autopilot/projects/{project_id}")
@@ -625,10 +751,13 @@ class TestProjects:
 
 class TestProjectDesigns:
     def _create_project(self, client, dirs):
-        resp = client.post("/api/autopilot/projects", json={
-            "name": "Test",
-            "base_dir": str(dirs["project_dir"]),
-        })
+        resp = client.post(
+            "/api/autopilot/projects",
+            json={
+                "name": "Test",
+                "base_dir": str(dirs["project_dir"]),
+            },
+        )
         return resp.json()["id"]
 
     def test_list_designs(self, project_client):
@@ -652,10 +781,13 @@ class TestProjectDesigns:
         client, dirs = project_client
         pid = self._create_project(client, dirs)
 
-        resp = client.post(f"/api/autopilot/projects/{pid}/designs", json={
-            "name": "New Feature",
-            "content": "# New Feature\nDescription here.",
-        })
+        resp = client.post(
+            f"/api/autopilot/projects/{pid}/designs",
+            json={
+                "name": "New Feature",
+                "content": "# New Feature\nDescription here.",
+            },
+        )
         assert resp.status_code == 200
         data = resp.json()
         assert data["name"] == "New Feature"
@@ -669,14 +801,20 @@ class TestProjectDesigns:
         client, dirs = project_client
         pid = self._create_project(client, dirs)
 
-        client.post(f"/api/autopilot/projects/{pid}/designs", json={
-            "name": "Dup Test",
-            "content": "first",
-        })
-        resp = client.post(f"/api/autopilot/projects/{pid}/designs", json={
-            "name": "Dup Test",
-            "content": "second",
-        })
+        client.post(
+            f"/api/autopilot/projects/{pid}/designs",
+            json={
+                "name": "Dup Test",
+                "content": "first",
+            },
+        )
+        resp = client.post(
+            f"/api/autopilot/projects/{pid}/designs",
+            json={
+                "name": "Dup Test",
+                "content": "second",
+            },
+        )
         assert resp.status_code == 409
 
     def test_remove_design(self, project_client):
@@ -716,9 +854,12 @@ class TestProjectDesigns:
         designs = client.get(f"/api/autopilot/projects/{pid}/designs").json()
         reversed_ids = [d["id"] for d in reversed(designs)]
 
-        resp = client.put(f"/api/autopilot/projects/{pid}/designs/reorder", json={
-            "design_ids": reversed_ids,
-        })
+        resp = client.put(
+            f"/api/autopilot/projects/{pid}/designs/reorder",
+            json={
+                "design_ids": reversed_ids,
+            },
+        )
         assert resp.status_code == 200
 
         reordered = client.get(f"/api/autopilot/projects/{pid}/designs").json()
@@ -728,9 +869,12 @@ class TestProjectDesigns:
         client, dirs = project_client
         pid = self._create_project(client, dirs)
 
-        resp = client.put(f"/api/autopilot/projects/{pid}/designs/reorder", json={
-            "design_ids": ["nonexistent-id"],
-        })
+        resp = client.put(
+            f"/api/autopilot/projects/{pid}/designs/reorder",
+            json={
+                "design_ids": ["nonexistent-id"],
+            },
+        )
         assert resp.status_code == 400
 
     def test_sync_project(self, project_client):
@@ -769,21 +913,29 @@ class TestProjectDesigns:
 class TestProjectPathTraversal:
     def test_design_content_rejects_traversal(self, project_client):
         client, dirs = project_client
-        resp = client.post("/api/autopilot/projects", json={
-            "name": "Test",
-            "base_dir": str(dirs["project_dir"]),
-        })
+        resp = client.post(
+            "/api/autopilot/projects",
+            json={
+                "name": "Test",
+                "base_dir": str(dirs["project_dir"]),
+            },
+        )
         pid = resp.json()["id"]
 
-        resp = client.get(f"/api/autopilot/projects/{pid}/designs/../../etc/passwd/content")
+        resp = client.get(
+            f"/api/autopilot/projects/{pid}/designs/../../etc/passwd/content"
+        )
         assert resp.status_code in (400, 404)
 
     def test_design_remove_rejects_traversal(self, project_client):
         client, dirs = project_client
-        resp = client.post("/api/autopilot/projects", json={
-            "name": "Test",
-            "base_dir": str(dirs["project_dir"]),
-        })
+        resp = client.post(
+            "/api/autopilot/projects",
+            json={
+                "name": "Test",
+                "base_dir": str(dirs["project_dir"]),
+            },
+        )
         pid = resp.json()["id"]
 
         resp = client.delete(f"/api/autopilot/projects/{pid}/designs/../../etc/passwd")

@@ -6,11 +6,7 @@ This test verifies that:
 3. Optional phases can fail without blocking the pipeline
 """
 
-import pytest
 import json
-from pathlib import Path
-from unittest.mock import MagicMock, patch, AsyncMock
-from datetime import datetime
 
 
 class TestSpecGateFiring:
@@ -18,7 +14,7 @@ class TestSpecGateFiring:
 
     def test_spec_gate_fires_on_qa_completion(self, tmp_path):
         """Test that the spec gate fires when qa_validation phase completes."""
-        from src.autopilot.spec import build_phase_output, GATED_PHASES
+        from src.autopilot.spec import build_phase_output
 
         # Create a failing qa_result.json
         docs = tmp_path / "docs"
@@ -105,7 +101,10 @@ class TestOptionalPhases:
 
     def test_required_output_loaded(self):
         """Test that required output artifacts are loaded."""
-        from src.autopilot.spec import PHASE_OUTPUT_ARTIFACTS, load_phase_output_artifacts
+        from src.autopilot.spec import (
+            PHASE_OUTPUT_ARTIFACTS,
+            load_phase_output_artifacts,
+        )
 
         # Default required output should include qa_validation
         assert "qa_validation" in PHASE_OUTPUT_ARTIFACTS
@@ -131,7 +130,7 @@ class TestOutputExistenceFloor:
 
     def test_optional_phases_not_in_required_output(self):
         """Test that optional phases are not in required output."""
-        from src.autopilot.spec import PHASE_OUTPUT_ARTIFACTS, OPTIONAL_PHASES
+        from src.autopilot.spec import OPTIONAL_PHASES, PHASE_OUTPUT_ARTIFACTS
 
         # Optional phases should not have required outputs
         for phase in OPTIONAL_PHASES:

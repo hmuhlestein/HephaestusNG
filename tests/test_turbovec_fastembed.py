@@ -1,9 +1,6 @@
 """Tests for turbovec store, embedding factory, and store factory."""
 
 import asyncio
-import os
-import shutil
-import tempfile
 import uuid
 from pathlib import Path
 
@@ -13,6 +10,7 @@ import pytest
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture
 def tmp_data_dir(tmp_path):
@@ -92,7 +90,9 @@ class TestStoreMemory:
     @pytest.mark.asyncio
     async def test_unknown_collection_raises(self, store):
         with pytest.raises(ValueError, match="Unknown collection"):
-            await store.store_memory("nonexistent", _random_id(), _random_embedding(), "", {})
+            await store.store_memory(
+                "nonexistent", _random_id(), _random_embedding(), "", {}
+            )
 
     @pytest.mark.asyncio
     async def test_wrong_dimension_raises(self, store):
@@ -113,7 +113,9 @@ class TestStoreMemory:
 
         store = TurboVecStore(data_dir=tmp_data_dir)
         mem_id = _random_id()
-        await store.store_memory("agent_memories", mem_id, _random_embedding(), "persist", {})
+        await store.store_memory(
+            "agent_memories", mem_id, _random_embedding(), "persist", {}
+        )
 
         index_path = Path(tmp_data_dir) / "hephaestus_agent_memories.tvim"
         meta_path = Path(tmp_data_dir) / "hephaestus_agent_memories_meta.json"
@@ -156,8 +158,12 @@ class TestSearch:
     async def test_search_with_filter(self, store):
         emb1 = _random_embedding()
         emb2 = _random_embedding()
-        await store.store_memory("agent_memories", _random_id(), emb1, "a", {"cat": "x"})
-        await store.store_memory("agent_memories", _random_id(), emb2, "b", {"cat": "y"})
+        await store.store_memory(
+            "agent_memories", _random_id(), emb1, "a", {"cat": "x"}
+        )
+        await store.store_memory(
+            "agent_memories", _random_id(), emb2, "b", {"cat": "y"}
+        )
 
         results = await store.search(
             "agent_memories", emb1, limit=10, filters={"cat": "x"}
@@ -204,8 +210,12 @@ class TestSearchAllCollections:
     @pytest.mark.asyncio
     async def test_respects_total_limit(self, store):
         for _ in range(5):
-            await store.store_memory("agent_memories", _random_id(), _random_embedding(), "", {})
-            await store.store_memory("static_docs", _random_id(), _random_embedding(), "", {})
+            await store.store_memory(
+                "agent_memories", _random_id(), _random_embedding(), "", {}
+            )
+            await store.store_memory(
+                "static_docs", _random_id(), _random_embedding(), "", {}
+            )
 
         results = await store.search_all_collections(
             _random_embedding(), limit_per_collection=5, total_limit=4
@@ -216,7 +226,9 @@ class TestSearchAllCollections:
     async def test_sorted_by_score_desc(self, store):
         emb = _random_embedding()
         await store.store_memory("agent_memories", _random_id(), emb, "a", {})
-        await store.store_memory("static_docs", _random_id(), _random_embedding(), "b", {})
+        await store.store_memory(
+            "static_docs", _random_id(), _random_embedding(), "b", {}
+        )
 
         results = await store.search_all_collections(emb, limit_per_collection=5)
         scores = [r["score"] for r in results]
@@ -427,7 +439,9 @@ class TestIntegrationRoundtrip:
         emb = await provider.generate_embedding(text)
         mem_id = _random_id()
 
-        await store.store_memory("agent_memories", mem_id, emb, text, {"source": "test"})
+        await store.store_memory(
+            "agent_memories", mem_id, emb, text, {"source": "test"}
+        )
 
         query_emb = await provider.generate_embedding("local vector search")
         results = await store.search("agent_memories", query_emb, limit=5)

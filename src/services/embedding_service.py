@@ -1,10 +1,17 @@
 """Service for generating and comparing embeddings for task deduplication."""
 
+import logging
+from typing import List
+
 import numpy as np
 import openai
-from typing import List
-import logging
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from tenacity import (
+    retry,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+)
+
 from src.core.simple_config import get_config
 
 logger = logging.getLogger(__name__)
@@ -50,7 +57,9 @@ class EmbeddingService:
             # Truncate text if too long (max ~8000 tokens for most models)
             max_chars = 30000  # Conservative limit
             if len(text) > max_chars:
-                logger.warning(f"Text truncated from {len(text)} to {max_chars} characters")
+                logger.warning(
+                    f"Text truncated from {len(text)} to {max_chars} characters"
+                )
                 text = text[:max_chars]
 
             response = self.client.embeddings.create(
@@ -68,7 +77,9 @@ class EmbeddingService:
             logger.error(f"Failed to generate embedding: {e}")
             raise
 
-    def calculate_cosine_similarity(self, vec1: List[float], vec2: List[float]) -> float:
+    def calculate_cosine_similarity(
+        self, vec1: List[float], vec2: List[float]
+    ) -> float:
         """Calculate cosine similarity between two vectors.
 
         Args:
@@ -155,7 +166,10 @@ class EmbeddingService:
         except Exception as e:
             logger.error(f"Error in batch similarity calculation: {e}")
             # Fallback to individual calculations
-            return [self.calculate_cosine_similarity(query_embedding, emb) for emb in embeddings]
+            return [
+                self.calculate_cosine_similarity(query_embedding, emb)
+                for emb in embeddings
+            ]
 
     async def generate_ticket_embedding(
         self, title: str, description: str, tags: List[str]

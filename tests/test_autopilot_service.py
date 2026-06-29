@@ -1,16 +1,17 @@
 """Tests for autopilot/service.py — AutopilotService lifecycle."""
 
-import pytest
 import asyncio
 import time
-from unittest.mock import patch, AsyncMock, Mock, MagicMock
-from pathlib import Path
+from unittest.mock import AsyncMock, Mock, patch
+
+import pytest
 
 
 class TestAutopilotService:
     @pytest.fixture
     def service(self):
         from src.autopilot.service import AutopilotService
+
         return AutopilotService()
 
     def test_initial_state(self, service):
@@ -229,6 +230,7 @@ class TestAutopilotService:
 class TestGetAutopilotService:
     def test_singleton(self):
         from src.autopilot.service import get_autopilot_service
+
         s1 = get_autopilot_service()
         s2 = get_autopilot_service()
         assert s1 is s2

@@ -1,12 +1,13 @@
 """Tests for phase loading functionality."""
 
-import pytest
 import tempfile
-import yaml
 from pathlib import Path
 
-from src.sdk.models import Phase
+import pytest
+import yaml
+
 from src.sdk.client import HephaestusSDK
+from src.sdk.models import Phase
 
 
 def create_test_phase_yaml(path: Path, phase_id: int, name: str):
@@ -130,7 +131,10 @@ def test_must_provide_either_phases_dir_or_phases():
     os.environ["ANTHROPIC_API_KEY"] = "test-key"
 
     try:
-        with pytest.raises(ValueError, match="Either workflow_definitions, phases_dir, or phases must be provided"):
+        with pytest.raises(
+            ValueError,
+            match="Either workflow_definitions, phases_dir, or phases must be provided",
+        ):
             HephaestusSDK()
 
     finally:

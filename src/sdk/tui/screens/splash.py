@@ -1,9 +1,9 @@
 """Splash screen with forge art and startup progress."""
 
 from textual.app import ComposeResult
+from textual.containers import Container
 from textual.screen import Screen
 from textual.widgets import Static
-from textual.containers import Container
 
 from src.sdk.tui.widgets.forge_art import ForgeArt
 

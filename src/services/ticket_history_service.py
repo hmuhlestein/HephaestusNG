@@ -1,10 +1,11 @@
 """Service layer for managing ticket history and audit trail."""
 
 from datetime import datetime
-from typing import Optional, Dict, Any, List
+from typing import Any, Dict, List, Optional
+
 from sqlalchemy.orm import Session
 
-from src.core.database import get_db, TicketHistory, Ticket
+from src.core.database import Ticket, TicketHistory, get_db
 
 
 class TicketHistoryService:
@@ -83,7 +84,11 @@ class TicketHistoryService:
 
     @staticmethod
     async def record_status_transition(
-        ticket_id: str, agent_id: str, from_status: str, to_status: str, db: Optional[Session] = None
+        ticket_id: str,
+        agent_id: str,
+        from_status: str,
+        to_status: str,
+        db: Optional[Session] = None,
     ) -> None:
         """
         Record a status change.
@@ -109,7 +114,9 @@ class TicketHistoryService:
         )
 
     @staticmethod
-    async def link_commit(ticket_id: str, commit_sha: str, message: str, db: Optional[Session] = None) -> None:
+    async def link_commit(
+        ticket_id: str, commit_sha: str, message: str, db: Optional[Session] = None
+    ) -> None:
         """
         Record a commit link.
 
@@ -263,7 +270,9 @@ class TicketHistoryService:
                 return f"Assigned to {new_value}"
 
         elif change_type == "commented":
-            comment_type = metadata.get("comment_type", "general") if metadata else "general"
+            comment_type = (
+                metadata.get("comment_type", "general") if metadata else "general"
+            )
             if comment_type == "status_change":
                 return "Added status change comment"
             elif comment_type == "resolution":

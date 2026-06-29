@@ -1,11 +1,12 @@
 """Tests for prompt delivery verification and retry logic."""
 
+from unittest.mock import AsyncMock, Mock
+
 import pytest
-from unittest.mock import Mock, AsyncMock, patch, MagicMock
-import asyncio
+
 from src.agents.manager import AgentManager
-from src.core.database import DatabaseManager, Task
-from src.interfaces import LLMProviderInterface, ClaudeCodeAgent
+from src.core.database import DatabaseManager
+from src.interfaces import ClaudeCodeAgent, LLMProviderInterface
 
 
 @pytest.fixture
@@ -27,10 +28,7 @@ def mock_llm_provider():
 @pytest.fixture
 def agent_manager(mock_db_manager, mock_llm_provider):
     """Create an AgentManager instance with mocks."""
-    return AgentManager(
-        db_manager=mock_db_manager,
-        llm_provider=mock_llm_provider
-    )
+    return AgentManager(db_manager=mock_db_manager, llm_provider=mock_llm_provider)
 
 
 @pytest.fixture
@@ -65,7 +63,7 @@ async def test_verify_prompt_delivery_success(agent_manager, mock_pane):
     result = await agent_manager._verify_prompt_delivery(
         pane=mock_pane,
         verification_string="Task ID: test-task-123",
-        wait_seconds=0.1  # Short wait for testing
+        wait_seconds=0.1,  # Short wait for testing
     )
 
     assert result is True
@@ -88,7 +86,7 @@ async def test_verify_prompt_delivery_failure(agent_manager, mock_pane):
     result = await agent_manager._verify_prompt_delivery(
         pane=mock_pane,
         verification_string="Task ID: test-task-123",
-        wait_seconds=0.1  # Short wait for testing
+        wait_seconds=0.1,  # Short wait for testing
     )
 
     assert result is False
@@ -104,9 +102,7 @@ async def test_verify_prompt_delivery_empty_output(agent_manager, mock_pane):
     mock_pane.cmd = Mock(return_value=mock_result)
 
     result = await agent_manager._verify_prompt_delivery(
-        pane=mock_pane,
-        verification_string="Task ID: test-task-123",
-        wait_seconds=0.1
+        pane=mock_pane, verification_string="Task ID: test-task-123", wait_seconds=0.1
     )
 
     assert result is False
@@ -130,7 +126,7 @@ async def test_send_initial_prompt_without_verification(
         agent_id=agent_id,
         task_id=task_id,
         max_retries=3,
-        verify_delivery=False  # Default behavior
+        verify_delivery=False,  # Default behavior
     )
 
     # Verify send_keys was called (1 chunk for short message + 1 Enter)
@@ -159,7 +155,7 @@ async def test_send_initial_prompt_with_retry_success_first_attempt(
         agent_id=agent_id,
         task_id=task_id,
         max_retries=3,
-        verify_delivery=True  # Enable verification
+        verify_delivery=True,  # Enable verification
     )
 
     # Verify send_keys was called (1 chunk for short message + 1 Enter)
@@ -191,7 +187,7 @@ async def test_send_initial_prompt_with_retry_success_second_attempt(
         agent_id=agent_id,
         task_id=task_id,
         max_retries=3,
-        verify_delivery=True  # Enable verification
+        verify_delivery=True,  # Enable verification
     )
 
     # Verify send_keys was called for both attempts (2 calls per attempt)
@@ -223,7 +219,7 @@ async def test_send_initial_prompt_with_retry_success_third_attempt(
         agent_id=agent_id,
         task_id=task_id,
         max_retries=3,
-        verify_delivery=True  # Enable verification
+        verify_delivery=True,  # Enable verification
     )
 
     # Verify send_keys was called for all three attempts (2 calls per attempt)
@@ -249,14 +245,14 @@ async def test_send_initial_prompt_with_retry_all_retries_fail(
     # Should raise an exception after all retries
     with pytest.raises(Exception) as exc_info:
         await agent_manager._send_initial_prompt_with_retry(
-        cli_type="claude",
+            cli_type="claude",
             pane=mock_pane,
             cli_agent=mock_cli_agent,
             initial_message=initial_message,
             agent_id=agent_id,
             task_id=task_id,
             max_retries=3,
-            verify_delivery=True  # Enable verification
+            verify_delivery=True,  # Enable verification
         )
 
     # Verify the error message
@@ -287,14 +283,14 @@ async def test_send_initial_prompt_with_retry_custom_max_retries(
     # Should fail after 5 retries (custom value)
     with pytest.raises(Exception) as exc_info:
         await agent_manager._send_initial_prompt_with_retry(
-        cli_type="claude",
+            cli_type="claude",
             pane=mock_pane,
             cli_agent=mock_cli_agent,
             initial_message=initial_message,
             agent_id=agent_id,
             task_id=task_id,
             max_retries=5,  # Custom value
-            verify_delivery=True  # Enable verification
+            verify_delivery=True,  # Enable verification
         )
 
     # Verify the error message mentions 5 attempts
@@ -315,13 +311,12 @@ async def test_verify_prompt_delivery_with_custom_wait_time(agent_manager, mock_
     mock_pane.cmd = Mock(return_value=mock_result)
 
     import time
+
     start_time = time.time()
 
     # Use a 0.5 second wait
     result = await agent_manager._verify_prompt_delivery(
-        pane=mock_pane,
-        verification_string="Task ID: test-task-123",
-        wait_seconds=0.5
+        pane=mock_pane, verification_string="Task ID: test-task-123", wait_seconds=0.5
     )
 
     elapsed_time = time.time() - start_time
@@ -348,21 +343,15 @@ async def test_verify_prompt_delivery_multiline_output(agent_manager, mock_pane)
 
     # Verify we can find strings from different parts of the output
     result1 = await agent_manager._verify_prompt_delivery(
-        pane=mock_pane,
-        verification_string="Task ID: task-xyz-789",
-        wait_seconds=0.1
+        pane=mock_pane, verification_string="Task ID: task-xyz-789", wait_seconds=0.1
     )
 
     result2 = await agent_manager._verify_prompt_delivery(
-        pane=mock_pane,
-        verification_string="TASK ASSIGNMENT",
-        wait_seconds=0.1
+        pane=mock_pane, verification_string="TASK ASSIGNMENT", wait_seconds=0.1
     )
 
     result3 = await agent_manager._verify_prompt_delivery(
-        pane=mock_pane,
-        verification_string="NOT IN OUTPUT",
-        wait_seconds=0.1
+        pane=mock_pane, verification_string="NOT IN OUTPUT", wait_seconds=0.1
     )
 
     assert result1 is True
@@ -389,7 +378,7 @@ async def test_send_initial_prompt_with_chunking_large_message(
         agent_id=agent_id,
         task_id=task_id,
         max_retries=3,
-        verify_delivery=False  # No verification, just testing chunking
+        verify_delivery=False,  # No verification, just testing chunking
     )
 
     # With 2000 chars and chunk_size=2500, the message fits in one chunk
@@ -398,12 +387,14 @@ async def test_send_initial_prompt_with_chunking_large_message(
 
     # Verify the first call was the first chunk (1500 chars)
     first_call_arg = mock_pane.send_keys.call_args_list[0][0][0]
-    assert len(first_call_arg) == 2023  # Full message fits in one chunk (chunk_size=2500)
+    assert (
+        len(first_call_arg) == 2023
+    )  # Full message fits in one chunk (chunk_size=2500)
 
     # Verify the last call was just Enter
     last_call = mock_pane.send_keys.call_args_list[-1]
-    assert last_call[0][0] == ''  # Empty string
-    assert last_call[1].get('enter') is True  # enter=True
+    assert last_call[0][0] == ""  # Empty string
+    assert last_call[1].get("enter") is True  # enter=True
 
     # Verify formatting was called once
     mock_cli_agent.format_message.assert_called_once_with(large_message)

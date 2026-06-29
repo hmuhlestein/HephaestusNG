@@ -7,12 +7,20 @@ Loads workflow definitions from a directory containing:
 This is the canonical loader used by all workflows. It replaces the old
 autopilot-specific src/autopilot/phase_loader.py.
 """
+
 import logging
 from pathlib import Path
 
 import yaml
 
-from src.sdk.models import LaunchParameter, LaunchTemplate, Phase, ValidationCriteria, WorkflowConfig, WorkflowDefinition
+from src.sdk.models import (
+    LaunchParameter,
+    LaunchTemplate,
+    Phase,
+    ValidationCriteria,
+    WorkflowConfig,
+    WorkflowDefinition,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +43,7 @@ def load_workflow_from_dir(workflow_dir: Path) -> dict:
     # Validate YAML configs before loading
     try:
         from src.workflow_engine.config_validator import validate_single_workflow
+
         errors = validate_single_workflow(workflow_dir)
         if errors:
             err_msgs = []
@@ -162,7 +171,9 @@ def load_workflow_config(cfg: dict) -> WorkflowConfig:
             ),
             "allow_reopen": board.get("allow_reopen", True),
             "track_time": board.get("track_time", False),
-        } if board else None,
+        }
+        if board
+        else None,
     )
 
 

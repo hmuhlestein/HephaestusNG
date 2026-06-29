@@ -1,14 +1,14 @@
 """Tests for workflow_result_service.py — static methods."""
 
+from unittest.mock import Mock, patch
+
 import pytest
-import json
-from unittest.mock import Mock, patch, MagicMock
-from datetime import datetime
 
 
 class TestSubmitResult:
     def test_submit_rejects_missing_file(self):
         from src.services.workflow_result_service import WorkflowResultService
+
         with pytest.raises(FileNotFoundError):
             WorkflowResultService.submit_result(
                 agent_id="a1",
@@ -18,6 +18,7 @@ class TestSubmitResult:
 
     def test_submit_validates_path(self):
         from src.services.workflow_result_service import WorkflowResultService
+
         with pytest.raises((ValueError, Exception)):
             WorkflowResultService.submit_result(
                 agent_id="a1",
@@ -27,6 +28,7 @@ class TestSubmitResult:
 
     def test_submit_rejects_oversized_file(self, tmp_path):
         from src.services.workflow_result_service import WorkflowResultService
+
         big_file = tmp_path / "big.md"
         big_file.write_text("x" * (1024 * 1024 + 1))  # > 1MB
         with pytest.raises((ValueError, Exception)):
@@ -40,6 +42,7 @@ class TestSubmitResult:
 class TestGetWorkflowResults:
     def test_returns_list(self):
         from src.services.workflow_result_service import WorkflowResultService
+
         with patch("src.services.workflow_result_service.get_db") as mock_db:
             mock_session = Mock()
             mock_session.query.return_value.filter_by.return_value.all.return_value = []
@@ -52,6 +55,7 @@ class TestGetWorkflowResults:
 class TestCheckWorkflowCompletion:
     def test_returns_bool(self):
         from src.services.workflow_result_service import WorkflowResultService
+
         with patch("src.services.workflow_result_service.get_db") as mock_db:
             mock_session = Mock()
             mock_session.query.return_value.filter_by.return_value.first.return_value = None
@@ -64,6 +68,7 @@ class TestCheckWorkflowCompletion:
 class TestUpdateResultStatus:
     def test_update_nonexistent_raises(self):
         from src.services.workflow_result_service import WorkflowResultService
+
         with patch("src.services.workflow_result_service.get_db") as mock_db:
             mock_session = Mock()
             mock_session.query.return_value.filter_by.return_value.first.return_value = None

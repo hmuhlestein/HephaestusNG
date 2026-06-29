@@ -1,7 +1,7 @@
 """Project management API — unified project endpoints."""
 
-import uuid
 import logging
+import uuid
 from pathlib import Path
 from typing import List, Optional
 
@@ -46,29 +46,31 @@ def _validate_base_dir(base_dir: str) -> str:
 
 @router.get("", response_model=List[ProjectItem])
 async def list_projects():
-    from src.core.database import AutopilotProject, AutopilotDesign, get_db
+    from src.core.database import AutopilotDesign, AutopilotProject, get_db
 
     with get_db() as db:
         projects = db.query(AutopilotProject).order_by(AutopilotProject.name).all()
         result = []
         for p in projects:
             count = db.query(AutopilotDesign).filter_by(project_id=p.id).count()
-            result.append(ProjectItem(
-                id=p.id,
-                name=p.name,
-                base_dir=p.base_dir,
-                is_default=p.is_default,
-                is_active=getattr(p, 'is_active', False),
-                design_count=count,
-                created_at=p.created_at.isoformat() if p.created_at else "",
-                updated_at=p.updated_at.isoformat() if p.updated_at else "",
-            ))
+            result.append(
+                ProjectItem(
+                    id=p.id,
+                    name=p.name,
+                    base_dir=p.base_dir,
+                    is_default=p.is_default,
+                    is_active=getattr(p, "is_active", False),
+                    design_count=count,
+                    created_at=p.created_at.isoformat() if p.created_at else "",
+                    updated_at=p.updated_at.isoformat() if p.updated_at else "",
+                )
+            )
         return result
 
 
 @router.get("/active", response_model=Optional[ProjectItem])
 async def get_active_project():
-    from src.core.database import AutopilotProject, AutopilotDesign, get_db
+    from src.core.database import AutopilotDesign, AutopilotProject, get_db
 
     with get_db() as db:
         proj = db.query(AutopilotProject).filter_by(is_active=True).first()
@@ -96,7 +98,9 @@ async def create_project(req: ProjectCreate):
     with get_db() as db:
         existing = db.query(AutopilotProject).filter_by(base_dir=resolved).first()
         if existing:
-            raise HTTPException(409, f"Project already exists for directory: {resolved}")
+            raise HTTPException(
+                409, f"Project already exists for directory: {resolved}"
+            )
 
         if req.is_default:
             db.query(AutopilotProject).update({"is_default": False})
@@ -137,7 +141,7 @@ async def create_project(req: ProjectCreate):
 
 @router.put("/{project_id}", response_model=ProjectItem)
 async def update_project(project_id: str, req: ProjectUpdate):
-    from src.core.database import AutopilotProject, AutopilotDesign, get_db
+    from src.core.database import AutopilotDesign, AutopilotProject, get_db
 
     with get_db() as db:
         proj = db.query(AutopilotProject).filter_by(id=project_id).first()
@@ -148,12 +152,18 @@ async def update_project(project_id: str, req: ProjectUpdate):
             proj.name = req.name
         if req.base_dir is not None:
             resolved = _validate_base_dir(req.base_dir)
-            existing = db.query(AutopilotProject).filter(
-                AutopilotProject.base_dir == resolved,
-                AutopilotProject.id != project_id,
-            ).first()
+            existing = (
+                db.query(AutopilotProject)
+                .filter(
+                    AutopilotProject.base_dir == resolved,
+                    AutopilotProject.id != project_id,
+                )
+                .first()
+            )
             if existing:
-                raise HTTPException(409, f"Another project already uses directory: {resolved}")
+                raise HTTPException(
+                    409, f"Another project already uses directory: {resolved}"
+                )
             proj.base_dir = resolved
 
         db.flush()
@@ -164,7 +174,7 @@ async def update_project(project_id: str, req: ProjectUpdate):
             name=proj.name,
             base_dir=proj.base_dir,
             is_default=proj.is_default,
-            is_active=getattr(proj, 'is_active', False),
+            is_active=getattr(proj, "is_active", False),
             design_count=count,
             created_at=proj.created_at.isoformat() if proj.created_at else "",
             updated_at=proj.updated_at.isoformat() if proj.updated_at else "",
@@ -182,13 +192,15 @@ async def delete_project(project_id: str):
         if not proj:
             raise HTTPException(404, f"Project not found: {project_id}")
 
-        was_active = getattr(proj, 'is_active', False)
+        was_active = getattr(proj, "is_active", False)
         db.delete(proj)
         db.flush()
 
         # If deleted project was active, find a replacement
         if was_active:
-            next_proj = db.query(AutopilotProject).order_by(AutopilotProject.name).first()
+            next_proj = (
+                db.query(AutopilotProject).order_by(AutopilotProject.name).first()
+            )
             if next_proj:
                 next_proj.is_active = True
                 replacement_proj = {
@@ -201,6 +213,7 @@ async def delete_project(project_id: str):
     if replacement_proj:
         try:
             from types import SimpleNamespace
+
             _apply_active_project(SimpleNamespace(**replacement_proj))
         except Exception as e:
             logger.error(f"Failed to activate replacement project: {e}")
@@ -210,7 +223,7 @@ async def delete_project(project_id: str):
 
 @router.post("/{project_id}/activate", response_model=ProjectItem)
 async def activate_project(project_id: str):
-    from src.core.database import AutopilotProject, AutopilotDesign, get_db
+    from src.core.database import AutopilotDesign, AutopilotProject, get_db
 
     with get_db() as db:
         proj = db.query(AutopilotProject).filter_by(id=project_id).first()
@@ -261,7 +274,9 @@ def _apply_active_project(proj):
             server_state.branch_manager.reload(new_path)
         except Exception as e:
             logger.error(f"Failed to reload WorktreeManager for {new_path}: {e}")
-            raise ValueError(f"Cannot activate project — not a valid git repository: {new_path}")
+            raise ValueError(
+                f"Cannot activate project — not a valid git repository: {new_path}"
+            )
 
     # Only mutate config after successful reload
     config.main_repo_path = new_path

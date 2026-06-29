@@ -1,7 +1,7 @@
 """heph restart — Restart services."""
 
-from src.cli.commands.stop import run as stop_run
 from src.cli.commands.start import run as start_run
+from src.cli.commands.stop import run as stop_run
 
 
 def register(subparsers):

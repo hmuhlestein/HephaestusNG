@@ -2,7 +2,7 @@
 
 import os
 from dataclasses import dataclass, field
-from typing import Optional, Dict, Any
+from typing import Any, Dict, Optional
 
 
 @dataclass
@@ -25,8 +25,8 @@ class HephaestusConfig:
 
     # LiteLLM Proxy (optional - routes through deneb-server for cost tracking)
     litellm_proxy_url: Optional[str] = None  # e.g., "http://deneb-server:4000"
-    litellm_api_key: Optional[str] = None    # Virtual key for LiteLLM proxy
-    litellm_cost_tracking: bool = False      # Enable cost tracking per feature
+    litellm_api_key: Optional[str] = None  # Virtual key for LiteLLM proxy
+    litellm_cost_tracking: bool = False  # Enable cost tracking per feature
     litellm_cost_api_key: Optional[str] = None  # Admin key for querying spend endpoints
 
     # Server
@@ -52,7 +52,9 @@ class HephaestusConfig:
 
     # Git Configuration
     main_repo_path: Optional[str] = None
-    base_branch: str = "main"  # Base branch/commit for merging (can be branch name or commit SHA)
+    base_branch: str = (
+        "main"  # Base branch/commit for merging (can be branch name or commit SHA)
+    )
     branch_prefix: str = "agent-"
     auto_commit: bool = True
     conflict_resolution: str = "newest_file_wins"
@@ -126,7 +128,6 @@ class HephaestusConfig:
         env = {
             # Database
             "DATABASE_PATH": self.database_path,
-
             # Qdrant / Vector Store
             "VECTOR_STORE_BACKEND": self.vector_store_backend,
             "QDRANT_URL": self.qdrant_url,
@@ -135,51 +136,42 @@ class HephaestusConfig:
             "EMBEDDING_MODEL": self.embedding_model,
             "EMBEDDING_BACKEND": self.embedding_backend,
             "TURBOVEC_DATA_DIR": self.turbovec_data_dir,
-
             # LLM
             "LLM_PROVIDER": self.llm_provider,
             "LLM_MODEL": self.llm_model or "",
-
             # Server
             "MCP_PORT": str(self.mcp_port),
             "MCP_HOST": self.mcp_host,
             "SERVER_ENABLE_CORS": str(self.enable_cors).lower(),
-
             # Monitoring
             "MONITORING_INTERVAL_SECONDS": str(self.monitoring_interval),
             "MONITORING_ENABLED": str(self.monitoring_enabled).lower(),
             "LOG_LEVEL": self.log_level,
             "LOG_FORMAT": self.log_format,
             "STUCK_AGENT_THRESHOLD": str(self.stuck_agent_threshold),
-
             # Paths
             "WORKING_DIRECTORY": self.working_directory,
             "WORKTREE_BASE": self.worktree_base,
-
             # Git Configuration
             "GIT_BASE_BRANCH": self.base_branch,
             "BRANCH_PREFIX": self.branch_prefix,
             "AUTO_COMMIT": str(self.auto_commit).lower(),
             "CONFLICT_RESOLUTION": self.conflict_resolution,
-
             # Agent Configuration
             "DEFAULT_CLI_TOOL": self.default_cli_tool,
             "TMUX_SESSION_PREFIX": self.tmux_session_prefix,
             "HEALTH_CHECK_INTERVAL": str(self.health_check_interval),
             "MAX_HEALTH_FAILURES": str(self.max_health_failures),
             "TERMINATION_DELAY": str(self.termination_delay),
-
             # MCP Server Configuration
             "AUTH_REQUIRED": str(self.auth_required).lower(),
             "SESSION_TIMEOUT": str(self.session_timeout),
             "MAX_CONCURRENT_AGENTS": str(self.max_concurrent_agents),
-
             # Task Deduplication
             "TASK_DEDUPLICATION_ENABLED": str(self.task_deduplication_enabled).lower(),
             "SIMILARITY_THRESHOLD": str(self.similarity_threshold),
             "RELATED_THRESHOLD": str(self.related_threshold),
             "DEDUP_BATCH_SIZE": str(self.dedup_batch_size),
-
             # Diagnostic Agent Configuration
             "DIAGNOSTIC_AGENT_ENABLED": str(self.diagnostic_agent_enabled).lower(),
             "DIAGNOSTIC_COOLDOWN_SECONDS": str(self.diagnostic_cooldown_seconds),

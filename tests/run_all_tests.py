@@ -2,11 +2,11 @@
 """Main test runner for Hephaestus integration tests."""
 
 import asyncio
-import sys
 import os
+import subprocess
+import sys
 import time
 from datetime import datetime
-import subprocess
 
 # Add parent directory to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -36,19 +36,23 @@ async def check_prerequisites():
     print("\n📍 Checking Qdrant...")
     try:
         import httpx
+
         async with httpx.AsyncClient() as client:
             response = await client.get("http://localhost:6333/collections")
             if response.status_code == 200:
                 print("   ✅ Qdrant is running on port 6333")
             else:
                 issues.append("Qdrant is not responding properly")
-    except Exception as e:
-        issues.append("Qdrant is not running. Start it with: docker run -p 6333:6333 qdrant/qdrant")
+    except Exception:
+        issues.append(
+            "Qdrant is not running. Start it with: docker run -p 6333:6333 qdrant/qdrant"
+        )
 
     # Check MCP Server
     print("\n📍 Checking MCP Server...")
     try:
         import httpx
+
         async with httpx.AsyncClient() as client:
             response = await client.get("http://localhost:8300/health", timeout=2)
             if response.status_code == 200:
@@ -62,6 +66,7 @@ async def check_prerequisites():
     # Check environment variables
     print("\n📍 Checking environment variables...")
     from src.core.simple_config import Config
+
     config = Config()
 
     if not config.openai_api_key or config.openai_api_key.startswith("sk-"):
@@ -94,7 +99,7 @@ async def run_test_module(module_name, description):
             [sys.executable, f"tests/{module_name}"],
             capture_output=True,
             text=True,
-            timeout=60  # 60 second timeout per test module
+            timeout=60,  # 60 second timeout per test module
         )
 
         # Print the output
@@ -155,7 +160,7 @@ async def main():
     passed = sum(1 for r in results.values() if r)
     failed = len(results) - passed
 
-    print(f"\n📊 Results:")
+    print("\n📊 Results:")
     for test_name, result in results.items():
         status = "✅ PASS" if result else "❌ FAIL"
         print(f"   {status} - {test_name}")
@@ -181,10 +186,9 @@ def run_quick_test():
     try:
         # Quick import test
         print("   Importing modules...")
-        from src.memory.vector_store import VectorStoreManager
-        from src.memory.rag import RAGSystem
-        from src.interfaces.llm_interface import OpenAIProvider
         from src.core.simple_config import Config
+        from src.interfaces.llm_interface import OpenAIProvider
+        from src.memory.vector_store import VectorStoreManager
 
         print("   ✅ All modules imported successfully")
 
@@ -199,7 +203,7 @@ def run_quick_test():
         llm_provider = OpenAIProvider(
             api_key=config.openai_api_key,
             model=config.llm_model,
-            embedding_model=config.embedding_model
+            embedding_model=config.embedding_model,
         )
         print("   ✅ LLM provider initialized")
 
@@ -215,8 +219,12 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(description="Run Hephaestus integration tests")
-    parser.add_argument("--quick", action="store_true", help="Run quick smoke test only")
-    parser.add_argument("--module", help="Run specific test module (e.g., test_vector_store.py)")
+    parser.add_argument(
+        "--quick", action="store_true", help="Run quick smoke test only"
+    )
+    parser.add_argument(
+        "--module", help="Run specific test module (e.g., test_vector_store.py)"
+    )
 
     args = parser.parse_args()
 

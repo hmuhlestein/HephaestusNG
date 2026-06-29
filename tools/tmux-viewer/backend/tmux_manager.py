@@ -1,7 +1,8 @@
 """Core tmux session management - create, read, write, and kill tmux sessions."""
 
 import logging
-from typing import Optional, Dict, List
+from typing import Dict, List, Optional
+
 import libtmux
 
 logger = logging.getLogger(__name__)
@@ -169,14 +170,14 @@ class TmuxSessionManager:
         for session in self.server.sessions:
             if prefix_filter and not session.name.startswith(prefix_filter):
                 continue
-            sessions.append({
-                "name": session.name,
-                "session_id": session.session_id,
-                "windows": len(list(session.windows)),
-                "attached": any(
-                    w.attached for w in session.windows
-                ),
-            })
+            sessions.append(
+                {
+                    "name": session.name,
+                    "session_id": session.session_id,
+                    "windows": len(list(session.windows)),
+                    "attached": any(w.attached for w in session.windows),
+                }
+            )
         return sessions
 
     def session_exists(self, session_name: str) -> bool:

@@ -1,10 +1,10 @@
 """Service for managing task blocking based on ticket blocking."""
 
 import logging
-from typing import Optional, Dict, Any, List
 from datetime import datetime
+from typing import Any, Dict, List, Optional
 
-from src.core.database import get_db, Task, Ticket
+from src.core.database import Task, Ticket, get_db
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +34,7 @@ class TaskBlockingService:
                     "is_blocked": False,
                     "blocking_ticket_ids": [],
                     "blocking_tickets": [],
-                    "error": "Task not found"
+                    "error": "Task not found",
                 }
 
             # If task has no associated ticket, it can't be blocked by tickets
@@ -42,26 +42,31 @@ class TaskBlockingService:
                 return {
                     "is_blocked": False,
                     "blocking_ticket_ids": [],
-                    "blocking_tickets": []
+                    "blocking_tickets": [],
                 }
 
             # Get the associated ticket
             ticket = db.query(Ticket).filter_by(id=task.ticket_id).first()
 
             if not ticket:
-                logger.warning(f"Task {task_id} references non-existent ticket {task.ticket_id}")
+                logger.warning(
+                    f"Task {task_id} references non-existent ticket {task.ticket_id}"
+                )
                 return {
                     "is_blocked": False,
                     "blocking_ticket_ids": [],
-                    "blocking_tickets": []
+                    "blocking_tickets": [],
                 }
 
             # Check if ticket is blocked
-            if not ticket.blocked_by_ticket_ids or len(ticket.blocked_by_ticket_ids) == 0:
+            if (
+                not ticket.blocked_by_ticket_ids
+                or len(ticket.blocked_by_ticket_ids) == 0
+            ):
                 return {
                     "is_blocked": False,
                     "blocking_ticket_ids": [],
-                    "blocking_tickets": []
+                    "blocking_tickets": [],
                 }
 
             # Ticket is blocked - get blocker details
@@ -74,7 +79,7 @@ class TaskBlockingService:
                     "title": t.title,
                     "status": t.status,
                     "priority": t.priority,
-                    "is_resolved": t.is_resolved
+                    "is_resolved": t.is_resolved,
                 }
                 for t in blocker_tickets
             ]
@@ -82,7 +87,7 @@ class TaskBlockingService:
             return {
                 "is_blocked": True,
                 "blocking_ticket_ids": blocker_ids,
-                "blocking_tickets": blocker_details
+                "blocking_tickets": blocker_details,
             }
 
     @staticmethod
@@ -121,7 +126,7 @@ class TaskBlockingService:
                 "task_id": task_id,
                 "old_status": old_status,
                 "new_status": "blocked",
-                "reason": reason
+                "reason": reason,
             }
 
     @staticmethod
@@ -150,7 +155,7 @@ class TaskBlockingService:
                 logger.warning(f"Task {task_id} is not blocked (status={task.status})")
                 return {
                     "success": False,
-                    "error": f"Task is not blocked (status={task.status})"
+                    "error": f"Task is not blocked (status={task.status})",
                 }
 
             old_status = task.status
@@ -165,13 +170,15 @@ class TaskBlockingService:
 
             db.commit()
 
-            logger.info(f"Task {task_id} status changed from {old_status} to 'queued' - will be processed by queue")
+            logger.info(
+                f"Task {task_id} status changed from {old_status} to 'queued' - will be processed by queue"
+            )
 
         # Recalculate queue positions for all queued tasks
         # Import here to avoid circular dependencies
         try:
-            from src.services.queue_service import QueueService
             from src.core.database import DatabaseManager
+            from src.services.queue_service import QueueService
 
             db_manager = DatabaseManager()
             queue_service = QueueService(db_manager)
@@ -184,7 +191,7 @@ class TaskBlockingService:
             "success": True,
             "task_id": task_id,
             "old_status": old_status,
-            "new_status": "queued"
+            "new_status": "queued",
         }
 
     @staticmethod
@@ -206,7 +213,7 @@ class TaskBlockingService:
             "task_id": task_id,
             "is_blocked": True,
             "blocker_count": len(blocking_info["blocking_ticket_ids"]),
-            "blockers": blocking_info["blocking_tickets"]
+            "blockers": blocking_info["blocking_tickets"],
         }
 
     @staticmethod
@@ -224,18 +231,21 @@ class TaskBlockingService:
                 # Get blocking info
                 blocking_info = TaskBlockingService.check_task_blocked(task.id)
 
-                results.append({
-                    "task_id": task.id,
-                    "description": task.enriched_description or task.raw_description,
-                    "priority": task.priority,
-                    "created_at": task.created_at.isoformat(),
-                    "ticket_id": task.ticket_id,
-                    "is_blocked": blocking_info["is_blocked"],
-                    "blocking_ticket_ids": blocking_info["blocking_ticket_ids"],
-                    "blocking_tickets": blocking_info["blocking_tickets"],
-                    "phase_id": task.phase_id,
-                    "workflow_id": task.workflow_id
-                })
+                results.append(
+                    {
+                        "task_id": task.id,
+                        "description": task.enriched_description
+                        or task.raw_description,
+                        "priority": task.priority,
+                        "created_at": task.created_at.isoformat(),
+                        "ticket_id": task.ticket_id,
+                        "is_blocked": blocking_info["is_blocked"],
+                        "blocking_ticket_ids": blocking_info["blocking_ticket_ids"],
+                        "blocking_tickets": blocking_info["blocking_tickets"],
+                        "phase_id": task.phase_id,
+                        "workflow_id": task.workflow_id,
+                    }
+                )
 
             return results
 
@@ -257,10 +267,16 @@ class TaskBlockingService:
 
         with get_db() as db:
             # Get all tasks that have tickets (excluding done/failed/duplicated)
-            tasks = db.query(Task).filter(
-                Task.ticket_id.isnot(None),
-                Task.status.in_(["pending", "queued", "blocked", "assigned", "in_progress"])
-            ).all()
+            tasks = (
+                db.query(Task)
+                .filter(
+                    Task.ticket_id.isnot(None),
+                    Task.status.in_(
+                        ["pending", "queued", "blocked", "assigned", "in_progress"]
+                    ),
+                )
+                .all()
+            )
 
             logger.info(f"Checking {len(tasks)} tasks for blocking status sync")
 
@@ -271,7 +287,9 @@ class TaskBlockingService:
 
                     if blocking_info["is_blocked"] and task.status != "blocked":
                         # Task should be blocked but isn't
-                        blocker_titles = [t["title"] for t in blocking_info["blocking_tickets"]]
+                        blocker_titles = [
+                            t["title"] for t in blocking_info["blocking_tickets"]
+                        ]
                         reason = f"Blocked by: {', '.join(blocker_titles)}"
 
                         TaskBlockingService.block_task(task.id, reason)
@@ -288,12 +306,14 @@ class TaskBlockingService:
                     logger.error(f"Error syncing task {task.id}: {e}")
                     errors.append({"task_id": task.id, "error": str(e)})
 
-        logger.info(f"Task blocking sync complete: {tasks_blocked} blocked, {tasks_unblocked} unblocked")
+        logger.info(
+            f"Task blocking sync complete: {tasks_blocked} blocked, {tasks_unblocked} unblocked"
+        )
 
         return {
             "success": True,
             "tasks_blocked": tasks_blocked,
             "tasks_unblocked": tasks_unblocked,
             "errors": errors,
-            "total_checked": len(tasks) if 'tasks' in locals() else 0
+            "total_checked": len(tasks) if "tasks" in locals() else 0,
         }

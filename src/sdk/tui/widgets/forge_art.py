@@ -1,9 +1,8 @@
 """Epic forge ASCII art for Hephaestus."""
 
-from textual.widgets import Static
-from rich.text import Text
 from rich.align import Align
-
+from rich.text import Text
+from textual.widgets import Static
 
 FORGE_ASCII = """
               ╔═══════════════════════════════════════════════╗

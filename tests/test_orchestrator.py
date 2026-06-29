@@ -5,156 +5,177 @@ Tests the recovery, completion checking, and design management functions.
 Uses mocked API calls to avoid requiring live services.
 """
 
-import json
-import subprocess
-from pathlib import Path
-from unittest.mock import patch, MagicMock, AsyncMock
-import pytest
-
 # Import the functions we're testing
 import sys
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from src.autopilot.orchestrator import (
-    is_design_fully_complete,
-    attempt_recovery,
-    get_active_workflows,
-    pick_next_design,
     DesignEntry,
     DesignStatus,
+    attempt_recovery,
+    get_active_workflows,
+    is_design_fully_complete,
+    pick_next_design,
 )
 
 
 class MockLogger:
     """Mock logger for testing."""
+
     def __init__(self):
         self.logs = []
-    
+
     def log(self, msg, level="INFO"):
         self.logs.append((level, msg))
-    
+
     def info(self, msg):
         self.logs.append(("INFO", msg))
-    
+
     def warning(self, msg):
         self.logs.append(("WARNING", msg))
-    
+
     def error(self, msg):
         self.logs.append(("ERROR", msg))
-    
+
     def event(self, name, data):
         self.logs.append(("EVENT", f"{name}: {data}"))
 
 
 class TestIsDesignFullyComplete:
     """Tests for is_design_fully_complete function."""
-    
-    @patch('src.autopilot.orchestrator.get_workflow_status')
-    @patch('src.autopilot.orchestrator.get_tasks')
-    @patch('src.autopilot.orchestrator.get_agents')
-    @patch('subprocess.run')
-    def test_complete_when_all_done(self, mock_subprocess, mock_agents, mock_tasks, mock_wf_status, tmp_path):
+
+    @patch("src.autopilot.orchestrator.get_workflow_status")
+    @patch("src.autopilot.orchestrator.get_tasks")
+    @patch("src.autopilot.orchestrator.get_agents")
+    @patch("subprocess.run")
+    def test_complete_when_all_done(
+        self, mock_subprocess, mock_agents, mock_tasks, mock_wf_status, tmp_path
+    ):
         """Design is complete when all 10 phases done, no agents, branches merged."""
         mock_wf_status.return_value = {"status": "completed"}
-        
+
         # 10 done tasks, nothing else
         done_tasks = [{"id": f"task-{i}", "status": "done"} for i in range(10)]
         mock_tasks.side_effect = lambda status=None, workflow_id=None: {
-            "pending": [], "queued": [], "in_progress": [], "assigned": [],
-            "failed": [], "done": done_tasks,
+            "pending": [],
+            "queued": [],
+            "in_progress": [],
+            "assigned": [],
+            "failed": [],
+            "done": done_tasks,
         }.get(status, [])
-        
+
         mock_agents.return_value = [{"id": "agent-1", "status": "terminated"}]
-        
+
         # No branches
         mock_subprocess.return_value = MagicMock(returncode=1, stdout="")
-        
+
         result, reason = is_design_fully_complete("wf-123", MockLogger())
         assert result is True
         assert "done" in reason.lower() or "complete" in reason.lower()
-    
-    @patch('src.autopilot.orchestrator.get_workflow_status')
-    @patch('src.autopilot.orchestrator.get_tasks')
+
+    @patch("src.autopilot.orchestrator.get_workflow_status")
+    @patch("src.autopilot.orchestrator.get_tasks")
     def test_incomplete_when_pending_tasks(self, mock_tasks, mock_wf_status):
         """Design is not complete when tasks are pending."""
         mock_wf_status.return_value = {"status": "active"}
-        
+
         mock_tasks.side_effect = lambda status=None, workflow_id=None: {
             "pending": [{"id": "task-1", "status": "pending"}],
-            "queued": [], "in_progress": [], "assigned": [],
-            "failed": [], "done": [{"id": f"task-{i}", "status": "done"} for i in range(9)],
+            "queued": [],
+            "in_progress": [],
+            "assigned": [],
+            "failed": [],
+            "done": [{"id": f"task-{i}", "status": "done"} for i in range(9)],
         }.get(status, [])
-        
+
         result, reason = is_design_fully_complete("wf-123", MockLogger())
         assert result is False
         assert "active" in reason.lower() or "task" in reason.lower()
-    
-    @patch('src.autopilot.orchestrator.get_workflow_status')
-    @patch('src.autopilot.orchestrator.get_tasks')
-    @patch('src.autopilot.orchestrator.get_agents')
-    def test_incomplete_when_agents_active(self, mock_agents, mock_tasks, mock_wf_status):
+
+    @patch("src.autopilot.orchestrator.get_workflow_status")
+    @patch("src.autopilot.orchestrator.get_tasks")
+    @patch("src.autopilot.orchestrator.get_agents")
+    def test_incomplete_when_agents_active(
+        self, mock_agents, mock_tasks, mock_wf_status
+    ):
         """Design is not complete when agents are still running."""
         mock_wf_status.return_value = {"status": "active"}
-        
+
         done_tasks = [{"id": f"task-{i}", "status": "done"} for i in range(10)]
         mock_tasks.side_effect = lambda status=None, workflow_id=None: {
-            "pending": [], "queued": [], "in_progress": [], "assigned": [],
-            "failed": [], "done": done_tasks,
+            "pending": [],
+            "queued": [],
+            "in_progress": [],
+            "assigned": [],
+            "failed": [],
+            "done": done_tasks,
         }.get(status, [])
-        
+
         mock_agents.return_value = [{"id": "agent-1", "status": "working"}]
-        
+
         result, reason = is_design_fully_complete("wf-123", MockLogger())
         assert result is False
         assert "agent" in reason.lower()
-    
-    @patch('src.autopilot.orchestrator.get_workflow_status')
-    @patch('src.autopilot.orchestrator.get_tasks')
-    @patch('src.autopilot.orchestrator.get_agents')
-    @patch('subprocess.run')
-    def test_incomplete_when_branches_unmerged(self, mock_subprocess, mock_agents, mock_tasks, mock_wf_status):
+
+    @patch("src.autopilot.orchestrator.get_workflow_status")
+    @patch("src.autopilot.orchestrator.get_tasks")
+    @patch("src.autopilot.orchestrator.get_agents")
+    @patch("subprocess.run")
+    def test_incomplete_when_branches_unmerged(
+        self, mock_subprocess, mock_agents, mock_tasks, mock_wf_status
+    ):
         """Design is not complete when agent branches exist."""
         mock_wf_status.return_value = {"status": "active"}
-        
+
         done_tasks = [{"id": f"task-{i}", "status": "done"} for i in range(10)]
         mock_tasks.side_effect = lambda status=None, workflow_id=None: {
-            "pending": [], "queued": [], "in_progress": [], "assigned": [],
-            "failed": [], "done": done_tasks,
+            "pending": [],
+            "queued": [],
+            "in_progress": [],
+            "assigned": [],
+            "failed": [],
+            "done": done_tasks,
         }.get(status, [])
-        
+
         mock_agents.return_value = [{"id": "agent-1", "status": "terminated"}]
-        
+
         # Branches exist
         mock_subprocess.return_value = MagicMock(
-            returncode=0, 
-            stdout="  agent-feature-1\n  agent-feature-2\n"
+            returncode=0, stdout="  agent-feature-1\n  agent-feature-2\n"
         )
-        
+
         result, reason = is_design_fully_complete("wf-123", MockLogger())
         assert result is False
         assert "branch" in reason.lower()
-    
-    @patch('src.autopilot.orchestrator.get_workflow_status')
-    @patch('src.autopilot.orchestrator.get_tasks')
+
+    @patch("src.autopilot.orchestrator.get_workflow_status")
+    @patch("src.autopilot.orchestrator.get_tasks")
     def test_incomplete_when_tasks_failed(self, mock_tasks, mock_wf_status):
         """Design is not complete when tasks have failed."""
         mock_wf_status.return_value = {"status": "active"}
-        
+
         mock_tasks.side_effect = lambda status=None, workflow_id=None: {
-            "pending": [], "queued": [], "in_progress": [], "assigned": [],
+            "pending": [],
+            "queued": [],
+            "in_progress": [],
+            "assigned": [],
             "failed": [{"id": "task-fail-1", "status": "failed"}],
             "done": [{"id": f"task-{i}", "status": "done"} for i in range(9)],
         }.get(status, [])
-        
+
         result, reason = is_design_fully_complete("wf-123", MockLogger())
         assert result is False
         assert "fail" in reason.lower()
-    
-    @patch('src.autopilot.orchestrator.get_workflow_status')
+
+    @patch("src.autopilot.orchestrator.get_workflow_status")
     def test_incomplete_when_workflow_failed(self, mock_wf_status):
         """Design is not complete when workflow itself failed."""
         mock_wf_status.return_value = {"status": "failed"}
-        
+
         result, reason = is_design_fully_complete("wf-123", MockLogger())
         assert result is False
         assert "failed" in reason.lower()
@@ -162,65 +183,76 @@ class TestIsDesignFullyComplete:
 
 class TestAttemptRecovery:
     """Tests for attempt_recovery function."""
-    
-    @patch('src.autopilot.orchestrator.get_tasks')
-    @patch('src.autopilot.orchestrator.api_post')
-    @patch('src.autopilot.orchestrator.get_agents')
-    @patch('src.autopilot.orchestrator.get_workflow_status')
-    @patch('subprocess.run')
-    def test_retries_failed_tasks(self, mock_subprocess, mock_wf_status, mock_agents, mock_api_post, mock_tasks):
+
+    @patch("src.autopilot.orchestrator.get_tasks")
+    @patch("src.autopilot.orchestrator.api_post")
+    @patch("src.autopilot.orchestrator.get_agents")
+    @patch("src.autopilot.orchestrator.get_workflow_status")
+    @patch("subprocess.run")
+    def test_retries_failed_tasks(
+        self, mock_subprocess, mock_wf_status, mock_agents, mock_api_post, mock_tasks
+    ):
         """Recovery should retry failed tasks by creating new agents."""
         mock_wf_status.return_value = {"status": "active"}
-        
-        failed_task = {"id": "task-fail-1", "status": "failed", "phase_id": "phase-1", "retry_count": 0}
-        
+
+        failed_task = {
+            "id": "task-fail-1",
+            "status": "failed",
+            "phase_id": "phase-1",
+            "retry_count": 0,
+        }
+
         mock_tasks.side_effect = lambda status=None, workflow_id=None: {
             "failed": [failed_task] if status == "failed" else [],
             "done": [],
         }.get(status, [])
-        
+
         mock_agents.return_value = []
         mock_subprocess.return_value = MagicMock(returncode=1, stdout="")
-        
+
         # Mock successful retry
         mock_api_post.side_effect = [
             {"status": "ok"},  # Reset task status
             {"agent_id": "agent-new-1"},  # Create agent
         ]
-        
+
         success, msg = attempt_recovery("wf-123", MockLogger())
         assert success is True
         assert "retry" in msg.lower() or "task" in msg.lower()
-    
-    @patch('src.autopilot.orchestrator.get_tasks')
-    @patch('src.autopilot.orchestrator.get_agents')
-    @patch('src.autopilot.orchestrator.api_post')
-    @patch('subprocess.run')
-    def test_skips_retry_after_max_attempts(self, mock_subprocess, mock_api_post, mock_agents, mock_tasks):
+
+    @patch("src.autopilot.orchestrator.get_tasks")
+    @patch("src.autopilot.orchestrator.get_agents")
+    @patch("src.autopilot.orchestrator.api_post")
+    @patch("subprocess.run")
+    def test_skips_retry_after_max_attempts(
+        self, mock_subprocess, mock_api_post, mock_agents, mock_tasks
+    ):
         """Recovery should skip retrying tasks that failed too many times."""
         mock_subprocess.return_value = MagicMock(returncode=1, stdout="")
         mock_agents.return_value = []
-        
+
         # Task already retried 2 times
         failed_task = {"id": "task-fail-1", "status": "failed", "retry_count": 2}
         mock_tasks.side_effect = lambda status=None, workflow_id=None: {
             "failed": [failed_task] if status == "failed" else [],
         }.get(status, [])
-        
+
         success, msg = attempt_recovery("wf-123", MockLogger())
         # Should not retry (already max retries)
         assert "skip" in msg.lower() or not success
-    
-    @patch('src.autopilot.orchestrator.get_tasks')
-    @patch('src.autopilot.orchestrator.get_agents')
-    @patch('src.autopilot.orchestrator.get_workflow_status')
-    @patch('subprocess.run')
-    def test_merges_branches(self, mock_subprocess, mock_wf_status, mock_agents, mock_tasks):
+
+    @patch("src.autopilot.orchestrator.get_tasks")
+    @patch("src.autopilot.orchestrator.get_agents")
+    @patch("src.autopilot.orchestrator.get_workflow_status")
+    @patch("subprocess.run")
+    def test_merges_branches(
+        self, mock_subprocess, mock_wf_status, mock_agents, mock_tasks
+    ):
         """Recovery should merge unmerged agent branches."""
         mock_wf_status.return_value = {"status": "active"}
         mock_tasks.side_effect = lambda status=None, workflow_id=None: []
         mock_agents.return_value = []
-        
+
         # First call: git branch --list agent-* returns branches
         # Second call: git checkout agent-feature-1
         # Third call: git checkout main
@@ -233,40 +265,44 @@ class TestAttemptRecovery:
             MagicMock(returncode=0, stdout="Merge made"),  # merge
             MagicMock(returncode=0, stdout=""),  # delete branch
         ]
-        
+
         success, msg = attempt_recovery("wf-123", MockLogger())
         assert "merge" in msg.lower() or success
-    
-    @patch('src.autopilot.orchestrator.get_tasks')
-    @patch('src.autopilot.orchestrator.get_agents')
-    @patch('src.autopilot.orchestrator.api_post')
-    @patch('src.autopilot.orchestrator.get_workflow_status')
-    @patch('subprocess.run')
-    def test_terminates_stale_agents(self, mock_subprocess, mock_wf_status, mock_api_post, mock_agents, mock_tasks):
+
+    @patch("src.autopilot.orchestrator.get_tasks")
+    @patch("src.autopilot.orchestrator.get_agents")
+    @patch("src.autopilot.orchestrator.api_post")
+    @patch("src.autopilot.orchestrator.get_workflow_status")
+    @patch("subprocess.run")
+    def test_terminates_stale_agents(
+        self, mock_subprocess, mock_wf_status, mock_api_post, mock_agents, mock_tasks
+    ):
         """Recovery should terminate stale agents."""
         mock_wf_status.return_value = {"status": "active"}
         mock_tasks.side_effect = lambda status=None, workflow_id=None: []
         mock_subprocess.return_value = MagicMock(returncode=1, stdout="")
-        
+
         stale_agent = {"id": "agent-stale-1", "status": "working"}
         mock_agents.return_value = [stale_agent]
-        
+
         mock_api_post.return_value = {"status": "terminated"}
-        
+
         success, msg = attempt_recovery("wf-123", MockLogger())
         assert "terminate" in msg.lower() or success
-    
-    @patch('src.autopilot.orchestrator.get_tasks')
-    @patch('src.autopilot.orchestrator.get_agents')
-    @patch('src.autopilot.orchestrator.get_workflow_status')
-    @patch('subprocess.run')
-    def test_no_recovery_needed(self, mock_subprocess, mock_wf_status, mock_agents, mock_tasks):
+
+    @patch("src.autopilot.orchestrator.get_tasks")
+    @patch("src.autopilot.orchestrator.get_agents")
+    @patch("src.autopilot.orchestrator.get_workflow_status")
+    @patch("subprocess.run")
+    def test_no_recovery_needed(
+        self, mock_subprocess, mock_wf_status, mock_agents, mock_tasks
+    ):
         """Recovery returns False when nothing needs fixing."""
         mock_wf_status.return_value = {"status": "completed"}
         mock_tasks.side_effect = lambda status=None, workflow_id=None: []
         mock_agents.return_value = []
         mock_subprocess.return_value = MagicMock(returncode=1, stdout="")
-        
+
         success, msg = attempt_recovery("wf-123", MockLogger())
         assert success is False
         assert "no" in msg.lower() or "needed" in msg.lower()
@@ -274,8 +310,8 @@ class TestAttemptRecovery:
 
 class TestGetActiveWorkflows:
     """Tests for get_active_workflows function."""
-    
-    @patch('src.autopilot.orchestrator.api_get')
+
+    @patch("src.autopilot.orchestrator.api_get")
     def test_returns_active_workflows(self, mock_api_get):
         """Should return workflows with active/running status."""
         mock_api_get.return_value = [
@@ -284,31 +320,31 @@ class TestGetActiveWorkflows:
             {"id": "wf-3", "status": "completed"},
             {"id": "wf-4", "status": "failed"},
         ]
-        
+
         result = get_active_workflows()
         assert len(result) == 2
         assert all(w["status"] in ("active", "running") for w in result)
-    
-    @patch('src.autopilot.orchestrator.api_get')
+
+    @patch("src.autopilot.orchestrator.api_get")
     def test_returns_empty_when_no_active(self, mock_api_get):
         """Should return empty list when no active workflows."""
         mock_api_get.return_value = [
             {"id": "wf-1", "status": "completed"},
             {"id": "wf-2", "status": "failed"},
         ]
-        
+
         result = get_active_workflows()
         assert len(result) == 0
-    
-    @patch('src.autopilot.orchestrator.api_get')
+
+    @patch("src.autopilot.orchestrator.api_get")
     def test_handles_none_response(self, mock_api_get):
         """Should handle None response from API."""
         mock_api_get.return_value = None
-        
+
         result = get_active_workflows()
         assert len(result) == 0
-    
-    @patch('src.autopilot.orchestrator.api_get')
+
+    @patch("src.autopilot.orchestrator.api_get")
     def test_handles_dict_response(self, mock_api_get):
         """Should handle dict response with executions key."""
         mock_api_get.return_value = {
@@ -316,25 +352,27 @@ class TestGetActiveWorkflows:
                 {"id": "wf-1", "status": "active"},
             ]
         }
-        
+
         result = get_active_workflows()
         assert len(result) == 1
 
 
 class TestEdgeCases:
     """Tests for edge cases and error handling."""
-    
-    @patch('src.autopilot.orchestrator.get_workflow_status')
-    @patch('src.autopilot.orchestrator.get_tasks')
-    @patch('src.autopilot.orchestrator.get_agents')
-    @patch('subprocess.run')
-    def test_handles_none_tasks(self, mock_subprocess, mock_agents, mock_tasks, mock_wf_status):
+
+    @patch("src.autopilot.orchestrator.get_workflow_status")
+    @patch("src.autopilot.orchestrator.get_tasks")
+    @patch("src.autopilot.orchestrator.get_agents")
+    @patch("subprocess.run")
+    def test_handles_none_tasks(
+        self, mock_subprocess, mock_agents, mock_tasks, mock_wf_status
+    ):
         """Should handle None returned from get_tasks."""
         mock_wf_status.return_value = {"status": "active"}
         mock_tasks.return_value = None  # Simulate API returning None
         mock_agents.return_value = None
         mock_subprocess.return_value = MagicMock(returncode=1, stdout="")
-        
+
         # Should not crash
         try:
             result, reason = is_design_fully_complete("wf-123", MockLogger())
@@ -342,34 +380,40 @@ class TestEdgeCases:
         except (TypeError, AttributeError):
             # These are expected if None handling is missing
             pass
-    
-    @patch('src.autopilot.orchestrator.get_workflow_status')
+
+    @patch("src.autopilot.orchestrator.get_workflow_status")
     def test_handles_workflow_not_found(self, mock_wf_status):
         """Should handle workflow not found."""
         mock_wf_status.return_value = {}
-        
+
         result, reason = is_design_fully_complete("wf-123", MockLogger())
         assert result is False
-    
-    @patch('src.autopilot.orchestrator.get_tasks')
-    @patch('src.autopilot.orchestrator.get_agents')
-    @patch('src.autopilot.orchestrator.get_workflow_status')
-    @patch('subprocess.run')
-    def test_handles_git_command_failure(self, mock_subprocess, mock_wf_status, mock_agents, mock_tasks):
+
+    @patch("src.autopilot.orchestrator.get_tasks")
+    @patch("src.autopilot.orchestrator.get_agents")
+    @patch("src.autopilot.orchestrator.get_workflow_status")
+    @patch("subprocess.run")
+    def test_handles_git_command_failure(
+        self, mock_subprocess, mock_wf_status, mock_agents, mock_tasks
+    ):
         """Should handle git command failures gracefully."""
         mock_wf_status.return_value = {"status": "active"}
-        
+
         done_tasks = [{"id": f"task-{i}", "status": "done"} for i in range(10)]
         mock_tasks.side_effect = lambda status=None, workflow_id=None: {
-            "pending": [], "queued": [], "in_progress": [], "assigned": [],
-            "failed": [], "done": done_tasks,
+            "pending": [],
+            "queued": [],
+            "in_progress": [],
+            "assigned": [],
+            "failed": [],
+            "done": done_tasks,
         }.get(status, [])
-        
+
         mock_agents.return_value = [{"id": "agent-1", "status": "terminated"}]
-        
+
         # Git command fails
         mock_subprocess.side_effect = Exception("git not found")
-        
+
         # Should not crash
         result, reason = is_design_fully_complete("wf-123", MockLogger())
         # Result depends on how failure is handled
@@ -377,83 +421,85 @@ class TestEdgeCases:
 
 class TestPickNextDesign:
     """Tests for pick_next_design function."""
-    
+
     def test_picks_first_design(self, tmp_path):
         """Should pick the first design in queue."""
         # Create design files
         (tmp_path / "001_design_a.md").write_text("# Design A")
         (tmp_path / "002_design_b.md").write_text("# Design B")
-        
+
         designs = pick_next_design(tmp_path, set(), MockLogger())
         assert designs is not None
         assert "design a" in designs.name.lower() or "001" in designs.name
-    
+
     def test_skips_processed_designs(self, tmp_path):
         """Should skip designs that have been processed."""
         (tmp_path / "001_design_a.md").write_text("# Design A")
         (tmp_path / "002_design_b.md").write_text("# Design B")
-        
+
         # Mark first as processed (by content hash)
         from src.autopilot.orchestrator import file_hash
+
         processed = {file_hash(tmp_path / "001_design_a.md")}
-        
+
         designs = pick_next_design(tmp_path, processed, MockLogger())
         assert designs is not None
         assert "design b" in designs.name.lower() or "002" in designs.name
-    
+
     def test_returns_none_when_empty(self, tmp_path):
         """Should return None when queue is empty."""
         designs = pick_next_design(tmp_path, set(), MockLogger())
         assert designs is None
-    
+
     def test_returns_none_when_all_processed(self, tmp_path):
         """Should return None when all designs are processed."""
         (tmp_path / "001_design_a.md").write_text("# Design A")
-        
+
         from src.autopilot.orchestrator import file_hash
+
         processed = {file_hash(tmp_path / "001_design_a.md")}
-        
+
         designs = pick_next_design(tmp_path, processed, MockLogger())
         assert designs is None
 
 
 class TestDesignEntry:
     """Tests for DesignEntry dataclass."""
-    
+
     def test_design_entry_creation(self, tmp_path):
         """DesignEntry should be creatable with required fields."""
         filepath = tmp_path / "test_design.md"
         filepath.write_text("# Test")
-        
+
         entry = DesignEntry(
             path=filepath,
             name="Test Design",
             content_hash="abc123",
         )
-        
+
         assert entry.path == filepath
         assert entry.name == "Test Design"
         assert entry.content_hash == "abc123"
         assert entry.status == DesignStatus.PENDING
-    
+
     def test_design_entry_status(self, tmp_path):
         """DesignEntry status can be set."""
         filepath = tmp_path / "test_design.md"
         filepath.write_text("# Test")
-        
+
         entry = DesignEntry(
             path=filepath,
             name="Test Design",
             content_hash="abc123",
         )
-        
+
         entry.status = DesignStatus.IN_PROGRESS
         assert entry.status == DesignStatus.IN_PROGRESS
 
 
 class TestDesignStatus:
     """Tests for DesignStatus enum."""
-    
+
     def test_status_values(self):
         """DesignStatus should have expected values."""
         assert DesignStatus.PENDING.value == "pending"
@@ -461,7 +507,7 @@ class TestDesignStatus:
         assert DesignStatus.COMPLETED.value == "completed"
         assert DesignStatus.FAILED.value == "failed"
         assert DesignStatus.SKIPPED.value == "skipped"
-    
+
     def test_all_statuses_exist(self):
         """DesignStatus should have all expected statuses."""
         expected = {"PENDING", "IN_PROGRESS", "COMPLETED", "FAILED", "SKIPPED"}

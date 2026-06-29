@@ -10,10 +10,10 @@ Allows any agent to:
 """
 
 import logging
-from typing import Dict, Any, List, Optional
 from datetime import datetime, timedelta
+from typing import Any, Dict, List, Optional
 
-from src.core.database import DatabaseManager, Agent, Task
+from src.core.database import Agent, DatabaseManager, Task
 
 logger = logging.getLogger(__name__)
 
@@ -33,38 +33,50 @@ class AgentCommunicationService:
         session = self.db_manager.get_session()
         try:
             # Find tasks created by this agent
-            parent_tasks = session.query(Task).filter_by(
-                created_by_agent_id=parent_agent_id
-            ).all()
+            parent_tasks = (
+                session.query(Task).filter_by(created_by_agent_id=parent_agent_id).all()
+            )
             parent_task_ids = [t.id for t in parent_tasks]
 
             if not parent_task_ids:
                 return []
 
             # Find agents assigned to those tasks
-            children = session.query(Agent).filter(
-                Agent.current_task_id.in_(parent_task_ids)
-            ).all()
+            children = (
+                session.query(Agent)
+                .filter(Agent.current_task_id.in_(parent_task_ids))
+                .all()
+            )
 
             result = []
             for child in children:
                 task = session.query(Task).filter_by(id=child.current_task_id).first()
-                result.append({
-                    "agent_id": child.id,
-                    "status": child.status,
-                    "task_id": child.current_task_id,
-                    "task_description": (task.enriched_description or task.raw_description or "")[:200] if task else None,
-                    "task_status": task.status if task else None,
-                    "last_activity": child.last_activity.isoformat() if child.last_activity else None,
-                    "health_check_failures": child.health_check_failures,
-                    "tmux_session": child.tmux_session_name,
-                })
+                result.append(
+                    {
+                        "agent_id": child.id,
+                        "status": child.status,
+                        "task_id": child.current_task_id,
+                        "task_description": (
+                            task.enriched_description or task.raw_description or ""
+                        )[:200]
+                        if task
+                        else None,
+                        "task_status": task.status if task else None,
+                        "last_activity": child.last_activity.isoformat()
+                        if child.last_activity
+                        else None,
+                        "health_check_failures": child.health_check_failures,
+                        "tmux_session": child.tmux_session_name,
+                    }
+                )
 
             return result
         finally:
             session.close()
 
-    def get_child_logs(self, parent_agent_id: str, child_agent_id: str, lines: int = 50) -> Optional[str]:
+    def get_child_logs(
+        self, parent_agent_id: str, child_agent_id: str, lines: int = 50
+    ) -> Optional[str]:
         """
         Read logs from a child agent.
 
@@ -75,7 +87,9 @@ class AgentCommunicationService:
         child_ids = [c["agent_id"] for c in children]
 
         if child_agent_id not in child_ids:
-            logger.warning(f"Agent {parent_agent_id} tried to access non-child {child_agent_id}")
+            logger.warning(
+                f"Agent {parent_agent_id} tried to access non-child {child_agent_id}"
+            )
             return None
 
         # Get child's tmux session output using agent manager
@@ -86,7 +100,16 @@ class AgentCommunicationService:
                 return None
 
             import subprocess
-            cmd = ["tmux", "capture-pane", "-t", agent.tmux_session_name, "-p", "-S", "-2000"]
+
+            cmd = [
+                "tmux",
+                "capture-pane",
+                "-t",
+                agent.tmux_session_name,
+                "-p",
+                "-S",
+                "-2000",
+            ]
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
             if result.returncode == 0:
                 output_lines = result.stdout.strip().split("\n")
@@ -99,10 +122,7 @@ class AgentCommunicationService:
             session.close()
 
     def send_message_to_child(
-        self,
-        parent_agent_id: str,
-        child_agent_id: str,
-        message: str
+        self, parent_agent_id: str, child_agent_id: str, message: str
     ) -> bool:
         """
         Send a message from parent to child agent.
@@ -112,7 +132,9 @@ class AgentCommunicationService:
         child_ids = [c["agent_id"] for c in children]
 
         if child_agent_id not in child_ids:
-            logger.warning(f"Agent {parent_agent_id} tried to message non-child {child_agent_id}")
+            logger.warning(
+                f"Agent {parent_agent_id} tried to message non-child {child_agent_id}"
+            )
             return False
 
         # Get child's tmux session name from database
@@ -125,11 +147,12 @@ class AgentCommunicationService:
 
             # Send message via tmux using argument list (no shell=True)
             import subprocess
+
             # Split message into individual keystrokes to avoid injection
             cmd = ["tmux", "send-keys", "-t", agent.tmux_session_name]
             # Send each character separately to avoid shell interpretation
             for char in message:
-                if char == '\n':
+                if char == "\n":
                     cmd.extend(["Enter"])
                 else:
                     cmd.append(char)
@@ -137,7 +160,9 @@ class AgentCommunicationService:
 
             result = subprocess.run(cmd, capture_output=True, timeout=5)
             if result.returncode == 0:
-                logger.info(f"Parent {parent_agent_id[:8]} messaged child {child_agent_id[:8]}")
+                logger.info(
+                    f"Parent {parent_agent_id[:8]} messaged child {child_agent_id[:8]}"
+                )
                 return True
             else:
                 logger.error(f"Failed to send message: {result.stderr}")
@@ -152,7 +177,7 @@ class AgentCommunicationService:
         self,
         parent_agent_id: str,
         child_agent_id: str,
-        reason: str = "No progress detected"
+        reason: str = "No progress detected",
     ) -> bool:
         """
         Nudge a child agent that appears stuck.
@@ -188,7 +213,9 @@ class AgentCommunicationService:
                 last_activity = child.get("last_activity")
                 if last_activity:
                     try:
-                        last_dt = datetime.fromisoformat(last_activity.replace("Z", "+00:00"))
+                        last_dt = datetime.fromisoformat(
+                            last_activity.replace("Z", "+00:00")
+                        )
                         if (now - last_dt.replace(tzinfo=None)) > timedelta(minutes=5):
                             summary["stuck"] += 1
                         else:
@@ -207,9 +234,7 @@ class AgentCommunicationService:
         return summary
 
     def monitor_and_nudge_stuck_children(
-        self,
-        parent_agent_id: str,
-        stuck_threshold_seconds: int = 300
+        self, parent_agent_id: str, stuck_threshold_seconds: int = 300
     ) -> List[str]:
         """
         Monitor children and nudge any that appear stuck.
@@ -229,13 +254,17 @@ class AgentCommunicationService:
 
             try:
                 last_dt = datetime.fromisoformat(last_activity.replace("Z", "+00:00"))
-                elapsed = (datetime.utcnow() - last_dt.replace(tzinfo=None)).total_seconds()
+                elapsed = (
+                    datetime.utcnow() - last_dt.replace(tzinfo=None)
+                ).total_seconds()
 
                 if elapsed > stuck_threshold_seconds:
                     reason = f"No activity for {int(elapsed)}s"
                     if self.nudge_child(parent_agent_id, child["agent_id"], reason):
                         nudged.append(child["agent_id"])
-                        logger.info(f"Nudged stuck child {child['agent_id'][:8]}: {reason}")
+                        logger.info(
+                            f"Nudged stuck child {child['agent_id'][:8]}: {reason}"
+                        )
             except Exception as e:
                 logger.error(f"Error checking child activity: {e}")
 
@@ -246,7 +275,7 @@ class AgentCommunicationService:
         parent_agent_id: str,
         description: str,
         priority: str = "medium",
-        phase_id: str = None
+        phase_id: str = None,
     ) -> Optional[str]:
         """
         Create a task that will spawn a child agent.
@@ -255,6 +284,7 @@ class AgentCommunicationService:
         session = self.db_manager.get_session()
         try:
             import uuid
+
             task_id = str(uuid.uuid4())
 
             task = Task(
@@ -270,7 +300,9 @@ class AgentCommunicationService:
             session.add(task)
             session.commit()
 
-            logger.info(f"Parent {parent_agent_id[:8]} created child task {task_id[:8]}")
+            logger.info(
+                f"Parent {parent_agent_id[:8]} created child task {task_id[:8]}"
+            )
             return task_id
         except Exception as e:
             logger.error(f"Failed to create child task: {e}")

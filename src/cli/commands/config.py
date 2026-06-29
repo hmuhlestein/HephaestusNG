@@ -1,6 +1,7 @@
 """heph config — Show and edit configuration."""
 
 from pathlib import Path
+
 from src.cli.utils import output
 from src.core.constants import AUTOPILOT_STATE_DIR, HEPHAESTUS_LOGS_DIR
 
@@ -30,10 +31,12 @@ def show(args):
     if args.json:
         try:
             import yaml
+
             parsed = yaml.safe_load(data)
             # Overlay active project from DB
             _overlay_active_project(parsed)
             import json
+
             print(json.dumps(parsed, indent=2))
         except ImportError:
             print("pyyaml not installed, showing raw YAML")
@@ -50,7 +53,9 @@ def show(args):
 def _overlay_active_project(parsed: dict):
     """Overlay active project paths onto parsed config dict."""
     import sqlalchemy
+
     from src.core.database import DatabaseManager
+
     db_path = HEPHAESTUS_DIR / "hephaestus.db"
     if not db_path.exists():
         return
@@ -58,7 +63,9 @@ def _overlay_active_project(parsed: dict):
         db_manager = DatabaseManager(str(db_path))
         with db_manager.get_session() as session:
             active = session.execute(
-                sqlalchemy.text("SELECT name, base_dir FROM autopilot_projects WHERE is_active = 1 LIMIT 1")
+                sqlalchemy.text(
+                    "SELECT name, base_dir FROM autopilot_projects WHERE is_active = 1 LIMIT 1"
+                )
             ).fetchone()
             if active:
                 parsed.setdefault("paths", {})["project_root"] = active[1]
@@ -71,7 +78,9 @@ def _overlay_active_project(parsed: dict):
 def _print_active_project_overlay():
     """Print active project info below the YAML dump."""
     import sqlalchemy
+
     from src.core.database import DatabaseManager
+
     db_path = HEPHAESTUS_DIR / "hephaestus.db"
     if not db_path.exists():
         return
@@ -79,10 +88,14 @@ def _print_active_project_overlay():
         db_manager = DatabaseManager(str(db_path))
         with db_manager.get_session() as session:
             active = session.execute(
-                sqlalchemy.text("SELECT name, base_dir FROM autopilot_projects WHERE is_active = 1 LIMIT 1")
+                sqlalchemy.text(
+                    "SELECT name, base_dir FROM autopilot_projects WHERE is_active = 1 LIMIT 1"
+                )
             ).fetchone()
             if active:
-                print("\n# Active project (overrides paths.project_root and git.main_repo_path):")
+                print(
+                    "\n# Active project (overrides paths.project_root and git.main_repo_path):"
+                )
                 print(f"#   name: {active[0]}")
                 print(f"#   path: {active[1]}")
     except Exception:

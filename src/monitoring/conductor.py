@@ -2,18 +2,19 @@
 
 import json
 import logging
-from typing import Dict, Any, List
 from datetime import datetime
 from enum import Enum
+from typing import Any, Dict, List
 
-from src.core.database import DatabaseManager, Agent, AgentLog
 from src.agents.manager import AgentManager
+from src.core.database import Agent, AgentLog, DatabaseManager
 
 logger = logging.getLogger(__name__)
 
 
 class SystemDecision(Enum):
     """System-level decisions the conductor can make."""
+
     CONTINUE = "continue"
     TERMINATE_DUPLICATE = "terminate_duplicate"
     COORDINATE_RESOURCES = "coordinate_resources"
@@ -80,13 +81,16 @@ class Conductor:
 
         try:
             from src.interfaces import get_llm_provider
+
             llm_provider = get_llm_provider()
-            if hasattr(llm_provider, 'get_model_for_component'):
-                model_name = llm_provider.get_model_for_component('conductor_analysis')
+            if hasattr(llm_provider, "get_model_for_component"):
+                model_name = llm_provider.get_model_for_component("conductor_analysis")
         except Exception:
             pass
 
-        logger.info(f"Conductor analyzing system with {len(guardian_summaries)} agents using {model_name}")
+        logger.info(
+            f"Conductor analyzing system with {len(guardian_summaries)} agents using {model_name}"
+        )
 
         if not guardian_summaries:
             return self._get_empty_analysis()
@@ -95,9 +99,12 @@ class Conductor:
             # Get LLM provider for analysis
             if not llm_provider:
                 from src.interfaces import get_llm_provider
+
                 llm_provider = get_llm_provider()
-                if hasattr(llm_provider, 'get_model_for_component'):
-                    model_name = llm_provider.get_model_for_component('conductor_analysis')
+                if hasattr(llm_provider, "get_model_for_component"):
+                    model_name = llm_provider.get_model_for_component(
+                        "conductor_analysis"
+                    )
 
             # Prepare system goals
             system_goals = {
@@ -123,15 +130,19 @@ class Conductor:
 
             validation_count = 0
             for i, summary in enumerate(guardian_summaries):
-                agent_type = summary.get('agent_type', 'unknown')
-                if agent_type in ['validator', 'result_validator']:
+                agent_type = summary.get("agent_type", "unknown")
+                if agent_type in ["validator", "result_validator"]:
                     validation_count += 1
-                logger.info(f"  Agent {i+1}: {summary.get('agent_id', 'unknown')} - "
-                           f"Type: {agent_type}, "
-                           f"Phase: {summary.get('current_phase', 'unknown')}, "
-                           f"Aligned: {summary.get('trajectory_aligned', 'unknown')}")
+                logger.info(
+                    f"  Agent {i + 1}: {summary.get('agent_id', 'unknown')} - "
+                    f"Type: {agent_type}, "
+                    f"Phase: {summary.get('current_phase', 'unknown')}, "
+                    f"Aligned: {summary.get('trajectory_aligned', 'unknown')}"
+                )
             if validation_count > 0:
-                logger.info(f"  NOTE: {validation_count} validation agents present (protected from duplicate termination)")
+                logger.info(
+                    f"  NOTE: {validation_count} validation agents present (protected from duplicate termination)"
+                )
             logger.info("=" * 60)
 
             gpt5_analysis = await llm_provider.analyze_system_coherence(
@@ -157,31 +168,39 @@ class Conductor:
 
             # Handle duplicate terminations
             for term_rec in termination_recs:
-                decisions.append({
-                    "type": SystemDecision.TERMINATE_DUPLICATE.value,
-                    "target": term_rec.get("agent_id"),
-                    "reason": term_rec.get("reason", "Duplicate work detected by LLM"),
-                    "confidence": 0.9,
-                })
+                decisions.append(
+                    {
+                        "type": SystemDecision.TERMINATE_DUPLICATE.value,
+                        "target": term_rec.get("agent_id"),
+                        "reason": term_rec.get(
+                            "reason", "Duplicate work detected by LLM"
+                        ),
+                        "confidence": 0.9,
+                    }
+                )
 
             # Handle resource coordination
             for coord_need in coordination_needs:
-                decisions.append({
-                    "type": SystemDecision.COORDINATE_RESOURCES.value,
-                    "agents": coord_need.get("agents", []),
-                    "resource": coord_need.get("resource", "unknown"),
-                    "action": coord_need.get("action", "coordinate access"),
-                    "confidence": 0.8,
-                })
+                decisions.append(
+                    {
+                        "type": SystemDecision.COORDINATE_RESOURCES.value,
+                        "agents": coord_need.get("agents", []),
+                        "resource": coord_need.get("resource", "unknown"),
+                        "action": coord_need.get("action", "coordinate access"),
+                        "confidence": 0.8,
+                    }
+                )
 
             # Handle low coherence
             if coherence_score < 0.5:
-                decisions.append({
-                    "type": SystemDecision.ESCALATE.value,
-                    "reason": "System coherence too low per LLM analysis",
-                    "details": gpt5_analysis.get("alignment_issues", []),
-                    "confidence": 0.9,
-                })
+                decisions.append(
+                    {
+                        "type": SystemDecision.ESCALATE.value,
+                        "reason": "System coherence too low per LLM analysis",
+                        "details": gpt5_analysis.get("alignment_issues", []),
+                        "confidence": 0.9,
+                    }
+                )
 
             # Build final result
             result = {
@@ -198,11 +217,13 @@ class Conductor:
             }
 
             # Update system state
-            self.system_state.update({
-                "last_analysis": datetime.utcnow(),
-                "duplicate_pairs": duplicates,
-                "coherence_score": coherence_score,
-            })
+            self.system_state.update(
+                {
+                    "last_analysis": datetime.utcnow(),
+                    "duplicate_pairs": duplicates,
+                    "coherence_score": coherence_score,
+                }
+            )
 
             # Log LLM's analysis
             logger.info(
@@ -331,6 +352,7 @@ class Conductor:
         """
         try:
             from src.interfaces import get_llm_provider
+
             llm_provider = get_llm_provider()
 
             if not llm_provider:
@@ -417,7 +439,7 @@ class Conductor:
             for decision in decisions:
                 report.append(f"Action: {decision['type']}")
                 report.append(f"  Reason: {decision.get('reason', 'N/A')}")
-                if decision.get('target'):
+                if decision.get("target"):
                     report.append(f"  Target: {decision['target']}")
                 report.append(f"  Confidence: {decision.get('confidence', 0):.2f}")
             report.append("")

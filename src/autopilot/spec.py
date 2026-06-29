@@ -26,7 +26,7 @@ SPEC_PATH = Path(AUTOPILOT_STATE_DIR) / "qa_spec.json"
 DEFAULT_SPEC: Dict[str, Any] = {
     "max_failed_tests": 0,
     "max_critical_issues": 0,
-    "required_pass_rate": 100,        # percent of tests that must pass
+    "required_pass_rate": 100,  # percent of tests that must pass
     "min_requirements_met_rate": 100,  # percent of requirements that must be met
 }
 
@@ -50,16 +50,17 @@ PHASE_OUTPUT_ARTIFACTS = dict(DEFAULT_PHASE_OUTPUT_ARTIFACTS)
 
 def load_phase_output_artifacts(workflow_id: Optional[str] = None) -> dict:
     """Load required_output artifacts from workflow.yaml if available.
-    
+
     Falls back to DEFAULT_PHASE_OUTPUT_ARTIFACTS if workflow_id is None
     or workflow.yaml doesn't have required_output config.
     """
     global PHASE_OUTPUT_ARTIFACTS
     if workflow_id is None:
         return PHASE_OUTPUT_ARTIFACTS
-    
+
     try:
-        from src.core.database import Workflow, DatabaseManager
+        from src.core.database import DatabaseManager, Workflow
+
         db = DatabaseManager()
         session = db.get_session()
         try:
@@ -67,20 +68,24 @@ def load_phase_output_artifacts(workflow_id: Optional[str] = None) -> dict:
             if wf and wf.definition_id:
                 # Load workflow definition from YAML
                 from src.workflow_registry import _WORKFLOWS_DIR
+
                 wf_dir = _WORKFLOWS_DIR / wf.definition_id
                 workflow_yaml = wf_dir / "workflow.yaml"
                 if workflow_yaml.exists():
                     import yaml
+
                     with open(workflow_yaml) as f:
                         wf_config = yaml.safe_load(f)
                     if wf_config and "required_output" in wf_config:
                         PHASE_OUTPUT_ARTIFACTS.update(wf_config["required_output"])
-                        logger.info(f"Loaded required_output from workflow.yaml: {PHASE_OUTPUT_ARTIFACTS}")
+                        logger.info(
+                            f"Loaded required_output from workflow.yaml: {PHASE_OUTPUT_ARTIFACTS}"
+                        )
         finally:
             session.close()
     except Exception as e:
         logger.debug(f"Could not load required_output from workflow.yaml: {e}")
-    
+
     return PHASE_OUTPUT_ARTIFACTS
 
 
@@ -93,34 +98,40 @@ def load_optional_phases(workflow_id: Optional[str] = None) -> set:
     global OPTIONAL_PHASES
     if workflow_id is None:
         return OPTIONAL_PHASES
-    
+
     try:
-        from src.core.database import Workflow, DatabaseManager
+        from src.core.database import DatabaseManager, Workflow
+
         db = DatabaseManager()
         session = db.get_session()
         try:
             wf = session.query(Workflow).filter_by(id=workflow_id).first()
             if wf and wf.definition_id:
                 from src.workflow_registry import _WORKFLOWS_DIR
+
                 wf_dir = _WORKFLOWS_DIR / wf.definition_id
                 workflow_yaml = wf_dir / "workflow.yaml"
                 if workflow_yaml.exists():
                     import yaml
+
                     with open(workflow_yaml) as f:
                         wf_config = yaml.safe_load(f)
                     if wf_config and "optional_phases" in wf_config:
                         OPTIONAL_PHASES = set(wf_config["optional_phases"])
-                        logger.info(f"Loaded optional_phases from workflow.yaml: {OPTIONAL_PHASES}")
+                        logger.info(
+                            f"Loaded optional_phases from workflow.yaml: {OPTIONAL_PHASES}"
+                        )
         finally:
             session.close()
     except Exception as e:
         logger.debug(f"Could not load optional_phases from workflow.yaml: {e}")
-    
+
     return OPTIONAL_PHASES
 
+
 # Score anchors for the three bands.
-_ARCH = 0.25       # < 0.3  -> goto architecture
-_DEV = 0.5         # < 0.7  -> goto development
+_ARCH = 0.25  # < 0.3  -> goto architecture
+_DEV = 0.5  # < 0.7  -> goto development
 _PASS_FLOOR = 0.7  # >= 0.7 -> continue
 
 
@@ -151,19 +162,29 @@ def _pass_with_subjective(agent_score: Any) -> float:
     return round(_PASS_FLOOR + (1.0 - _PASS_FLOOR) * _clamp01(agent_score, 1.0), 4)
 
 
-def score_scope_review(result: Optional[Dict[str, Any]]) -> Tuple[float, Dict[str, Any]]:
+def score_scope_review(
+    result: Optional[Dict[str, Any]],
+) -> Tuple[float, Dict[str, Any]]:
     """Score a scope_review_result.json. Binary: PASS=1.0, FAIL=0.2, missing=0.4.
 
     Accepts both the canonical flat schema and the nested schema agents sometimes
     write ({"scope_review": {"verdict": ...}, "out_of_scope_items": [...], ...}).
     """
     if not result:
-        return 0.4, {"gate": "scope_review", "reason": "no scope_review_result.json found", "result_missing": True}
+        return 0.4, {
+            "gate": "scope_review",
+            "reason": "no scope_review_result.json found",
+            "result_missing": True,
+        }
 
     # Normalise: agents sometimes write {"scope_review": {"verdict": ...}} instead
     # of the flat {"verdict": ...} schema specified in scope_review.yaml.
     flat = result
-    if "verdict" not in result and "scope_review" in result and isinstance(result["scope_review"], dict):
+    if (
+        "verdict" not in result
+        and "scope_review" in result
+        and isinstance(result["scope_review"], dict)
+    ):
         flat = result["scope_review"]
 
     verdict = str(flat.get("verdict", "")).strip().upper()
@@ -198,10 +219,17 @@ def score_scope_review(result: Optional[Dict[str, Any]]) -> Tuple[float, Dict[st
     }
     if verdict == "PASS" and not out_of_scope and not missing:
         return 1.0, {**meta, "band": "pass"}
-    return 0.2, {**meta, "band": "requirements", "out_of_scope": out_of_scope, "missing": missing}
+    return 0.2, {
+        **meta,
+        "band": "requirements",
+        "out_of_scope": out_of_scope,
+        "missing": missing,
+    }
 
 
-def score_qa(result: Optional[Dict[str, Any]], spec: Dict[str, Any]) -> Tuple[float, Dict[str, Any]]:
+def score_qa(
+    result: Optional[Dict[str, Any]], spec: Dict[str, Any]
+) -> Tuple[float, Dict[str, Any]]:
     """Score a structured QA result against the spec (hard floors + judgement).
 
     Expected result keys (all optional, scored defensively):
@@ -209,12 +237,18 @@ def score_qa(result: Optional[Dict[str, Any]], spec: Dict[str, Any]) -> Tuple[fl
         critical_issues, requirements_met, requirements_total, agent_score (0-1).
     """
     if not result:
-        return _DEV, {"gate": "qa", "reason": "no qa_result.json found", "result_missing": True}
+        return _DEV, {
+            "gate": "qa",
+            "reason": "no qa_result.json found",
+            "result_missing": True,
+        }
 
     spec = spec or DEFAULT_SPEC
     failed = int(result.get("failed_tests") or result.get("tests_failed") or 0)
     passed = int(result.get("passed_tests") or result.get("tests_passed") or 0)
-    total = int(result.get("total_tests") or result.get("tests_run") or (passed + failed) or 0)
+    total = int(
+        result.get("total_tests") or result.get("tests_run") or (passed + failed) or 0
+    )
     critical = int(result.get("critical_issues", 0) or 0)
 
     pass_rate = result.get("pass_rate")
@@ -228,17 +262,27 @@ def score_qa(result: Optional[Dict[str, Any]], spec: Dict[str, Any]) -> Tuple[fl
 
     violations = []
     if critical > spec.get("max_critical_issues", 0):
-        violations.append(f"critical_issues={critical} > {spec.get('max_critical_issues', 0)}")
+        violations.append(
+            f"critical_issues={critical} > {spec.get('max_critical_issues', 0)}"
+        )
     if failed > spec.get("max_failed_tests", 0):
         violations.append(f"failed_tests={failed} > {spec.get('max_failed_tests', 0)}")
     if pass_rate < spec.get("required_pass_rate", 100):
-        violations.append(f"pass_rate={pass_rate:.0f}% < {spec.get('required_pass_rate', 100)}%")
+        violations.append(
+            f"pass_rate={pass_rate:.0f}% < {spec.get('required_pass_rate', 100)}%"
+        )
     if req_rate < spec.get("min_requirements_met_rate", 100):
-        violations.append(f"requirements_met={req_rate:.0f}% < {spec.get('min_requirements_met_rate', 100)}%")
+        violations.append(
+            f"requirements_met={req_rate:.0f}% < {spec.get('min_requirements_met_rate', 100)}%"
+        )
 
     meta = {
-        "gate": "qa", "violations": violations, "pass_rate": round(pass_rate, 1),
-        "failed_tests": failed, "critical_issues": critical, "requirements_met_rate": round(req_rate, 1),
+        "gate": "qa",
+        "violations": violations,
+        "pass_rate": round(pass_rate, 1),
+        "failed_tests": failed,
+        "critical_issues": critical,
+        "requirements_met_rate": round(req_rate, 1),
     }
 
     # Critical issues are treated as fundamental (architecture); other floor
@@ -247,17 +291,26 @@ def score_qa(result: Optional[Dict[str, Any]], spec: Dict[str, Any]) -> Tuple[fl
         return _ARCH, {**meta, "band": "architecture"}
     if violations:
         return _DEV, {**meta, "band": "development"}
-    return _pass_with_subjective(result.get("agent_score", 1.0)), {**meta, "band": "pass"}
+    return _pass_with_subjective(result.get("agent_score", 1.0)), {
+        **meta,
+        "band": "pass",
+    }
 
 
-def score_product_validation(result: Optional[Dict[str, Any]], spec: Dict[str, Any]) -> Tuple[float, Dict[str, Any]]:
+def score_product_validation(
+    result: Optional[Dict[str, Any]], spec: Dict[str, Any]
+) -> Tuple[float, Dict[str, Any]]:
     """Score a structured product-validation result (verdict + unmet reqs + floors).
 
     Expected keys: verdict ("PASS"|"NEEDS_WORK"|"ARCHITECTURE"),
         unmet_requirements (list), agent_score (0-1).
     """
     if not result:
-        return _DEV, {"gate": "product", "reason": "no product_validation.json found", "result_missing": True}
+        return _DEV, {
+            "gate": "product",
+            "reason": "no product_validation.json found",
+            "result_missing": True,
+        }
 
     verdict = str(result.get("verdict", "")).strip().upper()
     unmet = result.get("unmet_requirements") or []
@@ -271,13 +324,20 @@ def score_product_validation(result: Optional[Dict[str, Any]], spec: Dict[str, A
 
     # Hard floor: a PASS verdict cannot stand if requirements are unmet.
     if unmet:
-        return _DEV, {**meta, "band": "development", "reason": "unmet requirements override verdict"}
+        return _DEV, {
+            **meta,
+            "band": "development",
+            "reason": "unmet requirements override verdict",
+        }
 
     if verdict in ("NEEDS_WORK", "FAIL", "NEEDS WORK"):
         return _DEV, {**meta, "band": "development"}
 
     if verdict == "PASS":
-        return _pass_with_subjective(result.get("agent_score", 1.0)), {**meta, "band": "pass"}
+        return _pass_with_subjective(result.get("agent_score", 1.0)), {
+            **meta,
+            "band": "pass",
+        }
 
     # Unknown/empty verdict with no unmet reqs — treat conservatively as code-level.
     return _DEV, {**meta, "band": "development", "reason": "unrecognized verdict"}

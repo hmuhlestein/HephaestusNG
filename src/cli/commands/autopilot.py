@@ -14,8 +14,12 @@ def register(subparsers):
     # start
     s = sub.add_parser("start", help="Start the autopilot pipeline")
     s.add_argument("--project-path", "-p", required=True, help="Project directory")
-    s.add_argument("--design-queue", help="Design queue directory (default: <project>/docs/design)")
-    s.add_argument("--max-iterations", type=int, default=3, help="Max iterations per design")
+    s.add_argument(
+        "--design-queue", help="Design queue directory (default: <project>/docs/design)"
+    )
+    s.add_argument(
+        "--max-iterations", type=int, default=3, help="Max iterations per design"
+    )
     s.add_argument("--drop-db", action="store_true", help="Drop database first")
     s.set_defaults(func=start_pipeline)
 
@@ -95,6 +99,7 @@ def start_pipeline(args):
 
     # Block until pipeline stops or user presses Ctrl+C
     import time
+
     try:
         while True:
             time.sleep(5)
@@ -194,12 +199,14 @@ def show_queue(args):
     designs = []
     for ext in ("*.md", "*.txt"):
         for f in sorted(queue_dir.glob(ext)):
-            designs.append({
-                "name": f.stem,
-                "file": f.name,
-                "size": f.stat().st_size,
-                "modified": f.stat().st_mtime,
-            })
+            designs.append(
+                {
+                    "name": f.stem,
+                    "file": f.name,
+                    "size": f.stat().st_size,
+                    "modified": f.stat().st_mtime,
+                }
+            )
 
     output(args, designs, _print_queue)
     return 0
@@ -216,20 +223,43 @@ def _print_queue(designs):
 
 
 def add_to_queue(args):
+    """Add a design document to the queue.
+
+    Resolves the file to an absolute path and calls POST /api/autopilot/designs/add.
+    Does NOT copy the file - stores the file_path in the database.
+    """
     source = Path(args.file).resolve()
     if not source.exists():
         print(f"File not found: {source}")
         return 1
 
-    queue_dir = Path(args.project_path) / DESIGN_SUBDIR
-    queue_dir.mkdir(parents=True, exist_ok=True)
+    import requests
 
-    dest = queue_dir / source.name
-    if dest.exists():
-        print(f"Already in queue: {dest.name}")
-        return 0
+    try:
+        resp = requests.post(
+            "http://127.0.0.1:8300/api/autopilot/designs/add",
+            json={
+                "file_path": str(source),
+                "project_path": str(Path(args.project_path).resolve()),
+            },
+            timeout=10,
+        )
 
-    import shutil
-    shutil.copy2(source, dest)
-    print(f"Added to queue: {dest.name}")
-    return 0
+        if resp.status_code == 200:
+            data = resp.json()
+            print(f"Added to queue: {data.get('name', source.name)}")
+            print(f"  ID: {data.get('id')}")
+            print(f"  Status: {data.get('status')}")
+            return 0
+        elif resp.status_code == 409:
+            print(f"Design already in queue: {source.name}")
+            return 0
+        else:
+            print(f"Error: {resp.status_code} - {resp.text}")
+            return 1
+    except requests.exceptions.ConnectionError:
+        print("Error: Backend not running. Start it with: heph start")
+        return 1
+    except Exception as e:
+        print(f"Error: {e}")
+        return 1

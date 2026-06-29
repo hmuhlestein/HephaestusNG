@@ -25,10 +25,12 @@ Usage:
 
 # Import phase definitions
 from example_workflows.index_repo.phase_1_initial_scan import PHASE_1_INITIAL_SCAN
-from example_workflows.index_repo.phase_2_component_deep_dive import PHASE_2_COMPONENT_DEEP_DIVE
+from example_workflows.index_repo.phase_2_component_deep_dive import (
+    PHASE_2_COMPONENT_DEEP_DIVE,
+)
 
 # Import SDK models
-from src.sdk.models import WorkflowConfig, LaunchTemplate, LaunchParameter
+from src.sdk.models import LaunchParameter, LaunchTemplate, WorkflowConfig
 
 # Export phase list
 INDEX_REPO_PHASES = [
@@ -43,7 +45,12 @@ INDEX_REPO_CONFIG = WorkflowConfig(
     enable_tickets=True,  # Track components on Kanban board
     board_config={
         "columns": [
-            {"id": "discovered", "name": "🔍 Discovered", "order": 1, "color": "#94a3b8"},
+            {
+                "id": "discovered",
+                "name": "🔍 Discovered",
+                "order": 1,
+                "color": "#94a3b8",
+            },
             {"id": "exploring", "name": "🔬 Exploring", "order": 2, "color": "#f59e0b"},
             {"id": "indexed", "name": "✅ Indexed", "order": 3, "color": "#22c55e"},
         ],
@@ -66,7 +73,7 @@ INDEX_REPO_LAUNCH_TEMPLATE = LaunchTemplate(
             type="textarea",
             required=False,
             default="",
-            description="Add any context about this repo that might help the exploration (e.g., 'This is a FastAPI backend for a todo app' or 'Focus on the authentication and API layers')"
+            description="Add any context about this repo that might help the exploration (e.g., 'This is a FastAPI backend for a todo app' or 'Focus on the authentication and API layers')",
         ),
     ],
     phase_1_task_prompt="""Phase 1: Initial Repository Scan

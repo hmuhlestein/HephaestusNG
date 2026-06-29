@@ -27,12 +27,18 @@ Usage:
 """
 
 # Import phase definitions
-from example_workflows.feature_development.phase_1_feature_analysis import PHASE_1_FEATURE_ANALYSIS
-from example_workflows.feature_development.phase_2_design_and_implementation import PHASE_2_DESIGN_AND_IMPLEMENTATION
-from example_workflows.feature_development.phase_3_validate_and_integrate import PHASE_3_VALIDATE_AND_INTEGRATE
+from example_workflows.feature_development.phase_1_feature_analysis import (
+    PHASE_1_FEATURE_ANALYSIS,
+)
+from example_workflows.feature_development.phase_2_design_and_implementation import (
+    PHASE_2_DESIGN_AND_IMPLEMENTATION,
+)
+from example_workflows.feature_development.phase_3_validate_and_integrate import (
+    PHASE_3_VALIDATE_AND_INTEGRATE,
+)
 
 # Import SDK models
-from src.sdk.models import WorkflowConfig, LaunchTemplate, LaunchParameter
+from src.sdk.models import LaunchParameter, LaunchTemplate, WorkflowConfig
 
 # Export phase list
 FEATURE_DEV_PHASES = [
@@ -49,8 +55,18 @@ FEATURE_DEV_CONFIG = WorkflowConfig(
     board_config={
         "columns": [
             {"id": "backlog", "name": "📋 Backlog", "order": 1, "color": "#94a3b8"},
-            {"id": "implementing", "name": "🔨 Implementing", "order": 2, "color": "#f59e0b"},
-            {"id": "implemented", "name": "✅ Implemented", "order": 3, "color": "#10b981"},
+            {
+                "id": "implementing",
+                "name": "🔨 Implementing",
+                "order": 2,
+                "color": "#f59e0b",
+            },
+            {
+                "id": "implemented",
+                "name": "✅ Implemented",
+                "order": 3,
+                "color": "#10b981",
+            },
             {"id": "testing", "name": "🧪 Testing", "order": 4, "color": "#8b5cf6"},
             {"id": "done", "name": "🎉 Done", "order": 5, "color": "#22c55e"},
         ],
@@ -72,7 +88,7 @@ FEATURE_DEV_LAUNCH_TEMPLATE = LaunchTemplate(
             label="Feature Description",
             type="textarea",
             required=True,
-            description="Describe the feature you want to add. Be specific about what it should do, expected behavior, and any requirements."
+            description="Describe the feature you want to add. Be specific about what it should do, expected behavior, and any requirements.",
         ),
         LaunchParameter(
             name="target_area",
@@ -80,7 +96,7 @@ FEATURE_DEV_LAUNCH_TEMPLATE = LaunchTemplate(
             type="text",
             required=False,
             default="",
-            description="Which part of the codebase? (e.g., 'authentication', 'API', 'frontend', 'database')"
+            description="Which part of the codebase? (e.g., 'authentication', 'API', 'frontend', 'database')",
         ),
         LaunchParameter(
             name="additional_context",
@@ -88,7 +104,7 @@ FEATURE_DEV_LAUNCH_TEMPLATE = LaunchTemplate(
             type="textarea",
             required=False,
             default="",
-            description="Any additional context, constraints, examples, or references that might help"
+            description="Any additional context, constraints, examples, or references that might help",
         ),
     ],
     phase_1_task_prompt="""Phase 1: Feature Analysis & Planning

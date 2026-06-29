@@ -4,11 +4,9 @@ Verifies that the additive ALTER TABLE migration works on databases
 that are missing the new columns (status, content_hash, feature_folder, completed_at).
 """
 
-import os
 import tempfile
 from pathlib import Path
 
-import pytest
 from sqlalchemy import create_engine, text
 
 
@@ -20,7 +18,8 @@ def test_autopilot_designs_migration_adds_columns():
         # Create a minimal DB with the OLD schema (no new columns)
         engine = create_engine(f"sqlite:///{db_path}")
         with engine.connect() as conn:
-            conn.execute(text("""
+            conn.execute(
+                text("""
                 CREATE TABLE IF NOT EXISTS autopilot_projects (
                     id VARCHAR PRIMARY KEY,
                     name VARCHAR(200) NOT NULL,
@@ -30,8 +29,10 @@ def test_autopilot_designs_migration_adds_columns():
                     created_at DATETIME NOT NULL,
                     updated_at DATETIME NOT NULL
                 )
-            """))
-            conn.execute(text("""
+            """)
+            )
+            conn.execute(
+                text("""
                 CREATE TABLE IF NOT EXISTS autopilot_designs (
                     id VARCHAR PRIMARY KEY,
                     project_id VARCHAR NOT NULL REFERENCES autopilot_projects(id) ON DELETE CASCADE,
@@ -43,7 +44,8 @@ def test_autopilot_designs_migration_adds_columns():
                     created_at DATETIME NOT NULL,
                     modified_at DATETIME
                 )
-            """))
+            """)
+            )
             conn.commit()
 
         # Verify the new columns DON'T exist yet
@@ -57,6 +59,7 @@ def test_autopilot_designs_migration_adds_columns():
 
         # Now run the migration via DatabaseManager
         from src.core.database import DatabaseManager
+
         db_manager = DatabaseManager(str(db_path))
         db_manager.create_tables()
 
@@ -73,6 +76,7 @@ def test_autopilot_designs_migration_adds_columns():
         session = db_manager.get_session()
         try:
             from src.core.database import AutopilotDesign
+
             designs = session.query(AutopilotDesign).all()
             assert designs == []  # Empty table, but no error
         finally:
@@ -108,6 +112,7 @@ def test_autopilot_designs_fresh_db_has_columns():
         db_path = Path(tmp) / "test.db"
 
         from src.core.database import DatabaseManager
+
         db_manager = DatabaseManager(str(db_path))
         db_manager.create_tables()
 
@@ -125,7 +130,8 @@ def test_autopilot_designs_can_insert_and_query():
     with tempfile.TemporaryDirectory() as tmp:
         db_path = Path(tmp) / "test.db"
 
-        from src.core.database import DatabaseManager, AutopilotProject, AutopilotDesign
+        from src.core.database import AutopilotDesign, AutopilotProject, DatabaseManager
+
         db_manager = DatabaseManager(str(db_path))
         db_manager.create_tables()
 

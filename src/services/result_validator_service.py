@@ -1,15 +1,15 @@
 """Service for spawning and managing result validator agents."""
 
-import uuid
 import logging
-from typing import Dict, Any, Optional
+import uuid
+from typing import Any, Dict, Optional
 
-from src.core.database import DatabaseManager, WorkflowResult, Workflow, Agent, Task
-from src.services.result_validation_helpers import (
-    validate_result_criteria,
-    ValidationResult,
-)
+from src.core.database import Agent, DatabaseManager, Task, Workflow, WorkflowResult
 from src.phases.phase_manager import PhaseManager
+from src.services.result_validation_helpers import (
+    ValidationResult,
+    validate_result_criteria,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -28,9 +28,7 @@ class ResultValidatorService:
         self.phase_manager = phase_manager
 
     def validate_result_against_criteria(
-        self,
-        result_content: str,
-        criteria: str
+        self, result_content: str, criteria: str
     ) -> ValidationResult:
         """
         Validate result content against criteria.
@@ -73,10 +71,7 @@ class ResultValidatorService:
             return False, None
 
     async def spawn_result_validator(
-        self,
-        result_id: str,
-        workflow_id: str,
-        criteria: str
+        self, result_id: str, workflow_id: str, criteria: str
     ) -> str:
         """
         Spawn a result validator agent for a submitted result.
@@ -108,17 +103,24 @@ class ResultValidatorService:
             validator_agent_id = f"result-validator-{uuid.uuid4().hex[:8]}"
 
             # Build validator prompt
-            from src.validation.result_prompt_builder import build_result_validator_prompt
+            from src.validation.result_prompt_builder import (
+                build_result_validator_prompt,
+            )
+
             validator_prompt = build_result_validator_prompt(
                 result=result,
                 workflow=workflow,
                 criteria=criteria,
-                validator_agent_id=validator_agent_id
+                validator_agent_id=validator_agent_id,
             )
 
             # Find the original task assigned to the agent that submitted the result
             # Be explicit about the join to avoid ambiguity
-            original_task = session.query(Task).filter(Task.assigned_agent_id == result.agent_id).first()
+            original_task = (
+                session.query(Task)
+                .filter(Task.assigned_agent_id == result.agent_id)
+                .first()
+            )
 
             # Create validation task
             validation_task_id = str(uuid.uuid4())
@@ -133,7 +135,7 @@ class ResultValidatorService:
                 parent_task_id=original_task.id if original_task else None,
                 phase_id=original_task.phase_id if original_task else None,
                 workflow_id=workflow_id,
-                validation_enabled=False  # Validators don't need validation themselves
+                validation_enabled=False,  # Validators don't need validation themselves
             )
             session.add(validation_task)
 
@@ -144,7 +146,7 @@ class ResultValidatorService:
                 system_prompt=validator_prompt,
                 cli_type="claude",  # Use Claude for result validation
                 status="working",
-                tmux_session_name=f"agent_{validator_agent_id}"
+                tmux_session_name=f"agent_{validator_agent_id}",
             )
             session.add(validator_agent)
             session.commit()
@@ -153,16 +155,21 @@ class ResultValidatorService:
             working_directory = workflow.phases_folder_path
 
             # Spawn tmux session for validator
-            from src.validation.result_validator_agent import spawn_result_validator_tmux_session
+            from src.validation.result_validator_agent import (
+                spawn_result_validator_tmux_session,
+            )
+
             await spawn_result_validator_tmux_session(
                 agent_id=validator_agent_id,
                 working_directory=working_directory,
                 prompt=validator_prompt,
                 result_file_path=result.result_file_path,
-                read_only=True
+                read_only=True,
             )
 
-            logger.info(f"Spawned result validator agent {validator_agent_id} for result {result_id}")
+            logger.info(
+                f"Spawned result validator agent {validator_agent_id} for result {result_id}"
+            )
             return validator_agent_id
 
         except Exception as e:
@@ -178,7 +185,7 @@ class ResultValidatorService:
         passed: bool,
         feedback: str,
         evidence: Optional[Dict[str, Any]] = None,
-        validator_agent_id: Optional[str] = None
+        validator_agent_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Process the outcome of result validation.
@@ -205,12 +212,13 @@ class ResultValidatorService:
 
             # Update result status
             from src.services.workflow_result_service import WorkflowResultService
+
             result_info = WorkflowResultService.update_result_status(
                 result_id=result_id,
                 status="validated" if passed else "rejected",
                 feedback=feedback,
                 evidence=evidence,
-                validator_agent_id=validator_agent_id
+                validator_agent_id=validator_agent_id,
             )
 
             # If validation passed, check workflow termination action
@@ -221,10 +229,14 @@ class ResultValidatorService:
 
                     if config.on_result_found == "stop_all":
                         next_actions.append("terminate_workflow")
-                        logger.info(f"Workflow {result.workflow_id} will be terminated due to validated result")
+                        logger.info(
+                            f"Workflow {result.workflow_id} will be terminated due to validated result"
+                        )
                     elif config.on_result_found == "do_nothing":
                         next_actions.append("continue_workflow")
-                        logger.info(f"Workflow {result.workflow_id} will continue after validated result")
+                        logger.info(
+                            f"Workflow {result.workflow_id} will continue after validated result"
+                        )
 
                 except Exception as e:
                     logger.error(f"Error checking workflow termination action: {e}")
@@ -262,7 +274,9 @@ class ResultValidatorService:
                 "status": result.status,
                 "validation_feedback": result.validation_feedback,
                 "validation_evidence": result.validation_evidence,
-                "validated_at": result.validated_at.isoformat() if result.validated_at else None,
+                "validated_at": result.validated_at.isoformat()
+                if result.validated_at
+                else None,
                 "validated_by_agent_id": result.validated_by_agent_id,
             }
 

@@ -16,7 +16,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from qdrant_client import QdrantClient
-from src.memory.vector_store import VectorStoreManager
 
 
 def confirm_deletion():
@@ -40,7 +39,9 @@ def confirm_deletion():
     return response == "DELETE"
 
 
-def clean_qdrant(qdrant_url: str = "http://localhost:6333", collection_prefix: str = "hephaestus"):
+def clean_qdrant(
+    qdrant_url: str = "http://localhost:6333", collection_prefix: str = "hephaestus"
+):
     """Clean all Qdrant collections.
 
     Args:
@@ -60,7 +61,8 @@ def clean_qdrant(qdrant_url: str = "http://localhost:6333", collection_prefix: s
 
         # Filter collections with our prefix
         hephaestus_collections = [
-            coll for coll in collections.collections
+            coll
+            for coll in collections.collections
             if coll.name.startswith(collection_prefix)
         ]
 
@@ -120,25 +122,23 @@ Examples:
 
   # Custom collection prefix
   python scripts/clean_qdrant.py --prefix my_project
-        """
+        """,
     )
 
     parser.add_argument(
         "--url",
         default="http://localhost:6333",
-        help="Qdrant server URL (default: http://localhost:6333)"
+        help="Qdrant server URL (default: http://localhost:6333)",
     )
 
     parser.add_argument(
         "--prefix",
         default="hephaestus",
-        help="Collection prefix to clean (default: hephaestus)"
+        help="Collection prefix to clean (default: hephaestus)",
     )
 
     parser.add_argument(
-        "--force",
-        action="store_true",
-        help="Skip confirmation prompt (DANGEROUS!)"
+        "--force", action="store_true", help="Skip confirmation prompt (DANGEROUS!)"
     )
 
     args = parser.parse_args()
@@ -156,10 +156,7 @@ Examples:
         print()
 
     # Clean Qdrant
-    clean_qdrant(
-        qdrant_url=args.url,
-        collection_prefix=args.prefix
-    )
+    clean_qdrant(qdrant_url=args.url, collection_prefix=args.prefix)
 
 
 if __name__ == "__main__":

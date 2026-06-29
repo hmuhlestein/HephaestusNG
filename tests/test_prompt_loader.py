@@ -1,10 +1,10 @@
 """Unit tests for the PromptLoader system."""
 
-import pytest
-from unittest.mock import Mock, patch, mock_open
-from pathlib import Path
 import json
 from datetime import datetime, timedelta
+from unittest.mock import mock_open, patch
+
+import pytest
 
 from src.monitoring.prompt_loader import PromptLoader
 
@@ -12,7 +12,7 @@ from src.monitoring.prompt_loader import PromptLoader
 @pytest.fixture
 def prompt_loader():
     """Create PromptLoader instance."""
-    with patch('src.monitoring.prompt_loader.Path.exists', return_value=True):
+    with patch("src.monitoring.prompt_loader.Path.exists", return_value=True):
         return PromptLoader()
 
 
@@ -27,8 +27,11 @@ def sample_accumulated_context():
         "constraints": ["no external databases", "must use TypeScript"],
         "lifted_constraints": ["can now use MongoDB"],
         "standing_instructions": ["add comprehensive tests", "document all endpoints"],
-        "discovered_blockers": ["CORS configuration issue", "Rate limiting not working"],
-        "session_start": datetime.utcnow() - timedelta(hours=2, minutes=30)
+        "discovered_blockers": [
+            "CORS configuration issue",
+            "Rate limiting not working",
+        ],
+        "session_start": datetime.utcnow() - timedelta(hours=2, minutes=30),
     }
 
 
@@ -39,7 +42,7 @@ def sample_task_info():
         "description": "Implement user authentication endpoints",
         "done_definition": "All auth endpoints working with tests passing",
         "task_id": "task-123",
-        "agent_id": "agent-456"
+        "agent_id": "agent-456",
     }
 
 
@@ -53,7 +56,7 @@ def sample_guardian_summaries():
             "current_phase": "implementation",
             "trajectory_aligned": True,
             "needs_steering": False,
-            "accumulated_goal": "Implement complete authentication system with JWT tokens and refresh logic"
+            "accumulated_goal": "Implement complete authentication system with JWT tokens and refresh logic",
         },
         {
             "agent_id": "agent-2",
@@ -61,7 +64,7 @@ def sample_guardian_summaries():
             "current_phase": "testing",
             "trajectory_aligned": True,
             "needs_steering": False,
-            "accumulated_goal": "Build CRUD operations for user management with proper validation"
+            "accumulated_goal": "Build CRUD operations for user management with proper validation",
         },
         {
             "agent_id": "agent-3",
@@ -69,8 +72,8 @@ def sample_guardian_summaries():
             "current_phase": "implementation",
             "trajectory_aligned": False,
             "needs_steering": True,
-            "accumulated_goal": "Create auth system with JWT"
-        }
+            "accumulated_goal": "Create auth system with JWT",
+        },
     ]
 
 
@@ -79,7 +82,7 @@ class TestPromptLoader:
 
     def test_init_with_missing_directory(self):
         """Test initialization fails when prompts directory doesn't exist."""
-        with patch('src.monitoring.prompt_loader.Path.exists', return_value=False):
+        with patch("src.monitoring.prompt_loader.Path.exists", return_value=False):
             with pytest.raises(ValueError, match="Prompts directory not found"):
                 PromptLoader()
 
@@ -87,8 +90,8 @@ class TestPromptLoader:
         """Test successful prompt loading."""
         mock_content = "# Test Prompt\n\nThis is a {test} prompt with {variables}."
 
-        with patch('builtins.open', mock_open(read_data=mock_content)):
-            with patch('src.monitoring.prompt_loader.Path.exists', return_value=True):
+        with patch("builtins.open", mock_open(read_data=mock_content)):
+            with patch("src.monitoring.prompt_loader.Path.exists", return_value=True):
                 content = prompt_loader.load_prompt("test_prompt")
 
         assert content == mock_content
@@ -97,15 +100,12 @@ class TestPromptLoader:
 
     def test_load_prompt_file_not_found(self, prompt_loader):
         """Test loading non-existent prompt file."""
-        with patch('src.monitoring.prompt_loader.Path.exists', return_value=False):
+        with patch("src.monitoring.prompt_loader.Path.exists", return_value=False):
             with pytest.raises(ValueError, match="Prompt file not found"):
                 prompt_loader.load_prompt("nonexistent_prompt")
 
     def test_format_guardian_prompt(
-        self,
-        prompt_loader,
-        sample_accumulated_context,
-        sample_task_info
+        self, prompt_loader, sample_accumulated_context, sample_task_info
     ):
         """Test formatting Guardian prompt with all parameters."""
         template = """
@@ -126,12 +126,12 @@ class TestPromptLoader:
         Output: {agent_output}
         """
 
-        with patch.object(prompt_loader, 'load_prompt', return_value=template):
+        with patch.object(prompt_loader, "load_prompt", return_value=template):
             formatted = prompt_loader.format_guardian_prompt(
                 accumulated_context=sample_accumulated_context,
                 past_summaries=[{"summary": "Previous analysis"}],
                 task_info=sample_task_info,
-                agent_output="Recent agent output here"
+                agent_output="Recent agent output here",
             )
 
         # Verify all fields are populated
@@ -151,11 +151,7 @@ class TestPromptLoader:
         assert "agent-456" in formatted
         assert "Recent agent output" in formatted
 
-    def test_format_guardian_prompt_empty_lists(
-        self,
-        prompt_loader,
-        sample_task_info
-    ):
+    def test_format_guardian_prompt_empty_lists(self, prompt_loader, sample_task_info):
         """Test Guardian prompt formatting with empty lists."""
         minimal_context = {
             "overall_goal": "Test goal",
@@ -165,7 +161,7 @@ class TestPromptLoader:
             "constraints": [],
             "lifted_constraints": [],
             "standing_instructions": [],
-            "discovered_blockers": []
+            "discovered_blockers": [],
         }
 
         template = """
@@ -176,12 +172,12 @@ class TestPromptLoader:
         Past: {past_summaries}
         """
 
-        with patch.object(prompt_loader, 'load_prompt', return_value=template):
+        with patch.object(prompt_loader, "load_prompt", return_value=template):
             formatted = prompt_loader.format_guardian_prompt(
                 accumulated_context=minimal_context,
                 past_summaries=[],
                 task_info=sample_task_info,
-                agent_output="test"
+                agent_output="test",
             )
 
         assert "No active constraints" in formatted
@@ -191,31 +187,24 @@ class TestPromptLoader:
         assert "No previous Guardian summaries" in formatted
 
     def test_format_guardian_prompt_long_output_truncation(
-        self,
-        prompt_loader,
-        sample_accumulated_context,
-        sample_task_info
+        self, prompt_loader, sample_accumulated_context, sample_task_info
     ):
         """Test that long agent output is truncated."""
         template = "Output: {agent_output}"
         long_output = "x" * 5000  # Very long output
 
-        with patch.object(prompt_loader, 'load_prompt', return_value=template):
+        with patch.object(prompt_loader, "load_prompt", return_value=template):
             formatted = prompt_loader.format_guardian_prompt(
                 accumulated_context=sample_accumulated_context,
                 past_summaries=[],
                 task_info=sample_task_info,
-                agent_output=long_output
+                agent_output=long_output,
             )
 
         # Output should be in the formatted prompt (truncation may or may not apply)
         assert "Output:" in formatted
 
-    def test_format_conductor_prompt(
-        self,
-        prompt_loader,
-        sample_guardian_summaries
-    ):
+    def test_format_conductor_prompt(self, prompt_loader, sample_guardian_summaries):
         """Test formatting Conductor prompt."""
         template = """
         # Conductor Analysis
@@ -228,13 +217,12 @@ class TestPromptLoader:
         system_goals = {
             "primary": "Complete authentication system",
             "constraints": "No duplicate work, efficient resource usage",
-            "coordination": "All agents working together"
+            "coordination": "All agents working together",
         }
 
-        with patch.object(prompt_loader, 'load_prompt', return_value=template):
+        with patch.object(prompt_loader, "load_prompt", return_value=template):
             formatted = prompt_loader.format_conductor_prompt(
-                guardian_summaries=sample_guardian_summaries,
-                system_goals=system_goals
+                guardian_summaries=sample_guardian_summaries, system_goals=system_goals
             )
 
         assert "Complete authentication system" in formatted
@@ -248,10 +236,7 @@ class TestPromptLoader:
         assert "Building authentication module" in formatted
         assert "Creating user management" in formatted
 
-    def test_format_conductor_prompt_truncates_long_goals(
-        self,
-        prompt_loader
-    ):
+    def test_format_conductor_prompt_truncates_long_goals(self, prompt_loader):
         """Test that long accumulated goals are truncated in Conductor prompt."""
         long_goal = "x" * 200
         summaries = [
@@ -261,27 +246,23 @@ class TestPromptLoader:
                 "current_phase": "implementation",
                 "trajectory_aligned": True,
                 "needs_steering": False,
-                "accumulated_goal": long_goal
+                "accumulated_goal": long_goal,
             }
         ]
 
         template = "Summaries: {guardian_summaries_json}"
         system_goals = {"primary": "Test", "constraints": "", "coordination": ""}
 
-        with patch.object(prompt_loader, 'load_prompt', return_value=template):
+        with patch.object(prompt_loader, "load_prompt", return_value=template):
             formatted = prompt_loader.format_conductor_prompt(
-                guardian_summaries=summaries,
-                system_goals=system_goals
+                guardian_summaries=summaries, system_goals=system_goals
             )
 
         # Goal should be truncated to 100 chars
         parsed = json.loads(formatted.split("Summaries: ")[1])
         assert len(parsed[0]["accumulated_goal"]) == 100
 
-    def test_format_conductor_prompt_with_defaults(
-        self,
-        prompt_loader
-    ):
+    def test_format_conductor_prompt_with_defaults(self, prompt_loader):
         """Test Conductor prompt with default system goals."""
         template = """
         Primary: {primary_goal}
@@ -289,10 +270,10 @@ class TestPromptLoader:
         Coordination: {coordination_requirement}
         """
 
-        with patch.object(prompt_loader, 'load_prompt', return_value=template):
+        with patch.object(prompt_loader, "load_prompt", return_value=template):
             formatted = prompt_loader.format_conductor_prompt(
                 guardian_summaries=[],
-                system_goals={}  # Empty goals should use defaults
+                system_goals={},  # Empty goals should use defaults
             )
 
         assert "Complete all assigned tasks efficiently" in formatted
@@ -314,10 +295,7 @@ class TestPromptLoader:
         assert result == "- first\n- second\n- third"
 
     def test_format_guardian_prompt_with_many_past_summaries(
-        self,
-        prompt_loader,
-        sample_accumulated_context,
-        sample_task_info
+        self, prompt_loader, sample_accumulated_context, sample_task_info
     ):
         """Test that only last 5 summaries are included."""
         template = "Past: {past_summaries}"
@@ -325,12 +303,12 @@ class TestPromptLoader:
         # Create 10 past summaries
         many_summaries = [{"id": i, "summary": f"Summary {i}"} for i in range(10)]
 
-        with patch.object(prompt_loader, 'load_prompt', return_value=template):
+        with patch.object(prompt_loader, "load_prompt", return_value=template):
             formatted = prompt_loader.format_guardian_prompt(
                 accumulated_context=sample_accumulated_context,
                 past_summaries=many_summaries,
                 task_info=sample_task_info,
-                agent_output="test"
+                agent_output="test",
             )
 
         # Should only include summaries 5-9 (last 5)
@@ -339,10 +317,7 @@ class TestPromptLoader:
         assert "Summary 0" not in formatted
         assert "Summary 4" not in formatted
 
-    def test_format_guardian_prompt_missing_fields(
-        self,
-        prompt_loader
-    ):
+    def test_format_guardian_prompt_missing_fields(self, prompt_loader):
         """Test Guardian prompt with missing fields uses defaults."""
         template = """
         Goal: {overall_goal}
@@ -353,12 +328,12 @@ class TestPromptLoader:
         incomplete_context = {"conversation_length": 5}
         incomplete_task = {}
 
-        with patch.object(prompt_loader, 'load_prompt', return_value=template):
+        with patch.object(prompt_loader, "load_prompt", return_value=template):
             formatted = prompt_loader.format_guardian_prompt(
                 accumulated_context=incomplete_context,
                 past_summaries=[],
                 task_info=incomplete_task,
-                agent_output="test"
+                agent_output="test",
             )
 
         assert "Unknown" in formatted  # Default values should be used
@@ -367,7 +342,7 @@ class TestPromptLoader:
         """Test that prompt_loader is available as singleton."""
         from src.monitoring.prompt_loader import prompt_loader
 
-        with patch('src.monitoring.prompt_loader.Path.exists', return_value=True):
+        with patch("src.monitoring.prompt_loader.Path.exists", return_value=True):
             assert isinstance(prompt_loader, PromptLoader)
 
 

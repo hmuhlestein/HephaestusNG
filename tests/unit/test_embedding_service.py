@@ -1,8 +1,10 @@
 """Unit tests for the EmbeddingService."""
 
-import pytest
+from unittest.mock import MagicMock, patch
+
 import numpy as np
-from unittest.mock import Mock, MagicMock, patch
+import pytest
+
 from src.services.embedding_service import EmbeddingService
 
 
@@ -12,7 +14,7 @@ class TestEmbeddingService:
     @pytest.fixture
     def embedding_service(self):
         """Create an EmbeddingService instance for testing."""
-        with patch('src.services.embedding_service.openai.OpenAI'):
+        with patch("src.services.embedding_service.openai.OpenAI"):
             service = EmbeddingService("test-api-key")
             return service
 
@@ -25,12 +27,16 @@ class TestEmbeddingService:
         return vec.tolist()
 
     @pytest.mark.asyncio
-    async def test_generate_embedding_success(self, embedding_service, sample_embedding):
+    async def test_generate_embedding_success(
+        self, embedding_service, sample_embedding
+    ):
         """Test successful embedding generation returns correct dimension."""
         # Mock the OpenAI response
         mock_response = MagicMock()
         mock_response.data = [MagicMock(embedding=sample_embedding)]
-        embedding_service.client.embeddings.create = MagicMock(return_value=mock_response)
+        embedding_service.client.embeddings.create = MagicMock(
+            return_value=mock_response
+        )
 
         # Generate embedding
         result = await embedding_service.generate_embedding("Test task description")
@@ -41,11 +47,13 @@ class TestEmbeddingService:
         embedding_service.client.embeddings.create.assert_called_once_with(
             model="BAAI/bge-small-en-v1.5",
             input="Test task description",
-            encoding_format="float"
+            encoding_format="float",
         )
 
     @pytest.mark.asyncio
-    async def test_generate_embedding_with_long_text(self, embedding_service, sample_embedding):
+    async def test_generate_embedding_with_long_text(
+        self, embedding_service, sample_embedding
+    ):
         """Test that long text is truncated properly."""
         # Create very long text
         long_text = "x" * 50000
@@ -53,14 +61,16 @@ class TestEmbeddingService:
         # Mock the OpenAI response
         mock_response = MagicMock()
         mock_response.data = [MagicMock(embedding=sample_embedding)]
-        embedding_service.client.embeddings.create = MagicMock(return_value=mock_response)
+        embedding_service.client.embeddings.create = MagicMock(
+            return_value=mock_response
+        )
 
         # Generate embedding
         result = await embedding_service.generate_embedding(long_text)
 
         # Verify text was truncated
         call_args = embedding_service.client.embeddings.create.call_args
-        assert len(call_args[1]['input']) == 30000  # Max chars limit
+        assert len(call_args[1]["input"]) == 30000  # Max chars limit
         assert len(result) == 3072
 
     @pytest.mark.asyncio
@@ -136,25 +146,25 @@ class TestEmbeddingService:
         """Test batch similarity calculation with multiple embeddings."""
         query = [1.0, 0.0, 0.0]
         embeddings = [
-            [1.0, 0.0, 0.0],   # Identical
-            [0.0, 1.0, 0.0],   # Orthogonal
+            [1.0, 0.0, 0.0],  # Identical
+            [0.0, 1.0, 0.0],  # Orthogonal
             [-1.0, 0.0, 0.0],  # Opposite
-            [0.7071, 0.7071, 0.0]  # 45 degrees
+            [0.7071, 0.7071, 0.0],  # 45 degrees
         ]
         similarities = embedding_service.calculate_batch_similarities(query, embeddings)
 
         assert len(similarities) == 4
-        assert abs(similarities[0] - 1.0) < 1e-6      # Identical
-        assert abs(similarities[1] - 0.0) < 1e-6      # Orthogonal
-        assert abs(similarities[2] - (-1.0)) < 1e-6   # Opposite
-        assert abs(similarities[3] - 0.7071) < 1e-3   # 45 degrees
+        assert abs(similarities[0] - 1.0) < 1e-6  # Identical
+        assert abs(similarities[1] - 0.0) < 1e-6  # Orthogonal
+        assert abs(similarities[2] - (-1.0)) < 1e-6  # Opposite
+        assert abs(similarities[3] - 0.7071) < 1e-3  # 45 degrees
 
     def test_calculate_batch_similarities_normalization(self, embedding_service):
         """Test that batch similarities are properly normalized."""
         query = [2.0, 0.0, 0.0]  # Not normalized
         embeddings = [
-            [3.0, 0.0, 0.0],   # Not normalized but same direction
-            [0.0, 5.0, 0.0],   # Different direction, not normalized
+            [3.0, 0.0, 0.0],  # Not normalized but same direction
+            [0.0, 5.0, 0.0],  # Different direction, not normalized
         ]
         similarities = embedding_service.calculate_batch_similarities(query, embeddings)
 
@@ -177,25 +187,34 @@ class TestEmbeddingService:
         assert similarities[1] == 0.0  # Zero vector
         assert abs(similarities[2] - 1.0) < 1e-6  # Same direction
 
-    @patch('src.services.embedding_service.logger')
-    def test_calculate_batch_similarities_error_fallback(self, mock_logger, embedding_service):
+    @patch("src.services.embedding_service.logger")
+    def test_calculate_batch_similarities_error_fallback(
+        self, mock_logger, embedding_service
+    ):
         """Test that batch calculation falls back to individual on error."""
         query = [1.0, 0.0]
         embeddings = [[1.0, 0.0], [0.0, 1.0]]
 
         # Mock the batch path to fail
-        with patch.object(embedding_service, 'calculate_batch_similarities', wraps=embedding_service.calculate_batch_similarities):
+        with patch.object(
+            embedding_service,
+            "calculate_batch_similarities",
+            wraps=embedding_service.calculate_batch_similarities,
+        ):
             # Mock numpy.linalg.norm to fail in batch path only
             original_norm = np.linalg.norm
             call_count = [0]
+
             def mock_norm(*args, **kwargs):
                 call_count[0] += 1
                 if call_count[0] <= 3:  # Batch path calls
                     raise Exception("Numpy error")
                 return original_norm(*args, **kwargs)
-            
-            with patch('numpy.linalg.norm', side_effect=mock_norm):
-                similarities = embedding_service.calculate_batch_similarities(query, embeddings)
+
+            with patch("numpy.linalg.norm", side_effect=mock_norm):
+                similarities = embedding_service.calculate_batch_similarities(
+                    query, embeddings
+                )
 
                 # Should still get results from fallback
                 assert len(similarities) == 2

@@ -30,7 +30,9 @@ def register(subparsers):
 
     # stop
     sp = sub.add_parser("stop", help="Stop a running workflow")
-    sp.add_argument("workflow_id", nargs="?", help="Workflow execution ID (omit with --all)")
+    sp.add_argument(
+        "workflow_id", nargs="?", help="Workflow execution ID (omit with --all)"
+    )
     sp.add_argument("--all", action="store_true", help="Stop all active workflows")
     sp.set_defaults(func=stop_workflow)
 
@@ -54,7 +56,10 @@ def _print_definitions(defs):
     if not defs:
         print("No workflow definitions registered.")
         return
-    rows = [[d.get("id", ""), d.get("name", ""), d.get("description", "")[:50]] for d in defs]
+    rows = [
+        [d.get("id", ""), d.get("name", ""), d.get("description", "")[:50]]
+        for d in defs
+    ]
     table(["ID", "Name", "Description"], rows)
 
 
@@ -63,7 +68,9 @@ def list_executions(args):
         return 1
     endpoint = "/api/workflow-executions"
     data = api_get(args, endpoint)
-    execs = data if isinstance(data, list) else data.get("executions", []) if data else []
+    execs = (
+        data if isinstance(data, list) else data.get("executions", []) if data else []
+    )
 
     if args.status:
         execs = [e for e in execs if e.get("status") == args.status]
@@ -77,7 +84,12 @@ def _print_executions(execs):
         print("No workflow executions.")
         return
     rows = [
-        [e.get("id", "")[:12], e.get("definition_id", ""), e.get("status", ""), time_ago(e.get("created_at", ""))]
+        [
+            e.get("id", "")[:12],
+            e.get("definition_id", ""),
+            e.get("status", ""),
+            time_ago(e.get("created_at", "")),
+        ]
         for e in execs
     ]
     table(["ID", "Definition", "Status", "Started"], rows)
@@ -125,8 +137,19 @@ def stop_workflow(args):
         # First: terminate all active agents
         try:
             agents_data = api_get(args, "/api/agents")
-            agents = agents_data if isinstance(agents_data, list) else agents_data.get("agents", []) if agents_data else []
-            active_agents = [a for a in agents if isinstance(a, dict) and a.get("status") in ("working", "starting", "idle")]
+            agents = (
+                agents_data
+                if isinstance(agents_data, list)
+                else agents_data.get("agents", [])
+                if agents_data
+                else []
+            )
+            active_agents = [
+                a
+                for a in agents
+                if isinstance(a, dict)
+                and a.get("status") in ("working", "starting", "idle")
+            ]
             if active_agents:
                 print(f"Terminating {len(active_agents)} active agent(s)...")
                 for agent in active_agents:
@@ -134,7 +157,12 @@ def stop_workflow(args):
                     if not agent_id:
                         continue
                     try:
-                        result = api_post(args, "/api/terminate_agent", {"agent_id": agent_id}, timeout=10)
+                        result = api_post(
+                            args,
+                            "/api/terminate_agent",
+                            {"agent_id": agent_id},
+                            timeout=10,
+                        )
                         if result is None:
                             print(f"  {agent_id[:8]}... connection error")
                         else:
@@ -146,7 +174,13 @@ def stop_workflow(args):
 
         # Second: stop all active workflows
         data = api_get(args, "/api/workflow-executions?status=active")
-        execs = data if isinstance(data, list) else data.get("executions", []) if data else []
+        execs = (
+            data
+            if isinstance(data, list)
+            else data.get("executions", [])
+            if data
+            else []
+        )
         if not execs:
             print("No active workflows.")
             return 0
@@ -161,7 +195,11 @@ def stop_workflow(args):
             elif isinstance(result, dict) and "error" in result:
                 print(f"  {eid[:12]}... {result.get('detail', result['error'])}")
             else:
-                msg = result.get("message", "stopped") if isinstance(result, dict) else "stopped"
+                msg = (
+                    result.get("message", "stopped")
+                    if isinstance(result, dict)
+                    else "stopped"
+                )
                 print(f"  {eid[:12]}... {msg}")
         return 0
 
@@ -172,12 +210,26 @@ def stop_workflow(args):
     # Single workflow stop — also terminate its agents
     try:
         agents_data = api_get(args, "/api/agents")
-        agents = agents_data if isinstance(agents_data, list) else agents_data.get("agents", []) if agents_data else []
-        wf_agents = [a for a in agents if isinstance(a, dict) and a.get("status") in ("working", "starting", "idle") and a.get("workflow", {}).get("id") == args.workflow_id]
+        agents = (
+            agents_data
+            if isinstance(agents_data, list)
+            else agents_data.get("agents", [])
+            if agents_data
+            else []
+        )
+        wf_agents = [
+            a
+            for a in agents
+            if isinstance(a, dict)
+            and a.get("status") in ("working", "starting", "idle")
+            and a.get("workflow", {}).get("id") == args.workflow_id
+        ]
         for agent in wf_agents:
             agent_id = agent.get("id", "")
             try:
-                api_post(args, "/api/terminate_agent", {"agent_id": agent_id}, timeout=10)
+                api_post(
+                    args, "/api/terminate_agent", {"agent_id": agent_id}, timeout=10
+                )
             except Exception:
                 pass
     except Exception:

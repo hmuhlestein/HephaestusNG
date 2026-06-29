@@ -24,16 +24,14 @@ import signal
 import subprocess
 import sys
 import time
-import yaml
 from pathlib import Path
+
 from dotenv import load_dotenv
 
 # Import from example_workflows
 sys.path.insert(0, str(Path(__file__).parent))
-from src.workflow_registry import get_all_workflow_definitions
-
 from src.sdk import HephaestusSDK
-from src.sdk.models import WorkflowDefinition
+from src.workflow_registry import get_all_workflow_definitions
 
 # Load environment variables from .env file
 load_dotenv()
@@ -108,7 +106,9 @@ def get_project_path(specified_path: str = None) -> str:
     default_path = str(Path.home() / "hephaestus-projects" / "initial-repo")
 
     while True:
-        user_input = input(f"[Setup] Enter project path (default: {default_path}): ").strip()
+        user_input = input(
+            f"[Setup] Enter project path (default: {default_path}): "
+        ).strip()
 
         if not user_input:
             project_path = Path(default_path)
@@ -119,7 +119,7 @@ def get_project_path(specified_path: str = None) -> str:
         if project_path.exists() and any(project_path.iterdir()):
             print(f"[Warning] Directory '{project_path}' exists and is not empty.")
             choice = input("[Setup] Continue anyway? (y/N): ").strip().lower()
-            if choice in ['y', 'yes']:
+            if choice in ["y", "yes"]:
                 break
             continue
 
@@ -144,6 +144,7 @@ def setup_project(project_path: str):
 
     if prd_source.exists():
         import shutil
+
         shutil.copy2(prd_source, prd_dest)
         print("[Setup] ✓ Copied PRD.md")
     else:
@@ -156,6 +157,7 @@ def setup_project(project_path: str):
 
     if gitignore_source.exists():
         import shutil
+
         shutil.copy2(gitignore_source, gitignore_dest)
         print("[Setup] ✓ Copied .gitignore")
 
@@ -163,12 +165,7 @@ def setup_project(project_path: str):
     git_dir = project_dir / ".git"
     if not git_dir.exists():
         print("[Setup] Initializing git repository...")
-        subprocess.run(
-            ["git", "init"],
-            cwd=project_dir,
-            capture_output=True,
-            text=True
-        )
+        subprocess.run(["git", "init"], cwd=project_dir, capture_output=True, text=True)
 
         # Configure git user if not set
         try:
@@ -177,14 +174,14 @@ def setup_project(project_path: str):
                 cwd=project_dir,
                 capture_output=True,
                 text=True,
-                check=True
+                check=True,
             )
             subprocess.run(
                 ["git", "config", "user.email", "example@hephaestus.local"],
                 cwd=project_dir,
                 capture_output=True,
                 text=True,
-                check=True
+                check=True,
             )
         except subprocess.CalledProcessError:
             print("[Warning] Git configuration may be incomplete")
@@ -193,17 +190,14 @@ def setup_project(project_path: str):
 
         # Add files and make initial commit
         subprocess.run(
-            ["git", "add", "."],
-            cwd=project_dir,
-            capture_output=True,
-            text=True
+            ["git", "add", "."], cwd=project_dir, capture_output=True, text=True
         )
 
         subprocess.run(
             ["git", "commit", "-m", "Initial commit: Add PRD and .gitignore"],
             cwd=project_dir,
             capture_output=True,
-            text=True
+            text=True,
         )
         print("[Setup] ✓ Initial commit created")
     else:
@@ -215,8 +209,9 @@ def setup_project(project_path: str):
 
 def register_project(project_path: str):
     """Register the project in the database as 'Initial Repo' and activate it."""
-    from src.core.database import DatabaseManager, AutopilotProject, get_db
     import uuid
+
+    from src.core.database import AutopilotProject, DatabaseManager
 
     db_path = Path(__file__).parent / "hephaestus.db"
     db_manager = DatabaseManager(str(db_path))
@@ -225,10 +220,13 @@ def register_project(project_path: str):
     # Run migration for is_active column
     try:
         import sqlalchemy
+
         with db_manager.get_session() as session:
-            session.execute(sqlalchemy.text(
-                "ALTER TABLE autopilot_projects ADD COLUMN is_active BOOLEAN DEFAULT 0"
-            ))
+            session.execute(
+                sqlalchemy.text(
+                    "ALTER TABLE autopilot_projects ADD COLUMN is_active BOOLEAN DEFAULT 0"
+                )
+            )
             session.commit()
     except Exception:
         pass
@@ -240,15 +238,17 @@ def register_project(project_path: str):
         if existing:
             existing.is_active = True
             existing.is_default = True
-            session.query(AutopilotProject).filter(AutopilotProject.id != existing.id).update({
-                "is_active": False, "is_default": False
-            })
+            session.query(AutopilotProject).filter(
+                AutopilotProject.id != existing.id
+            ).update({"is_active": False, "is_default": False})
             session.commit()
             print(f"[Project] Reactivated existing project: {existing.name}")
             return
 
         # Clear other active/default
-        session.query(AutopilotProject).update({"is_active": False, "is_default": False})
+        session.query(AutopilotProject).update(
+            {"is_active": False, "is_default": False}
+        )
 
         proj = AutopilotProject(
             id=f"proj-{uuid.uuid4().hex[:12]}",
@@ -272,7 +272,9 @@ def check_and_setup_sub_agents():
 
     # Check what sub-agents we have in examples
     if not examples_agents_dir.exists():
-        print(f"[Warning] Examples sub-agents directory not found: {examples_agents_dir}")
+        print(
+            f"[Warning] Examples sub-agents directory not found: {examples_agents_dir}"
+        )
         return
 
     # List required agents
@@ -285,7 +287,7 @@ def check_and_setup_sub_agents():
         "senior-fastapi-engineer.md",
         "senior-frontend-engineer.md",
         "technical-documentation-writer.md",
-        "test-automation-engineer.md"
+        "test-automation-engineer.md",
     ]
 
     missing_agents = []
@@ -309,14 +311,20 @@ def check_and_setup_sub_agents():
             print(f"  - {agent_file}")
 
         # Ask user if they want to copy the agents
-        response = input(
-            "\n[Sub-Agents] You need 9 sub agents. Do you want to copy them to ~/.claude/agents? (y/N): ").strip().lower()
+        response = (
+            input(
+                "\n[Sub-Agents] You need 9 sub agents. Do you want to copy them to ~/.claude/agents? (y/N): "
+            )
+            .strip()
+            .lower()
+        )
 
-        if response in ['y', 'yes']:
+        if response in ["y", "yes"]:
             print("[Sub-Agents] Copying agents...")
             for source_path, target_path, agent_file in missing_agents:
                 try:
                     import shutil
+
                     shutil.copy2(source_path, target_path)
                     print(f"  ✓ Copied {agent_file}")
                 except Exception as e:
@@ -325,16 +333,16 @@ def check_and_setup_sub_agents():
 
             print(f"[Sub-Agents] ✓ Successfully copied {len(missing_agents)} agents")
         else:
-            print("[Sub-Agents] Skipping agent copy. Workflow may not work properly without all sub-agents.")
+            print(
+                "[Sub-Agents] Skipping agent copy. Workflow may not work properly without all sub-agents."
+            )
 
     return True
 
 
 def main():
     """Run the Hephaestus example."""
-    parser = argparse.ArgumentParser(
-        description="Run Hephaestus example project"
-    )
+    parser = argparse.ArgumentParser(description="Run Hephaestus example project")
     parser.add_argument(
         "--drop-db",
         action="store_true",
@@ -379,8 +387,8 @@ def main():
     mcp_port = int(os.getenv("MCP_PORT", "8300"))
     monitoring_interval = int(os.getenv("MONITORING_INTERVAL_SECONDS", "60"))
 
-    print(f"[Hephaestus] Initializing SDK with PRD to Software Builder phases...")
-    print(f"[Config] Using LLM configuration from hephaestus_config.yaml")
+    print("[Hephaestus] Initializing SDK with PRD to Software Builder phases...")
+    print("[Config] Using LLM configuration from hephaestus_config.yaml")
     print(f"[Config] Working Directory: {project_path}")
     print(f"[Config] PRD File: {prd_file}")
 
@@ -395,14 +403,11 @@ def main():
             working_directory=project_path,
             mcp_port=mcp_port,
             monitoring_interval=monitoring_interval,
-
             # LLM Configuration
             llm_provider="openrouter",
             llm_model="xiaomi/mimo-v2.5",
-
             # Agent Configuration
             default_cli_tool=cli_tool,  # Options: "claude", "opencode", "codex", "droid", "pi"
-
             # Git Configuration
             main_repo_path=project_path,
             project_root=project_path,

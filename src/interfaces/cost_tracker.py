@@ -21,7 +21,8 @@ Usage:
 
 import logging
 from datetime import datetime, timedelta
-from typing import Dict, Any, List, Optional
+from typing import Any, Dict, List, Optional
+
 import httpx
 
 logger = logging.getLogger(__name__)
@@ -44,7 +45,9 @@ class CostTracker:
         self.proxy_url = proxy_url.rstrip("/")
         self.api_key = api_key
 
-    async def _get(self, endpoint: str, params: Optional[Dict] = None) -> Optional[Dict]:
+    async def _get(
+        self, endpoint: str, params: Optional[Dict] = None
+    ) -> Optional[Dict]:
         """Make authenticated GET request to LiteLLM proxy."""
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -62,7 +65,9 @@ class CostTracker:
                 if response.status_code == 200:
                     return response.json()
                 else:
-                    logger.warning(f"LiteLLM API error: {response.status_code} - {response.text[:200]}")
+                    logger.warning(
+                        f"LiteLLM API error: {response.status_code} - {response.text[:200]}"
+                    )
                     return None
 
         except Exception as e:
@@ -84,7 +89,11 @@ class CostTracker:
         )
 
         if not data:
-            return {"spend": 0, "total_tokens": 0, "error": "Could not fetch spend data"}
+            return {
+                "spend": 0,
+                "total_tokens": 0,
+                "error": "Could not fetch spend data",
+            }
 
         user_info = data.get("user_info", {})
         return {
@@ -126,7 +135,11 @@ class CostTracker:
         )
 
         if not data:
-            return {"results": [], "metadata": {}, "error": "Could not fetch daily activity"}
+            return {
+                "results": [],
+                "metadata": {},
+                "error": "Could not fetch daily activity",
+            }
 
         # Filter results for the specific feature/user
         all_results = data if isinstance(data, list) else []
@@ -135,10 +148,12 @@ class CostTracker:
             customers = day_entry.get("customers", [])
             matching = [c for c in customers if c.get("customer") == feature_name]
             if matching:
-                filtered_results.append({
-                    "date": day_entry.get("date"),
-                    "customers": matching,
-                })
+                filtered_results.append(
+                    {
+                        "date": day_entry.get("date"),
+                        "customers": matching,
+                    }
+                )
 
         return {
             "results": filtered_results,
@@ -223,7 +238,9 @@ class CostTracker:
 
         return sorted_features
 
-    async def get_feature_cost_from_response(self, response: Dict[str, Any]) -> Optional[float]:
+    async def get_feature_cost_from_response(
+        self, response: Dict[str, Any]
+    ) -> Optional[float]:
         """Extract cost from an LLM response.
 
         Args:

@@ -1,13 +1,10 @@
 """Build prompts for result validator agents."""
 
-from src.core.database import WorkflowResult, Workflow
+from src.core.database import Workflow, WorkflowResult
 
 
 def build_result_validator_prompt(
-    result: WorkflowResult,
-    workflow: Workflow,
-    criteria: str,
-    validator_agent_id: str
+    result: WorkflowResult, workflow: Workflow, criteria: str, validator_agent_id: str
 ) -> str:
     """
     Build a validation prompt for result validator agents.
@@ -26,7 +23,9 @@ def build_result_validator_prompt(
     extra_files_info = ""
     extra_files_read_commands = ""
     if result.extra_files and len(result.extra_files) > 0:
-        extra_files_list = "\n".join([f"   - {file_path}" for file_path in result.extra_files])
+        extra_files_list = "\n".join(
+            [f"   - {file_path}" for file_path in result.extra_files]
+        )
         extra_files_info = f"""
 - Extra files for validation:
 {extra_files_list}
@@ -35,10 +34,12 @@ IMPORTANT: Read these extra files to assist your validation!
 They contain patches, reproduction scripts, and other evidence."""
 
         # Add Read commands for each extra file
-        extra_files_read_commands = "\n".join([
-            f'   Extra file {i+1}: Read("{file_path}")'
-            for i, file_path in enumerate(result.extra_files)
-        ])
+        extra_files_read_commands = "\n".join(
+            [
+                f'   Extra file {i + 1}: Read("{file_path}")'
+                for i, file_path in enumerate(result.extra_files)
+            ]
+        )
         extra_files_read_commands = f"\n{extra_files_read_commands}"
 
     prompt = f"""

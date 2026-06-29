@@ -1,13 +1,13 @@
 """Test structured analysis using real OpenAI API."""
 
-import pytest
 import asyncio
 import os
+
+import pytest
 from dotenv import load_dotenv
 
 from src.interfaces.llm_interface import get_llm_provider
-from src.monitoring.models import GuardianTrajectoryAnalysis, ConductorSystemAnalysis
-
+from src.monitoring.models import ConductorSystemAnalysis, GuardianTrajectoryAnalysis
 
 # Load environment variables
 load_dotenv()
@@ -33,21 +33,21 @@ async def test_guardian_structured_analysis():
     accumulated_context = {
         "goal": "Analyze configuration system",
         "constraints": ["Read-only access", "No external dependencies"],
-        "session_start": "2025-09-25T21:00:00Z"
+        "session_start": "2025-09-25T21:00:00Z",
     }
 
     past_summaries = [
         {
             "phase": "exploration",
             "summary": "Started exploring codebase structure",
-            "timestamp": "2025-09-25T21:05:00Z"
+            "timestamp": "2025-09-25T21:05:00Z",
         }
     ]
 
     task_info = {
         "id": "test-task-123",
         "description": "Analyze configuration files and document their structure",
-        "agent_id": "test-agent-456"
+        "agent_id": "test-agent-456",
     }
 
     # Call the analysis method
@@ -55,7 +55,7 @@ async def test_guardian_structured_analysis():
         agent_output=agent_output,
         accumulated_context=accumulated_context,
         past_summaries=past_summaries,
-        task_info=task_info
+        task_info=task_info,
     )
 
     # Verify it's a dict (from model_dump())
@@ -81,12 +81,26 @@ async def test_guardian_structured_analysis():
     assert len(result["trajectory_summary"]) > 0
 
     # Verify phase is valid
-    valid_phases = ["exploration", "information_gathering", "planning", "implementation", "verification", "completed", "unknown"]
+    valid_phases = [
+        "exploration",
+        "information_gathering",
+        "planning",
+        "implementation",
+        "verification",
+        "completed",
+        "unknown",
+    ]
     assert result["current_phase"] in valid_phases
 
     # Verify steering_type is valid if present
     if result["steering_type"] is not None:
-        valid_steering_types = ["stuck", "drifting", "violating_constraints", "over_engineering", "confused"]
+        valid_steering_types = [
+            "stuck",
+            "drifting",
+            "violating_constraints",
+            "over_engineering",
+            "confused",
+        ]
         assert result["steering_type"] in valid_steering_types
 
     # Test that we can create a Pydantic model from the result
@@ -111,7 +125,7 @@ async def test_conductor_structured_analysis():
             "phase": "implementation",
             "aligned": True,
             "needs_steering": False,
-            "accumulated_goal": "Analyze config files"
+            "accumulated_goal": "Analyze config files",
         },
         {
             "agent_id": "agent-2",
@@ -119,20 +133,19 @@ async def test_conductor_structured_analysis():
             "phase": "verification",
             "aligned": True,
             "needs_steering": False,
-            "accumulated_goal": "Test system APIs"
-        }
+            "accumulated_goal": "Test system APIs",
+        },
     ]
 
     system_goals = {
         "primary": "Complete system analysis",
         "constraints": "No external dependencies",
-        "coordination": "Agents should not duplicate work"
+        "coordination": "Agents should not duplicate work",
     }
 
     # Call the analysis method
     result = await provider.analyze_system_coherence(
-        guardian_summaries=guardian_summaries,
-        system_goals=system_goals
+        guardian_summaries=guardian_summaries, system_goals=system_goals
     )
 
     # Verify it's a dict (from model_dump())
@@ -180,7 +193,7 @@ async def test_analysis_retry_mechanism():
             agent_output="test output",
             accumulated_context={"goal": "test"},
             past_summaries=[],
-            task_info={"id": "test", "agent_id": "test"}
+            task_info={"id": "test", "agent_id": "test"},
         )
 
         # Should get fallback response

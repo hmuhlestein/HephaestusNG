@@ -5,8 +5,8 @@ from src.phases.phase_loader import PhaseLoader
 from src.phases.phase_manager import PhaseManager
 
 __all__ = [
-    'PhaseContext',
-    'PhasesConfig',
-    'PhaseLoader',
-    'PhaseManager',
+    "PhaseContext",
+    "PhasesConfig",
+    "PhaseLoader",
+    "PhaseManager",
 ]

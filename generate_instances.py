@@ -66,20 +66,20 @@ def fetch_swebench_verified_instances() -> List[str]:
         # Extract instance IDs
         instance_ids = [item["instance_id"] for item in dataset]
 
-        print(f"[Info] Successfully loaded {len(instance_ids)} instances from SWEBench-Verified")
+        print(
+            f"[Info] Successfully loaded {len(instance_ids)} instances from SWEBench-Verified"
+        )
         return instance_ids
 
     except Exception as e:
         print(f"[Error] Failed to load SWEBench-Verified dataset: {e}")
-        print("[Error] Make sure you have internet connection and 'datasets' library installed")
+        print(
+            "[Error] Make sure you have internet connection and 'datasets' library installed"
+        )
         sys.exit(1)
 
 
-def generate_instances_yaml(
-    count: int,
-    output_file: Path,
-    results_dir: Path
-) -> None:
+def generate_instances_yaml(count: int, output_file: Path, results_dir: Path) -> None:
     """Generate instances.yaml with N uncompleted instances.
 
     Args:
@@ -95,8 +95,7 @@ def generate_instances_yaml(
 
     # Filter out completed instances
     available_instances = [
-        instance_id for instance_id in all_instances
-        if instance_id not in completed
+        instance_id for instance_id in all_instances if instance_id not in completed
     ]
 
     print(f"\n[Info] Total instances in SWEBench-Verified: {len(all_instances)}")
@@ -109,7 +108,9 @@ def generate_instances_yaml(
 
     # Check if we have enough instances
     if count > len(available_instances):
-        print(f"\n[Warning] Requested {count} instances, but only {len(available_instances)} are available")
+        print(
+            f"\n[Warning] Requested {count} instances, but only {len(available_instances)} are available"
+        )
         print(f"[Warning] Using all {len(available_instances)} available instances")
         count = len(available_instances)
 
@@ -117,25 +118,25 @@ def generate_instances_yaml(
     selected_instances = random.sample(available_instances, count)
 
     # Create YAML structure
-    yaml_data = {
-        "instances": selected_instances
-    }
+    yaml_data = {"instances": selected_instances}
 
     # Write to file
-    with open(output_file, 'w') as f:
+    with open(output_file, "w") as f:
         yaml.dump(yaml_data, f, default_flow_style=False, sort_keys=False)
 
-    print(f"\n[Success] Created {output_file} with {len(selected_instances)} instances:")
+    print(
+        f"\n[Success] Created {output_file} with {len(selected_instances)} instances:"
+    )
     print(f"[Success] File location: {output_file.absolute()}")
-    print(f"\n[Info] Selected instances:")
+    print("\n[Info] Selected instances:")
     for i, instance_id in enumerate(selected_instances, 1):
         print(f"  {i}. {instance_id}")
 
-    print(f"\n[Next Steps] Run the benchmark with:")
-    print(f"  python run_swebench_batch.py \\")
+    print("\n[Next Steps] Run the benchmark with:")
+    print("  python run_swebench_batch.py \\")
     print(f"      --instances {output_file} \\")
-    print(f"      --timeout 3000 \\")
-    print(f"      --poll-interval 30")
+    print("      --timeout 3000 \\")
+    print("      --poll-interval 30")
 
 
 def main():
@@ -153,26 +154,23 @@ Examples:
 
   # Generate 5 instances, specifying custom results directory
   python generate_instances.py --count 5 --results-dir ./custom_results
-        """
+        """,
     )
 
     parser.add_argument(
-        "--count",
-        type=int,
-        required=True,
-        help="Number of instances to generate"
+        "--count", type=int, required=True, help="Number of instances to generate"
     )
 
     parser.add_argument(
         "--output",
         default="instances.yaml",
-        help="Output YAML filename (default: instances.yaml)"
+        help="Output YAML filename (default: instances.yaml)",
     )
 
     parser.add_argument(
         "--results-dir",
         default="./swebench_results",
-        help="Path to results directory (default: ./swebench_results)"
+        help="Path to results directory (default: ./swebench_results)",
     )
 
     args = parser.parse_args()
@@ -188,20 +186,20 @@ Examples:
 
     # Check if output file already exists
     if output_file.exists():
-        response = input(f"\n[Warning] {output_file} already exists. Overwrite? (y/n): ")
-        if response.lower() != 'y':
+        response = input(
+            f"\n[Warning] {output_file} already exists. Overwrite? (y/n): "
+        )
+        if response.lower() != "y":
             print("[Info] Cancelled")
             sys.exit(0)
 
-    print(f"\n{'='*70}")
-    print(f"SWEBENCH INSTANCE GENERATOR")
-    print(f"{'='*70}\n")
+    print(f"\n{'=' * 70}")
+    print("SWEBENCH INSTANCE GENERATOR")
+    print(f"{'=' * 70}\n")
 
     # Generate the instances file
     generate_instances_yaml(
-        count=args.count,
-        output_file=output_file,
-        results_dir=results_dir
+        count=args.count, output_file=output_file, results_dir=results_dir
     )
 
 

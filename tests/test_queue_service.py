@@ -1,12 +1,13 @@
 """Unit tests for QueueService."""
 
-import pytest
 import uuid
 from datetime import datetime, timedelta
+
+import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from src.core.database import Base, DatabaseManager, Task, Agent
+from src.core.database import Agent, Base, Task
 from src.services.queue_service import QueueService
 
 
