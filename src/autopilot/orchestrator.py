@@ -2121,6 +2121,26 @@ def _advance_phases(workflow_id: str, logger: OrchestratorLogger) -> bool:
                         logger,
                     )
 
+            # Case 0b: In-progress phase with no tasks at all (workflow engine set it but didn't create task)
+            for ps in in_progress:
+                phase = ps["phase"]
+                task_count = (
+                    db.query(Task)
+                    .filter_by(phase_id=phase.id)
+                    .count()
+                )
+                if task_count == 0:
+                    logger.info(
+                        f"[PHASE-ADVANCE] Phase {phase.name} is in_progress but has no tasks — creating one"
+                    )
+                    return _create_phase_task(
+                        workflow_id,
+                        phase.id,
+                        phase.name,
+                        "continue",
+                        logger,
+                    )
+
             # Case 1: Completed phase with pending successor (phase N done, next never started)
             if completed and pending and not in_progress:
                 completed.sort(key=lambda p: p["phase"].order)
@@ -2350,6 +2370,7 @@ def _create_phase_task(
                 "workflow_id": workflow_id,
                 "phase_id": phase_id,
             },
+            timeout=30,
         )
         if not agent_data:
             # API call failed — clean up the orphaned task

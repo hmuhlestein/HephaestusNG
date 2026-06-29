@@ -2014,6 +2014,21 @@ async def get_project_design_status(project_id: str, filename: str):
                         }
                     )
 
+            # Also include full agent details (not just branch info)
+            for agent_id in agent_ids:
+                agent = agents_map.get(agent_id)
+                if agent:
+                    # Avoid duplicates
+                    if not any(a.get("agent_id") == agent.id for a in all_agents):
+                        all_agents.append({
+                            "agent_id": agent.id,
+                            "status": agent.status,
+                            "current_task_id": agent.current_task_id,
+                            "last_activity": agent.last_activity.isoformat() if agent.last_activity else None,
+                            "cli_model": agent.cli_model,
+                            "agent_type": agent.agent_type,
+                        })
+
         # Determine overall status — prefer the design-level status from
         # autopilot_designs (set by run_design_aggregate / continuous pipeline)
         # over workflow-level heuristics, because workflow statuses may include
