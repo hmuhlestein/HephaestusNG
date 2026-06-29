@@ -2524,6 +2524,19 @@ def run_single_workflow(
             # Store branch name for final merge
             state._design_branch = design_branch_name
             state._design_worktree = design_worktree_path
+
+        # Patch pipeline_metrics.json with the workflow_id so the UI can link tasks to features
+        if state and state.current_feature_folder:
+            try:
+                _pm_path = Path(state.current_feature_folder) / "docs" / "pipeline_metrics.json"
+                if _pm_path.exists():
+                    import json as _json
+                    _pm_data = _json.loads(_pm_path.read_text())
+                    _pm_data["workflow_id"] = exec_id
+                    _pm_path.write_text(_json.dumps(_pm_data, indent=2, default=str))
+                    logger.info(f"Patched pipeline_metrics.json with workflow_id={exec_id[:8]}")
+            except Exception as _pm_err:
+                logger.debug(f"Could not patch pipeline_metrics.json: {_pm_err}")
     except Exception as e:
         logger.error(f"Failed to launch workflow {workflow_id}: {e}")
         return "failed"
