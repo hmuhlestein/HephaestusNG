@@ -56,6 +56,7 @@ logs/
 htmlcov/
 .tox/
 .coverage.*
+.mypy_cache/
 
 # Documentation
 docs/_build/
