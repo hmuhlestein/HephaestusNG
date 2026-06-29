@@ -18,6 +18,7 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -286,6 +287,7 @@ class OrchestratorLogger:
         self.log_file = log_dir / "orchestrator.log"
         self.events_file = log_dir / "events.jsonl"
         self.state_file = log_dir / "state.json"
+        self._lock = threading.Lock()
 
     def log(self, message: str, level: str = "INFO"):
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -294,8 +296,9 @@ class OrchestratorLogger:
             print(line, flush=True)
         except OSError:
             pass  # Broken pipe when running as subprocess with DEVNULL
-        with open(self.log_file, "a") as f:
-            f.write(line + "\n")
+        with self._lock:
+            with open(self.log_file, "a") as f:
+                f.write(line + "\n")
 
     def info(self, message: str):
         self.log(message, "INFO")
@@ -312,8 +315,9 @@ class OrchestratorLogger:
             "type": event_type,
             **data,
         }
-        with open(self.events_file, "a") as f:
-            f.write(json.dumps(entry) + "\n")
+        with self._lock:
+            with open(self.events_file, "a") as f:
+                f.write(json.dumps(entry) + "\n")
 
     def save_state(self, state: PipelineState):
         with open(self.state_file, "w") as f:
@@ -1205,23 +1209,31 @@ def _create_integration_worktree(
 
         cfg = get_config()
         db = DbManager(cfg)
-        wt_mgr = WorktreeManager(db_manager=db)
-        wt_mgr.reload(project_path)
-
-        # Create branch from main if it doesn't exist
         try:
-            wt_mgr.main_repo.git.branch(branch)
-        except _git.exc.GitCommandError:
-            pass  # Branch exists
+            wt_mgr = WorktreeManager(db_manager=db)
+            wt_mgr.reload(project_path)
 
-        # Create worktree
-        safe_branch = branch.replace("/", "-")
-        wt_path = wt_mgr.worktree_base / f"wt_{safe_branch}"
-        if not wt_path.exists():
-            wt_mgr.main_repo.git.worktree("add", str(wt_path), branch)
+            # Create branch from main if it doesn't exist
+            try:
+                wt_mgr.main_repo.git.branch(branch)
+            except _git.exc.GitCommandError:
+                pass  # Branch exists
 
-        logger.info(f"Created integration worktree: {wt_path} (branch: {branch})")
-        return wt_path
+            # Create worktree
+            safe_branch = branch.replace("/", "-")
+            wt_path = wt_mgr.worktree_base / f"wt_{safe_branch}"
+            if not wt_path.exists():
+                wt_mgr.main_repo.git.worktree("add", str(wt_path), branch)
+
+            logger.info(f"Created integration worktree: {wt_path} (branch: {branch})")
+            return wt_path
+        finally:
+            session = getattr(db, "_session", None) or getattr(db, "session", None)
+            if session is not None:
+                try:
+                    session.close()
+                except Exception:
+                    pass
     except Exception as e:
         logger.warning(f"Failed to create integration worktree: {e}")
         return None
@@ -1248,16 +1260,24 @@ def _cleanup_worktree(
 
         cfg = get_config()
         db = DbManager(cfg)
-        wt_mgr = WorktreeManager(db_manager=db)
-        wt_mgr.reload(project_path)
+        try:
+            wt_mgr = WorktreeManager(db_manager=db)
+            wt_mgr.reload(project_path)
 
-        # Remove worktree
-        if worktree.exists():
-            try:
-                wt_mgr.main_repo.git.worktree("remove", str(worktree), "--force")
-                logger.info(f"Removed worktree: {worktree}")
-            except Exception as e:
-                logger.warning(f"Failed to remove worktree: {e}")
+            # Remove worktree
+            if worktree.exists():
+                try:
+                    wt_mgr.main_repo.git.worktree("remove", str(worktree), "--force")
+                    logger.info(f"Removed worktree: {worktree}")
+                except Exception as e:
+                    logger.warning(f"Failed to remove worktree: {e}")
+        finally:
+            session = getattr(db, "_session", None) or getattr(db, "session", None)
+            if session is not None:
+                try:
+                    session.close()
+                except Exception:
+                    pass
     except Exception as e:
         logger.warning(f"Failed to cleanup worktree: {e}")
 
@@ -1323,8 +1343,11 @@ def _create_feature_records(
             feature_record_path = designs_folder / "features" / feature_key
             feature_record_path.mkdir(parents=True, exist_ok=True)
 
-            # Create scope document path
+            # Only store scope_doc_path after the file has been copied by run_phase0.
+            # At this point the copy has already happened (run_phase0 copies scope files
+            # before calling _create_feature_records), so check for existence.
             scope_doc_path = feature_record_path / "scope.md"
+            scope_doc_path_str = str(scope_doc_path) if scope_doc_path.exists() else None
 
             feature = Feature(
                 id=feature_id,
@@ -1336,7 +1359,7 @@ def _create_feature_records(
                 depends_on=feat.get("depends_on", []),
                 execution=feat.get("execution", "parallel"),
                 status="pending",
-                scope_doc_path=str(scope_doc_path),
+                scope_doc_path=scope_doc_path_str,
                 feature_record_path=str(feature_record_path),
             )
             db.add(feature)
@@ -1350,7 +1373,7 @@ def _create_feature_records(
                     "files": feat.get("files", []),
                     "depends_on": feat.get("depends_on", []),
                     "execution": feat.get("execution", "parallel"),
-                    "scope_doc_path": str(scope_doc_path),
+                    "scope_doc_path": scope_doc_path_str,
                     "feature_record_path": str(feature_record_path),
                 }
             )
@@ -1422,6 +1445,10 @@ def _update_design_status(
             for key, value in kwargs.items():
                 if hasattr(design, key):
                     setattr(design, key, value)
+                elif logger:
+                    logger.warning(
+                        f"_update_design_status: unknown field {key!r} for AutopilotDesign"
+                    )
             db.commit()
             if logger:
                 logger.info(f"Updated design {design_id} status to {status}")
@@ -1578,7 +1605,8 @@ def _should_skip(feature: dict, feature_results: Dict[str, str]) -> bool:
     """
     depends_on = feature.get("depends_on", [])
     for dep in depends_on:
-        if feature_results.get(dep) == "failed":
+        # Cascade: skip if any dependency failed OR was itself skipped (transitive).
+        if feature_results.get(dep) in ("failed", "skipped"):
             return True
     return False
 
@@ -1659,12 +1687,14 @@ def _resolve_execution_order(
     unprocessed = [f["id"] for f in features if f["id"] not in processed]
     if unprocessed:
         logger.warning(
-            "Cycle detected in dependencies, falling back to sequential order"
+            f"Cycle detected in dependencies among {unprocessed}; "
+            "appending cyclic features sequentially after already-resolved groups"
         )
-        # Fall back to fully sequential - return all features in order
-        execution_groups = [
-            [feat_map[fid]] for fid in feat_map.keys() if fid not in processed
-        ]
+        # Preserve groups already resolved by Kahn's algorithm; append the cyclic
+        # remainder one-by-one so we don't silently drop any processed features.
+        for fid in feat_map:
+            if fid not in processed:
+                execution_groups.append([feat_map[fid]])
 
     # Log execution plan
     logger.info("Execution plan:")
@@ -1959,19 +1989,28 @@ def run_single_workflow(
     state: PipelineState = None,
     max_iterations: int = 10,
     design_id: Optional[str] = None,
+    timeout_seconds: int = MAX_WORKFLOW_TIME,
+    pause_existing: bool = True,
 ) -> str:
     """Run a single workflow execution.
 
     Args:
-        max_iterations: Maps to the engine's max_total_gotos. Updates the workflow
-            definition's orchestrator_config before launching.
+        max_iterations: Maps to the engine's max_total_gotos.
+        timeout_seconds: Hard deadline for this workflow (default: MAX_WORKFLOW_TIME).
+            Pass MAX_PHASE0_TIME for Phase 0 runs.
+        pause_existing: If False, skip pausing currently-active workflows. Set to
+            False when running feature pipelines in parallel so threads don't
+            clobber each other's workflows.
     """
     # Update the workflow definition's orchestrator_config with the requested max_iterations.
     # This makes --max-iterations control the engine's max_total_gotos.
     _update_orchestrator_max_gotos(max_iterations, logger)
 
     # Check for existing active workflows and stop them
-    existing_workflows = get_active_workflows()
+    if not pause_existing:
+        existing_workflows = []
+    else:
+        existing_workflows = get_active_workflows()
     if existing_workflows:
         logger.info(
             f"Found {len(existing_workflows)} active workflow(s) - stopping them..."
@@ -2137,8 +2176,8 @@ def run_single_workflow(
 
             # Timeout check
             elapsed = int(time.time() - start_time)
-            if elapsed > MAX_WORKFLOW_TIME:
-                logger.error(f"Workflow timed out after {MAX_WORKFLOW_TIME}s")
+            if elapsed > timeout_seconds:
+                logger.error(f"Workflow timed out after {timeout_seconds}s")
                 return "timeout"
 
             wf_status = get_workflow_status(exec_id)
@@ -2463,6 +2502,7 @@ def run_phase0(
             state=state,
             max_iterations=3,
             design_id=design_entry.db_id,
+            timeout_seconds=MAX_PHASE0_TIME,
         )
 
         if wf_status != "completed":
@@ -2478,14 +2518,26 @@ def run_phase0(
         # Read and validate features.json
         features_json_path = worktree / CONTEXT_DIR_NAME / "features.json"
         if not features_json_path.exists():
-            logger.error("Phase 0 completed but features.json not found")
-            _update_design_status(
-                design_entry.db_id,
-                "failed",
-                error="features.json not found",
-                logger=logger,
-            )
-            return None, None
+            # Agent may have written to a different location inside the worktree.
+            # Search the whole worktree as a fallback before giving up.
+            candidates = [
+                p for p in worktree.rglob("features.json")
+                if p.stat().st_size > 0
+            ]
+            if candidates:
+                features_json_path = candidates[0]
+                logger.warning(
+                    f"features.json not at expected path; found at {features_json_path}"
+                )
+            else:
+                logger.error("Phase 0 completed but features.json not found anywhere in worktree")
+                _update_design_status(
+                    design_entry.db_id,
+                    "failed",
+                    error="features.json not found",
+                    logger=logger,
+                )
+                return None, None
 
         try:
             features_json = json.loads(features_json_path.read_text())
@@ -2516,17 +2568,18 @@ def run_phase0(
                 else:
                     logger.warning(f"scope.md not found for feature {feat_id}")
 
-        # Create Feature DB records
-        feature_records = _create_feature_records(
-            design_entry.db_id, features_json, designs_folder, logger
-        )
-
-        # Update design status to active
+        # Persist designs_folder BEFORE creating feature records so recovery is possible
+        # if _create_feature_records raises (e.g. disk full).
         _update_design_status(
             design_entry.db_id,
             "active",
             designs_folder=str(designs_folder),
             logger=logger,
+        )
+
+        # Create Feature DB records
+        feature_records = _create_feature_records(
+            design_entry.db_id, features_json, designs_folder, logger
         )
 
         logger.info(f"Phase 0 complete: {len(feature_records)} features created")
@@ -2595,8 +2648,10 @@ def _run_one_feature(
     feature_record_path = designs_folder / "features" / feature_key
     feature_record_path.mkdir(parents=True, exist_ok=True)
 
-    # Create integration worktree for this feature
-    branch = f"feature/{feature_key}"
+    # Include design_id in the branch name to prevent collision when two designs
+    # share a feature with the same key (e.g. both have an "auth" feature).
+    design_slug = (design_entry.db_id or "unknown")[:8]
+    branch = f"feature/{design_slug}/{feature_key}"
     worktree = _create_integration_worktree(project_path, feature_key, branch, logger)
 
     if worktree is None:
@@ -2650,6 +2705,7 @@ def _run_one_feature(
             state=state,
             max_iterations=max_iterations,
             design_id=design_entry.db_id,
+            pause_existing=False,  # features run in parallel; don't clobber each other
         )
 
         # Determine final status
@@ -2830,15 +2886,20 @@ def run_design_aggregate(
     logger.info("=" * 70)
 
     # Determine overall status
-    all_completed = all(s == "completed" for s in feature_results.values())
-    any_failed = any(s == "failed" for s in feature_results.values())
+    results = list(feature_results.values())
+    all_completed = bool(results) and all(s == "completed" for s in results)
+    any_failed = any(s == "failed" for s in results)
+    any_completed = any(s == "completed" for s in results)
+    all_skipped = bool(results) and all(s == "skipped" for s in results)
 
     if all_completed:
         status = DesignStatus.COMPLETED
-    elif any_failed:
+    elif any_failed or all_skipped or not any_completed or not results:
+        # An all-skipped run (e.g. first feature failed, rest cascaded) is not a success.
         status = DesignStatus.FAILED
     else:
-        status = DesignStatus.COMPLETED  # Some skipped is OK
+        # Some skipped but at least one completed — partial success.
+        status = DesignStatus.COMPLETED
 
     # Calculate total time
     total_time = 0
@@ -3079,8 +3140,8 @@ def run_single_design(
 
     design_entry.completed_at = datetime.now().isoformat()
 
-    # ── Post-pipeline: archive artifacts, remove worktree ──
-    _archive_and_cleanup(design_entry, designs_folder, logger)
+    # Note: Phase 0 and feature worktrees are cleaned up by their own finally blocks
+    # inside run_phase0() and _run_one_feature(). No additional cleanup needed here.
 
     return status, report
 
@@ -3393,14 +3454,22 @@ def run_continuous_pipeline(args) -> None:
                 logger.save_state(state)
                 persistent_state.save(state, processed_hashes)
 
-                status, feature_report = run_single_design(
-                    sdk,
-                    next_design,
-                    project_path,
-                    logger,
-                    state,
-                    max_iterations=args.max_iterations,
-                )
+                try:
+                    status, feature_report = run_single_design(
+                        sdk,
+                        next_design,
+                        project_path,
+                        logger,
+                        state,
+                        max_iterations=args.max_iterations,
+                    )
+                except Exception as _design_err:
+                    logger.error(
+                        f"run_single_design raised unexpectedly for "
+                        f"'{next_design.name}': {_design_err}"
+                    )
+                    status = DesignStatus.FAILED
+                    feature_report = _empty_report(next_design)
 
                 next_design.status = status
                 processed_hashes.add(next_design.content_hash)
