@@ -36,7 +36,18 @@ HEPHAESTUS_DIR = Path(__file__).parent.parent.parent
 API_BASE = os.environ.get("HEPHAESTUS_API_BASE", "http://127.0.0.1:8300")
 
 from src.core.constants import AUTOPILOT_STATE_DIR, CONTEXT_DIR_NAME, DESIGN_SUBDIR
+from src.core.database import (
+    Agent,
+    DatabaseManager,
+    Phase,
+    PhaseExecution,
+    Task,
+    Workflow,
+    get_db,
+)
 from src.core.simple_config import get_config
+from src.autopilot.spec import GATED_PHASES, build_phase_output
+from src.phases import PhaseManager
 
 POLL_INTERVAL = 15
 STUCK_THRESHOLD = 3
@@ -637,8 +648,7 @@ def attempt_recovery(workflow_id: str, logger: OrchestratorLogger) -> Tuple[bool
         # Get project path from workflow's working directory
         project_path = None
         try:
-            from src.core.database import Workflow, get_db as _get_db
-            with _get_db() as _db:
+            with get_db() as _db:
                 _wf = _db.query(Workflow).filter_by(id=workflow_id).first()
                 if _wf and _wf.working_directory:
                     project_path = _wf.working_directory
@@ -2036,16 +2046,6 @@ def _advance_phases(workflow_id: str, logger: OrchestratorLogger) -> bool:
     Returns True if a phase was advanced, False otherwise.
     """
     try:
-        from src.core.database import (
-            Agent,
-            Phase,
-            PhaseExecution,
-            Task,
-            Workflow,
-            get_db,
-        )
-        from src.phases import PhaseManager
-
         with get_db() as db:
             # Get workflow
             wf = db.query(Workflow).filter_by(id=workflow_id).first()
@@ -2171,10 +2171,6 @@ def _fire_phase_transition(
     Returns True if something was done.
     """
     try:
-        from src.autopilot.spec import GATED_PHASES, build_phase_output
-        from src.core.database import Phase, PhaseExecution, Workflow, get_db
-        from src.phases import PhaseManager
-
         # Build phase output for gated phases
         phase_output = {}
         if phase.name in GATED_PHASES:
@@ -2238,15 +2234,6 @@ def _create_phase_task(
     """Create a task and agent for a phase via API."""
     try:
         import uuid
-
-        from src.core.database import (
-            Agent,
-            Phase,
-            PhaseExecution,
-            Task,
-            Workflow,
-            get_db,
-        )
 
         with get_db() as db:
             # Check if phase already has an active task
