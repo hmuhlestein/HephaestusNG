@@ -2818,19 +2818,25 @@ async def update_task_status(
                         # This ensures the GOTO/retry/continue decision is made immediately
                         from src.phases import PhaseManager
 
-                        pm = PhaseManager(task.workflow_id)
+                        from src.core.database import DatabaseManager as _DbMgr
+                        pm = PhaseManager(_DbMgr())
+                        pm.workflow_id = task.workflow_id
                         result = pm.mark_phase_complete(
                             phase.id,
                             "Phase completed (spec gate fired from update_task_status)",
                             phase_output=phase_output,
                         )
-                        if result.get("action") == "goto" and result.get(
+                        if result.get("action") == "already_completed":
+                            logger.info(
+                                f"[SPEC-GATE] {phase.name}: already completed by another caller"
+                            )
+                        elif result.get("action") == "goto" and result.get(
                             "target_phase_id"
                         ):
                             logger.info(
                                 f"[SPEC-GATE] {phase.name}: GOTO {result.get('target_phase')} (score too low)"
                             )
-                            # Store the GOTO action so the monitor can create the target phase task
+                            # Store the GOTO action so the orchestrator can create the target phase task
                             task.action = "goto"
                             task.has_results = True
                             session.commit()

@@ -634,7 +634,20 @@ def attempt_recovery(workflow_id: str, logger: OrchestratorLogger) -> Tuple[bool
     #    corrupts the repo because attempt_recovery runs from the orchestrator's
     #    thread, not the agent's worktree context.)
     try:
-        project_path = os.getenv("PROJECT_PATH", "/Users/hmuhlestein/code/sotto")
+        # Get project path from workflow's working directory
+        project_path = None
+        try:
+            from src.core.database import Workflow, get_db as _get_db
+            with _get_db() as _db:
+                _wf = _db.query(Workflow).filter_by(id=workflow_id).first()
+                if _wf and _wf.working_directory:
+                    project_path = _wf.working_directory
+        except Exception:
+            pass
+        if not project_path:
+            project_path = os.getenv("PROJECT_PATH")
+        if not project_path:
+            return recovery  # Can't determine project path
         # Check if repo needs cleanup
         status_result = subprocess.run(
             ["git", "status", "--porcelain"],
@@ -2087,19 +2100,17 @@ def _advance_phases(workflow_id: str, logger: OrchestratorLogger) -> bool:
             pending = [p for p in phase_statuses if p["status"] == "pending"]
             in_progress = [p for p in phase_statuses if p["status"] == "in_progress"]
 
-            # Case 1: Completed phase with pending successor (phase N done, N+1 never started)
+            # Case 1: Completed phase with pending successor (phase N done, next never started)
             if completed and pending and not in_progress:
                 completed.sort(key=lambda p: p["phase"].order)
                 last_completed = completed[-1]
-                has_pending_successor = any(
-                    p["phase"].order == last_completed["phase"].order + 1
-                    for p in pending
+                # Find the next pending phase by order (handles non-sequential orders)
+                successor = min(
+                    (p for p in pending if p["phase"].order > last_completed["phase"].order),
+                    key=lambda p: p["phase"].order,
+                    default=None,
                 )
-                if has_pending_successor:
-                    successor = next(
-                        p for p in pending
-                        if p["phase"].order == last_completed["phase"].order + 1
-                    )
+                if successor:
                     # Check if successor already has tasks (transition already fired)
                     existing_tasks = (
                         db.query(Task)
@@ -2177,7 +2188,9 @@ def _fire_phase_transition(
                     )
 
         # Mark phase complete and get engine decision
-        pm = PhaseManager(workflow_id)
+        from src.core.database import DatabaseManager
+        pm = PhaseManager(DatabaseManager())
+        pm.workflow_id = workflow_id
         result = pm.mark_phase_complete(
             phase.id,
             f"Phase completed",
@@ -2192,6 +2205,11 @@ def _fire_phase_transition(
             f"[PHASE-ADVANCE] Engine decision for {phase.name}: {action}" +
             (f" -> {target_phase_name}" if target_phase_name else "")
         )
+
+        if action == "already_completed":
+            # Phase was already advanced by another caller (spec gate, etc.)
+            # Don't create a duplicate task.
+            return False
 
         if action == "arbitrate":
             # TODO: spawn arbitration agent via API
@@ -2325,6 +2343,18 @@ def _create_phase_task(
                 "phase_id": phase_id,
             },
         )
+        if not agent_data:
+            # API call failed — clean up the orphaned task
+            logger.warning(
+                f"[PHASE-TASK] Failed to create agent for {phase_name}, cleaning up task {task_id[:8]}"
+            )
+            with get_db() as db:
+                task = db.query(Task).filter_by(id=task_id).first()
+                if task:
+                    task.status = "failed"
+                    db.commit()
+            return False
+
         agent_id = agent_data.get("agent_id", "unknown")
 
         # Update task with agent
