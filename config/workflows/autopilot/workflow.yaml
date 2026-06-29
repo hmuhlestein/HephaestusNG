@@ -1,15 +1,16 @@
 default_model: xiaomi/mimo-v2.5
 default_thinking_level: low
 
-# Execution order by phase id. Ids now match pipeline position (1-11).
-execution_order: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+# Execution order by phase id. Ids match pipeline position (1-12).
+execution_order: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
 
 session_roles:
   product_requirements: product-requirements
   scope_review: scope-reviewer
   architecture_design: architect
   development: developer
-  adversarial_review: architect
+  architectural_review: architect       # checks design compliance vs architecture.md
+  adversarial_review: adversarial       # reasons backward from failure modes
   doc_review: doc-reviewer
   security_review: security-reviewer
   qa_validation: qa
@@ -23,6 +24,8 @@ session_roles:
 required_output:
   architecture_design: architecture.md
   scope_review: scope_review_result.json
+  architectural_review: architectural_review_report.md
+  adversarial_review: adversarial_review_report.md
   qa_validation: qa_result.json
   product_validation: product_validation.json
 
@@ -74,21 +77,37 @@ orchestrator:
           action: continue
           reason: "Development complete, proceeding to review"
 
-    - after_phase: adversarial_review
+    - after_phase: architectural_review
       evaluator: heuristic
-      max_retries: 15
+      max_retries: 10
       conditions:
         - if: "score < 0.3"
           action: goto
           target: architecture_design
-          reason: "Major architectural issues found, returning to architecture"
+          reason: "Major architectural violations found, redesign required"
         - if: "score < 0.6"
           action: goto
           target: development
-          reason: "Code issues found, returning to development"
+          reason: "Architectural deviations found, returning to development"
         - if: "score >= 0.6"
           action: continue
-          reason: "Adversarial review passed"
+          reason: "Architectural review passed, proceeding to adversarial review"
+
+    - after_phase: adversarial_review
+      evaluator: heuristic
+      max_retries: 10
+      conditions:
+        - if: "score < 0.3"
+          action: goto
+          target: architecture_design
+          reason: "Critical failure modes found that require architectural changes"
+        - if: "score < 0.6"
+          action: goto
+          target: development
+          reason: "Runtime failure modes found, returning to development to fix"
+        - if: "score >= 0.6"
+          action: continue
+          reason: "Adversarial review passed, no critical failure modes found"
 
     - after_phase: doc_review
       evaluator: heuristic
