@@ -1292,7 +1292,7 @@ def _create_designs_folder(
 
 
 def _create_feature_records(
-    design_id: str,
+    design_id: Optional[str],
     features_json: dict,
     designs_folder: Path,
     logger: OrchestratorLogger,
@@ -1364,7 +1364,7 @@ def _create_feature_records(
 
 def _update_feature_status(
     feature_id: str,
-    design_id: str,
+    design_id: Optional[str],
     status: str,
     error: Optional[str] = None,
     logger: OrchestratorLogger = None,
@@ -1400,7 +1400,7 @@ def _update_feature_status(
 
 
 def _update_design_status(
-    design_id: str,
+    design_id: Optional[str],
     status: str,
     logger: OrchestratorLogger = None,
     **kwargs,
@@ -1662,7 +1662,9 @@ def _resolve_execution_order(
             "Cycle detected in dependencies, falling back to sequential order"
         )
         # Fall back to fully sequential - return all features in order
-        execution_groups = [[feat_map[fid]] for fid in feat_map.keys() if fid not in processed]
+        execution_groups = [
+            [feat_map[fid]] for fid in feat_map.keys() if fid not in processed
+        ]
 
     # Log execution plan
     logger.info("Execution plan:")
