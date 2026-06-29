@@ -739,6 +739,10 @@ class MonitoringLoop:
             except Exception as e:
                 logger.warning(f"[AUTO-DISCOVER] Failed to load active workflow: {e}")
 
+        # Propagate phase_manager to agent_manager so spawned agents get phase context
+        if self.phase_manager and self.agent_manager and not self.agent_manager.phase_manager:
+            self.agent_manager.phase_manager = self.phase_manager
+
         # Check phase progression if workflow is active
         if self.phase_manager and self.phase_manager.workflow_id:
             try:
