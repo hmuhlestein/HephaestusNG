@@ -640,6 +640,33 @@ def attempt_recovery(workflow_id: str, logger: OrchestratorLogger) -> Tuple[bool
         except Exception as e:
             logger.error(f"  Failed to retry task {task_id[:8]}: {e}")
 
+    # 1b. Clean stale "assigned" tasks whose agent is terminated
+    try:
+        from src.core.database import get_db as _get_db, Task as _Task, Agent as _Agent
+
+        with _get_db() as _db:
+            assigned_tasks = (
+                _db.query(_Task)
+                .filter(
+                    _Task.workflow_id == workflow_id,
+                    _Task.status.in_(["assigned", "in_progress"]),
+                )
+                .all()
+            )
+            for task in assigned_tasks:
+                if task.assigned_agent_id:
+                    agent = _db.query(_Agent).filter_by(id=task.assigned_agent_id).first()
+                    if agent and agent.status == "terminated":
+                        logger.info(
+                            f"  Task {task.id[:8]} assigned to terminated agent {task.assigned_agent_id[:8]} — marking failed"
+                        )
+                        task.status = "failed"
+                        task.failure_reason = f"Agent {task.assigned_agent_id[:8]} terminated unexpectedly"
+                        _db.commit()
+                        recovered.append(f"cleaned stale task {task.id[:8]}")
+    except Exception as e:
+        logger.error(f"  Failed to clean stale assigned tasks: {e}")
+
     # 2. Clean stale merge state if repo is dirty (do NOT merge branches here —
     #    the WorktreeManager handles merges in update_task_status. Raw git merge
     #    corrupts the repo because attempt_recovery runs from the orchestrator's
