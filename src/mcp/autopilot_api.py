@@ -1924,7 +1924,7 @@ async def get_project_design_status(project_id: str, filename: str):
         matching_workflows = (
             db.query(Workflow)
             .filter(
-                Workflow.definition_id == "autopilot",
+                Workflow.definition_id.in_(["autopilot", "autopilot-phase0"]),
                 Workflow.launch_params.like(f"%{filename}%"),
             )
             .order_by(Workflow.created_at.desc())
