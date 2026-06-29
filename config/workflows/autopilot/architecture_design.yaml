@@ -64,9 +64,24 @@ additional_notes: |
   steps below are the complete toolkit; apply the parts the design actually warrants.
   
   ═══════════════════════════════════════════════════════════════════════
+  STEP 0.5: CHECK FOR PRIOR PARTIAL WORK (RETRY AWARENESS)
+  ═══════════════════════════════════════════════════════════════════════
+
+  Before doing any work, check if a previous attempt already produced output:
+
+    cat ./docs/architecture.md 2>/dev/null | head -20 || echo "NO_PRIOR_ARCH"
+
+  If architecture.md EXISTS and is non-empty:
+  - Read it fully — do NOT rewrite from scratch
+  - Check what's missing vs the done_definitions above
+  - Fill only the gaps, then mark done
+
+  If it does NOT exist (or is empty): proceed normally from STEP 1.
+
+  ═══════════════════════════════════════════════════════════════════════
   STEP 1: READ REQUIREMENTS AND EXISTING FILES
   ═══════════════════════════════════════════════════════════════════════
-  
+
   Read requirements_analysis.md from Phase 1. Understand:
   - All functional requirements
   - Non-functional requirements
