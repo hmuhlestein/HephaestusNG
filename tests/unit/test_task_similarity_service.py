@@ -34,6 +34,7 @@ class TestTaskSimilarityService:
         db_manager, _ = mock_db_manager
         with patch("src.services.task_similarity_service.get_config") as mock_config:
             config = Mock()
+            config.database_path = ":memory:"
             config.task_similarity_threshold = 0.7
             config.task_related_threshold = 0.4
             mock_config.return_value = config
