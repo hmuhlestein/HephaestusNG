@@ -757,130 +757,61 @@ NOTE: Having a workflow-level goal does NOT mean you skip hephaestus_update_task
 
         base_message += result_criteria_section
 
-        base_message += f"""
+        is_phase_agent = hasattr(task, 'phase_id') and task.phase_id
+
+        if is_phase_agent:
+            # Compact instructions for workflow phase agents — keep context window lean
+            base_message += f"""
+
+INSTRUCTIONS (agent_id="{agent_id}" required on every MCP call):
+- Complete the task described above
+- hephaestus_update_task_status(task_id="{task.id}", status="done") — REQUIRED when done
+- hephaestus_update_task_status(task_id="{task.id}", status="failed", failure_reason="...") — on unrecoverable error
+- hephaestus_save_memory: save key decisions, error fixes, and discoveries as you go
+- hephaestus_search_memory: search before reinventing; use specific queries
+- hephaestus_create_task(description="...", done_definition="...", phase=N): create subtasks
+{phase_context_section}
+Begin now.
+"""
+        else:
+            base_message += f"""
 
 IMPORTANT INSTRUCTIONS:
 1. Complete all the requirements listed in the COMPLETION CRITERIA above
 
-2. You have access to the Hephaestus MCP server tools. Use them to:
-   
-   🔑 REMEMBER: When calling these tools, always use agent_id="{agent_id}"
-   
-   - hephaestus_update_task_status: Mark your task as done when completed (with task_id: {task.id})
-   - hephaestus_save_memory: Save discoveries for other agents (USE THIS LIBERALLY - see Memory Guidelines below)
-   - hephaestus_create_task: Create sub-tasks if you need to break down complex work
-   - hephaestus_search_memory: Search past memories when you need specific information (see Memory Search below)"""
-
-        # Add phase-specific instructions if in a workflow
-        if hasattr(task, 'phase_id') and task.phase_id:
-            base_message += """
-   - When creating tasks, specify the phase number (1, 2, 3...) for the phase you want
-   - Example: hephaestus_create_task(description="...", done_definition="...", phase=1) for Planning phase
-   - Example: hephaestus_create_task(description="...", done_definition="...", phase=2) for Implementation phase"""
-
-        base_message += f"""
-   - hephaestus_get_tasks: Check the status of other tasks in the system
-   - hephaestus_broadcast_message: Send a message to ALL active agents in the system
-   - hephaestus_send_message: Send a direct message to a SPECIFIC agent
+2. MCP tools (always use agent_id="{agent_id}"):
+   - hephaestus_update_task_status: Mark your task as done (task_id: {task.id})
+   - hephaestus_save_memory: Save discoveries for other agents
+   - hephaestus_search_memory: Search past memories
+   - hephaestus_create_task: Create sub-tasks
+   - hephaestus_get_tasks: Check status of other tasks
+   - hephaestus_broadcast_message: Send message to ALL active agents
+   - hephaestus_send_message: Send direct message to a SPECIFIC agent
 
 **Agent Communication**:
-You can communicate with other agents working in the system using these tools:
+- hephaestus_broadcast_message: Use when all agents need to know something
+- hephaestus_send_message: Use for direct agent-to-agent coordination
+  (use hephaestus_get_agent_status first to find agent IDs)
 
-- **hephaestus_broadcast_message(message, sender_agent_id)**: Use when you have information ALL agents should know,
-  or when asking for help but don't know who to ask specifically.
-  Examples:
-  • "I found a critical bug in module X that affects everyone"
-  • "Does anyone have information about how authentication works?"
-  • "I've completed the database schema - all agents can now use it"
+3. **TASK COMPLETION** (REQUIRED):
+   hephaestus_update_task_status(task_id="{task.id}", status="done", ...)
 
-- **hephaestus_send_message(message, sender_agent_id, recipient_agent_id)**: Use when you want to communicate
-  with a specific agent. First use hephaestus_get_agent_status() to see active agents and their tasks.
-  Examples:
-  • "I need the API specs you were working on"
-  • "Your task conflicts with mine - can we coordinate?"
-  • "I found the answer to your earlier question"
+4. **WORKFLOW RESULT** (only if you solved the ENTIRE workflow):
+   hephaestus_submit_result(markdown_file_path="...", agent_id="{agent_id}", explanation="...", evidence=[...])
 
-Messages you receive from other agents will appear with prefixes:
-- [AGENT xxx BROADCAST]: Message sent to all agents
-- [AGENT xxx TO AGENT yyy]: Direct message to you specifically
+5. On unrecoverable failure:
+   hephaestus_update_task_status(task_id="{task.id}", status="failed", failure_reason="...")
 
-When another agent sends you a message, consider responding if you have helpful information or can assist.
-
-3. **CRITICAL - TASK COMPLETION**: When you complete YOUR ASSIGNED TASK:
-   - You MUST ALWAYS use hephaestus_update_task_status to mark your task as "done"
-   - Set status to "done"
-   - Include a summary of what you accomplished
-   - Your task_id is: {task.id}
-   - Your agent_id is: {agent_id}
-   - This is REQUIRED for every task, regardless of workflow type
-
-4. **OPTIONAL - WORKFLOW RESULT SUBMISSION**: Only if you have achieved the ENTIRE workflow's final goal:
-   - Use hephaestus_submit_result ONLY when you have the complete solution for the ENTIRE WORKFLOW
-   - This is SEPARATE from task completion - you still need to mark your task as done first
-   - hephaestus_submit_result(markdown_file_path="path/to/result.md", agent_id="{agent_id}",
-                     explanation="Brief description", evidence=["proof1", "proof2"])
-   - This is for the final workflow deliverable (e.g., the cracked password, the complete report, etc.)
-   - Do NOT use this for intermediate task results
-   - The result will be automatically validated before workflow completion
-
-5. If you encounter issues you cannot resolve:
-   - Use hephaestus_update_task_status with status "failed"
-   - Include a clear failure_reason explaining what went wrong
-   - Your task_id is: {task.id}
-   - Your agent_id is: {agent_id}
-
-6. **MEMORY GUIDELINES** - Sharing Knowledge with Other Agents:
-
-   **When to SAVE memories (hephaestus_save_memory):**
-   Save memories LIBERALLY throughout your work - don't wait until the end! Other agents benefit from:
-   • Error solutions: Fixed a bug? Save it immediately (type: error_fix)
-   • Discoveries: Found how something works? Save it (type: discovery)
-   • Decisions: Made a design choice? Document why (type: decision)
-   • Learnings: Learned something non-obvious? Share it (type: learning)
-   • Warnings: Hit an edge case or gotcha? Warn others (type: warning)
-   • Code insights: Understand code structure? Document it (type: codebase_knowledge)
-
-   Examples of what to save:
-   - "Fixed 'ModuleNotFoundError' by adding src/ to PYTHONPATH"
-   - "Authentication uses JWT with HS256, 24h expiry, stored in cookie"
-   - "Chose Redis over Memcached for pub/sub support in notifications"
-   - "Always call db.commit() before db.close() or changes are lost"
-   - "Don't use os.fork() with SQLite - causes 'database locked' errors"
-   - "API routes defined in src/api/routes/, grouped by resource type"
-
-   **When to SEARCH memories (search_memory):**
-   Use search_memory when you need specific information not in your initial context:
-   • Encountering an unfamiliar error? Search: "search_memory 'NameError when importing'"
-   • Need implementation details? Search: "search_memory 'how database migrations work'"
-   • Looking for patterns? Search: "search_memory 'API authentication setup'"
-   • Finding related work? Search: "search_memory 'previous rate limiting implementations'"
-
-   Pro tips:
-   - Save memories AS YOU GO, not just at task completion
-   - Be specific in memory content (include error messages, file paths, exact solutions)
-   - Use search_memory before reinventing the wheel
-   - Prefix memory content with a feature/context identifier so future searches can filter by topic"""
-
-        # Add phase transition instructions if available
-        if hasattr(task, 'phase_id') and task.phase_id:
-            base_message += """
-
-7. Phase-Aware Task Creation:
-   - Always specify the phase number when creating tasks: phase=1, phase=2, etc.
-   - You can create tasks for ANY phase based on what you discover
-   - Phase 1 tasks: Planning, architecture, design decisions
-   - Phase 2 tasks: Implementation, coding, building features
-   - Use your judgment to assign tasks to the appropriate phase"""
-
-        base_message += f"""
+6. Memory — save liberally throughout (not just at end):
+   Types: error_fix, discovery, decision, learning, warning, codebase_knowledge
+   Search before reinventing: hephaestus_search_memory(query="specific topic")
 {phase_context_section}
 
 Begin working on your task now.
 
 REMEMBER:
-- When you complete YOUR TASK → use hephaestus_update_task_status(status="done")
-- Only if you solve the ENTIRE WORKFLOW → also use hephaestus_submit_result()
-- These are TWO SEPARATE actions - task completion is always required!
+- Task done → hephaestus_update_task_status(status="done") [ALWAYS required]
+- Entire workflow solved → also hephaestus_submit_result() [separate action]
 """
 
         logger.info(f"🔍 PROMPT SIZE DEBUG: Message before adding phase context: {len(base_message)} chars")
