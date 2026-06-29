@@ -4,11 +4,62 @@ import pytest
 import tempfile
 import os
 import uuid
+import builtins
 from datetime import datetime
-from unittest.mock import MagicMock, AsyncMock
+from pathlib import Path
+from unittest.mock import MagicMock, AsyncMock, patch
 
 # Set test database environment variable before any imports
 os.environ["HEPHAESTUS_TEST_DB"] = ":memory:"
+
+
+@pytest.fixture(autouse=True)
+def _guard_mock_paths(monkeypatch):
+    """Raise if any code opens a path whose str looks like a Mock repr.
+
+    Bare Mock() objects silently auto-create attributes that pass through to
+    open() as filenames, e.g. '<Mock name="get_config().database_path" id="...">'.
+    """
+    real_open = builtins.open
+
+    def guarded_open(file, *args, **kwargs):
+        if isinstance(file, str) and file.startswith("<Mock "):
+            raise TypeError(
+                f"open() called with a Mock repr as path: {file!r}\n"
+                "Set the required attribute on your mock config "
+                "(e.g. config.database_path = ':memory:')."
+            )
+        return real_open(file, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "open", guarded_open)
+
+
+@pytest.fixture
+def mock_heph_config():
+    """Return a Mock config with all common fields pre-populated.
+
+    Use this instead of bare Mock() when patching get_config() so that
+    accessing any config attribute never silently returns another Mock.
+    """
+    config = MagicMock()
+    config.database_path = Path(":memory:")
+    config.mcp_host = "127.0.0.1"
+    config.mcp_port = 8300
+    config.enable_cors = True
+    config.branch_base_path = Path("/tmp/hephaestus_worktrees")
+    config.worktree_base_path = None
+    config.project_root = Path("/tmp/test-project")
+    config.main_repo_path = Path("/tmp/test-project")
+    config.base_branch = "main"
+    config.branch_prefix = "agent-"
+    config.auto_commit = False
+    config.conflict_resolution_strategy = "newest_file_wins"
+    config.llm_provider = "openrouter"
+    config.llm_model = "openai/gpt-4o"
+    config.task_similarity_threshold = 0.7
+    config.task_related_threshold = 0.4
+    config.phases_folder = "./sample-phases"
+    return config
 
 
 @pytest.fixture(scope="session")
