@@ -2102,7 +2102,11 @@ async def get_project_design_status(project_id: str, filename: str):
                     best_diff = float('inf')
                     for wf in matching_workflows:
                         if wf.created_at:
-                            diff = abs(wf.created_at.timestamp() - feat_mtime)
+                            # DB stores naive UTC; timestamp() treats naive as local,
+                            # but getmtime() returns UTC epoch. Normalize to UTC.
+                            from datetime import timezone as _tz
+                            wf_ts = wf.created_at.replace(tzinfo=_tz.utc).timestamp() if wf.created_at.tzinfo is None else wf.created_at.timestamp()
+                            diff = abs(wf_ts - feat_mtime)
                             if diff < best_diff:
                                 best_diff = diff
                                 best_wf = wf
