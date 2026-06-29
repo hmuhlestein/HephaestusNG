@@ -17,6 +17,22 @@ session_roles:
   git_commit_push: git
   forensics_analysis: forensics
 
+# Required output artifacts per phase — used as completion hard floors.
+# If a phase declares an output, update_task_status rejects 'done' when
+# the artifact is missing (catches hallucinated completions at the source).
+required_output:
+  architecture_design: architecture.md
+  scope_review: scope_review_result.json
+  qa_validation: qa_result.json
+  product_validation: product_validation.json
+
+# Optional phases that can fail without blocking the pipeline.
+# All other phases are required — if they fail after MAX_PHASE_ATTEMPTS,
+# the workflow enters impasse (paused for human review).
+optional_phases:
+  - forensics_analysis
+  - git_commit_push
+
 orchestrator:
   type: evaluating
   max_phase_retries: 2

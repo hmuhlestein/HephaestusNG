@@ -36,12 +36,87 @@ GATED_PHASES = ("scope_review", "qa_validation", "product_validation")
 # Declared output artifacts per phase — used as completion hard floors.
 # If a phase declares an output, update_task_status rejects 'done' when
 # the artifact is missing (catches hallucinated completions at the source).
-PHASE_OUTPUT_ARTIFACTS = {
+# Default artifacts (can be overridden by workflow.yaml required_output config)
+DEFAULT_PHASE_OUTPUT_ARTIFACTS = {
     "architecture_design": "architecture.md",
     "scope_review": "scope_review_result.json",
     "qa_validation": "qa_result.json",
     "product_validation": "product_validation.json",
 }
+
+# Runtime-loaded artifacts from workflow.yaml
+PHASE_OUTPUT_ARTIFACTS = dict(DEFAULT_PHASE_OUTPUT_ARTIFACTS)
+
+
+def load_phase_output_artifacts(workflow_id: Optional[str] = None) -> dict:
+    """Load required_output artifacts from workflow.yaml if available.
+    
+    Falls back to DEFAULT_PHASE_OUTPUT_ARTIFACTS if workflow_id is None
+    or workflow.yaml doesn't have required_output config.
+    """
+    global PHASE_OUTPUT_ARTIFACTS
+    if workflow_id is None:
+        return PHASE_OUTPUT_ARTIFACTS
+    
+    try:
+        from src.core.database import Workflow, DatabaseManager
+        db = DatabaseManager()
+        session = db.get_session()
+        try:
+            wf = session.query(Workflow).filter_by(id=workflow_id).first()
+            if wf and wf.definition_id:
+                # Load workflow definition from YAML
+                from src.workflow_registry import _WORKFLOWS_DIR
+                wf_dir = _WORKFLOWS_DIR / wf.definition_id
+                workflow_yaml = wf_dir / "workflow.yaml"
+                if workflow_yaml.exists():
+                    import yaml
+                    with open(workflow_yaml) as f:
+                        wf_config = yaml.safe_load(f)
+                    if wf_config and "required_output" in wf_config:
+                        PHASE_OUTPUT_ARTIFACTS.update(wf_config["required_output"])
+                        logger.info(f"Loaded required_output from workflow.yaml: {PHASE_OUTPUT_ARTIFACTS}")
+        finally:
+            session.close()
+    except Exception as e:
+        logger.debug(f"Could not load required_output from workflow.yaml: {e}")
+    
+    return PHASE_OUTPUT_ARTIFACTS
+
+
+# Optional phases that can fail without blocking the pipeline
+OPTIONAL_PHASES = {"forensics_analysis", "git_commit_push"}
+
+
+def load_optional_phases(workflow_id: Optional[str] = None) -> set:
+    """Load optional_phases from workflow.yaml if available."""
+    global OPTIONAL_PHASES
+    if workflow_id is None:
+        return OPTIONAL_PHASES
+    
+    try:
+        from src.core.database import Workflow, DatabaseManager
+        db = DatabaseManager()
+        session = db.get_session()
+        try:
+            wf = session.query(Workflow).filter_by(id=workflow_id).first()
+            if wf and wf.definition_id:
+                from src.workflow_registry import _WORKFLOWS_DIR
+                wf_dir = _WORKFLOWS_DIR / wf.definition_id
+                workflow_yaml = wf_dir / "workflow.yaml"
+                if workflow_yaml.exists():
+                    import yaml
+                    with open(workflow_yaml) as f:
+                        wf_config = yaml.safe_load(f)
+                    if wf_config and "optional_phases" in wf_config:
+                        OPTIONAL_PHASES = set(wf_config["optional_phases"])
+                        logger.info(f"Loaded optional_phases from workflow.yaml: {OPTIONAL_PHASES}")
+        finally:
+            session.close()
+    except Exception as e:
+        logger.debug(f"Could not load optional_phases from workflow.yaml: {e}")
+    
+    return OPTIONAL_PHASES
 
 # Score anchors for the three bands.
 _ARCH = 0.25       # < 0.3  -> goto architecture
