@@ -72,7 +72,7 @@ def test_feature_default_status():
         )
         session.add(feat)
         session.commit()
-        loaded = session.query(Feature).get("test-123")
+        loaded = session.get(Feature, "test-123")
         assert loaded.status == "pending"
         assert loaded.execution == "parallel"
     finally:

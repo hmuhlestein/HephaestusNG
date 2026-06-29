@@ -288,7 +288,7 @@ class Workflow(Base):
         String,
         CheckConstraint("workflow_type IN ('design', 'feature')"),
         nullable=True,
-        default="feature",
+        default=None,  # Explicitly set via _set_workflow_type; NULL = pre-feature-model row
     )
     feature_id = Column(String, ForeignKey("features.id"), nullable=True)
 
@@ -1480,13 +1480,16 @@ class DatabaseManager:
                 try:
                     conn.execute(
                         text(
-                            "ALTER TABLE workflows ADD COLUMN workflow_type VARCHAR DEFAULT 'feature'"
+                            "ALTER TABLE workflows ADD COLUMN workflow_type VARCHAR DEFAULT NULL"
                         )
                     )
                 except Exception:
                     pass  # Column already exists
 
-                # Add feature_id column
+                # Add feature_id column.
+                # Note: SQLite silently ignores FK declarations in ALTER TABLE, so
+                # the REFERENCES clause is documentation only — cascade deletes and
+                # constraint checks are enforced by the ORM layer, not the DB engine.
                 try:
                     conn.execute(
                         text(
