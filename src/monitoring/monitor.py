@@ -1773,6 +1773,10 @@ class MonitoringLoop:
                 phase_glm_token_env = phase.glm_api_token_env
                 phase_thinking_level = getattr(phase, 'thinking_level', None)
 
+                # Ensure agent_manager has phase_manager so spawned agents get phase context
+                if self.phase_manager and not self.agent_manager.phase_manager:
+                    self.agent_manager.phase_manager = self.phase_manager
+
                 project_context = await self.agent_manager.get_project_context()
 
                 agent = await self.agent_manager.create_agent_for_task(
