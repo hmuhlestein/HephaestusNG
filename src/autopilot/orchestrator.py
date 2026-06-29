@@ -1130,6 +1130,21 @@ def pick_next_design(
 
     next_design = designs[0]
     logger.info(f"Selected: {next_design.name}")
+
+    # Try to look up DB ID for file-scanned design
+    try:
+        from src.core.database import AutopilotDesign, AutopilotProject, get_db as _get_db
+        with _get_db() as _db:
+            project = _db.query(AutopilotProject).filter_by(is_active=True).first()
+            if project:
+                db_design = _db.query(AutopilotDesign).filter_by(
+                    project_id=project.id, filename=next_design.path.name
+                ).first()
+                if db_design:
+                    next_design.db_id = db_design.id
+    except Exception:
+        pass  # non-critical
+
     return next_design
 
 
@@ -2899,6 +2914,25 @@ def run_phase0(
     logger.info("=" * 70)
     logger.info("STAGE 1: PHASE 0 - FEATURE ARCHITECT")
     logger.info("=" * 70)
+
+    # Check if features already exist for this design — skip Phase 0 if so
+    from src.core.database import Feature as FeatureModel, get_db as _get_db
+    with _get_db() as _db:
+        existing_features = _db.query(FeatureModel).filter_by(design_id=design_entry.db_id).all()
+        # Copy data out of session to avoid DetachedInstanceError
+        existing_feature_data = [
+            {"id": f.feature_key, "name": f.name, "scope": f.scope, "files": f.files or [], "depends_on": f.depends_on or [], "execution": f.execution}
+            for f in existing_features
+        ]
+    if existing_feature_data:
+        logger.info(f"Features already exist for {design_entry.name} ({len(existing_feature_data)} features) — skipping Phase 0")
+        features_json = {
+            "design_name": design_entry.name,
+            "features": existing_feature_data,
+        }
+        designs_folder = _create_designs_folder(project_path, design_entry, logger)
+        _update_design_status(design_entry.db_id, "active", logger=logger)
+        return features_json, designs_folder
 
     # Update design status to decomposing
     _update_design_status(design_entry.db_id, "decomposing", logger=logger)
