@@ -763,13 +763,14 @@ NOTE: Having a workflow-level goal does NOT mean you skip hephaestus_update_task
             # Compact instructions for workflow phase agents — keep context window lean
             base_message += f"""
 
-INSTRUCTIONS (agent_id="{agent_id}" required on every MCP call):
+INSTRUCTIONS (include agent_id="{agent_id}" and workflow_id="{workflow_id if workflow_id else 'N/A'}" on every MCP call):
 - Complete the task described above
 - hephaestus_update_task_status(task_id="{task.id}", status="done") — REQUIRED when done
 - hephaestus_update_task_status(task_id="{task.id}", status="failed", failure_reason="...") — on unrecoverable error
-- hephaestus_save_memory: save key decisions, error fixes, and discoveries as you go
-- hephaestus_search_memory: search before reinventing; use specific queries
-- hephaestus_create_task(description="...", done_definition="...", phase=N): create subtasks
+- hephaestus_save_memory(content="...", memory_type="<type>"): save as you go, not just at end
+  types: error_fix | discovery | decision | learning | warning | codebase_knowledge
+- hephaestus_search_memory(query="..."): search before reinventing
+- hephaestus_create_task(description="...", done_definition="...", phase=N, workflow_id="{workflow_id if workflow_id else 'N/A'}"): create subtasks
 {phase_context_section}
 Begin now.
 """

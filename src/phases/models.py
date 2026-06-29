@@ -59,14 +59,13 @@ class PhaseContext(BaseModel):
                 outputs_str = current.outputs
             context += f"Outputs: {outputs_str}\n"
 
-        context += "\nPipeline:\n"
+        context += "\nPipeline (use phase=N when creating tasks):\n"
         for phase in self.all_phases:
             status_indicator = "✓" if phase.id < current.id else (
                 "→" if phase.id == current.id else "○"
             )
-            context += f"  {status_indicator} Phase {phase.id}: {phase.name}\n"
-
-        context += f"\nTask creation: always pass phase=N (e.g. phase={current.id} for this phase).\n"
+            desc_short = phase.description[:80].split("\n")[0] if phase.description else ""
+            context += f"  {status_indicator} Phase {phase.id}: {phase.name} — {desc_short}\n"
 
         return context
 
