@@ -792,9 +792,28 @@ def detect_impasse(
     active_agents = [a for a in agents if a.get("status") in ACTIVE_AGENT_STATUSES]
 
     # If there are pending tasks but no active agents, something is wrong
-    # But give a 300 second grace period for agents to start (monitor needs
-    # time to detect phase completion, evaluate, create task, then spawn agent)
-    if not active_agents and pending_tasks and elapsed_seconds > 300:
+    # But give a generous grace period for agents to start. The monitor needs
+    # time to: detect phase completion → evaluate with engine → create task →
+    # spawn agent. With 60s polling intervals, this can take 2-3 minutes.
+    # Also check if any pending task was recently created (monitor is working on it).
+    if not active_agents and pending_tasks and elapsed_seconds > 600:
+        # Check if any pending task was created recently (within last 120s)
+        # If so, the monitor is likely about to spawn an agent — don't trigger impasse.
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
+        for task in pending_tasks:
+            created = task.get("created_at")
+            if created:
+                try:
+                    created_dt = datetime.fromisoformat(created)
+                    if created_dt.tzinfo is None:
+                        created_dt = created_dt.replace(tzinfo=timezone.utc)
+                    task_age = (now - created_dt).total_seconds()
+                    if task_age < 120:
+                        # Task was just created — monitor is likely spawning agent
+                        return False, ""
+                except Exception:
+                    pass
         return True, f"No active agents but {len(pending_tasks)} tasks pending"
 
     # Check for agents that have been working too long without progress
@@ -3467,8 +3486,6 @@ def run_continuous_pipeline(args) -> None:
                     "processed": len(processed_hashes),
                 }
                 _update_orchestrator_status("working")
-                logger.save_state(state)
-                persistent_state.save(state, processed_hashes)
 
                 try:
                     status, feature_report = run_single_design(
@@ -3479,6 +3496,9 @@ def run_continuous_pipeline(args) -> None:
                         state,
                         max_iterations=args.max_iterations,
                     )
+                    # Save state AFTER run_single_design so current_workflow_id is captured
+                    logger.save_state(state)
+                    persistent_state.save(state, processed_hashes)
                 except Exception as _design_err:
                     logger.error(
                         f"run_single_design raised unexpectedly for "
