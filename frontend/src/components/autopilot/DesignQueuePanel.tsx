@@ -350,7 +350,7 @@ const StatusBadge: React.FC<{ status: string }> = ({ status }) => {
 
 const TASK_STATUS_CONFIG: Record<string, { color: string; icon: React.ReactNode }> = {
   pending: { color: 'text-gray-400', icon: <Clock className="w-4 h-4" /> },
-  assigned: { color: 'text-blue-500', icon: <Loader2 className="w-4 h-4" /> },
+  assigned: { color: 'text-blue-500', icon: <Loader2 className="w-4 h-4 animate-spin" /> },
   in_progress: { color: 'text-violet-500', icon: <Loader2 className="w-4 h-4 animate-spin" /> },
   done: { color: 'text-green-500', icon: <CheckCircle2 className="w-4 h-4" /> },
   failed: { color: 'text-red-500', icon: <XCircle className="w-4 h-4" /> },
