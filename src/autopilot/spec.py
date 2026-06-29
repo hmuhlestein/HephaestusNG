@@ -16,8 +16,11 @@ Score bands map onto the autopilot evaluation_points thresholds:
 """
 
 import json
+import logging
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
+
+logger = logging.getLogger(__name__)
 
 from src.core.constants import AUTOPILOT_STATE_DIR
 
