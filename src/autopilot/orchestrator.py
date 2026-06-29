@@ -1196,6 +1196,9 @@ def generate_html_feature_report(
     html_path = feature_folder / "feature_report.html"
     html_path.write_text(html)
     logger.info(f"HTML feature report: {html_path}")
+    import subprocess, sys
+    if sys.platform == "darwin":
+        subprocess.Popen(["open", str(html_path)])
     return html_path
 
 
