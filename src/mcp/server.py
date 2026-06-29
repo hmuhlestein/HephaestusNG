@@ -2725,7 +2725,7 @@ async def update_task_status(
         if request.status == "done" and task.phase_id:
             from pathlib import Path as _Path
 
-            from src.autopilot.spec import load_phase_output_artifacts
+            from src.autopilot.spec import PHASE_OUTPUT_ARTIFACTS, load_phase_output_artifacts
 
             # Load required_output from workflow.yaml for this workflow
             required_output = load_phase_output_artifacts(task.workflow_id)
