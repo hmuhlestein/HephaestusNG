@@ -1661,8 +1661,8 @@ def _resolve_execution_order(
         logger.warning(
             "Cycle detected in dependencies, falling back to sequential order"
         )
-        # Fall back to fully sequential
-        execution_groups = [[feat_map[fid]] for fid in features if fid not in processed]
+        # Fall back to fully sequential - return all features in order
+        execution_groups = [[feat_map[fid]] for fid in feat_map.keys() if fid not in processed]
 
     # Log execution plan
     logger.info("Execution plan:")
