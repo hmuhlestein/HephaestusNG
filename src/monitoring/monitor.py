@@ -1427,6 +1427,85 @@ class MonitoringLoop:
             agent.id, f"Tmux session {agent.tmux_session_name} was missing, recreating"
         )
 
+    async def _on_workflow_complete(self, workflow_id: str) -> None:
+        """Copy phase artifacts to the permanent feature folder and remove the worktree.
+
+        Called once when all phases are completed. Idempotent — tracks which
+        workflows have been cleaned up to avoid repeated runs.
+        """
+        if not hasattr(self, "_completed_workflows"):
+            self._completed_workflows: set = set()
+        if workflow_id in self._completed_workflows:
+            return
+        self._completed_workflows.add(workflow_id)
+
+        try:
+            from src.core.database import Workflow
+            import shutil
+            from pathlib import Path
+
+            session = self.db_manager.get_session()
+            try:
+                wf = session.query(Workflow).filter_by(id=workflow_id).first()
+                if not wf or not wf.working_directory:
+                    return
+                worktree = Path(wf.working_directory)
+                if not worktree.exists():
+                    return
+
+                # Locate the feature folder for this workflow
+                # Stored under .hephaestus/features/<run>/ next to the worktree's project root
+                config = self.agent_manager.config if self.agent_manager else None
+                project_root = Path(config.project_root) if config else worktree.parent.parent
+
+                # Find the matching feature folder by matching workflow description prefix
+                features_root = project_root / ".hephaestus" / "features"
+                feature_folder = None
+                if features_root.exists():
+                    # Most recently created folder is the active one for this workflow
+                    folders = sorted(features_root.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True)
+                    if folders:
+                        feature_folder = folders[0]
+
+                # Copy docs
+                worktree_docs = worktree / "docs"
+                if worktree_docs.exists() and feature_folder:
+                    dest_docs = feature_folder / "docs"
+                    dest_docs.mkdir(parents=True, exist_ok=True)
+                    for f in worktree_docs.iterdir():
+                        if f.is_file():
+                            dest = dest_docs / f.name
+                            if not dest.exists():
+                                shutil.copy2(f, dest)
+                                logger.info(f"[POST-COMPLETE] Copied artifact {f.name} → {dest_docs}")
+                    logger.info(f"[POST-COMPLETE] Artifacts copied to {dest_docs}")
+                else:
+                    logger.info(f"[POST-COMPLETE] No docs to copy (worktree_docs={worktree_docs.exists()}, feature_folder={feature_folder})")
+
+                # Remove the worktree
+                try:
+                    import subprocess
+                    result = subprocess.run(
+                        ["git", "worktree", "remove", "--force", str(worktree)],
+                        cwd=str(project_root),
+                        capture_output=True,
+                        text=True,
+                    )
+                    if result.returncode == 0:
+                        logger.info(f"[POST-COMPLETE] Removed worktree {worktree}")
+                    else:
+                        logger.warning(f"[POST-COMPLETE] git worktree remove failed: {result.stderr.strip()}")
+                        # Fallback: prune only
+                        subprocess.run(["git", "worktree", "prune"], cwd=str(project_root))
+                except Exception as e:
+                    logger.warning(f"[POST-COMPLETE] Worktree removal error: {e}")
+
+            finally:
+                session.close()
+
+        except Exception as e:
+            logger.error(f"[POST-COMPLETE] Error in post-workflow cleanup: {e}")
+
     async def _check_phase_progression(self):
         """Check workflow phases for progression needs."""
         logger.debug("Checking phase progression")
@@ -1483,6 +1562,11 @@ class MonitoringLoop:
         completed_phases = [p for p in phases if p["status"] == "completed"]
         pending_phases = [p for p in phases if p["status"] == "pending"]
         in_progress_phases = [p for p in phases if p["status"] == "in_progress"]
+
+        # All phases done — copy artifacts and clean up worktree (once per workflow).
+        if completed_phases and not pending_phases and not in_progress_phases:
+            await self._on_workflow_complete(self.phase_manager.workflow_id)
+            return
 
         # Don't advance to future phases when a GOTO has rewound execution to an
         # earlier phase that is still running. Without this guard, the
