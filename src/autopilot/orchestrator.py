@@ -2972,6 +2972,71 @@ def _generate_design_report_html(
     logger.info(f"Design report: {html_path}")
 
 
+def _empty_report(design_entry: DesignEntry) -> FeatureReport:
+    """Create an empty FeatureReport for failed designs."""
+    return FeatureReport(
+        design_name=design_entry.name,
+        project_path="",
+        feature_folder="",
+        design_document=str(design_entry.path),
+        iterations=0,
+        total_time_seconds=0,
+        qa_passed=False,
+        product_validated=False,
+        stop_reason="failed",
+    )
+
+
+def _archive_and_cleanup(
+    design_entry: DesignEntry,
+    designs_folder: Path,
+    logger: OrchestratorLogger,
+) -> None:
+    """Copy phase artifacts to the permanent designs folder, then remove the worktree.
+
+    Copies docs/*.md, *.json, *.html from the shared worktree into
+    designs_folder/docs/ so artifacts survive worktree removal.
+    Then removes the linked worktree via `git worktree remove`.
+    """
+    import shutil
+    import subprocess
+
+    project_path = Path(design_entry.project_path) if design_entry.project_path else None
+    if not project_path or not project_path.exists():
+        return
+
+    # Worktrees live at <project_root>/.worktrees/wt_<name>. The project_path
+    # passed to run_single_design IS the worktree root.
+    worktree = project_path
+    repo_root = worktree.parent.parent  # .worktrees/ -> project root
+
+    # Copy docs
+    worktree_docs = worktree / "docs"
+    dest_docs = designs_folder / "docs"
+    if worktree_docs.exists():
+        dest_docs.mkdir(parents=True, exist_ok=True)
+        for f in worktree_docs.iterdir():
+            if f.is_file():
+                dest = dest_docs / f.name
+                if not dest.exists():
+                    shutil.copy2(f, dest)
+        logger.info(f"Artifacts archived to {dest_docs}")
+
+    # Remove the linked worktree
+    if ".worktrees" in str(worktree) and worktree.exists():
+        result = subprocess.run(
+            ["git", "worktree", "remove", "--force", str(worktree)],
+            cwd=str(repo_root),
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0:
+            logger.info(f"Worktree removed: {worktree}")
+        else:
+            logger.warning(f"git worktree remove failed: {result.stderr.strip()}")
+            subprocess.run(["git", "worktree", "prune"], cwd=str(repo_root))
+
+
 def run_single_design(
     sdk,
     design_entry: DesignEntry,
@@ -2980,337 +3045,43 @@ def run_single_design(
     state: Optional[PipelineState] = None,
     max_iterations: int = 10,
 ) -> Tuple[DesignStatus, FeatureReport]:
-    """Run a single design through the autopilot pipeline.
-
-    The engine's evaluation points (goto/retry/continue) are the SOLE authority
-    for iteration. This function runs the workflow once; the engine handles
-    retries via `max_total_gotos` in AUTOPILOT_ORCHESTRATOR_CONFIG.
-
-    Args:
-        max_iterations: Maps to the engine's max_total_gotos. Controls how many
-            times the engine can goto/retry phases before giving up. Default 10.
-    """
-    # project_path: where implementation code lives (the actual project)
-    # docs_dir: where generated docs/reports go (inside feature folder)
+    """Three-stage coordinator: Phase 0 → per-feature pipelines → design aggregate."""
     project_path.mkdir(parents=True, exist_ok=True)
-
-    _AP = getattr(sdk, "phases_list", [])
-
-    feature_folder = create_feature_folder(project_path, design_entry.name, logger)
     design_entry.project_path = project_path
-    design_entry.feature_folder = feature_folder
     design_entry.started_at = datetime.now().isoformat()
-
-    design_copy = copy_design_document(design_entry, feature_folder)
 
     logger.info("=" * 70)
     logger.info(f"PROCESSING DESIGN: {design_entry.name}")
     logger.info(f"  Source: {design_entry.path}")
     logger.info(f"  Project: {project_path}")
-    logger.info(f"  Feature: {feature_folder}")
     logger.info("=" * 70)
 
-    report = FeatureReport(
-        design_name=design_entry.name,
-        project_path=str(project_path),
-        feature_folder=str(feature_folder),
-        design_document=str(design_entry.path),
-        iterations=0,
-        total_time_seconds=0,
-        qa_passed=False,
-        product_validated=False,
-        stop_reason="",
+    # ── Stage 1: Phase 0 — Feature Architect ──
+    features_json, designs_folder = run_phase0(
+        sdk, design_entry, project_path, logger, state
+    )
+    if features_json is None:
+        raise RuntimeError(
+            f"Phase 0 failed to produce features.json for design '{design_entry.name}'. "
+            "Check the autopilot-phase0 workflow and agent logs."
+        )
+
+    # ── Stage 2: Per-feature pipelines ──
+    feature_results = run_feature_pipelines(
+        sdk, design_entry, features_json, designs_folder,
+        project_path, logger, state, max_iterations,
     )
 
-    design_start = time.time()
-    stop_reason = StopReason.COMPLETED
-
-    # docs_dir: where generated docs (requirements, architecture, reports) go
-    docs_dir = feature_folder / "docs"
-    docs_dir.mkdir(exist_ok=True)
-
-    # Copy phase definitions BEFORE workflow so forensics agent can read them
-    phases_dir = docs_dir / "phase_prompts"
-    phases_dir.mkdir(exist_ok=True)
-    autopilot_workflow_dir = HEPHAESTUS_DIR / "config" / "workflows" / "autopilot"
-    phase_files = [
-        p
-        for p in sorted(autopilot_workflow_dir.glob("*.yaml"))
-        if p.name != "workflow.yaml"
-    ]
-    for pf in phase_files:
-        shutil.copy2(pf, phases_dir / pf.name)
-    logger.info(f"Copied {len(phase_files)} phase YAML files to {phases_dir}")
-
-    # Write initial pipeline_metrics.json BEFORE workflow so forensics agent can read it
-    # (will be updated with final values after workflow completes)
-    initial_metrics = {
-        "design_name": design_entry.name,
-        "design_document": str(design_entry.path),
-        "project_path": str(project_path),
-        "docs_dir": str(docs_dir),
-        "feature_folder": str(feature_folder),
-        "started_at": design_entry.started_at,
-        "control_model": "engine_evaluation_points",
-        "max_iterations": max_iterations,
-        "max_gotos": max_iterations,  # max_iterations maps to engine's max_total_gotos
-        "phases": [
-            {
-                "id": p.id,
-                "name": p.name,
-                "output": p.outputs[0] if p.outputs else "",
-            }
-            for p in _AP
-        ],
-    }
-    metrics_path = docs_dir / "pipeline_metrics.json"
-    metrics_path.write_text(json.dumps(initial_metrics, indent=2, default=str))
-    logger.info(f"Initial pipeline metrics: {metrics_path}")
-
-    try:
-        # Single workflow run — the engine's evaluation points handle all iteration.
-        # If product_validation scores < 0.7, the engine does goto development/architecture
-        # bounded by max_total_gotos (default 10) in AUTOPILOT_ORCHESTRATOR_CONFIG.
-        logger.info("")
-        logger.info("-" * 60)
-        logger.info(
-            f"DESIGN: {design_entry.name} | Single run (engine-controlled iteration)"
-        )
-        logger.info("-" * 60)
-
-        description = (
-            f"Autopilot: {design_entry.name}\n"
-            f"Your working directory is an isolated git worktree (the project root).\n"
-            f"Design Document: ./.hephaestus/design.md (copied into your worktree)\n"
-            f"Project Path: . (your working directory)\n"
-            f"Project Root (absolute): {project_path}\n"
-            f"Docs Path: ./docs/ (generated requirements, architecture, reports)\n"
-            f"Feature Folder: {feature_folder}\n"
-            f"Docs Path (absolute): {docs_dir}\n"
-            f"Implementation code (src/, tests/) goes in your working directory.\n"
-            f"Inputs (design, context, qa_spec) are in ./.hephaestus/.\n"
-            f"Read the design doc carefully, extract requirements, "
-            f"create architecture, implement, review, security check, and QA."
-        )
-
-        # Session ID components for persistent agent sessions (§10.1.1).
-        # The agent manager uses these to generate deterministic session IDs
-        # so pi agents resume with full conversational context on gotos.
-        _project_slug = Path(project_path).name.lower().replace(" ", "-")[:30]
-        _design_slug = design_entry.name.lower().replace(" ", "-")[:30]
-
-        # design_document is the absolute SOURCE path; the backend (AgentManager)
-        # reads it and copies it into each worktree's .hephaestus/design.md. Agents
-        # only ever read the worktree-relative copy.
-        launch_params = {
-            "design_document": str(
-                design_entry.path
-            ),  # source path, not the features copy
-            "project_path": str(project_path),
-            "project_id": _project_slug,
-            "design_slug": _design_slug,
-            "project_context": (
-                "Your working directory is the project root. Write code/tests there, "
-                "generated docs in ./docs/. Read inputs from ./.hephaestus/."
-            ),
-        }
-
-        wf_status = run_single_workflow(
-            sdk,
-            "autopilot",
-            str(project_path),
-            description,
-            logger,
-            launch_params=launch_params,
-            state=state,
-            max_iterations=max_iterations,
-            design_id=design_entry.db_id,
-        )
-
-        report.iterations = 1  # Single run; engine handles iteration via gotos
-
-        if wf_status == "interrupted":
-            stop_reason = StopReason.USER_INTERRUPT
-        elif wf_status == "hard_error":
-            stop_reason = StopReason.HARD_ERROR
-        elif wf_status == "skipped":
-            logger.info("Design skipped by user")
-            stop_reason = StopReason.USER_SKIP
-        elif wf_status == "timeout":
-            stop_reason = StopReason.MAX_ITERATIONS
-        elif wf_status == "completed":
-            # Workflow completed — read spec gate results from structured files.
-            # The engine's evaluation points already drove iteration via gotos;
-            # we just need to determine if the final state passed the gate.
-            logger.info("")
-            logger.info("Workflow completed. Reading spec gate results...")
-
-            from src.autopilot.spec import (
-                load_spec,
-                read_result,
-                score_product_validation,
-                score_qa,
-            )
-
-            spec = load_spec()
-
-            # Check QA result — prefer the worktree copy but fall back to
-            # docs_dir (feature folder) which survives concurrent git clean.
-            qa_result = read_result(project_path, "qa_result.json") or read_result(
-                docs_dir.parent, "qa_result.json"
-            )
-            if qa_result:
-                qa_score, qa_meta = score_qa(qa_result, spec)
-                report.qa_passed = qa_score >= 0.7
-                logger.info(
-                    f"QA gate: score={qa_score:.2f}, band={qa_meta.get('band', 'unknown')}"
-                )
-            else:
-                # Fallback: check for qa_report.md existence as a weak signal
-                qa_report = _report_path(project_path, "qa_report.md")
-                report.qa_passed = qa_report.exists()
-
-            # Check product validation result
-            pv_result = read_result(
-                project_path, "product_validation.json"
-            ) or read_result(docs_dir.parent, "product_validation.json")
-            if pv_result:
-                pv_score, pv_meta = score_product_validation(pv_result, spec)
-                report.product_validated = pv_score >= 0.7
-                logger.info(
-                    f"Product validation gate: score={pv_score:.2f}, band={pv_meta.get('band', 'unknown')}"
-                )
-            else:
-                # Fallback: check for product_validation.md existence
-                pv_report = _report_path(project_path, "product_validation.md")
-                report.product_validated = pv_report.exists()
-
-            if report.product_validated:
-                logger.info(f"DESIGN VALIDATED: {design_entry.name}")
-                stop_reason = StopReason.COMPLETED
-            else:
-                # Engine exhausted gotos without passing the gate
-                stop_reason = StopReason.MAX_ITERATIONS
-                logger.info(
-                    "Design did not pass validation gate after engine-controlled iterations"
-                )
-        else:
-            # Unknown status
-            stop_reason = StopReason.HARD_ERROR
-            logger.warning(f"Unexpected workflow status: {wf_status}")
-
-    except KeyboardInterrupt:
-        stop_reason = StopReason.USER_INTERRUPT
-        logger.info("Design processing interrupted")
-
-    # Organize: copy stray docs from project root into feature docs (don't move - iteration loop needs them)
-    _sweep_stray_files(project_path, feature_folder, docs_dir, logger)
-
-    # Assess run health and write run_health.json for forensics agent
-    _orch_log = getattr(logger, "log_file", None)
-    run_health = _assess_run_health(project_path, "", _orch_log, logger)
-    run_health_path = docs_dir / "run_health.json"
-    run_health_path.write_text(json.dumps(run_health, indent=2, default=str))
-    logger.info(f"Run health written: {run_health_path}")
-
-    # Collect summaries from the correct locations (docs in features, code in builds)
-    summaries = collect_report_summaries(docs_dir)
-    report.requirements_summary = summaries.get("requirements", "")
-    report.architecture_summary = summaries.get("architecture", "")
-    report.doc_review_summary = summaries.get("doc_review", "")
-    report.security_summary = summaries.get("security", "")
-    report.qa_summary = summaries.get("qa", "")
-    report.product_validation_summary = summaries.get("product_validation", "")
-    report.forensics_summary = summaries.get("forensics", "")
-    report.files_created = collect_files_created(project_path, feature_folder)
-
-    # Finalise report fields before writing metrics so the JSON has real values.
-    report.total_time_seconds = int(time.time() - design_start)
-    report.stop_reason = stop_reason.value
-    completed_at = datetime.utcnow().isoformat() + "Z"
-
-    # Update pipeline_metrics.json with final values
-    metrics = {
-        "design_name": design_entry.name,
-        "design_document": str(design_entry.path),
-        "project_path": str(project_path),
-        "docs_dir": str(docs_dir),
-        "feature_folder": str(feature_folder),
-        "iterations": report.iterations,
-        "total_time_seconds": report.total_time_seconds,
-        "stop_reason": report.stop_reason,
-        "qa_passed": report.qa_passed,
-        "product_validated": report.product_validated,
-        "cost_total": report.cost_total,
-        "files_created_count": len(report.files_created),
-        "started_at": design_entry.started_at,
-        "completed_at": completed_at,
-        "phases": [
-            {
-                "id": p.id,
-                "name": p.name,
-                "output": p.outputs[0] if p.outputs else "",
-            }
-            for p in _AP
-        ],
-    }
-    metrics_path = docs_dir / "pipeline_metrics.json"
-    metrics_path.write_text(json.dumps(metrics, indent=2, default=str))
-    logger.info(f"Final pipeline metrics: {metrics_path}")
-
-    # Fetch cost data from LiteLLM proxy if configured
-    litellm_config = get_litellm_config()
-    if (
-        litellm_config["cost_tracking"]
-        and litellm_config["url"]
-        and litellm_config["cost_api_key"]
-    ):
-        try:
-            import asyncio
-
-            from src.interfaces.cost_tracker import CostTracker
-
-            tracker = CostTracker(
-                proxy_url=litellm_config["url"],
-                api_key=litellm_config["cost_api_key"],
-            )
-
-            # Use the safe_name as the user identifier for cost tracking
-            feature_user = design_entry.name.lower().replace(" ", "_")[:40]
-
-            async def fetch_costs():
-                cost_info = await tracker.get_feature_cost(feature_user)
-                daily = await tracker.get_daily_breakdown(feature_user, days=7)
-                return cost_info, daily
-
-            cost_info, daily_breakdown = asyncio.run(fetch_costs())
-
-            report.cost_total = cost_info.get("spend", 0)
-            logger.info(f"Cost for '{feature_user}': ${report.cost_total:.4f}")
-
-            # Extract model breakdown from daily data
-            for day_entry in daily_breakdown.get("results", []):
-                metrics = day_entry.get("metrics", {})
-                breakdown = day_entry.get("breakdown", {})
-                for model_name, model_data in breakdown.get("models", {}).items():
-                    model_spend = model_data.get("spend", 0)
-                    if model_name not in report.cost_breakdown:
-                        report.cost_breakdown[model_name] = 0
-                    report.cost_breakdown[model_name] += model_spend
-
-        except Exception as e:
-            logger.warning(f"Failed to fetch cost data: {e}")
-
-    generate_html_feature_report(report, summaries, feature_folder, logger)
+    # ── Stage 3: Design aggregate ──
+    status, report = run_design_aggregate(
+        design_entry, feature_results, designs_folder, logger
+    )
 
     design_entry.completed_at = datetime.now().isoformat()
 
-    if stop_reason == StopReason.USER_SKIP:
-        status = DesignStatus.SKIPPED
-    elif report.product_validated:
-        status = DesignStatus.COMPLETED
-    else:
-        status = DesignStatus.FAILED
+    # ── Post-pipeline: archive artifacts, remove worktree ──
+    _archive_and_cleanup(design_entry, designs_folder, logger)
+
     return status, report
 
 
