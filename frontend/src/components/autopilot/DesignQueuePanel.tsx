@@ -380,25 +380,28 @@ interface SortableDesignItemProps {
 const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, isActive, onRemove, onDetail, onTaskClick, onPauseResume, status, workflowId, projectId }) => {
   const [expanded, setExpanded] = useState(false);
   const [features, setFeatures] = useState<any[]>([]);
-  const [loadingFeatures, setLoadingFeatures] = useState(false);
+
+  const fetchFeatures = async () => {
+    if (!projectId) return;
+    try {
+      const statusData = await apiService.getAutopilotProjectDesignStatus(projectId, item.filename);
+      setFeatures(statusData.features || []);
+    } catch {
+      // ignore
+    }
+  };
+
+  // Poll features every 10s when expanded
+  useEffect(() => {
+    if (!expanded || !projectId) return;
+    fetchFeatures(); // immediate fetch
+    const interval = setInterval(fetchFeatures, 10000);
+    return () => clearInterval(interval);
+  }, [expanded, projectId]);
 
   const handleToggleExpand = async (e: React.MouseEvent) => {
     e.stopPropagation();
-    const newExpanded = !expanded;
-    setExpanded(newExpanded);
-    
-    // Fetch features when expanding for the first time
-    if (newExpanded && features.length === 0 && projectId) {
-      setLoadingFeatures(true);
-      try {
-        const statusData = await apiService.getAutopilotProjectDesignStatus(projectId, item.filename);
-        setFeatures(statusData.features || []);
-      } catch {
-        setFeatures([]);
-      } finally {
-        setLoadingFeatures(false);
-      }
-    }
+    setExpanded(!expanded);
   };
 
   const {
@@ -521,11 +524,7 @@ const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, is
           >
             <div className="px-5 py-3">
               <h5 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Features</h5>
-              {loadingFeatures ? (
-                <div className="flex items-center justify-center py-4">
-                  <Loader2 className="w-5 h-5 text-violet-500 animate-spin" />
-                </div>
-              ) : features.length > 0 ? (
+              {features.length > 0 ? (
                 <div className="space-y-2">
                   {features.map((feature) => (
                     <FeatureRow
