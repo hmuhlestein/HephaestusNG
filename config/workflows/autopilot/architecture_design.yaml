@@ -360,11 +360,9 @@ additional_notes: |
   - ALWAYS use the "Project Path:" value for ALL implementation code.
   - Your task description contains the exact paths — copy them exactly.
   
-  Read your task description for the correct paths:
-  - "Docs Path:" tells you where to write architecture.md
-  - "Project Path:" tells you where implementation code goes
-  
-  Write architecture.md to the "Docs Path" location from your task description.
+  Output path: ./docs/architecture.md
+  ⚠️  NEVER write to ./docs/design/ — that subdirectory holds the design queue, NOT generated outputs.
+  ⚠️  NEVER write architecture.md anywhere except ./docs/architecture.md.
   
   # Architecture: [Project Name]
   
