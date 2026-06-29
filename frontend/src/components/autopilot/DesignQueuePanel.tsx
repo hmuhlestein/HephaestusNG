@@ -20,7 +20,7 @@ import {
 import { CSS } from '@dnd-kit/utilities';
 import {
   Plus, Trash2, FileText, Clock, GripVertical, Search, ListOrdered, RefreshCw,
-  CheckCircle2, XCircle, Loader2, Pause, Play, Upload, ChevronRight, ChevronDown, ExternalLink
+  CheckCircle2, XCircle, Loader2, Pause, Play, Upload, ChevronRight, ChevronDown, Layers
 } from 'lucide-react';
 import { apiService } from '@/services/api';
 import { Button } from '@/components/ui/button';
@@ -379,24 +379,24 @@ interface SortableDesignItemProps {
 
 const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, isActive, onRemove, onDetail, onTaskClick, onPauseResume, status, workflowId, projectId }) => {
   const [expanded, setExpanded] = useState(false);
-  const [tasks, setTasks] = useState<any[]>([]);
-  const [loadingTasks, setLoadingTasks] = useState(false);
+  const [features, setFeatures] = useState<any[]>([]);
+  const [loadingFeatures, setLoadingFeatures] = useState(false);
 
   const handleToggleExpand = async (e: React.MouseEvent) => {
     e.stopPropagation();
     const newExpanded = !expanded;
     setExpanded(newExpanded);
     
-    // Fetch tasks when expanding for the first time
-    if (newExpanded && tasks.length === 0 && projectId) {
-      setLoadingTasks(true);
+    // Fetch features when expanding for the first time
+    if (newExpanded && features.length === 0 && projectId) {
+      setLoadingFeatures(true);
       try {
         const statusData = await apiService.getAutopilotProjectDesignStatus(projectId, item.filename);
-        setTasks(statusData.tasks || []);
+        setFeatures(statusData.features || []);
       } catch {
-        setTasks([]);
+        setFeatures([]);
       } finally {
-        setLoadingTasks(false);
+        setLoadingFeatures(false);
       }
     }
   };
@@ -511,7 +511,7 @@ const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, is
         </div>
       </motion.div>
 
-        {/* Expanded tasks section */}
+        {/* Expanded features section */}
         {expanded && (
           <motion.div
             initial={{ height: 0, opacity: 0 }}
@@ -520,55 +520,23 @@ const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, is
             className="border-t border-gray-100 bg-gray-50 rounded-b-xl"
           >
             <div className="px-5 py-3">
-              <h5 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Tasks</h5>
-              {loadingTasks ? (
+              <h5 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Features</h5>
+              {loadingFeatures ? (
                 <div className="flex items-center justify-center py-4">
                   <Loader2 className="w-5 h-5 text-violet-500 animate-spin" />
                 </div>
-              ) : tasks.length > 0 ? (
+              ) : features.length > 0 ? (
                 <div className="space-y-2">
-                  {tasks.map((task) => (
-                    <div
-                      key={task.id}
-                      className="flex items-center gap-3 px-3 py-2 bg-white rounded-lg border border-gray-100 cursor-pointer hover:bg-gray-50 hover:border-gray-200 transition-colors"
-                    >
-                      <TaskStatusIcon status={task.status} />
-                      <div 
-                        className="flex-1 min-w-0"
-                        onClick={() => onTaskClick(task.id)}
-                      >
-                        <p className="text-sm text-gray-700 truncate">{task.description || task.id.substring(0, 8)}</p>
-                        <div className="flex items-center gap-2 mt-0.5">
-                          {task.phase_name && (
-                            <span className="text-xs text-gray-400">{task.phase_name}</span>
-                          )}
-                          {task.agent_status && (
-                            <span className={`text-xs px-1.5 py-0.5 rounded ${
-                              task.agent_status === 'working' ? 'bg-green-100 text-green-700' :
-                              task.agent_status === 'idle' ? 'bg-gray-100 text-gray-600' :
-                              'bg-gray-100 text-gray-500'
-                            }`}>
-                              {task.agent_status}
-                            </span>
-                          )}
-                        </div>
-                      </div>
-                      {task.agent_id && (
-                        <a
-                          href={`/agents/${task.agent_id}`}
-                          className="flex items-center gap-1 px-2 py-1 text-xs bg-violet-100 text-violet-700 rounded hover:bg-violet-200 transition-colors"
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          <span className={task.agent_status === 'working' ? 'w-1.5 h-1.5 rounded-full bg-green-500' : 'w-1.5 h-1.5 rounded-full bg-gray-400'}></span>
-                          {task.agent_id.substring(0, 6)}
-                          <ExternalLink className="w-3 h-3" />
-                        </a>
-                      )}
-                    </div>
+                  {features.map((feature) => (
+                    <FeatureRow
+                      key={feature.id}
+                      feature={feature}
+                      onTaskClick={onTaskClick}
+                    />
                   ))}
                 </div>
               ) : (
-                <p className="text-xs text-gray-400 text-center py-4">No tasks yet</p>
+                <p className="text-xs text-gray-400 text-center py-4">No features yet</p>
               )}
             </div>
           </motion.div>
@@ -581,6 +549,113 @@ const formatBytes = (bytes: number): string => {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+};
+
+// ── Feature Row (expandable, shows tasks under it) ──────────────
+
+const FEATURE_STATUS_CONFIG: Record<string, { color: string; icon: React.ReactNode; label: string }> = {
+  pending: { color: 'bg-gray-100 text-gray-600', icon: <Clock className="w-3 h-3" />, label: 'Pending' },
+  active: { color: 'bg-blue-100 text-blue-700', icon: <Loader2 className="w-3 h-3 animate-spin" />, label: 'Active' },
+  completed: { color: 'bg-green-100 text-green-700', icon: <CheckCircle2 className="w-3 h-3" />, label: 'Done' },
+  failed: { color: 'bg-red-100 text-red-700', icon: <XCircle className="w-3 h-3" />, label: 'Failed' },
+  skipped: { color: 'bg-gray-100 text-gray-500', icon: <Clock className="w-3 h-3" />, label: 'Skipped' },
+};
+
+const FeatureStatusBadge: React.FC<{ status: string }> = ({ status }) => {
+  const config = FEATURE_STATUS_CONFIG[status];
+  if (!config) return null;
+  return (
+    <span className={`px-2 py-0.5 text-xs font-semibold rounded-full flex items-center gap-1 ${config.color}`}>
+      {config.icon}
+      {config.label}
+    </span>
+  );
+};
+
+const FeatureRow: React.FC<{
+  feature: any;
+  onTaskClick: (taskId: string) => void;
+}> = ({ feature, onTaskClick }) => {
+  const [expanded, setExpanded] = useState(false);
+  const tasks = feature.tasks || [];
+  const doneCount = tasks.filter((t: any) => t.status === 'done').length;
+  const activeCount = tasks.filter((t: any) => ['in_progress', 'assigned'].includes(t.status)).length;
+
+  return (
+    <div className="bg-white rounded-lg border border-gray-100 overflow-hidden">
+      <div
+        className="flex items-center gap-3 px-3 py-2 cursor-pointer hover:bg-gray-50 transition-colors"
+        onClick={() => setExpanded(!expanded)}
+      >
+        <div className="p-1 text-gray-400">
+          {expanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+        </div>
+        <div className="p-1.5 rounded bg-violet-50">
+          <Layers className="w-3.5 h-3.5 text-violet-600" />
+        </div>
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-medium text-gray-700 truncate">{feature.name}</p>
+          <p className="text-xs text-gray-400 truncate">{feature.feature_key}</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-gray-400">
+            {doneCount}/{tasks.length} tasks
+          </span>
+          {activeCount > 0 && (
+            <span className="text-xs text-blue-500">
+              {activeCount} active
+            </span>
+          )}
+          <FeatureStatusBadge status={feature.status} />
+        </div>
+      </div>
+
+      {expanded && tasks.length > 0 && (
+        <div className="border-t border-gray-100 bg-gray-50 px-3 py-2">
+          <div className="space-y-1">
+            {tasks.map((task: any) => (
+              <div
+                key={task.id}
+                className="flex items-center gap-2 px-2 py-1.5 bg-white rounded border border-gray-100 cursor-pointer hover:bg-gray-50 hover:border-gray-200 transition-colors"
+              >
+                <TaskStatusIcon status={task.status} />
+                <div
+                  className="flex-1 min-w-0"
+                  onClick={() => onTaskClick(task.id)}
+                >
+                  <p className="text-xs text-gray-600 truncate">{task.description || task.id.substring(0, 8)}</p>
+                  <div className="flex items-center gap-2 mt-0.5">
+                    {task.phase_name && (
+                      <span className="text-[10px] text-gray-400">{task.phase_name}</span>
+                    )}
+                    {task.agent_status && (
+                      <span className={`text-[10px] px-1 py-0.5 rounded ${
+                        task.agent_status === 'working' ? 'bg-green-100 text-green-700' :
+                        task.agent_status === 'idle' ? 'bg-gray-100 text-gray-600' :
+                        'bg-gray-100 text-gray-500'
+                      }`}>
+                        {task.agent_status}
+                      </span>
+                    )}
+                  </div>
+                </div>
+                {task.agent_id && (
+                  <a
+                    href={`/agents/${task.agent_id}`}
+                    className="flex items-center gap-1 px-1.5 py-0.5 text-[10px] bg-violet-100 text-violet-700 rounded hover:bg-violet-200 transition-colors"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <span className={task.agent_status === 'working' ? 'w-1 h-1 rounded-full bg-green-500' : 'w-1 h-1 rounded-full bg-gray-400'}></span>
+                    {task.agent_id.substring(0, 6)}
+                  </a>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
 };
 
 export default DesignQueuePanel;
