@@ -93,18 +93,37 @@ def get_auth_config() -> AuthConfig:
     global _auth_config
     if _auth_config is None:
         _auth_config = AuthConfig()
-        # SECURITY: Warn if using default/empty JWT secret
+        
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        # SECURITY: Validate JWT secret configuration
         if not _auth_config.jwt_secret_key or _auth_config.jwt_secret_key == "":
-            # Auto-generate a secure random key for development
-            import secrets
-
-            _auth_config.jwt_secret_key = secrets.token_urlsafe(64)
-            import logging
-
-            logger = logging.getLogger(__name__)
-            logger.warning(
-                "SECURITY: No AUTH_JWT_SECRET_KEY set. Auto-generated a random key. "
-                "Tokens will NOT be valid across server restarts. "
-                "Set AUTH_JWT_SECRET_KEY environment variable for production."
-            )
+            # Check if we're in production mode
+            import os
+            is_production = os.environ.get("ENVIRONMENT", "").lower() in ["production", "prod"]
+            
+            if is_production:
+                # SECURITY: Fail hard in production - never auto-generate secrets
+                raise ValueError(
+                    "CRITICAL SECURITY ERROR: AUTH_JWT_SECRET_KEY must be set in production. "
+                    "Auto-generated keys are not secure for production use. "
+                    "Set the AUTH_JWT_SECRET_KEY environment variable to a strong random string."
+                )
+            else:
+                # Development mode: auto-generate with clear warning
+                import secrets
+                _auth_config.jwt_secret_key = secrets.token_urlsafe(64)
+                logger.warning(
+                    "SECURITY WARNING: No AUTH_JWT_SECRET_KEY set in development mode. "
+                    "Auto-generated a random key - tokens will NOT be valid across server restarts. "
+                    "Set AUTH_JWT_SECRET_KEY environment variable for persistent tokens."
+                )
+        else:
+            # Validate key strength
+            if len(_auth_config.jwt_secret_key) < 32:
+                logger.warning(
+                    f"SECURITY WARNING: AUTH_JWT_SECRET_KEY is only {len(_auth_config.jwt_secret_key)} characters. "
+                    "Recommend at least 32 characters for security."
+                )
     return _auth_config
