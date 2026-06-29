@@ -2018,6 +2018,7 @@ async def get_project_design_status(project_id: str, filename: str):
         # autopilot_designs (set by run_design_aggregate / continuous pipeline)
         # over workflow-level heuristics, because workflow statuses may include
         # retries, gotos, or partial failures that don't reflect final outcome.
+        _design_id = None
         with get_db() as _db:
             _design = (
                 _db.query(AutopilotDesign)
@@ -2025,6 +2026,7 @@ async def get_project_design_status(project_id: str, filename: str):
                 .first()
             )
             design_status = _design.status if _design else None
+            _design_id = _design.id if _design else None
 
         if design_status and design_status not in ("pending", "unknown"):
             overall_status = design_status
@@ -2162,46 +2164,49 @@ async def get_project_design_status(project_id: str, filename: str):
                                 "created_at": feat.created_at.isoformat() if feat.created_at else None,
                                 "completed_at": feat.completed_at.isoformat() if feat.completed_at else None,
                             })
-            for feat in feature_records:
-                # Get tasks for this feature's workflow
-                feat_tasks = []
-                if feat.workflow_id:
-                    feat_tasks = [
-                        {
-                            "id": t.id,
-                            "description": (t.enriched_description or t.raw_description or "")[:200],
-                            "status": t.status,
-                            "phase_id": t.phase_id,
-                            "phase_name": None,  # Will be filled below
-                            "workflow_id": t.workflow_id,
-                            "created_at": t.created_at.isoformat() if t.created_at else None,
-                            "completed_at": t.completed_at.isoformat() if t.completed_at else None,
-                            "agent_id": t.assigned_agent_id,
-                            "agent_status": None,
-                        }
-                        for t in db.query(Task).filter_by(workflow_id=feat.workflow_id).all()
-                    ]
-                    # Fill in phase names
-                    phase_map = {}
-                    phases = db.query(Phase).filter(Phase.workflow_id.in_([feat.workflow_id])).all()
-                    phase_map = {p.id: p.name for p in phases}
-                    for ft in feat_tasks:
-                        ft["phase_name"] = phase_map.get(ft["phase_id"])
-                        # Get agent status
-                        if ft["agent_id"]:
-                            agent = db.query(Agent).filter_by(id=ft["agent_id"]).first()
-                            ft["agent_status"] = agent.status if agent else None
 
-                features.append({
-                    "id": feat.id,
-                    "name": feat.name,
-                    "feature_key": feat.feature_key,
-                    "status": feat.status,
-                    "scope": feat.scope,
-                    "tasks": feat_tasks,
-                    "created_at": feat.created_at.isoformat() if feat.created_at else None,
-                    "completed_at": feat.completed_at.isoformat() if feat.completed_at else None,
-                })
+        # Also query DB features for this design that weren't picked up above
+        if _design_id:
+            db_features = db.query(Feature).filter_by(design_id=_design_id).all()
+            for feat in db_features:
+                if not any(f["id"] == feat.id for f in features):
+                    # Get tasks for this feature's workflow
+                    feat_tasks = []
+                    if feat.workflow_id:
+                        feat_tasks = [
+                            {
+                                "id": t.id,
+                                "description": (t.enriched_description or t.raw_description or "")[:200],
+                                "status": t.status,
+                                "phase_id": t.phase_id,
+                                "phase_name": None,
+                                "workflow_id": t.workflow_id,
+                                "created_at": t.created_at.isoformat() if t.created_at else None,
+                                "completed_at": t.completed_at.isoformat() if t.completed_at else None,
+                                "agent_id": t.assigned_agent_id,
+                                "agent_status": None,
+                            }
+                            for t in db.query(Task).filter_by(workflow_id=feat.workflow_id).all()
+                        ]
+                        # Fill in phase names
+                        phases = db.query(Phase).filter(Phase.workflow_id == feat.workflow_id).all()
+                        phase_map = {p.id: p.name for p in phases}
+                        for ft in feat_tasks:
+                            ft["phase_name"] = phase_map.get(ft["phase_id"])
+                            if ft["agent_id"]:
+                                agent = db.query(Agent).filter_by(id=ft["agent_id"]).first()
+                                ft["agent_status"] = agent.status if agent else None
+
+                    features.append({
+                        "id": feat.id,
+                        "name": feat.name,
+                        "feature_key": feat.feature_key,
+                        "status": feat.status,
+                        "scope": feat.scope,
+                        "tasks": feat_tasks,
+                        "created_at": feat.created_at.isoformat() if feat.created_at else None,
+                        "completed_at": feat.completed_at.isoformat() if feat.completed_at else None,
+                    })
 
         return {
             "filename": filename,
