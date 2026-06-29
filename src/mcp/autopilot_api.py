@@ -2114,6 +2114,20 @@ async def get_project_design_status(project_id: str, filename: str):
                 "completed_at": feat.completed_at.isoformat() if feat.completed_at else None,
             })
 
+        # Placeholder: if no DB features yet, show a single pending feature
+        # so the UI has something to display while waiting for Phase 0
+        if not features:
+            features.append({
+                "id": f"placeholder-{filename}",
+                "name": design_name or filename.replace(".md", ""),
+                "feature_key": "pending-decomposition",
+                "status": "pending",
+                "scope": "Awaiting Phase 0 decomposition",
+                "tasks": [],
+                "created_at": None,
+                "completed_at": None,
+            })
+
         return {
             "filename": filename,
             "name": design_name,

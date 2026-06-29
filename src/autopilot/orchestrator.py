@@ -3655,9 +3655,19 @@ def run_continuous_pipeline(args) -> None:
         launch_template=AUTOPILOT_LAUNCH_TEMPLATE,
     )
 
+    # Load all workflow definitions from registry (including autopilot-phase0)
+    from src.workflow_registry import get_all_workflow_definitions
+    all_defs = get_all_workflow_definitions()
+    # Add any definitions not already in our list
+    known_ids = {autopilot_def.id}
+    extra_defs = [d for d in all_defs if d.id not in known_ids]
+    workflow_defs = [autopilot_def] + extra_defs
+    if extra_defs:
+        logger.info(f"Loaded extra workflow definitions: {[d.id for d in extra_defs]}")
+
     logger.info("Initializing SDK...")
     sdk = HephaestusSDK(
-        workflow_definitions=[autopilot_def],
+        workflow_definitions=workflow_defs,
         database_path=os.environ.get(
             "DATABASE_PATH", str(HEPHAESTUS_DIR / "hephaestus.db")
         ),
