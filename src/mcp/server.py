@@ -6411,8 +6411,25 @@ async def list_tools():
             },
             {
                 "name": "get_task_status",
-                "description": "Get status of all tasks",
-                "input_schema": {"type": "object", "properties": {}},
+                "description": "Get status of tasks, optionally filtered by agent_id or workflow_id",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "status": {
+                            "type": "string",
+                            "description": "Filter by task status (pending, assigned, in_progress, done, failed)",
+                            "default": "all"
+                        },
+                        "agent_id": {
+                            "type": "string",
+                            "description": "Filter tasks assigned to this agent"
+                        },
+                        "workflow_id": {
+                            "type": "string",
+                            "description": "Filter tasks belonging to this workflow"
+                        }
+                    }
+                },
             },
             {
                 "name": "create_ticket",
@@ -7232,7 +7249,43 @@ async def execute_tool(request: Dict[str, Any]):
             agent_id=arguments.get("_agent_id"),
         )
     elif tool_name == "get_task_status":
-        return await task_progress()
+        # Pass optional filters from arguments
+        agent_id_filter = arguments.get("agent_id")
+        workflow_id_filter = arguments.get("workflow_id")
+        status_filter = arguments.get("status")
+
+        session = server_state.db_manager.get_session()
+        try:
+            query = session.query(Task)
+            if status_filter and status_filter != "all":
+                query = query.filter(Task.status == status_filter)
+            else:
+                query = query.filter(Task.status.in_(["pending", "assigned", "in_progress", "done", "failed"]))
+            if workflow_id_filter:
+                query = query.filter(Task.workflow_id == workflow_id_filter)
+            if agent_id_filter:
+                query = query.filter(Task.assigned_agent_id == agent_id_filter)
+            tasks = query.order_by(Task.created_at.desc()).limit(50).all()
+
+            results = []
+            for t in tasks:
+                phase_name = None
+                if t.phase_id:
+                    phase = session.query(Phase).filter_by(id=t.phase_id).first()
+                    phase_name = phase.name if phase else None
+                results.append({
+                    "id": t.id,
+                    "status": t.status,
+                    "description": (t.enriched_description or t.raw_description or "")[:200],
+                    "phase_name": phase_name,
+                    "workflow_id": t.workflow_id,
+                    "assigned_agent_id": t.assigned_agent_id,
+                    "created_at": t.created_at.isoformat() if t.created_at else None,
+                    "completed_at": t.completed_at.isoformat() if t.completed_at else None,
+                })
+            return {"tasks": results, "count": len(results)}
+        finally:
+            session.close()
     elif tool_name == "create_ticket":
         # Create ticket using TicketService
         from src.services.ticket_service import TicketService
