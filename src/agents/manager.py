@@ -1272,9 +1272,8 @@ REMEMBER:
                 restart_sess = self.db_manager.get_session()
                 try:
                     wf = restart_sess.query(Workflow).filter_by(id=task.workflow_id).first()
-                    if wf and wf.working_directory:
-                        self.branch_manager.reload(Path(wf.working_directory))
-                        restart_wd = str(self.branch_manager.worktree_base / f"wt_{agent_id}")
+                    if wf and wf.working_directory and Path(wf.working_directory).exists():
+                        restart_wd = wf.working_directory
                 finally:
                     restart_sess.close()
             tmux_session = self._create_tmux_session(new_session_name, working_directory=restart_wd, env_vars=env_vars)
