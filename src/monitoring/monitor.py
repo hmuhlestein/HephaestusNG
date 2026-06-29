@@ -809,6 +809,45 @@ class MonitoringLoop:
             except Exception as e:
                 logger.warning(f"[AUTO-DISCOVER] Failed to load active workflow: {e}")
 
+        # Check if tracked workflow is still the most recent active one.
+        # When the pipeline restarts with a new design, it launches a new workflow.
+        # The monitor should switch to track the new workflow instead of the old one.
+        if self.phase_manager and self.phase_manager.workflow_id:
+            try:
+                session = self.db_manager.get_session()
+                from src.core.database import Workflow
+                try:
+                    # Get the tracked workflow's status
+                    tracked_wf = session.query(Workflow).filter_by(id=self.phase_manager.workflow_id).first()
+                    # Find the most recent active workflow
+                    latest_active = (
+                        session.query(Workflow)
+                        .filter_by(status="active")
+                        .order_by(Workflow.created_at.desc())
+                        .first()
+                    )
+                    if latest_active and latest_active.id != self.phase_manager.workflow_id:
+                        # A newer active workflow exists — switch to it
+                        logger.info(
+                            f"[WORKFLOW-SWITCH] Tracked workflow {self.phase_manager.workflow_id[:8]} "
+                            f"is {tracked_wf.status if tracked_wf else 'unknown'}, "
+                            f"switching to newer active workflow {latest_active.id[:8]}"
+                        )
+                        self.phase_manager.workflow_id = latest_active.id
+                        self.phase_manager.active_workflow = None  # Force reload
+                        self.phase_manager.load_active_workflow()
+                    elif tracked_wf and tracked_wf.status in ("completed", "failed", "paused") and not latest_active:
+                        # Tracked workflow is done and no new active workflow — clear
+                        logger.info(
+                            f"[WORKFLOW-SWITCH] Tracked workflow {self.phase_manager.workflow_id[:8]} "
+                            f"is {tracked_wf.status} with no active workflows — clearing"
+                        )
+                        self.phase_manager.workflow_id = None
+                finally:
+                    session.close()
+            except Exception as e:
+                logger.debug(f"[WORKFLOW-SWITCH] Check failed: {e}")
+
         # Propagate phase_manager to agent_manager so spawned agents get phase context
         if self.phase_manager and self.agent_manager and not self.agent_manager.phase_manager:
             self.agent_manager.phase_manager = self.phase_manager
