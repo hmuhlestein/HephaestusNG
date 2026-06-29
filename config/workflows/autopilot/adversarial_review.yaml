@@ -15,7 +15,7 @@ done_definitions:
   - "All DB/file/network operations checked for connection leaks and missing closes"
   - "Cascade and ordering invariants verified (no time-of-check/time-of-use gaps)"
   - "adversarial_review_report.md written with BLOCKER/WARNING/NIT findings"
-  - "All BLOCKER issues fixed directly in code"
+  - "Each BLOCKER includes exact failure sequence and specific recommended fix"
   - "Task marked as done"
 outputs:
   - "adversarial_review_report.md"
@@ -46,7 +46,8 @@ additional_notes: |
   CRITICAL PATH RULE: Your current working directory IS the project root.
   - Read all inputs from ./.hephaestus/ and the docs/ folder.
   - Write adversarial_review_report.md to the "Docs Path:" in your task.
-  - Fix code in "Project Path:" (src/, tests/).
+  - Do NOT edit any source code or tests. Your only output is the report.
+    The developer will fix based on your findings.
 
   Read:
   - architectural_review_report.md — what the architect already caught (skip those)
@@ -117,33 +118,24 @@ additional_notes: |
     at 3am — covered by a test?
 
   ═══════════════════════════════════════════════════════════════════════
-  STEP 3: REPRODUCE BEFORE REPORTING
+  STEP 3: CONFIRM BEFORE REPORTING
   ═══════════════════════════════════════════════════════════════════════
 
   Before classifying any issue as BLOCKER:
-  1. Write a minimal repro (a test, a script, or a trace through the code)
-  2. Run it, or trace the code path line-by-line to confirm the failure
-  3. If you cannot reproduce it, downgrade to WARNING
+  1. Trace the exact call chain — function A calls B with X, B raises Y, caller Z
+     catches nothing, process exits. Write it out step by step.
+  2. Confirm the failure path is not already caught by a higher-level handler.
+  3. If you cannot trace the complete failure path, downgrade to WARNING.
 
-  Do not report speculative issues. Show the exact sequence of events that
-  produces the failure: function A calls B with X, B raises Y, caller Z
-  catches nothing, process exits.
-
-  ═══════════════════════════════════════════════════════════════════════
-  STEP 4: FIX ALL BLOCKERs AND WARNINGs DIRECTLY
-  ═══════════════════════════════════════════════════════════════════════
-
-  For every BLOCKER and WARNING:
-  1. Read the exact lines
-  2. Write the fix
-  3. Run existing tests to verify no regression
-  4. Mark "FIXED" in the report
-
-  Do NOT just list issues. Fix them.
+  Do not report speculative issues ("this could fail"). Show the exact sequence.
 
   ═══════════════════════════════════════════════════════════════════════
-  STEP 5: WRITE adversarial_review_report.md
+  STEP 4: WRITE adversarial_review_report.md
   ═══════════════════════════════════════════════════════════════════════
+
+  Write the report to the Docs Path. This is your ONLY output — do NOT edit source.
+  The developer reads this report and fixes the code. Make recommended fixes
+  specific enough to act on without guessing.
 
   # Adversarial Review Report
 
@@ -152,27 +144,25 @@ additional_notes: |
   **Attack vectors applied:** [list the 2a–2h lenses above]
 
   ## Summary
-  - **BLOCKERs:** [count] — causes process death, data corruption, or silent wrong result
-  - **WARNINGs:** [count] — likely production failure under real load or error conditions
+  - **BLOCKERs:** [count] — process death, data corruption, or silent wrong result
+  - **WARNINGs:** [count] — fails under real load or error conditions
   - **NITs:** [count] — minor robustness or clarity improvements
   - **Overall:** PASS / NEEDS_WORK / FAIL
 
   ## Findings
 
   ### [BLOCKER] {title}
-  - **Attack vector:** {which lens found this — 2a/2b/2c/...}
+  - **Attack vector:** {lens — 2a/2b/2c/...}
   - **File:** {path}:{line}
-  - **Failure sequence:** {exact call chain that produces the failure}
+  - **Failure sequence:** {exact call chain — A calls B(x), B raises Y, Z catches nothing}
   - **Impact:** {what breaks and how badly}
-  - **Fix applied:** {what you changed}
-  - **Status:** FIXED
+  - **Recommended fix:** {specific enough to implement without guessing}
 
   ### [WARNING] {title}
   - **Attack vector:** {lens}
   - **File:** {path}:{line}
   - **Failure sequence:** {how it fails}
-  - **Fix applied:** {what you changed}
-  - **Status:** FIXED
+  - **Recommended fix:** {specific direction}
 
   ### [NIT] {title}
   - **File:** {path}:{line}
@@ -201,13 +191,14 @@ additional_notes: |
   DO:
   - Read the FULL source of every changed file before reporting anything
   - Trace caller chains, not just the function you're looking at
-  - Reproduce before reporting (or clearly state "could not reproduce, downgraded")
-  - Fix BLOCKERs and WARNINGs directly
+  - Confirm the failure path before classifying as BLOCKER
+  - Give specific recommended fixes — the developer acts on this report directly
   - Report the exact file:line for every finding
 
   DO NOT:
-  - Review design compliance — that was architecture_review's job
-  - Report issues already fixed in architectural_review_report.md
+  - Edit any source code or test files — report only
+  - Review design compliance — that was architectural_review's job
+  - Report issues already addressed in architectural_review_report.md
   - Be vague ("this could fail") — show the exact failure path
   - Inflate severity to make the report look thorough
   - Skip any of the attack vectors in Step 2
@@ -222,6 +213,6 @@ additional_notes: |
   mcp__hephaestus__update_task_status({
     "task_id": "<your task id>",
     "status": "done",
-    "summary": "<brief summary: N BLOCKERs fixed, M WARNINGs fixed>",
+    "summary": "<brief summary: N BLOCKERs found, M WARNINGs found — see adversarial_review_report.md>",
     "key_learnings": ["<specific failure modes found>"]
   })
