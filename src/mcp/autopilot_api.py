@@ -2094,6 +2094,21 @@ async def get_project_design_status(project_id: str, filename: str):
                 # Get tasks from the workflow linked to this feature
                 feat_tasks = []
                 wf_id = metrics.get("workflow_id")
+                
+                # If no workflow_id in metrics, try to find matching workflow by timestamp
+                if not wf_id and matching_workflows:
+                    feat_mtime = feature_dir.stat().st_mtime
+                    best_wf = None
+                    best_diff = float('inf')
+                    for wf in matching_workflows:
+                        if wf.created_at:
+                            diff = abs(wf.created_at.timestamp() - feat_mtime)
+                            if diff < best_diff:
+                                best_diff = diff
+                                best_wf = wf
+                    if best_wf and best_diff < 300:  # within 5 minutes
+                        wf_id = best_wf.id
+                
                 if wf_id:
                     wf_tasks = db.query(Task).filter_by(workflow_id=wf_id).all()
                     phase_ids = set(t.phase_id for t in wf_tasks if t.phase_id)
