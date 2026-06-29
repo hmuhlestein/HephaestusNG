@@ -610,6 +610,12 @@ class MonitoringLoop:
             if top_count < REPEAT_THRESHOLD:
                 self._rep_loop_state.pop(agent.id, None)
                 return
+            # Diversity guard: if the window contains many distinct lines, the
+            # repeated phrase is likely markdown in a file write, not a reasoning
+            # loop. Only fire if the top phrase accounts for >30% of all lines.
+            if top_count / len(lines) < 0.30:
+                self._rep_loop_state.pop(agent.id, None)
+                return
             # Guard: only fire once per unique repeated phrase to avoid spam.
             last_phrase = self._rep_loop_state.get(agent.id)
             if last_phrase == top_line:
