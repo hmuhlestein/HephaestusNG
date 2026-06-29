@@ -2067,12 +2067,96 @@ async def get_project_design_status(project_id: str, filename: str):
         # Get features linked to this design's workflows
         workflow_ids = [wf.id for wf in matching_workflows]
         features = []
-        if workflow_ids:
-            feature_records = (
-                db.query(Feature)
-                .filter(Feature.workflow_id.in_(workflow_ids))
-                .all()
-            )
+        
+        # Also scan filesystem for features matching this design
+        # Feature dirs are named like <timestamp>_<design_slug>
+        design_slug = filename.replace(".md", "").replace("-", "_").lower()
+        if FEATURES_DIR and Path(FEATURES_DIR).exists():
+            for feature_dir in sorted(Path(FEATURES_DIR).iterdir(), reverse=True):
+                if not feature_dir.is_dir():
+                    continue
+                # Check if this feature dir matches the design
+                dir_name = feature_dir.name.lower()
+                if design_slug not in dir_name:
+                    continue
+                
+                # Read metrics
+                metrics_path = feature_dir / "docs" / "pipeline_metrics.json"
+                metrics = _read_json(metrics_path) or {}
+                
+                # Get tasks from the workflow linked to this feature
+                feat_tasks = []
+                wf_id = metrics.get("workflow_id")
+                if wf_id:
+                    wf_tasks = db.query(Task).filter_by(workflow_id=wf_id).all()
+                    phase_ids = set(t.phase_id for t in wf_tasks if t.phase_id)
+                    phases = db.query(Phase).filter(Phase.id.in_(phase_ids)).all() if phase_ids else []
+                    phase_map = {p.id: p.name for p in phases}
+                    
+                    for t in wf_tasks:
+                        agent_status = None
+                        if t.assigned_agent_id:
+                            agent = db.query(Agent).filter_by(id=t.assigned_agent_id).first()
+                            agent_status = agent.status if agent else None
+                        feat_tasks.append({
+                            "id": t.id,
+                            "description": (t.enriched_description or t.raw_description or "")[:200],
+                            "status": t.status,
+                            "phase_id": t.phase_id,
+                            "phase_name": phase_map.get(t.phase_id),
+                            "workflow_id": t.workflow_id,
+                            "created_at": t.created_at.isoformat() if t.created_at else None,
+                            "completed_at": t.completed_at.isoformat() if t.completed_at else None,
+                            "agent_id": t.assigned_agent_id,
+                            "agent_status": agent_status,
+                        })
+                
+                dir_name_display = feature_dir.name
+                if "_" in dir_name_display:
+                    feat_name = dir_name_display.split("_", 1)[1].replace("_", " ").replace("-", " ").title()
+                else:
+                    feat_name = dir_name_display
+                
+                status = metrics.get("stop_reason", "pending")
+                if status == "completed":
+                    status = "completed"
+                elif status in ("interrupted", "hard_error", "timeout"):
+                    status = "failed"
+                else:
+                    status = "active"
+                
+                features.append({
+                    "id": feature_dir.name,
+                    "name": feat_name,
+                    "feature_key": dir_name_display,
+                    "status": status,
+                    "scope": "",
+                    "tasks": feat_tasks,
+                    "created_at": datetime.fromtimestamp(
+                        feature_dir.stat().st_mtime, tz=timezone.utc
+                    ).isoformat(),
+                    "completed_at": metrics.get("completed_at"),
+                })
+                
+                # Also add DB features linked to this workflow
+                if wf_id:
+                    feature_records = (
+                        db.query(Feature)
+                        .filter(Feature.workflow_id == wf_id)
+                        .all()
+                    )
+                    for feat in feature_records:
+                        if not any(f["id"] == feat.id for f in features):
+                            features.append({
+                                "id": feat.id,
+                                "name": feat.name,
+                                "feature_key": feat.feature_key,
+                                "status": feat.status,
+                                "scope": feat.scope,
+                                "tasks": feat_tasks,
+                                "created_at": feat.created_at.isoformat() if feat.created_at else None,
+                                "completed_at": feat.completed_at.isoformat() if feat.completed_at else None,
+                            })
             for feat in feature_records:
                 # Get tasks for this feature's workflow
                 feat_tasks = []

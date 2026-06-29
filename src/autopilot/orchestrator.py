@@ -2100,6 +2100,27 @@ def _advance_phases(workflow_id: str, logger: OrchestratorLogger) -> bool:
             pending = [p for p in phase_statuses if p["status"] == "pending"]
             in_progress = [p for p in phase_statuses if p["status"] == "in_progress"]
 
+            # Case 0: No in-progress phase and first phase is pending — start it
+            if not in_progress and not completed and pending:
+                first_phase = min(pending, key=lambda p: p["phase"].order)
+                # Check if it already has tasks
+                existing = (
+                    db.query(Task)
+                    .filter_by(phase_id=first_phase["phase"].id)
+                    .count()
+                )
+                if existing == 0:
+                    logger.info(
+                        f"[PHASE-ADVANCE] Starting first phase: {first_phase['phase'].name}"
+                    )
+                    return _create_phase_task(
+                        workflow_id,
+                        first_phase["phase"].id,
+                        first_phase["phase"].name,
+                        "continue",
+                        logger,
+                    )
+
             # Case 1: Completed phase with pending successor (phase N done, next never started)
             if completed and pending and not in_progress:
                 completed.sort(key=lambda p: p["phase"].order)
