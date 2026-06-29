@@ -1895,6 +1895,7 @@ async def get_project_design_status(project_id: str, filename: str):
         AgentBranch,
         AutopilotDesign,
         AutopilotProject,
+        Feature,
         Phase,
         Task,
         Workflow,
@@ -2063,6 +2064,56 @@ async def get_project_design_status(project_id: str, filename: str):
             set(a["branch_name"] for a in all_agents if a.get("branch_name"))
         )
 
+        # Get features linked to this design's workflows
+        workflow_ids = [wf.id for wf in matching_workflows]
+        features = []
+        if workflow_ids:
+            feature_records = (
+                db.query(Feature)
+                .filter(Feature.workflow_id.in_(workflow_ids))
+                .all()
+            )
+            for feat in feature_records:
+                # Get tasks for this feature's workflow
+                feat_tasks = []
+                if feat.workflow_id:
+                    feat_tasks = [
+                        {
+                            "id": t.id,
+                            "description": (t.enriched_description or t.raw_description or "")[:200],
+                            "status": t.status,
+                            "phase_id": t.phase_id,
+                            "phase_name": None,  # Will be filled below
+                            "workflow_id": t.workflow_id,
+                            "created_at": t.created_at.isoformat() if t.created_at else None,
+                            "completed_at": t.completed_at.isoformat() if t.completed_at else None,
+                            "agent_id": t.assigned_agent_id,
+                            "agent_status": None,
+                        }
+                        for t in db.query(Task).filter_by(workflow_id=feat.workflow_id).all()
+                    ]
+                    # Fill in phase names
+                    phase_map = {}
+                    phases = db.query(Phase).filter(Phase.workflow_id.in_([feat.workflow_id])).all()
+                    phase_map = {p.id: p.name for p in phases}
+                    for ft in feat_tasks:
+                        ft["phase_name"] = phase_map.get(ft["phase_id"])
+                        # Get agent status
+                        if ft["agent_id"]:
+                            agent = db.query(Agent).filter_by(id=ft["agent_id"]).first()
+                            ft["agent_status"] = agent.status if agent else None
+
+                features.append({
+                    "id": feat.id,
+                    "name": feat.name,
+                    "feature_key": feat.feature_key,
+                    "status": feat.status,
+                    "scope": feat.scope,
+                    "tasks": feat_tasks,
+                    "created_at": feat.created_at.isoformat() if feat.created_at else None,
+                    "completed_at": feat.completed_at.isoformat() if feat.completed_at else None,
+                })
+
         return {
             "filename": filename,
             "name": design_name,
@@ -2080,6 +2131,7 @@ async def get_project_design_status(project_id: str, filename: str):
             "agents": all_agents,
             "branches": branch_names,
             "feature_folder": feature_folder,
+            "features": features,
         }
 
 
