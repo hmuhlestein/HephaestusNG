@@ -6514,6 +6514,46 @@ async def list_tools():
                 },
             },
             {
+                "name": "broadcast_message",
+                "description": "Send a message to ALL active agents",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "message": {
+                            "type": "string",
+                            "description": "Message content to broadcast",
+                        },
+                        "sender_id": {
+                            "type": "string",
+                            "description": "Sender agent ID",
+                        },
+                    },
+                    "required": ["message"],
+                },
+            },
+            {
+                "name": "send_message",
+                "description": "Send a direct message to a specific agent",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "agent_id": {
+                            "type": "string",
+                            "description": "Target agent ID",
+                        },
+                        "message": {
+                            "type": "string",
+                            "description": "Message content",
+                        },
+                        "sender_id": {
+                            "type": "string",
+                            "description": "Sender agent ID",
+                        },
+                    },
+                    "required": ["agent_id", "message"],
+                },
+            },
+            {
                 "name": "devtools_connect",
                 "description": "Connect to Chrome DevTools Protocol for browser automation",
                 "input_schema": {
@@ -7331,6 +7371,36 @@ async def execute_tool(request: Dict[str, Any]):
             agent_id=arguments.get("agent_id", "mcp-claude"),
         )
         return {"success": True, "result": result}
+    elif tool_name == "broadcast_message":
+        # Broadcast message to all active agents
+        message = arguments.get("message", "")
+        sender_id = arguments.get("sender_id", "unknown")
+        if not message:
+            raise HTTPException(status_code=400, detail="message is required")
+        try:
+            await server_state.agent_manager.broadcast_message_to_all_agents(
+                message=message,
+                sender_agent_id=sender_id,
+            )
+        except Exception as e:
+            logger.warning(f"broadcast_message failed: {e}")
+        return {"success": True, "message": "Broadcast sent"}
+    elif tool_name == "send_message":
+        # Send direct message to a specific agent
+        target_agent_id = arguments.get("agent_id")
+        message = arguments.get("message", "")
+        sender_id = arguments.get("sender_id", "unknown")
+        if not target_agent_id or not message:
+            raise HTTPException(status_code=400, detail="agent_id and message are required")
+        try:
+            await server_state.agent_manager.send_message_to_agent(
+                agent_id=target_agent_id,
+                message=message,
+                sender_agent_id=sender_id,
+            )
+        except Exception as e:
+            logger.warning(f"send_message to {target_agent_id[:8]} failed: {e}")
+        return {"success": True, "message": f"Message sent to {target_agent_id[:8]}"}
     elif tool_name.startswith("devtools_"):
         return await _handle_devtools_tool(tool_name, arguments)
     else:

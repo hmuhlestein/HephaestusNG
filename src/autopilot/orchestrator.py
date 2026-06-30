@@ -1587,6 +1587,76 @@ def _link_workflow_to_feature(workflow_id: str, feature_id: str) -> None:
             logger.info(f"Linked workflow {workflow_id[:8]} to feature {feature_id}")
 
 
+def _relink_features_to_workflows(design_id: str, logger: OrchestratorLogger) -> None:
+    """Re-link features to their workflows if workflow_id is missing.
+
+    Handles pipeline restarts where features exist but their workflow link
+    was lost. Matches features to workflows by feature_key in launch_params.
+    """
+    import json as _json
+    from src.core.database import Feature, Workflow, get_db
+
+    with get_db() as db:
+        unlinked = (
+            db.query(Feature)
+            .filter_by(design_id=design_id, workflow_id=None)
+            .all()
+        )
+        if not unlinked:
+            return
+
+        # Get all autopilot workflows for this design's project
+        workflows = (
+            db.query(Workflow)
+            .filter(Workflow.definition_id == "autopilot")
+            .order_by(Workflow.created_at.desc())
+            .all()
+        )
+
+        for feat in unlinked:
+            for wf in workflows:
+                try:
+                    params = _json.loads(wf.launch_params or "{}")
+                except Exception:
+                    continue
+                if params.get("feature_id") == feat.feature_key:
+                    feat.workflow_id = wf.id
+                    logger.info(f"Re-linked workflow {wf.id[:8]} to feature {feat.id} ({feat.name})")
+                    break
+
+        db.commit()
+
+
+def _clean_stale_assigned_tasks(workflow_id: str, logger: OrchestratorLogger) -> None:
+    """Clean tasks that are 'assigned' or 'in_progress' to terminated agents.
+
+    Called periodically from the polling loop to prevent tasks from hanging
+    forever when agents crash or are killed.
+    """
+    from src.core.database import Agent, Task, get_db
+
+    with get_db() as db:
+        stale_tasks = (
+            db.query(Task)
+            .filter(
+                Task.workflow_id == workflow_id,
+                Task.status.in_(["assigned", "in_progress"]),
+                Task.assigned_agent_id.isnot(None),
+            )
+            .all()
+        )
+        for task in stale_tasks:
+            agent = db.query(Agent).filter_by(id=task.assigned_agent_id).first()
+            if agent and agent.status == "terminated":
+                logger.info(
+                    f"[STALE-TASK] Task {task.id[:8]} assigned to terminated agent "
+                    f"{task.assigned_agent_id[:8]} — marking failed"
+                )
+                task.status = "failed"
+                task.failure_reason = f"Agent {task.assigned_agent_id[:8]} terminated unexpectedly"
+                db.commit()
+
+
 def _validate_features_json(features_json: dict) -> None:
     """Validate features.json structure.
 
@@ -2073,10 +2143,10 @@ def _update_orchestrator_max_gotos(max_gotos: int, logger: OrchestratorLogger) -
             if defn and defn.orchestrator_config:
                 config = dict(defn.orchestrator_config)
                 old_val = config.get("max_total_gotos", 10)
-                config["max_total_gotos"] = max_gotos
-                defn.orchestrator_config = config
-                db.commit()
                 if old_val != max_gotos:
+                    config["max_total_gotos"] = max_gotos
+                    defn.orchestrator_config = config
+                    db.commit()
                     logger.info(f"Updated max_total_gotos: {old_val} -> {max_gotos}")
     except Exception as e:
         logger.warning(f"Failed to update max_total_gotos: {e}")
@@ -3644,6 +3714,9 @@ def run_single_design(
         )
 
     # ── Stage 2: Per-feature pipelines ──
+    # Re-link features to their workflows if missing (handles pipeline restarts)
+    _relink_features_to_workflows(design_entry.db_id, logger)
+
     feature_results = run_feature_pipelines(
         sdk, design_entry, features_json, designs_folder,
         project_path, logger, state, max_iterations,
@@ -3794,15 +3867,24 @@ def run_continuous_pipeline(args) -> None:
         session = db_manager.get_session()
         try:
             _orchestrator_agent_id = f"orchestrator-{uuid.uuid4().hex[:8]}"
-            orchestrator_agent = Agent(
-                id=_orchestrator_agent_id,
-                system_prompt=f"LOG_DIR:{log_dir}",
-                status="working",
-                cli_type=cli_tool,
-                agent_type="orchestrator",
-                tmux_session_name="orchestrator",
-            )
-            session.add(orchestrator_agent)
+            orchestrator_agent = session.query(Agent).filter_by(id=_orchestrator_agent_id).first()
+            if orchestrator_agent:
+                orchestrator_agent.status = "working"
+                orchestrator_agent.last_activity = datetime.utcnow()
+            else:
+                # Check if tmux_session_name is already taken
+                existing = session.query(Agent).filter_by(tmux_session_name="orchestrator").first()
+                if existing:
+                    existing.status = "terminated"
+                orchestrator_agent = Agent(
+                    id=_orchestrator_agent_id,
+                    system_prompt=f"LOG_DIR:{log_dir}",
+                    status="working",
+                    cli_type=cli_tool,
+                    agent_type="orchestrator",
+                    tmux_session_name="orchestrator",
+                )
+                session.add(orchestrator_agent)
             session.commit()
             logger.info(f"Registered orchestrator agent: {orchestrator_agent.id[:8]}")
         except Exception as e:
@@ -3890,6 +3972,13 @@ def run_continuous_pipeline(args) -> None:
                         is_complete, reason = is_design_fully_complete(
                             state.current_workflow_id, logger
                         )
+
+                        # Periodic stale task cleanup (every cycle)
+                        try:
+                            _clean_stale_assigned_tasks(state.current_workflow_id, logger)
+                        except Exception as e:
+                            logger.debug(f"Stale task cleanup error: {e}")
+
                         if not is_complete:
                             logger.info(f"Previous workflow not yet complete: {reason}")
 
