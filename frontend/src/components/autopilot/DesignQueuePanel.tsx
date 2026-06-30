@@ -617,7 +617,7 @@ const FeatureRow: React.FC<{
                 key={task.id}
                 className="flex items-center gap-2 px-2 py-1.5 bg-white rounded border border-gray-100 cursor-pointer hover:bg-gray-50 hover:border-gray-200 transition-colors"
               >
-                <TaskStatusIcon status={task.status} />
+                <TaskStatusIcon status={task.agent_status === 'terminated' ? 'failed' : task.status} />
                 <div
                   className="flex-1 min-w-0"
                   onClick={() => onTaskClick(task.id)}
