@@ -978,7 +978,7 @@ class Feature(Base):
     status = Column(
         String,
         CheckConstraint(
-            "status IN ('pending', 'active', 'completed', 'failed', 'skipped')"
+            "status IN ('pending', 'active', 'completed', 'failed', 'skipped', 'paused')"
         ),
         nullable=False,
         default="pending",
