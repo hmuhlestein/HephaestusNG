@@ -606,19 +606,21 @@ const FeatureRow: React.FC<{
 
   return (
     <div className="bg-white rounded-lg border border-gray-100 overflow-hidden">
-      <div
-        className="flex items-center gap-3 px-3 py-2 cursor-pointer hover:bg-gray-50 transition-colors"
-        onClick={() => setExpanded(!expanded)}
-      >
-        <div className="p-1 text-gray-400">
-          {expanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
-        </div>
-        <div className="p-1.5 rounded bg-violet-50">
-          <Layers className="w-3.5 h-3.5 text-violet-600" />
-        </div>
-        <div className="flex-1 min-w-0">
-          <p className="text-sm font-medium text-gray-700 truncate">{feature.name}</p>
-          <p className="text-xs text-gray-400 truncate">{feature.feature_key}</p>
+      <div className="flex items-center gap-3 px-3 py-2">
+        <div
+          className="flex items-center gap-3 flex-1 min-w-0 cursor-pointer hover:bg-gray-50 transition-colors rounded"
+          onClick={() => setExpanded(!expanded)}
+        >
+          <div className="p-1 text-gray-400">
+            {expanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+          </div>
+          <div className="p-1.5 rounded bg-violet-50">
+            <Layers className="w-3.5 h-3.5 text-violet-600" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-medium text-gray-700 truncate">{feature.name}</p>
+            <p className="text-xs text-gray-400 truncate">{feature.feature_key}</p>
+          </div>
         </div>
         <div className="flex items-center gap-2">
           <span className="text-xs text-gray-400">
