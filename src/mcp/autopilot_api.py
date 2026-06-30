@@ -2118,11 +2118,27 @@ async def get_project_design_status(project_id: str, filename: str):
                         "agent_status": agent_status,
                     })
             
+            # Derive feature status from task statuses
+            if feat_tasks:
+                task_statuses = {t["status"] for t in feat_tasks}
+                if task_statuses == {"done"}:
+                    feat_status = "completed"
+                elif "in_progress" in task_statuses or "assigned" in task_statuses:
+                    feat_status = "active"
+                elif "failed" in task_statuses:
+                    feat_status = "failed"
+                elif task_statuses == {"pending"}:
+                    feat_status = "pending"
+                else:
+                    feat_status = feat.status
+            else:
+                feat_status = feat.status
+
             features.append({
                 "id": feat.id,
                 "name": feat.name,
                 "feature_key": feat.feature_key,
-                "status": feat.status,
+                "status": feat_status,
                 "scope": feat.scope or "",
                 "tasks": feat_tasks,
                 "created_at": feat.created_at.isoformat() if feat.created_at else None,
