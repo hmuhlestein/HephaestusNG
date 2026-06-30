@@ -2235,6 +2235,54 @@ async def list_features():
     return _scan_features()
 
 
+@router.post("/features/{feature_id}/pause")
+async def pause_feature(feature_id: str):
+    """Pause a feature's workflow."""
+    from src.core.database import Feature, Workflow, get_db
+
+    with get_db() as db:
+        feature = db.query(Feature).filter_by(id=feature_id).first()
+        if not feature:
+            raise HTTPException(status_code=404, detail="Feature not found")
+        if not feature.workflow_id:
+            raise HTTPException(status_code=400, detail="Feature has no linked workflow")
+
+        wf = db.query(Workflow).filter_by(id=feature.workflow_id).first()
+        if not wf:
+            raise HTTPException(status_code=404, detail="Workflow not found")
+        if wf.status != "active":
+            return {"success": True, "message": f"Workflow already {wf.status}"}
+
+        wf.status = "paused"
+        feature.status = "paused"
+        db.commit()
+        return {"success": True, "message": f"Paused feature {feature.name}"}
+
+
+@router.post("/features/{feature_id}/resume")
+async def resume_feature(feature_id: str):
+    """Resume a paused feature's workflow."""
+    from src.core.database import Feature, Workflow, get_db
+
+    with get_db() as db:
+        feature = db.query(Feature).filter_by(id=feature_id).first()
+        if not feature:
+            raise HTTPException(status_code=404, detail="Feature not found")
+        if not feature.workflow_id:
+            raise HTTPException(status_code=400, detail="Feature has no linked workflow")
+
+        wf = db.query(Workflow).filter_by(id=feature.workflow_id).first()
+        if not wf:
+            raise HTTPException(status_code=404, detail="Workflow not found")
+        if wf.status != "paused":
+            return {"success": True, "message": f"Workflow already {wf.status}"}
+
+        wf.status = "active"
+        feature.status = "active"
+        db.commit()
+        return {"success": True, "message": f"Resumed feature {feature.name}"}
+
+
 @router.get("/features/{feature_id}", response_model=FeatureDetail)
 async def get_feature_detail(feature_id: str):
     cache_key = f"feature:{feature_id}"

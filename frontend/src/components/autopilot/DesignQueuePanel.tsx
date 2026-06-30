@@ -391,6 +391,8 @@ const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, is
     }
   };
 
+  const refetchFeatures = fetchFeatures;
+
   // Poll features every 10s when expanded
   useEffect(() => {
     if (!expanded || !projectId) return;
@@ -531,6 +533,8 @@ const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, is
                       key={feature.id}
                       feature={feature}
                       onTaskClick={onTaskClick}
+                      projectId={projectId ?? undefined}
+                      onFeatureUpdate={() => refetchFeatures()}
                     />
                   ))}
                 </div>
@@ -574,11 +578,31 @@ const FeatureStatusBadge: React.FC<{ status: string }> = ({ status }) => {
 const FeatureRow: React.FC<{
   feature: any;
   onTaskClick: (taskId: string) => void;
-}> = ({ feature, onTaskClick }) => {
+  projectId?: string;
+  onFeatureUpdate?: () => void;
+}> = ({ feature, onTaskClick, onFeatureUpdate }) => {
   const [expanded, setExpanded] = useState(false);
+  const [pausing, setPausing] = useState(false);
   const tasks = feature.tasks || [];
   const doneCount = tasks.filter((t: any) => t.status === 'done').length;
   const activeCount = tasks.filter((t: any) => ['in_progress', 'assigned'].includes(t.status)).length;
+
+  const handlePauseResume = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setPausing(true);
+    try {
+      if (feature.status === 'active') {
+        await apiService.pauseFeature(feature.id);
+      } else if (feature.status === 'paused') {
+        await apiService.resumeFeature(feature.id);
+      }
+      onFeatureUpdate?.();
+    } catch (err) {
+      console.error('Pause/resume failed:', err);
+    } finally {
+      setPausing(false);
+    }
+  };
 
   return (
     <div className="bg-white rounded-lg border border-gray-100 overflow-hidden">
@@ -606,6 +630,24 @@ const FeatureRow: React.FC<{
             </span>
           )}
           <FeatureStatusBadge status={feature.status} />
+          {(feature.status === 'active' || feature.status === 'paused' || feature.status === 'failed') && (
+            <button
+              onClick={handlePauseResume}
+              disabled={pausing}
+              className={`p-1 rounded transition-colors ${
+                feature.status === 'active'
+                  ? 'text-amber-500 hover:bg-amber-50'
+                  : 'text-green-500 hover:bg-green-50'
+              } ${pausing ? 'opacity-50' : ''}`}
+              title={feature.status === 'active' ? 'Pause feature' : 'Resume feature'}
+            >
+              {feature.status === 'active' ? (
+                <Pause className="w-3.5 h-3.5" />
+              ) : (
+                <Play className="w-3.5 h-3.5" />
+              )}
+            </button>
+          )}
         </div>
       </div>
 

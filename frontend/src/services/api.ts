@@ -767,6 +767,16 @@ export const apiService = {
     return data;
   },
 
+  pauseFeature: async (featureId: string): Promise<any> => {
+    const { data } = await api.post(`/autopilot/features/${encodeURIComponent(featureId)}/pause`);
+    return data;
+  },
+
+  resumeFeature: async (featureId: string): Promise<any> => {
+    const { data } = await api.post(`/autopilot/features/${encodeURIComponent(featureId)}/resume`);
+    return data;
+  },
+
   // Unified Projects
   getProjects: async (): Promise<any[]> => {
     const { data } = await api.get('/projects');
