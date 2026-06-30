@@ -2118,8 +2118,10 @@ async def get_project_design_status(project_id: str, filename: str):
                         "agent_status": agent_status,
                     })
             
-            # Derive feature status from task statuses
-            if feat_tasks:
+            # Derive feature status from task statuses, but respect DB 'paused'
+            if feat.status == "paused":
+                feat_status = "paused"
+            elif feat_tasks:
                 task_statuses = {t["status"] for t in feat_tasks}
                 if task_statuses == {"done"}:
                     feat_status = "completed"
@@ -2261,7 +2263,7 @@ async def pause_feature(feature_id: str):
 
 @router.post("/features/{feature_id}/resume")
 async def resume_feature(feature_id: str):
-    """Resume a paused feature's workflow."""
+    """Resume a paused or failed feature's workflow."""
     from src.core.database import Feature, Workflow, get_db
 
     with get_db() as db:
@@ -2274,10 +2276,12 @@ async def resume_feature(feature_id: str):
         wf = db.query(Workflow).filter_by(id=feature.workflow_id).first()
         if not wf:
             raise HTTPException(status_code=404, detail="Workflow not found")
-        if wf.status != "paused":
-            return {"success": True, "message": f"Workflow already {wf.status}"}
 
-        wf.status = "active"
+        # Resume workflow if paused
+        if wf.status == "paused":
+            wf.status = "active"
+
+        # Always set feature to active on resume
         feature.status = "active"
         db.commit()
         return {"success": True, "message": f"Resumed feature {feature.name}"}
