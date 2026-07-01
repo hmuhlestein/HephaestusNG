@@ -1161,6 +1161,9 @@ async def process_queue():
 
     Only creates an agent if we're under the max concurrent agent limit.
     """
+    from src.services.agent_dispatch_service import AgentDispatchService
+    from src.services.task_enrichment_service import TaskEnrichmentService
+
     try:
         # Check if we should queue (i.e., at capacity)
         if server_state.queue_service.should_queue_task():
@@ -1181,260 +1184,80 @@ async def process_queue():
         # Dequeue the task
         server_state.queue_service.dequeue_task(next_task.id)
 
-        # BUG FIX: Check if task needs enrichment (was blocked on creation and skipped enrichment)
-        # Tasks created with placeholder "[Processing] ..." need real LLM enrichment
+        # Resolve phase_id once up front — reused for both enrichment (if
+        # needed) and agent dispatch below. Previously this exact
+        # digit-vs-UUID resolution was independently duplicated for each
+        # (see docs/SOLID_OO_REVIEW.md findings 1.2/1.3/1.4).
+        resolved_phase_id = None
+        if next_task.phase_id and server_state.phase_manager:
+            resolved_phase_id = TaskEnrichmentService.resolve_phase_id(
+                phase_id_raw=next_task.phase_id,
+                phase_order=None,
+                workflow_id=next_task.workflow_id,
+                requesting_agent_id="system",
+            )
+            if resolved_phase_id != next_task.phase_id:
+                next_task.phase_id = resolved_phase_id  # update in-memory object too
+
+        # Tasks created with placeholder "[Processing] ..." (e.g. blocked on
+        # creation and enrichment was skipped) need real LLM enrichment.
         needs_enrichment = (
             not next_task.enriched_description
             or next_task.enriched_description.startswith("[Processing]")
         )
-        logger.info(f"[QUEUE_ENRICHMENT] Task {next_task.id} enrichment check:")
         logger.info(
-            f"[QUEUE_ENRICHMENT]   - enriched_description exists: {bool(next_task.enriched_description)}"
+            f"[QUEUE_ENRICHMENT] Task {next_task.id} needs_enrichment={needs_enrichment}"
         )
-        logger.info(
-            f"[QUEUE_ENRICHMENT]   - enriched_description value: {next_task.enriched_description[:100] if next_task.enriched_description else 'NULL'}"
-        )
-        logger.info(
-            f"[QUEUE_ENRICHMENT]   - starts with [Processing]: {next_task.enriched_description.startswith('[Processing]') if next_task.enriched_description else False}"
-        )
-        logger.info(f"[QUEUE_ENRICHMENT]   - NEEDS ENRICHMENT: {needs_enrichment}")
 
         if needs_enrichment:
-            logger.info(
-                f"[QUEUE_ENRICHMENT] ========== STARTING ENRICHMENT PIPELINE FOR TASK {next_task.id} =========="
+            phase_context_str, ctx_workflow_id = (
+                TaskEnrichmentService.get_phase_context_str(resolved_phase_id)
             )
-            logger.info(
-                f"[QUEUE_ENRICHMENT] Task phase_id (from DB): {next_task.phase_id} (type: {type(next_task.phase_id).__name__})"
-            )
-            logger.info(
-                f"[QUEUE_ENRICHMENT] Task raw_description: {next_task.raw_description[:200]}"
-            )
+            workflow_id = ctx_workflow_id or next_task.workflow_id
 
-            # Get phase context for enrichment
-            # CRITICAL: phase_id might be an integer (phase order) or UUID string
-            phase_context_str = ""
-            workflow_id = None
-            phase_id_uuid = None
-
-            if next_task.phase_id and server_state.phase_manager:
-                # BUG FIX: Convert phase order number to UUID (same logic as process_task_async)
-                logger.info("[QUEUE_ENRICHMENT] Converting phase_id to UUID if needed")
-                logger.info(
-                    f"[QUEUE_ENRICHMENT]   - Original phase_id: {next_task.phase_id}"
-                )
-                logger.info(
-                    f"[QUEUE_ENRICHMENT]   - Is digit check: {str(next_task.phase_id).isdigit()}"
-                )
-
-                if str(next_task.phase_id).isdigit():
-                    # phase_id is a phase order number - convert to UUID
-                    logger.info(
-                        f"[QUEUE_ENRICHMENT] phase_id={next_task.phase_id} is an ORDER number - converting to UUID"
-                    )
-                    phase_id_uuid = server_state.phase_manager.get_phase_for_task(
-                        phase_id=None,
-                        order=int(next_task.phase_id),
-                        requesting_agent_id="system",
-                    )
-                    logger.info(
-                        f"[QUEUE_ENRICHMENT] ✓ Converted phase order {next_task.phase_id} → UUID: {phase_id_uuid}"
-                    )
-                else:
-                    # phase_id is already a UUID
-                    logger.info(
-                        f"[QUEUE_ENRICHMENT] phase_id={next_task.phase_id} is a UUID - using directly"
-                    )
-                    phase_id_uuid = next_task.phase_id
-
-                logger.info(
-                    f"[QUEUE_ENRICHMENT] Fetching phase context for UUID: {phase_id_uuid}"
-                )
-                phase_context = server_state.phase_manager.get_phase_context(
-                    phase_id_uuid
-                )
-                if phase_context:
-                    phase_context_str = phase_context.to_prompt_context()
-                    workflow_id = phase_context.workflow_id
-                    logger.info(
-                        f"[QUEUE_ENRICHMENT] ✓ Got phase context (length={len(phase_context_str)}, workflow_id={workflow_id})"
-                    )
-                    logger.info(
-                        f"[QUEUE_ENRICHMENT] Phase context preview: {phase_context_str[:300]}"
-                    )
-                else:
-                    logger.warning(
-                        f"[QUEUE_ENRICHMENT] ✗ No phase context returned for phase UUID={phase_id_uuid}"
-                    )
-            else:
-                logger.warning(
-                    f"[QUEUE_ENRICHMENT] ✗ Skipping phase context (phase_id={next_task.phase_id}, phase_manager={bool(server_state.phase_manager)})"
-                )
-
-            # Use the task's workflow_id if not obtained from phase context
-            if not workflow_id:
-                logger.info(
-                    "[QUEUE_ENRICHMENT] No workflow_id from phase context - using task's workflow_id"
-                )
-                workflow_id = next_task.workflow_id
-                if workflow_id:
-                    logger.info(
-                        f"[QUEUE_ENRICHMENT] ✓ Got workflow_id from task: {workflow_id}"
-                    )
-                else:
-                    logger.warning("[QUEUE_ENRICHMENT] ✗ Task has no workflow_id set")
-
-            # Retrieve RAG memories for enrichment
-            logger.info("[QUEUE_ENRICHMENT] Retrieving RAG memories for enrichment")
-            context_memories_for_enrichment = (
-                await server_state.rag_system.retrieve_for_task(
-                    task_description=next_task.raw_description,
-                    requesting_agent_id="system",
-                )
+            enrichment_result = await TaskEnrichmentService.enrich(
+                raw_description=next_task.raw_description,
+                done_definition=next_task.done_definition,
+                phase_context_str=phase_context_str,
+                requesting_agent_id="system",
             )
-            logger.info(
-                f"[QUEUE_ENRICHMENT] ✓ Retrieved {len(context_memories_for_enrichment)} memories from RAG"
-            )
+            enriched_task = enrichment_result["enriched_task"]
 
-            # Get project context for enrichment
-            logger.info("[QUEUE_ENRICHMENT] Getting project context")
-            project_context_for_enrichment = (
-                await server_state.agent_manager.get_project_context()
-            )
-            logger.info(
-                f"[QUEUE_ENRICHMENT] ✓ Got project context (length={len(project_context_for_enrichment)})"
-            )
-
-            if phase_context_str:
-                project_context_for_enrichment = (
-                    f"{project_context_for_enrichment}\n\n{phase_context_str}"
-                )
-                logger.info(
-                    f"[QUEUE_ENRICHMENT] ✓ Added phase context to project context (total length={len(project_context_for_enrichment)})"
-                )
-
-            # Enrich task using LLM
-            logger.info("[QUEUE_ENRICHMENT] Calling LLM for task enrichment")
-            logger.info(
-                f"[QUEUE_ENRICHMENT]   - task_description: {next_task.raw_description[:100]}"
-            )
-            logger.info(
-                f"[QUEUE_ENRICHMENT]   - done_definition: {next_task.done_definition}"
-            )
-            logger.info(
-                f"[QUEUE_ENRICHMENT]   - context memories: {len(context_memories_for_enrichment)} items"
-            )
-            logger.info(
-                f"[QUEUE_ENRICHMENT]   - phase_context provided: {bool(phase_context_str)}"
-            )
-
-            context_strings = [
-                mem.get("content", "") for mem in context_memories_for_enrichment
-            ]
-            enriched_task = await server_state.llm_provider.enrich_task(
-                task_description=next_task.raw_description,
-                done_definition=next_task.done_definition
-                or "Task completed successfully",
-                context=context_strings,
-                phase_context=phase_context_str if phase_context_str else None,
-            )
-            # Normalize: ensure enriched_description is always a string
-            import json as _json
-
-            _raw_desc = enriched_task.get("enriched_description")
-            if _raw_desc is None:
-                _raw_desc = next_task.raw_description
-            elif isinstance(_raw_desc, dict):
-                _raw_desc = _json.dumps(_raw_desc, indent=2)
-            enriched_task["enriched_description"] = str(_raw_desc)
-            logger.info("[QUEUE_ENRICHMENT] ✓ LLM enrichment complete!")
-            logger.info(
-                f"[QUEUE_ENRICHMENT] Enriched description: {enriched_task['enriched_description'][:200]}"
-            )
-            logger.info(
-                f"[QUEUE_ENRICHMENT] Estimated complexity: {enriched_task.get('estimated_complexity', 'N/A')}"
-            )
-
-            # Update task with enriched data
-            logger.info("[QUEUE_ENRICHMENT] Updating task in database")
             session = server_state.db_manager.get_session()
             try:
                 task = session.query(Task).filter_by(id=next_task.id).first()
                 if task:
-                    enriched_desc = enriched_task["enriched_description"]
-                    if isinstance(enriched_desc, dict):
-                        import json
-
-                        enriched_desc = json.dumps(enriched_desc, indent=2)
-                    task.enriched_description = enriched_desc
+                    task.enriched_description = enriched_task["enriched_description"]
                     task.estimated_complexity = enriched_task.get(
                         "estimated_complexity", 5
                     )
-                    logger.info(
-                        "[QUEUE_ENRICHMENT] ✓ Set enriched_description and estimated_complexity"
-                    )
-
-                    # BUG FIX: Update phase_id to UUID if we converted it from order
-                    if phase_id_uuid and phase_id_uuid != next_task.phase_id:
-                        logger.info(
-                            f"[QUEUE_ENRICHMENT] Updating phase_id from order {next_task.phase_id} to UUID {phase_id_uuid}"
-                        )
-                        task.phase_id = phase_id_uuid
-                        next_task.phase_id = (
-                            phase_id_uuid  # Update in-memory object too
-                        )
-                        logger.info(
-                            "[QUEUE_ENRICHMENT] ✓ Updated phase_id to UUID in database"
-                        )
-
-                    # BUG FIX: Always set workflow_id (to match process_task_async behavior)
+                    if resolved_phase_id:
+                        task.phase_id = resolved_phase_id
                     if workflow_id:
                         task.workflow_id = workflow_id
-                        logger.info(
-                            f"[QUEUE_ENRICHMENT] ✓ Set workflow_id: {workflow_id}"
-                        )
-                    else:
-                        logger.warning("[QUEUE_ENRICHMENT] ✗ No workflow_id to set")
 
-                    # Check if phase has validation enabled
-                    if phase_id_uuid:
+                    # Inherit validation from phase, if enabled there
+                    if resolved_phase_id:
                         from src.core.database import Phase
 
-                        phase = session.query(Phase).filter_by(id=phase_id_uuid).first()
-                        if phase and phase.validation:
-                            if phase.validation.get("enabled", True):
-                                task.validation_enabled = True
-                                logger.info(
-                                    "[QUEUE_ENRICHMENT] ✓ Inherited validation from phase (enabled=True)"
-                                )
-                            else:
-                                logger.info(
-                                    "[QUEUE_ENRICHMENT] Phase validation explicitly disabled"
-                                )
-                        else:
-                            logger.info(
-                                "[QUEUE_ENRICHMENT] No validation config in phase"
-                            )
+                        phase = (
+                            session.query(Phase)
+                            .filter_by(id=resolved_phase_id)
+                            .first()
+                        )
+                        if phase and phase.validation and phase.validation.get(
+                            "enabled", True
+                        ):
+                            task.validation_enabled = True
 
                     session.commit()
-                    logger.info("[QUEUE_ENRICHMENT] ✓ Database commit successful")
-
-                    # Store enriched_task dict for passing to create_agent_for_task
-                    next_enriched_desc = enriched_task["enriched_description"]
-                    if isinstance(enriched_desc, dict):
-                        import json
-
-                        enriched_desc = json.dumps(enriched_desc, indent=2)
-                    task.enriched_description = enriched_desc
-                    next_task._enriched_task_dict = enriched_task  # Store full dict
+                    next_task._enriched_task_dict = enriched_task  # for dispatch below
                     logger.info(
-                        "[QUEUE_ENRICHMENT] ✓ Stored full enriched_task dict for agent creation"
-                    )
-                    logger.info(
-                        f"[QUEUE_ENRICHMENT] ========== ENRICHMENT PIPELINE COMPLETE FOR TASK {next_task.id} =========="
+                        f"[QUEUE_ENRICHMENT] Enrichment complete for task {next_task.id}"
                     )
                 else:
                     logger.error(
-                        f"[QUEUE_ENRICHMENT] ✗ Task {next_task.id} not found in database!"
+                        f"[QUEUE_ENRICHMENT] Task {next_task.id} not found in database!"
                     )
             finally:
                 session.close()
@@ -1443,254 +1266,62 @@ async def process_queue():
                 f"[QUEUE_ENRICHMENT] Task {next_task.id} already enriched - skipping enrichment pipeline"
             )
 
-        # BUG FIX: Refresh task from database first to get enriched_description for RAG retrieval
-        session_pre = server_state.db_manager.get_session()
-        try:
-            refreshed_task_pre = (
-                session_pre.query(Task).filter_by(id=next_task.id).first()
-            )
-            task_description_for_rag = (
-                refreshed_task_pre.enriched_description
-                or refreshed_task_pre.raw_description
-            )
-        finally:
-            session_pre.close()
-
-        # Get project context
-        logger.info(
-            f"[QUEUE_AGENT_CREATE] Getting project context for task {next_task.id}"
-        )
-        project_context = await server_state.agent_manager.get_project_context()
-        logger.info(
-            f"[QUEUE_AGENT_CREATE] ✓ Got project context (length={len(project_context)})"
-        )
-
-        # Get phase context if applicable
-        # BUG FIX: Convert phase order to UUID (same as enrichment above)
-        phase_id_for_agent = None
-        if next_task.phase_id and server_state.phase_manager:
-            logger.info("[QUEUE_AGENT_CREATE] Converting phase_id for agent creation")
-            logger.info(
-                f"[QUEUE_AGENT_CREATE]   - phase_id from task: {next_task.phase_id}"
-            )
-
-            if str(next_task.phase_id).isdigit():
-                logger.info(
-                    f"[QUEUE_AGENT_CREATE] phase_id={next_task.phase_id} is ORDER - converting to UUID"
-                )
-                phase_id_for_agent = server_state.phase_manager.get_phase_for_task(
-                    phase_id=None,
-                    order=int(next_task.phase_id),
-                    requesting_agent_id="system",
-                )
-                logger.info(
-                    f"[QUEUE_AGENT_CREATE] ✓ Converted order {next_task.phase_id} → UUID: {phase_id_for_agent}"
-                )
-            else:
-                logger.info(
-                    f"[QUEUE_AGENT_CREATE] phase_id={next_task.phase_id} is UUID - using directly"
-                )
-                phase_id_for_agent = next_task.phase_id
-
-            logger.info(
-                f"[QUEUE_AGENT_CREATE] Fetching phase context for agent with UUID: {phase_id_for_agent}"
-            )
-            phase_context = server_state.phase_manager.get_phase_context(
-                phase_id_for_agent
-            )
-            if phase_context:
-                project_context = (
-                    f"{project_context}\n\n{phase_context.to_prompt_context()}"
-                )
-                logger.info(
-                    f"[QUEUE_AGENT_CREATE] ✓ Added phase context to project context (total={len(project_context)})"
-                )
-            else:
-                logger.warning(
-                    f"[QUEUE_AGENT_CREATE] ✗ No phase context for UUID: {phase_id_for_agent}"
-                )
-
-        # Retrieve relevant memories (using enriched description if available)
-        logger.info("[QUEUE_AGENT_CREATE] Retrieving RAG memories")
-        context_memories = await server_state.rag_system.retrieve_for_task(
-            task_description=task_description_for_rag,
-            requesting_agent_id="system",
-        )
-        logger.info(
-            f"[QUEUE_AGENT_CREATE] ✓ Retrieved {len(context_memories)} memories"
-        )
-
-        # Determine working directory
-        working_directory = None
-        if phase_id_for_agent:
-            logger.info(
-                "[QUEUE_AGENT_CREATE] Querying database for phase working directory"
-            )
-            session = server_state.db_manager.get_session()
-            try:
-                from src.core.database import Phase
-
-                # DEBUG: Show what's in the Phase table
-                logger.info(
-                    f"[QUEUE_AGENT_CREATE] DEBUG: Querying Phase table with UUID: {phase_id_for_agent}"
-                )
-                all_phases = session.query(Phase.id, Phase.name, Phase.order).all()
-                logger.info(
-                    f"[QUEUE_AGENT_CREATE] DEBUG: All phases in DB: {all_phases}"
-                )
-
-                phase = session.query(Phase).filter_by(id=phase_id_for_agent).first()
-                if phase:
-                    logger.info(
-                        f"[QUEUE_AGENT_CREATE] ✓ Found phase: {phase.name}, working_dir: {phase.working_directory}"
-                    )
-                    if phase.working_directory:
-                        working_directory = phase.working_directory
-                else:
-                    logger.warning(
-                        f"[QUEUE_AGENT_CREATE] ✗ No phase found with UUID: {phase_id_for_agent}"
-                    )
-            finally:
-                session.close()
-        if not working_directory:
-            working_directory = os.getcwd()
-            logger.info(
-                f"[QUEUE_AGENT_CREATE] Using default working directory: {working_directory}"
-            )
-
-        # BUG FIX: Refresh task from database to get updated enriched_description
-        # The next_task object is stale if enrichment just ran
-        logger.info("[QUEUE_AGENT_CREATE] Refreshing task from database")
+        # Refresh task from DB to get post-enrichment data, and build the
+        # temp task object used for dispatch (mirrors create_task's pattern).
         session = server_state.db_manager.get_session()
         try:
             refreshed_task = session.query(Task).filter_by(id=next_task.id).first()
             if refreshed_task:
-                logger.info("[QUEUE_AGENT_CREATE] ✓ Refreshed task from DB")
-                logger.info(
-                    f"[QUEUE_AGENT_CREATE]   - enriched_description: {refreshed_task.enriched_description[:100] if refreshed_task.enriched_description else 'NULL'}"
-                )
-                logger.info(
-                    f"[QUEUE_AGENT_CREATE]   - phase_id: {refreshed_task.phase_id}"
-                )
-
-                # BUG FIX: Use the UUID phase_id for the temp task, not the order number
-                # Create temp task object with fresh data (like normal flow does)
-                temp_task = Task(
+                task_for_agent = Task(
                     id=refreshed_task.id,
                     raw_description=refreshed_task.raw_description,
                     enriched_description=refreshed_task.enriched_description,
                     done_definition=refreshed_task.done_definition,
-                    phase_id=phase_id_for_agent
-                    or refreshed_task.phase_id,  # Use UUID if converted
+                    phase_id=resolved_phase_id or refreshed_task.phase_id,
                     created_by_agent_id=refreshed_task.created_by_agent_id,
-                    workflow_id=refreshed_task.workflow_id,  # CRITICAL: Include workflow_id
+                    workflow_id=refreshed_task.workflow_id,
                 )
-                task_for_agent = temp_task
-                logger.info(
-                    f"[QUEUE_AGENT_CREATE] ✓ Created temp task object for agent (phase_id={temp_task.phase_id})"
+                task_description_for_rag = (
+                    refreshed_task.enriched_description
+                    or refreshed_task.raw_description
                 )
             else:
-                # Fallback to next_task if refresh failed
                 logger.warning(
-                    "[QUEUE_AGENT_CREATE] ✗ Could not refresh task from DB - using stale task"
+                    "[QUEUE_AGENT_CREATE] Could not refresh task from DB - using stale task"
                 )
                 task_for_agent = next_task
+                task_description_for_rag = (
+                    next_task.enriched_description or next_task.raw_description
+                )
         finally:
             session.close()
 
-        # BUG FIX: Prepare enriched_data dict to match process_task_async exactly
-        # If we just ran enrichment, use the full dict; otherwise create minimal dict
-        logger.info("[QUEUE_AGENT_CREATE] Preparing enriched_data for agent")
+        # If enrichment just ran, use the full LLM result dict; otherwise
+        # (task was already enriched) build a minimal dict.
         if hasattr(next_task, "_enriched_task_dict"):
-            # Enrichment just ran - use full dict from LLM
             enriched_data_for_agent = next_task._enriched_task_dict
-            logger.info("[QUEUE_AGENT_CREATE] ✓ Using full enriched_task dict from LLM")
         else:
-            # Task was already enriched - create minimal dict with enriched_description
             enriched_data_for_agent = {
                 "enriched_description": task_for_agent.enriched_description,
                 "estimated_complexity": task_for_agent.estimated_complexity or 5,
             }
-            logger.info("[QUEUE_AGENT_CREATE] ✓ Created minimal enriched_data dict")
 
-        logger.info(f"[QUEUE_AGENT_CREATE] Creating agent for task {next_task.id}")
-        logger.info(
-            f"[QUEUE_AGENT_CREATE]   - task enriched_description: {task_for_agent.enriched_description[:100] if task_for_agent.enriched_description else 'NULL'}"
+        dispatch_context = await AgentDispatchService.build_dispatch_context(
+            task_description_for_rag=task_description_for_rag,
+            phase_id=task_for_agent.phase_id,
+            requesting_agent_id="system",
         )
-        logger.info(
-            f"[QUEUE_AGENT_CREATE]   - task phase_id: {task_for_agent.phase_id}"
-        )
-        logger.info(
-            f"[QUEUE_AGENT_CREATE]   - project_context length: {len(project_context)}"
-        )
-        logger.info(f"[QUEUE_AGENT_CREATE]   - memories count: {len(context_memories)}")
-        logger.info(f"[QUEUE_AGENT_CREATE]   - working_directory: {working_directory}")
 
-        # Fetch phase CLI configuration if phase_id is set
-        phase_cli_tool = None
-        phase_cli_model = None
-        phase_glm_token_env = None
-        phase_thinking_level = None
-        logger.info(f"[QUEUE_AGENT_CREATE] Task phase_id: {task_for_agent.phase_id}")
-        if task_for_agent.phase_id:
-            phase_session = server_state.db_manager.get_session()
-            try:
-                from src.core.database import Phase
-
-                phase = (
-                    phase_session.query(Phase)
-                    .filter(Phase.id == task_for_agent.phase_id)
-                    .first()
-                )
-                logger.info(
-                    f"[QUEUE_AGENT_CREATE] Found phase in DB: {phase is not None}"
-                )
-                if phase:
-                    phase_cli_tool = phase.cli_tool
-                    phase_cli_model = phase.cli_model
-                    phase_glm_token_env = phase.glm_api_token_env
-                    phase_thinking_level = (
-                        phase.thinking_level
-                    )  # per-phase pi reasoning budget
-                else:
-                    logger.warning(
-                        f"[QUEUE_AGENT_CREATE] Phase not found in database for phase_id: {task_for_agent.phase_id}"
-                    )
-            finally:
-                phase_session.close()
-        else:
-            logger.info(
-                "[QUEUE_AGENT_CREATE] No phase_id set on task, using global CLI config"
-            )
-
-        # Create agent for the task (using refreshed task data and full enriched_data)
-        agent = await server_state.agent_manager.create_agent_for_task(
+        agent = await AgentDispatchService.dispatch(
             task=task_for_agent,
             enriched_data=enriched_data_for_agent,
-            memories=context_memories,
-            project_context=project_context,
-            working_directory=working_directory,
-            phase_cli_tool=phase_cli_tool,
-            phase_cli_model=phase_cli_model,
-            phase_glm_token_env=phase_glm_token_env,
-            phase_thinking_level=phase_thinking_level,
+            dispatch_context=dispatch_context,
         )
+        logger.info(f"Created agent {agent.id} for queued task {next_task.id}")
 
-        logger.info(
-            f"[QUEUE_AGENT_CREATE] ✓✓✓ AGENT CREATED SUCCESSFULLY: {agent.id} for task {next_task.id} ✓✓✓"
-        )
-
-        # Update task status
-        session = server_state.db_manager.get_session()
-        try:
-            task = session.query(Task).filter_by(id=next_task.id).first()
-            if task:
-                task.assigned_agent_id = agent.id
-                task.status = "in_progress"  # Agent is now working
-                task.started_at = datetime.utcnow()
-                session.commit()
-        finally:
-            session.close()
+        # Agent is now working — "in_progress" (not "assigned" like the
+        # other dispatch call sites), matching original process_queue behavior.
+        AgentDispatchService.mark_assigned(next_task.id, agent.id, status="in_progress")
 
         # Broadcast update
         await server_state.broadcast_update(
@@ -1703,8 +1334,6 @@ async def process_queue():
                 )[:200],
             }
         )
-
-        logger.info(f"Created agent {agent.id} for queued task {next_task.id}")
 
     except Exception as e:
         logger.error(f"Failed to process queue: {e}")
@@ -2109,102 +1738,43 @@ async def create_task(
         async def process_task_async():
             # Import Phase at the top to avoid scope issues
             from src.core.database import Phase
+            from src.services.agent_dispatch_service import AgentDispatchService
+            from src.services.task_enrichment_service import TaskEnrichmentService
 
             try:
-                # 1. Determine phase if workflow is active
-                logger.info(f"=== TASK CREATION PHASE DEBUG for task {task_id} ===")
-                logger.info(f"Request phase_id: {request.phase_id}")
-                logger.info(f"Request phase_order: {request.phase_order}")
-                logger.info(f"Server phase_manager: {server_state.phase_manager}")
-                logger.info(
-                    f"Server phase_manager.workflow_id: {getattr(server_state.phase_manager, 'workflow_id', 'NOT SET')}"
-                )
-                logger.debug(
-                    f"Server phase_manager.active_workflow: {getattr(server_state.phase_manager, 'active_workflow', 'NOT SET')}..."
-                )
-
-                # Use the phase_id from the request first, then fallback to phase_manager
+                # 1. Determine phase if workflow is active. Only attempt
+                # resolution if there's a workflow context at all (from the
+                # request or the phase_manager singleton) — this guard is
+                # specific to create_task (process_queue always has a
+                # workflow_id already, since the task was already created).
                 phase_id = request.phase_id
                 workflow_id = None
                 phase_context_str = ""
 
-                # Check if we have a workflow context - either from request or from phase_manager singleton
                 target_workflow_id = (
                     request.workflow_id or server_state.phase_manager.workflow_id
                 )
                 if target_workflow_id:
-                    logger.info(
-                        f"Workflow context: request.workflow_id={request.workflow_id}, phase_manager.workflow_id={server_state.phase_manager.workflow_id}"
+                    phase_id = TaskEnrichmentService.resolve_phase_id(
+                        phase_id_raw=request.phase_id,
+                        phase_order=request.phase_order,
+                        workflow_id=request.workflow_id,
+                        requesting_agent_id=agent_id,
                     )
-
-                    # Handle phase identification - request.phase_id might be a phase order number, not UUID
-                    if request.phase_id and str(request.phase_id).isdigit():
-                        # request.phase_id is actually a phase order number
-                        logger.info(
-                            f"phase_id appears to be an order number: {request.phase_id}"
-                        )
-                        phase_id = server_state.phase_manager.get_phase_for_task(
-                            phase_id=None,
-                            order=int(request.phase_id),
-                            requesting_agent_id=agent_id,
-                            workflow_id=request.workflow_id,  # Pass explicit workflow_id for multi-workflow support
-                        )
-                        logger.info(
-                            f"get_phase_for_task returned phase_id: {phase_id} for order: {request.phase_id}"
-                        )
-                    elif request.phase_id:
-                        # request.phase_id is a UUID string
-                        logger.info(
-                            f"phase_id appears to be a UUID: {request.phase_id}"
-                        )
-                        phase_id = request.phase_id
-                    else:
-                        # No phase specified, get current phase
-                        logger.info(
-                            "No explicit phase_id in request, calling get_phase_for_task"
-                        )
-                        phase_id = server_state.phase_manager.get_phase_for_task(
-                            phase_id=None,
-                            order=request.phase_order,
-                            requesting_agent_id=agent_id,
-                            workflow_id=request.workflow_id,  # Pass explicit workflow_id for multi-workflow support
-                        )
-                        logger.info(f"get_phase_for_task returned: {phase_id}")
-
                     if phase_id:
-                        logger.info(f"Getting phase context for phase_id: {phase_id}")
-                        # Get phase context for enrichment
-                        phase_context = server_state.phase_manager.get_phase_context(
-                            phase_id
+                        phase_context_str, ctx_workflow_id = (
+                            TaskEnrichmentService.get_phase_context_str(phase_id)
                         )
-                        logger.debug(f"get_phase_context returned: {phase_context}")
-                        if phase_context:
-                            logger.info(
-                                "Phase context found, generating prompt context"
-                            )
-                            phase_context_str = phase_context.to_prompt_context()
-                            workflow_id = phase_context.workflow_id
-                            logger.info(
-                                f"Generated context length: {len(phase_context_str)}, workflow_id: {workflow_id}"
-                            )
-                        else:
-                            logger.warning(
-                                f"No phase context returned for phase_id: {phase_id}"
-                            )
+                        if ctx_workflow_id:
+                            workflow_id = ctx_workflow_id
                     else:
                         logger.warning("No phase_id determined for task")
                 else:
                     logger.warning("No active workflow in phase_manager")
 
-                logger.info(
-                    f"Final values: phase_id={phase_id}, workflow_id={workflow_id}, context_length={len(phase_context_str)}"
-                )
-                logger.info("=== END TASK CREATION PHASE DEBUG ===")
-
                 # 2. Determine working directory (priority: request > phase > server)
                 working_directory = request.cwd  # From request
                 if not working_directory and phase_id:
-                    # Get phase working directory
                     session = server_state.db_manager.get_session()
                     phase = session.query(Phase).filter_by(id=phase_id).first()
                     if phase and phase.working_directory:
@@ -2213,37 +1783,18 @@ async def create_task(
                 if not working_directory:
                     working_directory = os.getcwd()  # Server's current directory
 
-                # 3. Retrieve relevant context from RAG
-                context_memories = await server_state.rag_system.retrieve_for_task(
-                    task_description=request.task_description,
+                # 3-5. Retrieve RAG context, project context, and run LLM
+                # enrichment (shared with process_queue — see
+                # TaskEnrichmentService / docs/SOLID_OO_REVIEW.md 1.2/1.3).
+                enrichment_result = await TaskEnrichmentService.enrich(
+                    raw_description=request.task_description,
+                    done_definition=request.done_definition,
+                    phase_context_str=phase_context_str,
                     requesting_agent_id=agent_id,
                 )
-
-                # 4. Get project context
-                project_context = await server_state.agent_manager.get_project_context()
-
-                # Add phase context to project context
-                if phase_context_str:
-                    project_context = f"{project_context}\n\n{phase_context_str}"
-
-                # 5. Enrich task using LLM
-                context_strings = [mem.get("content", "") for mem in context_memories]
-                enriched_task = await server_state.llm_provider.enrich_task(
-                    task_description=request.task_description,
-                    done_definition=request.done_definition,
-                    context=context_strings,
-                    phase_context=phase_context_str if phase_context_str else None,
-                )
-
-                # 5b. Normalize enriched_task: ensure enriched_description is always a string
-                import json as _json
-
-                _raw_desc = enriched_task.get("enriched_description")
-                if _raw_desc is None:
-                    _raw_desc = request.task_description
-                elif isinstance(_raw_desc, dict):
-                    _raw_desc = _json.dumps(_raw_desc, indent=2)
-                enriched_task["enriched_description"] = str(_raw_desc)
+                enriched_task = enrichment_result["enriched_task"]
+                context_memories = enrichment_result["context_memories"]
+                project_context = enrichment_result["project_context"]
 
                 # 6. Update task with enriched data
                 session = server_state.db_manager.get_session()
@@ -2403,57 +1954,32 @@ async def create_task(
                         created_by_agent_id=agent_id,  # Important: Set the parent agent ID
                     )
 
-                    logger.info(
-                        f"[CREATE_TASK] temp_task.created_by_agent_id = {temp_task.created_by_agent_id}"
+                    # Dispatch reuses the RAG memories/project context already
+                    # fetched during enrichment above (unlike process_queue,
+                    # which re-fetches post-enrichment) — only the phase CLI
+                    # config lookup is added here.
+                    dispatch_context = (
+                        await AgentDispatchService.build_dispatch_context_from_existing(
+                            memories=context_memories,
+                            project_context=project_context,
+                            working_directory=working_directory,
+                            phase_id=temp_task.phase_id,
+                        )
                     )
 
-                    # Fetch phase CLI configuration
-                    phase_cli_tool = None
-                    phase_cli_model = None
-                    phase_glm_token_env = None
-                    phase_thinking_level = None
-                    if temp_task.phase_id:
-                        session = server_state.db_manager.get_session()
-                        try:
-                            phase = (
-                                session.query(Phase)
-                                .filter_by(id=temp_task.phase_id)
-                                .first()
-                            )
-                            if phase:
-                                phase_cli_tool = phase.cli_tool
-                                phase_cli_model = phase.cli_model
-                                phase_glm_token_env = phase.glm_api_token_env
-                                phase_thinking_level = (
-                                    phase.thinking_level
-                                )  # per-phase pi reasoning budget
-                        finally:
-                            session.close()
-
-                    agent = await server_state.agent_manager.create_agent_for_task(
+                    agent = await AgentDispatchService.dispatch(
                         task=temp_task,
                         enriched_data=enriched_task,
-                        memories=context_memories,
-                        project_context=project_context,
-                        working_directory=working_directory,
-                        phase_cli_tool=phase_cli_tool,
-                        phase_cli_model=phase_cli_model,
-                        phase_glm_token_env=phase_glm_token_env,
-                        phase_thinking_level=phase_thinking_level,
+                        dispatch_context=dispatch_context,
                     )
 
                     # Store agent ID immediately (before session issues)
                     agent_id_str = str(agent.id) if agent else None
 
-                    # 8. Update task with assigned agent in a new session
-                    session = server_state.db_manager.get_session()
-                    task = session.query(Task).filter_by(id=task_id).first()
-                    if task:
-                        task.assigned_agent_id = agent_id_str
-                        task.status = "assigned"
-                        task.started_at = datetime.utcnow()
-                        session.commit()
-                    session.close()
+                    # 8. Update task with assigned agent
+                    AgentDispatchService.mark_assigned(
+                        task_id, agent_id_str, status="assigned"
+                    )
 
                     # 9. Broadcast update via WebSocket
                     await server_state.broadcast_update(
@@ -2547,6 +2073,8 @@ async def update_task_status(
     _touch_agent_activity(agent_id)
     logger.info(f"Updating task {request.task_id} status to {request.status}")
 
+    from src.services.task_completion_service import TaskCompletionService
+
     try:
         session = server_state.db_manager.get_session()
 
@@ -2561,36 +2089,9 @@ async def update_task_status(
             )
 
         # 2. Save learnings as memories
-        for learning in request.key_learnings:
-            # Generate embedding
-            embedding = await server_state.llm_provider.generate_embedding(learning)
-
-            # Save to vector store
-            memory_id = str(uuid.uuid4())
-            await server_state.vector_store.store_memory(
-                collection="agent_memories",
-                memory_id=memory_id,
-                embedding=embedding,
-                content=learning,
-                metadata={
-                    "agent_id": agent_id,
-                    "task_id": request.task_id,
-                    "memory_type": "learning",
-                    "code_changes": request.code_changes,
-                },
-            )
-
-            # Save to database
-            memory = Memory(
-                id=memory_id,
-                agent_id=agent_id,
-                content=learning,
-                memory_type="learning",
-                embedding_id=memory_id,
-                related_task_id=request.task_id,
-                related_files=request.code_changes,
-            )
-            session.add(memory)
+        await TaskCompletionService.record_learnings(
+            session, agent_id, request.task_id, request.key_learnings, request.code_changes
+        )
 
         # 3. Check if task has results reported
         if request.status == "done" and not task.has_results:
@@ -2598,66 +2099,14 @@ async def update_task_status(
                 f"Task {request.task_id} completed without formal results reported"
             )
 
-        # 3b. Output-existence hard floor — reject done when declared output artifact is missing.
-        # General, not phase-special-cased: drives off PHASE_OUTPUT_ARTIFACTS in spec.py.
-        # Same class as ruff/tests: mechanical check, hard floor.
+        # 3b. Output-existence hard floor — reject done when declared output
+        # artifact is missing. General, not phase-special-cased: drives off
+        # PHASE_OUTPUT_ARTIFACTS in spec.py. Same class as ruff/tests: a
+        # mechanical, hard floor check.
         if request.status == "done" and task.phase_id:
-            from pathlib import Path as _Path
-
-            from src.autopilot.spec import PHASE_OUTPUT_ARTIFACTS, load_phase_output_artifacts
-
-            # Load required_output from workflow.yaml for this workflow
-            required_output = load_phase_output_artifacts(task.workflow_id)
-            phase = session.query(Phase).filter_by(id=task.phase_id).first()
-            if phase and phase.name in required_output:
-                declared_output = PHASE_OUTPUT_ARTIFACTS[phase.name]
-                # Search for the artifact in the shared worktree (or feature folder)
-                agent = session.query(Agent).filter_by(id=agent_id).first()
-                found = False
-                # 1. Check the workflow's shared worktree
-                if task.workflow_id:
-                    from src.core.database import Workflow as _WF
-
-                    wf = session.query(_WF).filter_by(id=task.workflow_id).first()
-                    if wf and wf.working_directory:
-                        for candidate in [
-                            _Path(wf.working_directory) / "docs" / declared_output,
-                            _Path(wf.working_directory) / declared_output,
-                        ]:
-                            if candidate.exists():
-                                found = True
-                                break
-                # 2. Check feature folder
-                if not found:
-                    feature_dir = (
-                        _Path(config.project_root) / CONTEXT_DIR_NAME / "features"
-                    )
-                    if feature_dir.exists():
-                        for d in sorted(feature_dir.iterdir(), reverse=True):
-                            candidate = d / "docs" / declared_output
-                            if candidate.exists():
-                                found = True
-                                break
-                if not found:
-                    # Check if this phase is optional — if so, allow completion without output
-                    from src.autopilot.spec import load_optional_phases
-
-                    optional_phases = load_optional_phases(task.workflow_id)
-                    if phase.name in optional_phases:
-                        logger.info(
-                            f"Agent {agent_id[:8]} completed optional phase {phase.name} without {declared_output} — allowing"
-                        )
-                    else:
-                        logger.warning(
-                            f"Agent {agent_id[:8]} claimed done on {phase.name} but {declared_output} not found — rejecting"
-                        )
-                        task.status = "failed"
-                        task.failure_reason = f"Agent claimed completion but {declared_output} was not created."
-                        session.commit()
-                        return {
-                            "status": "failed",
-                            "message": f"Output validation failed: {declared_output} not found",
-                        }
+            rejection = TaskCompletionService.verify_output_artifact(session, task)
+            if rejection:
+                return rejection
 
         # 3c. Spec gate firing — when a gated phase task completes and the phase
         # is now complete, trigger the gate immediately (don't wait for monitor poll).
@@ -2665,64 +2114,7 @@ async def update_task_status(
         # pending — if it's already in_progress, the gate is missed. Fix: fire from
         # the completion path itself and actually trigger the evaluation.
         if request.status == "done" and task.phase_id:
-            from src.autopilot.spec import GATED_PHASES, build_phase_output
-
-            phase = session.query(Phase).filter_by(id=task.phase_id).first()
-            if phase and phase.name in GATED_PHASES:
-                incomplete = (
-                    session.query(Task)
-                    .filter_by(phase_id=phase.id)
-                    .filter(
-                        Task.status.in_(
-                            ["pending", "assigned", "in_progress", "failed"]
-                        )
-                    )
-                    .count()
-                )
-                if incomplete == 0:
-                    # Phase complete — fire the gate now
-                    from src.core.database import Workflow
-
-                    wf = session.query(Workflow).filter_by(id=task.workflow_id).first()
-                    if wf and wf.working_directory:
-                        from pathlib import Path as _P
-
-                        phase_output = build_phase_output(
-                            phase.name, _P(wf.working_directory)
-                        )
-                        logger.info(
-                            f"[SPEC-GATE] {phase.name}: gate fired from completion path, phase_output={phase_output}"
-                        )
-                        # Actually trigger the evaluation by calling mark_phase_complete
-                        # This ensures the GOTO/retry/continue decision is made immediately
-                        from src.phases import PhaseManager
-
-                        from src.core.database import DatabaseManager as _DbMgr
-                        pm = PhaseManager(_DbMgr())
-                        pm.workflow_id = task.workflow_id
-                        result = pm.mark_phase_complete(
-                            phase.id,
-                            "Phase completed (spec gate fired from update_task_status)",
-                            phase_output=phase_output,
-                        )
-                        if result.get("action") == "already_completed":
-                            logger.info(
-                                f"[SPEC-GATE] {phase.name}: already completed by another caller"
-                            )
-                        elif result.get("action") == "goto" and result.get(
-                            "target_phase_id"
-                        ):
-                            logger.info(
-                                f"[SPEC-GATE] {phase.name}: GOTO {result.get('target_phase')} (score too low)"
-                            )
-                            # Store the GOTO action so the orchestrator can create the target phase task
-                            task.action = "goto"
-                            task.has_results = True
-                            session.commit()
-                        elif result.get("action") == "continue":
-                            logger.info(
-                                f"[SPEC-GATE] {phase.name}: PASSED (score >= 0.7)"
-                            )
+            TaskCompletionService.fire_spec_gate_if_ready(session, task)
 
         # 4. Check if task has validation enabled
         validation_spawned = False
@@ -2745,90 +2137,14 @@ async def update_task_status(
                 session.commit()
 
             # Process validation spawning asynchronously (like create_task)
-            async def spawn_validation_async():
-                try:
-                    logger.info(
-                        f"Starting validation process for task {request.task_id}"
-                    )
-
-                    # Commit agent's work for validation (using worktree manager)
-                    commit_sha = None
-                    if hasattr(server_state, "branch_manager"):
-                        try:
-                            commit_result = (
-                                server_state.branch_manager.commit_for_validation(
-                                    agent_id=agent_id,
-                                    iteration=task_validation_iteration,
-                                )
-                            )
-                            commit_sha = commit_result.get("commit_sha")
-                        except Exception as e:
-                            logger.warning(f"Failed to create validation commit: {e}")
-
-                    # Spawn validator agent
-                    from src.validation.validator_agent import spawn_validator_agent
-
-                    validator_id = await spawn_validator_agent(
-                        validation_type="task",
-                        target_id=request.task_id,
-                        workflow_id=task_workflow_id,
-                        commit_sha=commit_sha or "HEAD",
-                        db_manager=server_state.db_manager,
-                        branch_manager=getattr(server_state, "branch_manager", None),
-                        agent_manager=server_state.agent_manager,
-                        original_agent_id=agent_id,
-                    )
-
-                    # Update task status to validation in progress
-                    session = server_state.db_manager.get_session()
-                    try:
-                        task = session.query(Task).filter_by(id=request.task_id).first()
-                        if task:
-                            task.status = "validation_in_progress"
-                            session.commit()
-                            logger.info(
-                                f"Task {request.task_id} validation spawned successfully, validator: {validator_id}"
-                            )
-                        else:
-                            logger.error(
-                                f"Task {request.task_id} not found during validation update"
-                            )
-                    finally:
-                        session.close()
-
-                    # Broadcast validation started
-                    await server_state.broadcast_update(
-                        {
-                            "type": "validation_started",
-                            "task_id": request.task_id,
-                            "validator_id": validator_id,
-                            "original_agent_id": agent_id,
-                        }
-                    )
-
-                except Exception as e:
-                    logger.error(
-                        f"Failed to spawn validation for task {request.task_id}: {e}"
-                    )
-                    # Update task status to failed validation
-                    session = server_state.db_manager.get_session()
-                    try:
-                        task = session.query(Task).filter_by(id=request.task_id).first()
-                        if task:
-                            task.status = "failed"
-                            task.failure_reason = (
-                                f"Validation spawning failed: {str(e)}"
-                            )
-                            session.commit()
-
-                        # Terminate the agent since validation failed and process queue
-                        await server_state.agent_manager.terminate_agent(agent_id)
-                        await process_queue()
-                    finally:
-                        session.close()
-
-            # Start validation process in background
-            asyncio.create_task(spawn_validation_async())
+            asyncio.create_task(
+                TaskCompletionService.spawn_validation(
+                    agent_id=agent_id,
+                    task_id=request.task_id,
+                    task_workflow_id=task_workflow_id,
+                    task_validation_iteration=task_validation_iteration,
+                )
+            )
             validation_spawned = True
 
         else:
@@ -2842,105 +2158,12 @@ async def update_task_status(
 
             session.commit()
 
-            # Commit in the shared worktree when a task completes successfully.
-            merge_commit_sha = None
+            # Commit in the shared worktree when a task completes successfully,
+            # and auto-link the resulting commit to the task's ticket if any.
             if request.status == "done":
-                try:
-                    from pathlib import Path as _P
-
-                    wt_path = None
-
-                    # Shared-worktree path (normal autopilot): use the workflow's directory.
-                    if task.workflow_id:
-                        from src.core.database import Workflow as _WF
-
-                        wf_row = (
-                            session.query(_WF).filter_by(id=task.workflow_id).first()
-                        )
-                        if wf_row and wf_row.working_directory:
-                            wt_path = wf_row.working_directory
-
-                    # Legacy per-agent worktree fallback.
-                    if not wt_path and hasattr(server_state, "branch_manager"):
-                        record = server_state.branch_manager._agent_record(
-                            session, agent_id
-                        )
-                        if record and record.worktree_path:
-                            wt_path = record.worktree_path
-
-                    if wt_path and _P(wt_path).is_dir():
-                        phase_obj = (
-                            session.query(Phase).filter_by(id=task.phase_id).first()
-                            if task.phase_id
-                            else None
-                        )
-                        phase_label = (
-                            phase_obj.name
-                            if phase_obj
-                            else (task.phase_id[:8] if task.phase_id else "unknown")
-                        )
-
-                        wt_repo = Repo(wt_path)
-                        wt_repo.git.add("-A")
-                        if wt_repo.is_dirty(index=True) or wt_repo.untracked_files:
-                            # Use the agent's summary as the commit message body.
-                            summary = (request.summary or "").strip()
-                            subject = f"phase({phase_label}): " + (
-                                summary[:60] if summary else f"task {task.id[:8]} done"
-                            )
-                            msg = (
-                                subject
-                                if not summary or len(summary) <= 60
-                                else f"{subject}\n\n{summary}"
-                            )
-                            wt_repo.git.commit("-m", msg, "--no-verify")
-                            merge_commit_sha = wt_repo.head.commit.hexsha
-                            logger.info(
-                                f"[COMMIT] phase({phase_label}) agent {agent_id[:8]}: {merge_commit_sha[:8]}"
-                            )
-                        else:
-                            logger.debug(
-                                f"[COMMIT] phase agent {agent_id[:8]}: nothing to commit"
-                            )
-                except Exception as e:
-                    logger.warning(
-                        f"Failed to commit after task done for agent {agent_id[:8]}: {e}"
-                    )
-
-                # Auto-link commit to ticket if task has ticket_id
-                if task.ticket_id and merge_commit_sha:
-                    try:
-                        logger.info(
-                            f"Auto-linking commit {merge_commit_sha} to ticket {task.ticket_id}"
-                        )
-
-                        # Link the merge commit to the ticket
-                        await TicketService.link_commit(
-                            ticket_id=task.ticket_id,
-                            agent_id=agent_id,
-                            commit_sha=merge_commit_sha,
-                            commit_message=f"Task {request.task_id} completed and merged",
-                            link_method="auto_task_completion",
-                        )
-
-                        logger.info(
-                            f"Commit {merge_commit_sha} linked to ticket {task.ticket_id}"
-                        )
-
-                        # Broadcast commit linked to ticket
-                        await server_state.broadcast_update(
-                            {
-                                "type": "ticket_commit_linked",
-                                "ticket_id": task.ticket_id,
-                                "task_id": request.task_id,
-                                "agent_id": agent_id,
-                                "commit_sha": merge_commit_sha,
-                            }
-                        )
-
-                    except Exception as e:
-                        logger.error(f"Failed to auto-link commit to ticket: {e}")
-                        # Don't fail the task if ticket operations fail
+                await TaskCompletionService.commit_and_link_ticket(
+                    session, agent_id, task, request.summary
+                )
 
             # 4. Schedule agent termination and queue processing (only if no validation)
             async def terminate_and_process_queue():
@@ -4452,79 +3675,27 @@ async def bump_task_priority_endpoint(
         session = server_state.db_manager.get_session()
         try:
             task = session.query(Task).filter_by(id=task_id).first()
-
             # Dequeue the task
             server_state.queue_service.dequeue_task(task_id)
-
-            # Get project context
-            project_context = await server_state.agent_manager.get_project_context()
-
-            # Get phase context if applicable
-            if task.phase_id and server_state.phase_manager:
-                phase_context = server_state.phase_manager.get_phase_context(
-                    task.phase_id
-                )
-                if phase_context:
-                    project_context = (
-                        f"{project_context}\n\n{phase_context.to_prompt_context()}"
-                    )
-
-            # Retrieve relevant memories
-            context_memories = await server_state.rag_system.retrieve_for_task(
-                task_description=task.enriched_description or task.raw_description,
-                requesting_agent_id="system",
-            )
-
-            # Determine working directory and fetch phase CLI config
-            working_directory = None
-            phase_cli_tool = None
-            phase_cli_model = None
-            phase_glm_token_env = None
-            phase_thinking_level = None
-            if task.phase_id:
-                from src.core.database import Phase
-
-                phase = session.query(Phase).filter_by(id=task.phase_id).first()
-                if phase:
-                    if phase.working_directory:
-                        working_directory = phase.working_directory
-                    # Fetch phase CLI configuration
-                    phase_cli_tool = phase.cli_tool
-                    phase_cli_model = phase.cli_model
-                    phase_glm_token_env = phase.glm_api_token_env
-                    phase_thinking_level = (
-                        phase.thinking_level
-                    )  # per-phase pi reasoning budget
-            if not working_directory:
-                working_directory = os.getcwd()
-
         finally:
             session.close()
 
+        from src.services.agent_dispatch_service import AgentDispatchService
+
+        dispatch_context = await AgentDispatchService.build_dispatch_context(
+            task_description_for_rag=task.enriched_description or task.raw_description,
+            phase_id=task.phase_id,
+        )
+
         # Create agent immediately (bypassing agent limit)
-        agent = await server_state.agent_manager.create_agent_for_task(
+        agent = await AgentDispatchService.dispatch(
             task=task,
             enriched_data={"enriched_description": task.enriched_description},
-            memories=context_memories,
-            project_context=project_context,
-            working_directory=working_directory,
-            phase_cli_tool=phase_cli_tool,
-            phase_cli_model=phase_cli_model,
-            phase_glm_token_env=phase_glm_token_env,
-            phase_thinking_level=phase_thinking_level,
+            dispatch_context=dispatch_context,
         )
 
         # Update task status
-        session = server_state.db_manager.get_session()
-        try:
-            task = session.query(Task).filter_by(id=task_id).first()
-            if task:
-                task.assigned_agent_id = agent.id
-                task.status = "assigned"
-                task.started_at = datetime.utcnow()
-                session.commit()
-        finally:
-            session.close()
+        AgentDispatchService.mark_assigned(task_id, agent.id, status="assigned")
 
         # Broadcast update
         await server_state.broadcast_update(
@@ -4765,60 +3936,31 @@ async def restart_task_endpoint(
             session = server_state.db_manager.get_session()
             try:
                 task = session.query(Task).filter_by(id=task_id).first()
-
-                # Get project context
-                project_context = await server_state.agent_manager.get_project_context()
-
-                # Get phase context if applicable
-                if task.phase_id and server_state.phase_manager:
-                    phase_context = server_state.phase_manager.get_phase_context(
-                        task.phase_id
-                    )
-                    if phase_context:
-                        project_context = (
-                            f"{project_context}\n\n{phase_context.to_prompt_context()}"
-                        )
-
-                # Retrieve relevant memories
-                context_memories = await server_state.rag_system.retrieve_for_task(
-                    task_description=task.enriched_description or task.raw_description,
-                    requesting_agent_id="system",
-                )
-
-                # Determine working directory
-                working_directory = None
-                if task.phase_id:
-                    from src.core.database import Phase
-
-                    phase = session.query(Phase).filter_by(id=task.phase_id).first()
-                    if phase and phase.working_directory:
-                        working_directory = phase.working_directory
-                if not working_directory:
-                    working_directory = os.getcwd()
-
             finally:
                 session.close()
 
+            from src.services.agent_dispatch_service import AgentDispatchService
+
+            # NOTE: this now also fetches phase CLI config, which the
+            # previous inline version of this endpoint did not (only
+            # bump_task_priority_endpoint did) — an inconsistency flagged
+            # in docs/SOLID_OO_REVIEW.md finding 1.3 that this shared
+            # dispatch-context helper fixes by construction.
+            dispatch_context = await AgentDispatchService.build_dispatch_context(
+                task_description_for_rag=task.enriched_description
+                or task.raw_description,
+                phase_id=task.phase_id,
+            )
+
             # Create agent for the task
-            agent = await server_state.agent_manager.create_agent_for_task(
+            agent = await AgentDispatchService.dispatch(
                 task=task,
                 enriched_data={"enriched_description": task.enriched_description},
-                memories=context_memories,
-                project_context=project_context,
-                working_directory=working_directory,
+                dispatch_context=dispatch_context,
             )
 
             # Update task status
-            session = server_state.db_manager.get_session()
-            try:
-                task = session.query(Task).filter_by(id=task_id).first()
-                if task:
-                    task.assigned_agent_id = agent.id
-                    task.status = "assigned"
-                    task.started_at = datetime.utcnow()
-                    session.commit()
-            finally:
-                session.close()
+            AgentDispatchService.mark_assigned(task_id, agent.id, status="assigned")
 
             logger.info(f"Task {task_id} restarted with new agent {agent.id}")
 
