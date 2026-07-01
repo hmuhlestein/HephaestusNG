@@ -628,6 +628,13 @@ class ServerState:
 # Initialize server state
 server_state = ServerState()
 
+# Register with app_context so other modules can reach shared state without
+# importing this route module (breaks the circular-import workaround used
+# throughout the service layer — see docs/SOLID_OO_REVIEW.md 1.6/3.11).
+from src.core.app_context import set_app_state as _set_app_state
+
+_set_app_state(server_state)
+
 
 # ==================== SECURITY: Agent Authentication ====================
 

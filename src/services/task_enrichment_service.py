@@ -31,7 +31,9 @@ class TaskEnrichmentService:
         This is the canonical "order vs UUID" resolution — previously
         reimplemented independently at every call site (SOLID review 1.4).
         """
-        from src.mcp.server import server_state
+        from src.core.app_context import get_app_state
+
+        server_state = get_app_state()
 
         if phase_id_raw and str(phase_id_raw).isdigit():
             return server_state.phase_manager.get_phase_for_task(
@@ -53,7 +55,9 @@ class TaskEnrichmentService:
     @staticmethod
     def get_phase_context_str(phase_id: Optional[str]) -> Tuple[str, Optional[str]]:
         """Returns (phase_context_str, workflow_id_from_phase_context)."""
-        from src.mcp.server import server_state
+        from src.core.app_context import get_app_state
+
+        server_state = get_app_state()
 
         if not phase_id:
             return "", None
@@ -86,7 +90,9 @@ class TaskEnrichmentService:
             context_memories: list of RAG memory dicts
             project_context: project context string (with phase context appended)
         """
-        from src.mcp.server import server_state
+        from src.core.app_context import get_app_state
+
+        server_state = get_app_state()
 
         context_memories = await server_state.rag_system.retrieve_for_task(
             task_description=raw_description,

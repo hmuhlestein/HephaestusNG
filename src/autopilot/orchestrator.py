@@ -450,8 +450,10 @@ def create_agent_for_task_direct(
     """
     import asyncio
 
+    from src.core.app_context import get_app_state
     from src.core.database import Task
-    from src.mcp.server import server_state
+
+    server_state = get_app_state()
 
     try:
         session = server_state.db_manager.get_session()

@@ -31,7 +31,9 @@ class TaskCompletionService:
     ) -> None:
         """Embed and persist each reported learning as a Memory."""
         from src.core.database import Memory
-        from src.mcp.server import server_state
+        from src.core.app_context import get_app_state
+
+        server_state = get_app_state()
 
         for learning in key_learnings:
             embedding = await server_state.llm_provider.generate_embedding(learning)
@@ -207,7 +209,9 @@ class TaskCompletionService:
         fire-and-forget pattern. On failure, marks the task failed and
         terminates the agent instead of leaving it dangling.
         """
-        from src.mcp.server import server_state
+        from src.core.app_context import get_app_state
+
+        server_state = get_app_state()
 
         try:
             logger.info(f"Starting validation process for task {task_id}")
@@ -290,7 +294,9 @@ class TaskCompletionService:
         from git import Repo
 
         from src.core.database import Phase
-        from src.mcp.server import server_state
+        from src.core.app_context import get_app_state
+
+        server_state = get_app_state()
         from src.services.ticket_service import TicketService
 
         merge_commit_sha = None

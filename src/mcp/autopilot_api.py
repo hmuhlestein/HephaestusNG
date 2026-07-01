@@ -2364,9 +2364,10 @@ async def resume_feature(feature_id: str):
 
 async def _spawn_agent_for_task(task_id: str, phase_id: Optional[str]) -> None:
     """Create an agent for a task, mirroring /api/create_agent_for_task in server.py."""
+    from src.core.app_context import get_app_state
     from src.core.database import Task
 
-    from src.mcp.server import server_state
+    server_state = get_app_state()
 
     session = server_state.db_manager.get_session()
     try:

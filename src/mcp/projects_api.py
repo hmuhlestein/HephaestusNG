@@ -267,9 +267,10 @@ def _apply_active_project(proj):
     Validates the path is a valid git repo BEFORE mutating config.
     If reload fails, config is not mutated.
     """
+    from src.core.app_context import get_app_state
     from src.core.simple_config import get_config
-    from src.mcp.server import server_state
 
+    server_state = get_app_state()
     config = get_config()
     new_path = Path(proj.base_dir)
 
