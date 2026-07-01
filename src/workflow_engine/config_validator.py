@@ -19,6 +19,8 @@ from typing import Any, Dict, List, Optional
 
 import yaml
 
+from src.workflow_engine.orchestrator import is_valid_condition_string
+
 logger = logging.getLogger(__name__)
 
 # ── Schema definitions ────────────────────────────────────────────
@@ -322,6 +324,26 @@ def validate_workflow_yaml(
                                 filename,
                                 f"condition[{j}].action invalid: '{action}' (must be one of {sorted(VALID_CONDITION_ACTIONS)})",
                                 path=f"{cond_path}.action",
+                            )
+                        )
+
+                    # The "if" string must parse against the same grammar
+                    # WorkflowOrchestrator._check_condition evaluates it
+                    # with — otherwise a typo like "score between 0.5 and
+                    # 0.9" passes validation cleanly and silently evaluates
+                    # to False at runtime (SOLID review 2.10).
+                    if_str = cond.get("if")
+                    if isinstance(if_str, str) and not is_valid_condition_string(
+                        if_str
+                    ):
+                        errors.append(
+                            _err(
+                                filename,
+                                f"condition[{j}].if is not a valid condition "
+                                f"expression: '{if_str}' (expected 'true', "
+                                f"'false', or '<variable> <op> <number>' "
+                                f"with op in <,<=,>,>=,==,!=)",
+                                path=f"{cond_path}.if",
                             )
                         )
 

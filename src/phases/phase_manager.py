@@ -604,6 +604,232 @@ class PhaseManager:
         finally:
             session.close()
 
+    @staticmethod
+    def _close_execution(
+        session, execution, status: str, summary: Optional[str] = None
+    ) -> None:
+        """Shared completion-write boilerplate for PhaseExecution rows.
+
+        Extracted so the same status/completed_at/summary/commit sequence
+        isn't hand-copied at every branch of mark_phase_complete (SOLID
+        review 2.12 — this exact block was duplicated 3+ times).
+        """
+        execution.status = status
+        execution.completed_at = datetime.utcnow()
+        if summary is not None:
+            execution.completion_summary = summary
+        session.commit()
+
+    def _advance_or_complete(self, session, phase_id: str) -> Dict[str, Any]:
+        """Start the next phase, or complete the workflow if there isn't one."""
+        next_started = self._start_next_phase(session, phase_id)
+        if not next_started:
+            self._complete_workflow(session)
+            return {
+                "action": "continue",
+                "target_phase": None,
+                "target_phase_id": None,
+                "should_continue": False,
+            }
+        return {
+            "action": "continue",
+            "target_phase": None,
+            "target_phase_id": None,
+            "should_continue": True,
+        }
+
+    def _handle_force_continue(self, session, phase, execution, summary) -> Dict[str, Any]:
+        self._close_execution(session, execution, "completed", summary)
+        next_started = self._start_next_phase(session, phase.id)
+        if not next_started:
+            self._complete_workflow(session)
+            return {
+                "action": "continue",
+                "target_phase": None,
+                "target_phase_id": None,
+                "should_continue": False,
+            }
+        next_phase = self._find_next_phase(session, phase.id)
+        return {
+            "action": "continue",
+            "target_phase": next_phase.name if next_phase else None,
+            "target_phase_id": next_phase.id if next_phase else None,
+            "should_continue": True,
+        }
+
+    def _handle_force_fail(self, session, execution, summary) -> Dict[str, Any]:
+        self._close_execution(session, execution, "failed", summary)
+        self._fail_workflow(session, summary)
+        return {
+            "action": "fail",
+            "target_phase": None,
+            "target_phase_id": None,
+            "should_continue": False,
+        }
+
+    def _handle_sequential_mode(self, session, phase, execution, summary) -> Dict[str, Any]:
+        self._close_execution(session, execution, "completed", summary)
+        logger.info(f"Marked phase {phase.name} as complete (sequential mode)")
+        return self._advance_or_complete(session, phase.id)
+
+    def _handle_evaluation_continue(
+        self, session, phase, execution, summary, evaluation
+    ) -> Dict[str, Any]:
+        self._close_execution(session, execution, "completed", summary)
+        next_started = self._start_next_phase(session, phase.id)
+        if not next_started:
+            self._complete_workflow(session)
+            return {
+                "action": "continue",
+                "target_phase": None,
+                "target_phase_id": None,
+                "should_continue": False,
+            }
+        # Return the next phase info for the caller to create task+agent
+        next_phase = self._find_next_phase(session, phase.id)
+        return {
+            "action": "continue",
+            "target_phase": next_phase.name if next_phase else None,
+            "target_phase_id": next_phase.id if next_phase else None,
+            "should_continue": True,
+        }
+
+    def _handle_evaluation_skip(
+        self, session, phase, execution, summary, evaluation
+    ) -> Dict[str, Any]:
+        # SKIP is "continue, but logged differently" per OrchestrationAction's
+        # own docstring — it was previously undispatched here and silently
+        # fell through to a generic continue with no logging (SOLID review
+        # 2.12). Behavior matches CONTINUE; only the log message differs.
+        self._close_execution(session, execution, "completed", summary)
+        logger.info(f"Skipping past phase {phase.name}: {evaluation.reason}")
+        next_started = self._start_next_phase(session, phase.id)
+        if not next_started:
+            self._complete_workflow(session)
+            return {
+                "action": "continue",
+                "target_phase": None,
+                "target_phase_id": None,
+                "should_continue": False,
+            }
+        next_phase = self._find_next_phase(session, phase.id)
+        return {
+            "action": "continue",
+            "target_phase": next_phase.name if next_phase else None,
+            "target_phase_id": next_phase.id if next_phase else None,
+            "should_continue": True,
+        }
+
+    def _handle_evaluation_retry(
+        self, session, phase, execution, summary, evaluation
+    ) -> Dict[str, Any]:
+        execution.status = "pending"
+        execution.started_at = None
+        session.commit()
+
+        logger.info(
+            f"Retrying phase {phase.name} "
+            f"({evaluation.metadata.get('retry_count', 0)}/"
+            f"{evaluation.metadata.get('max_retries', '?')})"
+        )
+        return {
+            "action": "retry",
+            "target_phase": phase.name,
+            "target_phase_id": phase.id,
+            "should_continue": True,
+        }
+
+    def _handle_evaluation_goto(
+        self, session, phase, execution, summary, evaluation
+    ) -> Dict[str, Any]:
+        self._close_execution(session, execution, "completed", summary)
+
+        # Find target phase — Monitor will create task+agent
+        target_phase = self._find_phase_by_name_or_order(
+            session, phase.workflow_id, evaluation.target_phase
+        )
+        if target_phase:
+            logger.info(f"Goto phase {target_phase.name} from {phase.name}")
+            # Reset any phase_executions between target and current that are
+            # still "in_progress" — these are stale records from a prior pass
+            # that were never closed when the pipeline rewound.
+            stale = (
+                session.query(PhaseExecution)
+                .join(Phase)
+                .filter(
+                    Phase.workflow_id == phase.workflow_id,
+                    Phase.order >= target_phase.order,
+                    Phase.order < phase.order,
+                    PhaseExecution.status == "in_progress",
+                )
+                .all()
+            )
+            for s in stale:
+                s.status = "completed"
+                s.completed_at = datetime.utcnow()
+            if stale:
+                session.commit()
+                logger.info(
+                    f"Reset {len(stale)} stale in_progress phase(s) before GOTO to {target_phase.name}"
+                )
+            return {
+                "action": "goto",
+                "target_phase": target_phase.name,
+                "target_phase_id": target_phase.id,
+                "should_continue": True,
+            }
+        else:
+            logger.warning(f"Target phase not found: {evaluation.target_phase}")
+            return self._advance_or_complete(session, phase.id)
+
+    def _handle_evaluation_arbitrate(
+        self, session, phase, execution, summary, evaluation
+    ) -> Dict[str, Any]:
+        # Budget exhausted — pause the phase and request LLM arbitration.
+        # The monitor will spawn an arbitration agent; once it writes
+        # arbitration_result.json the pipeline resumes (proceed) or stops (impasse).
+        execution.status = "pending"  # keep phase alive until arbitration resolves
+        session.commit()
+        logger.warning(
+            f"[ARBITRATE] Phase {phase.name} needs arbitration: {evaluation.reason}"
+        )
+        return {
+            "action": "arbitrate",
+            "target_phase": phase.name,
+            "target_phase_id": phase.id,
+            "should_continue": True,
+            "arbitration_metadata": evaluation.metadata,
+        }
+
+    def _handle_evaluation_fail(
+        self, session, phase, execution, summary, evaluation
+    ) -> Dict[str, Any]:
+        self._close_execution(
+            session, execution, "failed", f"Failed: {evaluation.reason}"
+        )
+        logger.error(f"Phase {phase.name} failed: {evaluation.reason}")
+        self._fail_workflow(session, evaluation.reason)
+        return {
+            "action": "fail",
+            "target_phase": None,
+            "target_phase_id": None,
+            "should_continue": False,
+        }
+
+    # Dispatch table for orchestrator.evaluate() results — replaces a long
+    # if/elif chain over OrchestrationAction so a new action is registered
+    # here instead of silently falling through the final default (this is
+    # exactly what happened to SKIP before this refactor; see
+    # _handle_evaluation_skip). SOLID review finding 2.12.
+    _EVALUATION_HANDLERS = {
+        OrchestrationAction.CONTINUE: _handle_evaluation_continue,
+        OrchestrationAction.SKIP: _handle_evaluation_skip,
+        OrchestrationAction.RETRY: _handle_evaluation_retry,
+        OrchestrationAction.GOTO: _handle_evaluation_goto,
+        OrchestrationAction.ARBITRATE: _handle_evaluation_arbitrate,
+        OrchestrationAction.FAIL: _handle_evaluation_fail,
+    }
+
     def mark_phase_complete(
         self,
         phase_id: str,
@@ -668,67 +894,16 @@ class PhaseManager:
 
             # Arbitration override: skip evaluation and use the resolved action.
             if force_action == "continue":
-                execution.status = "completed"
-                execution.completed_at = datetime.utcnow()
-                execution.completion_summary = summary
-                session.commit()
-                next_started = self._start_next_phase(session, phase_id)
-                if not next_started:
-                    self._complete_workflow(session)
-                    return {
-                        "action": "continue",
-                        "target_phase": None,
-                        "target_phase_id": None,
-                        "should_continue": False,
-                    }
-                next_phase = self._find_next_phase(session, phase_id)
-                return {
-                    "action": "continue",
-                    "target_phase": next_phase.name if next_phase else None,
-                    "target_phase_id": next_phase.id if next_phase else None,
-                    "should_continue": True,
-                }
+                return self._handle_force_continue(session, phase, execution, summary)
             elif force_action == "fail":
-                execution.status = "failed"
-                execution.completed_at = datetime.utcnow()
-                execution.completion_summary = summary
-                session.commit()
-                self._fail_workflow(session, summary)
-                return {
-                    "action": "fail",
-                    "target_phase": None,
-                    "target_phase_id": None,
-                    "should_continue": False,
-                }
+                return self._handle_force_fail(session, execution, summary)
 
             # Get orchestrator config
             orchestrator = self._get_orchestrator(session, phase.workflow_id)
 
             # If no orchestrator config or sequential mode, use simple flow
             if not orchestrator or orchestrator.config.type == "sequential":
-                execution.status = "completed"
-                execution.completed_at = datetime.utcnow()
-                execution.completion_summary = summary
-                session.commit()
-
-                logger.info(f"Marked phase {phase.name} as complete (sequential mode)")
-
-                # Start next phase
-                next_started = self._start_next_phase(session, phase_id)
-                if not next_started:
-                    self._complete_workflow(session)
-                    return {
-                        "action": "continue",
-                        "target_phase": None,
-                        "target_phase_id": None,
-                        "should_continue": False,
-                    }
-                return {
-                    "action": "continue",
-                    "target_phase": None,
-                    "target_phase_id": None,
-                    "should_continue": True,
-                }
+                return self._handle_sequential_mode(session, phase, execution, summary)
 
             # Evaluating mode - use orchestrator to decide flow
             phase_history = self._get_phase_history(session, phase.workflow_id)
@@ -743,138 +918,9 @@ class PhaseManager:
                 f"action={evaluation.action.value}, reason={evaluation.reason}"
             )
 
-            if evaluation.action == OrchestrationAction.CONTINUE:
-                execution.status = "completed"
-                execution.completed_at = datetime.utcnow()
-                execution.completion_summary = summary
-                session.commit()
-
-                next_started = self._start_next_phase(session, phase_id)
-                if not next_started:
-                    self._complete_workflow(session)
-                    return {
-                        "action": "continue",
-                        "target_phase": None,
-                        "target_phase_id": None,
-                        "should_continue": False,
-                    }
-                # Return the next phase info for the caller to create task+agent
-                next_phase = self._find_next_phase(session, phase_id)
-                return {
-                    "action": "continue",
-                    "target_phase": next_phase.name if next_phase else None,
-                    "target_phase_id": next_phase.id if next_phase else None,
-                    "should_continue": True,
-                }
-
-            elif evaluation.action == OrchestrationAction.RETRY:
-                execution.status = "pending"
-                execution.started_at = None
-                session.commit()
-
-                logger.info(
-                    f"Retrying phase {phase.name} "
-                    f"({evaluation.metadata.get('retry_count', 0)}/"
-                    f"{evaluation.metadata.get('max_retries', '?')})"
-                )
-                return {
-                    "action": "retry",
-                    "target_phase": phase.name,
-                    "target_phase_id": phase.id,
-                    "should_continue": True,
-                }
-
-            elif evaluation.action == OrchestrationAction.GOTO:
-                execution.status = "completed"
-                execution.completed_at = datetime.utcnow()
-                execution.completion_summary = summary
-                session.commit()
-
-                # Find target phase — Monitor will create task+agent
-                target_phase = self._find_phase_by_name_or_order(
-                    session, phase.workflow_id, evaluation.target_phase
-                )
-                if target_phase:
-                    logger.info(f"Goto phase {target_phase.name} from {phase.name}")
-                    # Reset any phase_executions between target and current that are
-                    # still "in_progress" — these are stale records from a prior pass
-                    # that were never closed when the pipeline rewound.
-                    stale = (
-                        session.query(PhaseExecution)
-                        .join(Phase)
-                        .filter(
-                            Phase.workflow_id == phase.workflow_id,
-                            Phase.order >= target_phase.order,
-                            Phase.order < phase.order,
-                            PhaseExecution.status == "in_progress",
-                        )
-                        .all()
-                    )
-                    for s in stale:
-                        s.status = "completed"
-                        s.completed_at = datetime.utcnow()
-                    if stale:
-                        session.commit()
-                        logger.info(
-                            f"Reset {len(stale)} stale in_progress phase(s) before GOTO to {target_phase.name}"
-                        )
-                    return {
-                        "action": "goto",
-                        "target_phase": target_phase.name,
-                        "target_phase_id": target_phase.id,
-                        "should_continue": True,
-                    }
-                else:
-                    logger.warning(f"Target phase not found: {evaluation.target_phase}")
-                    next_started = self._start_next_phase(session, phase_id)
-                    if not next_started:
-                        self._complete_workflow(session)
-                        return {
-                            "action": "continue",
-                            "target_phase": None,
-                            "target_phase_id": None,
-                            "should_continue": False,
-                        }
-                    return {
-                        "action": "continue",
-                        "target_phase": None,
-                        "target_phase_id": None,
-                        "should_continue": True,
-                    }
-
-            elif evaluation.action == OrchestrationAction.ARBITRATE:
-                # Budget exhausted — pause the phase and request LLM arbitration.
-                # The monitor will spawn an arbitration agent; once it writes
-                # arbitration_result.json the pipeline resumes (proceed) or stops (impasse).
-                execution.status = (
-                    "pending"  # keep phase alive until arbitration resolves
-                )
-                session.commit()
-                logger.warning(
-                    f"[ARBITRATE] Phase {phase.name} needs arbitration: {evaluation.reason}"
-                )
-                return {
-                    "action": "arbitrate",
-                    "target_phase": phase.name,
-                    "target_phase_id": phase.id,
-                    "should_continue": True,
-                    "arbitration_metadata": evaluation.metadata,
-                }
-
-            elif evaluation.action == OrchestrationAction.FAIL:
-                execution.status = "failed"
-                execution.completed_at = datetime.utcnow()
-                execution.completion_summary = f"Failed: {evaluation.reason}"
-                session.commit()
-
-                logger.error(f"Phase {phase.name} failed: {evaluation.reason}")
-                self._fail_workflow(session, evaluation.reason)
-                return {
-                    "action": "fail",
-                    "target_phase": None,
-                    "target_phase_id": None,
-                    "should_continue": False,
-                }
+            handler = self._EVALUATION_HANDLERS.get(evaluation.action)
+            if handler:
+                return handler(self, session, phase, execution, summary, evaluation)
 
             return {
                 "action": "continue",
@@ -1182,18 +1228,32 @@ class PhaseManager:
 
             # 4. Link design → feature folder in DB
             from src.core.database import AutopilotDesign as _AD
+            from src.core.status_derivation import derive_design_status
 
             _design_name_for_metrics = safe_name
             if workflow.design_id:
                 design = session.query(_AD).filter_by(id=workflow.design_id).first()
                 if design:
                     design.feature_folder = str(feature_dir)
-                    design.status = "completed"
-                    design.completed_at = _dt.utcnow()
                     _design_name_for_metrics = design.name or safe_name
                     session.commit()
+                    # Don't unconditionally mark the design "completed" here —
+                    # a design can have multiple features/workflows, and this
+                    # workflow finishing doesn't mean sibling features have
+                    # too. Derive the real rollup status instead (H-3 /
+                    # SOLID review 2.1: this was the most severe instance of
+                    # bypassing the centralized status derivation, able to
+                    # mark a multi-feature design "completed" the moment the
+                    # first feature's workflow finished).
+                    derived_status = derive_design_status(
+                        session, design.id, write_back=True
+                    )
+                    if derived_status == "completed" and not design.completed_at:
+                        design.completed_at = _dt.utcnow()
+                        session.commit()
                     logger.info(
-                        f"[FEATURE-FOLDER] Design {design.id[:8]} → {feature_dir.name}"
+                        f"[FEATURE-FOLDER] Design {design.id[:8]} → "
+                        f"{feature_dir.name} (status={derived_status})"
                     )
 
             # 5. Write pipeline_metrics.json so forensics has real timestamps even

@@ -9,7 +9,9 @@
       "Bash(curl -s http://127.0.0.1:*)",
       "Bash(heph task list*)",
       "Bash(heph autopilot status*)",
-      "Bash(heph autopilot --help*)"
+      "Bash(heph autopilot --help*)",
+      "Bash(pytest *)",
+      "Bash(python scripts/check_import.py *)"
     ]
   }
 }
