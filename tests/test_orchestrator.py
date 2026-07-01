@@ -1,3 +1,4 @@
+import os
 """
 Tests for autopilot orchestrator logic.
 
@@ -9,6 +10,8 @@ Uses mocked API calls to avoid requiring live services.
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
@@ -185,12 +188,19 @@ class TestAttemptRecovery:
     """Tests for attempt_recovery function."""
 
     @patch("src.autopilot.orchestrator.get_tasks")
-    @patch("src.autopilot.orchestrator.api_post")
+    @patch("src.autopilot.orchestrator.update_task_status")
+    @patch("src.autopilot.orchestrator.create_agent_for_task_direct")
     @patch("src.autopilot.orchestrator.get_agents")
     @patch("src.autopilot.orchestrator.get_workflow_status")
     @patch("subprocess.run")
     def test_retries_failed_tasks(
-        self, mock_subprocess, mock_wf_status, mock_agents, mock_api_post, mock_tasks
+        self,
+        mock_subprocess,
+        mock_wf_status,
+        mock_agents,
+        mock_create_agent,
+        mock_update_status,
+        mock_tasks,
     ):
         """Recovery should retry failed tasks by creating new agents."""
         mock_wf_status.return_value = {"status": "active"}
@@ -210,15 +220,16 @@ class TestAttemptRecovery:
         mock_agents.return_value = []
         mock_subprocess.return_value = MagicMock(returncode=1, stdout="")
 
-        # Mock successful retry
-        mock_api_post.side_effect = [
-            {"status": "ok"},  # Reset task status
-            {"agent_id": "agent-new-1"},  # Create agent
-        ]
+        # Mock successful retry (H-2: create_agent_for_task_direct replaces
+        # the old api_post("/api/create_agent_for_task", ...) self-HTTP call)
+        mock_update_status.return_value = True
+        mock_create_agent.return_value = {"agent_id": "agent-new-1", "status": "created"}
 
+        os.environ["PROJECT_PATH"] = "/tmp/test-project"
         success, msg = attempt_recovery("wf-123", MockLogger())
         assert success is True
         assert "retry" in msg.lower() or "task" in msg.lower()
+        mock_create_agent.assert_called_once()
 
     @patch("src.autopilot.orchestrator.get_tasks")
     @patch("src.autopilot.orchestrator.get_agents")
@@ -237,6 +248,7 @@ class TestAttemptRecovery:
             "failed": [failed_task] if status == "failed" else [],
         }.get(status, [])
 
+        os.environ["PROJECT_PATH"] = "/tmp/test-project"
         success, msg = attempt_recovery("wf-123", MockLogger())
         # Should not retry (already max retries)
         assert "skip" in msg.lower() or not success
@@ -253,19 +265,30 @@ class TestAttemptRecovery:
         mock_tasks.side_effect = lambda status=None, workflow_id=None: []
         mock_agents.return_value = []
 
-        # First call: git branch --list agent-* returns branches
-        # Second call: git checkout agent-feature-1
-        # Third call: git checkout main
-        # Fourth call: git merge agent-feature-1
-        # Fifth call: git branch -d agent-feature-1
-        mock_subprocess.side_effect = [
-            MagicMock(returncode=0, stdout="  agent-feature-1\n"),  # branch list
-            MagicMock(returncode=0, stdout=""),  # checkout branch
-            MagicMock(returncode=0, stdout=""),  # checkout main
-            MagicMock(returncode=0, stdout="Merge made"),  # merge
-            MagicMock(returncode=0, stdout=""),  # delete branch
-        ]
+        # Mock the workflow query to return a workflow with working_directory
+        mock_workflow = MagicMock()
+        mock_workflow.working_directory = "/tmp/test-project"
+        with patch("src.autopilot.orchestrator.get_db") as mock_get_db:
+            mock_db = MagicMock()
+            mock_db.__enter__ = MagicMock(return_value=mock_db)
+            mock_db.__exit__ = MagicMock(return_value=False)
+            mock_db.query.return_value.filter_by.return_value.first.return_value = mock_workflow
+            mock_get_db.return_value = mock_db
 
+            # First call: git branch --list agent-* returns branches
+            # Second call: git status (clean)
+            # Third call: git branch --list (for merge check)
+            mock_subprocess.side_effect = [
+                MagicMock(returncode=0, stdout="  agent-feature-1\n"),  # branch list
+                MagicMock(returncode=0, stdout=""),  # status (clean)
+                MagicMock(returncode=0, stdout="  agent-feature-1\n"),  # branch list for merge
+                MagicMock(returncode=0, stdout=""),  # checkout branch
+                MagicMock(returncode=0, stdout=""),  # checkout main
+                MagicMock(returncode=0, stdout="Merge made"),  # merge
+                MagicMock(returncode=0, stdout=""),  # delete branch
+            ]
+
+            os.environ["PROJECT_PATH"] = "/tmp/test-project"
         success, msg = attempt_recovery("wf-123", MockLogger())
         assert "merge" in msg.lower() or success
 
@@ -287,6 +310,7 @@ class TestAttemptRecovery:
 
         mock_api_post.return_value = {"status": "terminated"}
 
+        os.environ["PROJECT_PATH"] = "/tmp/test-project"
         success, msg = attempt_recovery("wf-123", MockLogger())
         assert "terminate" in msg.lower() or success
 
@@ -303,58 +327,71 @@ class TestAttemptRecovery:
         mock_agents.return_value = []
         mock_subprocess.return_value = MagicMock(returncode=1, stdout="")
 
+        os.environ["PROJECT_PATH"] = "/tmp/test-project"
         success, msg = attempt_recovery("wf-123", MockLogger())
         assert success is False
         assert "no" in msg.lower() or "needed" in msg.lower()
 
 
 class TestGetActiveWorkflows:
-    """Tests for get_active_workflows function."""
+    """Tests for get_active_workflows function.
 
-    @patch("src.autopilot.orchestrator.api_get")
-    def test_returns_active_workflows(self, mock_api_get):
-        """Should return workflows with active/running status."""
-        mock_api_get.return_value = [
-            {"id": "wf-1", "status": "active"},
-            {"id": "wf-2", "status": "running"},
-            {"id": "wf-3", "status": "completed"},
-            {"id": "wf-4", "status": "failed"},
-        ]
+    get_active_workflows queries the DB directly (H-2 fix, no more
+    self-HTTP call to /api/workflows), so these tests seed a real sqlite
+    DB via HEPHAESTUS_TEST_DB rather than mocking api_get.
+    """
 
-        result = get_active_workflows()
-        assert len(result) == 2
-        assert all(w["status"] in ("active", "running") for w in result)
+    @pytest.fixture
+    def db_env(self, tmp_path, monkeypatch):
+        from src.core.database import DatabaseManager
 
-    @patch("src.autopilot.orchestrator.api_get")
-    def test_returns_empty_when_no_active(self, mock_api_get):
-        """Should return empty list when no active workflows."""
-        mock_api_get.return_value = [
-            {"id": "wf-1", "status": "completed"},
-            {"id": "wf-2", "status": "failed"},
-        ]
+        db_path = tmp_path / "test.db"
+        monkeypatch.setenv("HEPHAESTUS_TEST_DB", str(db_path))
+        db = DatabaseManager(str(db_path))
+        db.create_tables()
+        return db
 
-        result = get_active_workflows()
-        assert len(result) == 0
+    def _make_workflow(self, db, wf_id, status):
+        from src.core.database import Workflow
 
-    @patch("src.autopilot.orchestrator.api_get")
-    def test_handles_none_response(self, mock_api_get):
-        """Should handle None response from API."""
-        mock_api_get.return_value = None
+        with db.session_scope() as session:
+            session.add(
+                Workflow(
+                    id=wf_id,
+                    name="Test Workflow",
+                    status=status,
+                    phases_folder_path="/tmp",
+                )
+            )
 
-        result = get_active_workflows()
-        assert len(result) == 0
-
-    @patch("src.autopilot.orchestrator.api_get")
-    def test_handles_dict_response(self, mock_api_get):
-        """Should handle dict response with executions key."""
-        mock_api_get.return_value = {
-            "executions": [
-                {"id": "wf-1", "status": "active"},
-            ]
-        }
+    def test_returns_active_workflows(self, db_env):
+        """Should return only workflows with 'active' status."""
+        self._make_workflow(db_env, "wf-1", "active")
+        self._make_workflow(db_env, "wf-2", "completed")
+        self._make_workflow(db_env, "wf-3", "failed")
 
         result = get_active_workflows()
         assert len(result) == 1
+        assert result[0]["id"] == "wf-1"
+        assert result[0]["status"] == "active"
+
+    def test_returns_empty_when_no_active(self, db_env):
+        """Should return empty list when no active workflows."""
+        self._make_workflow(db_env, "wf-1", "completed")
+        self._make_workflow(db_env, "wf-2", "failed")
+
+        result = get_active_workflows()
+        assert len(result) == 0
+
+    def test_handles_dict_response(self, db_env):
+        """Should return multiple active workflows when several exist."""
+        self._make_workflow(db_env, "wf-1", "active")
+        self._make_workflow(db_env, "wf-2", "active")
+        self._make_workflow(db_env, "wf-3", "paused")
+
+        result = get_active_workflows()
+        assert len(result) == 2
+        assert {w["id"] for w in result} == {"wf-1", "wf-2"}
 
 
 class TestEdgeCases:

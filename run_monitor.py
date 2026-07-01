@@ -21,23 +21,19 @@ sys.path.append(str(Path(__file__).parent / "src"))
 
 from src.agents.manager import AgentManager
 from src.core.database import DatabaseManager
+from src.core.logging_config import configure_logging
 from src.core.simple_config import get_config
 from src.interfaces import get_llm_provider
 from src.memory.rag import RAGSystem
 from src.monitoring.monitor import MonitoringLoop
 from src.phases import PhaseManager
 
-# Configure logging. Only log to stdout — the process is launched with stdout
+# Configure logging using shared helper (L-2 fix)
+# Only log to stdout — the process is launched with stdout
 # redirected to ~/.hephaestus/logs/monitor.log (see src/cli/commands/start.py),
 # so a second FileHandler here would just duplicate every line into a stray
 # ./logs/monitor.log under the repo (and monitor.stdout.log historically).
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    handlers=[
-        logging.StreamHandler(sys.stdout),
-    ],
-)
+configure_logging()
 
 logger = logging.getLogger(__name__)
 

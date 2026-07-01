@@ -20,11 +20,13 @@ from fastapi.testclient import TestClient
 
 from src.mcp.server import (
     CreateTaskRequest,
+    StartWorkflowRequest,
+    app,
+)
+from src.mcp.tickets_api import (
     CreateTicketRequest,
     GetTicketsRequest,
     SearchTicketsRequest,
-    StartWorkflowRequest,
-    app,
 )
 
 

@@ -2,6 +2,7 @@
 
 import logging
 import os
+from contextlib import contextmanager
 from datetime import datetime
 from typing import Optional
 
@@ -18,6 +19,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     create_engine,
+    event,
 )
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import backref, relationship, sessionmaker
@@ -25,6 +27,88 @@ from sqlalchemy.pool import StaticPool
 
 Base = declarative_base()
 logger = logging.getLogger(__name__)
+
+
+# Status enums - use these instead of string literals for type safety (L-1)
+class AgentStatus:
+    """Valid agent status values."""
+    IDLE = "idle"
+    WORKING = "working"
+    STUCK = "stuck"
+    TERMINATED = "terminated"
+    
+    ALL = {IDLE, WORKING, STUCK, TERMINATED}
+
+
+class TaskStatus:
+    """Valid task status values."""
+    PENDING = "pending"
+    QUEUED = "queued"
+    BLOCKED = "blocked"
+    ASSIGNED = "assigned"
+    IN_PROGRESS = "in_progress"
+    UNDER_REVIEW = "under_review"
+    VALIDATION_IN_PROGRESS = "validation_in_progress"
+    NEEDS_WORK = "needs_work"
+    DONE = "done"
+    FAILED = "failed"
+    DUPLICATED = "duplicated"
+    
+    ALL = {PENDING, QUEUED, BLOCKED, ASSIGNED, IN_PROGRESS, UNDER_REVIEW,
+           VALIDATION_IN_PROGRESS, NEEDS_WORK, DONE, FAILED, DUPLICATED}
+    
+    # Terminal states (no further transitions expected)
+    TERMINAL = {DONE, FAILED, DUPLICATED}
+    
+    # Active states (work in progress)
+    ACTIVE = {ASSIGNED, IN_PROGRESS, UNDER_REVIEW, VALIDATION_IN_PROGRESS, NEEDS_WORK}
+
+
+class WorkflowStatus:
+    """Valid workflow status values."""
+    ACTIVE = "active"
+    PAUSED = "paused"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    
+    ALL = {ACTIVE, PAUSED, COMPLETED, FAILED}
+
+
+class FeatureStatus:
+    """Valid feature status values."""
+    PENDING = "pending"
+    ACTIVE = "active"
+    PAUSED = "paused"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    SKIPPED = "skipped"
+    VALIDATED = "validated"
+    
+    ALL = {PENDING, ACTIVE, PAUSED, COMPLETED, FAILED, SKIPPED, VALIDATED}
+
+
+class PhaseExecutionStatus:
+    """Valid phase execution status values."""
+    PENDING = "pending"
+    IN_PROGRESS = "in_progress"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    SKIPPED = "skipped"
+    
+    ALL = {PENDING, IN_PROGRESS, COMPLETED, FAILED, SKIPPED}
+
+
+class DesignStatus:
+    """Valid autopilot design status values."""
+    PENDING = "pending"
+    QUEUED = "queued"
+    ACTIVE = "active"
+    PAUSED = "paused"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    VALIDATED = "validated"
+    
+    ALL = {PENDING, QUEUED, ACTIVE, PAUSED, COMPLETED, FAILED, VALIDATED}
 
 
 class Agent(Base):
@@ -1132,8 +1216,20 @@ class DatabaseManager:
             poolclass=StaticPool,
             echo=False,
         )
+        
+        # Set SQLite pragmas for concurrent access
+        # WAL mode allows concurrent readers alongside a single writer
+        # busy_timeout makes writers block-and-retry instead of failing immediately
+        @event.listens_for(self.engine, "connect")
+        def _set_sqlite_pragma(dbapi_connection, connection_record):
+            cursor = dbapi_connection.cursor()
+            cursor.execute("PRAGMA journal_mode=WAL")
+            cursor.execute("PRAGMA busy_timeout=5000")
+            cursor.close()
+        
         self.SessionLocal = sessionmaker(
-            autocommit=False, autoflush=False, bind=self.engine
+            autocommit=False, autoflush=False, bind=self.engine,
+            expire_on_commit=False  # Prevent DetachedInstanceError bugs (H-0*)
         )
 
     def create_tables(self):
@@ -1517,14 +1613,29 @@ class DatabaseManager:
         """Get a database session."""
         return self.SessionLocal()
 
+    @contextmanager
+    def session_scope(self):
+        """Provide a transactional scope around a series of operations.
+        
+        Use this instead of raw get_session() to ensure proper
+        commit/rollback/close handling (H-1 fix).
+        """
+        session = self.SessionLocal()
+        try:
+            yield session
+            session.commit()
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
     def drop_tables(self):
         """Drop all database tables (for testing)."""
         Base.metadata.drop_all(bind=self.engine)
 
 
 # Context manager for database sessions
-from contextlib import contextmanager
-
 from sqlalchemy.sql import text
 
 

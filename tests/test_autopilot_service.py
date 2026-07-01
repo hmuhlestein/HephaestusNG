@@ -141,7 +141,7 @@ class TestAutopilotService:
 
         with patch.object(service, "_run_pipeline", new_callable=AsyncMock):
             await service.start(str(project))
-            assert (project / "docs" / "design-queue").exists()
+            assert (project / "docs" / "design").exists()
             await service.stop()
 
     @pytest.mark.asyncio

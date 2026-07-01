@@ -588,8 +588,7 @@ class MonitoringLoop:
                     f"[MECH-RECOVERY] Agent {agent.id[:8]} frozen {int(frozen_for)}s after "
                     f"{MAX_RECOV} recovery attempts — abandoning: fail task, terminate agent"
                 )
-                session = self.db_manager.get_session()
-                try:
+                with self.db_manager.session_scope() as session:
                     from src.core.database import Task as _Task
 
                     stuck_task = (
@@ -603,13 +602,10 @@ class MonitoringLoop:
                             f"Agent output frozen {int(frozen_for)}s; "
                             f"{MAX_RECOV} recovery attempts exhausted"
                         )
-                        session.commit()
                         logger.info(
                             f"[MECH-RECOVERY] Task {stuck_task.id[:8]} marked failed; "
                             f"phase will be retried (MAX_PHASE_ATTEMPTS bound)"
                         )
-                finally:
-                    session.close()
                 await self.agent_manager.terminate_agent(agent.id)
                 self._stuck_state.pop(agent.id, None)
         except Exception as e:
@@ -1122,18 +1118,18 @@ class MonitoringLoop:
                 self.agent_manager.tmux_server.kill_session(agent.tmux_session_name)
                 logger.info(f"Killed tmux session {agent.tmux_session_name}")
 
-            session = self.db_manager.get_session()
-            try:
-                agent.status = "terminated"
-                agent.health_check_failures = 0
-                session.commit()
-            finally:
-                session.close()
+            with self.db_manager.session_scope() as session:
+                # Re-query the agent from this session to avoid detached object bugs
+                db_agent = session.query(Agent).filter_by(id=agent.id).first()
+                if db_agent:
+                    db_agent.status = "terminated"
+                    db_agent.health_check_failures = 0
+                else:
+                    logger.warning(f"Agent {agent.id} not found in DB during restart")
 
             # Record the restart
-            self.guardian._record_steering(
+            self.guardian.record_auto_restart(
                 agent.id,
-                "AUTO_RESTART",
                 "Agent ignored steering too many times, auto-restarted",
             )
 
@@ -1152,8 +1148,7 @@ class MonitoringLoop:
         Returns:
             List of past summaries
         """
-        session = self.db_manager.get_session()
-        try:
+        with self.db_manager.session_scope() as session:
             # Get past Guardian summaries from dedicated table
             analyses = (
                 session.query(GuardianAnalysis)
@@ -1201,9 +1196,6 @@ class MonitoringLoop:
 
             return summaries
 
-        finally:
-            session.close()
-
     async def _update_agent_health_from_trajectory(
         self, agent: Agent, analysis: Dict[str, Any]
     ):
@@ -1214,8 +1206,7 @@ class MonitoringLoop:
         health_check_failures is incremented when trajectory is off-track,
         so the Guardian can decide whether to intervene.
         """
-        session = self.db_manager.get_session()
-        try:
+        with self.db_manager.session_scope() as session:
             db_agent = session.query(Agent).filter_by(id=agent.id).first()
             if not db_agent:
                 return
@@ -1266,10 +1257,6 @@ class MonitoringLoop:
                 },  # Reference to the full analysis
             )
             session.add(summary_log)
-            session.commit()
-
-        finally:
-            session.close()
 
     async def _save_conductor_analysis(self, analysis: Dict[str, Any]):
         """Save Conductor analysis to dedicated table.
@@ -1277,57 +1264,56 @@ class MonitoringLoop:
         Args:
             analysis: Conductor analysis result
         """
-        session = self.db_manager.get_session()
         try:
-            # Extract duplicate info
-            duplicates = analysis.get("duplicates", [])
-            coherence_info = analysis.get("coherence", {})
-            decisions = analysis.get("decisions", [])
+            with self.db_manager.session_scope() as session:
+                # Extract duplicate info
+                duplicates = analysis.get("duplicates", [])
+                coherence_info = analysis.get("coherence", {})
+                decisions = analysis.get("decisions", [])
 
-            # Count decision types
-            termination_count = sum(
-                1 for d in decisions if d.get("type") == "terminate_duplicate"
-            )
-            coordination_count = sum(
-                1 for d in decisions if d.get("type") == "coordinate_resources"
-            )
-
-            # Save main Conductor analysis
-            conductor_analysis = ConductorAnalysis(
-                coherence_score=coherence_info.get("score", 0.7),
-                num_agents=analysis.get("num_agents", 0),
-                system_status=analysis.get("system_status", "Unknown"),
-                duplicate_count=len(duplicates),
-                termination_count=termination_count,
-                coordination_count=coordination_count,
-                details=analysis,
-            )
-            session.add(conductor_analysis)
-            session.flush()  # Get the ID
-
-            # Save detected duplicates
-            for dup in duplicates:
-                duplicate_entry = DetectedDuplicate(
-                    conductor_analysis_id=conductor_analysis.id,
-                    agent1_id=dup.get("agent1"),
-                    agent2_id=dup.get("agent2"),
-                    similarity_score=dup.get("similarity", 0.0),
-                    work_description=dup.get("work", "Unknown duplicate work"),
+                # Count decision types
+                termination_count = sum(
+                    1 for d in decisions if d.get("type") == "terminate_duplicate"
                 )
-                session.add(duplicate_entry)
+                coordination_count = sum(
+                    1 for d in decisions if d.get("type") == "coordinate_resources"
+                )
 
-            # Also keep a log entry for backwards compatibility
-            log_entry = AgentLog(
-                agent_id=None,  # System-level log
-                log_type="conductor_analysis",
-                message=f"Conductor: coherence={coherence_info.get('score', 0):.2f}, "
-                f"{len(duplicates)} duplicates, {analysis.get('system_status', 'Unknown')[:50]}",
-                details={"conductor_analysis_id": conductor_analysis.id},
-            )
-            session.add(log_entry)
+                # Save main Conductor analysis
+                conductor_analysis = ConductorAnalysis(
+                    coherence_score=coherence_info.get("score", 0.7),
+                    num_agents=analysis.get("num_agents", 0),
+                    system_status=analysis.get("system_status", "Unknown"),
+                    duplicate_count=len(duplicates),
+                    termination_count=termination_count,
+                    coordination_count=coordination_count,
+                    details=analysis,
+                )
+                session.add(conductor_analysis)
+                session.flush()  # Get the ID
 
-            session.commit()
-            logger.debug(f"Saved Conductor analysis ID {conductor_analysis.id}")
+                # Save detected duplicates
+                for dup in duplicates:
+                    duplicate_entry = DetectedDuplicate(
+                        conductor_analysis_id=conductor_analysis.id,
+                        agent1_id=dup.get("agent1"),
+                        agent2_id=dup.get("agent2"),
+                        similarity_score=dup.get("similarity", 0.0),
+                        work_description=dup.get("work", "Unknown duplicate work"),
+                    )
+                    session.add(duplicate_entry)
+
+                # Also keep a log entry for backwards compatibility
+                log_entry = AgentLog(
+                    agent_id=None,  # System-level log
+                    log_type="conductor_analysis",
+                    message=f"Conductor: coherence={coherence_info.get('score', 0):.2f}, "
+                    f"{len(duplicates)} duplicates, {analysis.get('system_status', 'Unknown')[:50]}",
+                    details={"conductor_analysis_id": conductor_analysis.id},
+                )
+                session.add(log_entry)
+
+                logger.debug(f"Saved Conductor analysis ID {conductor_analysis.id}")
 
         except Exception as e:
             logger.error(f"Failed to save Conductor analysis: {e}")

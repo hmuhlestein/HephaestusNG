@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { motion } from 'framer-motion';
 import {
@@ -43,14 +43,39 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
   const [localOrder, setLocalOrder] = useState<any[] | null>(null);
   const [detailFile, setDetailFile] = useState<string | null>(null);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
-  const [designStatuses, setDesignStatuses] = useState<Record<string, { status: string; workflowId?: string }>>({});
 
-  // Fetch status for all designs to show badges
+  // Fetch status for all designs to show badges (M-5 fix: migrated to React Query)
   const { data: designs, isLoading } = useQuery({
     queryKey: ['autopilot-project-designs', projectId],
     queryFn: () => projectId ? apiService.getAutopilotProjectDesigns(projectId) : Promise.resolve([]),
     enabled: !!projectId,
     refetchInterval: 5000,
+  });
+
+  // Fetch design statuses using React Query (M-5 fix)
+  const { data: designStatuses = {} } = useQuery({
+    queryKey: ['autopilot-design-statuses', projectId, designs?.length],
+    queryFn: async () => {
+      if (!projectId || !designs || designs.length === 0) return {};
+      const statuses: Record<string, { status: string; workflowId?: string }> = {};
+      await Promise.all(
+        designs.map(async (d: any) => {
+          try {
+            const status = await apiService.getAutopilotProjectDesignStatus(projectId, d.filename);
+            statuses[d.filename] = {
+              status: status.status || 'pending',
+              workflowId: status.workflows?.[0]?.id
+            };
+          } catch {
+            statuses[d.filename] = { status: 'pending' };
+          }
+        })
+      );
+      return statuses;
+    },
+    enabled: !!projectId && !!designs && designs.length > 0,
+    refetchInterval: 10000,
+    staleTime: 5000,
   });
 
   // Periodically reload designs from disk every 30 seconds
@@ -67,43 +92,6 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
     }, 30000);
     return () => clearInterval(interval);
   }, [projectId, queryClient]);
-
-
-  // Fetch status for each design. Pulled out of the effect (via useCallback)
-  // so the pause/resume mutation can call it directly for an immediate
-  // refresh — this state was previously only ever updated by its own 10s
-  // timer, completely disconnected from the pause/resume mutation's
-  // invalidate/refetch calls (those only touch the design *list* query, which
-  // holds no status/workflowId data). That meant the Pause/Play icon relied
-  // on this button's own `status` prop, which could take up to 10s to catch
-  // up after a click — and looked like it "didn't change" if you weren't
-  // watching that long.
-  const fetchStatuses = useCallback(async () => {
-    if (!projectId || !designs || designs.length === 0) return;
-    const statuses: Record<string, { status: string; workflowId?: string }> = {};
-    await Promise.all(
-      designs.map(async (d: any) => {
-        try {
-          const status = await apiService.getAutopilotProjectDesignStatus(projectId, d.filename);
-          statuses[d.filename] = {
-            status: status.status || 'pending',
-            workflowId: status.workflows?.[0]?.id
-          };
-        } catch {
-          statuses[d.filename] = { status: 'pending' };
-        }
-      })
-    );
-    setDesignStatuses(statuses);
-  }, [projectId, designs]);
-
-  useEffect(() => {
-    if (!projectId || !designs || designs.length === 0) return;
-    fetchStatuses();
-    // Periodically refresh statuses every 10 seconds
-    const statusInterval = setInterval(fetchStatuses, 10000);
-    return () => clearInterval(statusInterval);
-  }, [projectId, designs, fetchStatuses]);
 
   const items = localOrder ?? designs ?? [];
 
@@ -175,12 +163,8 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['workflows'] });
       queryClient.invalidateQueries({ queryKey: ['autopilot-project-designs', projectId] });
-      // Force refetch of designs to trigger status re-fetch
-      queryClient.refetchQueries({ queryKey: ['autopilot-project-designs', projectId] });
-      // designStatuses (which drives the Pause/Play icon) is populated by its
-      // own separate 10s timer, not by the query above — refresh it now so
-      // the button updates immediately instead of up to 10s later.
-      fetchStatuses();
+      // Invalidate design statuses to trigger immediate refetch (M-5 fix)
+      queryClient.invalidateQueries({ queryKey: ['autopilot-design-statuses', projectId] });
       toast.success('Workflow updated');
     },
     onError: () => {

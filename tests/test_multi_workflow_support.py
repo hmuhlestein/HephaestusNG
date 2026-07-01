@@ -13,10 +13,12 @@ from pydantic import ValidationError
 
 from src.mcp.server import (
     CreateTaskRequest,
-    CreateTicketRequest,
-    SearchTicketsRequest,
     StartWorkflowRequest,
     app,
+)
+from src.mcp.tickets_api import (
+    CreateTicketRequest,
+    SearchTicketsRequest,
 )
 
 

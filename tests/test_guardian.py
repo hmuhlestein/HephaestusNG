@@ -1,5 +1,6 @@
 """Unit tests for the Guardian trajectory monitoring system."""
 
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -14,6 +15,21 @@ def mock_db_manager():
     """Create mock database manager."""
     mock = Mock()
     mock.get_session = Mock()
+
+    @contextmanager
+    def _session_scope():
+        # Guardian production code uses session_scope() rather than raw
+        # get_session()/close() — route through the same mocked session so
+        # tests that configure get_session.return_value keep working, and
+        # mirror DatabaseManager.session_scope()'s real commit/close semantics.
+        session = mock.get_session()
+        try:
+            yield session
+            session.commit()
+        finally:
+            session.close()
+
+    mock.session_scope = Mock(side_effect=_session_scope)
     return mock
 
 
@@ -45,6 +61,19 @@ def mock_llm_provider():
         }
     )
     return mock
+
+
+def _task_dict(task: Task) -> dict:
+    """Mirror Guardian._get_agent_task's dict shape (H-0d: returns
+    primitives, not a detached ORM object) for tests that build a Task."""
+    return {
+        "id": task.id,
+        "phase_id": task.phase_id,
+        "workflow_id": task.workflow_id,
+        "enriched_description": task.enriched_description,
+        "raw_description": task.raw_description,
+        "done_definition": task.done_definition,
+    }
 
 
 @pytest.fixture
@@ -93,7 +122,7 @@ class TestGuardian:
                 "current_focus": "implementation",
             },
         ):
-            with patch.object(guardian, "_get_agent_task", return_value=mock_task):
+            with patch.object(guardian, "_get_agent_task", return_value=_task_dict(mock_task)):
                 # Execute
                 result = await guardian.analyze_agent_with_trajectory(
                     agent=agent,
@@ -143,7 +172,7 @@ class TestGuardian:
                 "session_start": datetime.utcnow(),
             },
         ):
-            with patch.object(guardian, "_get_agent_task", return_value=mock_task):
+            with patch.object(guardian, "_get_agent_task", return_value=_task_dict(mock_task)):
                 # Execute
                 result = await guardian.analyze_agent_with_trajectory(
                     agent=agent, tmux_output="pip install requests", past_summaries=[]
@@ -176,7 +205,7 @@ class TestGuardian:
         with patch.object(
             guardian, "_build_accumulated_context", return_value=complete_context
         ):
-            with patch.object(guardian, "_get_agent_task", return_value=mock_task):
+            with patch.object(guardian, "_get_agent_task", return_value=_task_dict(mock_task)):
                 await guardian.analyze_agent_with_trajectory(
                     agent=agent, tmux_output="test", past_summaries=[]
                 )
@@ -327,7 +356,7 @@ class TestGuardian:
             "_build_accumulated_context",
             return_value={"overall_goal": "Test"},
         ):
-            with patch.object(guardian, "_get_agent_task", return_value=mock_task):
+            with patch.object(guardian, "_get_agent_task", return_value=_task_dict(mock_task)):
                 result = await guardian.analyze_agent_with_trajectory(
                     agent=agent, tmux_output="test", past_summaries=[]
                 )

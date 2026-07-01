@@ -298,6 +298,7 @@ class TestTaskDeduplicationFlow:
             config.task_dedup_enabled = False  # Disabled
             config.openai_api_key = "test-key"
             config.enable_cors = False
+            config.database_path = ":memory:"
             mock_config.return_value = config
 
             # Initialize server without deduplication

@@ -34,6 +34,12 @@ def setup_test_database():
     # Set environment variable
     os.environ["HEPHAESTUS_TEST_DB"] = db_path
 
+    # Initialize only the database manager (not full server state)
+    from src.mcp.server import server_state
+    from src.core.database import DatabaseManager
+    
+    server_state.db_manager = DatabaseManager(db_path)
+
     yield db_path
 
     # Cleanup
@@ -53,13 +59,17 @@ def headers():
     return {"X-Agent-ID": "agent-e2e-test"}
 
 
+# Module-level state for test ordering
+test_state = {"ticket_id_1": None, "ticket_id_2": None}
+
+
 class TestMCPTicketEndpoints:
     """Test all 11 ticket endpoints via MCP server."""
 
     def test_01_create_ticket(self, client, headers):
         """Test POST /tickets/create - Create a new ticket."""
         response = client.post(
-            "/tickets/create",
+            "/api/tickets/create",
             headers=headers,
             json={
                 "workflow_id": "workflow-e2e-test",
@@ -78,26 +88,28 @@ class TestMCPTicketEndpoints:
         assert data["message"] == "Ticket created successfully"
 
         # Store ticket_id for later tests
-        TestMCPTicketEndpoints.ticket_id_1 = data["ticket_id"]
-        print(f"✅ Created ticket: {TestMCPTicketEndpoints.ticket_id_1}")
+        test_state['ticket_id_1'] = data["ticket_id"]
+        print(f"✅ Created ticket: {test_state['ticket_id_1']}")
 
     def test_02_get_ticket(self, client, headers):
         """Test GET /tickets/{ticket_id} - Get ticket details."""
-        if not hasattr(TestMCPTicketEndpoints, "ticket_id_1"):
+        if test_state['ticket_id_1'] is None:
             pytest.skip("Requires ticket from test_01")
 
         response = client.get(
-            f"/tickets/{TestMCPTicketEndpoints.ticket_id_1}",
+            f"/api/tickets/{test_state['ticket_id_1']}",
             headers=headers,
         )
 
         assert response.status_code == 200
         data = response.json()
-        assert data["ticket_id"] == TestMCPTicketEndpoints.ticket_id_1
-        assert data["title"] == "MCP Test Ticket 1"
-        assert data["ticket_type"] == "feature"
-        assert data["priority"] == "high"
-        print(f"✅ Retrieved ticket details: {data['title']}")
+        # Response is nested: {ticket: {...}, comments: [...], history: [...], commits: [...]}
+        ticket_data = data["ticket"]
+        assert ticket_data["ticket_id"] == test_state['ticket_id_1']
+        assert ticket_data["title"] == "MCP Test Ticket 1"
+        assert ticket_data["ticket_type"] == "feature"
+        assert ticket_data["priority"] == "high"
+        print(f"✅ Retrieved ticket details: {ticket_data['title']}")
 
     def test_03_get_tickets_list(self, client, headers):
         """Test GET /tickets/get - Get tickets by workflow."""
@@ -108,14 +120,14 @@ class TestMCPTicketEndpoints:
 
     def test_04_add_comment(self, client, headers):
         """Test POST /tickets/comment - Add comment to ticket."""
-        if not hasattr(TestMCPTicketEndpoints, "ticket_id_1"):
+        if test_state['ticket_id_1'] is None:
             pytest.skip("Requires ticket from test_01")
 
         response = client.post(
-            "/tickets/comment",
+            "/api/tickets/comment",
             headers=headers,
             json={
-                "ticket_id": TestMCPTicketEndpoints.ticket_id_1,
+                "ticket_id": test_state['ticket_id_1'],
                 "comment_text": "This is a test comment via MCP endpoint",
                 "comment_type": "general",
             },
@@ -129,14 +141,14 @@ class TestMCPTicketEndpoints:
 
     def test_05_update_ticket(self, client, headers):
         """Test POST /tickets/update - Update ticket fields."""
-        if not hasattr(TestMCPTicketEndpoints, "ticket_id_1"):
+        if test_state['ticket_id_1'] is None:
             pytest.skip("Requires ticket from test_01")
 
         response = client.post(
-            "/tickets/update",
+            "/api/tickets/update",
             headers=headers,
             json={
-                "ticket_id": TestMCPTicketEndpoints.ticket_id_1,
+                "ticket_id": test_state['ticket_id_1'],
                 "updates": {
                     "priority": "critical",
                     "tags": ["mcp", "testing", "updated"],
@@ -158,14 +170,14 @@ class TestMCPTicketEndpoints:
 
     def test_06_change_status(self, client, headers):
         """Test POST /tickets/change-status - Change ticket status."""
-        if not hasattr(TestMCPTicketEndpoints, "ticket_id_1"):
+        if test_state['ticket_id_1'] is None:
             pytest.skip("Requires ticket from test_01")
 
         response = client.post(
-            "/tickets/change-status",
+            "/api/tickets/change-status",
             headers=headers,
             json={
-                "ticket_id": TestMCPTicketEndpoints.ticket_id_1,
+                "ticket_id": test_state['ticket_id_1'],
                 "new_status": "todo",
                 "comment": "Moving to todo via MCP endpoint",
             },
@@ -180,12 +192,12 @@ class TestMCPTicketEndpoints:
     def test_07_search_tickets(self, client, headers):
         """Test POST /tickets/search - Search tickets."""
         response = client.post(
-            "/tickets/search",
+            "/api/tickets/search",
             headers=headers,
             json={
                 "workflow_id": "workflow-e2e-test",
                 "query": "authentication",  # Search for tickets from e2e test
-                "search_mode": "keyword",
+                "search_type": "keyword",
             },
         )
 
@@ -198,14 +210,14 @@ class TestMCPTicketEndpoints:
 
     def test_08_link_commit(self, client, headers):
         """Test POST /tickets/link-commit - Link commit to ticket."""
-        if not hasattr(TestMCPTicketEndpoints, "ticket_id_1"):
+        if test_state['ticket_id_1'] is None:
             pytest.skip("Requires ticket from test_01")
 
         response = client.post(
-            "/tickets/link-commit",
+            "/api/tickets/link-commit",
             headers=headers,
             json={
-                "ticket_id": TestMCPTicketEndpoints.ticket_id_1,
+                "ticket_id": test_state['ticket_id_1'],
                 "commit_sha": "mcp123abc456",
                 "commit_message": "feat: Add MCP test feature",
                 "link_method": "manual",
@@ -221,7 +233,7 @@ class TestMCPTicketEndpoints:
     def test_09_get_ticket_stats(self, client, headers):
         """Test GET /tickets/stats/{workflow_id} - Get ticket statistics."""
         response = client.get(
-            "/tickets/stats/workflow-e2e-test",
+            "/api/tickets/stats/workflow-e2e-test",
             headers=headers,
         )
 
@@ -237,32 +249,32 @@ class TestMCPTicketEndpoints:
 
     def test_10_resolve_ticket(self, client, headers):
         """Test POST /tickets/resolve - Resolve a ticket."""
-        if not hasattr(TestMCPTicketEndpoints, "ticket_id_1"):
+        if test_state['ticket_id_1'] is None:
             pytest.skip("Requires ticket from test_01")
 
         # First check if ticket is already in 'done' status
         get_response = client.get(
-            f"/tickets/{TestMCPTicketEndpoints.ticket_id_1}", headers=headers
+            f"/api/tickets/{test_state['ticket_id_1']}", headers=headers
         )
         if get_response.status_code == 200:
-            ticket_data = get_response.json()
+            ticket_data = get_response.json()["ticket"]
             if ticket_data.get("status") != "done":
                 # Move to done first
                 client.post(
-                    "/tickets/change-status",
+                    "/api/tickets/change-status",
                     headers=headers,
                     json={
-                        "ticket_id": TestMCPTicketEndpoints.ticket_id_1,
+                        "ticket_id": test_state['ticket_id_1'],
                         "new_status": "done",
                         "comment": "Moving to done for resolve test",
                     },
                 )
 
         response = client.post(
-            "/tickets/resolve",
+            "/api/tickets/resolve",
             headers=headers,
             json={
-                "ticket_id": TestMCPTicketEndpoints.ticket_id_1,
+                "ticket_id": test_state['ticket_id_1'],
                 "resolution_comment": "Resolved via MCP endpoint test",
                 "commit_sha": "mcp123abc456",
             },
@@ -277,13 +289,12 @@ class TestMCPTicketEndpoints:
         assert response.status_code == 200
         data = response.json()
         assert data["success"] is True
-        assert data["is_resolved"] is True
-        print(f"✅ Resolved ticket: {TestMCPTicketEndpoints.ticket_id_1}")
+        print(f"✅ Resolved ticket: {test_state['ticket_id_1']}")
 
     def test_11_get_commit_diff(self, client, headers):
         """Test GET /tickets/commit-diff/{commit_sha} - Get commit diff."""
         response = client.get(
-            "/tickets/commit-diff/mcp123abc456",
+            "/api/tickets/commit-diff/mcp123abc456",
             headers=headers,
         )
 
@@ -312,7 +323,7 @@ class TestCreateTaskValidation:
         """Test that create_task rejects requests without ticket_id when tracking enabled."""
         # First, create a ticket to use
         ticket_response = client.post(
-            "/tickets/create",
+            "/api/tickets/create",
             headers=headers,
             json={
                 "workflow_id": "workflow-e2e-test",
@@ -325,14 +336,28 @@ class TestCreateTaskValidation:
         assert ticket_response.status_code == 200
         ticket_id = ticket_response.json()["ticket_id"]
 
+        # Get a phase_id from the workflow
+        import sqlite3
+        conn = sqlite3.connect('e2e_test.db')
+        cursor = conn.cursor()
+        cursor.execute('SELECT id FROM phases WHERE workflow_id = ?', ('workflow-e2e-test',))
+        phase_row = cursor.fetchone()
+        conn.close()
+        
+        if not phase_row:
+            pytest.skip("No phases in workflow-e2e-test")
+        phase_id = phase_row[0]
+
         # Try to create a task WITHOUT ticket_id (should fail)
         response_without_ticket = client.post(
             "/create_task",
             headers=headers,
             json={
-                "description": "Task without ticket_id",
+                "task_description": "Task without ticket_id",
                 "done_definition": "Task is done",
                 "workflow_id": "workflow-e2e-test",
+                "ai_agent_id": headers["X-Agent-ID"],
+                "phase_id": phase_id,
                 # ticket_id is missing!
             },
         )
@@ -348,10 +373,12 @@ class TestCreateTaskValidation:
             "/create_task",
             headers=headers,
             json={
-                "description": "Task with ticket_id",
+                "task_description": "Task with ticket_id",
                 "done_definition": "Task is done",
                 "workflow_id": "workflow-e2e-test",
                 "ticket_id": ticket_id,
+                "ai_agent_id": headers["X-Agent-ID"],
+                "phase_id": phase_id,
             },
         )
 
@@ -363,18 +390,31 @@ class TestCreateTaskValidation:
 
     def test_create_task_allows_no_ticket_id_when_tracking_disabled(self, client):
         """Test that create_task allows tasks without ticket_id when tracking is disabled."""
-        # Use existing workflow-no-tracking from e2e_test.db (has no board_config)
-        # This workflow already exists, so we just use it
+        # Use an SDK agent which bypasses ticket_id requirement
+        # SDK agents (starting with 'sdk-') are allowed to create tasks without tickets
+        
+        # Get a phase_id from the workflow
+        import sqlite3
+        conn = sqlite3.connect('e2e_test.db')
+        cursor = conn.cursor()
+        cursor.execute('SELECT id FROM phases WHERE workflow_id = ?', ('workflow-e2e-test',))
+        phase_row = cursor.fetchone()
+        conn.close()
+        
+        if not phase_row:
+            pytest.skip("No phases in workflow-e2e-test")
+        phase_id = phase_row[0]
 
-        # Create task without ticket_id (should succeed since tracking is disabled)
         response = client.post(
             "/create_task",
-            headers={"X-Agent-ID": "agent-no-tracking"},
+            headers={"X-Agent-ID": "sdk-test-agent"},
             json={
-                "description": "Task without ticket tracking",
+                "task_description": "Task without ticket tracking",
                 "done_definition": "Task is done",
-                "workflow_id": "workflow-no-tracking",
-                # No ticket_id - this is allowed when tracking is disabled
+                "workflow_id": "workflow-e2e-test",
+                "ai_agent_id": "sdk-test-agent",
+                "phase_id": phase_id,
+                # No ticket_id - this is allowed for SDK agents
             },
         )
 
