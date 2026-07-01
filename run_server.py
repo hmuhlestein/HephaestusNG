@@ -12,13 +12,15 @@ import uvicorn
 
 from src.core.simple_config import get_config
 
-# Configure logging
+# Configure logging. Only log to stdout — the process is launched with stdout
+# redirected to ~/.hephaestus/logs/backend.log (see src/cli/commands/start.py),
+# so a second FileHandler here would just duplicate every line into a stray
+# hephaestus_server.log at the repo root.
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     handlers=[
         logging.StreamHandler(),
-        logging.FileHandler("hephaestus_server.log"),
     ],
 )
 

@@ -6,7 +6,10 @@
       "Bash(tmux ls *)",
       "Bash(tmux list-sessions *)",
       "Bash(tmux list-panes *)",
-      "Bash(curl -s http://127.0.0.1:*)"
+      "Bash(curl -s http://127.0.0.1:*)",
+      "Bash(heph task list*)",
+      "Bash(heph autopilot status*)",
+      "Bash(heph autopilot --help*)"
     ]
   }
 }

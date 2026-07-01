@@ -1315,6 +1315,32 @@ async def startup_event():
     except Exception as e:
         logger.error(f"[RESUME] resume scan failed: {e}")
 
+    # Resume the autopilot pipeline driver itself if it was running when the
+    # server last stopped. AutopilotService lives entirely in-process (see
+    # src/autopilot/service.py) — its polling loop (which fires phase
+    # transitions once a phase's task is marked done) dies with the process
+    # and nothing else re-creates it. Without this, a backend restart while a
+    # pipeline is active permanently stalls phase advancement: tasks finish,
+    # but the next phase's task never gets created, until a much later,
+    # cruder fallback (the diagnostic monitor's stuck-workflow detector)
+    # eventually notices and manually patches the gap.
+    try:
+        from src.autopilot.service import get_autopilot_service
+
+        persisted = get_autopilot_service().load_persisted_state()
+        if persisted and persisted.get("project_path"):
+            logger.info(
+                f"[RESUME] Auto-resuming autopilot pipeline for "
+                f"{persisted['project_path']} (was running before restart)"
+            )
+            await get_autopilot_service().start(
+                project_path=persisted["project_path"],
+                design_queue=persisted.get("design_queue") or "",
+                max_iterations=persisted.get("max_iterations", 10),
+            )
+    except Exception as e:
+        logger.error(f"[RESUME] Failed to auto-resume autopilot pipeline: {e}")
+
     logger.info("Server started successfully")
 
 
@@ -2103,8 +2129,19 @@ async def create_task(
 
             # Dedup: don't create duplicate tasks for the same phase
             dedup_phase_id = request.phase_id
-            if not dedup_phase_id and request.phase_order:
-                # Resolve phase_order to phase_id
+            # Resolve an order number to the real Phase UUID — needed both when
+            # phase_order was given directly, AND when phase_id itself is a
+            # digit string (the MCP create_task tool sends phase order numbers
+            # through the phase_id field, e.g. "4"). Without this, phase_id
+            # stays as the literal string "4", which matches no real Phase row,
+            # silently defeating both the dedup check below and the
+            # own-phase guard further down.
+            phase_order_to_resolve = request.phase_order
+            if not phase_order_to_resolve and dedup_phase_id and str(dedup_phase_id).isdigit():
+                phase_order_to_resolve = int(dedup_phase_id)
+            if phase_order_to_resolve and (
+                not dedup_phase_id or str(dedup_phase_id).isdigit()
+            ):
                 from src.core.database import Phase as PhaseModel
 
                 _s = server_state.db_manager.get_session()
@@ -2112,7 +2149,7 @@ async def create_task(
                     _phase = (
                         _s.query(PhaseModel)
                         .filter_by(
-                            workflow_id=request.workflow_id, order=request.phase_order
+                            workflow_id=request.workflow_id, order=phase_order_to_resolve
                         )
                         .first()
                     )
@@ -2137,19 +2174,101 @@ async def create_task(
                         .first()
                     )
                     if existing:
+                        # Content-aware dedup: a phase like 'development' can
+                        # legitimately have many distinct tasks in flight at
+                        # once. Matching on phase_id alone (as this used to)
+                        # silently swallowed every genuinely-different task
+                        # submitted while one was already active — the caller
+                        # got back a false "created successfully" pointing at
+                        # unrelated existing content, and the new work was
+                        # never recorded anywhere. Only treat it as a real
+                        # duplicate if the description is actually the same.
+                        from difflib import SequenceMatcher
+
+                        similarity = SequenceMatcher(
+                            None,
+                            (existing.raw_description or "")[:500],
+                            request.task_description[:500],
+                        ).ratio()
+                        if similarity >= 0.85:
+                            logger.info(
+                                f"[CREATE_TASK] Dedup: phase already has near-identical "
+                                f"active task {existing.id[:8]} (similarity={similarity:.2f}), returning it"
+                            )
+                            _s.close()
+                            return CreateTaskResponse(
+                                task_id=existing.id,
+                                enriched_description=existing.enriched_description
+                                or existing.raw_description,
+                                assigned_agent_id=existing.assigned_agent_id
+                                or "unassigned",
+                                estimated_completion_time=30,
+                                status="queued",
+                            )
                         logger.info(
-                            f"[CREATE_TASK] Dedup: phase already has active task {existing.id[:8]}, returning it"
+                            f"[CREATE_TASK] Phase has active task {existing.id[:8]} but "
+                            f"new description differs (similarity={similarity:.2f}) — "
+                            "creating a new task rather than deduping"
                         )
+                finally:
+                    if _s.is_active:
                         _s.close()
-                        return CreateTaskResponse(
-                            task_id=existing.id,
-                            enriched_description=existing.enriched_description
-                            or existing.raw_description,
-                            assigned_agent_id=existing.assigned_agent_id
-                            or "unassigned",
-                            estimated_completion_time=30,
-                            status="queued",
+
+            # Guard: don't let a phase agent seed the FIRST task for a phase
+            # other than its own. Agents have no reliable way to know a
+            # workflow's real phase order/names (e.g. assuming "scope review
+            # is phase 2, so phase 3 must be implementation" when phase 3 is
+            # actually architecture_design) — guessing wrong here has created
+            # tasks with content for the wrong phase, pre-empting the
+            # orchestrator's own correctly-labeled auto-transition (which
+            # only fires if no task exists yet for that phase). Agents with
+            # no currently-assigned task (SDK/root/system agents bootstrapping
+            # a workflow) are exempt.
+            if dedup_phase_id:
+                _s = server_state.db_manager.get_session()
+                try:
+                    from src.core.database import Phase as PhaseModel
+                    from src.core.database import Task as TaskModel
+
+                    own_task = (
+                        _s.query(TaskModel)
+                        .filter(
+                            TaskModel.assigned_agent_id == agent_id,
+                            TaskModel.workflow_id == request.workflow_id,
                         )
+                        .order_by(TaskModel.created_at.desc())
+                        .first()
+                    )
+                    if own_task and own_task.phase_id:
+                        own_phase = (
+                            _s.query(PhaseModel).filter_by(id=own_task.phase_id).first()
+                        )
+                        target_phase = (
+                            _s.query(PhaseModel).filter_by(id=dedup_phase_id).first()
+                        )
+                        if (
+                            own_phase
+                            and target_phase
+                            and own_phase.order != target_phase.order
+                        ):
+                            logger.error(
+                                f"[CREATE_TASK] REJECTED: agent {agent_id[:8]} (own phase "
+                                f"'{own_phase.name}', order {own_phase.order}) tried to seed "
+                                f"the first task for phase '{target_phase.name}' "
+                                f"(order {target_phase.order})"
+                            )
+                            raise HTTPException(
+                                status_code=400,
+                                detail=(
+                                    f"Refusing to create a task for phase '{target_phase.name}' "
+                                    f"(order {target_phase.order}) — you are working phase "
+                                    f"'{own_phase.name}' (order {own_phase.order}). Only create "
+                                    "subtasks within your OWN current phase. The orchestrator "
+                                    "automatically creates the next phase's task, with the "
+                                    "correct name and required output, once you mark your own "
+                                    "task done — do not try to create it yourself."
+                                ),
+                            )
                 finally:
                     if _s.is_active:
                         _s.close()

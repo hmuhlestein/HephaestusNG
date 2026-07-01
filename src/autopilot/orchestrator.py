@@ -2305,6 +2305,28 @@ def _advance_phases(workflow_id: str, logger: OrchestratorLogger) -> bool:
                     .count()
                 )
                 if done_count == 0:
+                    # Check if ALL tasks are failed — retry them
+                    failed_count = (
+                        db.query(Task)
+                        .filter_by(phase_id=phase.id, status="failed")
+                        .count()
+                    )
+                    total_count = db.query(Task).filter_by(phase_id=phase.id).count()
+                    if failed_count > 0 and failed_count == total_count:
+                        logger.info(
+                            f"[PHASE-ADVANCE] Phase {phase.name} has {failed_count} failed tasks "
+                            f"and 0 done — retrying all"
+                        )
+                        # Reset all failed tasks to pending for retry
+                        db.query(Task).filter(
+                            Task.phase_id == phase.id,
+                            Task.status == "failed",
+                        ).update({
+                            Task.status: "pending",
+                            Task.failure_reason: None,
+                        })
+                        db.commit()
+                        return True
                     continue  # No completed tasks yet
 
                 # Phase is complete — fire transition

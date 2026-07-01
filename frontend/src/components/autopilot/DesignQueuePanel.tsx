@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { motion } from 'framer-motion';
 import {
@@ -20,7 +20,8 @@ import {
 import { CSS } from '@dnd-kit/utilities';
 import {
   Plus, Trash2, FileText, Clock, GripVertical, Search, ListOrdered, RefreshCw,
-  CheckCircle2, XCircle, Loader2, Pause, Play, Upload, ChevronRight, ChevronDown, Layers
+  CheckCircle2, XCircle, Loader2, Pause, Play, Upload, ChevronRight, ChevronDown, Layers,
+  PauseCircle
 } from 'lucide-react';
 import { apiService } from '@/services/api';
 import { Button } from '@/components/ui/button';
@@ -68,34 +69,41 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
   }, [projectId, queryClient]);
 
 
-  // Fetch status for each design
+  // Fetch status for each design. Pulled out of the effect (via useCallback)
+  // so the pause/resume mutation can call it directly for an immediate
+  // refresh — this state was previously only ever updated by its own 10s
+  // timer, completely disconnected from the pause/resume mutation's
+  // invalidate/refetch calls (those only touch the design *list* query, which
+  // holds no status/workflowId data). That meant the Pause/Play icon relied
+  // on this button's own `status` prop, which could take up to 10s to catch
+  // up after a click — and looked like it "didn't change" if you weren't
+  // watching that long.
+  const fetchStatuses = useCallback(async () => {
+    if (!projectId || !designs || designs.length === 0) return;
+    const statuses: Record<string, { status: string; workflowId?: string }> = {};
+    await Promise.all(
+      designs.map(async (d: any) => {
+        try {
+          const status = await apiService.getAutopilotProjectDesignStatus(projectId, d.filename);
+          statuses[d.filename] = {
+            status: status.status || 'pending',
+            workflowId: status.workflows?.[0]?.id
+          };
+        } catch {
+          statuses[d.filename] = { status: 'pending' };
+        }
+      })
+    );
+    setDesignStatuses(statuses);
+  }, [projectId, designs]);
+
   useEffect(() => {
     if (!projectId || !designs || designs.length === 0) return;
-    
-    const fetchStatuses = async () => {
-      const statuses: Record<string, { status: string; workflowId?: string }> = {};
-      await Promise.all(
-        designs.map(async (d: any) => {
-          try {
-            const status = await apiService.getAutopilotProjectDesignStatus(projectId, d.filename);
-            statuses[d.filename] = {
-              status: status.status || 'pending',
-              workflowId: status.workflows?.[0]?.id
-            };
-          } catch {
-            statuses[d.filename] = { status: 'pending' };
-          }
-        })
-      );
-      setDesignStatuses(statuses);
-    };
-    
     fetchStatuses();
-    
     // Periodically refresh statuses every 10 seconds
     const statusInterval = setInterval(fetchStatuses, 10000);
     return () => clearInterval(statusInterval);
-  }, [projectId, designs]);
+  }, [projectId, designs, fetchStatuses]);
 
   const items = localOrder ?? designs ?? [];
 
@@ -169,6 +177,10 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
       queryClient.invalidateQueries({ queryKey: ['autopilot-project-designs', projectId] });
       // Force refetch of designs to trigger status re-fetch
       queryClient.refetchQueries({ queryKey: ['autopilot-project-designs', projectId] });
+      // designStatuses (which drives the Pause/Play icon) is populated by its
+      // own separate 10s timer, not by the query above — refresh it now so
+      // the button updates immediately instead of up to 10s later.
+      fetchStatuses();
       toast.success('Workflow updated');
     },
     onError: () => {
@@ -350,10 +362,15 @@ const StatusBadge: React.FC<{ status: string }> = ({ status }) => {
 
 const TASK_STATUS_CONFIG: Record<string, { color: string; icon: React.ReactNode }> = {
   pending: { color: 'text-gray-400', icon: <Clock className="w-4 h-4" /> },
+  queued: { color: 'text-blue-500', icon: <Loader2 className="w-4 h-4 animate-spin" /> },
   assigned: { color: 'text-blue-500', icon: <Loader2 className="w-4 h-4 animate-spin" /> },
   in_progress: { color: 'text-violet-500', icon: <Loader2 className="w-4 h-4 animate-spin" /> },
+  under_review: { color: 'text-violet-500', icon: <Loader2 className="w-4 h-4 animate-spin" /> },
+  validation_in_progress: { color: 'text-violet-500', icon: <Loader2 className="w-4 h-4 animate-spin" /> },
+  needs_work: { color: 'text-violet-500', icon: <Loader2 className="w-4 h-4 animate-spin" /> },
   done: { color: 'text-green-500', icon: <CheckCircle2 className="w-4 h-4" /> },
   failed: { color: 'text-red-500', icon: <XCircle className="w-4 h-4" /> },
+  blocked: { color: 'text-amber-500', icon: <PauseCircle className="w-4 h-4" /> },
 };
 
 const TaskStatusIcon: React.FC<{ status: string }> = ({ status }) => {
@@ -593,7 +610,7 @@ const FeatureRow: React.FC<{
     try {
       if (feature.status === 'active') {
         await apiService.pauseFeature(feature.id);
-      } else if (feature.status === 'paused') {
+      } else if (feature.status === 'paused' || feature.status === 'failed') {
         await apiService.resumeFeature(feature.id);
       }
       onFeatureUpdate?.();
@@ -661,7 +678,13 @@ const FeatureRow: React.FC<{
                 key={task.id}
                 className="flex items-center gap-2 px-2 py-1.5 bg-white rounded border border-gray-100 cursor-pointer hover:bg-gray-50 hover:border-gray-200 transition-colors"
               >
-                <TaskStatusIcon status={task.agent_status === 'terminated' ? 'failed' : task.status} />
+                <TaskStatusIcon
+                  status={
+                    task.status !== 'blocked' && task.agent_status === 'terminated'
+                      ? 'failed'
+                      : task.status
+                  }
+                />
                 <div
                   className="flex-1 min-w-0"
                   onClick={() => onTaskClick(task.id)}

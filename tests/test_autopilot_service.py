@@ -234,3 +234,63 @@ class TestGetAutopilotService:
         s1 = get_autopilot_service()
         s2 = get_autopilot_service()
         assert s1 is s2
+
+
+class TestRunningStatePersistence:
+    """A backend restart kills AutopilotService's in-process asyncio task
+    with nothing to resume it — these persist/restore the run params across
+    that restart so the pipeline driver comes back on its own instead of
+    silently stalling forever (see src/mcp/server.py startup_event)."""
+
+    @pytest.fixture
+    def service(self):
+        from src.autopilot.service import AutopilotService
+
+        return AutopilotService()
+
+    @pytest.fixture(autouse=True)
+    def _isolate_state_file(self, tmp_path, monkeypatch):
+        # Redirect the module-level state path so tests never touch the
+        # real ~/.hephaestus/autopilot/running_pipeline.json
+        import src.autopilot.service as service_module
+
+        monkeypatch.setattr(
+            service_module, "_RUNNING_STATE_PATH", tmp_path / "running_pipeline.json"
+        )
+
+    @pytest.mark.asyncio
+    async def test_start_persists_state(self, service, tmp_path):
+        project = tmp_path / "project"
+        project.mkdir()
+        (project / ".git").mkdir()
+
+        with patch.object(service, "_run_pipeline", new_callable=AsyncMock):
+            await service.start(str(project), max_iterations=7)
+
+            persisted = service.load_persisted_state()
+            assert persisted is not None
+            assert persisted["project_path"] == str(project)
+            assert persisted["max_iterations"] == 7
+
+            await service.stop()
+
+    @pytest.mark.asyncio
+    async def test_stop_clears_persisted_state(self, service, tmp_path):
+        project = tmp_path / "project"
+        project.mkdir()
+        (project / ".git").mkdir()
+
+        with patch.object(service, "_run_pipeline", new_callable=AsyncMock):
+            await service.start(str(project))
+            assert service.load_persisted_state() is not None
+
+            await service.stop()
+            assert service.load_persisted_state() is None
+
+    def test_load_persisted_state_when_absent(self, service):
+        assert service.load_persisted_state() is None
+
+    def test_clear_persisted_state_when_absent_is_safe(self, service):
+        # Should not raise even if nothing was ever persisted
+        service.clear_persisted_state()
+        assert service.load_persisted_state() is None

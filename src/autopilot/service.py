@@ -10,14 +10,22 @@ This fixes:
 """
 
 import asyncio
+import json
 import logging
 import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from src.core.constants import DESIGN_SUBDIR
+from src.core.constants import AUTOPILOT_STATE_DIR, DESIGN_SUBDIR
 
 logger = logging.getLogger(__name__)
+
+# Persisted across backend restarts so a running pipeline can resume itself —
+# without this, an in-flight pipeline goes silently dead on any backend
+# restart/crash (this class lives entirely in-process, see module docstring),
+# and nothing ever notices except the separate diagnostic monitor process,
+# which only patches over the gap much later and much more crudely.
+_RUNNING_STATE_PATH = Path(AUTOPILOT_STATE_DIR) / "running_pipeline.json"
 
 
 class AutopilotService:
@@ -103,7 +111,43 @@ class AutopilotService:
         self._task = asyncio.create_task(self._run_pipeline())
         logger.info(f"Autopilot service started for {project}")
 
+        self._persist_running_state()
+
         return {"started": True, "project": str(project)}
+
+    def _persist_running_state(self) -> None:
+        """Write current run params so a restart can resume this pipeline."""
+        try:
+            _RUNNING_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+            _RUNNING_STATE_PATH.write_text(
+                json.dumps(
+                    {
+                        "project_path": self._project_path,
+                        "design_queue": self._design_queue,
+                        "max_iterations": self._max_iterations,
+                    }
+                )
+            )
+        except Exception as e:
+            logger.warning(f"Failed to persist autopilot running state: {e}")
+
+    @staticmethod
+    def clear_persisted_state() -> None:
+        """Remove the persisted run state (deliberate stop — don't auto-resume)."""
+        try:
+            _RUNNING_STATE_PATH.unlink(missing_ok=True)
+        except Exception as e:
+            logger.warning(f"Failed to clear persisted autopilot state: {e}")
+
+    @staticmethod
+    def load_persisted_state() -> Optional[Dict[str, Any]]:
+        """Read persisted run params, if any (used to auto-resume on startup)."""
+        try:
+            if _RUNNING_STATE_PATH.exists():
+                return json.loads(_RUNNING_STATE_PATH.read_text())
+        except Exception as e:
+            logger.warning(f"Failed to read persisted autopilot state: {e}")
+        return None
 
     async def stop(self) -> Dict[str, Any]:
         """Stop the autopilot pipeline.
@@ -116,6 +160,7 @@ class AutopilotService:
 
         self._stop_event.set()
         self._running = False
+        self.clear_persisted_state()
 
         # Wait for task to finish (with timeout)
         if self._task:
