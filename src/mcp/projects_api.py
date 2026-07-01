@@ -129,10 +129,15 @@ async def create_project(req: ProjectCreate):
             updated_at=proj.updated_at.isoformat() if proj.updated_at else "",
         )
 
-    # Apply active project OUTSIDE the DB session
+    # Apply active project OUTSIDE the DB session — proj is detached once the
+    # session above closes, so pass a plain object instead of touching the
+    # ORM instance (accessing proj.base_dir here would raise
+    # DetachedInstanceError, silently swallowed by the except below).
     if is_first:
         try:
-            _apply_active_project(proj)
+            from types import SimpleNamespace
+
+            _apply_active_project(SimpleNamespace(base_dir=result.base_dir))
         except Exception as e:
             logger.warning(f"Created project but failed to activate at runtime: {e}")
 

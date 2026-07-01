@@ -54,7 +54,8 @@ async def create_task(
         done_definition: Clear criteria for completion
         agent_id: Your agent ID (REQUIRED - found in your initial prompt under "Your Agent ID:")
         workflow_id: Your workflow ID (REQUIRED - found in your initial prompt under "Your Workflow ID:")
-        phase_id: Phase ID for the task (REQUIRED - MUST specify which workflow phase this task belongs to, e.g., 1, 2, 3)
+        phase_id: Phase order number for the task (REQUIRED). Use YOUR OWN phase's number — the
+            same one from your task prompt — to create a SUBTASK within your current phase.
         priority: Task priority (low/medium/high)
         cwd: Current working directory for the task (optional)
         ticket_id: Associated ticket ID (OPTIONAL for SDK/root tasks, REQUIRED when ticket tracking is enabled for MCP agents)
@@ -63,7 +64,16 @@ async def create_task(
     - agent_id: ALWAYS use YOUR agent ID from the prompt header (looks like "6a062184-e189-4d8d-8376-89da987b9996").
       NEVER use placeholder values like 'agent-mcp' - they will cause authorization failures.
     - workflow_id: ALWAYS use YOUR workflow ID from the prompt header (looks like "a1b2c3d4-e5f6-7890-abcd-ef1234567890").
-    - phase_id: REQUIRED - Specify the workflow phase number (e.g., 1 for Phase 1, 2 for Phase 2, etc.)
+    - phase_id: REQUIRED — pass YOUR OWN current phase number (same one shown in your task prompt).
+
+    DO NOT use this tool to create the NEXT pipeline phase's task, and do not guess a phase
+    number based on what you assume comes "next" (e.g. "scope review is phase 2, so phase 3
+    must be implementation"). The pipeline's phase order and names are workflow-specific and
+    not a fixed universal sequence — guessing has previously caused full implementation work
+    to be filed under an architecture-design phase, corrupting the pipeline. The orchestrator
+    automatically creates the correct next-phase task, with the correct name and required
+    output, once you mark your own task done. Only use this tool for subtasks within your
+    OWN phase.
 
     IMPORTANT FOR TICKET TRACKING:
     - When ticket tracking is active, MCP agents MUST provide ticket_id
@@ -150,7 +160,11 @@ async def get_tasks(status: str = "all") -> str:
 
 @mcp.tool()
 async def save_memory(
-    content: str, agent_id: str, memory_type: str = "discovery"
+    content: str,
+    agent_id: str,
+    memory_type: str = "discovery",
+    workflow_id: str = None,
+    task_id: str = None,
 ) -> str:
     """Save a memory to Hephaestus knowledge base.
 
@@ -158,6 +172,9 @@ async def save_memory(
         content: The memory content to save
         agent_id: Your agent ID (CRITICAL: must match YOUR agent ID from your initial prompt)
         memory_type: Type of memory (error_fix/discovery/decision/learning/warning/codebase_knowledge)
+        workflow_id: Not used by this tool — accepted and ignored so agents that pass it
+            (per the general "include workflow_id on every call" habit) don't get rejected.
+        task_id: Not used by this tool — accepted and ignored for the same reason.
 
     CRITICAL: Use your actual agent UUID from your initial prompt.
     Example: agent_id="84f15f6c-35b1-4d57-97ac-92a3c0c94d29"
@@ -313,11 +330,16 @@ Iteration: {result.get("iteration", "N/A")}"""
 
 
 @mcp.tool()
-async def validate_my_agent_id(agent_id: str) -> str:
+async def validate_my_agent_id(
+    agent_id: str, workflow_id: str = None, task_id: str = None
+) -> str:
     """Validate that your agent ID has the correct format before using it.
 
     Args:
         agent_id: The agent ID you plan to use
+        workflow_id: Not used by this tool — accepted and ignored so agents that pass it
+            (per the general "include workflow_id on every call" habit) don't get rejected.
+        task_id: Not used by this tool — accepted and ignored for the same reason.
 
     Returns:
         Validation result with helpful error messages if invalid

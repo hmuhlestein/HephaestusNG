@@ -797,14 +797,6 @@ class AgentManager:
 📋 Task ID: {task.id}
 🔄 Workflow ID: {workflow_id if workflow_id else "N/A (standalone task)"}
 📁 {cwd_info}
-
-⚠️ CRITICAL WORKFLOW INFORMATION:
-When using MCP tools, you MUST include:
-- agent_id: {agent_id}
-- workflow_id: {workflow_id if workflow_id else "N/A"}
-
-This ensures your work stays within this workflow execution.
-All tasks and tickets you create must use workflow_id: {workflow_id if workflow_id else "N/A"}
 """
 
         logger.info(
@@ -816,9 +808,10 @@ All tasks and tickets you create must use workflow_id: {workflow_id if workflow_
         if hasattr(task, "phase_id") and task.phase_id:
             base_message += f"\nPhase ID: {task.phase_id}"
 
-            # Add workflow description if available
+            # Add workflow description if available (ID already stated in the
+            # header above — no need to repeat it here)
             if workflow_description:
-                base_message += f"\n\n=== WORKFLOW CONTEXT ===\nWorkflow ID: {workflow_id}\nWorkflow Description: {workflow_description}\n"
+                base_message += f"\n\n=== WORKFLOW CONTEXT ===\nWorkflow Description: {workflow_description}\n"
 
             logger.info(f"=== PHASE CONTEXT DEBUG for task {task.id} ===")
             logger.info(f"Task has phase_id: {task.phase_id}")
@@ -919,14 +912,18 @@ NOTE: Having a workflow-level goal does NOT mean you skip hephaestus_update_task
             # Compact instructions for workflow phase agents — keep context window lean
             base_message += f"""
 
-INSTRUCTIONS (include agent_id="{agent_id}" and workflow_id="{workflow_id if workflow_id else "N/A"}" on every MCP call):
+INSTRUCTIONS (always pass agent_id="{agent_id}"; pass workflow_id="{workflow_id if workflow_id else "N/A"}" only for tools that accept it — save_memory and validate_my_agent_id do NOT take workflow_id, don't pass it to those):
 - Complete the task described above
 - hephaestus_update_task_status(task_id="{task.id}", status="done") — REQUIRED when done
 - hephaestus_update_task_status(task_id="{task.id}", status="failed", failure_reason="...") — on unrecoverable error
-- hephaestus_save_memory(content="...", memory_type="<type>"): save as you go, not just at end
+- hephaestus_save_memory(content="...", agent_id="{agent_id}", memory_type="<type>"): save as you go, not just at end
   types: error_fix | discovery | decision | learning | warning | codebase_knowledge
 - hephaestus_search_memory(query="..."): search before reinventing
-- hephaestus_create_task(description="...", done_definition="...", phase=N, workflow_id="{workflow_id if workflow_id else "N/A"}"): create subtasks
+- hephaestus_create_task(description="...", done_definition="...", phase=N, workflow_id="{workflow_id if workflow_id else "N/A"}"): create SUBTASKS within YOUR OWN current phase only.
+  Do NOT use this to create the next pipeline phase's task — the orchestrator creates that
+  automatically, with the correct phase name and required output, once you mark this task done.
+  Manually guessing a future phase number here has caused tasks to be created under the wrong
+  phase (e.g. full implementation work filed under an architecture-design phase) — never do this.
 {phase_context_section}
 Begin now.
 """

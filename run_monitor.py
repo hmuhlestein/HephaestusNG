@@ -27,13 +27,15 @@ from src.memory.rag import RAGSystem
 from src.monitoring.monitor import MonitoringLoop
 from src.phases import PhaseManager
 
-# Configure logging
+# Configure logging. Only log to stdout — the process is launched with stdout
+# redirected to ~/.hephaestus/logs/monitor.log (see src/cli/commands/start.py),
+# so a second FileHandler here would just duplicate every line into a stray
+# ./logs/monitor.log under the repo (and monitor.stdout.log historically).
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     handlers=[
         logging.StreamHandler(sys.stdout),
-        logging.FileHandler("logs/monitor.log", mode="a"),
     ],
 )
 

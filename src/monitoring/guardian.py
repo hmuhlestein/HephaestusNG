@@ -70,6 +70,13 @@ class Guardian:
         # Track steering history to avoid over-messaging
         self.steering_history: Dict[str, List[Dict[str, Any]]] = {}
 
+        # Track consecutive same-type flags per agent, so soft concerns
+        # (drifting/off_track/etc) require confirmation across >=2 passes
+        # before Guardian acts on them, rather than a single LLM trajectory
+        # judgment call. Genuinely stuck/idle agents still act on the first
+        # flag — waiting there only prolongs a frozen agent.
+        self._consecutive_flags: Dict[str, Dict[str, Any]] = {}
+
     async def analyze_agent_with_trajectory(
         self,
         agent: Agent,
@@ -325,6 +332,51 @@ class Guardian:
             f"last resort steering (parent already detected impasse)"
         )
 
+        # Genuinely stuck/idle agents act on the first flag — waiting only
+        # prolongs a frozen agent. Everything else (drifting, off_track,
+        # over_engineering, confused, ...) is a single LLM trajectory
+        # judgment call and can be wrong; require the SAME type to be flagged
+        # on >=2 consecutive passes before acting, matching what this
+        # docstring already claims ("flagged multiple times") but the caller
+        # never actually enforced. This is what let a single off-track
+        # judgment interrupt a legitimate in-progress file write.
+        NEEDS_CONFIRMATION = {
+            SteeringType.DRIFTING.value,
+            SteeringType.OFF_TRACK.value,
+            SteeringType.OVER_ENGINEERING.value,
+            SteeringType.CONFUSED.value,
+            SteeringType.VIOLATING_CONSTRAINTS.value,
+        }
+        if steering_type in NEEDS_CONFIRMATION:
+            flag_state = self._consecutive_flags.get(agent.id)
+            now = datetime.utcnow()
+            stale = (
+                flag_state is None
+                or flag_state["type"] != steering_type
+                or (now - flag_state["last_seen"]) > timedelta(minutes=10)
+            )
+            if stale:
+                self._consecutive_flags[agent.id] = {
+                    "type": steering_type,
+                    "count": 1,
+                    "last_seen": now,
+                }
+                logger.info(
+                    f"[GUARDIAN] Agent {agent.id[:8]} flagged {steering_type} "
+                    f"(1/2) — waiting for a second consecutive flag before acting"
+                )
+                return
+            flag_state["count"] += 1
+            flag_state["last_seen"] = now
+            if flag_state["count"] < 2:
+                logger.info(
+                    f"[GUARDIAN] Agent {agent.id[:8]} flagged {steering_type} "
+                    f"({flag_state['count']}/2) — waiting for confirmation before acting"
+                )
+                return
+            # Confirmed on a second consecutive pass — clear and proceed to act.
+            del self._consecutive_flags[agent.id]
+
         # Check cooldown - max 1 steering per 10 minutes (longer than before)
         if not self._should_steer_agent(agent.id):
             logger.info(
@@ -345,10 +397,15 @@ class Guardian:
             )
             return
 
-        # Break a possible thought-loop first (Esc for pi, polymorphic per CLI), then
-        # send the steering message so it's actually read rather than queued behind a
-        # never-ending generation.
-        await self.agent_manager.send_recovery_keystrokes(agent.id)
+        # Only break a possible thought-loop (Esc for pi, polymorphic per CLI)
+        # for genuinely stuck/idle agents — that's the one case where an
+        # in-flight generation is actually a non-terminating loop worth
+        # killing. For softer concerns, the agent is doing finite, possibly
+        # valid work (e.g. a large file write); interrupting it destroys
+        # real progress for no benefit, since the steering message will be
+        # read at the agent's next natural pause anyway.
+        if steering_type in (SteeringType.STUCK.value, "idle"):
+            await self.agent_manager.send_recovery_keystrokes(agent.id)
         formatted_message = f"\n[GUARDIAN - LAST RESORT]: {message}\n"
         await self.agent_manager.send_message_to_agent(agent.id, formatted_message)
         self._record_steering(agent.id, steering_type, message)

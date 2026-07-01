@@ -957,12 +957,17 @@ YOUR JOB:
 
         logger.info(f"[REPAIR-AGENT] Task created: {task_id[:8]}")
 
-        # Create the agent
+        # Create the agent. This runs on a background executor thread (not an
+        # awaited request path), so a generous timeout is safe — but it still
+        # needs to exceed the agent's own ~25s+ tmux/pi init delay
+        # (src/agents/manager.py), otherwise this silently returns None while
+        # the agent keeps starting up in the background, leaving the task
+        # never linked to it (same failure mode fixed in resume_feature).
         logger.info(f"[REPAIR-AGENT] Creating agent for task {task_id[:8]}")
         agent_data = api_post(
             "/api/create_agent_for_task",
             {"task_id": task_id, "workflow_id": wf_id, "phase_id": "repair-review"},
-            timeout=30,
+            timeout=120,
         )
 
         if not agent_data:
@@ -1649,7 +1654,7 @@ async def update_project(project_id: str, req: ProjectUpdate):
 async def delete_project(project_id: str):
     from src.core.database import AutopilotProject, get_db
 
-    replacement_proj = None
+    replacement_base_dir = None
 
     with get_db() as db:
         proj = db.query(AutopilotProject).get(project_id)
@@ -1666,13 +1671,18 @@ async def delete_project(project_id: str):
             )
             if next_proj:
                 next_proj.is_active = True
-                replacement_proj = next_proj
+                replacement_base_dir = next_proj.base_dir
 
-    if replacement_proj:
+    if replacement_base_dir:
         try:
+            from types import SimpleNamespace
+
             from src.mcp.projects_api import _apply_active_project
 
-            _apply_active_project(replacement_proj)
+            # Pass a plain object, not the ORM instance — its session is
+            # already closed here, so touching an attribute on it would
+            # raise DetachedInstanceError.
+            _apply_active_project(SimpleNamespace(base_dir=replacement_base_dir))
         except Exception as e:
             logger.error(f"Failed to activate replacement project: {e}")
 
@@ -2043,20 +2053,28 @@ async def get_project_design_status(project_id: str, filename: str):
             design_status = _design.status if _design else None
             _design_id = _design.id if _design else None
 
-        if design_status and design_status not in ("pending", "unknown"):
+        # A live 'active'/'paused' workflow signal must win over the coarser
+        # design_status field — that field is only updated by run_design_aggregate
+        # at the end of a full pipeline run, so it never reflects a workflow
+        # being paused mid-run. Without this, design_status stays 'active'
+        # forever after a pause, the pause/resume button never flips to
+        # 'resume', and clicking pause looks like it did nothing.
+        _wf_statuses = [wf.status for wf in matching_workflows]
+        if any(s == "active" for s in _wf_statuses):
+            overall_status = "active"
+        elif _wf_statuses and any(s == "paused" for s in _wf_statuses):
+            overall_status = "paused"
+        elif design_status and design_status not in ("pending", "unknown"):
             overall_status = design_status
         elif not matching_workflows:
             overall_status = "pending"
         else:
-            statuses = [wf.status for wf in matching_workflows]
-            if any(s == "active" for s in statuses):
-                overall_status = "active"
-            elif all(s == "completed" for s in statuses):
+            if all(s == "completed" for s in _wf_statuses):
                 overall_status = "completed"
-            elif any(s == "failed" for s in statuses):
+            elif any(s == "failed" for s in _wf_statuses):
                 overall_status = "failed"
             else:
-                overall_status = statuses[0] if statuses else "unknown"
+                overall_status = _wf_statuses[0] if _wf_statuses else "unknown"
 
         # Find feature folder
         feature_folder = None
@@ -2116,13 +2134,28 @@ async def get_project_design_status(project_id: str, filename: str):
                         "completed_at": t.completed_at.isoformat() if t.completed_at else None,
                         "agent_id": t.assigned_agent_id,
                         "agent_status": agent_status,
+                        # raw_description (not the enriched/display text, which
+                        # rewords it and drops the prefix) is what actually
+                        # carries the DIAGNOSTIC: marker — used below to
+                        # exclude these from feature-status derivation.
+                        "_is_diagnostic": (t.raw_description or "").startswith(
+                            "DIAGNOSTIC:"
+                        ),
                     })
             
-            # Derive feature status from task statuses, but respect DB 'paused'
+            # Derive feature status from task statuses, but respect DB 'paused'.
+            # Exclude monitor-generated DIAGNOSTIC tasks from this — they're not
+            # real feature work, and a stray leftover one (e.g. from a stalled-
+            # workflow diagnostic run) makes "all real tasks done" look like
+            # "mixed statuses", falling through to the stale DB value forever
+            # (this is what made a completed feature's pause/resume button
+            # silently no-op — the workflow had already finished, but the
+            # feature's own status field never got the memo).
+            real_feat_tasks = [t for t in feat_tasks if not t.get("_is_diagnostic")]
             if feat.status == "paused":
                 feat_status = "paused"
-            elif feat_tasks:
-                task_statuses = {t["status"] for t in feat_tasks}
+            elif real_feat_tasks:
+                task_statuses = {t["status"] for t in real_feat_tasks}
                 if task_statuses == {"done"}:
                     feat_status = "completed"
                 elif "in_progress" in task_statuses or "assigned" in task_statuses:
@@ -2130,16 +2163,29 @@ async def get_project_design_status(project_id: str, filename: str):
                 elif "failed" in task_statuses:
                     feat_status = "failed"
                 elif task_statuses == {"pending"}:
-                    feat_status = "pending"
+                    # No task has started yet — trust the DB status (set by the
+                    # orchestrator when the feature pipeline launches, before any
+                    # task exists) instead of forcing "pending" and hiding the
+                    # active/failed state from the UI.
+                    feat_status = feat.status
                 else:
                     feat_status = feat.status
             else:
                 feat_status = feat.status
 
+            # Self-heal the DB column too — other code (pause/resume,
+            # run_design_aggregate) reads Feature.status directly, not this
+            # derived value, so a stale row would keep confusing them even
+            # though this response now shows the right thing.
+            if feat_status in ("completed", "failed") and feat.status != feat_status:
+                feat.status = feat_status
+                db.commit()
+
             features.append({
                 "id": feat.id,
                 "name": feat.name,
                 "feature_key": feat.feature_key,
+                "workflow_id": feat.workflow_id,
                 "status": feat_status,
                 "scope": feat.scope or "",
                 "tasks": feat_tasks,
@@ -2239,8 +2285,8 @@ async def list_features():
 
 @router.post("/features/{feature_id}/pause")
 async def pause_feature(feature_id: str):
-    """Pause a feature's workflow."""
-    from src.core.database import Feature, Workflow, get_db
+    """Pause a feature's workflow and block its in-flight child tasks."""
+    from src.core.database import Agent, Feature, Task, Workflow, get_db
 
     with get_db() as db:
         feature = db.query(Feature).filter_by(id=feature_id).first()
@@ -2255,16 +2301,37 @@ async def pause_feature(feature_id: str):
         if wf.status != "active":
             return {"success": True, "message": f"Workflow already {wf.status}"}
 
+        # Terminate any agent actively working a task on this feature, and mark
+        # every not-yet-done task 'blocked' so the UI reflects the pause and the
+        # orchestrator will not advance them until resume.
+        active_tasks = (
+            db.query(Task)
+            .filter(
+                Task.workflow_id == feature.workflow_id,
+                Task.status.in_(["pending", "queued", "assigned", "in_progress"]),
+            )
+            .all()
+        )
+        for task in active_tasks:
+            if task.assigned_agent_id:
+                agent = db.query(Agent).filter_by(id=task.assigned_agent_id).first()
+                if agent and agent.status in ("working", "starting", "idle"):
+                    agent.status = "terminated"
+            task.status = "blocked"
+
         wf.status = "paused"
         feature.status = "paused"
         db.commit()
-        return {"success": True, "message": f"Paused feature {feature.name}"}
+        return {
+            "success": True,
+            "message": f"Paused feature {feature.name} ({len(active_tasks)} task(s) blocked)",
+        }
 
 
 @router.post("/features/{feature_id}/resume")
 async def resume_feature(feature_id: str):
-    """Resume a paused or failed feature's workflow."""
-    from src.core.database import Feature, Workflow, get_db
+    """Resume a paused or failed feature: recover blocked, failed, and errored tasks."""
+    from src.core.database import Agent, Feature, Task, Workflow, get_db
 
     with get_db() as db:
         feature = db.query(Feature).filter_by(id=feature_id).first()
@@ -2272,19 +2339,103 @@ async def resume_feature(feature_id: str):
             raise HTTPException(status_code=404, detail="Feature not found")
         if not feature.workflow_id:
             raise HTTPException(status_code=400, detail="Feature has no linked workflow")
+        workflow_id = feature.workflow_id
+        feature_name = feature.name
 
-        wf = db.query(Workflow).filter_by(id=feature.workflow_id).first()
+        wf = db.query(Workflow).filter_by(id=workflow_id).first()
         if not wf:
             raise HTTPException(status_code=404, detail="Workflow not found")
 
-        # Resume workflow if paused
-        if wf.status == "paused":
+        # Resume workflow if paused or failed
+        if wf.status in ("paused", "failed"):
             wf.status = "active"
+
+        # Recover blocked/failed tasks, plus any task still marked
+        # assigned/in_progress whose agent was terminated (errored/orphaned
+        # rather than cleanly failed) — pressing resume should retry all of these.
+        candidates = (
+            db.query(Task)
+            .filter(
+                Task.workflow_id == workflow_id,
+                Task.status.in_(["blocked", "failed", "assigned", "in_progress"]),
+            )
+            .all()
+        )
+        restartable = []
+        for t in candidates:
+            if t.status in ("blocked", "failed"):
+                restartable.append(t)
+            elif t.assigned_agent_id:
+                agent = db.query(Agent).filter_by(id=t.assigned_agent_id).first()
+                if not agent or agent.status == "terminated":
+                    restartable.append(t)
+
+        to_restart = [(t.id, t.phase_id) for t in restartable]
+        for t in restartable:
+            t.status = "pending"
+            t.failure_reason = None
+            t.assigned_agent_id = None
 
         # Always set feature to active on resume
         feature.status = "active"
         db.commit()
-        return {"success": True, "message": f"Resumed feature {feature.name}"}
+
+    # Spawn a fresh agent for each restarted task. This runs in-process
+    # (not a self-HTTP call) and is fired off in the background: agent
+    # initialization can legitimately take 25s+, so awaiting it here would
+    # block the response and (as a prior version did via a synchronous HTTP
+    # call to this same server with a 30s timeout) time out before the agent
+    # ever finished starting, leaving the task stuck at 'pending' forever.
+    for task_id, phase_id in to_restart:
+        asyncio.create_task(_spawn_agent_for_task(task_id, phase_id))
+
+    return {
+        "success": True,
+        "message": f"Resumed feature {feature_name} — restarting {len(to_restart)} task(s)",
+    }
+
+
+async def _spawn_agent_for_task(task_id: str, phase_id: Optional[str]) -> None:
+    """Create an agent for a task, mirroring /api/create_agent_for_task in server.py."""
+    from src.core.database import Task
+
+    from src.mcp.server import server_state
+
+    session = server_state.db_manager.get_session()
+    try:
+        task = session.query(Task).filter_by(id=task_id).first()
+        if not task:
+            logger.warning(f"[RESUME] Task {task_id} not found, cannot restart")
+            return
+
+        enriched_data = {}
+        if task.enriched_description:
+            enriched_data["enriched_description"] = task.enriched_description
+
+        agent = await server_state.agent_manager.create_agent_for_task(
+            task=task,
+            enriched_data=enriched_data,
+            memories=[],
+            project_context="",
+            agent_type="phase",
+            use_existing_worktree=True,
+        )
+
+        task.assigned_agent_id = agent.id
+        task.status = "in_progress"
+        task.started_at = datetime.utcnow()
+        session.commit()
+        logger.info(f"[RESUME] Restarted task {task_id[:8]} with agent {agent.id[:8]}")
+    except Exception as e:
+        logger.error(f"[RESUME] Failed to restart task {task_id[:8]}: {e}", exc_info=True)
+        session.rollback()
+        task = session.query(Task).filter_by(id=task_id).first()
+        if task:
+            task.status = "failed"
+            task.failure_reason = f"Resume failed to spawn agent: {e}"
+            session.commit()
+    finally:
+        session.close()
 
 
 @router.get("/features/{feature_id}", response_model=FeatureDetail)

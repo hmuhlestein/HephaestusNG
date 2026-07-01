@@ -354,5 +354,97 @@ class TestGuardian:
         assert agent_id not in guardian.steering_history
 
 
+class TestSteerAgentGating:
+    """Regression coverage for the incident where a single 'off_track'
+    trajectory judgment interrupted (via a forced Esc keystroke) an agent's
+    legitimate, in-progress file write. Two behaviors were added:
+    1. Soft concerns (drifting/off_track/over_engineering/confused/
+       violating_constraints) require the SAME type flagged on 2 consecutive
+       calls before Guardian acts at all.
+    2. Even once acted on, the interrupt keystroke only fires for stuck/idle
+       — soft concerns get the message without interrupting anything.
+    """
+
+    @pytest.mark.asyncio
+    async def test_stuck_acts_on_first_flag_with_interrupt(
+        self, guardian, mock_agent_manager, mock_db_manager
+    ):
+        agent = Agent(id="agent-stuck", current_task_id="task-1")
+        mock_db_manager.get_session.return_value = Mock()
+
+        await guardian.steer_agent(agent=agent, steering_type="stuck", message="m")
+
+        mock_agent_manager.send_recovery_keystrokes.assert_awaited_once_with(
+            "agent-stuck"
+        )
+        mock_agent_manager.send_message_to_agent.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_idle_acts_on_first_flag_with_interrupt(
+        self, guardian, mock_agent_manager, mock_db_manager
+    ):
+        agent = Agent(id="agent-idle", current_task_id="task-1")
+        mock_db_manager.get_session.return_value = Mock()
+
+        await guardian.steer_agent(agent=agent, steering_type="idle", message="m")
+
+        mock_agent_manager.send_recovery_keystrokes.assert_awaited_once_with(
+            "agent-idle"
+        )
+        mock_agent_manager.send_message_to_agent.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_off_track_does_not_act_on_first_flag(
+        self, guardian, mock_agent_manager, mock_db_manager
+    ):
+        agent = Agent(id="agent-drift", current_task_id="task-1")
+        mock_db_manager.get_session.return_value = Mock()
+
+        await guardian.steer_agent(agent=agent, steering_type="off_track", message="m")
+
+        mock_agent_manager.send_recovery_keystrokes.assert_not_awaited()
+        mock_agent_manager.send_message_to_agent.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_off_track_acts_on_second_consecutive_flag_without_interrupt(
+        self, guardian, mock_agent_manager, mock_db_manager
+    ):
+        agent = Agent(id="agent-drift2", current_task_id="task-1")
+        mock_db_manager.get_session.return_value = Mock()
+
+        await guardian.steer_agent(agent=agent, steering_type="off_track", message="m")
+        await guardian.steer_agent(agent=agent, steering_type="off_track", message="m")
+
+        # Confirmed on the 2nd consecutive flag — message sent, but no
+        # interrupt keystroke, since off_track work may be legitimate and
+        # finite (e.g. an in-progress file write).
+        mock_agent_manager.send_recovery_keystrokes.assert_not_awaited()
+        mock_agent_manager.send_message_to_agent.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_different_type_resets_confirmation_count(
+        self, guardian, mock_agent_manager, mock_db_manager
+    ):
+        agent = Agent(id="agent-drift3", current_task_id="task-1")
+        mock_db_manager.get_session.return_value = Mock()
+
+        await guardian.steer_agent(agent=agent, steering_type="off_track", message="m")
+        # A different soft type shouldn't count toward off_track's confirmation
+        await guardian.steer_agent(agent=agent, steering_type="confused", message="m")
+
+        mock_agent_manager.send_message_to_agent.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_confirmed_flag_state_is_cleared_after_acting(
+        self, guardian, mock_agent_manager, mock_db_manager
+    ):
+        agent = Agent(id="agent-drift4", current_task_id="task-1")
+        mock_db_manager.get_session.return_value = Mock()
+
+        await guardian.steer_agent(agent=agent, steering_type="off_track", message="m")
+        await guardian.steer_agent(agent=agent, steering_type="off_track", message="m")
+        assert "agent-drift4" not in guardian._consecutive_flags
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
