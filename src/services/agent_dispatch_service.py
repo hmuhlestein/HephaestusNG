@@ -57,7 +57,9 @@ class AgentDispatchService:
         working_directory (used by create_task, which honors an
         explicit request.cwd before falling back to the phase).
         """
-        from src.mcp.server import server_state
+        from src.core.app_context import get_app_state
+
+        server_state = get_app_state()
 
         project_context = await server_state.agent_manager.get_project_context()
         if phase_id and server_state.phase_manager:
@@ -109,7 +111,9 @@ class AgentDispatchService:
         variant only adds the phase CLI config lookup on top of what the
         caller already has.
         """
-        from src.mcp.server import server_state
+        from src.core.app_context import get_app_state
+
+        server_state = get_app_state()
 
         session = server_state.db_manager.get_session()
         try:
@@ -130,7 +134,9 @@ class AgentDispatchService:
     @staticmethod
     async def dispatch(task, enriched_data: Dict[str, Any], dispatch_context: Dict[str, Any]):
         """Create an agent for task using the gathered dispatch context."""
-        from src.mcp.server import server_state
+        from src.core.app_context import get_app_state
+
+        server_state = get_app_state()
 
         return await server_state.agent_manager.create_agent_for_task(
             task=task,
@@ -148,7 +154,9 @@ class AgentDispatchService:
     def mark_assigned(task_id: str, agent_id: str, status: str = "assigned") -> None:
         """Update Task.assigned_agent_id/status/started_at after a successful dispatch."""
         from src.core.database import Task
-        from src.mcp.server import server_state
+        from src.core.app_context import get_app_state
+
+        server_state = get_app_state()
 
         session = server_state.db_manager.get_session()
         try:

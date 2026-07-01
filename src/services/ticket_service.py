@@ -392,7 +392,9 @@ class TicketService:
 
             # Broadcast that ticket needs review (will be implemented with API endpoints)
             try:
-                from src.mcp.server import server_state
+                from src.core.app_context import get_app_state
+
+                server_state = get_app_state()
 
                 await server_state.broadcast_update(
                     {
@@ -455,7 +457,9 @@ class TicketService:
                 # Broadcast deletion to UI
                 if deleted:
                     try:
-                        from src.mcp.server import server_state
+                        from src.core.app_context import get_app_state
+
+                        server_state = get_app_state()
 
                         await server_state.broadcast_update(
                             {
@@ -518,7 +522,9 @@ class TicketService:
                 # Broadcast deletion to UI
                 if deleted:
                     try:
-                        from src.mcp.server import server_state
+                        from src.core.app_context import get_app_state
+
+                        server_state = get_app_state()
 
                         await server_state.broadcast_update(
                             {
@@ -554,7 +560,9 @@ class TicketService:
 
                 # Broadcast approval
                 try:
-                    from src.mcp.server import server_state
+                    from src.core.app_context import get_app_state
+
+                    server_state = get_app_state()
 
                     await server_state.broadcast_update(
                         {

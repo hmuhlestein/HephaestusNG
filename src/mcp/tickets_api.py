@@ -33,9 +33,11 @@ def _get_ticket_service():
 
 
 async def _broadcast_update(data: dict):
-    """Broadcast update to SSE/WebSocket clients (lazy import to avoid circular deps)."""
+    """Broadcast update to SSE/WebSocket clients."""
     try:
-        from src.mcp.server import server_state
+        from src.core.app_context import get_app_state
+
+        server_state = get_app_state()
         await server_state.broadcast_update(data)
     except Exception:
         pass  # Non-critical
