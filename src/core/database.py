@@ -1516,10 +1516,10 @@ class DatabaseManager:
 
         # Add cli_model to agents table if missing
         try:
-            with sqlite3.connect(self.db_path) as conn:
+            with self.engine.connect() as conn:
                 try:
-                    conn.execute("ALTER TABLE agents ADD COLUMN cli_model TEXT")
-                except sqlite3.OperationalError:
+                    conn.execute(text("ALTER TABLE agents ADD COLUMN cli_model TEXT"))
+                except Exception:
                     pass  # Column already exists
                 conn.commit()
                 logger.info("Migrated agents.cli_model column")

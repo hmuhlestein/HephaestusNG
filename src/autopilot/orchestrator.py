@@ -1650,29 +1650,42 @@ def _create_feature_records(
 
 
 def _update_feature_status(
-    feature_id: str,
+    feature_id: Optional[str],
     design_id: Optional[str],
     status: str,
     error: Optional[str] = None,
     logger: OrchestratorLogger = None,
+    feature_key: Optional[str] = None,
 ) -> None:
     """Update a feature's status in the database.
 
+    This is the single write path for Feature.status from the orchestrator —
+    callers that only know a feature's key (not its DB id) should pass
+    feature_key instead of duplicating this lookup+write inline.
+
     Args:
-        feature_id: Feature ID
+        feature_id: Feature ID (looked up by id+design_id if given)
         design_id: Design ID
         status: New status (pending, active, completed, failed, skipped)
         error: Error message if status is failed
         logger: Optional logger
+        feature_key: Alternate lookup key when feature_id is unknown
     """
     from datetime import datetime
 
     from src.core.database import Feature, get_db
 
     with get_db() as db:
-        feature = (
-            db.query(Feature).filter_by(id=feature_id, design_id=design_id).first()
-        )
+        if feature_id:
+            feature = (
+                db.query(Feature).filter_by(id=feature_id, design_id=design_id).first()
+            )
+        else:
+            feature = (
+                db.query(Feature)
+                .filter_by(design_id=design_id, feature_key=feature_key)
+                .first()
+            )
         if feature:
             feature.status = status
             if status == "active":
@@ -3642,22 +3655,15 @@ def run_feature_pipelines(
                 feature_key = feat.get("id", "unknown")
                 logger.info(f"Skipping feature {feature_key} due to failed dependency")
                 feature_results[feature_key] = "skipped"
-                # Update DB
-                from src.core.database import Feature, get_db
-
-                with get_db() as db:
-                    feat_record = (
-                        db.query(Feature)
-                        .filter_by(
-                            design_id=design_entry.db_id,
-                            feature_key=feature_key,
-                        )
-                        .first()
-                    )
-                    if feat_record:
-                        feat_record.status = "skipped"
-                        feat_record.completed_at = datetime.utcnow()
-                        db.commit()
+                # Route through the shared write path instead of duplicating
+                # the lookup+write inline (SOLID review 2.2).
+                _update_feature_status(
+                    feature_id=None,
+                    design_id=design_entry.db_id,
+                    status="skipped",
+                    logger=logger,
+                    feature_key=feature_key,
+                )
             else:
                 features_to_run.append(feat)
 

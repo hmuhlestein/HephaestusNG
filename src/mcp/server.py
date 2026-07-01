@@ -6472,201 +6472,344 @@ async def cancel_workflow(workflow_id: str, request: Request):
         session.close()
 
 
+async def _tool_create_task(arguments: Dict[str, Any]):
+    workflow_id = arguments.get("workflow_id")
+    if not workflow_id:
+        raise HTTPException(
+            status_code=400, detail="workflow_id is required for create_task"
+        )
+
+    return await create_task(
+        CreateTaskRequest(
+            task_description=arguments.get("task_description"),
+            done_definition=arguments.get("done_definition"),
+            ai_agent_id="mcp-claude",
+            workflow_id=workflow_id,
+            phase_id=arguments.get("phase_id"),
+            priority=arguments.get("priority", "medium"),
+            ticket_id=arguments.get("ticket_id"),
+            depends_on=arguments.get("depends_on"),
+            parallel_group=arguments.get("parallel_group"),
+            max_concurrent=arguments.get("max_concurrent", 1),
+        ),
+        agent_id="mcp-claude",
+    )
+
+
+async def _tool_save_memory(arguments: Dict[str, Any]):
+    return await save_memory(
+        SaveMemoryRequest(
+            content=arguments.get("content"),
+            memory_type=arguments.get("memory_type", "discovery"),
+            tags=arguments.get("tags", []),
+            related_files=arguments.get("related_files", []),
+        ),
+        agent_id="mcp-claude",
+    )
+
+
+async def _tool_search_memory(arguments: Dict[str, Any]):
+    return await search_memory(
+        SearchMemoryRequest(
+            query=arguments.get("query", ""),
+            limit=arguments.get("limit", 10),
+            memory_type=arguments.get("memory_type"),
+            project_id=arguments.get("project_id"),
+        ),
+        agent_id=arguments.get("_agent_id"),
+    )
+
+
+async def _tool_get_task_status(arguments: Dict[str, Any]):
+    agent_id_filter = arguments.get("agent_id")
+    workflow_id_filter = arguments.get("workflow_id")
+    status_filter = arguments.get("status")
+
+    session = server_state.db_manager.get_session()
+    try:
+        query = session.query(Task)
+        if status_filter and status_filter != "all":
+            query = query.filter(Task.status == status_filter)
+        else:
+            query = query.filter(
+                Task.status.in_(["pending", "assigned", "in_progress", "done", "failed"])
+            )
+        if workflow_id_filter:
+            query = query.filter(Task.workflow_id == workflow_id_filter)
+        if agent_id_filter:
+            query = query.filter(Task.assigned_agent_id == agent_id_filter)
+        tasks = query.order_by(Task.created_at.desc()).limit(50).all()
+
+        results = []
+        for t in tasks:
+            phase_name = None
+            if t.phase_id:
+                phase = session.query(Phase).filter_by(id=t.phase_id).first()
+                phase_name = phase.name if phase else None
+            results.append({
+                "id": t.id,
+                "status": t.status,
+                "description": (t.enriched_description or t.raw_description or "")[:200],
+                "phase_name": phase_name,
+                "workflow_id": t.workflow_id,
+                "assigned_agent_id": t.assigned_agent_id,
+                "created_at": t.created_at.isoformat() if t.created_at else None,
+                "completed_at": t.completed_at.isoformat() if t.completed_at else None,
+            })
+        return {"tasks": results, "count": len(results)}
+    finally:
+        session.close()
+
+
+async def _tool_create_ticket(arguments: Dict[str, Any]):
+    from src.services.ticket_service import TicketService
+
+    workflow_id = arguments.get("workflow_id")
+    if not workflow_id:
+        raise HTTPException(status_code=400, detail="workflow_id is required")
+
+    result = await TicketService.create_ticket(
+        workflow_id=workflow_id,
+        agent_id=arguments.get("agent_id", "mcp-claude"),
+        title=arguments.get("title"),
+        description=arguments.get("description"),
+        ticket_type=arguments.get("ticket_type"),
+        priority=arguments.get("priority"),
+        tags=arguments.get("tags", []),
+        blocked_by_ticket_ids=arguments.get("blocked_by_ticket_ids", []),
+    )
+    return {"success": True, "ticket": result}
+
+
+async def _tool_search_tickets(arguments: Dict[str, Any]):
+    from src.services.ticket_search_service import TicketSearchService
+
+    session = server_state.db_manager.get_session()
+    try:
+        search_service = TicketSearchService(session)
+        results = await search_service.search_tickets(
+            query=arguments.get("query"),
+            tags=arguments.get("tags"),
+            status=arguments.get("status"),
+        )
+        return {"tickets": results}
+    finally:
+        session.close()
+
+
+async def _tool_update_ticket_status(arguments: Dict[str, Any]):
+    from src.services.ticket_service import TicketService
+
+    result = await TicketService.change_ticket_status(
+        ticket_id=arguments.get("ticket_id"),
+        new_status=arguments.get("new_status"),
+        agent_id=arguments.get("agent_id", "mcp-claude"),
+    )
+    return {"success": True, "result": result}
+
+
+async def _tool_broadcast_message(arguments: Dict[str, Any]):
+    message = arguments.get("message", "")
+    sender_id = arguments.get("sender_id", "unknown")
+    if not message:
+        raise HTTPException(status_code=400, detail="message is required")
+    try:
+        await server_state.agent_manager.broadcast_message_to_all_agents(
+            message=message,
+            sender_agent_id=sender_id,
+        )
+    except Exception as e:
+        logger.warning(f"broadcast_message failed: {e}")
+    return {"success": True, "message": "Broadcast sent"}
+
+
+async def _tool_send_message(arguments: Dict[str, Any]):
+    target_agent_id = arguments.get("agent_id")
+    message = arguments.get("message", "")
+    sender_id = arguments.get("sender_id", "unknown")
+    if not target_agent_id or not message:
+        raise HTTPException(status_code=400, detail="agent_id and message are required")
+    try:
+        await server_state.agent_manager.send_message_to_agent(
+            agent_id=target_agent_id,
+            message=message,
+            sender_agent_id=sender_id,
+        )
+    except Exception as e:
+        logger.warning(f"send_message to {target_agent_id[:8]} failed: {e}")
+    return {"success": True, "message": f"Message sent to {target_agent_id[:8]}"}
+
+
+# Registry for non-devtools MCP tools: name -> async handler(arguments).
+# Replaces a 9-branch if/elif chain (SOLID review 1.5) — a new tool is added
+# by defining one handler and registering it here, instead of editing this
+# dispatch chain (devtools_* tools have their own registry in
+# _handle_devtools_tool/_DEVTOOLS_TOOLS since they share a different shape:
+# a browser-session precondition and per-tool required-args).
+_MCP_TOOLS: Dict[str, Any] = {
+    "create_task": _tool_create_task,
+    "save_memory": _tool_save_memory,
+    "search_memory": _tool_search_memory,
+    "get_task_status": _tool_get_task_status,
+    "create_ticket": _tool_create_ticket,
+    "search_tickets": _tool_search_tickets,
+    "update_ticket_status": _tool_update_ticket_status,
+    "broadcast_message": _tool_broadcast_message,
+    "send_message": _tool_send_message,
+}
+
+
 @app.post("/tools/execute")
 async def execute_tool(request: Dict[str, Any]):
     """Execute an MCP tool."""
     tool_name = request.get("tool")
     arguments = request.get("arguments", {})
 
-    if tool_name == "create_task":
-        # Forward to create_task endpoint
-        workflow_id = arguments.get("workflow_id")
-        if not workflow_id:
-            raise HTTPException(
-                status_code=400, detail="workflow_id is required for create_task"
-            )
-
-        return await create_task(
-            CreateTaskRequest(
-                task_description=arguments.get("task_description"),
-                done_definition=arguments.get("done_definition"),
-                ai_agent_id="mcp-claude",
-                workflow_id=workflow_id,
-                phase_id=arguments.get("phase_id"),
-                priority=arguments.get("priority", "medium"),
-                ticket_id=arguments.get("ticket_id"),
-                depends_on=arguments.get("depends_on"),
-                parallel_group=arguments.get("parallel_group"),
-                max_concurrent=arguments.get("max_concurrent", 1),
-            ),
-            agent_id="mcp-claude",
-        )
-    elif tool_name == "save_memory":
-        # Forward to save_memory endpoint
-        return await save_memory(
-            SaveMemoryRequest(
-                content=arguments.get("content"),
-                memory_type=arguments.get("memory_type", "discovery"),
-                tags=arguments.get("tags", []),
-                related_files=arguments.get("related_files", []),
-            ),
-            agent_id="mcp-claude",
-        )
-    elif tool_name == "search_memory":
-        return await search_memory(
-            SearchMemoryRequest(
-                query=arguments.get("query", ""),
-                limit=arguments.get("limit", 10),
-                memory_type=arguments.get("memory_type"),
-                project_id=arguments.get("project_id"),
-            ),
-            agent_id=arguments.get("_agent_id"),
-        )
-    elif tool_name == "get_task_status":
-        # Pass optional filters from arguments
-        agent_id_filter = arguments.get("agent_id")
-        workflow_id_filter = arguments.get("workflow_id")
-        status_filter = arguments.get("status")
-
-        session = server_state.db_manager.get_session()
-        try:
-            query = session.query(Task)
-            if status_filter and status_filter != "all":
-                query = query.filter(Task.status == status_filter)
-            else:
-                query = query.filter(Task.status.in_(["pending", "assigned", "in_progress", "done", "failed"]))
-            if workflow_id_filter:
-                query = query.filter(Task.workflow_id == workflow_id_filter)
-            if agent_id_filter:
-                query = query.filter(Task.assigned_agent_id == agent_id_filter)
-            tasks = query.order_by(Task.created_at.desc()).limit(50).all()
-
-            results = []
-            for t in tasks:
-                phase_name = None
-                if t.phase_id:
-                    phase = session.query(Phase).filter_by(id=t.phase_id).first()
-                    phase_name = phase.name if phase else None
-                results.append({
-                    "id": t.id,
-                    "status": t.status,
-                    "description": (t.enriched_description or t.raw_description or "")[:200],
-                    "phase_name": phase_name,
-                    "workflow_id": t.workflow_id,
-                    "assigned_agent_id": t.assigned_agent_id,
-                    "created_at": t.created_at.isoformat() if t.created_at else None,
-                    "completed_at": t.completed_at.isoformat() if t.completed_at else None,
-                })
-            return {"tasks": results, "count": len(results)}
-        finally:
-            session.close()
-    elif tool_name == "create_ticket":
-        # Create ticket using TicketService
-        from src.services.ticket_service import TicketService
-
-        # workflow_id is now required
-        workflow_id = arguments.get("workflow_id")
-        if not workflow_id:
-            raise HTTPException(status_code=400, detail="workflow_id is required")
-
-        result = await TicketService.create_ticket(
-            workflow_id=workflow_id,
-            agent_id=arguments.get("agent_id", "mcp-claude"),
-            title=arguments.get("title"),
-            description=arguments.get("description"),
-            ticket_type=arguments.get("ticket_type"),
-            priority=arguments.get("priority"),
-            tags=arguments.get("tags", []),
-            blocked_by_ticket_ids=arguments.get("blocked_by_ticket_ids", []),
-        )
-        return {"success": True, "ticket": result}
-    elif tool_name == "search_tickets":
-        # Search tickets using TicketSearchService
-        from src.services.ticket_search_service import TicketSearchService
-
-        session = server_state.db_manager.get_session()
-        try:
-            search_service = TicketSearchService(session)
-            results = await search_service.search_tickets(
-                query=arguments.get("query"),
-                tags=arguments.get("tags"),
-                status=arguments.get("status"),
-            )
-            return {"tickets": results}
-        finally:
-            session.close()
-    elif tool_name == "update_ticket_status":
-        # Update ticket status
-        from src.services.ticket_service import TicketService
-
-        result = await TicketService.change_ticket_status(
-            ticket_id=arguments.get("ticket_id"),
-            new_status=arguments.get("new_status"),
-            agent_id=arguments.get("agent_id", "mcp-claude"),
-        )
-        return {"success": True, "result": result}
-    elif tool_name == "broadcast_message":
-        # Broadcast message to all active agents
-        message = arguments.get("message", "")
-        sender_id = arguments.get("sender_id", "unknown")
-        if not message:
-            raise HTTPException(status_code=400, detail="message is required")
-        try:
-            await server_state.agent_manager.broadcast_message_to_all_agents(
-                message=message,
-                sender_agent_id=sender_id,
-            )
-        except Exception as e:
-            logger.warning(f"broadcast_message failed: {e}")
-        return {"success": True, "message": "Broadcast sent"}
-    elif tool_name == "send_message":
-        # Send direct message to a specific agent
-        target_agent_id = arguments.get("agent_id")
-        message = arguments.get("message", "")
-        sender_id = arguments.get("sender_id", "unknown")
-        if not target_agent_id or not message:
-            raise HTTPException(status_code=400, detail="agent_id and message are required")
-        try:
-            await server_state.agent_manager.send_message_to_agent(
-                agent_id=target_agent_id,
-                message=message,
-                sender_agent_id=sender_id,
-            )
-        except Exception as e:
-            logger.warning(f"send_message to {target_agent_id[:8]} failed: {e}")
-        return {"success": True, "message": f"Message sent to {target_agent_id[:8]}"}
-    elif tool_name.startswith("devtools_"):
+    if tool_name in _MCP_TOOLS:
+        return await _MCP_TOOLS[tool_name](arguments)
+    elif tool_name and tool_name.startswith("devtools_"):
         return await _handle_devtools_tool(tool_name, arguments)
     else:
         raise HTTPException(status_code=400, detail=f"Unknown tool: {tool_name}")
 
 
+# Registry for devtools_* MCP tools: name -> (required_args, handler).
+# Replaces a 13-branch if/elif chain (SOLID review 1.5) — adding a devtools
+# tool means adding one entry here instead of editing a dispatch chain.
+# Handlers receive (browser, arguments) except "devtools_connect", which is
+# dispatched separately below since it runs before a browser session exists.
+async def _devtools_connect(arguments: Dict[str, Any], session_id: str):
+    from src.mcp.devtools import devtools_manager
+
+    debug_url = arguments.get("debug_url", "http://localhost:9222")
+    target_url = arguments.get("target_url")
+    if target_url:
+        browser = await devtools_manager.connect_new_tab(
+            session_id, target_url, debug_url
+        )
+    else:
+        browser = await devtools_manager.connect(session_id, debug_url)
+    version = await browser.get_version()
+    return {
+        "success": True,
+        "session_id": session_id,
+        "browser": version.get("Browser", "unknown"),
+    }
+
+
+async def _devtools_navigate(browser, arguments):
+    result = await browser.navigate(arguments["url"])
+    return {"success": True, "result": result}
+
+
+async def _devtools_evaluate(browser, arguments):
+    result = await browser.evaluate(arguments["expression"])
+    return {"success": True, "result": result}
+
+
+async def _devtools_screenshot(browser, arguments):
+    path = arguments.get("path")
+    fmt = arguments.get("format", "png")
+    data = await browser.screenshot(path=path, format=fmt)
+    return {"success": True, "data_length": len(data) if data else 0, "saved_to": path}
+
+
+async def _devtools_click(browser, arguments):
+    await browser.click(arguments["selector"])
+    return {"success": True}
+
+
+async def _devtools_fill(browser, arguments):
+    await browser.fill(arguments["selector"], arguments["value"])
+    return {"success": True}
+
+
+async def _devtools_get_console_errors(browser, arguments):
+    errors = await browser.check_console_errors()
+    return {"success": True, "errors": errors, "count": len(errors)}
+
+
+async def _devtools_get_failed_requests(browser, arguments):
+    logs = await browser.get_network_logs(
+        failed_only=True, status=arguments.get("status")
+    )
+    return {"success": True, "failed_requests": logs, "count": len(logs)}
+
+
+async def _devtools_get_network_logs(browser, arguments):
+    logs = await browser.get_network_logs(
+        method=arguments.get("method"),
+        status=arguments.get("status"),
+        failed_only=arguments.get("failed_only", False),
+    )
+    return {"success": True, "logs": logs, "count": len(logs)}
+
+
+async def _devtools_get_performance(browser, arguments):
+    metrics = await browser.get_performance_metrics()
+    return {"success": True, "metrics": metrics}
+
+
+async def _devtools_get_page_info(browser, arguments):
+    title = await browser.get_page_title()
+    url = await browser.get_page_url()
+    return {"success": True, "title": title, "url": url}
+
+
+async def _devtools_check_broken_images(browser, arguments):
+    broken = await browser.check_broken_images()
+    return {"success": True, "broken_images": broken, "count": len(broken)}
+
+
+async def _devtools_wait_for_selector(browser, arguments):
+    found = await browser.wait_for_selector(
+        arguments["selector"], timeout_ms=arguments.get("timeout_ms", 5000)
+    )
+    return {"success": True, "found": found}
+
+
+async def _devtools_get_cookies(browser, arguments):
+    cookies = await browser.get_cookies()
+    return {"success": True, "cookies": cookies, "count": len(cookies)}
+
+
+async def _devtools_close(browser, arguments, session_id: str):
+    from src.mcp.devtools import devtools_manager
+
+    await devtools_manager.close(session_id)
+    return {"success": True, "message": f"Session '{session_id}' closed"}
+
+
+# name -> (required_args, handler). Handlers whose signature includes
+# session_id are called with it explicitly below.
+_DEVTOOLS_TOOLS: Dict[str, tuple] = {
+    "devtools_connect": ([], _devtools_connect),
+    "devtools_navigate": (["url"], _devtools_navigate),
+    "devtools_evaluate": (["expression"], _devtools_evaluate),
+    "devtools_screenshot": ([], _devtools_screenshot),
+    "devtools_click": (["selector"], _devtools_click),
+    "devtools_fill": (["selector", "value"], _devtools_fill),
+    "devtools_get_console_errors": ([], _devtools_get_console_errors),
+    "devtools_get_failed_requests": ([], _devtools_get_failed_requests),
+    "devtools_get_network_logs": ([], _devtools_get_network_logs),
+    "devtools_get_performance": ([], _devtools_get_performance),
+    "devtools_get_page_info": ([], _devtools_get_page_info),
+    "devtools_check_broken_images": ([], _devtools_check_broken_images),
+    "devtools_wait_for_selector": (["selector"], _devtools_wait_for_selector),
+    "devtools_get_cookies": ([], _devtools_get_cookies),
+    "devtools_close": ([], _devtools_close),
+}
+
+
 async def _handle_devtools_tool(tool_name: str, arguments: Dict[str, Any]):
     from src.mcp.devtools import devtools_manager, validate_session_id
 
-    REQUIRED_ARGS = {
-        "devtools_connect": [],
-        "devtools_navigate": ["url"],
-        "devtools_evaluate": ["expression"],
-        "devtools_screenshot": [],
-        "devtools_click": ["selector"],
-        "devtools_fill": ["selector", "value"],
-        "devtools_get_console_errors": [],
-        "devtools_get_failed_requests": [],
-        "devtools_get_network_logs": [],
-        "devtools_get_performance": [],
-        "devtools_get_page_info": [],
-        "devtools_check_broken_images": [],
-        "devtools_wait_for_selector": ["selector"],
-        "devtools_get_cookies": [],
-        "devtools_close": [],
-    }
-
-    required = REQUIRED_ARGS.get(tool_name)
-    if required is None:
+    entry = _DEVTOOLS_TOOLS.get(tool_name)
+    if entry is None:
         raise HTTPException(
             status_code=400, detail=f"Unknown devtools tool: {tool_name}"
         )
+    required, handler = entry
 
     missing = [k for k in required if k not in arguments]
     if missing:
@@ -6682,20 +6825,7 @@ async def _handle_devtools_tool(tool_name: str, arguments: Dict[str, Any]):
 
     try:
         if tool_name == "devtools_connect":
-            debug_url = arguments.get("debug_url", "http://localhost:9222")
-            target_url = arguments.get("target_url")
-            if target_url:
-                browser = await devtools_manager.connect_new_tab(
-                    session_id, target_url, debug_url
-                )
-            else:
-                browser = await devtools_manager.connect(session_id, debug_url)
-            version = await browser.get_version()
-            return {
-                "success": True,
-                "session_id": session_id,
-                "browser": version.get("Browser", "unknown"),
-            }
+            return await handler(arguments, session_id)
 
         browser = devtools_manager.get(session_id)
         if not browser:
@@ -6704,78 +6834,10 @@ async def _handle_devtools_tool(tool_name: str, arguments: Dict[str, Any]):
                 detail=f"No browser session '{session_id}'. Call devtools_connect first.",
             )
 
-        if tool_name == "devtools_navigate":
-            result = await browser.navigate(arguments["url"])
-            return {"success": True, "result": result}
+        if tool_name == "devtools_close":
+            return await handler(browser, arguments, session_id)
 
-        elif tool_name == "devtools_evaluate":
-            result = await browser.evaluate(arguments["expression"])
-            return {"success": True, "result": result}
-
-        elif tool_name == "devtools_screenshot":
-            path = arguments.get("path")
-            fmt = arguments.get("format", "png")
-            data = await browser.screenshot(path=path, format=fmt)
-            return {
-                "success": True,
-                "data_length": len(data) if data else 0,
-                "saved_to": path,
-            }
-
-        elif tool_name == "devtools_click":
-            await browser.click(arguments["selector"])
-            return {"success": True}
-
-        elif tool_name == "devtools_fill":
-            await browser.fill(arguments["selector"], arguments["value"])
-            return {"success": True}
-
-        elif tool_name == "devtools_get_console_errors":
-            errors = await browser.check_console_errors()
-            return {"success": True, "errors": errors, "count": len(errors)}
-
-        elif tool_name == "devtools_get_failed_requests":
-            status_filter = arguments.get("status")
-            logs = await browser.get_network_logs(
-                failed_only=True, status=status_filter
-            )
-            return {"success": True, "failed_requests": logs, "count": len(logs)}
-
-        elif tool_name == "devtools_get_network_logs":
-            logs = await browser.get_network_logs(
-                method=arguments.get("method"),
-                status=arguments.get("status"),
-                failed_only=arguments.get("failed_only", False),
-            )
-            return {"success": True, "logs": logs, "count": len(logs)}
-
-        elif tool_name == "devtools_get_performance":
-            metrics = await browser.get_performance_metrics()
-            return {"success": True, "metrics": metrics}
-
-        elif tool_name == "devtools_get_page_info":
-            title = await browser.get_page_title()
-            url = await browser.get_page_url()
-            return {"success": True, "title": title, "url": url}
-
-        elif tool_name == "devtools_check_broken_images":
-            broken = await browser.check_broken_images()
-            return {"success": True, "broken_images": broken, "count": len(broken)}
-
-        elif tool_name == "devtools_wait_for_selector":
-            found = await browser.wait_for_selector(
-                arguments["selector"],
-                timeout_ms=arguments.get("timeout_ms", 5000),
-            )
-            return {"success": True, "found": found}
-
-        elif tool_name == "devtools_get_cookies":
-            cookies = await browser.get_cookies()
-            return {"success": True, "cookies": cookies, "count": len(cookies)}
-
-        elif tool_name == "devtools_close":
-            await devtools_manager.close(session_id)
-            return {"success": True, "message": f"Session '{session_id}' closed"}
+        return await handler(browser, arguments)
 
     except HTTPException:
         raise

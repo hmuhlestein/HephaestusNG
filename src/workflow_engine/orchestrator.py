@@ -18,6 +18,39 @@ from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
+# Grammar for condition strings like "score < 0.6": a variable name, a
+# comparison operator, and a numeric threshold. Exported so
+# config_validator.py can validate condition["if"] strings against the same
+# grammar this module actually evaluates them with, instead of the two files
+# silently drifting out of sync (SOLID review 2.9/2.10).
+CONDITION_PATTERN = r"^([a-zA-Z_][a-zA-Z0-9_]*)\s*(<=|>=|==|!=|<|>)\s*([0-9.]+)$"
+
+_EPSILON = 0.0001
+
+CONDITION_OPERATORS: Dict[str, Any] = {
+    "<": lambda value, threshold: value < threshold,
+    "<=": lambda value, threshold: value <= threshold,
+    ">": lambda value, threshold: value > threshold,
+    ">=": lambda value, threshold: value >= threshold,
+    "==": lambda value, threshold: abs(value - threshold) < _EPSILON,
+    "!=": lambda value, threshold: abs(value - threshold) >= _EPSILON,
+}
+
+
+def is_valid_condition_string(condition_str: str) -> bool:
+    """True if condition_str is either a bare boolean or matches CONDITION_PATTERN.
+
+    Shared by _check_condition (evaluation) and config_validator.py
+    (startup-time validation) so both agree on what a valid condition looks
+    like.
+    """
+    import re
+
+    stripped = condition_str.strip()
+    if stripped in ("true", "false"):
+        return True
+    return re.match(CONDITION_PATTERN, stripped) is not None
+
 
 class OrchestrationAction(Enum):
     CONTINUE = "continue"  # Move to next phase
@@ -463,14 +496,11 @@ class WorkflowOrchestrator:
 
         # Safe evaluation: only allow comparison operators and numbers
         try:
-            # Pattern: variable_name <operator> number
-            # Supported operators: <, <=, >, >=, ==, !=
-            pattern = r"^([a-zA-Z_][a-zA-Z0-9_]*)\s*(<|<=|>|>=|==|!=)\s*([0-9.]+)$"
-            match = re.match(pattern, condition_str.strip())
+            match = re.match(CONDITION_PATTERN, condition_str.strip())
 
             if match:
                 var_name = match.group(1)
-                operator = match.group(2)
+                op = match.group(2)
                 threshold = float(match.group(3))
 
                 # Get variable value
@@ -486,19 +516,7 @@ class WorkflowOrchestrator:
                     logger.warning(f"Cannot convert '{var_value}' to float")
                     return False
 
-                # Evaluate comparison
-                if operator == "<":
-                    return var_value < threshold
-                elif operator == "<=":
-                    return var_value <= threshold
-                elif operator == ">":
-                    return var_value > threshold
-                elif operator == ">=":
-                    return var_value >= threshold
-                elif operator == "==":
-                    return abs(var_value - threshold) < 0.0001
-                elif operator == "!=":
-                    return abs(var_value - threshold) >= 0.0001
+                return CONDITION_OPERATORS[op](var_value, threshold)
             else:
                 # Try simple boolean evaluation
                 if condition_str.strip() == "true":
