@@ -46,7 +46,7 @@ def run(args):
         pass
 
     # Then kill by PID file
-    for name in ("backend", "monitor", "frontend", "orchestrator"):
+    for name in ("backend", "monitor", "frontend", "orchestrator", "watchdog"):
         pid = read_pid(name)
         if pid and is_process_running(pid):
             try:

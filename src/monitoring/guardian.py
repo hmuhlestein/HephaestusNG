@@ -118,9 +118,9 @@ class Guardian:
 
             # Get Phase context if task has a phase
             phase_info = None
-            if task.phase_id and task.workflow_id:
+            if task["phase_id"] and task["workflow_id"]:
                 phase_info = await self._get_phase_context(
-                    task.phase_id, task.workflow_id
+                    task["phase_id"], task["workflow_id"]
                 )
                 if phase_info:
                     logger.info(
@@ -149,7 +149,7 @@ class Guardian:
             logger.info(
                 f"Last Message Marker: {last_message_marker or 'None (first analysis)'}"
             )
-            logger.info(f"Task ID: {task.id}")
+            logger.info(f"Task ID: {task['id']}")
             logger.info(f"Phase Info: {'Present' if phase_info else 'None'}")
             logger.info("=" * 60)
 
@@ -164,10 +164,10 @@ class Guardian:
                         accumulated_context=accumulated_context,
                         past_summaries=past_summaries,
                         task_info={
-                            "description": task.enriched_description
-                            or task.raw_description,
-                            "done_definition": task.done_definition,
-                            "task_id": task.id,
+                            "description": task["enriched_description"]
+                            or task["raw_description"],
+                            "done_definition": task["done_definition"],
+                            "task_id": task["id"],
                             "agent_id": agent.id,
                             "phase_info": phase_info,  # NEW: Pass phase information
                         },
@@ -249,8 +249,7 @@ class Guardian:
         logger.debug(f"Building accumulated context for agent {agent.id}")
 
         # Get all agent logs to understand full conversation
-        session = self.db_manager.get_session()
-        try:
+        with self.db_manager.session_scope() as session:
             logs = (
                 session.query(AgentLog)
                 .filter_by(agent_id=agent.id)
@@ -305,9 +304,6 @@ class Guardian:
 
             return context
 
-        finally:
-            session.close()
-
     async def steer_agent(
         self,
         agent: Agent,
@@ -340,47 +336,12 @@ class Guardian:
         # docstring already claims ("flagged multiple times") but the caller
         # never actually enforced. This is what let a single off-track
         # judgment interrupt a legitimate in-progress file write.
-        NEEDS_CONFIRMATION = {
-            SteeringType.DRIFTING.value,
-            SteeringType.OFF_TRACK.value,
-            SteeringType.OVER_ENGINEERING.value,
-            SteeringType.CONFUSED.value,
-            SteeringType.VIOLATING_CONSTRAINTS.value,
-        }
-        if steering_type in NEEDS_CONFIRMATION:
-            flag_state = self._consecutive_flags.get(agent.id)
-            now = datetime.utcnow()
-            stale = (
-                flag_state is None
-                or flag_state["type"] != steering_type
-                or (now - flag_state["last_seen"]) > timedelta(minutes=10)
-            )
-            if stale:
-                self._consecutive_flags[agent.id] = {
-                    "type": steering_type,
-                    "count": 1,
-                    "last_seen": now,
-                }
-                logger.info(
-                    f"[GUARDIAN] Agent {agent.id[:8]} flagged {steering_type} "
-                    f"(1/2) — waiting for a second consecutive flag before acting"
-                )
-                return
-            flag_state["count"] += 1
-            flag_state["last_seen"] = now
-            if flag_state["count"] < 2:
-                logger.info(
-                    f"[GUARDIAN] Agent {agent.id[:8]} flagged {steering_type} "
-                    f"({flag_state['count']}/2) — waiting for confirmation before acting"
-                )
-                return
-            # Confirmed on a second consecutive pass — clear and proceed to act.
-            del self._consecutive_flags[agent.id]
-
-        # Check cooldown - max 1 steering per 10 minutes (longer than before)
-        if not self._should_steer_agent(agent.id):
+        
+        # Use consolidated rate-limiter (L-3 fix)
+        eligible, reason = self._evaluate_steering_eligibility(agent.id, steering_type)
+        if not eligible:
             logger.info(
-                f"[GUARDIAN] Discarding — cooldown active for agent {agent.id[:8]}"
+                f"[GUARDIAN] Discarding — {reason} for agent {agent.id[:8]}"
             )
             return
 
@@ -411,8 +372,7 @@ class Guardian:
         self._record_steering(agent.id, steering_type, message)
 
         # Save to database
-        session = self.db_manager.get_session()
-        try:
+        with self.db_manager.session_scope() as session:
             log_entry = AgentLog(
                 agent_id=agent.id,
                 log_type="guardian_steering",
@@ -425,9 +385,6 @@ class Guardian:
                 },
             )
             session.add(log_entry)
-            session.commit()
-        finally:
-            session.close()
 
     def _should_steer_agent(self, agent_id: str) -> bool:
         """Check if we should steer agent (avoid over-messaging).
@@ -447,6 +404,66 @@ class Guardian:
         ]
 
         return len(recent_steerings) == 0
+
+    def _evaluate_steering_eligibility(
+        self, agent_id: str, steering_type: str
+    ) -> tuple[bool, str]:
+        """Evaluate whether an agent is eligible for steering.
+        
+        Consolidates the consecutive-flag confirmation gate and the
+        cooldown check into one function with a clear reason output.
+        
+        Args:
+            agent_id: Agent ID to check
+            steering_type: Type of steering being attempted
+            
+        Returns:
+            Tuple of (eligible: bool, reason: str)
+        """
+        # Types that need 2 consecutive flags before acting
+        NEEDS_CONFIRMATION = {
+            SteeringType.DRIFTING.value,
+            SteeringType.OFF_TRACK.value,
+            SteeringType.OVER_ENGINEERING.value,
+            SteeringType.CONFUSED.value,
+            SteeringType.VIOLATING_CONSTRAINTS.value,
+        }
+        
+        # Check consecutive-flag confirmation gate
+        if steering_type in NEEDS_CONFIRMATION:
+            flag_state = self._consecutive_flags.get(agent_id)
+            now = datetime.utcnow()
+            stale = (
+                flag_state is None
+                or flag_state["type"] != steering_type
+                or (now - flag_state["last_seen"]) > timedelta(minutes=10)
+            )
+            if stale:
+                self._consecutive_flags[agent_id] = {
+                    "type": steering_type,
+                    "count": 1,
+                    "last_seen": now,
+                }
+                return False, f"first flag ({steering_type}) — waiting for confirmation"
+            
+            flag_state["count"] += 1
+            flag_state["last_seen"] = now
+            if flag_state["count"] < 2:
+                return False, f"{flag_state['count']}/2 flags — waiting for confirmation"
+            
+            # Confirmed — clear and proceed
+            del self._consecutive_flags[agent_id]
+        
+        # Check cooldown — max 1 steering per 10 minutes
+        if agent_id in self.steering_history:
+            recent_steerings = [
+                s for s in self.steering_history[agent_id]
+                if datetime.fromisoformat(s["timestamp"]) > datetime.utcnow() - timedelta(minutes=10)
+            ]
+            if recent_steerings:
+                return False, "cooldown active (10 minutes)"
+        
+        return True, "eligible"
 
     def detect_agent_exited(self, tmux_output: str) -> bool:
         """Detect if agent has exited to the command line.
@@ -527,6 +544,15 @@ class Guardian:
         # Keep only last 10 steerings
         self.steering_history[agent_id] = self.steering_history[agent_id][-10:]
 
+    def record_auto_restart(self, agent_id: str, reason: str):
+        """Public method to record an auto-restart event.
+        
+        Called by MonitoringLoop when it restarts an agent, to keep
+        Guardian's steering history accurate without reaching into
+        private methods.
+        """
+        self._record_steering(agent_id, "AUTO_RESTART", reason)
+
     def _extract_last_error(self, tmux_output: str) -> str:
         """Extract last error message from output."""
         lines = tmux_output.split("\n")
@@ -537,14 +563,24 @@ class Guardian:
                 return " ".join(error_context)[:200]
         return "The error details are not clear from the output."
 
-    async def _get_agent_task(self, agent: Agent) -> Optional[Task]:
-        """Get task for agent."""
-        session = self.db_manager.get_session()
-        try:
+    async def _get_agent_task(self, agent: Agent) -> Optional[Dict[str, Any]]:
+        """Get task for agent.
+        
+        Returns a dict with task primitives to avoid DetachedInstanceError
+        across await boundaries (H-0d fix).
+        """
+        with self.db_manager.session_scope() as session:
             task = session.query(Task).filter_by(id=agent.current_task_id).first()
-            return task
-        finally:
-            session.close()
+            if not task:
+                return None
+            return {
+                "id": task.id,
+                "phase_id": task.phase_id,
+                "workflow_id": task.workflow_id,
+                "enriched_description": task.enriched_description,
+                "raw_description": task.raw_description,
+                "done_definition": task.done_definition,
+            }
 
     async def _get_phase_context(
         self, phase_id: str, workflow_id: str
@@ -558,8 +594,7 @@ class Guardian:
         Returns:
             Phase context dictionary or None
         """
-        session = self.db_manager.get_session()
-        try:
+        with self.db_manager.session_scope() as session:
             from src.core.database import Phase, Workflow
 
             # Get the phase
@@ -596,8 +631,6 @@ class Guardian:
                     "all_phase_names": [p.name for p in all_phases],
                 },
             }
-        finally:
-            session.close()
 
     def _get_default_analysis(self, agent: Agent) -> Dict[str, Any]:
         """Get default analysis when LLM analysis fails."""

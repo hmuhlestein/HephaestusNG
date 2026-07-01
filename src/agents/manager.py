@@ -2157,10 +2157,17 @@ REMEMBER:
 
         Returns:
             List of active agents
+
+        Note: these Agent objects are returned after their session closes and
+        are held by callers (monitor.py) across await points. This is safe
+        ONLY because SessionLocal is configured with expire_on_commit=False
+        and every attribute callers touch (id, status, cli_type, created_at,
+        agent_type, tmux_session_name, current_task_id, ...) is a plain
+        Column already eagerly loaded by the .all() query below — not a
+        lazy-loaded relationship. If a caller starts accessing a relationship
+        (e.g. agent.assigned_tasks) on these objects, that WILL raise
+        DetachedInstanceError; extract it to a primitive here instead.
         """
-        session = self.db_manager.get_session()
-        try:
+        with self.db_manager.session_scope() as session:
             agents = session.query(Agent).filter(Agent.status != "terminated").all()
             return agents
-        finally:
-            session.close()

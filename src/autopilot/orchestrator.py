@@ -276,7 +276,8 @@ class PersistentPipelineState:
             return (
                 current_design is not None or queue_status.get("status") == "processing"
             )
-        except Exception:
+        except Exception as e:
+            logger.warning(f"Failed to read state file for incomplete work check: {e}")
             return False
 
     def get_last_run_id(self) -> Optional[str]:
@@ -287,7 +288,8 @@ class PersistentPipelineState:
             with open(self.state_file) as f:
                 state_data = json.load(f)
             return state_data.get("run_id")
-        except Exception:
+        except Exception as e:
+            logger.warning(f"Failed to read state file for last run ID: {e}")
             return None
 
 
@@ -353,18 +355,20 @@ def file_hash(path: Path) -> str:
 
 
 def api_get(endpoint: str, timeout: int = 5) -> Optional[dict]:
+    """Legacy HTTP GET - prefer direct DB access functions below."""
     try:
         r = requests.get(f"{API_BASE}{endpoint}", timeout=timeout)
         if r.status_code == 200:
             return r.json()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"[api_get] {endpoint} failed: {e}")
     return None
 
 
 def api_post(
     endpoint: str, data: dict = None, timeout: int = 5, headers: dict = None
 ) -> Optional[dict]:
+    """Legacy HTTP POST - prefer direct DB access functions below."""
     try:
         r = requests.post(
             f"{API_BASE}{endpoint}", json=data, timeout=timeout, headers=headers or {}
@@ -372,10 +376,113 @@ def api_post(
         if r.status_code == 200:
             return r.json()
         else:
-            print(f"[api_post] {endpoint} returned {r.status_code}: {r.text[:200]}")
+            logger.debug(f"[api_post] {endpoint} returned {r.status_code}: {r.text[:200]}")
     except Exception as e:
-        print(f"[api_post] {endpoint} failed: {e}")
+        logger.debug(f"[api_post] {endpoint} failed: {e}")
     return None
+
+
+def update_task_status(task_id: str, status: str) -> bool:
+    """Update task status directly in database (H-2 fix)."""
+    try:
+        with get_db() as session:
+            task = session.query(Task).filter_by(id=task_id).first()
+            if task:
+                task.status = status
+                return True
+        return False
+    except Exception as e:
+        logger.debug(f"[update_task_status] Failed: {e}")
+        return False
+
+
+def terminate_agent_direct(agent_id: str) -> bool:
+    """Terminate agent directly in database (H-2 fix)."""
+    try:
+        with get_db() as session:
+            agent = session.query(Agent).filter_by(id=agent_id).first()
+            if agent:
+                agent.status = "terminated"
+                return True
+        return False
+    except Exception as e:
+        logger.debug(f"[terminate_agent_direct] Failed: {e}")
+        return False
+
+
+def pause_workflow_direct(workflow_id: str) -> bool:
+    """Pause workflow directly in database (H-2 fix)."""
+    try:
+        with get_db() as session:
+            wf = session.query(Workflow).filter_by(id=workflow_id).first()
+            if wf:
+                wf.status = "paused"
+                return True
+        return False
+    except Exception as e:
+        logger.debug(f"[pause_workflow_direct] Failed: {e}")
+        return False
+
+
+def complete_workflow_direct(workflow_id: str) -> bool:
+    """Complete workflow directly in database (H-2 fix)."""
+    try:
+        with get_db() as session:
+            wf = session.query(Workflow).filter_by(id=workflow_id).first()
+            if wf:
+                wf.status = "completed"
+                return True
+        return False
+    except Exception as e:
+        logger.debug(f"[complete_workflow_direct] Failed: {e}")
+        return False
+
+
+def create_agent_for_task_direct(
+    task_id: str, workflow_id: str, phase_id: Optional[str] = None
+) -> Optional[dict]:
+    """Create an agent for a pending task directly in-process (H-2 fix).
+
+    Mirrors /api/create_agent_for_task (src/mcp/server.py) without a
+    self-HTTP round trip. Callers here run in a background thread (not the
+    asyncio event loop), so a fresh event loop is spun up to drive the
+    async AgentManager.create_agent_for_task call.
+    """
+    import asyncio
+
+    from src.core.database import Task
+    from src.mcp.server import server_state
+
+    try:
+        session = server_state.db_manager.get_session()
+        try:
+            task = session.query(Task).filter_by(id=task_id).first()
+            if not task:
+                logger.debug(f"[create_agent_for_task_direct] Task {task_id} not found")
+                return None
+
+            enriched_data = {}
+            if task.enriched_description:
+                enriched_data["enriched_description"] = task.enriched_description
+            if getattr(task, "completion_criteria", None):
+                enriched_data["completion_criteria"] = task.completion_criteria
+
+            agent = asyncio.run(
+                server_state.agent_manager.create_agent_for_task(
+                    task=task,
+                    enriched_data=enriched_data,
+                    memories=[],
+                    project_context="",
+                    agent_type="phase",
+                    use_existing_worktree=True,
+                )
+            )
+            return {"agent_id": agent.id, "status": "created"}
+        finally:
+            session.close()
+    except Exception as e:
+        logger.debug(f"[create_agent_for_task_direct] Failed: {e}")
+        return None
 
 
 def _update_orchestrator_status(status: str) -> None:
@@ -387,66 +494,105 @@ def _update_orchestrator_status(status: str) -> None:
     if not _orchestrator_agent_id:
         return
     try:
-        from src.core.database import Agent, DatabaseManager
 
-        db_manager = DatabaseManager()
-        session = db_manager.get_session()
-        try:
+        with get_db() as session:
             agent = session.query(Agent).filter_by(id=_orchestrator_agent_id).first()
             if agent:
                 agent.status = status
                 agent.last_activity = datetime.utcnow()
-                session.commit()
-        finally:
-            session.close()
     except Exception as e:
         # Non-critical — don't break the pipeline if status update fails
-        print(f"[orchestrator] Failed to update status to {status}: {e}")
+        logger.debug(f"[orchestrator] Failed to update status to {status}: {e}")
 
 
 def get_tasks(status: str = None, workflow_id: str = None) -> list:
-    params = []
-    if status:
-        params.append(f"status={status}")
-    if workflow_id:
-        params.append(f"workflow_id={workflow_id}")
-    query = f"?{'&'.join(params)}" if params else ""
-    data = api_get(f"/api/tasks{query}")
-    if data is None:
+    """Get tasks directly from database instead of HTTP (H-2 fix)."""
+    try:
+        with get_db() as session:
+            query = session.query(Task)
+            if status:
+                query = query.filter(Task.status == status)
+            if workflow_id:
+                query = query.filter(Task.workflow_id == workflow_id)
+            tasks = query.all()
+            return [
+                {
+                    "id": t.id,
+                    "workflow_id": t.workflow_id,
+                    "phase_id": t.phase_id,
+                    "status": t.status,
+                    "raw_description": t.raw_description,
+                    "enriched_description": t.enriched_description,
+                    "assigned_agent_id": t.assigned_agent_id,
+                    "created_at": t.created_at.isoformat() if t.created_at else None,
+                    "started_at": t.started_at.isoformat() if t.started_at else None,
+                    "completed_at": t.completed_at.isoformat() if t.completed_at else None,
+                }
+                for t in tasks
+            ]
+    except Exception as e:
+        logger.debug(f"[get_tasks] Failed: {e}")
         return []
-    return data if isinstance(data, list) else data.get("tasks", [])
 
 
 def get_agents(workflow_id: str = None) -> list:
-    """Get agents, optionally filtered by workflow_id via their assigned tasks."""
-    # Get ALL agents (not paginated) for internal use
-    data = api_get("/api/agents?status=all&per_page=100")
-    if data is None:
+    """Get agents directly from database instead of HTTP (H-2 fix)."""
+    try:
+        with get_db() as session:
+            query = session.query(Agent)
+            if workflow_id:
+                # Filter agents by workflow through their assigned tasks
+                agent_ids = (
+                    session.query(Task.assigned_agent_id)
+                    .filter(Task.workflow_id == workflow_id, Task.assigned_agent_id.isnot(None))
+                    .distinct()
+                    .all()
+                )
+                agent_ids = [a[0] for a in agent_ids]
+                query = query.filter(Agent.id.in_(agent_ids))
+            agents = query.all()
+            return [
+                {
+                    "id": a.id,
+                    "status": a.status,
+                    "cli_type": a.cli_type,
+                    "agent_type": a.agent_type if hasattr(a, 'agent_type') else None,
+                    "tmux_session_name": a.tmux_session_name,
+                    "current_task_id": a.current_task_id,
+                    "created_at": a.created_at.isoformat() if a.created_at else None,
+                    "last_activity": a.last_activity.isoformat() if a.last_activity else None,
+                    "health_check_failures": a.health_check_failures,
+                    "restart_count": a.restart_count,
+                }
+                for a in agents
+            ]
+    except Exception as e:
+        logger.debug(f"[get_agents] Failed: {e}")
         return []
-    agents = data if isinstance(data, list) else data.get("agents", [])
-
-    if not workflow_id:
-        return agents
-
-    # Filter agents to only those working on tasks in this workflow
-    # Get all tasks for this workflow
-    tasks = get_tasks(workflow_id=workflow_id)
-    agent_ids = set()
-    for t in tasks:
-        if t.get("assigned_agent_id"):
-            agent_ids.add(t["assigned_agent_id"])
-        if t.get("created_by_agent_id"):
-            agent_ids.add(t["created_by_agent_id"])
-
-    return [a for a in agents if a.get("id") in agent_ids]
 
 
 def peek_agent_output(agent_id: str, lines: int = 30) -> str:
     """Peek at the last N lines of an agent's tmux output."""
-    data = api_get(f"/api/agents/{agent_id}/output?lines={lines}")
-    if data is None:
+    try:
+        with get_db() as session:
+            agent = session.query(Agent).filter_by(id=agent_id).first()
+            if not agent or not agent.tmux_session_name:
+                return ""
+            # Get output from tmux directly
+            try:
+                import libtmux
+                server = libtmux.Server()
+                tmux_session = server.sessions.get(agent.tmux_session_name)
+                if tmux_session:
+                    pane = tmux_session.attached_window.attached_pane
+                    output_lines = pane.cmd("capture-pane", "-p", "-S", f"-{lines}").stdout
+                    return "\n".join(output_lines)
+            except Exception as e:
+                logger.debug(f"[peek_agent_output] tmux error: {e}")
+            return ""
+    except Exception as e:
+        logger.debug(f"[peek_agent_output] Failed: {e}")
         return ""
-    return data.get("output", "") if isinstance(data, dict) else str(data)
 
 
 def get_task_progress(agent_id: str) -> dict:
@@ -461,15 +607,40 @@ def get_task_progress(agent_id: str) -> dict:
 
 
 def get_workflow_status(workflow_id: str) -> dict:
-    return api_get(f"/api/workflow-executions/{workflow_id}") or {}
+    """Get workflow status directly from database (H-2 fix)."""
+    try:
+        with get_db() as session:
+            wf = session.query(Workflow).filter_by(id=workflow_id).first()
+            if not wf:
+                return {}
+            return {
+                "id": wf.id,
+                "status": wf.status,
+                "name": wf.name if hasattr(wf, 'name') else None,
+                "created_at": wf.created_at.isoformat() if wf.created_at else None,
+            }
+    except Exception as e:
+        logger.debug(f"[get_workflow_status] Failed: {e}")
+        return {}
 
 
 def get_active_workflows() -> list:
-    """Get list of active workflows (excluding the one we're about to start)."""
-    data = api_get("/api/workflow-executions") or []
-    if isinstance(data, dict):
-        data = data.get("executions", [])
-    return [w for w in data if w.get("status") in ("active", "running")]
+    """Get list of active workflows directly from database (H-2 fix)."""
+    try:
+        with get_db() as session:
+            workflows = session.query(Workflow).filter(Workflow.status == "active").all()
+            return [
+                {
+                    "id": wf.id,
+                    "status": wf.status,
+                    "name": wf.name if hasattr(wf, 'name') else None,
+                    "created_at": wf.created_at.isoformat() if wf.created_at else None,
+                }
+                for wf in workflows
+            ]
+    except Exception as e:
+        logger.debug(f"[get_active_workflows] Failed: {e}")
+        return []
 
 
 def is_design_fully_complete(
@@ -624,16 +795,11 @@ def attempt_recovery(workflow_id: str, logger: OrchestratorLogger) -> Tuple[bool
         logger.info(f"  Retrying failed task {task_id[:8]} (retry #{retry_count + 1})")
         try:
             # Reset task status to pending
-            api_post(f"/api/tasks/{task_id}/status", {"status": "pending"})
+            update_task_status(task_id, "pending")
             # Create agent for it
-            agent_data = api_post(
-                "/api/create_agent_for_task",
-                {
-                    "task_id": task_id,
-                    "workflow_id": workflow_id,
-                    "phase_id": phase_id,
-                },
-            )
+            agent_data = create_agent_for_task_direct(task_id, workflow_id, phase_id)
+            if not agent_data:
+                raise RuntimeError("create_agent_for_task_direct returned no agent")
             agent_id = agent_data.get("agent_id", "unknown")
             logger.info(f"  Created agent {agent_id[:8]} for retried task")
             recovered.append(f"retried task {task_id[:8]}")
@@ -684,7 +850,7 @@ def attempt_recovery(workflow_id: str, logger: OrchestratorLogger) -> Tuple[bool
         if not project_path:
             project_path = os.getenv("PROJECT_PATH")
         if not project_path:
-            return recovery  # Can't determine project path
+            return recovered  # Can't determine project path
         # Check if repo needs cleanup
         status_result = subprocess.run(
             ["git", "status", "--porcelain"],
@@ -738,7 +904,7 @@ def attempt_recovery(workflow_id: str, logger: OrchestratorLogger) -> Tuple[bool
         aid = agent.get("id", "")
         logger.info(f"  Terminating stale agent {aid[:8]}")
         try:
-            api_post(f"/api/agents/{aid}/terminate")
+            terminate_agent_direct(aid)
             recovered.append(f"terminated agent {aid[:8]}")
         except Exception as e:
             logger.warning(f"  Failed to terminate {aid[:8]}: {e}")
@@ -2159,6 +2325,12 @@ def _advance_phases(workflow_id: str, logger: OrchestratorLogger) -> bool:
     the polling loop in run_single_workflow.
 
     Returns True if a phase was advanced, False otherwise.
+
+    Phase Transition Cases (evaluated in priority order):
+    - Case 0:  No in-progress, no completed, first pending phase exists -> start it
+    - Case 0b: In-progress phase with no tasks -> create task for it
+    - Case 1:  Completed phase with pending successor -> fire transition
+    - Case 2:  In-progress phase that is now complete -> fire transition
     """
     try:
         with get_db() as db:
@@ -2169,180 +2341,262 @@ def _advance_phases(workflow_id: str, logger: OrchestratorLogger) -> bool:
 
             # Auto-resume paused workflow if it has a done task in the stalled phase
             if wf.status == "paused":
-                phases = (
-                    db.query(Phase)
-                    .filter_by(workflow_id=workflow_id)
-                    .order_by(Phase.order)
-                    .all()
-                )
-                for phase in phases:
-                    exec = db.query(PhaseExecution).filter_by(phase_id=phase.id).first()
-                    if exec and exec.status == "in_progress":
-                        done_task = (
-                            db.query(Task)
-                            .filter_by(phase_id=phase.id, status="done")
-                            .first()
-                        )
-                        if done_task:
-                            logger.info(
-                                f"[PHASE-ADVANCE] Auto-resuming paused workflow — "
-                                f"{phase.name} has done task {done_task.id[:8]}"
-                            )
-                            wf.status = "active"
-                            db.commit()
-                            break
+                _try_auto_resume_paused_workflow(db, workflow_id, wf, logger)
                 if wf.status == "paused":
                     return False  # Still paused, nothing to do
 
             # Get all phases and their statuses
-            phases = (
-                db.query(Phase)
-                .filter_by(workflow_id=workflow_id)
-                .order_by(Phase.order)
-                .all()
-            )
-
-            phase_statuses = []
-            for phase in phases:
-                exec = db.query(PhaseExecution).filter_by(phase_id=phase.id).first()
-                phase_statuses.append({
-                    "phase": phase,
-                    "execution": exec,
-                    "status": exec.status if exec else "pending",
-                })
+            phase_statuses = _get_phase_statuses(db, workflow_id)
 
             completed = [p for p in phase_statuses if p["status"] == "completed"]
             pending = [p for p in phase_statuses if p["status"] == "pending"]
             in_progress = [p for p in phase_statuses if p["status"] == "in_progress"]
 
             # Case 0: No in-progress phase and first phase is pending — start it
-            if not in_progress and not completed and pending:
-                first_phase = min(pending, key=lambda p: p["phase"].order)
-                # Check if it already has tasks
-                existing = (
-                    db.query(Task)
-                    .filter_by(phase_id=first_phase["phase"].id)
-                    .count()
-                )
-                if existing == 0:
-                    logger.info(
-                        f"[PHASE-ADVANCE] Starting first phase: {first_phase['phase'].name}"
-                    )
-                    return _create_phase_task(
-                        workflow_id,
-                        first_phase["phase"].id,
-                        first_phase["phase"].name,
-                        "continue",
-                        logger,
-                    )
+            result = _case_start_first_phase(db, workflow_id, pending, in_progress, completed, logger)
+            if result is not None:
+                return result
 
-            # Case 0b: In-progress phase with no tasks at all (workflow engine set it but didn't create task)
-            for ps in in_progress:
-                phase = ps["phase"]
-                task_count = (
-                    db.query(Task)
-                    .filter_by(phase_id=phase.id)
-                    .count()
-                )
-                if task_count == 0:
-                    logger.info(
-                        f"[PHASE-ADVANCE] Phase {phase.name} is in_progress but has no tasks — creating one"
-                    )
-                    return _create_phase_task(
-                        workflow_id,
-                        phase.id,
-                        phase.name,
-                        "continue",
-                        logger,
-                    )
+            # Case 0b: In-progress phase with no tasks at all
+            result = _case_in_progress_no_tasks(db, workflow_id, in_progress, logger)
+            if result is not None:
+                return result
 
-            # Case 1: Completed phase with pending successor (phase N done, next never started)
-            if completed and pending and not in_progress:
-                completed.sort(key=lambda p: p["phase"].order)
-                last_completed = completed[-1]
-                # Find the next pending phase by order (handles non-sequential orders)
-                successor = min(
-                    (p for p in pending if p["phase"].order > last_completed["phase"].order),
-                    key=lambda p: p["phase"].order,
-                    default=None,
-                )
-                if successor:
-                    # Check if successor already has tasks (transition already fired)
-                    existing_tasks = (
-                        db.query(Task)
-                        .filter_by(phase_id=successor["phase"].id)
-                        .count()
-                    )
-                    if existing_tasks > 0:
-                        return False  # Already fired
-
-                    logger.info(
-                        f"[PHASE-ADVANCE] {last_completed['phase'].name} completed, "
-                        f"advancing to {successor['phase'].name}"
-                    )
-                    return _fire_phase_transition(
-                        workflow_id, last_completed["phase"], logger
-                    )
+            # Case 1: Completed phase with pending successor
+            result = _case_completed_with_successor(db, workflow_id, completed, pending, in_progress, logger)
+            if result is not None:
+                return result
 
             # Case 2: In-progress phase that is now complete
-            for ps in in_progress:
-                phase = ps["phase"]
-                # Check if all tasks are done
-                incomplete = (
-                    db.query(Task)
-                    .filter(
-                        Task.phase_id == phase.id,
-                        Task.status.in_(["pending", "assigned", "in_progress"]),
-                    )
-                    .count()
-                )
-                if incomplete > 0:
-                    continue  # Still has active tasks
-
-                done_count = (
-                    db.query(Task)
-                    .filter_by(phase_id=phase.id, status="done")
-                    .count()
-                )
-                if done_count == 0:
-                    # Check if ALL tasks are failed — retry them
-                    failed_count = (
-                        db.query(Task)
-                        .filter_by(phase_id=phase.id, status="failed")
-                        .count()
-                    )
-                    total_count = db.query(Task).filter_by(phase_id=phase.id).count()
-                    if failed_count > 0 and failed_count == total_count:
-                        logger.info(
-                            f"[PHASE-ADVANCE] Phase {phase.name} has {failed_count} failed tasks "
-                            f"and 0 done — retrying all"
-                        )
-                        # Reset all failed tasks to pending for retry
-                        db.query(Task).filter(
-                            Task.phase_id == phase.id,
-                            Task.status == "failed",
-                        ).update({
-                            Task.status: "pending",
-                            Task.failure_reason: None,
-                        })
-                        db.commit()
-                        return True
-                    continue  # No completed tasks yet
-
-                # Phase is complete — fire transition
-                logger.info(
-                    f"[PHASE-ADVANCE] {phase.name} appears complete "
-                    f"({done_count} tasks done, 0 active), evaluating transition"
-                )
-                return _fire_phase_transition(workflow_id, phase, logger)
+            result = _case_in_progress_complete(db, workflow_id, in_progress, logger)
+            if result is not None:
+                return result
 
     except Exception as e:
         logger.warning(f"[PHASE-ADVANCE] Error: {e}")
     return False
 
 
+def _try_auto_resume_paused_workflow(db, workflow_id: str, wf, logger: OrchestratorLogger) -> None:
+    """Auto-resume paused workflow if it has a done task in the stalled phase."""
+    phases = (
+        db.query(Phase)
+        .filter_by(workflow_id=workflow_id)
+        .order_by(Phase.order)
+        .all()
+    )
+    for phase in phases:
+        exec = db.query(PhaseExecution).filter_by(phase_id=phase.id).first()
+        if exec and exec.status == "in_progress":
+            done_task = (
+                db.query(Task)
+                .filter_by(phase_id=phase.id, status="done")
+                .first()
+            )
+            if done_task:
+                logger.info(
+                    f"[PHASE-ADVANCE] Auto-resuming paused workflow — "
+                    f"{phase.name} has done task {done_task.id[:8]}"
+                )
+                wf.status = "active"
+                db.commit()
+                break
+
+
+def _get_phase_statuses(db, workflow_id: str) -> list:
+    """Get all phases with their execution statuses."""
+    phases = (
+        db.query(Phase)
+        .filter_by(workflow_id=workflow_id)
+        .order_by(Phase.order)
+        .all()
+    )
+
+    phase_statuses = []
+    for phase in phases:
+        exec = db.query(PhaseExecution).filter_by(phase_id=phase.id).first()
+        phase_statuses.append({
+            "phase": phase,
+            "execution": exec,
+            "status": exec.status if exec else "pending",
+        })
+    return phase_statuses
+
+
+def _case_start_first_phase(
+    db, workflow_id: str, pending: list, in_progress: list, completed: list, logger: OrchestratorLogger
+) -> Optional[bool]:
+    """Case 0: No in-progress phase and first phase is pending — start it.
+    
+    Returns None if this case doesn't apply, True/False otherwise.
+    """
+    if not in_progress and not completed and pending:
+        first_phase = min(pending, key=lambda p: p["phase"].order)
+        # Check if it already has tasks
+        existing = (
+            db.query(Task)
+            .filter_by(phase_id=first_phase["phase"].id)
+            .count()
+        )
+        if existing == 0:
+            logger.info(
+                f"[PHASE-ADVANCE] Starting first phase: {first_phase['phase'].name}"
+            )
+            return _create_phase_task(
+                workflow_id,
+                first_phase["phase"].id,
+                first_phase["phase"].name,
+                "continue",
+                logger,
+            )
+    return None
+
+
+def _case_in_progress_no_tasks(
+    db, workflow_id: str, in_progress: list, logger: OrchestratorLogger
+) -> Optional[bool]:
+    """Case 0b: In-progress phase with no tasks at all.
+    
+    Workflow engine set it but didn't create task.
+    Returns None if this case doesn't apply, True/False otherwise.
+    """
+    for ps in in_progress:
+        phase = ps["phase"]
+        task_count = (
+            db.query(Task)
+            .filter_by(phase_id=phase.id)
+            .count()
+        )
+        if task_count == 0:
+            logger.info(
+                f"[PHASE-ADVANCE] Phase {phase.name} is in_progress but has no tasks — creating one"
+            )
+            return _create_phase_task(
+                workflow_id,
+                phase.id,
+                phase.name,
+                "continue",
+                logger,
+            )
+    return None
+
+
+def _case_completed_with_successor(
+    db, workflow_id: str, completed: list, pending: list, in_progress: list, logger: OrchestratorLogger
+) -> Optional[bool]:
+    """Case 1: Completed phase with pending successor.
+    
+    Phase N done, next never started.
+    Returns None if this case doesn't apply, True/False otherwise.
+    """
+    if completed and pending and not in_progress:
+        completed.sort(key=lambda p: p["phase"].order)
+        last_completed = completed[-1]
+        # Find the next pending phase by order (handles non-sequential orders)
+        successor = min(
+            (p for p in pending if p["phase"].order > last_completed["phase"].order),
+            key=lambda p: p["phase"].order,
+            default=None,
+        )
+        if successor:
+            # Check if successor already has tasks (transition already fired)
+            existing_tasks = (
+                db.query(Task)
+                .filter_by(phase_id=successor["phase"].id)
+                .count()
+            )
+            if existing_tasks > 0:
+                return False  # Already fired
+
+            logger.info(
+                f"[PHASE-ADVANCE] {last_completed['phase'].name} completed, "
+                f"advancing to {successor['phase'].name}"
+            )
+            # Extract primitives before session closes to avoid DetachedInstanceError
+            phase_id = last_completed["phase"].id
+            phase_name = last_completed["phase"].name
+            return _fire_phase_transition(
+                workflow_id, phase_id, phase_name, logger
+            )
+    return None
+
+
+def _case_in_progress_complete(
+    db, workflow_id: str, in_progress: list, logger: OrchestratorLogger
+) -> Optional[bool]:
+    """Case 2: In-progress phase that is now complete.
+    
+    Returns None if this case doesn't apply, True/False otherwise.
+    """
+    for ps in in_progress:
+        phase = ps["phase"]
+        # Check if all tasks are done
+        incomplete = (
+            db.query(Task)
+            .filter(
+                Task.phase_id == phase.id,
+                Task.status.in_(["pending", "assigned", "in_progress"]),
+            )
+            .count()
+        )
+        if incomplete > 0:
+            continue  # Still has active tasks
+
+        done_count = (
+            db.query(Task)
+            .filter_by(phase_id=phase.id, status="done")
+            .count()
+        )
+        if done_count == 0:
+            # Check if ALL tasks are failed — retry them
+            result = _maybe_retry_failed_tasks(db, phase, logger)
+            if result is not None:
+                return result
+            continue  # No completed tasks yet
+
+        # Phase is complete — fire transition
+        logger.info(
+            f"[PHASE-ADVANCE] {phase.name} appears complete "
+            f"({done_count} tasks done, 0 active), evaluating transition"
+        )
+        # Extract primitives before session closes to avoid DetachedInstanceError
+        phase_id = phase.id
+        phase_name = phase.name
+        return _fire_phase_transition(workflow_id, phase_id, phase_name, logger)
+    return None
+
+
+def _maybe_retry_failed_tasks(db, phase, logger: OrchestratorLogger) -> Optional[bool]:
+    """Retry all failed tasks in a phase if all tasks are failed.
+    
+    Returns None if no retry was needed, True if tasks were reset for retry.
+    """
+    failed_count = (
+        db.query(Task)
+        .filter_by(phase_id=phase.id, status="failed")
+        .count()
+    )
+    total_count = db.query(Task).filter_by(phase_id=phase.id).count()
+    if failed_count > 0 and failed_count == total_count:
+        logger.info(
+            f"[PHASE-ADVANCE] Phase {phase.name} has {failed_count} failed tasks "
+            f"and 0 done — retrying all"
+        )
+        # Reset all failed tasks to pending for retry
+        db.query(Task).filter(
+            Task.phase_id == phase.id,
+            Task.status == "failed",
+        ).update({
+            Task.status: "pending",
+            Task.failure_reason: None,
+        })
+        db.commit()
+        return True
+    return None
+
+
 def _fire_phase_transition(
-    workflow_id: str, phase, logger: OrchestratorLogger
+    workflow_id: str, phase_id: str, phase_name: str, logger: OrchestratorLogger
 ) -> bool:
     """Fire the phase transition: mark complete, evaluate, create next task/agent.
 
@@ -2351,14 +2605,14 @@ def _fire_phase_transition(
     try:
         # Build phase output for gated phases
         phase_output = {}
-        if phase.name in GATED_PHASES:
+        if phase_name in GATED_PHASES:
             with get_db() as db:
                 wf = db.query(Workflow).filter_by(id=workflow_id).first()
                 if wf and wf.working_directory:
                     from pathlib import Path
 
                     phase_output = build_phase_output(
-                        phase.name, Path(wf.working_directory)
+                        phase_name, Path(wf.working_directory)
                     )
 
         # Mark phase complete and get engine decision
@@ -2366,7 +2620,7 @@ def _fire_phase_transition(
         pm = PhaseManager(DatabaseManager())
         pm.workflow_id = workflow_id
         result = pm.mark_phase_complete(
-            phase.id,
+            phase_id,
             f"Phase completed",
             phase_output=phase_output,
         )
@@ -2376,7 +2630,7 @@ def _fire_phase_transition(
         target_phase_name = result.get("target_phase")
 
         logger.info(
-            f"[PHASE-ADVANCE] Engine decision for {phase.name}: {action}" +
+            f"[PHASE-ADVANCE] Engine decision for {phase_name}: {action}" +
             (f" -> {target_phase_name}" if target_phase_name else "")
         )
 
@@ -2387,7 +2641,7 @@ def _fire_phase_transition(
 
         if action == "arbitrate":
             # TODO: spawn arbitration agent via API
-            logger.warning(f"[PHASE-ADVANCE] Arbitration needed for {phase.name}")
+            logger.warning(f"[PHASE-ADVANCE] Arbitration needed for {phase_name}")
             return True
 
         if not target_phase_id:
@@ -2499,18 +2753,10 @@ def _create_phase_task(
 
             db.commit()
 
-        # Create agent via API
-        agent_data = api_post(
-            "/api/create_agent_for_task",
-            {
-                "task_id": task_id,
-                "workflow_id": workflow_id,
-                "phase_id": phase_id,
-            },
-            timeout=30,
-        )
+        # Create agent directly in-process (H-2 fix — no self-HTTP call)
+        agent_data = create_agent_for_task_direct(task_id, workflow_id, phase_id)
         if not agent_data:
-            # API call failed — clean up the orphaned task
+            # Agent creation failed — clean up the orphaned task
             logger.warning(
                 f"[PHASE-TASK] Failed to create agent for {phase_name}, cleaning up task {task_id[:8]}"
             )
@@ -2587,14 +2833,14 @@ def run_single_workflow(
                 for agent in agents:
                     if agent.get("status") in ACTIVE_AGENT_STATUSES:
                         try:
-                            api_post(f"/api/agents/{agent['id']}/terminate")
+                            terminate_agent_direct(agent["id"])
                             logger.info(
                                 f"  Terminated agent {agent['id'][:8]} for workflow {wf_id[:8]}"
                             )
                         except Exception:
                             pass
                 # Mark workflow as paused
-                api_post(f"/api/workflow-executions/{wf_id}/pause")
+                pause_workflow_direct(wf_id)
                 logger.info(f"  Paused workflow {wf_id[:8]}")
             except Exception as e:
                 logger.warning(f"  Failed to stop workflow {wf_id[:8]}: {e}")
@@ -2982,7 +3228,7 @@ def run_single_workflow(
                         for a in agents:
                             if a.get("status") in ACTIVE_AGENT_STATUSES:
                                 try:
-                                    api_post(f"/api/agents/{a['id']}/terminate")
+                                    terminate_agent_direct(a["id"])
                                     logger.info(
                                         f"Terminated agent {a['id'][:8]} (skip)"
                                     )
@@ -3005,7 +3251,7 @@ def run_single_workflow(
             try:
                 wf_status = get_workflow_status(exec_id)
                 if wf_status.get("status") == "active":
-                    api_post(f"/api/workflow-executions/{exec_id}/pause")
+                    pause_workflow_direct(exec_id)
                     logger.info(f"Paused workflow {exec_id[:8]}")
             except Exception as e:
                 logger.warning(f"Workflow cleanup failed: {e}")
@@ -3926,7 +4172,7 @@ def run_continuous_pipeline(args) -> None:
             for wf in active_workflows:
                 wf_id = wf.get("id", "")
                 try:
-                    api_post(f"/api/workflow-executions/{wf_id}/complete")
+                    complete_workflow_direct(wf_id)
                     logger.info(f"  Cleaned up stale workflow {wf_id[:8]}")
                 except Exception as e:
                     logger.warning(f"  Failed to clean up {wf_id[:8]}: {e}")
@@ -4230,7 +4476,7 @@ def run_continuous_pipeline(args) -> None:
             for wf in active_workflows:
                 wf_id = wf.get("id", "")
                 try:
-                    api_post(f"/api/workflow-executions/{wf_id}/pause")
+                    pause_workflow_direct(wf_id)
                     logger.info(f"Paused workflow {wf_id[:8]}")
                 except Exception:
                     pass

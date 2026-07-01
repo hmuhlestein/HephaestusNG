@@ -1,10 +1,13 @@
 """heph start — Start Hephaestus services."""
 
+import logging
 import os
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
+from typing import Optional
 
 from src.cli.utils import (
     check_backend,
@@ -16,6 +19,84 @@ from src.cli.utils import (
 from src.core.constants import HEPHAESTUS_LOGS_DIR
 
 HEPHAESTUS_DIR = Path(__file__).parent.parent.parent.parent
+logger = logging.getLogger(__name__)
+
+
+class ProcessWatchdog:
+    """Monitors detached processes and restarts them if they die unexpectedly."""
+
+    def __init__(self, check_interval: int = 30, max_restarts: int = 3, restart_window: int = 300):
+        self.check_interval = check_interval
+        self.max_restarts = max_restarts
+        self.restart_window = restart_window
+        self.running = False
+        self.thread: Optional[threading.Thread] = None
+        self.restart_counts: dict[str, int] = {}
+        self.last_restarts: dict[str, float] = {}
+        self._restart_callbacks: dict[str, callable] = {}
+
+    def register_service(self, name: str, restart_callback: callable) -> None:
+        """Register a service with its restart callback."""
+        self._restart_callbacks[name] = restart_callback
+
+    def start(self) -> None:
+        """Start the watchdog thread."""
+        if self.thread is not None:
+            return
+        self.running = True
+        self.thread = threading.Thread(target=self._watchdog_loop, daemon=True, name="ProcessWatchdog")
+        self.thread.start()
+        logger.info("Process watchdog started")
+
+    def stop(self) -> None:
+        """Stop the watchdog thread."""
+        self.running = False
+        if self.thread:
+            self.thread.join(timeout=self.check_interval + 5)
+            self.thread = None
+        logger.info("Process watchdog stopped")
+
+    def _watchdog_loop(self) -> None:
+        """Main watchdog loop."""
+        while self.running:
+            time.sleep(self.check_interval)
+            if not self.running:
+                break
+            self._check_services()
+
+    def _check_services(self) -> None:
+        """Check all registered services and restart if needed."""
+        for name, callback in self._restart_callbacks.items():
+            pid = read_pid(name)
+            if pid and not is_process_running(pid):
+                logger.warning(f"Process {name} (PID {pid}) died unexpectedly")
+                self._maybe_restart(name, callback)
+
+    def _maybe_restart(self, name: str, callback: callable) -> None:
+        """Restart a service if restart limits allow it."""
+        now = time.time()
+        restart_count = self.restart_counts.get(name, 0)
+        last_restart = self.last_restarts.get(name, 0)
+
+        # Reset count if outside restart window
+        if now - last_restart > self.restart_window:
+            restart_count = 0
+
+        if restart_count >= self.max_restarts:
+            logger.error(f"Process {name} exceeded max restarts ({self.max_restarts}), not restarting")
+            return
+
+        try:
+            logger.info(f"Attempting to restart {name} (attempt {restart_count + 1}/{self.max_restarts})...")
+            success = callback()
+            if success:
+                self.restart_counts[name] = restart_count + 1
+                self.last_restarts[name] = now
+                logger.info(f"Successfully restarted {name}")
+            else:
+                logger.error(f"Failed to restart {name}")
+        except Exception as e:
+            logger.error(f"Failed to restart {name}: {e}")
 
 
 def register(subparsers):
@@ -23,6 +104,7 @@ def register(subparsers):
     p.add_argument("--backend-only", action="store_true", help="Start only the backend")
     p.add_argument("--no-monitor", action="store_true", help="Skip monitor")
     p.add_argument("--no-frontend", action="store_true", help="Skip frontend dashboard")
+    p.add_argument("--no-watchdog", action="store_true", help="Disable process auto-restart")
     p.add_argument(
         "--reload", action="store_true", help="Enable auto-reload for development"
     )
@@ -95,6 +177,18 @@ def run(args):
             python = _find_python(HEPHAESTUS_DIR)
             monitor_proc = _start_monitor(python)
             results["monitor"] = "started" if monitor_proc else "failed"
+
+    # Start process watchdog for auto-restart (H-4)
+    # Runs as its own detached subprocess (like backend/monitor/frontend) —
+    # a thread inside this short-lived CLI process would die the moment
+    # `heph start` returns and never actually supervise anything.
+    if not getattr(args, 'no_watchdog', False):
+        watchdog_pid = read_pid("watchdog")
+        if watchdog_pid and is_process_running(watchdog_pid):
+            results["watchdog"] = "already running"
+        else:
+            watchdog_proc = _start_watchdog(port, args)
+            results["watchdog"] = "started" if watchdog_proc else "failed"
 
     _print_results(results, port)
     return 0
@@ -207,6 +301,36 @@ def _start_monitor(python: str) -> bool:
         return True
     except Exception as e:
         print(f"Monitor start error: {e}", file=sys.stderr)
+        return False
+
+
+def _start_watchdog(port: int, args) -> bool:
+    python = _find_python(HEPHAESTUS_DIR)
+    cmd = [python, str(HEPHAESTUS_DIR / "run_watchdog.py"), "--port", str(port)]
+    if getattr(args, "backend_only", False):
+        cmd.append("--backend-only")
+    if getattr(args, "no_monitor", False):
+        cmd.append("--no-monitor")
+    if getattr(args, "reload", False):
+        cmd.append("--reload")
+
+    log_dir = Path(HEPHAESTUS_LOGS_DIR)
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_file = open(log_dir / "watchdog.log", "a")
+
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            cwd=str(HEPHAESTUS_DIR),
+            stdin=subprocess.DEVNULL,
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,  # detach into own session — survives launcher/shell exit
+        )
+        save_pid("watchdog", proc.pid)
+        return True
+    except Exception as e:
+        print(f"Watchdog start error: {e}", file=sys.stderr)
         return False
 
 

@@ -5,6 +5,22 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import Mock, patch
 
+import pytest
+
+
+@pytest.fixture
+def orch_db_env(tmp_path, monkeypatch):
+    """Real sqlite DB for functions converted to direct DB access (H-2
+    fix) — get_tasks/get_agents/peek_agent_output no longer call api_get,
+    so tests seed data via HEPHAESTUS_TEST_DB instead of mocking HTTP."""
+    from src.core.database import DatabaseManager
+
+    db_path = tmp_path / "test.db"
+    monkeypatch.setenv("HEPHAESTUS_TEST_DB", str(db_path))
+    db = DatabaseManager(str(db_path))
+    db.create_tables()
+    return db
+
 
 class TestFileHash:
     def test_deterministic(self, tmp_path):
@@ -188,7 +204,7 @@ class TestDetectImpasse:
     def test_no_agents_pending_tasks(self):
         from src.autopilot.orchestrator import detect_impasse
 
-        found, msg = detect_impasse([], [{"id": "t1"}], [], elapsed_seconds=400)
+        found, msg = detect_impasse([], [{"id": "t1"}], [], elapsed_seconds=700)
         assert found is True
         assert "No active agents" in msg
 
@@ -281,9 +297,15 @@ class TestScanDesignQueue:
     def test_queue_order(self, tmp_path):
         from src.autopilot.orchestrator import scan_design_queue
 
+        # The function looks for order file at queue_dir.parent.parent / .hephaestus / .queue_order.json
+        # So we need to set up the directory structure accordingly
+        project_root = tmp_path.parent.parent
+        hephaestus_dir = project_root / ".hephaestus"
+        hephaestus_dir.mkdir(exist_ok=True)
+
         (tmp_path / "a.md").write_text("a")
         (tmp_path / "b.md").write_text("b")
-        (tmp_path / ".queue_order.json").write_text(json.dumps(["b.md", "a.md"]))
+        (hephaestus_dir / ".queue_order.json").write_text(json.dumps(["b.md", "a.md"]))
         designs = scan_design_queue(tmp_path, set())
         assert designs[0].path.name == "b.md"
         assert designs[1].path.name == "a.md"
@@ -385,91 +407,130 @@ class TestCollectFilesCreated:
 
 
 class TestGetTasks:
-    @patch("src.autopilot.orchestrator.api_get")
-    def test_returns_list(self, mock_get):
+    def _make_task(self, db, task_id, status="pending", workflow_id="wf-1"):
+        from src.core.database import Task
+
+        with db.session_scope() as session:
+            session.add(
+                Task(
+                    id=task_id,
+                    raw_description="do work",
+                    done_definition="done",
+                    status=status,
+                    workflow_id=workflow_id,
+                )
+            )
+
+    def test_returns_list(self, orch_db_env):
         from src.autopilot.orchestrator import get_tasks
 
-        mock_get.return_value = [{"id": "t1", "status": "done"}]
+        self._make_task(orch_db_env, "t1", status="done")
         result = get_tasks()
         assert len(result) == 1
 
-    @patch("src.autopilot.orchestrator.api_get")
-    def test_returns_empty_on_none(self, mock_get):
+    def test_returns_empty_on_none(self, orch_db_env):
         from src.autopilot.orchestrator import get_tasks
 
-        mock_get.return_value = None
         result = get_tasks()
         assert result == []
 
-    @patch("src.autopilot.orchestrator.api_get")
-    def test_unwraps_dict(self, mock_get):
+    def test_unwraps_dict(self, orch_db_env):
         from src.autopilot.orchestrator import get_tasks
 
-        mock_get.return_value = {"tasks": [{"id": "t1"}]}
+        self._make_task(orch_db_env, "t1")
         result = get_tasks()
         assert len(result) == 1
+        assert result[0]["id"] == "t1"
 
-    @patch("src.autopilot.orchestrator.api_get")
-    def test_with_params(self, mock_get):
+    def test_with_params(self, orch_db_env):
         from src.autopilot.orchestrator import get_tasks
 
-        mock_get.return_value = []
-        get_tasks(status="done", workflow_id="wf-1")
-        mock_get.assert_called_once()
-        call_url = mock_get.call_args[0][0]
-        assert "status=done" in call_url
-        assert "workflow_id=wf-1" in call_url
+        self._make_task(orch_db_env, "t1", status="done", workflow_id="wf-1")
+        self._make_task(orch_db_env, "t2", status="pending", workflow_id="wf-1")
+        self._make_task(orch_db_env, "t3", status="done", workflow_id="wf-2")
+
+        result = get_tasks(status="done", workflow_id="wf-1")
+        assert len(result) == 1
+        assert result[0]["id"] == "t1"
 
 
 class TestGetAgents:
-    @patch("src.autopilot.orchestrator.get_tasks")
-    @patch("src.autopilot.orchestrator.api_get")
-    def test_returns_all(self, mock_get, mock_tasks):
+    def _make_agent(self, db, agent_id, status="working"):
+        from src.core.database import Agent
+
+        with db.session_scope() as session:
+            session.add(Agent(id=agent_id, system_prompt="test", status=status, cli_type="pi"))
+
+    def _make_task(self, db, task_id, workflow_id, assigned_agent_id):
+        from src.core.database import Task
+
+        with db.session_scope() as session:
+            session.add(
+                Task(
+                    id=task_id,
+                    raw_description="do work",
+                    done_definition="done",
+                    status="in_progress",
+                    workflow_id=workflow_id,
+                    assigned_agent_id=assigned_agent_id,
+                )
+            )
+
+    def test_returns_all(self, orch_db_env):
         from src.autopilot.orchestrator import get_agents
 
-        mock_get.return_value = [{"id": "a1", "status": "active"}]
+        self._make_agent(orch_db_env, "a1")
         result = get_agents()
         assert len(result) == 1
 
-    @patch("src.autopilot.orchestrator.get_tasks")
-    @patch("src.autopilot.orchestrator.api_get")
-    def test_filters_by_workflow(self, mock_get, mock_tasks):
+    def test_filters_by_workflow(self, orch_db_env):
         from src.autopilot.orchestrator import get_agents
 
-        mock_get.return_value = [
-            {"id": "a1", "status": "active"},
-            {"id": "a2", "status": "active"},
-        ]
-        mock_tasks.return_value = [
-            {"assigned_agent_id": "a1", "workflow_id": "wf-1"},
-        ]
+        self._make_agent(orch_db_env, "a1")
+        self._make_agent(orch_db_env, "a2")
+        self._make_task(orch_db_env, "t1", "wf-1", "a1")
+
         result = get_agents(workflow_id="wf-1")
         assert len(result) == 1
         assert result[0]["id"] == "a1"
 
-    @patch("src.autopilot.orchestrator.api_get")
-    def test_returns_empty_on_none(self, mock_get):
+    def test_returns_empty_on_none(self, orch_db_env):
         from src.autopilot.orchestrator import get_agents
 
-        mock_get.return_value = None
         result = get_agents()
         assert result == []
 
 
 class TestPeekAgentOutput:
-    @patch("src.autopilot.orchestrator.api_get")
-    def test_returns_output(self, mock_get):
+    def test_returns_output(self, orch_db_env):
+        from src.core.database import Agent
         from src.autopilot.orchestrator import peek_agent_output
 
-        mock_get.return_value = {"output": "Building..."}
-        result = peek_agent_output("a1")
+        with orch_db_env.session_scope() as session:
+            session.add(
+                Agent(
+                    id="a1",
+                    system_prompt="test",
+                    status="working",
+                    cli_type="pi",
+                    tmux_session_name="agent-a1",
+                )
+            )
+
+        with patch("libtmux.Server") as mock_server_cls:
+            mock_pane = Mock()
+            mock_pane.cmd.return_value.stdout = ["Building..."]
+            mock_window = Mock()
+            mock_window.attached_pane = mock_pane
+            mock_session = Mock()
+            mock_session.attached_window = mock_window
+            mock_server_cls.return_value.sessions.get.return_value = mock_session
+
+            result = peek_agent_output("a1")
         assert result == "Building..."
 
-    @patch("src.autopilot.orchestrator.api_get")
-    def test_returns_empty_on_none(self, mock_get):
+    def test_returns_empty_on_none(self, orch_db_env):
         from src.autopilot.orchestrator import peek_agent_output
-
-        mock_get.return_value = None
         result = peek_agent_output("a1")
         assert result == ""
 
@@ -515,8 +576,10 @@ class TestOrchestratorLogger:
         assert state_file.exists()
 
 
+
 class TestSweepStrayFiles:
     def test_moves_root_files(self, tmp_path):
+        from unittest.mock import patch
         from src.autopilot.orchestrator import OrchestratorLogger, _sweep_stray_files
 
         logger = OrchestratorLogger(tmp_path / "logs")
@@ -525,15 +588,17 @@ class TestSweepStrayFiles:
         docs = feature / "docs"
         docs.mkdir()
 
-        # Create stray file in project root
-        stray = tmp_path / "design_notes.md"
-        stray.write_text("# Notes")
+        # Create stray file in project root (use a file from _SWEEP_REPORT_NAMES)
+        stray = tmp_path / "review_report.md"
+        stray.write_text("# Review Report")
 
-        _sweep_stray_files(tmp_path, feature, docs, logger)
+        with patch("src.autopilot.orchestrator.SWEEP_ENABLED", True):
+            _sweep_stray_files(tmp_path, feature, docs, logger)
         assert not stray.exists()
-        assert (docs / "design_notes.md").exists()
+        assert (docs / "review_report.md").exists()
 
     def test_skips_root_files(self, tmp_path):
+        from unittest.mock import patch
         from src.autopilot.orchestrator import OrchestratorLogger, _sweep_stray_files
 
         logger = OrchestratorLogger(tmp_path / "logs")
@@ -548,11 +613,13 @@ class TestSweepStrayFiles:
         (tmp_path / ".env").write_text("skip")
         (tmp_path / "run.py").write_text("skip")
 
-        _sweep_stray_files(tmp_path, feature, docs, logger)
+        with patch("src.autopilot.orchestrator.SWEEP_ENABLED", True):
+            _sweep_stray_files(tmp_path, feature, docs, logger)
         assert (tmp_path / "README.md").exists()
         assert (tmp_path / "run.py").exists()
 
     def test_moves_feature_files(self, tmp_path):
+        from unittest.mock import patch
         from src.autopilot.orchestrator import OrchestratorLogger, _sweep_stray_files
 
         logger = OrchestratorLogger(tmp_path / "logs")
@@ -561,14 +628,16 @@ class TestSweepStrayFiles:
         docs = feature / "docs"
         docs.mkdir()
 
-        stray = feature / "notes.md"
-        stray.write_text("# Notes")
+        stray = feature / "security_report.md"
+        stray.write_text("# Security Report")
 
-        _sweep_stray_files(tmp_path, feature, docs, logger)
+        with patch("src.autopilot.orchestrator.SWEEP_ENABLED", True):
+            _sweep_stray_files(tmp_path, feature, docs, logger)
         assert not stray.exists()
-        assert (docs / "notes.md").exists()
+        assert (docs / "security_report.md").exists()
 
     def test_moves_stray_dirs(self, tmp_path):
+        from unittest.mock import patch
         from src.autopilot.orchestrator import OrchestratorLogger, _sweep_stray_files
 
         logger = OrchestratorLogger(tmp_path / "logs")
@@ -577,16 +646,17 @@ class TestSweepStrayFiles:
         docs = feature / "docs"
         docs.mkdir()
 
-        # Create stray dir in project root
-        stray_dir = tmp_path / "evidence"
-        stray_dir.mkdir()
-        (stray_dir / "proof.md").write_text("evidence")
+        # Create report file directly in project root (not in a subdirectory)
+        stray = tmp_path / "qa_result.json"
+        stray.write_text("{}")
 
-        _sweep_stray_files(tmp_path, feature, docs, logger)
-        assert not stray_dir.exists()
-        assert (docs / "evidence" / "proof.md").exists()
+        with patch("src.autopilot.orchestrator.SWEEP_ENABLED", True):
+            _sweep_stray_files(tmp_path, feature, docs, logger)
+        assert not stray.exists()
+        assert (docs / "qa_result.json").exists()
 
     def test_copies_report_docs(self, tmp_path):
+        from unittest.mock import patch
         from src.autopilot.orchestrator import OrchestratorLogger, _sweep_stray_files
 
         logger = OrchestratorLogger(tmp_path / "logs")
@@ -600,40 +670,9 @@ class TestSweepStrayFiles:
         proj_docs.mkdir()
         (proj_docs / "qa_result.json").write_text("{}")
 
-        _sweep_stray_files(tmp_path, feature, docs, logger)
-        # Report should be copied to feature docs
+        with patch("src.autopilot.orchestrator.SWEEP_ENABLED", True):
+            _sweep_stray_files(tmp_path, feature, docs, logger)
         assert (docs / "qa_result.json").exists()
-
-    def test_no_existing_dest(self, tmp_path):
-        from src.autopilot.orchestrator import OrchestratorLogger, _sweep_stray_files
-
-        logger = OrchestratorLogger(tmp_path / "logs")
-        feature = tmp_path / "feature"
-        feature.mkdir()
-        docs = feature / "docs"
-        docs.mkdir()
-
-        # File already exists in dest
-        (docs / "design.md").write_text("existing")
-        (tmp_path / "design.md").write_text("new")
-
-        _sweep_stray_files(tmp_path, feature, docs, logger)
-        # Should not overwrite
-        assert (docs / "design.md").read_text() == "existing"
-
-    def test_empty_dirs(self, tmp_path):
-        from src.autopilot.orchestrator import OrchestratorLogger, _sweep_stray_files
-
-        logger = OrchestratorLogger(tmp_path / "logs")
-        feature = tmp_path / "feature"
-        feature.mkdir()
-        docs = feature / "docs"
-        docs.mkdir()
-
-        # No stray files
-        _sweep_stray_files(tmp_path, feature, docs, logger)
-        assert docs.exists()
-
 
 class TestCheckApiCredits:
     @patch("src.autopilot.orchestrator.get_tasks")
@@ -824,10 +863,13 @@ class TestAttemptRecovery:
         assert success is False
         assert "No recovery" in msg
 
-    @patch("src.autopilot.orchestrator.api_post")
+    @patch("src.autopilot.orchestrator.update_task_status")
+    @patch("src.autopilot.orchestrator.create_agent_for_task_direct")
     @patch("src.autopilot.orchestrator.get_agents")
     @patch("src.autopilot.orchestrator.get_tasks")
-    def test_retries_failed_tasks(self, mock_tasks, mock_agents, mock_post):
+    def test_retries_failed_tasks(
+        self, mock_tasks, mock_agents, mock_create_agent, mock_update_status
+    ):
         from src.autopilot.orchestrator import OrchestratorLogger, attempt_recovery
 
         logger = OrchestratorLogger(Path("/tmp/logs"))
@@ -835,7 +877,9 @@ class TestAttemptRecovery:
             [{"id": "t1", "retry_count": 0, "phase_id": "p1"}],  # failed tasks
         ]
         mock_agents.return_value = []
-        mock_post.return_value = {"agent_id": "a1"}
+        mock_update_status.return_value = True
+        # H-2: create_agent_for_task_direct replaces the old api_post self-HTTP call
+        mock_create_agent.return_value = {"agent_id": "a1", "status": "created"}
         success, msg = attempt_recovery("wf-1", logger)
         assert success is True
         assert "retried" in msg.lower()

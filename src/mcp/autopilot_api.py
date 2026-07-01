@@ -2050,8 +2050,16 @@ async def get_project_design_status(project_id: str, filename: str):
                 .filter_by(project_id=project_id, filename=filename)
                 .first()
             )
-            design_status = _design.status if _design else None
-            _design_id = _design.id if _design else None
+            if _design:
+                from src.core.status_derivation import derive_design_status
+
+                # H-3: use the centralized, self-healing derivation (feature
+                # rollup) instead of the raw column, which is only ever
+                # written by run_design_aggregate at the very end of a run.
+                design_status = derive_design_status(_db, _design.id, write_back=True)
+                _design_id = _design.id
+            else:
+                design_status = None
 
         # A live 'active'/'paused' workflow signal must win over the coarser
         # design_status field — that field is only updated by run_design_aggregate
@@ -2134,52 +2142,11 @@ async def get_project_design_status(project_id: str, filename: str):
                         "completed_at": t.completed_at.isoformat() if t.completed_at else None,
                         "agent_id": t.assigned_agent_id,
                         "agent_status": agent_status,
-                        # raw_description (not the enriched/display text, which
-                        # rewords it and drops the prefix) is what actually
-                        # carries the DIAGNOSTIC: marker — used below to
-                        # exclude these from feature-status derivation.
-                        "_is_diagnostic": (t.raw_description or "").startswith(
-                            "DIAGNOSTIC:"
-                        ),
                     })
             
-            # Derive feature status from task statuses, but respect DB 'paused'.
-            # Exclude monitor-generated DIAGNOSTIC tasks from this — they're not
-            # real feature work, and a stray leftover one (e.g. from a stalled-
-            # workflow diagnostic run) makes "all real tasks done" look like
-            # "mixed statuses", falling through to the stale DB value forever
-            # (this is what made a completed feature's pause/resume button
-            # silently no-op — the workflow had already finished, but the
-            # feature's own status field never got the memo).
-            real_feat_tasks = [t for t in feat_tasks if not t.get("_is_diagnostic")]
-            if feat.status == "paused":
-                feat_status = "paused"
-            elif real_feat_tasks:
-                task_statuses = {t["status"] for t in real_feat_tasks}
-                if task_statuses == {"done"}:
-                    feat_status = "completed"
-                elif "in_progress" in task_statuses or "assigned" in task_statuses:
-                    feat_status = "active"
-                elif "failed" in task_statuses:
-                    feat_status = "failed"
-                elif task_statuses == {"pending"}:
-                    # No task has started yet — trust the DB status (set by the
-                    # orchestrator when the feature pipeline launches, before any
-                    # task exists) instead of forcing "pending" and hiding the
-                    # active/failed state from the UI.
-                    feat_status = feat.status
-                else:
-                    feat_status = feat.status
-            else:
-                feat_status = feat.status
-
-            # Self-heal the DB column too — other code (pause/resume,
-            # run_design_aggregate) reads Feature.status directly, not this
-            # derived value, so a stale row would keep confusing them even
-            # though this response now shows the right thing.
-            if feat_status in ("completed", "failed") and feat.status != feat_status:
-                feat.status = feat_status
-                db.commit()
+            # Use centralized status derivation (H-3 fix)
+            from src.core.status_derivation import derive_feature_status
+            feat_status = derive_feature_status(db, feat.id, write_back=True)
 
             features.append({
                 "id": feat.id,
