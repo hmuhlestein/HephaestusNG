@@ -456,6 +456,12 @@ class MonitoringLoop:
         # Cache for Guardian summaries
         self.guardian_summaries_cache: Dict[str, Dict[str, Any]] = {}
 
+        # Orphaned tmux session reconciliation collaborator (SOLID review
+        # 3.4) — _cleanup_orphaned_tmux_sessions below delegates to this.
+        from src.monitoring.orphan_reaper import OrphanSessionReaper
+
+        self._orphan_reaper = OrphanSessionReaper(db_manager, agent_manager)
+
     async def start(self):
         """Start the monitoring loop."""
         self.running = True
@@ -1607,143 +1613,20 @@ class MonitoringLoop:
 
     async def _cleanup_orphaned_tmux_sessions(self):
         """Clean up tmux sessions that don't have corresponding active agents.
-        Also clean up orphaned agents (working but no active workflow)."""
-        logger.debug("Starting orphaned tmux session cleanup")
+        Also clean up orphaned agents (working but no active workflow).
 
+        Delegates to OrphanSessionReaper (SOLID review 3.4) — kept as a
+        public method here since tests call it directly on the
+        MonitoringLoop instance and set/read the grace-period timestamp
+        (_last_orphan_check_time) there, hence the two-way sync below.
+        """
+        self._orphan_reaper.last_check_time = getattr(
+            self, "_last_orphan_check_time", None
+        )
         try:
-            # Get all tmux sessions that start with 'agent' (the new naming convention)
-            agent_sessions = []
-            for session in self.agent_manager.tmux_server.sessions:
-                if session.name.startswith("agent"):
-                    agent_sessions.append(session.name)
-
-            if not agent_sessions:
-                logger.debug("No agent tmux sessions found")
-                return
-
-            logger.debug(
-                f"Found {len(agent_sessions)} agent tmux sessions: {agent_sessions}"
-            )
-
-            # Get all active agent session names from database
-            session = self.db_manager.get_session()
-            try:
-                active_agents = (
-                    session.query(Agent)
-                    .filter(Agent.status.in_(["working", "pending", "assigned"]))
-                    .all()
-                )
-
-                active_session_names = {
-                    agent.tmux_session_name
-                    for agent in active_agents
-                    if agent.tmux_session_name
-                }
-
-                logger.debug(
-                    f"Found {len(active_session_names)} active agent sessions: {active_session_names}"
-                )
-
-                # Clean up orphaned agents (working but no active workflow)
-                from src.core.database import Workflow
-
-                active_workflow_ids = {
-                    wf.id
-                    for wf in session.query(Workflow)
-                    .filter(Workflow.status.in_(["active", "running"]))
-                    .all()
-                }
-
-                for agent in active_agents:
-                    if agent.current_task_id:
-                        task = (
-                            session.query(Task)
-                            .filter_by(id=agent.current_task_id)
-                            .first()
-                        )
-                        if (
-                            task
-                            and task.workflow_id
-                            and task.workflow_id not in active_workflow_ids
-                        ):
-                            logger.info(
-                                f"Terminating orphaned agent {agent.id[:8]} - workflow {task.workflow_id[:8]} not active"
-                            )
-                            agent.status = "terminated"
-                session.commit()
-
-            finally:
-                session.close()
-
-            # Find orphaned sessions (exist in tmux but not in database)
-            # Use grace period based on last check time to avoid killing newly-created sessions
-            GRACE_PERIOD_SECONDS = 120
-            current_time = datetime.now()
-
-            # Track when we last checked - agents created since last check get grace period
-            if not hasattr(self, "_last_orphan_check_time"):
-                self._last_orphan_check_time = current_time
-                logger.debug(
-                    "First orphan check - skipping all sessions for grace period"
-                )
-                return
-
-            time_since_last_check = (
-                current_time - self._last_orphan_check_time
-            ).total_seconds()
-
-            orphaned_sessions = []
-            for tmux_sess in self.agent_manager.tmux_server.sessions:
-                if tmux_sess.name not in agent_sessions:
-                    continue
-                if tmux_sess.name in active_session_names:
-                    continue
-
-                # Apply grace period: if we just started monitoring or haven't checked in a while,
-                # skip orphan detection to let new agents get registered in DB
-                if time_since_last_check < GRACE_PERIOD_SECONDS:
-                    logger.debug(
-                        f"Skipping session {tmux_sess.name} - within grace period ({time_since_last_check:.0f}s < {GRACE_PERIOD_SECONDS}s)"
-                    )
-                    continue
-
-                orphaned_sessions.append(tmux_sess.name)
-
-            # Update last check time
-            self._last_orphan_check_time = current_time
-
-            if not orphaned_sessions:
-                logger.debug("No orphaned tmux sessions found")
-                return
-
-            logger.info(
-                f"Found {len(orphaned_sessions)} orphaned tmux sessions (after grace period): {orphaned_sessions}"
-            )
-
-            # Kill orphaned sessions
-            killed_count = 0
-            for session_name in orphaned_sessions:
-                try:
-                    # Find and kill the session
-                    for tmux_sess in self.agent_manager.tmux_server.sessions:
-                        if tmux_sess.name == session_name:
-                            tmux_sess.kill_session()
-                            logger.info(f"Killed orphaned tmux session: {session_name}")
-                            killed_count += 1
-                            break
-                except Exception as e:
-                    logger.warning(
-                        f"Failed to kill orphaned session {session_name}: {e}"
-                    )
-
-            if killed_count > 0:
-                logger.info(
-                    f"Successfully cleaned up {killed_count} orphaned tmux sessions"
-                )
-
-        except Exception as e:
-            logger.error(f"Error during tmux session cleanup: {e}")
-            raise
+            await self._orphan_reaper.cleanup_orphaned_tmux_sessions()
+        finally:
+            self._last_orphan_check_time = self._orphan_reaper.last_check_time
 
     async def _check_workflow_stuck_state(self):
         """Check if workflow is stuck and needs diagnostic agent.
