@@ -23,6 +23,17 @@ class CLIAgentInterface(ABC):
     calls these methods without knowing which CLI tool is running.
     """
 
+    #: Human-readable label used in delivery logging (e.g. "Claude", "Pi").
+    display_name: str = "agent"
+
+    #: Whether the initial prompt must be sent in chunks to avoid tmux
+    #: buffer issues with large prompts (True for CLIs that read the full
+    #: prompt from stdin/paste vs. those that load it via a launch flag).
+    #: Replaces isinstance() branching in AgentManager._send_initial_prompt_with_retry
+    #: (SOLID review 3.3) — a new CLI agent opts into chunked delivery by
+    #: setting this attribute instead of the caller needing to know its type.
+    needs_chunked_delivery: bool = False
+
     def get_session_args(self, session_id: str) -> str:
         """Return the CLI-specific flag to resume/create a named session.
 
@@ -273,6 +284,9 @@ class CLIAgentInterface(ABC):
 class ClaudeCodeAgent(CLIAgentInterface):
     """Implementation for Claude Code CLI."""
 
+    display_name = "Claude"
+    needs_chunked_delivery = True
+
     def get_launch_command(self, system_prompt: str, **kwargs) -> str:
         from src.core.simple_config import get_config
 
@@ -411,6 +425,9 @@ class OpenCodeAgent(CLIAgentInterface):
 class DroidAgent(CLIAgentInterface):
     """Implementation for Droid CLI."""
 
+    display_name = "Droid"
+    needs_chunked_delivery = True
+
     def get_launch_command(self, system_prompt: str, **kwargs) -> str:
         return "droid"
 
@@ -457,6 +474,9 @@ class DroidAgent(CLIAgentInterface):
 
 class CodexAgent(CLIAgentInterface):
     """Implementation for Codex CLI."""
+
+    display_name = "Codex"
+    needs_chunked_delivery = True
 
     def get_launch_command(self, system_prompt: str, **kwargs) -> str:
         return "codex --dangerously-bypass-approvals-and-sandbox"
@@ -508,6 +528,9 @@ class PiAgent(CLIAgentInterface):
     For Hephaestus, we launch pi interactively (no --print/-p) so it stays
     running and can call MCP tools. The initial message is sent via tmux.
     """
+
+    display_name = "Pi"
+    needs_chunked_delivery = True
 
     def get_session_args(self, session_id: str) -> str:
         """Pi uses --session-id to resume or create a named session.
