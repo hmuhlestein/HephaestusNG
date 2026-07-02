@@ -51,6 +51,106 @@ class AgentManager:
         # Branch manager for agent isolation
         self.branch_manager = WorktreeManager(db_manager)
 
+        # Tmux message-delivery collaborator (SOLID review 3.1) — the public
+        # send_message_to_agent method below delegates to this.
+        from src.agents.messenger import AgentMessenger
+
+        self._messenger = AgentMessenger(db_manager, self.tmux_server)
+
+    def _build_glm_env_vars(
+        self,
+        model: str,
+        glm_token_env: Optional[str],
+        agent_id: str,
+        label: str = "agent",
+    ) -> Optional[Dict[str, str]]:
+        """Build ANTHROPIC_* env vars for GLM models, or None if the model
+        isn't GLM or no token is configured.
+
+        Shared by create_agent_for_task and restart_agent — previously
+        duplicated independently in each (SOLID review finding 3.2).
+        """
+        if "GLM" not in (model or "").upper():
+            return None
+
+        import os
+
+        token_env_var = glm_token_env or getattr(
+            self.config, "glm_api_token_env", "GLM_API_TOKEN"
+        )
+        token = os.getenv(token_env_var)
+        if not token:
+            logger.warning(
+                f"GLM model configured but {token_env_var} not found, using standard Claude"
+            )
+            return None
+
+        logger.info(f"Setting up GLM-4.6 environment variables for {label} {agent_id}")
+        return {
+            "ANTHROPIC_BASE_URL": "https://api.z.ai/api/anthropic",
+            "ANTHROPIC_AUTH_TOKEN": token,
+            "ANTHROPIC_DEFAULT_SONNET_MODEL": "GLM-4.6",
+            "ANTHROPIC_DEFAULT_OPUS_MODEL": "GLM-4.6",
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL": "GLM-4.6",
+        }
+
+    def _resolve_mcp_timeout_ms(
+        self,
+        cli_type: str,
+        task_workflow_id: Optional[str],
+        label: str = "agent",
+    ) -> Optional[int]:
+        """Resolve MCP_TOOL_TIMEOUT (in ms) for Claude Code agents when the
+        target workflow has human-approval ticket review enabled.
+
+        Returns None if not applicable. Shared by create_agent_for_task and
+        restart_agent — restart_agent previously resolved this via the
+        caller's already-open session rather than a fresh get_db() call
+        like create_agent_for_task, a drift this unification fixes (SOLID
+        review finding 3.2).
+        """
+        if cli_type != "claude":
+            return None
+
+        try:
+            workflow_id = None
+            if task_workflow_id:
+                workflow_id = task_workflow_id
+            elif (
+                hasattr(self, "phase_manager")
+                and self.phase_manager
+                and hasattr(self.phase_manager, "workflow_id")
+            ):
+                workflow_id = self.phase_manager.workflow_id
+            else:
+                with get_db() as db:
+                    board_config = (
+                        db.query(BoardConfig).filter_by(ticket_human_review=True).first()
+                    )
+                    if board_config:
+                        workflow_id = board_config.workflow_id
+
+            if not workflow_id:
+                return None
+
+            with get_db() as db:
+                board_config = (
+                    db.query(BoardConfig).filter_by(workflow_id=workflow_id).first()
+                )
+                if board_config and board_config.ticket_human_review:
+                    timeout_seconds = board_config.approval_timeout_seconds or 1800
+                    timeout_ms = timeout_seconds * 1000
+                    logger.info(
+                        f"Human approval enabled for workflow {workflow_id}: "
+                        f"Setting MCP_TOOL_TIMEOUT={timeout_ms}ms ({timeout_seconds}s) for {label}"
+                    )
+                    return timeout_ms
+        except Exception as e:
+            logger.warning(
+                f"Failed to check board config for MCP_TOOL_TIMEOUT ({label}): {e}"
+            )
+        return None
+
     async def create_agent_for_task(
         self,
         task: Task,
@@ -181,93 +281,20 @@ class AgentManager:
             )
 
             # 3. Prepare environment variables for GLM if needed
-            env_vars = None
             # Use phase config with fallback to global defaults
             model = phase_cli_model or getattr(self.config, "cli_model", "sonnet")
-            if "GLM" in model.upper():
-                import os
-
-                token_env_var = phase_glm_token_env or getattr(
-                    self.config, "glm_api_token_env", "GLM_API_TOKEN"
-                )
-                token = os.getenv(token_env_var)
-
-                if token:
-                    env_vars = {
-                        "ANTHROPIC_BASE_URL": "https://api.z.ai/api/anthropic",
-                        "ANTHROPIC_AUTH_TOKEN": token,
-                        "ANTHROPIC_DEFAULT_SONNET_MODEL": "GLM-4.6",
-                        "ANTHROPIC_DEFAULT_OPUS_MODEL": "GLM-4.6",
-                        "ANTHROPIC_DEFAULT_HAIKU_MODEL": "GLM-4.6",
-                    }
-                    logger.info(
-                        f"Setting up GLM-4.6 environment variables for agent {agent_id}"
-                    )
-                else:
-                    logger.warning(
-                        f"GLM model configured but {token_env_var} not found, using standard Claude"
-                    )
+            env_vars = self._build_glm_env_vars(
+                model, phase_glm_token_env, agent_id, label="agent"
+            )
 
             # 3.5. Set MCP_TOOL_TIMEOUT if workflow has human approval enabled
-            # This only applies to Claude Code agents
-            # NOTE: task.workflow_id might be None at creation time, so check active workflow or board configs
-            if cli_type == "claude":
-                try:
-                    # Try to get workflow_id from multiple sources
-                    workflow_id = None
-
-                    # Source 1: task.workflow_id (might be None at creation time)
-                    if task.workflow_id:
-                        workflow_id = task.workflow_id
-                    # Source 2: active workflow from phase manager
-                    elif (
-                        hasattr(self, "phase_manager")
-                        and self.phase_manager
-                        and hasattr(self.phase_manager, "workflow_id")
-                    ):
-                        workflow_id = self.phase_manager.workflow_id
-                    # Source 3: check if there's any active workflow with human review enabled
-                    else:
-                        with get_db() as db:
-                            # Get first board config with human review enabled
-                            board_config = (
-                                db.query(BoardConfig)
-                                .filter_by(ticket_human_review=True)
-                                .first()
-                            )
-                            if board_config:
-                                workflow_id = board_config.workflow_id
-
-                    if workflow_id:
-                        with get_db() as db:
-                            board_config = (
-                                db.query(BoardConfig)
-                                .filter_by(workflow_id=workflow_id)
-                                .first()
-                            )
-
-                            if board_config and board_config.ticket_human_review:
-                                # Get timeout in seconds, default to 1800 (30 minutes)
-                                timeout_seconds = (
-                                    board_config.approval_timeout_seconds or 1800
-                                )
-                                # Convert to milliseconds for Claude Code
-                                timeout_ms = timeout_seconds * 1000
-
-                                # Initialize env_vars if not already set
-                                if env_vars is None:
-                                    env_vars = {}
-
-                                env_vars["MCP_TOOL_TIMEOUT"] = str(timeout_ms)
-                                logger.info(
-                                    f"Human approval enabled for workflow {workflow_id}: "
-                                    f"Setting MCP_TOOL_TIMEOUT={timeout_ms}ms ({timeout_seconds}s)"
-                                )
-                except Exception as e:
-                    logger.warning(
-                        f"Failed to check board config for MCP_TOOL_TIMEOUT: {e}"
-                    )
-                    # Don't fail agent creation if this check fails
+            # (Claude Code agents only.)
+            timeout_ms = self._resolve_mcp_timeout_ms(
+                cli_type, task.workflow_id, label="agent"
+            )
+            if timeout_ms is not None:
+                env_vars = env_vars or {}
+                env_vars["MCP_TOOL_TIMEOUT"] = str(timeout_ms)
 
             # 4. Create tmux session IN THE WORKTREE with env vars
             # Use agent_id for unique session names (not task_id which can be reused on restarts)
@@ -1034,18 +1061,11 @@ REMEMBER:
         # Check if this is OpenCode (prompt already loaded via -p flag)
         is_opencode = cli_type == "opencode"
 
-        # Check which agents need chunking
-        from src.interfaces.cli_interface import (
-            ClaudeCodeAgent,
-            CodexAgent,
-            DroidAgent,
-            PiAgent,
-        )
-
-        is_claude = isinstance(cli_agent, ClaudeCodeAgent)
-        is_droid = isinstance(cli_agent, DroidAgent)
-        is_codex = isinstance(cli_agent, CodexAgent)
-        is_pi = isinstance(cli_agent, PiAgent)
+        # Whether this CLI agent needs chunked delivery is now a property of
+        # the CLIAgentInterface implementation (cli_agent.needs_chunked_delivery/
+        # display_name) instead of isinstance-checking concrete classes here —
+        # a new chunked-delivery CLI opts in on its own class instead of this
+        # method needing to know about it (SOLID review 3.3).
 
         # If verification is disabled, just send once and return
         if not verify_delivery:
@@ -1057,16 +1077,9 @@ REMEMBER:
                 await asyncio.sleep(5)
                 pane.send_keys("", enter=True)  # Send Enter to submit the prompt
                 logger.info(f"OpenCode: Enter sent to agent {agent_id}")
-            elif is_claude or is_droid or is_codex or is_pi:
-                # Claude/Droid/Codex/Pi: Send in chunks to avoid tmux buffer issues with large prompts
-                if is_claude:
-                    agent_name = "Claude"
-                elif is_droid:
-                    agent_name = "Droid"
-                elif is_codex:
-                    agent_name = "Codex"
-                else:
-                    agent_name = "Pi"
+            elif cli_agent.needs_chunked_delivery:
+                # Send in chunks to avoid tmux buffer issues with large prompts
+                agent_name = cli_agent.display_name
                 logger.info(
                     f"Sending initial prompt to {agent_name} agent {agent_id} (verification disabled)"
                 )
@@ -1117,16 +1130,9 @@ REMEMBER:
                 )
                 await asyncio.sleep(5)
                 pane.send_keys("", enter=True)  # Send Enter to submit the prompt
-            elif is_claude or is_droid or is_codex or is_pi:
-                # Claude/Droid/Codex/Pi: Send in chunks to avoid tmux buffer issues with large prompts
-                if is_claude:
-                    agent_name = "Claude"
-                elif is_droid:
-                    agent_name = "Droid"
-                elif is_codex:
-                    agent_name = "Codex"
-                else:
-                    agent_name = "Pi"
+            elif cli_agent.needs_chunked_delivery:
+                # Send in chunks to avoid tmux buffer issues with large prompts
+                agent_name = cli_agent.display_name
                 formatted_message = cli_agent.format_message(initial_message)
                 chunk_size = 2000  # characters per chunk
                 num_chunks = (len(formatted_message) + chunk_size - 1) // chunk_size
@@ -1443,86 +1449,19 @@ REMEMBER:
                     pass
 
             # Prepare environment variables for GLM if needed
-            env_vars = None
             model = agent.cli_model or getattr(self.config, "cli_model", "sonnet")
-            if "GLM" in model.upper():
-                import os
-
-                token_env_var = getattr(
-                    self.config, "glm_api_token_env", "GLM_API_TOKEN"
-                )
-                token = os.getenv(token_env_var)
-
-                if token:
-                    env_vars = {
-                        "ANTHROPIC_BASE_URL": "https://api.z.ai/api/anthropic",
-                        "ANTHROPIC_AUTH_TOKEN": token,
-                        "ANTHROPIC_DEFAULT_SONNET_MODEL": "GLM-4.6",
-                        "ANTHROPIC_DEFAULT_OPUS_MODEL": "GLM-4.6",
-                        "ANTHROPIC_DEFAULT_HAIKU_MODEL": "GLM-4.6",
-                    }
-                    logger.info(
-                        f"Setting up GLM-4.6 environment variables for restarted agent {agent_id}"
-                    )
+            env_vars = self._build_glm_env_vars(
+                model, None, agent_id, label="restarted agent"
+            )
 
             # Set MCP_TOOL_TIMEOUT if workflow has human approval enabled
-            # This only applies to Claude Code agents
-            # NOTE: task.workflow_id might be None at creation time, so check active workflow or board configs
-            if agent.cli_type == "claude":
-                try:
-                    # Try to get workflow_id from multiple sources
-                    workflow_id = None
-
-                    # Source 1: task.workflow_id (might be None at creation time)
-                    if task.workflow_id:
-                        workflow_id = task.workflow_id
-                    # Source 2: active workflow from phase manager
-                    elif (
-                        hasattr(self, "phase_manager")
-                        and self.phase_manager
-                        and hasattr(self.phase_manager, "workflow_id")
-                    ):
-                        workflow_id = self.phase_manager.workflow_id
-                    # Source 3: check if there's any active workflow with human review enabled
-                    else:
-                        # Get first board config with human review enabled
-                        board_config = (
-                            session.query(BoardConfig)
-                            .filter_by(ticket_human_review=True)
-                            .first()
-                        )
-                        if board_config:
-                            workflow_id = board_config.workflow_id
-
-                    if workflow_id:
-                        board_config = (
-                            session.query(BoardConfig)
-                            .filter_by(workflow_id=workflow_id)
-                            .first()
-                        )
-
-                        if board_config and board_config.ticket_human_review:
-                            # Get timeout in seconds, default to 1800 (30 minutes)
-                            timeout_seconds = (
-                                board_config.approval_timeout_seconds or 1800
-                            )
-                            # Convert to milliseconds for Claude Code
-                            timeout_ms = timeout_seconds * 1000
-
-                            # Initialize env_vars if not already set
-                            if env_vars is None:
-                                env_vars = {}
-
-                            env_vars["MCP_TOOL_TIMEOUT"] = str(timeout_ms)
-                            logger.info(
-                                f"Human approval enabled for workflow {workflow_id}: "
-                                f"Setting MCP_TOOL_TIMEOUT={timeout_ms}ms for restarted agent"
-                            )
-                except Exception as e:
-                    logger.warning(
-                        f"Failed to check board config for MCP_TOOL_TIMEOUT on restart: {e}"
-                    )
-                    # Don't fail agent restart if this check fails
+            # (Claude Code agents only.)
+            timeout_ms = self._resolve_mcp_timeout_ms(
+                agent.cli_type, task.workflow_id, label="restarted agent"
+            )
+            if timeout_ms is not None:
+                env_vars = env_vars or {}
+                env_vars["MCP_TOOL_TIMEOUT"] = str(timeout_ms)
 
             # Create new tmux session with env vars
             # Use agent_id for unique session names (not task_id which can be reused on restarts)
@@ -1899,70 +1838,11 @@ REMEMBER:
     async def send_message_to_agent(self, agent_id: str, message: str):
         """Send a message to an agent's tmux session.
 
-        Args:
-            agent_id: Agent ID
-            message: Message to send
+        Delegates to AgentMessenger (SOLID review 3.1) — kept as a public
+        method here since guardian.py, monitor.py, and others depend on
+        AgentManager exposing this directly.
         """
-        session = self.db_manager.get_session()
-        try:
-            agent = session.query(Agent).filter_by(id=agent_id).first()
-            if not agent or not agent.tmux_session_name:
-                logger.warning(f"Agent {agent_id} not found or no tmux session")
-                return
-
-            logger.debug(f"Sending message to tmux session: {agent.tmux_session_name}")
-
-            has_session = self.tmux_server.has_session(agent.tmux_session_name)
-            logger.debug(f"has_session({agent.tmux_session_name}) = {has_session}")
-            if not has_session:
-                logger.warning(f"Tmux session {agent.tmux_session_name} not found")
-                return
-
-            logger.debug(
-                f"Finding session by iteration for message: {agent.tmux_session_name}"
-            )
-            tmux_session = None
-            for tmux_sess in self.tmux_server.sessions:
-                if tmux_sess.name == agent.tmux_session_name:
-                    tmux_session = tmux_sess
-                    break
-
-            logger.debug(f"Session iteration result for message: {tmux_session}")
-            if not tmux_session:
-                logger.warning(f"Could not get tmux session {agent.tmux_session_name}")
-                return
-
-            # Get CLI agent interface
-            cli_agent = get_cli_agent(agent.cli_type)
-            formatted_message = cli_agent.format_message(message)
-
-            # Send message
-            pane = tmux_session.attached_window.attached_pane
-
-            # Escape special shell characters to prevent glob/syntax errors
-            # Wrap in quotes to prevent shell interpretation of [, ], etc.
-            escaped_message = (
-                formatted_message.replace('"', '\\"')
-                .replace("$", "\\$")
-                .replace("`", "\\`")
-            )
-            pane.send_keys(f'"{escaped_message}"', enter=True)
-
-            # Wait a moment then send Enter to ensure message is submitted
-            await asyncio.sleep(1)
-            pane.send_keys("", enter=True)
-
-            # Update last activity
-            agent.last_activity = datetime.utcnow()
-            session.commit()
-
-            logger.debug(f"Sent message to agent {agent_id}")
-
-        except Exception as e:
-            logger.error(f"Failed to send message to agent: {e}")
-            session.rollback()
-        finally:
-            session.close()
+        return await self._messenger.send_message_to_agent(agent_id, message)
 
     async def broadcast_message_to_all_agents(
         self, sender_agent_id: str, message: str
@@ -1975,9 +1855,14 @@ REMEMBER:
 
         Returns:
             Number of agents the message was sent to
-        """
-        logger.info(f"Broadcasting message from agent {sender_agent_id}")
 
+        Note: this stays on AgentManager (rather than delegating to
+        AgentMessenger like send_message_to_agent) because it calls
+        self.send_message_to_agent — several tests patch that method on the
+        AgentManager instance and assert this loop invoked it. Delegating
+        the loop itself to AgentMessenger would call AgentMessenger's own
+        send_message_to_agent instead, silently bypassing that mock.
+        """
         session = self.db_manager.get_session()
         try:
             # Get all active agents except the sender
@@ -2047,6 +1932,10 @@ REMEMBER:
 
         Returns:
             True if message was sent successfully, False otherwise
+
+        Note: stays on AgentManager rather than delegating to AgentMessenger
+        for the same reason as broadcast_message_to_all_agents above — it
+        calls self.send_message_to_agent, which tests patch at this level.
         """
         logger.info(
             f"Sending message from agent {sender_agent_id[:8]} to {recipient_agent_id[:8]}"

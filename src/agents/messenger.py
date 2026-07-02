@@ -1,0 +1,102 @@
+"""Delivering a message to a specific agent's tmux session.
+
+Extracted from AgentManager, which mixed this concern in with tmux session
+lifecycle, prompt construction, and DB persistence for agent creation/
+restart — see docs/SOLID_OO_REVIEW.md finding 3.1. AgentManager still
+exposes send_message_to_agent (many callers depend on that public API) but
+delegates to an AgentMessenger instance instead of implementing the tmux
+plumbing itself.
+
+broadcast_message_to_all_agents/send_direct_message stay on AgentManager
+rather than moving here: both call self.send_message_to_agent, and several
+tests patch that method at the AgentManager instance level and assert the
+broadcast/direct-message loop invoked it. Moving the loop itself into this
+class would have it call AgentMessenger's own send_message_to_agent
+instead, silently bypassing that mock.
+"""
+
+import logging
+from datetime import datetime
+
+logger = logging.getLogger(__name__)
+
+
+class AgentMessenger:
+    """Delivers a message to an agent via its tmux session."""
+
+    def __init__(self, db_manager, tmux_server):
+        self.db_manager = db_manager
+        self.tmux_server = tmux_server
+
+    async def send_message_to_agent(self, agent_id: str, message: str) -> None:
+        """Send a message to an agent's tmux session.
+
+        Args:
+            agent_id: Agent ID
+            message: Message to send
+        """
+        import asyncio
+
+        from src.core.database import Agent
+        from src.interfaces import get_cli_agent
+
+        session = self.db_manager.get_session()
+        try:
+            agent = session.query(Agent).filter_by(id=agent_id).first()
+            if not agent or not agent.tmux_session_name:
+                logger.warning(f"Agent {agent_id} not found or no tmux session")
+                return
+
+            logger.debug(f"Sending message to tmux session: {agent.tmux_session_name}")
+
+            has_session = self.tmux_server.has_session(agent.tmux_session_name)
+            logger.debug(f"has_session({agent.tmux_session_name}) = {has_session}")
+            if not has_session:
+                logger.warning(f"Tmux session {agent.tmux_session_name} not found")
+                return
+
+            logger.debug(
+                f"Finding session by iteration for message: {agent.tmux_session_name}"
+            )
+            tmux_session = None
+            for tmux_sess in self.tmux_server.sessions:
+                if tmux_sess.name == agent.tmux_session_name:
+                    tmux_session = tmux_sess
+                    break
+
+            logger.debug(f"Session iteration result for message: {tmux_session}")
+            if not tmux_session:
+                logger.warning(f"Could not get tmux session {agent.tmux_session_name}")
+                return
+
+            # Get CLI agent interface
+            cli_agent = get_cli_agent(agent.cli_type)
+            formatted_message = cli_agent.format_message(message)
+
+            # Send message
+            pane = tmux_session.attached_window.attached_pane
+
+            # Escape special shell characters to prevent glob/syntax errors
+            # Wrap in quotes to prevent shell interpretation of [, ], etc.
+            escaped_message = (
+                formatted_message.replace('"', '\\"')
+                .replace("$", "\\$")
+                .replace("`", "\\`")
+            )
+            pane.send_keys(f'"{escaped_message}"', enter=True)
+
+            # Wait a moment then send Enter to ensure message is submitted
+            await asyncio.sleep(1)
+            pane.send_keys("", enter=True)
+
+            # Update last activity
+            agent.last_activity = datetime.utcnow()
+            session.commit()
+
+            logger.debug(f"Sent message to agent {agent_id}")
+
+        except Exception as e:
+            logger.error(f"Failed to send message to agent: {e}")
+            session.rollback()
+        finally:
+            session.close()
