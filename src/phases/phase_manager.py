@@ -638,24 +638,25 @@ class PhaseManager:
             "should_continue": True,
         }
 
+    def _advance_or_complete_with_phase_info(
+        self, session, phase_id: str
+    ) -> Dict[str, Any]:
+        """Like _advance_or_complete, but includes next phase info in the result.
+
+        FIX #19: Shared by _handle_force_continue and _handle_evaluation_continue
+        to eliminate duplicated advance-or-complete logic.
+        """
+        result = self._advance_or_complete(session, phase_id)
+        if result.get("should_continue"):
+            next_phase = self._find_next_phase(session, phase_id)
+            result["target_phase"] = next_phase.name if next_phase else None
+            result["target_phase_id"] = next_phase.id if next_phase else None
+        return result
+
     def _handle_force_continue(self, session, phase, execution, summary) -> Dict[str, Any]:
+        # FIX #19: Delegate to _advance_or_complete_with_phase_info.
         self._close_execution(session, execution, "completed", summary)
-        next_started = self._start_next_phase(session, phase.id)
-        if not next_started:
-            self._complete_workflow(session)
-            return {
-                "action": "continue",
-                "target_phase": None,
-                "target_phase_id": None,
-                "should_continue": False,
-            }
-        next_phase = self._find_next_phase(session, phase.id)
-        return {
-            "action": "continue",
-            "target_phase": next_phase.name if next_phase else None,
-            "target_phase_id": next_phase.id if next_phase else None,
-            "should_continue": True,
-        }
+        return self._advance_or_complete_with_phase_info(session, phase.id)
 
     def _handle_force_fail(self, session, execution, summary) -> Dict[str, Any]:
         self._close_execution(session, execution, "failed", summary)
@@ -675,24 +676,9 @@ class PhaseManager:
     def _handle_evaluation_continue(
         self, session, phase, execution, summary, evaluation
     ) -> Dict[str, Any]:
+        # FIX #19: Delegate to _advance_or_complete_with_phase_info.
         self._close_execution(session, execution, "completed", summary)
-        next_started = self._start_next_phase(session, phase.id)
-        if not next_started:
-            self._complete_workflow(session)
-            return {
-                "action": "continue",
-                "target_phase": None,
-                "target_phase_id": None,
-                "should_continue": False,
-            }
-        # Return the next phase info for the caller to create task+agent
-        next_phase = self._find_next_phase(session, phase.id)
-        return {
-            "action": "continue",
-            "target_phase": next_phase.name if next_phase else None,
-            "target_phase_id": next_phase.id if next_phase else None,
-            "should_continue": True,
-        }
+        return self._advance_or_complete_with_phase_info(session, phase.id)
 
     def _handle_evaluation_skip(
         self, session, phase, execution, summary, evaluation
@@ -821,13 +807,15 @@ class PhaseManager:
     # here instead of silently falling through the final default (this is
     # exactly what happened to SKIP before this refactor; see
     # _handle_evaluation_skip). SOLID review finding 2.12.
-    _EVALUATION_HANDLERS = {
-        OrchestrationAction.CONTINUE: _handle_evaluation_continue,
-        OrchestrationAction.SKIP: _handle_evaluation_skip,
-        OrchestrationAction.RETRY: _handle_evaluation_retry,
-        OrchestrationAction.GOTO: _handle_evaluation_goto,
-        OrchestrationAction.ARBITRATE: _handle_evaluation_arbitrate,
-        OrchestrationAction.FAIL: _handle_evaluation_fail,
+    # FIX #22: Use string-key dispatch instead of unbound function references.
+    # Handler method names follow the pattern _handle_evaluation_{action.value}.
+    _EVALUATION_ACTION_VALUES = {
+        "continue",
+        "skip",
+        "retry",
+        "goto",
+        "arbitrate",
+        "fail",
     }
 
     def mark_phase_complete(
@@ -918,9 +906,11 @@ class PhaseManager:
                 f"action={evaluation.action.value}, reason={evaluation.reason}"
             )
 
-            handler = self._EVALUATION_HANDLERS.get(evaluation.action)
-            if handler:
-                return handler(self, session, phase, execution, summary, evaluation)
+            # FIX #22: Use getattr dispatch instead of unbound function table.
+            action_value = evaluation.action.value
+            if action_value in self._EVALUATION_ACTION_VALUES:
+                handler = getattr(self, f"_handle_evaluation_{action_value}")
+                return handler(session, phase, execution, summary, evaluation)
 
             return {
                 "action": "continue",

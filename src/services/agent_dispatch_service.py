@@ -74,14 +74,44 @@ class AgentDispatchService:
             requesting_agent_id=requesting_agent_id,
         )
 
+        working_directory = (
+            explicit_working_directory
+            or os.getcwd()
+        )
+
+        # FIX #6: Delegate to _assemble_dispatch_dict for shared assembly.
+        return AgentDispatchService._assemble_dispatch_dict(
+            project_context=project_context,
+            context_memories=context_memories,
+            working_directory=working_directory,
+            phase_id=phase_id,
+        )
+
+    @staticmethod
+    def _assemble_dispatch_dict(
+        project_context: str,
+        context_memories: list,
+        working_directory: str,
+        phase_id: Optional[str],
+    ) -> Dict[str, Any]:
+        """Shared assembly for dispatch context dicts.
+
+        FIX #6: Extracted to eliminate duplication between
+        build_dispatch_context and build_dispatch_context_from_existing.
+        """
+        from src.core.app_context import get_app_state
+
+        server_state = get_app_state()
+
         session = server_state.db_manager.get_session()
         try:
             cli_config = AgentDispatchService.get_phase_cli_config(session, phase_id)
         finally:
             session.close()
 
-        working_directory = (
-            explicit_working_directory
+        # Phase working_directory is a fallback if caller didn't provide one
+        effective_working_directory = (
+            working_directory
             or cli_config["working_directory"]
             or os.getcwd()
         )
@@ -89,7 +119,7 @@ class AgentDispatchService:
         return {
             "project_context": project_context,
             "context_memories": context_memories,
-            "working_directory": working_directory,
+            "working_directory": effective_working_directory,
             "phase_cli_tool": cli_config["cli_tool"],
             "phase_cli_model": cli_config["cli_model"],
             "phase_glm_token_env": cli_config["glm_token_env"],
@@ -111,25 +141,13 @@ class AgentDispatchService:
         variant only adds the phase CLI config lookup on top of what the
         caller already has.
         """
-        from src.core.app_context import get_app_state
-
-        server_state = get_app_state()
-
-        session = server_state.db_manager.get_session()
-        try:
-            cli_config = AgentDispatchService.get_phase_cli_config(session, phase_id)
-        finally:
-            session.close()
-
-        return {
-            "project_context": project_context,
-            "context_memories": memories,
-            "working_directory": working_directory,
-            "phase_cli_tool": cli_config["cli_tool"],
-            "phase_cli_model": cli_config["cli_model"],
-            "phase_glm_token_env": cli_config["glm_token_env"],
-            "phase_thinking_level": cli_config["thinking_level"],
-        }
+        # FIX #6: Delegate to _assemble_dispatch_dict.
+        return AgentDispatchService._assemble_dispatch_dict(
+            project_context=project_context,
+            context_memories=memories,
+            working_directory=working_directory,
+            phase_id=phase_id,
+        )
 
     @staticmethod
     async def dispatch(task, enriched_data: Dict[str, Any], dispatch_context: Dict[str, Any]):
@@ -151,14 +169,25 @@ class AgentDispatchService:
         )
 
     @staticmethod
-    def mark_assigned(task_id: str, agent_id: str, status: str = "assigned") -> None:
-        """Update Task.assigned_agent_id/status/started_at after a successful dispatch."""
+    def mark_assigned(
+        task_id: str,
+        agent_id: str,
+        status: str = "assigned",
+        session=None,
+    ) -> None:
+        """Update Task.assigned_agent_id/status/started_at after a successful dispatch.
+
+        FIX #12: Added rollback on commit failure.
+        FIX #16: Accept optional session to avoid double-session issue.
+        """
         from src.core.database import Task
         from src.core.app_context import get_app_state
 
         server_state = get_app_state()
 
-        session = server_state.db_manager.get_session()
+        owns_session = session is None
+        if owns_session:
+            session = server_state.db_manager.get_session()
         try:
             task = session.query(Task).filter_by(id=task_id).first()
             if task:
@@ -166,5 +195,9 @@ class AgentDispatchService:
                 task.status = status
                 task.started_at = datetime.utcnow()
                 session.commit()
+        except Exception:
+            session.rollback()
+            raise
         finally:
-            session.close()
+            if owns_session:
+                session.close()

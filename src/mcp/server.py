@@ -1230,6 +1230,12 @@ async def process_queue():
             )
             enriched_task = enrichment_result["enriched_task"]
 
+            # FIX #7: Save enrichment context for dispatch reuse.
+            next_task._enrichment_context = {
+                "context_memories": enrichment_result["context_memories"],
+                "project_context": enrichment_result["project_context"],
+            }
+
             session = server_state.db_manager.get_session()
             try:
                 task = session.query(Task).filter_by(id=next_task.id).first()
@@ -1313,11 +1319,22 @@ async def process_queue():
                 "estimated_complexity": task_for_agent.estimated_complexity or 5,
             }
 
-        dispatch_context = await AgentDispatchService.build_dispatch_context(
-            task_description_for_rag=task_description_for_rag,
-            phase_id=task_for_agent.phase_id,
-            requesting_agent_id="system",
-        )
+        # FIX #7: Reuse enrichment context if available (avoid double-fetch).
+        if hasattr(next_task, "_enrichment_context"):
+            dispatch_context = (
+                await AgentDispatchService.build_dispatch_context_from_existing(
+                    memories=next_task._enrichment_context["context_memories"],
+                    project_context=next_task._enrichment_context["project_context"],
+                    working_directory="",  # Will fall back to phase cwd
+                    phase_id=task_for_agent.phase_id,
+                )
+            )
+        else:
+            dispatch_context = await AgentDispatchService.build_dispatch_context(
+                task_description_for_rag=task_description_for_rag,
+                phase_id=task_for_agent.phase_id,
+                requesting_agent_id="system",
+            )
 
         agent = await AgentDispatchService.dispatch(
             task=task_for_agent,
@@ -1347,6 +1364,13 @@ async def process_queue():
         import traceback
 
         logger.error(traceback.format_exc())
+
+
+# FIX #11: Register queue processor with app_context so services can
+# trigger queue processing without importing server.py directly.
+from src.core.app_context import set_queue_processor as _set_queue_processor
+
+_set_queue_processor(process_queue)
 
 
 async def background_queue_processor():
@@ -2082,9 +2106,10 @@ async def update_task_status(
 
     from src.services.task_completion_service import TaskCompletionService
 
+    # FIX #5: Wrap entire handler in try/finally to prevent session leaks
+    # on early returns (404, 403, rejection dict).
+    session = server_state.db_manager.get_session()
     try:
-        session = server_state.db_manager.get_session()
-
         # 1. Verify task exists and agent owns it
         task = session.query(Task).filter_by(id=request.task_id).first()
         if not task:
@@ -2190,8 +2215,6 @@ async def update_task_status(
             }
         )
 
-        session.close()
-
         # Return appropriate response based on whether validation was spawned
         if validation_spawned:
             return UpdateTaskStatusResponse(
@@ -2211,6 +2234,8 @@ async def update_task_status(
     except Exception as e:
         logger.error(f"Failed to update task status: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        session.close()
 
 
 async def _get_project_id_for_agent(agent_id: str) -> Optional[str]:
@@ -5779,10 +5804,12 @@ async def _tool_send_message(arguments: Dict[str, Any]):
     if not target_agent_id or not message:
         raise HTTPException(status_code=400, detail="agent_id and message are required")
     try:
-        await server_state.agent_manager.send_message_to_agent(
-            agent_id=target_agent_id,
-            message=message,
+        # FIX #4: Use send_direct_message which accepts sender_id,
+        # not send_message_to_agent which doesn't have that parameter.
+        await server_state.agent_manager.send_direct_message(
             sender_agent_id=sender_id,
+            target_agent_id=target_agent_id,
+            message=message,
         )
     except Exception as e:
         logger.warning(f"send_message to {target_agent_id[:8]} failed: {e}")

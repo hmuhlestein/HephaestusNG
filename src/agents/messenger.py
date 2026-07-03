@@ -24,9 +24,17 @@ logger = logging.getLogger(__name__)
 class AgentMessenger:
     """Delivers a message to an agent via its tmux session."""
 
-    def __init__(self, db_manager, tmux_server):
+    def __init__(self, db_manager, agent_manager):
         self.db_manager = db_manager
-        self.tmux_server = tmux_server
+        # FIX #2: Store reference to agent_manager instead of tmux_server
+        # directly, so we always read the live tmux_server (tests reassign
+        # agent_manager.tmux_server after construction).
+        self._agent_manager = agent_manager
+
+    @property
+    def tmux_server(self):
+        """Always read the live tmux_server from agent_manager."""
+        return self._agent_manager.tmux_server
 
     async def send_message_to_agent(self, agent_id: str, message: str) -> None:
         """Send a message to an agent's tmux session.

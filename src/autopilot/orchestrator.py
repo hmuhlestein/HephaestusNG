@@ -1652,42 +1652,31 @@ def _create_feature_records(
 
 
 def _update_feature_status(
-    feature_id: Optional[str],
+    feature_id: str,
     design_id: Optional[str],
     status: str,
     error: Optional[str] = None,
     logger: OrchestratorLogger = None,
-    feature_key: Optional[str] = None,
 ) -> None:
     """Update a feature's status in the database.
 
-    This is the single write path for Feature.status from the orchestrator —
-    callers that only know a feature's key (not its DB id) should pass
-    feature_key instead of duplicating this lookup+write inline.
+    This is the single write path for Feature.status from the orchestrator.
 
     Args:
-        feature_id: Feature ID (looked up by id+design_id if given)
+        feature_id: Feature ID
         design_id: Design ID
         status: New status (pending, active, completed, failed, skipped)
         error: Error message if status is failed
         logger: Optional logger
-        feature_key: Alternate lookup key when feature_id is unknown
     """
     from datetime import datetime
 
     from src.core.database import Feature, get_db
 
     with get_db() as db:
-        if feature_id:
-            feature = (
-                db.query(Feature).filter_by(id=feature_id, design_id=design_id).first()
-            )
-        else:
-            feature = (
-                db.query(Feature)
-                .filter_by(design_id=design_id, feature_key=feature_key)
-                .first()
-            )
+        feature = (
+            db.query(Feature).filter_by(id=feature_id, design_id=design_id).first()
+        )
         if feature:
             feature.status = status
             if status == "active":
@@ -1699,6 +1688,41 @@ def _update_feature_status(
             db.commit()
             if logger:
                 logger.info(f"Updated feature {feature.feature_key} status to {status}")
+
+
+def _update_feature_status_by_key(
+    feature_key: str,
+    design_id: Optional[str],
+    status: str,
+    error: Optional[str] = None,
+    logger: OrchestratorLogger = None,
+) -> None:
+    """Update a feature's status by feature_key (alternate lookup).
+
+    FIX #21: Separated from _update_feature_status to preserve the
+    original type contract (feature_id: str, not Optional[str]).
+    """
+    from datetime import datetime
+
+    from src.core.database import Feature, get_db
+
+    with get_db() as db:
+        feature = (
+            db.query(Feature)
+            .filter_by(design_id=design_id, feature_key=feature_key)
+            .first()
+        )
+        if feature:
+            feature.status = status
+            if status == "active":
+                feature.started_at = datetime.utcnow()
+            elif status in ("completed", "failed", "skipped"):
+                feature.completed_at = datetime.utcnow()
+            if error:
+                feature.error = error
+            db.commit()
+            if logger:
+                logger.info(f"Updated feature {feature_key} status to {status}")
 
 
 def _update_design_status(
@@ -3657,14 +3681,12 @@ def run_feature_pipelines(
                 feature_key = feat.get("id", "unknown")
                 logger.info(f"Skipping feature {feature_key} due to failed dependency")
                 feature_results[feature_key] = "skipped"
-                # Route through the shared write path instead of duplicating
-                # the lookup+write inline (SOLID review 2.2).
-                _update_feature_status(
-                    feature_id=None,
+                # FIX #21: Use _update_feature_status_by_key for feature_key lookups.
+                _update_feature_status_by_key(
+                    feature_key=feature_key,
                     design_id=design_entry.db_id,
                     status="skipped",
                     logger=logger,
-                    feature_key=feature_key,
                 )
             else:
                 features_to_run.append(feat)

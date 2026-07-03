@@ -15,15 +15,23 @@ instance here once at import time, and every other consumer imports
 `get_app_state()` from here instead of reaching into `src.mcp.server`.
 """
 
-from typing import Any, Optional
+import asyncio
+import threading
+from typing import Any, Callable, Coroutine, Optional
 
 _app_state: Optional[Any] = None
+_queue_processor: Optional[Callable[..., Coroutine]] = None
+_lock = threading.Lock()
 
 
 def set_app_state(state: Any) -> None:
-    """Register the shared ServerState instance. Called once by server.py."""
+    """Register the shared ServerState instance. Called once by server.py.
+
+    FIX #13: Thread-safe via lock.
+    """
     global _app_state
-    _app_state = state
+    with _lock:
+        _app_state = state
 
 
 def get_app_state() -> Any:
@@ -31,10 +39,41 @@ def get_app_state() -> Any:
 
     Raises if called before server.py has registered it — a clear error
     here beats an AttributeError on whatever attribute access came next.
+
+    FIX #13: Thread-safe via lock.
     """
-    if _app_state is None:
-        raise RuntimeError(
-            "App state not initialized — set_app_state() must be called "
-            "(src.mcp.server does this at import time) before this can be used."
-        )
-    return _app_state
+    with _lock:
+        if _app_state is None:
+            raise RuntimeError(
+                "App state not initialized — set_app_state() must be called "
+                "(src.mcp.server does this at import time) before this can be used."
+            )
+        return _app_state
+
+
+def set_queue_processor(processor: Callable[..., Coroutine]) -> None:
+    """Register the queue processor callback. Called once by server.py.
+
+    FIX #11: Breaks the circular import where task_completion_service.py
+    had to import process_queue from src.mcp.server. Now server.py registers
+    the callback here, and services call trigger_queue_processing() instead.
+
+    FIX #13: Thread-safe via lock.
+    """
+    global _queue_processor
+    with _lock:
+        _queue_processor = processor
+
+
+def trigger_queue_processing() -> None:
+    """Fire-and-forget trigger for the queue processor.
+
+    Creates an asyncio task to run the registered queue processor.
+    Safe to call from sync or async context. No-op if no processor registered.
+
+    FIX #13: Thread-safe via lock.
+    """
+    with _lock:
+        proc = _queue_processor
+    if proc is not None:
+        asyncio.create_task(proc())
