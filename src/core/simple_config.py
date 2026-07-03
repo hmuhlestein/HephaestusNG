@@ -190,6 +190,11 @@ class Config:
         )
         self.diagnostic_max_tasks_per_run = diagnostic.get("max_tasks_per_run", 5)
 
+        # Autopilot/pipeline timeout settings
+        autopilot = config.get("autopilot", {})
+        self.workflow_timeout_seconds = autopilot.get("workflow_timeout_seconds", 7200)  # 2 hours
+        self.phase0_timeout_seconds = autopilot.get("phase0_timeout_seconds", 3600)  # 1 hour
+
         # Ticket tracking settings
         ticket_tracking = config.get("ticket_tracking", {})
         self.ticket_tracking_enabled = ticket_tracking.get("enabled", True)
@@ -239,6 +244,13 @@ class Config:
             self.max_health_check_failures = int(os.getenv("MAX_HEALTH_CHECK_FAILURES"))
         if os.getenv("AGENT_TIMEOUT_MINUTES"):
             self.agent_timeout_minutes = int(os.getenv("AGENT_TIMEOUT_MINUTES"))
+
+        # Autopilot timeout overrides
+        if os.getenv("WORKFLOW_TIMEOUT_SECONDS"):
+            self.workflow_timeout_seconds = int(os.getenv("WORKFLOW_TIMEOUT_SECONDS"))
+        if os.getenv("PHASE0_TIMEOUT_SECONDS"):
+            self.phase0_timeout_seconds = int(os.getenv("PHASE0_TIMEOUT_SECONDS"))
+
         # Note: max_concurrent_agents is ONLY configurable via hephaestus_config.yaml or SDK
         # Not overridable by environment variables for consistency
         if os.getenv("GUARDIAN_MIN_AGENT_AGE_SECONDS"):

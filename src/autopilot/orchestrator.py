@@ -49,11 +49,29 @@ from src.core.simple_config import get_config
 from src.autopilot.spec import GATED_PHASES, build_phase_output
 from src.phases import PhaseManager
 
+def _get_workflow_timeout() -> int:
+    """Get workflow timeout from config, with fallback to default."""
+    try:
+        from src.core.simple_config import get_config
+        return get_config().workflow_timeout_seconds
+    except Exception:
+        return 7200  # 2 hours default
+
+def _get_phase0_timeout() -> int:
+    """Get Phase 0 timeout from config, with fallback to default."""
+    try:
+        from src.core.simple_config import get_config
+        return get_config().phase0_timeout_seconds
+    except Exception:
+        return 3600  # 1 hour default
+
 POLL_INTERVAL = 15
 STUCK_THRESHOLD = 3
 DESIGN_QUEUE_SCAN_INTERVAL = 60
 HEARTBEAT_INTERVAL = 300
-MAX_WORKFLOW_TIME = 7200  # 2 hours per workflow execution
+# FIX: Extracted to config (hephaestus_config.yaml -> autopilot section)
+# Fallback values preserved here for backward compatibility.
+MAX_WORKFLOW_TIME = 7200  # 2 hours per workflow execution (deprecated: use config)
 ACTIVE_AGENT_STATUSES = {
     "working",
     "idle",
@@ -63,7 +81,8 @@ PARENT_PEEK_INTERVAL = int(
 )  # seconds between parent peeks
 
 # Feature Model constants
-MAX_PHASE0_TIME = 3600  # 1 hour timeout for Phase 0
+# FIX: Extracted to config (hephaestus_config.yaml -> autopilot section)
+MAX_PHASE0_TIME = 3600  # 1 hour timeout for Phase 0 (deprecated: use config)
 MAX_PARALLEL_FEATURES = 4  # max concurrent feature pipelines
 
 # Module-level orchestrator agent ID (set during registration)
@@ -2838,19 +2857,22 @@ def run_single_workflow(
     state: PipelineState = None,
     max_iterations: int = 10,
     design_id: Optional[str] = None,
-    timeout_seconds: int = MAX_WORKFLOW_TIME,
+    timeout_seconds: int = None,
     pause_existing: bool = True,
 ) -> str:
     """Run a single workflow execution.
 
     Args:
         max_iterations: Maps to the engine's max_total_gotos.
-        timeout_seconds: Hard deadline for this workflow (default: MAX_WORKFLOW_TIME).
-            Pass MAX_PHASE0_TIME for Phase 0 runs.
+        timeout_seconds: Hard deadline for this workflow (default: from config).
+            Pass 0 or a custom value for Phase 0 runs.
         pause_existing: If False, skip pausing currently-active workflows. Set to
             False when running feature pipelines in parallel so threads don't
             clobber each other's workflows.
     """
+    # FIX: Get timeout from config if not specified
+    if timeout_seconds is None:
+        timeout_seconds = _get_workflow_timeout()
     # Update the workflow definition's orchestrator_config with the requested max_iterations.
     # This makes --max-iterations control the engine's max_total_gotos.
     _update_orchestrator_max_gotos(max_iterations, logger)
@@ -3391,7 +3413,7 @@ def run_phase0(
             state=state,
             max_iterations=3,
             design_id=design_entry.db_id,
-            timeout_seconds=MAX_PHASE0_TIME,
+            timeout_seconds=_get_phase0_timeout(),
         )
 
         if wf_status != "completed":
