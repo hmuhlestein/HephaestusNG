@@ -34,7 +34,6 @@ env/
 *.swo
 *~
 .DS_Store
-.claude/settings.json
 
 # Environment
 .env
