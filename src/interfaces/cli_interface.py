@@ -319,7 +319,9 @@ class ClaudeCodeAgent(CLIAgentInterface):
         mcp_config = os.path.expanduser("~/.config/mcp/mcp.json")
         mcp_flag = f"--mcp-config {mcp_config}" if os.path.exists(mcp_config) else ""
 
-        if "GLM" in model.upper():
+        from src.core.utils import is_glm_model
+
+        if is_glm_model(model):
             command = f'claude --model sonnet{effort_flag} --dangerously-skip-permissions {mcp_flag} --append-system-prompt "$(cat {prompt_file})" --verbose'
         else:
             command = f'claude --model {model}{effort_flag} --dangerously-skip-permissions {mcp_flag} --append-system-prompt "$(cat {prompt_file})" --verbose'

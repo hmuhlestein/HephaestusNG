@@ -1617,16 +1617,13 @@ class MonitoringLoop:
 
         Delegates to OrphanSessionReaper (SOLID review 3.4) — kept as a
         public method here since tests call it directly on the
-        MonitoringLoop instance and set/read the grace-period timestamp
-        (_last_orphan_check_time) there, hence the two-way sync below.
+        MonitoringLoop instance.
+
+        FIX #18: Removed fragile two-way state sync. The reaper owns
+        last_check_time entirely; tests should access
+        monitor._orphan_reaper.last_check_time directly.
         """
-        self._orphan_reaper.last_check_time = getattr(
-            self, "_last_orphan_check_time", None
-        )
-        try:
-            await self._orphan_reaper.cleanup_orphaned_tmux_sessions()
-        finally:
-            self._last_orphan_check_time = self._orphan_reaper.last_check_time
+        await self._orphan_reaper.cleanup_orphaned_tmux_sessions()
 
     async def _check_workflow_stuck_state(self):
         """Check if workflow is stuck and needs diagnostic agent.

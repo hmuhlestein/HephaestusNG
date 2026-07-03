@@ -253,6 +253,11 @@ class TaskCompletionService:
                     )
                 else:
                     logger.error(f"Task {task_id} not found during validation update")
+            except Exception:
+                # FIX #12: Rollback on commit failure to avoid leaking a
+                # dirty session back into the connection pool.
+                session.rollback()
+                raise
             finally:
                 session.close()
 
@@ -278,11 +283,24 @@ class TaskCompletionService:
                     session.commit()
 
                 await server_state.agent_manager.terminate_agent(agent_id)
-                from src.mcp.server import process_queue
-
-                await process_queue()
+            except Exception as inner_e:
+                # FIX #17: Don't let task-update/termination errors propagate
+                # and lose the original validation failure context.
+                # FIX #12: Rollback on commit failure before closing session.
+                session.rollback()
+                logger.error(
+                    f"Failed to update task/terminate agent after validation failure: {inner_e}"
+                )
             finally:
                 session.close()
+
+            # FIX #11/#17: Defer queue processing to avoid nested I/O in except block.
+            try:
+                from src.core.app_context import trigger_queue_processing
+
+                trigger_queue_processing()
+            except Exception as qe:
+                logger.error(f"Failed to trigger queue processing after validation failure: {qe}")
 
     @staticmethod
     async def commit_and_link_ticket(session, agent_id: str, task, summary: str) -> Optional[str]:

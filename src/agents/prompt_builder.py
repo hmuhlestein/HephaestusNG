@@ -111,7 +111,7 @@ class AgentPromptBuilder:
             logger.info(f"Task has phase_id: {task.phase_id}")
 
             # Try to get phase context if phase manager is available
-            if hasattr(self, "phase_manager") and self.phase_manager:
+            if self.phase_manager is not None:
                 logger.info(f"Phase manager exists: {self.phase_manager}")
                 logger.info(
                     f"Phase manager workflow_id: {getattr(self.phase_manager, 'workflow_id', 'NOT SET')}"
@@ -155,7 +155,7 @@ class AgentPromptBuilder:
                     logger.error(f"Full traceback: {traceback.format_exc()}")
             else:
                 logger.warning(
-                    f"Phase manager not available or is None: hasattr={hasattr(self, 'phase_manager')}, value={getattr(self, 'phase_manager', 'MISSING')}"
+                    f"Phase manager not available or is None: value={self.phase_manager}"
                 )
 
             logger.info(

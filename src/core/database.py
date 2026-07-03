@@ -20,6 +20,7 @@ from sqlalchemy import (
     UniqueConstraint,
     create_engine,
     event,
+    exc as sqlalchemy_exc,
 )
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import backref, relationship, sessionmaker
@@ -1519,7 +1520,7 @@ class DatabaseManager:
             with self.engine.connect() as conn:
                 try:
                     conn.execute(text("ALTER TABLE agents ADD COLUMN cli_model TEXT"))
-                except Exception:
+                except sqlalchemy_exc.OperationalError:
                     pass  # Column already exists
                 conn.commit()
                 logger.info("Migrated agents.cli_model column")

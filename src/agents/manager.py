@@ -55,7 +55,8 @@ class AgentManager:
         # send_message_to_agent method below delegates to this.
         from src.agents.messenger import AgentMessenger
 
-        self._messenger = AgentMessenger(db_manager, self.tmux_server)
+        # FIX #2: Pass self (agent_manager) so messenger reads live tmux_server
+        self._messenger = AgentMessenger(db_manager, self)
 
         # Initial-message formatting collaborator (SOLID review 3.1) — the
         # public _format_initial_message method below delegates to this.
@@ -79,7 +80,9 @@ class AgentManager:
         Shared by create_agent_for_task and restart_agent — previously
         duplicated independently in each (SOLID review finding 3.2).
         """
-        if "GLM" not in (model or "").upper():
+        from src.core.utils import is_glm_model
+
+        if not is_glm_model(model):
             return None
 
         import os
@@ -1641,6 +1644,8 @@ class AgentManager:
         the loop itself to AgentMessenger would call AgentMessenger's own
         send_message_to_agent instead, silently bypassing that mock.
         """
+        # FIX #3: Restored dropped log line.
+        logger.info(f"Broadcasting message from agent {sender_agent_id}")
         session = self.db_manager.get_session()
         try:
             # Get all active agents except the sender
