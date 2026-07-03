@@ -115,6 +115,11 @@ diagnostic_agent:
   max_agents_to_analyze: 15
   max_conductor_analyses: 5
   max_tasks_per_run: 5
+autopilot:
+  # Timeout for a single workflow execution (default: 7200 = 2 hours)
+  workflow_timeout_seconds: 7200
+  # Timeout for Phase 0 runs (default: 3600 = 1 hour)
+  phase0_timeout_seconds: 3600
 ticket_tracking:
   enabled: true
   default_human_review: false
