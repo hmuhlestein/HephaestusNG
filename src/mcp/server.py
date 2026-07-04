@@ -2146,7 +2146,7 @@ async def update_task_status(
         # pending — if it's already in_progress, the gate is missed. Fix: fire from
         # the completion path itself and actually trigger the evaluation.
         if request.status == "done" and task.phase_id:
-            TaskCompletionService.fire_spec_gate_if_ready(session, task)
+            await TaskCompletionService.fire_spec_gate_if_ready(session, task)
 
         # 4. Check if task has validation enabled
         validation_spawned = False

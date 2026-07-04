@@ -139,13 +139,18 @@ class TaskCompletionService:
         }
 
     @staticmethod
-    def fire_spec_gate_if_ready(session, task) -> None:
+    async def fire_spec_gate_if_ready(session, task) -> None:
         """When a gated phase's last task completes, fire the phase-completion
         gate immediately instead of waiting for the monitor's next poll.
 
         The orchestrator's _advance_phases only fires when the next phase is
         still pending — if it's already in_progress, the gate would be
         missed without this.
+
+        build_phase_output may run pytest (Enhancement 1: independent test
+        verification), which can block for up to several minutes. This method
+        is async so it can offload that work to a thread pool executor rather
+        than blocking the event loop.
         """
         from src.autopilot.spec import GATED_PHASES, build_phase_output
         from src.core.database import DatabaseManager as _DbMgr
@@ -171,8 +176,17 @@ class TaskCompletionService:
             return
 
         from pathlib import Path as _P
+        import asyncio
+        import functools
 
-        phase_output = build_phase_output(phase.name, _P(wf.working_directory))
+        # build_phase_output may run pytest (Enhancement 1: independent test
+        # verification). Run it in a thread pool executor so the async event
+        # loop is not blocked by a potentially multi-minute subprocess call.
+        loop = asyncio.get_event_loop()
+        phase_output = await loop.run_in_executor(
+            None,
+            functools.partial(build_phase_output, phase.name, _P(wf.working_directory)),
+        )
         logger.info(
             f"[SPEC-GATE] {phase.name}: gate fired from completion path, phase_output={phase_output}"
         )

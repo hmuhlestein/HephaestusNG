@@ -3296,14 +3296,15 @@ def run_single_workflow(
             impasse, impasse_reason = detect_impasse(
                 agents, pending, in_progress, elapsed
             )
-            # Enhancement 4: Monitor signals can also indicate impasse
+            # Enhancement 4: Monitor signals can also indicate impasse.
+            # Require at least 2 high-confidence stuck signals to avoid false
+            # positives from a single Guardian assessment firing too aggressively.
             if not impasse and high_confidence_signals:
                 stuck_signals = [
                     s for s in high_confidence_signals
                     if s.type in (SignalType.STUCK_PATTERN, SignalType.PHASE_STUCK)
                 ]
-                if stuck_signals:
-                    # Multiple high-confidence stuck signals count toward impasse
+                if len(stuck_signals) >= 2:
                     impasse = True
                     impasse_reason = (
                         f"Monitor detected {len(stuck_signals)} stuck signals: "

@@ -1098,9 +1098,7 @@ class MonitoringLoop:
                             f"{analysis.get('summary', '')[:100]}",
                             metadata={
                                 "steering_type": steering_type,
-                                "consecutive_flags": consecutive_stuck
-                                if 'consecutive_stuck' in dir()
-                                else 0,
+                                "consecutive_flags": locals().get("consecutive_stuck", 0),
                             },
                         )
                     )
