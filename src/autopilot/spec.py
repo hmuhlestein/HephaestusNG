@@ -17,6 +17,7 @@ Score bands map onto the autopilot evaluation_points thresholds:
 
 import json
 import logging
+import re
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
@@ -165,6 +166,35 @@ def _pass_with_subjective(agent_score: Any) -> float:
     return round(_PASS_FLOOR + (1.0 - _PASS_FLOOR) * _clamp01(agent_score, 1.0), 4)
 
 
+#: Matches pytest's plain-text summary line, e.g. "2 failed, 8 passed in
+#: 1.05s" or "3 passed, 1 skipped, 2 xfailed in 0.42s" or "5 error in 0.10s".
+#: Deliberately does NOT depend on the pytest-json-report plugin (undeclared
+#: anywhere in this repo, and not something we can assume a target project
+#: has installed) — this format is emitted by vanilla pytest with zero
+#: extra plugins, which is the only thing we can rely on being present.
+_PYTEST_SUMMARY_COUNT_RE = re.compile(
+    r"(\d+)\s+(failed|passed|error(?:s)?|skipped|xfailed|xpassed)"
+)
+
+
+def _parse_pytest_summary(output: str) -> Optional[Dict[str, int]]:
+    """Parse counts out of pytest's final summary line.
+
+    Returns None if no recognizable summary line is found (e.g. pytest
+    crashed before producing one, or "no tests ran").
+    """
+    for line in reversed(output.splitlines()):
+        matches = _PYTEST_SUMMARY_COUNT_RE.findall(line)
+        if not matches:
+            continue
+        counts = {"failed": 0, "passed": 0, "error": 0, "skipped": 0, "xfailed": 0, "xpassed": 0}
+        for num, label in matches:
+            key = "error" if label.startswith("error") else label
+            counts[key] = counts.get(key, 0) + int(num)
+        return counts
+    return None
+
+
 def run_independent_test_verification(
     working_directory: str,
     timeout_seconds: int = 300,
@@ -175,6 +205,12 @@ def run_independent_test_verification(
     Turns the QA gate from 'trust the JSON format' into 'verify against
     reality' by running pytest independently and comparing results.
 
+    Parses pytest's plain-text summary output rather than requiring the
+    pytest-json-report plugin, since we can't assume an arbitrary target
+    project (or even a Python one) has that plugin installed — this way the
+    verification actually runs for any project with vanilla pytest instead
+    of silently no-op'ing whenever the plugin is absent.
+
     Returns:
         Dict with 'failed', 'passed', 'total', 'pass_rate' keys, or None
         if tests couldn't be run (caller should fall back to agent report).
@@ -182,15 +218,19 @@ def run_independent_test_verification(
     import subprocess
 
     try:
-        # Run pytest with JSON report output
-        report_file = Path(working_directory) / ".pytest_report.json"
         result = subprocess.run(
             [
-                "python", "-m", "pytest",
-                "--json-report",
-                f"--json-report-file={report_file}",
-                "-q",
-                "--tb=no",
+                "python", "-m", "pytest", "-q", "--tb=no",
+                # -p no:libtmux: if this subprocess inherits the same Python
+                # environment/site-packages as the orchestrator itself (the
+                # common case unless the target project has its own venv on
+                # PATH), HephaestusNG's own libtmux dependency registers a
+                # pytest plugin via entry_points that crashes on newer pytest
+                # ("Marks cannot be applied to fixtures") regardless of the
+                # target project's own test files — verified reproducible.
+                # Disabling it here only affects auto-loaded Hephaestus-side
+                # plugins, not anything the target project installed itself.
+                "-p", "no:libtmux",
             ],
             cwd=working_directory,
             capture_output=True,
@@ -198,35 +238,32 @@ def run_independent_test_verification(
             text=True,
         )
 
-        if report_file.exists():
-            try:
-                report = json.loads(report_file.read_text())
-                summary = report.get("summary", {})
-                failed = summary.get("failed", 0)
-                passed = summary.get("passed", 0)
-                total = failed + passed
-                pass_rate = (passed / total * 100.0) if total > 0 else 0.0
-
-                logger.info(
-                    f"[INDEPENDENT_TEST] Verification complete: "
-                    f"{passed}/{total} passed ({pass_rate:.1f}%), "
-                    f"{failed} failed"
-                )
-
-                return {
-                    "failed": failed,
-                    "passed": passed,
-                    "total": total,
-                    "pass_rate": round(pass_rate, 1),
-                    "source": "independent_verification",
-                }
-            except (json.JSONDecodeError, KeyError) as e:
-                logger.warning(f"[INDEPENDENT_TEST] Could not parse report: {e}")
-        else:
+        counts = _parse_pytest_summary(result.stdout)
+        if counts is None:
             logger.warning(
-                f"[INDEPENDENT_TEST] No report file generated. "
-                f"pytest exit code: {result.returncode}"
+                f"[INDEPENDENT_TEST] Could not parse pytest output "
+                f"(exit code: {result.returncode}); falling back to agent report"
             )
+            return None
+
+        failed = counts["failed"] + counts["error"]
+        passed = counts["passed"] + counts["xpassed"]
+        total = failed + passed + counts["skipped"] + counts["xfailed"]
+        pass_rate = (passed / total * 100.0) if total > 0 else 0.0
+
+        logger.info(
+            f"[INDEPENDENT_TEST] Verification complete: "
+            f"{passed}/{total} passed ({pass_rate:.1f}%), "
+            f"{failed} failed"
+        )
+
+        return {
+            "failed": failed,
+            "passed": passed,
+            "total": total,
+            "pass_rate": round(pass_rate, 1),
+            "source": "independent_verification",
+        }
 
     except subprocess.TimeoutExpired:
         logger.warning(

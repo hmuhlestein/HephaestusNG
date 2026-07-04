@@ -104,23 +104,24 @@ class SignalQueue:
         Returns:
             List of matching signals
         """
+        def _matches(s: MonitorSignal) -> bool:
+            return s.confidence >= min_confidence and (
+                signal_type is None or s.type == signal_type
+            )
+
         with self._lock:
             signals = self._signals.get(workflow_id, [])
 
-            filtered = [
-                s
-                for s in signals
-                if s.confidence >= min_confidence
-                and (signal_type is None or s.type == signal_type)
-            ]
+            # Partition by the predicate directly rather than filtering
+            # "remaining" via `s not in filtered` — MonitorSignal is a plain
+            # dataclass with value-based __eq__, so two structurally
+            # identical signals (possible if emitted in the same
+            # microsecond with the same evidence/confidence) would
+            # incorrectly be treated as the same object under `in`.
+            filtered = [s for s in signals if _matches(s)]
 
             if consume:
-                # Remove consumed signals
-                remaining = [
-                    s
-                    for s in signals
-                    if s not in filtered
-                ]
+                remaining = [s for s in signals if not _matches(s)]
                 if remaining:
                     self._signals[workflow_id] = remaining
                 else:
