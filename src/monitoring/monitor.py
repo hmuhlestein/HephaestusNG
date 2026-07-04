@@ -1067,6 +1067,19 @@ class MonitoringLoop:
 
             # Execute steering if needed
             if analysis.get("needs_steering", False):
+                # Compute consecutive-stuck count up front so it's available
+                # both for the signal emitted below and the auto-restart
+                # check further down (previously computed after the signal
+                # was emitted, so the signal's metadata always saw a
+                # not-yet-assigned value and silently reported 0).
+                past = self._get_past_summaries_for_agent(agent.id, limit=5)
+                consecutive_stuck = sum(
+                    1
+                    for s in past
+                    if s.get("needs_steering")
+                    and s.get("steering_type") in ("stuck", "idle")
+                )
+
                 # Enhancement 4: Emit signal to orchestrator
                 from src.monitoring.signals import (
                     MonitorSignal,
@@ -1098,7 +1111,7 @@ class MonitoringLoop:
                             f"{analysis.get('summary', '')[:100]}",
                             metadata={
                                 "steering_type": steering_type,
-                                "consecutive_flags": locals().get("consecutive_stuck", 0),
+                                "consecutive_flags": consecutive_stuck,
                             },
                         )
                     )
@@ -1112,13 +1125,6 @@ class MonitoringLoop:
                 )
 
                 # Auto-restart if agent keeps ignoring steering
-                past = self._get_past_summaries_for_agent(agent.id, limit=5)
-                consecutive_stuck = sum(
-                    1
-                    for s in past
-                    if s.get("needs_steering")
-                    and s.get("steering_type") in ("stuck", "idle")
-                )
                 if consecutive_stuck >= self.config.max_ignored_steering:
                     # Check if agent has recent activity before restarting
                     if agent.last_activity:
