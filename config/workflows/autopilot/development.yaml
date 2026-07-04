@@ -60,29 +60,19 @@ additional_notes: |
   specific layout — directory names, module boundaries, and naming conventions
   vary per project. Do not assume any particular structure before reading them.
 
-  CODE STYLE (from AGENTS.md — follow exactly):
-  - Python: Black (line length 88), flake8, mypy
-  - Naming: snake_case functions/variables, PascalCase classes
-  - Async: verb-first async names (e.g., process_queue, handle_update)
-  - Types: explicit type hints on all functions
-  - Logging: use module-level logger = logging.getLogger(__name__)
-  - No bare except: always catch specific exceptions
-  - Imports: at top of file, sorted; lazy imports for circular deps
+  CODE STYLE: Read AGENTS.md for this project's formatter, linter, naming
+  conventions, and type-checking requirements — follow them exactly. Do not
+  assume any particular language, formatter, or style before reading it.
 
-  TESTING STRATEGY (from AGENTS.md):
-  - Test runner: python tests/run_all_tests.py (or pytest for targeted)
-  - Smoke pass: python tests/run_all_tests.py --quick
-  - Coverage: pytest --cov=src
-  - Format: ruff check . && ruff format --check .
-  - Types: mypy src/
-  - Frontend: cd frontend && npm run type-check
+  TESTING STRATEGY: Read AGENTS.md for this project's actual test runner,
+  coverage command, and lint/type-check commands. Do not assume a specific
+  test runner path or toolchain before reading it.
 
   COMMON PATTERNS:
-  - Database sessions: use try/finally with session.close()
-  - Config access: from src.core.simple_config import get_config
-  - App state: from src.core.app_context import get_app_state
-  - Error handling: log with logger.error(), rollback session, re-raise
-  - Agent communication: use MCP tools (hephaestus_*) not direct imports
+  - Follow this project's own conventions for config access, error handling,
+    and resource cleanup (see AGENTS.md and existing code for examples).
+  - Agent communication: use MCP tools (hephaestus_*) not direct imports —
+    this is how you talk to Hephaestus itself, not the project you're building.
 
   PRE-SEEDED TEST FILES: The design doc may reference pre-seeded test files in
   tests/. If tests/test_calculator.py (or similar) already exists:
@@ -115,8 +105,8 @@ additional_notes: |
   - Directory structure
   - Technology choices
   - Acceptance criteria for your task
-  - Coding style (Black, flake8, mypy, snake_case, PascalCase)
-  - Test commands (python tests/run_all_tests.py, npm run type-check)
+  - Coding style, naming conventions, and test commands (read from AGENTS.md
+    — do not assume a specific language, formatter, or test runner)
   - Commit format (feat:, fix:, chore: prefixes)
   
   ═══════════════════════════════════════════════════════════════════════
