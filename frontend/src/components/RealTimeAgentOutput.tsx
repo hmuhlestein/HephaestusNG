@@ -50,6 +50,7 @@ const RealTimeAgentOutput: React.FC<RealTimeAgentOutputProps> = ({
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const lastScrollPosition = useRef(0);
+  const savedSelection = useRef<{ start: number; end: number } | null>(null);
 
   const {
     output,
@@ -75,6 +76,42 @@ const RealTimeAgentOutput: React.FC<RealTimeAgentOutputProps> = ({
     }
   }, [output, autoScroll, lastUpdateTime]);
 
+  // Save selection before content update if user is selecting
+  useEffect(() => {
+    const sel = window.getSelection();
+    if (sel && sel.rangeCount > 0 && isSelecting && outputRef.current?.contains(sel.anchorNode)) {
+      const range = sel.getRangeAt(0);
+      savedSelection.current = {
+        start: range.startOffset,
+        end: range.endOffset,
+      };
+    }
+  }, [output, isSelecting]);
+
+  // Restore selection after content update
+  useEffect(() => {
+    if (savedSelection.current && outputRef.current) {
+      const sel = window.getSelection();
+      if (sel) {
+        try {
+          const textNode = outputRef.current.firstChild;
+          if (textNode) {
+            const range = document.createRange();
+            const start = Math.min(savedSelection.current.start, textNode.textContent?.length || 0);
+            const end = Math.min(savedSelection.current.end, textNode.textContent?.length || 0);
+            range.setStart(textNode, start);
+            range.setEnd(textNode, end);
+            sel.removeAllRanges();
+            sel.addRange(range);
+          }
+        } catch (e) {
+          // Selection restore failed silently
+        }
+      }
+      savedSelection.current = null;
+    }
+  }, [output]);
+
   // Handle scroll events to determine if user is at bottom
   const handleScroll = useCallback(() => {
     if (outputRef.current && !isSelecting) {
@@ -91,7 +128,14 @@ const RealTimeAgentOutput: React.FC<RealTimeAgentOutputProps> = ({
   }, []);
 
   const handleMouseUp = useCallback(() => {
-    setTimeout(() => setIsSelecting(false), 100);
+    // Small delay to allow selection to complete before clearing flag
+    setTimeout(() => {
+      const sel = window.getSelection();
+      // Only clear selecting state if no text is actually selected
+      if (!sel || sel.toString().length === 0) {
+        setIsSelecting(false);
+      }
+    }, 200);
   }, []);
 
   // Copy to clipboard functionality
