@@ -45,8 +45,10 @@ def run(args):
     except Exception:
         pass
 
-    # Then kill by PID file
-    for name in ("backend", "monitor", "frontend", "orchestrator", "watchdog"):
+    # Then kill by PID file. Watchdog goes first — it respawns monitor/backend
+    # on a health-check timer, so killing it last lets it resurrect whatever
+    # this loop just killed in the window before its own SIGTERM lands.
+    for name in ("watchdog", "backend", "monitor", "frontend", "orchestrator"):
         pid = read_pid(name)
         if pid and is_process_running(pid):
             try:
@@ -71,6 +73,28 @@ def run(args):
             stopped[name] = "not_running"
             if pid:
                 remove_pid(name)
+
+    # Safety-net sweep: pidfiles only track the most recently started
+    # instance of each service. A watchdog-respawned monitor/backend that
+    # never got its pidfile entry synced (or a process started outside
+    # `heph start` entirely) would otherwise survive this command.
+    for pattern in ("run_watchdog.py", "run_server.py", "run_monitor.py"):
+        try:
+            result = subprocess.run(
+                ["pgrep", "-f", pattern], capture_output=True, text=True
+            )
+            for pid_str in result.stdout.strip().split("\n"):
+                if not pid_str:
+                    continue
+                try:
+                    pid = int(pid_str)
+                    sig = signal.SIGKILL if args.force else signal.SIGTERM
+                    os.kill(pid, sig)
+                    stopped[f"orphan-{pattern}-{pid}"] = "killed"
+                except (OSError, ValueError):
+                    pass
+        except Exception:
+            pass
 
     output(args, stopped, lambda d: [print(f"  {k}: {v}") for k, v in d.items()])
     return 0
