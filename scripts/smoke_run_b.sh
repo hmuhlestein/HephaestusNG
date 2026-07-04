@@ -230,7 +230,7 @@ sqlite3 "$DB" "
     DELETE FROM ticket_comments;
     DELETE FROM tickets;
     UPDATE autopilot_designs SET status='pending', completed_at=NULL
-    WHERE project_id='proj-3c562e7de665';
+    WHERE project_id=(SELECT id FROM autopilot_projects WHERE base_dir='$PROJECT_PATH');
 " 2>/dev/null
 
 # ─── Start services ───────────────────────────────────────────────────
