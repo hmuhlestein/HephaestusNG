@@ -94,6 +94,35 @@ class AutopilotService:
         dq = design_queue or str(project / DESIGN_SUBDIR)
         Path(dq).mkdir(parents=True, exist_ok=True)
 
+        # Activate the matching project so pick_next_design() finds its designs.
+        # Without this, the pipeline queries is_active=True which may point
+        # at a completely different project (e.g. Sotto instead of smoke-test).
+        try:
+            from src.core.database import AutopilotProject, get_db
+
+            with get_db() as db:
+                proj = (
+                    db.query(AutopilotProject)
+                    .filter_by(base_dir=str(project))
+                    .first()
+                )
+                if proj:
+                    if not proj.is_active:
+                        # Deactivate current active project
+                        current = db.query(AutopilotProject).filter_by(is_active=True).first()
+                        if current:
+                            current.is_active = False
+                        proj.is_active = True
+                        db.commit()
+                        logger.info(f"Activated project '{proj.name}' for pipeline")
+                else:
+                    logger.warning(
+                        f"No project in DB matching {project} — "
+                        f"pick_next_design may look at wrong project"
+                    )
+        except Exception as e:
+            logger.warning(f"Could not activate project: {e}")
+
         # Reset state
         self._stop_event.clear()
         self._project_path = str(project)
