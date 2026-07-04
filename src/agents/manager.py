@@ -647,6 +647,8 @@ class AgentManager:
             "session_name": session_name,
             "window_name": "agent",
             "attach": False,
+            "x": 220,  # Initial width in columns
+            "y": 50,   # Initial height in rows
         }
         # Use provided working directory (which should be a worktree path)
         # Fallback to project root from config if not provided
@@ -670,7 +672,12 @@ class AgentManager:
         # This matches what a developer would see in a full-width terminal.
         try:
             pane = session.attached_window.attached_pane
-            pane.set_width(220)
+            # Try both methods for reliability
+            pane.set_width(300)
+            try:
+                pane.resize_pane(width=300)
+            except Exception:
+                pass
         except Exception:
             pass  # Non-critical
 
