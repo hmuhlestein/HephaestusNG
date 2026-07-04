@@ -1903,7 +1903,7 @@ def _relink_features_to_workflows(design_id: str, logger: OrchestratorLogger) ->
         for feat in unlinked:
             for wf in workflows:
                 try:
-                    params = _json.loads(wf.launch_params or "{}")
+                    params = wf.launch_params if isinstance(wf.launch_params, dict) else _json.loads(wf.launch_params or "{}")
                 except Exception:
                     continue
                 if params.get("feature_id") == feat.feature_key:

@@ -2120,7 +2120,21 @@ async def get_project_design_status(project_id: str, filename: str):
         for feat in db_features:
             # Get tasks for this feature's workflow
             feat_tasks = []
-            if feat.workflow_id:
+            feat_wf_id = feat.workflow_id
+            
+            # If no workflow_id, try to match by feature_key in launch_params
+            if not feat_wf_id and matching_workflows:
+                import json as _json
+                for wf in matching_workflows:
+                    try:
+                        params = wf.launch_params if isinstance(wf.launch_params, dict) else _json.loads(wf.launch_params or '{}')
+                    except Exception:
+                        continue
+                    if params.get('feature_id') == feat.feature_key:
+                        feat_wf_id = wf.id
+                        break
+            
+            if feat_wf_id:
                 wf_tasks = db.query(Task).filter_by(workflow_id=feat.workflow_id).all()
                 phase_ids = set(t.phase_id for t in wf_tasks if t.phase_id)
                 phases_q = db.query(Phase).filter(Phase.id.in_(phase_ids)).all() if phase_ids else []
