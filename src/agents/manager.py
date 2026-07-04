@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import shlex
 import time
 import uuid
 from datetime import datetime
@@ -667,6 +668,23 @@ class AgentManager:
             session.set_option("history-limit", "50000")
         except Exception:
             pass  # Non-critical
+
+        # Continuously tee this session's output to a durable file via tmux's
+        # pipe-pane, independent of history-limit and of how the session later
+        # dies. terminate_agent() only captures a scrollback snapshot on its
+        # own "clean shutdown" path — the orphan reaper and auto-restart kill
+        # paths kill sessions with no capture at all, losing the transcript
+        # needed to audit what an agent actually ran. pipe-pane appends every
+        # byte in real time, so it survives all of those kill paths.
+        try:
+            tmux_dir = Path(working_directory) / CONTEXT_DIR_NAME / "tmux"
+            tmux_dir.mkdir(parents=True, exist_ok=True)
+            transcript_path = tmux_dir / f"{session_name}.transcript.log"
+            session.attached_window.attached_pane.cmd(
+                "pipe-pane", "-o", f"cat >> {shlex.quote(str(transcript_path))}"
+            )
+        except Exception as e:
+            logger.warning(f"Failed to enable pipe-pane transcript logging: {e}")
 
         # Use a wide terminal so captured output isn't hard-wrapped at 80 columns.
         # This matches what a developer would see in a full-width terminal.

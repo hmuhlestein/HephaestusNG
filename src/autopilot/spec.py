@@ -437,9 +437,31 @@ def score_qa(
             )
             if not is_consistent:
                 verification_discrepancy = discrepancy
-                # Use the independent (worse) metrics if agent claims better results
                 ind_failed = independent_result.get("failed", 0)
-                if ind_failed > failed:
+                ind_total = independent_result.get("total", 0)
+                if total == 0 and ind_total > 0:
+                    # agent's qa_result.json didn't populate the documented
+                    # top-level failed_tests/passed_tests/total_tests/pass_rate
+                    # fields at all (e.g. it wrote its own nested report shape
+                    # instead of the prompt's "EXACTLY this schema" — a real
+                    # xiaomi/mimo-v2.5 failure mode observed in smoke testing).
+                    # Reading that as "0 tests, 0% pass rate" is worse than
+                    # useless: it fails a genuinely passing QA run and sends
+                    # the whole feature back to development, wasting an
+                    # entire review cycle. The independent run is ground
+                    # truth here regardless of direction, not just when it's
+                    # worse than the agent's claim.
+                    logger.warning(
+                        f"[QA_GATE] Agent report has no usable test counts "
+                        f"(total=0) — adopting independent verification "
+                        f"wholesale: {ind_total} tests, {independent_result.get('pass_rate', 0)}% pass rate"
+                    )
+                    failed = ind_failed
+                    passed = independent_result.get("passed", passed)
+                    total = ind_total
+                    pass_rate = independent_result.get("pass_rate", pass_rate)
+                elif ind_failed > failed:
+                    # Use the independent (worse) metrics if agent claims better results
                     logger.warning(
                         f"[QA_GATE] Overriding agent metrics with independent results: "
                         f"failed_tests {failed} -> {ind_failed}"

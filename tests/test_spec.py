@@ -173,6 +173,79 @@ class TestScoreQA:
         assert score == 0.5  # development band
         assert meta["requirements_met_rate"] == 30.0
 
+    def test_malformed_agent_report_adopts_independent_verification(
+        self, tmp_path, monkeypatch
+    ):
+        """Agent ignores the documented top-level schema (writes its own
+        nested report shape instead of failed_tests/passed_tests/total_tests/
+        pass_rate) -> total computes to 0, which independent verification
+        must not read as '0 tests, 0% pass' when the real suite passed."""
+        from src.autopilot import spec as spec_module
+
+        (tmp_path / "test_x.py").write_text(
+            "def test_a():\n    assert True\ndef test_b():\n    assert True\n"
+        )
+
+        def fake_verification(working_directory, timeout_seconds=300):
+            return {
+                "failed": 0,
+                "passed": 2,
+                "total": 2,
+                "pass_rate": 100.0,
+                "source": "independent_verification",
+            }
+
+        monkeypatch.setattr(
+            spec_module, "run_independent_test_verification", fake_verification
+        )
+
+        result = {
+            "overall_status": "PASS",
+            "test_results": {"unit_tests": {"total": 2, "passed": 2, "failed": 0}},
+        }
+        score, meta = score_qa(
+            result, DEFAULT_SPEC, working_directory=str(tmp_path)
+        )
+        assert meta["band"] == "pass"
+        assert meta["pass_rate"] == 100.0
+        assert meta["failed_tests"] == 0
+        assert meta["violations"] == []
+
+    def test_independent_verification_still_overrides_worse_claim(
+        self, tmp_path, monkeypatch
+    ):
+        """Regression: when the agent DOES populate the schema but claims
+        better results than independent verification finds, the independent
+        (worse) result must still win — this is the original Enhancement 1
+        behavior and must not be disturbed by the total==0 fallback."""
+        from src.autopilot import spec as spec_module
+
+        def fake_verification(working_directory, timeout_seconds=300):
+            return {
+                "failed": 3,
+                "passed": 7,
+                "total": 10,
+                "pass_rate": 70.0,
+                "source": "independent_verification",
+            }
+
+        monkeypatch.setattr(
+            spec_module, "run_independent_test_verification", fake_verification
+        )
+
+        result = {
+            "failed_tests": 0,
+            "passed_tests": 10,
+            "total_tests": 10,
+            "pass_rate": 100.0,
+            "critical_issues": 0,
+            "agent_score": 1.0,
+        }
+        score, meta = score_qa(result, DEFAULT_SPEC, working_directory=str(tmp_path))
+        assert meta["band"] == "development"
+        assert meta["failed_tests"] == 3
+        assert meta["pass_rate"] == 70.0
+
 
 class TestScoreProductValidation:
     def test_none_result(self):
