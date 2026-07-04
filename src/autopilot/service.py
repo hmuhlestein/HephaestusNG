@@ -97,7 +97,16 @@ class AutopilotService:
         # Activate the matching project so pick_next_design() finds its designs.
         # Without this, the pipeline queries is_active=True which may point
         # at a completely different project (e.g. Sotto instead of smoke-test).
+        #
+        # Auto-create the row if none exists (e.g. its project was deleted
+        # via the UI, or a pipeline was started against a path never
+        # registered through the projects API at all) -- otherwise this
+        # path is invisible/unmanageable in the UI even though the pipeline
+        # itself runs fine underneath via the file-based design-queue
+        # fallback in pick_next_design, which doesn't need a project row.
         try:
+            import uuid as _uuid
+
             from src.core.database import AutopilotProject, get_db
 
             with get_db() as db:
@@ -106,20 +115,27 @@ class AutopilotService:
                     .filter_by(base_dir=str(project))
                     .first()
                 )
-                if proj:
-                    if not proj.is_active:
-                        # Deactivate current active project
-                        current = db.query(AutopilotProject).filter_by(is_active=True).first()
-                        if current:
-                            current.is_active = False
-                        proj.is_active = True
-                        db.commit()
-                        logger.info(f"Activated project '{proj.name}' for pipeline")
-                else:
-                    logger.warning(
-                        f"No project in DB matching {project} — "
-                        f"pick_next_design may look at wrong project"
+                if not proj:
+                    proj = AutopilotProject(
+                        id=f"proj-{_uuid.uuid4().hex[:12]}",
+                        name=project.name,
+                        base_dir=str(project),
+                        is_active=False,
                     )
+                    db.add(proj)
+                    db.flush()
+                    logger.info(
+                        f"Auto-created project '{proj.name}' for {project} "
+                        "(none registered)"
+                    )
+                if not proj.is_active:
+                    # Deactivate current active project
+                    current = db.query(AutopilotProject).filter_by(is_active=True).first()
+                    if current:
+                        current.is_active = False
+                    proj.is_active = True
+                    db.commit()
+                    logger.info(f"Activated project '{proj.name}' for pipeline")
         except Exception as e:
             logger.warning(f"Could not activate project: {e}")
 

@@ -239,6 +239,79 @@ class TestAutopilotService:
         status = service.status()
         assert status["elapsed_seconds"] >= 9
 
+    @pytest.mark.asyncio
+    async def test_start_auto_creates_missing_project(
+        self, service, tmp_path, monkeypatch
+    ):
+        """A project deleted via the UI (or never registered at all) must not
+        make the pipeline invisible/unmanageable there forever -- start()
+        should recreate the row instead of only warning.
+
+        Points HEPHAESTUS_TEST_DB at a real file instead of the conftest
+        default ':memory:' -- each DatabaseManager(':memory:') call gets its
+        own separate empty database (StaticPool keeps one connection alive
+        per *engine instance*, not across instances), so the service's
+        internal get_db() calls and this test's assertions would otherwise
+        never see the same data.
+        """
+        from src.core.database import AutopilotProject, DatabaseManager, get_db
+
+        db_path = tmp_path / "test.db"
+        monkeypatch.setenv("HEPHAESTUS_TEST_DB", str(db_path))
+        DatabaseManager(str(db_path)).create_tables()
+
+        project = tmp_path / "myproject"
+        project.mkdir()
+        (project / ".git").mkdir()
+        (project / "docs" / "design-queue").mkdir(parents=True)
+
+        with patch.object(service, "_run_pipeline", new_callable=AsyncMock):
+            await service.start(str(project))
+            await service.stop()
+
+        with get_db() as db:
+            proj = db.query(AutopilotProject).filter_by(base_dir=str(project)).first()
+            assert proj is not None
+            assert proj.name == "myproject"
+            assert proj.is_active is True
+
+    @pytest.mark.asyncio
+    async def test_start_reuses_existing_project_without_duplicating(
+        self, service, tmp_path, monkeypatch
+    ):
+        from src.core.database import AutopilotProject, DatabaseManager, get_db
+
+        db_path = tmp_path / "test.db"
+        monkeypatch.setenv("HEPHAESTUS_TEST_DB", str(db_path))
+        DatabaseManager(str(db_path)).create_tables()
+
+        project = tmp_path / "myproject"
+        project.mkdir()
+        (project / ".git").mkdir()
+        (project / "docs" / "design-queue").mkdir(parents=True)
+
+        with get_db() as db:
+            db.add(
+                AutopilotProject(
+                    id="proj-existing123",
+                    name="myproject",
+                    base_dir=str(project),
+                    is_active=False,
+                )
+            )
+
+        with patch.object(service, "_run_pipeline", new_callable=AsyncMock):
+            await service.start(str(project))
+            await service.stop()
+
+        with get_db() as db:
+            matches = (
+                db.query(AutopilotProject).filter_by(base_dir=str(project)).all()
+            )
+            assert len(matches) == 1
+            assert matches[0].id == "proj-existing123"
+            assert matches[0].is_active is True
+
 
 class TestGetAutopilotService:
     def test_singleton(self):
