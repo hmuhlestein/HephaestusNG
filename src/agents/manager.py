@@ -680,9 +680,20 @@ class AgentManager:
             tmux_dir = Path(working_directory) / CONTEXT_DIR_NAME / "tmux"
             tmux_dir.mkdir(parents=True, exist_ok=True)
             transcript_path = tmux_dir / f"{session_name}.transcript.log"
-            session.attached_window.attached_pane.cmd(
-                "pipe-pane", "-o", f"cat >> {shlex.quote(str(transcript_path))}"
+            # pipe-pane gets the pane's raw pty bytes, unlike capture-pane
+            # (which tmux itself renders to plain text) — so without this,
+            # the transcript is full of ANSI CSI/OSC escape sequences from
+            # the CLI's TUI (color, cursor movement, spinner redraws),
+            # unreadable and ungreppable. Strip them inline, in the same
+            # pipe-pane command, since there's no post-processing step that
+            # every kill path would reliably reach.
+            _ansi_strip = (
+                r"s/\x1b\[[0-9;?]*[a-zA-Z]//g; "
+                r"s/\x1b\][^\x07]*\x07//g; "
+                r"s/\x1b[()][A-Za-z0-9]//g"
             )
+            pipe_cmd = f"perl -pe {shlex.quote(_ansi_strip)} >> {shlex.quote(str(transcript_path))}"
+            session.attached_window.attached_pane.cmd("pipe-pane", "-o", pipe_cmd)
         except Exception as e:
             logger.warning(f"Failed to enable pipe-pane transcript logging: {e}")
 
