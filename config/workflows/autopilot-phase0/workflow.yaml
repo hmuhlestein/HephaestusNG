@@ -28,6 +28,13 @@ workflow:
   on_result_found: do_nothing
   enable_tickets: false
 
+# Required output artifact per phase — the same completion hard floor every
+# other pipeline phase gets (update_task_status rejects 'done' when the
+# artifact is missing). Written to .hephaestus/ rather than docs/, since it's
+# an internal orchestration artifact, not a project deliverable.
+required_output:
+  Feature Architect: features.json
+
 launch_template:
   parameters:
     - name: design_document

@@ -1792,6 +1792,51 @@ def _set_workflow_type(workflow_id: str, workflow_type: str) -> None:
             db.commit()
 
 
+def _get_phase0_completion(design_id: Optional[str]) -> Optional[dict]:
+    """Check whether Phase 0's workflow already completed for this design.
+
+    Uses the same status-based idempotency concept PhaseManager.mark_phase_complete
+    uses for every other phase (PhaseExecution.status == "completed"), anchored one
+    level up at Workflow-existence since Phase 0 is necessarily its own Workflow row
+    (it decomposes a design into N features, each of which then gets its own
+    separate Workflow — Phase 0 can't be "phase order=0" of any of those, since it
+    runs before they exist) rather than a Phase row inside a shared one.
+
+    Note: assumes exactly one Phase/PhaseExecution per Phase 0 workflow, true today
+    (01_feature_architect.yaml declares a single phase). If Phase 0 ever gains a
+    second phase this needs revisiting.
+
+    Returns designs_folder (NOT the workflow's own working_directory/worktree,
+    which _cleanup_worktree removes once the workflow finishes) — run_phase0
+    already persists AutopilotDesign.designs_folder before calling
+    _create_feature_records specifically so this recovery path has somewhere
+    durable to read features.json back from if that call never completed.
+
+    Returns:
+        {"workflow_id": ..., "designs_folder": ...} if completed, else None.
+    """
+    if not design_id:
+        return None
+    from src.core.database import AutopilotDesign, Phase, PhaseExecution, Workflow, get_db
+
+    with get_db() as db:
+        design = db.query(AutopilotDesign).filter_by(id=design_id).first()
+        if not design or not design.phase0_workflow_id or not design.designs_folder:
+            return None
+        wf = db.query(Workflow).filter_by(id=design.phase0_workflow_id).first()
+        if not wf:
+            return None
+        phase = db.query(Phase).filter_by(workflow_id=wf.id).first()
+        execution = (
+            db.query(PhaseExecution).filter_by(phase_id=phase.id).first()
+            if phase
+            else None
+        )
+        if execution and execution.status == "completed":
+            return {"workflow_id": wf.id, "designs_folder": design.designs_folder}
+        return None
+
+
 def _link_workflow_to_feature(workflow_id: str, feature_id: str) -> None:
     """Link a workflow to a feature.
 
@@ -3375,7 +3420,10 @@ def run_phase0(
     logger.info("STAGE 1: PHASE 0 - FEATURE ARCHITECT")
     logger.info("=" * 70)
 
-    # Check if features already exist for this design — skip Phase 0 if so
+    # Tier 1: Feature rows already exist for this design — skip re-running Phase 0.
+    # This is the only thing preventing _create_feature_records from creating
+    # duplicate Feature rows on a re-entrant call (that function is not itself
+    # idempotent), so it must be checked first and preserved as-is.
     from src.core.database import Feature as FeatureModel, get_db as _get_db
     with _get_db() as _db:
         existing_features = _db.query(FeatureModel).filter_by(design_id=design_entry.db_id).all()
@@ -3393,6 +3441,49 @@ def run_phase0(
         designs_folder = _create_designs_folder(project_path, design_entry, logger)
         _update_design_status(design_entry.db_id, "active", logger=logger)
         return features_json, designs_folder
+
+    # Tier 2: no Feature rows yet, but Phase 0's workflow already completed (using
+    # the same PhaseExecution-status idempotency concept every other phase gets via
+    # PhaseManager.mark_phase_complete) — the Feature Architect agent already
+    # finished and features.json exists on disk, but _create_feature_records never
+    # ran (e.g. the process crashed in between). Resume from there instead of
+    # re-running the whole agent, which would waste work and risk a second LLM
+    # decomposition picking different feature boundaries than the first.
+    completion = _get_phase0_completion(design_entry.db_id)
+    if completion is not None:
+        # Reuse the ALREADY-PERSISTED designs_folder from the completed run — do
+        # NOT call _create_designs_folder here, it always mints a brand-new
+        # timestamped directory and would never find the prior run's output.
+        designs_folder = Path(completion["designs_folder"])
+        features_json_path = designs_folder / "features.json"
+        if features_json_path.exists():
+            try:
+                features_json = json.loads(features_json_path.read_text())
+                _validate_features_json(features_json)
+                logger.info(
+                    f"Phase 0 workflow {completion['workflow_id'][:8]} already "
+                    f"completed for {design_entry.name} — resuming feature-record "
+                    "creation without re-running the agent"
+                )
+                feature_records = _create_feature_records(
+                    design_entry.db_id, features_json, designs_folder, logger
+                )
+                logger.info(
+                    f"Phase 0 resumed: {len(feature_records)} features created"
+                )
+                return features_json, designs_folder
+            except (json.JSONDecodeError, ValueError, OSError) as e:
+                logger.warning(
+                    f"Phase 0 workflow {completion['workflow_id'][:8]} completed "
+                    f"but its features.json could not be resumed ({e}) — "
+                    "falling through to a full re-run"
+                )
+        else:
+            logger.warning(
+                f"Phase 0 workflow {completion['workflow_id'][:8]} completed but "
+                f"no features.json found at {features_json_path} — falling "
+                "through to a full re-run"
+            )
 
     # Update design status to decomposing
     _update_design_status(design_entry.db_id, "decomposing", logger=logger)
@@ -3514,12 +3605,47 @@ def run_phase0(
                     logger.warning(f"scope.md not found for feature {feat_id}")
 
         # Persist designs_folder BEFORE creating feature records so recovery is possible
-        # if _create_feature_records raises (e.g. disk full).
+        # if _create_feature_records raises (e.g. disk full). Also persist
+        # phase0_workflow_id here — this is the durable completion marker
+        # _get_phase0_completion checks on a future re-entrant call, so that a
+        # crash between here and _create_feature_records resumes from the
+        # already-completed workflow's output instead of re-running the agent.
+        #
+        # NOTE: deliberately NOT using state.current_workflow_id here —
+        # run_single_workflow clears it back to None right before returning
+        # "completed" (see its final success branch), so by this point it's
+        # already gone (the same reason _run_one_feature's analogous
+        # _link_workflow_to_feature call below is a pre-existing no-op; not
+        # fixing that here, out of scope, but avoiding relying on the same
+        # broken channel for this new code). Query the just-created Workflow
+        # row directly instead, via the design_id/definition_id it was
+        # created with — robust regardless of that state-clearing behavior.
+        update_kwargs = {"designs_folder": str(designs_folder)}
+        from src.core.database import Workflow as _WF
+        with _get_db() as _db:
+            phase0_wf = (
+                _db.query(_WF)
+                .filter_by(design_id=design_entry.db_id, definition_id="autopilot-phase0")
+                .order_by(_WF.created_at.desc())
+                .first()
+            )
+            phase0_wf_id = phase0_wf.id if phase0_wf else None
+        if phase0_wf_id:
+            update_kwargs["phase0_workflow_id"] = phase0_wf_id
+            _set_workflow_type(phase0_wf_id, "design")
+        else:
+            logger.warning(
+                f"Could not find the just-created Phase 0 workflow for design "
+                f"{design_entry.db_id} — phase0_workflow_id will not be set, "
+                "so a future crash-recovery re-entrant call will re-run the "
+                "full agent instead of resuming (correctness is unaffected, "
+                "only the recovery optimization is skipped)"
+            )
         _update_design_status(
             design_entry.db_id,
             "active",
-            designs_folder=str(designs_folder),
             logger=logger,
+            **update_kwargs,
         )
 
         # Create Feature DB records
