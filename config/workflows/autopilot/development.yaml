@@ -34,7 +34,7 @@ additional_notes: |
   ═══════════════════════════════════════════════════════════════════════
   STEP 1: READ ARCHITECTURE AND GUIDELINES
   ═══════════════════════════════════════════════════════════════════════
-  
+
   CRITICAL PATH RULE: Your current working directory IS the project root (an isolated git worktree).
   - Write ALL code and tests inside your working directory (e.g. ./src, ./tests).
   - "Project Path" = your working directory (.).  "Docs Path" = ./docs/ (create it if missing).
@@ -43,11 +43,56 @@ additional_notes: |
   - ALL implementation code goes in "Project Path:" (src/, tests/, etc.).
   - ALL docs/reports go in "Docs Path:" — not the project root.
   - Your task description contains the exact paths — copy them exactly.
-  
+
   SCOPE RULE: Before writing any code, read ./.hephaestus/design.md.
   Implement ONLY what the design doc specifies. If architecture.md specifies more
   than the design doc, follow the design doc — not the architecture.
   Do NOT add functions, classes, or files not required by the design doc.
+
+  ═══════════════════════════════════════════════════════════════════════
+  STRUCTURED PROJECT CONTEXT (Reduced "14% Claude.md Tax")
+  ═══════════════════════════════════════════════════════════════════════
+
+  Before writing code, orient yourself with this structured context.\  This replaces wasted turns asking basic questions about project structure.
+
+  ARCHITECTURE MAP (read from AGENTS.md and architecture.md):
+  - src/ — Main source code (orchestration stack)
+  - src/agents/ — Agent lifecycle management
+  - src/autopilot/ — Pipeline orchestration
+  - src/core/ — Database, config, constants, shared utilities
+  - src/interfaces/ — CLI tool adapters (Claude, Pi, Droid, etc.)
+  - src/mcp/ — FastAPI MCP server and endpoints
+  - src/monitoring/ — Guardian and Conductor loops
+  - src/phases/ — Phase manager and workflow execution
+  - src/services/ — Business logic services
+  - src/workflow_engine/ — Workflow orchestration engine
+  - tests/ — Test suites
+  - config/workflows/ — Phase definitions (YAML)
+  - docs/ — Documentation
+
+  CODE STYLE (from AGENTS.md — follow exactly):
+  - Python: Black (line length 88), flake8, mypy
+  - Naming: snake_case functions/variables, PascalCase classes
+  - Async: verb-first async names (e.g., process_queue, handle_update)
+  - Types: explicit type hints on all functions
+  - Logging: use module-level logger = logging.getLogger(__name__)
+  - No bare except: always catch specific exceptions
+  - Imports: at top of file, sorted; lazy imports for circular deps
+
+  TESTING STRATEGY (from AGENTS.md):
+  - Test runner: python tests/run_all_tests.py (or pytest for targeted)
+  - Smoke pass: python tests/run_all_tests.py --quick
+  - Coverage: pytest --cov=src
+  - Format: ruff check . && ruff format --check .
+  - Types: mypy src/
+  - Frontend: cd frontend && npm run type-check
+
+  COMMON PATTERNS:
+  - Database sessions: use try/finally with session.close()
+  - Config access: from src.core.simple_config import get_config
+  - App state: from src.core.app_context import get_app_state
+  - Error handling: log with logger.error(), rollback session, re-raise
+  - Agent communication: use MCP tools (hephaestus_*) not direct imports
 
   PRE-SEEDED TEST FILES: The design doc may reference pre-seeded test files in
   tests/. If tests/test_calculator.py (or similar) already exists:

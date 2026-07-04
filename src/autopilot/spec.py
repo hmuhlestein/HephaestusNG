@@ -165,6 +165,126 @@ def _pass_with_subjective(agent_score: Any) -> float:
     return round(_PASS_FLOOR + (1.0 - _PASS_FLOOR) * _clamp01(agent_score, 1.0), 4)
 
 
+def run_independent_test_verification(
+    working_directory: str,
+    timeout_seconds: int = 300,
+) -> Optional[Dict[str, Any]]:
+    """Run the test suite independently to verify agent-reported QA metrics.
+
+    Enhancement 1 (from docs/LOOP_ENGINEERING_EVALUATION.md):
+    Turns the QA gate from 'trust the JSON format' into 'verify against
+    reality' by running pytest independently and comparing results.
+
+    Returns:
+        Dict with 'failed', 'passed', 'total', 'pass_rate' keys, or None
+        if tests couldn't be run (caller should fall back to agent report).
+    """
+    import subprocess
+
+    try:
+        # Run pytest with JSON report output
+        report_file = Path(working_directory) / ".pytest_report.json"
+        result = subprocess.run(
+            [
+                "python", "-m", "pytest",
+                "--json-report",
+                f"--json-report-file={report_file}",
+                "-q",
+                "--tb=no",
+            ],
+            cwd=working_directory,
+            capture_output=True,
+            timeout=timeout_seconds,
+            text=True,
+        )
+
+        if report_file.exists():
+            try:
+                report = json.loads(report_file.read_text())
+                summary = report.get("summary", {})
+                failed = summary.get("failed", 0)
+                passed = summary.get("passed", 0)
+                total = failed + passed
+                pass_rate = (passed / total * 100.0) if total > 0 else 0.0
+
+                logger.info(
+                    f"[INDEPENDENT_TEST] Verification complete: "
+                    f"{passed}/{total} passed ({pass_rate:.1f}%), "
+                    f"{failed} failed"
+                )
+
+                return {
+                    "failed": failed,
+                    "passed": passed,
+                    "total": total,
+                    "pass_rate": round(pass_rate, 1),
+                    "source": "independent_verification",
+                }
+            except (json.JSONDecodeError, KeyError) as e:
+                logger.warning(f"[INDEPENDENT_TEST] Could not parse report: {e}")
+        else:
+            logger.warning(
+                f"[INDEPENDENT_TEST] No report file generated. "
+                f"pytest exit code: {result.returncode}"
+            )
+
+    except subprocess.TimeoutExpired:
+        logger.warning(
+            f"[INDEPENDENT_TEST] Test suite timed out after {timeout_seconds}s"
+        )
+    except FileNotFoundError:
+        logger.warning(
+            "[INDEPENDENT_TEST] pytest not available in working directory"
+        )
+    except Exception as e:
+        logger.warning(f"[INDEPENDENT_TEST] Unexpected error: {e}")
+
+    return None
+
+
+def verify_qa_against_independent(
+    agent_result: Dict[str, Any],
+    independent_result: Dict[str, Any],
+) -> Tuple[bool, str]:
+    """Compare agent-reported QA metrics against independent test run.
+
+    Returns:
+        (is_consistent, discrepancy_message)
+    """
+    agent_failed = int(
+        agent_result.get("failed_tests")
+        or agent_result.get("tests_failed")
+        or 0
+    )
+    agent_pass_rate = float(agent_result.get("pass_rate", 0.0))
+
+    ind_failed = independent_result.get("failed", 0)
+    ind_pass_rate = independent_result.get("pass_rate", 0.0)
+
+    discrepancies = []
+
+    # Check if agent claims 0 failures but independent run found failures
+    if agent_failed == 0 and ind_failed > 0:
+        discrepancies.append(
+            f"Agent reported 0 failed tests but independent run found {ind_failed} failures"
+        )
+
+    # Check if pass rates diverge significantly (>5%)
+    if abs(agent_pass_rate - ind_pass_rate) > 5.0:
+        discrepancies.append(
+            f"Pass rate divergence: agent={agent_pass_rate:.1f}%, "
+            f"independent={ind_pass_rate:.1f}%"
+        )
+
+    if discrepancies:
+        msg = "; ".join(discrepancies)
+        logger.warning(f"[QA_VERIFICATION] Discrepancy detected: {msg}")
+        return False, msg
+
+    logger.info("[QA_VERIFICATION] Agent report consistent with independent run")
+    return True, ""
+
+
 def score_scope_review(
     result: Optional[Dict[str, Any]],
 ) -> Tuple[float, Dict[str, Any]]:
@@ -231,13 +351,18 @@ def score_scope_review(
 
 
 def score_qa(
-    result: Optional[Dict[str, Any]], spec: Dict[str, Any]
+    result: Optional[Dict[str, Any]],
+    spec: Dict[str, Any],
+    working_directory: Optional[str] = None,
 ) -> Tuple[float, Dict[str, Any]]:
     """Score a structured QA result against the spec (hard floors + judgement).
 
     Expected result keys (all optional, scored defensively):
         failed_tests, passed_tests, total_tests, pass_rate (0-100),
         critical_issues, requirements_met, requirements_total, agent_score (0-1).
+
+    Enhancement 1: If working_directory is provided, runs an independent test
+    verification and compares against the agent's self-reported metrics.
     """
     if not result:
         return _DEV, {
@@ -263,6 +388,30 @@ def score_qa(
     req_met = int(result.get("requirements_met", req_total) or 0)
     req_rate = (req_met / req_total * 100.0) if req_total > 0 else 100.0
 
+    # Enhancement 1: Independent test verification
+    independent_verification = None
+    verification_discrepancy = ""
+    if working_directory:
+        independent_result = run_independent_test_verification(working_directory)
+        if independent_result:
+            independent_verification = independent_result
+            is_consistent, discrepancy = verify_qa_against_independent(
+                result, independent_result
+            )
+            if not is_consistent:
+                verification_discrepancy = discrepancy
+                # Use the independent (worse) metrics if agent claims better results
+                ind_failed = independent_result.get("failed", 0)
+                if ind_failed > failed:
+                    logger.warning(
+                        f"[QA_GATE] Overriding agent metrics with independent results: "
+                        f"failed_tests {failed} -> {ind_failed}"
+                    )
+                    failed = ind_failed
+                    passed = independent_result.get("passed", passed)
+                    total = independent_result.get("total", total)
+                    pass_rate = independent_result.get("pass_rate", pass_rate)
+
     violations = []
     if critical > spec.get("max_critical_issues", 0):
         violations.append(
@@ -287,6 +436,12 @@ def score_qa(
         "critical_issues": critical,
         "requirements_met_rate": round(req_rate, 1),
     }
+
+    # Include verification metadata
+    if independent_verification:
+        meta["independent_verification"] = independent_verification
+    if verification_discrepancy:
+        meta["verification_discrepancy"] = verification_discrepancy
 
     # Critical issues are treated as fundamental (architecture); other floor
     # breaches are code-level (development); otherwise pass + subjective blend.
@@ -385,7 +540,8 @@ def build_phase_output(
         score, meta = score_scope_review(result)
     elif phase_name == "qa_validation":
         result = read_result(working_directory, "qa_result.json")
-        score, meta = score_qa(result, spec)
+        # Enhancement 1: Pass working_directory for independent test verification
+        score, meta = score_qa(result, spec, working_directory=working_directory)
     else:  # product_validation
         result = read_result(working_directory, "product_validation.json")
         score, meta = score_product_validation(result, spec)
