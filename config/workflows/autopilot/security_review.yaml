@@ -53,15 +53,16 @@ additional_notes: |
   STEP 0.5: AUTOMATED SCAN (ash) — MANDATORY
   ═══════════════════════════════════════════════════════════════════════
 
-  Run the AWS Automated Security Helper. Derive the path from the `heph` binary:
+  The orchestrator already ran the AWS Automated Security Helper against
+  this worktree before you started (guaranteed — not dependent on you
+  remembering this step). Read its results:
   ```bash
-  HEPH_REPO="$(cd "$(dirname "$(which heph)")/../.." && pwd)"
-  "$HEPH_REPO/scripts/ash" --source-dir . 2>&1 | tee /tmp/ash_results.txt || true
-  cat /tmp/ash_results.txt
+  cat ./.hephaestus/ash_results.txt
   ```
 
-  This script runs via `uvx` (no Docker required). It may take 1-2 minutes.
-  If it fails or times out, note the error in the report and continue.
+  If that file says "SCAN FAILED TO RUN" or "SCAN TIMED OUT", note that
+  verbatim in the report and continue — do not attempt to run the scan
+  yourself.
 
   Include a summary of its findings in security_report.md under
   "## Automated Scan Results". Fix any HIGH/CRITICAL findings it surfaces.

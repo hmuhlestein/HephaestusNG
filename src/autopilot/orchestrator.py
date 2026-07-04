@@ -2777,6 +2777,52 @@ def _fire_phase_transition(
         return False
 
 
+def _run_ash_scan(worktree: Path, logger: OrchestratorLogger) -> None:
+    """Run the AWS Automated Security Helper against a feature's worktree.
+
+    security_review.yaml marks this scan MANDATORY, but relying on the agent
+    to remember to run it is unreliable — observed live during smoke testing:
+    an agent skipped both the mandatory feature-classification step and this
+    scan entirely, with no note of it being skipped (which the prompt also
+    explicitly asked for on failure). Running it here, unconditionally,
+    before the agent starts, removes the compliance gap the same way
+    Enhancement 1 (run_independent_test_verification in spec.py) stopped
+    trusting agent-reported QA metrics — the orchestrator now guarantees the
+    scan happened at all, regardless of what the agent does with the results.
+    """
+    results_path = worktree / CONTEXT_DIR_NAME / "ash_results.txt"
+    try:
+        heph_repo = Path(__file__).resolve().parents[2]
+        ash_script = heph_repo / "scripts" / "ash"
+        if not ash_script.exists():
+            logger.warning(f"[ASH] scripts/ash not found at {ash_script}, skipping scan")
+            return
+
+        results_path.parent.mkdir(parents=True, exist_ok=True)
+        result = subprocess.run(
+            [str(ash_script), "--source-dir", "."],
+            cwd=str(worktree),
+            capture_output=True,
+            timeout=300,
+            text=True,
+        )
+        output = (result.stdout or "") + (result.stderr or "")
+        results_path.write_text(output or "(no output)")
+        logger.info(
+            f"[ASH] Automated security scan complete (exit code {result.returncode}), "
+            f"results written to {results_path}"
+        )
+    except subprocess.TimeoutExpired:
+        logger.warning("[ASH] Automated security scan timed out after 300s")
+        results_path.write_text("SCAN TIMED OUT after 300s")
+    except Exception as e:
+        logger.warning(f"[ASH] Automated security scan failed: {e}")
+        try:
+            results_path.write_text(f"SCAN FAILED TO RUN: {e}")
+        except Exception:
+            pass
+
+
 def _create_phase_task(
     workflow_id: str,
     phase_id: str,
@@ -2789,6 +2835,14 @@ def _create_phase_task(
         import uuid
 
         with get_db() as db:
+            # Run the mandatory automated security scan ourselves before the
+            # agent starts (see _run_ash_scan) — don't rely on the agent to
+            # remember a "MANDATORY" prompt instruction.
+            if phase_name == "security_review":
+                wf = db.query(Workflow).filter_by(id=workflow_id).first()
+                if wf and wf.working_directory:
+                    _run_ash_scan(Path(wf.working_directory), logger)
+
             # forensics_analysis reviews every artifact + full tmux transcript
             # of a completed feature run to propose prompt/methodology fixes —
             # expensive (whole-pipeline review) and only actionable when
