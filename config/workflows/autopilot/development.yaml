@@ -53,22 +53,12 @@ additional_notes: |
   STRUCTURED PROJECT CONTEXT (Reduced "14% Claude.md Tax")
   ═══════════════════════════════════════════════════════════════════════
 
-  Before writing code, orient yourself with this structured context.\  This replaces wasted turns asking basic questions about project structure.
+  Before writing code, orient yourself with this structured context.
+  This replaces wasted turns asking basic questions about project structure.
 
-  ARCHITECTURE MAP (read from AGENTS.md and architecture.md):
-  - src/ — Main source code (orchestration stack)
-  - src/agents/ — Agent lifecycle management
-  - src/autopilot/ — Pipeline orchestration
-  - src/core/ — Database, config, constants, shared utilities
-  - src/interfaces/ — CLI tool adapters (Claude, Pi, Droid, etc.)
-  - src/mcp/ — FastAPI MCP server and endpoints
-  - src/monitoring/ — Guardian and Conductor loops
-  - src/phases/ — Phase manager and workflow execution
-  - src/services/ — Business logic services
-  - src/workflow_engine/ — Workflow orchestration engine
-  - tests/ — Test suites
-  - config/workflows/ — Phase definitions (YAML)
-  - docs/ — Documentation
+  ARCHITECTURE MAP: Read AGENTS.md and architecture.md for this project's
+  specific layout — directory names, module boundaries, and naming conventions
+  vary per project. Do not assume any particular structure before reading them.
 
   CODE STYLE (from AGENTS.md — follow exactly):
   - Python: Black (line length 88), flake8, mypy
