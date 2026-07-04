@@ -5808,7 +5808,7 @@ async def _tool_send_message(arguments: Dict[str, Any]):
         # not send_message_to_agent which doesn't have that parameter.
         await server_state.agent_manager.send_direct_message(
             sender_agent_id=sender_id,
-            target_agent_id=target_agent_id,
+            recipient_agent_id=target_agent_id,
             message=message,
         )
     except Exception as e:
