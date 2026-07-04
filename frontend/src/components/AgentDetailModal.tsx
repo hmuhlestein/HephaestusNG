@@ -132,15 +132,14 @@ const AgentDetailModal: React.FC<AgentDetailModalProps> = ({
                     {agent?.id || agentId}
                   </p>
                 </div>
+              </div>
 
+              <div className="flex items-center space-x-2">
                 {agent && (
                   <span className={`px-2.5 py-1 rounded-full text-xs font-semibold ${getStatusColor(agent.status)}`}>
                     {agent.status}
                   </span>
                 )}
-              </div>
-
-              <div className="flex items-center space-x-2">
                 {agent && onViewOutput && (
                   <button
                     onClick={() => onViewOutput(agent.id)}
