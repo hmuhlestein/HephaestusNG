@@ -205,6 +205,57 @@ async def save_memory(
 
 
 @mcp.tool()
+async def search_memory(
+    query: str,
+    agent_id: str = None,
+    limit: int = 10,
+    memory_type: str = None,
+) -> str:
+    """Search the Hephaestus knowledge base for relevant memories.
+
+    Args:
+        query: What to search for (natural-language description)
+        agent_id: Your agent ID — used to auto-scope results to your project
+        limit: Max number of results to return (default 10)
+        memory_type: Optional filter (error_fix/discovery/decision/learning/warning/codebase_knowledge)
+
+    Search before reinventing something another agent already figured out.
+    """
+    try:
+        async with httpx.AsyncClient() as client:
+            payload = {"query": query, "limit": limit}
+            if memory_type:
+                payload["memory_type"] = memory_type
+
+            headers = {"Content-Type": "application/json"}
+            if agent_id:
+                headers["X-Agent-ID"] = agent_id
+
+            response = await client.post(
+                f"{HEPHAESTUS_URL}/search_memory",
+                json=payload,
+                headers=headers,
+                timeout=10.0,
+            )
+
+            if response.status_code == 200:
+                result = response.json()
+                results = result.get("results", [])
+                if not results:
+                    return "No matching memories found."
+                lines = [f"Found {len(results)} memories:"]
+                for r in results:
+                    lines.append(
+                        f"- [{r.get('memory_type', '?')}] {r.get('content', '')[:300]}"
+                    )
+                return "\n".join(lines)
+            else:
+                return f"❌ Failed to search memory: {response.text}"
+    except Exception as e:
+        return f"❌ Error searching memory: {str(e)}"
+
+
+@mcp.tool()
 async def update_task_status(
     task_id: str,
     agent_id: str,
