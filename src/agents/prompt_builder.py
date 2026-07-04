@@ -213,7 +213,8 @@ INSTRUCTIONS (always pass agent_id="{agent_id}"; pass workflow_id="{workflow_id 
 - hephaestus_save_memory(content="...", agent_id="{agent_id}", memory_type="<type>"): save as you go, not just at end
   types: error_fix | discovery | decision | learning | warning | codebase_knowledge
 - hephaestus_search_memory(query="..."): search before reinventing
-- hephaestus_create_task(description="...", done_definition="...", phase=N, workflow_id="{workflow_id if workflow_id else "N/A"}"): create SUBTASKS within YOUR OWN current phase only.
+- hephaestus_create_task(task_description="...", done_definition="...", phase_id="{task.phase_id if hasattr(task, "phase_id") and task.phase_id else "N/A"}", workflow_id="{workflow_id if workflow_id else "N/A"}"): create SUBTASKS within YOUR OWN current phase only.
+  This tool does NOT take agent_id — omit it here even though other tools need it.
   Do NOT use this to create the next pipeline phase's task — the orchestrator creates that
   automatically, with the correct phase name and required output, once you mark this task done.
   Manually guessing a future phase number here has caused tasks to be created under the wrong
