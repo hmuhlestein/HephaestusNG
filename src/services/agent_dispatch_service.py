@@ -74,16 +74,13 @@ class AgentDispatchService:
             requesting_agent_id=requesting_agent_id,
         )
 
-        working_directory = (
-            explicit_working_directory
-            or os.getcwd()
-        )
-
-        # FIX #6: Delegate to _assemble_dispatch_dict for shared assembly.
+        # FIX #6: Pass explicit_working_directory (may be None) to the assembler
+        # so the phase's configured working_directory can be used as fallback.
+        # Do NOT resolve to os.getcwd() here — that shadows the phase config.
         return AgentDispatchService._assemble_dispatch_dict(
             project_context=project_context,
             context_memories=context_memories,
-            working_directory=working_directory,
+            working_directory=explicit_working_directory,
             phase_id=phase_id,
         )
 
