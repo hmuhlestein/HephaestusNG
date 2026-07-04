@@ -357,6 +357,11 @@ class Workflow(Base):
     # Link to the autopilot design that spawned this execution (1 Design : N Workflows)
     design_id = Column(String, ForeignKey("autopilot_designs.id"), nullable=True)
 
+    # Denormalized project_id for direct filtering (set from design.project_id)
+    project_id = Column(
+        String, ForeignKey("autopilot_projects.id", ondelete="SET NULL"), nullable=True
+    )
+
     # Working directory for this execution (can override default)
     working_directory = Column(String)
 
@@ -381,6 +386,9 @@ class Workflow(Base):
     definition = relationship("WorkflowDefinition", back_populates="executions")
     design = relationship(
         "AutopilotDesign", foreign_keys=[design_id], backref="workflows"
+    )
+    project = relationship(
+        "AutopilotProject", foreign_keys=[project_id], backref="workflows"
     )
     phases = relationship("Phase", back_populates="workflow", order_by="Phase.order")
     result = relationship("WorkflowResult", foreign_keys=[result_id])

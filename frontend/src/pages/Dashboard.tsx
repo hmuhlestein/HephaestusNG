@@ -83,10 +83,10 @@ const Dashboard: React.FC = () => {
   const projectId = activeProject?.id || null;
 
   const { data, isLoading, error } = useQuery({
-    queryKey: ['dashboard-stats', selectedExecutionId],
-    queryFn: () => apiService.getDashboardStats(selectedExecutionId || undefined),
+    queryKey: ['dashboard-stats', projectId],
+    queryFn: () => apiService.getDashboardStats(undefined, projectId || undefined),
     refetchInterval: 5000, // Refresh every 5 seconds
-    enabled: !!selectedExecutionId,
+    enabled: !!projectId,
   });
 
   const { data: autopilotInput } = useQuery({

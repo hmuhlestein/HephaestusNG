@@ -110,27 +110,35 @@ export const apiService = {
   },
 
   // Dashboard
-  getDashboardStats: async (workflowId?: string): Promise<DashboardStats> => {
-    const params = workflowId ? `?workflow_id=${workflowId}` : '';
-    const { data } = await api.get(`/dashboard/stats${params}`);
+  getDashboardStats: async (workflowId?: string, projectId?: string): Promise<DashboardStats> => {
+    const params = new URLSearchParams();
+    if (workflowId) params.append('workflow_id', workflowId);
+    if (projectId) params.append('project_id', projectId);
+    const { data } = await api.get(`/dashboard/stats?${params}`);
     return data;
   },
 
   // Tasks
-  getTasks: async (skip = 0, limit = 50, status?: string, workflowId?: string): Promise<Task[]> => {
+  getTasks: async (skip = 0, limit = 50, status?: string, workflowId?: string, projectId?: string): Promise<Task[]> => {
     const params = new URLSearchParams();
     params.append('skip', skip.toString());
     params.append('limit', limit.toString());
     if (status) params.append('status', status);
     if (workflowId) params.append('workflow_id', workflowId);
+    if (projectId) params.append('project_id', projectId);
 
     const { data } = await api.get(`/tasks?${params}`);
     return data;
   },
 
   // Agents
-  getAgents: async (status: string = 'active', page: number = 1): Promise<{ agents: Agent[]; total: number; page: number; per_page: number; pages: number }> => {
-    const { data } = await api.get(`/agents?status=${status}&page=${page}&per_page=20`);
+  getAgents: async (status: string = 'active', page: number = 1, projectId?: string): Promise<{ agents: Agent[]; total: number; page: number; per_page: number; pages: number }> => {
+    const params = new URLSearchParams();
+    params.append('status', status);
+    params.append('page', page.toString());
+    params.append('per_page', '20');
+    if (projectId) params.append('project_id', projectId);
+    const { data } = await api.get(`/agents?${params}`);
     return data;
   },
 

@@ -10,6 +10,7 @@ import RealTimeAgentOutput from '@/components/RealTimeAgentOutput';
 import TaskDetailModal from '@/components/TaskDetailModal';
 import SendMessageDialog from '@/components/SendMessageDialog';
 import { useWebSocket } from '@/context/WebSocketContext';
+import { useProject } from '@/context/ProjectContext';
 import { formatDistanceToNow } from 'date-fns';
 
 function agentTitle(agent: Agent): string {
@@ -279,11 +280,14 @@ const Agents: React.FC = () => {
   const [showAll, setShowAll] = useState(!!urlAgentId);
   const [page, setPage] = useState(1);
   const { subscribe } = useWebSocket();
+  const { activeProject } = useProject();
+  const projectId = activeProject?.id || null;
 
   const { data, isLoading, error, refetch } = useQuery({
-    queryKey: ['agents', showAll ? 'all' : 'active', page],
-    queryFn: () => apiService.getAgents(showAll ? 'all' : 'active', page),
+    queryKey: ['agents', showAll ? 'all' : 'active', page, projectId],
+    queryFn: () => apiService.getAgents(showAll ? 'all' : 'active', page, projectId || undefined),
     refetchInterval: 5000,
+    enabled: !!projectId,
   });
 
   // Auto-select agent from URL

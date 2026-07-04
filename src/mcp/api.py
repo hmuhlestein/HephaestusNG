@@ -141,26 +141,46 @@ class FrontendAPI:
 
         return deduplicated
 
-    async def get_dashboard_stats(self) -> Dict[str, Any]:
+    async def get_dashboard_stats(self, project_id: Optional[str] = None) -> Dict[str, Any]:
         """Get dashboard statistics."""
         session = self.db_manager.get_session()
         try:
+            # Base query filters
+            agent_query = session.query(Agent)
+            task_query = session.query(Task)
+            
+            if project_id:
+                # Filter by project through workflow
+                project_workflow_ids = session.query(Workflow.id).filter(
+                    Workflow.project_id == project_id
+                ).subquery()
+                agent_query = agent_query.filter(
+                    Agent.current_task_id.in_(
+                        session.query(Task.id).filter(
+                            Task.workflow_id.in_(project_workflow_ids)
+                        )
+                    )
+                )
+                task_query = task_query.filter(
+                    Task.workflow_id.in_(project_workflow_ids)
+                )
+
             active_agents = (
-                session.query(func.count(Agent.id))
+                agent_query
                 .filter(Agent.status != "terminated")
-                .scalar()
+                .count()
             )
 
             running_tasks = (
-                session.query(func.count(Task.id))
+                task_query
                 .filter(Task.status.in_(["assigned", "in_progress"]))
-                .scalar()
+                .count()
             )
 
             queued_tasks = (
-                session.query(func.count(Task.id))
+                task_query
                 .filter(Task.status == "queued")
-                .scalar()
+                .count()
             )
 
             total_memories = session.query(func.count(Memory.id)).scalar()
@@ -219,6 +239,7 @@ class FrontendAPI:
         limit: int = 50,
         status: Optional[str] = None,
         workflow_id: Optional[str] = None,
+        project_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """Get all tasks with pagination."""
         session = self.db_manager.get_session()
@@ -229,6 +250,11 @@ class FrontendAPI:
                 query = query.filter(Task.status == status)
             if workflow_id:
                 query = query.filter(Task.workflow_id == workflow_id)
+            if project_id:
+                # Filter through workflow -> project_id
+                query = query.join(Workflow, Task.workflow_id == Workflow.id).filter(
+                    Workflow.project_id == project_id
+                )
 
             tasks = (
                 query.order_by(desc(Task.created_at)).offset(skip).limit(limit).all()
@@ -285,11 +311,25 @@ class FrontendAPI:
         finally:
             session.close()
 
-    async def get_agents(self) -> List[Dict[str, Any]]:
+    async def get_agents(self, project_id: Optional[str] = None) -> List[Dict[str, Any]]:
         """Get all agents with enhanced task information."""
         session = self.db_manager.get_session()
         try:
-            agents = session.query(Agent).order_by(desc(Agent.created_at)).all()
+            query = session.query(Agent)
+            
+            if project_id:
+                # Filter agents that have tasks in the specified project
+                project_workflow_ids = session.query(Workflow.id).filter(
+                    Workflow.project_id == project_id
+                ).subquery()
+                project_task_ids = session.query(Task.id).filter(
+                    Task.workflow_id.in_(project_workflow_ids)
+                ).subquery()
+                query = query.filter(
+                    Agent.current_task_id.in_(project_task_ids)
+                )
+            
+            agents = query.order_by(desc(Agent.created_at)).all()
 
             result = []
             for agent in agents:
@@ -2702,9 +2742,9 @@ def create_frontend_routes(
     frontend_api = FrontendAPI(db_manager, agent_manager, phase_manager)
 
     @router.get("/dashboard/stats")
-    async def get_dashboard_stats():
+    async def get_dashboard_stats(project_id: Optional[str] = None):
         """Get dashboard statistics."""
-        return await frontend_api.get_dashboard_stats()
+        return await frontend_api.get_dashboard_stats(project_id)
 
     @router.get("/tasks")
     async def get_tasks(
@@ -2712,14 +2752,15 @@ def create_frontend_routes(
         limit: int = Query(50, ge=1, le=10000),
         status: Optional[str] = None,
         workflow_id: Optional[str] = None,
+        project_id: Optional[str] = None,
     ):
         """Get tasks with pagination."""
-        return await frontend_api.get_tasks(skip, limit, status, workflow_id)
+        return await frontend_api.get_tasks(skip, limit, status, workflow_id, project_id)
 
     @router.get("/agents")
-    async def get_agents():
+    async def get_agents(project_id: Optional[str] = None):
         """Get all agents."""
-        return await frontend_api.get_agents()
+        return await frontend_api.get_agents(project_id)
 
     @router.get("/agents/{agent_id}/output")
     async def get_agent_output(agent_id: str, lines: int = Query(2000, ge=10, le=5000)):

@@ -4052,6 +4052,7 @@ async def list_agents(
     status: str = Query("active", regex="^(active|all)$"),
     page: int = Query(1, ge=1),
     per_page: int = Query(20, ge=1, le=100),
+    project_id: Optional[str] = None,
 ):
     """List agents with pagination. status='active' excludes terminated, 'all' includes everything."""
     _require_localhost(request)
@@ -4062,6 +4063,19 @@ async def list_agents(
         query = session.query(Agent)
         if status == "active":
             query = query.filter(Agent.status.notin_(["terminated", "idle"]))
+        
+        if project_id:
+            # Filter agents that have tasks in the specified project
+            project_workflow_ids = session.query(Workflow.id).filter(
+                Workflow.project_id == project_id
+            ).subquery()
+            from src.core.database import Task
+            project_task_ids = session.query(Task.id).filter(
+                Task.workflow_id.in_(project_workflow_ids)
+            ).subquery()
+            query = query.filter(
+                Agent.current_task_id.in_(project_task_ids)
+            )
 
         total = query.count()
         agents = (
