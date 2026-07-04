@@ -30,7 +30,7 @@ const AdvancedFilterBar: React.FC<AdvancedFilterBarProps> = ({
     { value: 'working', label: 'Working', icon: Activity, color: 'text-green-600' },
     { value: 'idle', label: 'Idle', icon: Clock, color: 'text-gray-600' },
     { value: 'stuck', label: 'Stuck', icon: AlertCircle, color: 'text-red-600' },
-    { value: 'terminated', label: 'Terminated', icon: CheckCircle, color: 'text-gray-500' },
+    { value: 'terminated', label: 'Done', icon: CheckCircle, color: 'text-gray-500' },
   ];
 
   const activityOptions = [

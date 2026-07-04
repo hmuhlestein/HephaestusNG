@@ -663,11 +663,7 @@ const FeatureRow: React.FC<{
                 className="flex items-center gap-2 px-2 py-1.5 bg-white rounded border border-gray-100 cursor-pointer hover:bg-gray-50 hover:border-gray-200 transition-colors"
               >
                 <TaskStatusIcon
-                  status={
-                    task.status !== 'blocked' && task.agent_status === 'terminated'
-                      ? 'failed'
-                      : task.status
-                  }
+                  status={task.status}
                 />
                 <div
                   className="flex-1 min-w-0"
@@ -678,13 +674,18 @@ const FeatureRow: React.FC<{
                     {task.phase_name && (
                       <span className="text-[10px] text-gray-400">{task.phase_name}</span>
                     )}
-                    {task.agent_status && (
+                    {task.agent_status && task.agent_status !== 'terminated' && (
                       <span className={`text-[10px] px-1 py-0.5 rounded ${
                         task.agent_status === 'working' ? 'bg-green-100 text-green-700' :
                         task.agent_status === 'idle' ? 'bg-gray-100 text-gray-600' :
                         'bg-gray-100 text-gray-500'
                       }`}>
                         {task.agent_status}
+                      </span>
+                    )}
+                    {task.agent_status === 'terminated' && task.status === 'done' && (
+                      <span className="text-[10px] px-1 py-0.5 rounded bg-green-100 text-green-700">
+                        done
                       </span>
                     )}
                   </div>

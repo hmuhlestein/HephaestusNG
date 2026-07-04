@@ -48,12 +48,15 @@ const StatusBadge: React.FC<StatusBadgeProps> = ({ status, size = 'md' }) => {
       [
         'failed',
         'error',
-        'terminated',
         'rejected',
         'disputed',
       ].includes(normalized)
     ) {
       return 'bg-red-100 text-red-800';
+    }
+
+    if (normalized === 'terminated') {
+      return 'bg-gray-100 text-gray-800';
     }
 
     if (
@@ -91,7 +94,7 @@ const StatusBadge: React.FC<StatusBadgeProps> = ({ status, size = 'md' }) => {
         sizeClasses[size]
       )}
     >
-      {status.replace(/_/g, ' ')}
+      {status === 'terminated' ? 'done' : status.replace(/_/g, ' ')}
     </span>
   );
 };
