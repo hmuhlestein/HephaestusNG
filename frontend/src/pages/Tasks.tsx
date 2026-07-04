@@ -191,10 +191,10 @@ const Tasks: React.FC = () => {
   });
 
   const { data: blockedTasks } = useQuery({
-    queryKey: ['blocked-tasks', selectedExecutionId],
-    queryFn: () => apiService.getBlockedTasks(selectedExecutionId || undefined),
+    queryKey: ['blocked-tasks', projectId],
+    queryFn: () => apiService.getBlockedTasks(undefined, projectId || undefined),
     refetchInterval: 5000,
-    enabled: !!selectedExecutionId,
+    enabled: !!projectId,
   });
 
   useEffect(() => {

@@ -562,9 +562,11 @@ export const apiService = {
   },
 
   // Blocked Tasks
-  getBlockedTasks: async (workflowId?: string): Promise<BlockedTask[]> => {
-    const params = workflowId ? `?workflow_id=${workflowId}` : '';
-    const { data } = await api.get(`/blocked-tasks${params}`);
+  getBlockedTasks: async (workflowId?: string, projectId?: string): Promise<BlockedTask[]> => {
+    const params = new URLSearchParams();
+    if (workflowId) params.append('workflow_id', workflowId);
+    if (projectId) params.append('project_id', projectId);
+    const { data } = await api.get(`/blocked-tasks?${params}`);
     return data;
   },
 

@@ -4,7 +4,7 @@ import logging
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from src.core.database import Task, Ticket, get_db
+from src.core.database import Task, Ticket, Workflow, get_db
 
 logger = logging.getLogger(__name__)
 
@@ -217,14 +217,25 @@ class TaskBlockingService:
         }
 
     @staticmethod
-    def get_all_blocked_tasks() -> List[Dict[str, Any]]:
+    def get_all_blocked_tasks(project_id: Optional[str] = None) -> List[Dict[str, Any]]:
         """Get all tasks with blocked status.
 
+        Args:
+            project_id: Optional project ID to filter by
+            
         Returns:
             List of blocked task details with blocker information
         """
         with get_db() as db:
-            blocked_tasks = db.query(Task).filter_by(status="blocked").all()
+            query = db.query(Task).filter_by(status="blocked")
+            
+            if project_id:
+                # Filter through workflow -> project_id
+                query = query.join(Workflow, Task.workflow_id == Workflow.id).filter(
+                    Workflow.project_id == project_id
+                )
+            
+            blocked_tasks = query.all()
 
             results = []
             for task in blocked_tasks:
