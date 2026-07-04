@@ -1067,6 +1067,44 @@ class MonitoringLoop:
 
             # Execute steering if needed
             if analysis.get("needs_steering", False):
+                # Enhancement 4: Emit signal to orchestrator
+                from src.monitoring.signals import (
+                    MonitorSignal,
+                    SignalType,
+                    get_signal_queue,
+                )
+
+                steering_type = analysis.get("steering_type", "general")
+                signal_type_map = {
+                    "stuck": SignalType.STUCK_PATTERN,
+                    "idle": SignalType.STUCK_PATTERN,
+                    "drifting": SignalType.TRAJECTORY_DEVIATION,
+                    "off_track": SignalType.TRAJECTORY_DEVIATION,
+                    "over_engineering": SignalType.TRAJECTORY_DEVIATION,
+                }
+                signal_type = signal_type_map.get(
+                    steering_type, SignalType.STUCK_PATTERN
+                )
+                task = await self.guardian._get_agent_task(agent)
+                workflow_id = task.get("workflow_id") if task else None
+                if workflow_id:
+                    get_signal_queue().emit(
+                        MonitorSignal(
+                            type=signal_type,
+                            workflow_id=workflow_id,
+                            agent_id=agent.id,
+                            confidence=0.7,
+                            evidence=f"Guardian detected {steering_type}: "
+                            f"{analysis.get('summary', '')[:100]}",
+                            metadata={
+                                "steering_type": steering_type,
+                                "consecutive_flags": consecutive_stuck
+                                if 'consecutive_stuck' in dir()
+                                else 0,
+                            },
+                        )
+                    )
+
                 await self.guardian.steer_agent(
                     agent=agent,
                     steering_type=analysis.get("steering_type", "general"),

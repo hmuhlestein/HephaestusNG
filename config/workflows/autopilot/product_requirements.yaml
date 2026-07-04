@@ -41,6 +41,20 @@ additional_notes: |
 
   Before reading the design document, understand the LARGER PROJECT:
 
+  STRUCTURED PROJECT CONTEXT (Reduced "14% Claude.md Tax"):
+  - src/ — Main source code (orchestration stack)
+  - src/agents/ — Agent lifecycle management
+  - src/autopilot/ — Pipeline orchestration
+  - src/core/ — Database, config, constants, shared utilities
+  - src/interfaces/ — CLI tool adapters (Claude, Pi, Droid, etc.)
+  - src/mcp/ — FastAPI MCP server and endpoints
+  - src/monitoring/ — Guardian and Conductor loops
+  - src/phases/ — Phase manager and workflow execution
+  - src/services/ — Business logic services
+  - tests/ — Test suites
+  - config/workflows/ — Phase definitions (YAML)
+  - docs/ — Documentation
+
   1. Read AGENTS.md for repository guidelines:
      - Project structure and module organization
      - Coding style and naming conventions

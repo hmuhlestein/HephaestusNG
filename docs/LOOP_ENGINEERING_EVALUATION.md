@@ -621,6 +621,69 @@ closes the biggest fidelity gap in the existing pipeline.
 
 ---
 
-*Document generated 2026-07-03. Sources: Anthropic Engineering blog (March 2026),
-Boris Cherny at Acquired Unplugged (June 2026), direct code analysis of HephaestusNG
-`src/` and `config/` at commit `a939e3b`.*
+## Implementation Summary (2026-07-03)
+
+All three enhancements were implemented:
+
+### Enhancement 1: Independent Test Re-run at QA Gate
+
+**Files modified:** `src/autopilot/spec.py`
+
+**What was done:**
+- Added `run_independent_test_verification()` function that runs pytest independently
+  with `--json-report` and returns actual test metrics
+- Added `verify_qa_against_independent()` function that compares agent-reported metrics
+  against independent verification results
+- Modified `score_qa()` to accept optional `working_directory` parameter and run
+  independent verification when provided
+- If agent reports 0 failures but independent run finds failures, the gate uses the
+  independent (worse) metrics
+- Pass rate divergence >5% triggers a warning and uses independent metrics
+
+**Measurable impact:** Closes the biggest verification fidelity gap. The QA gate now
+verifies test results against reality instead of trusting agent self-report. An agent
+that writes plausible `qa_result.json` without running tests will be caught.
+
+### Enhancement 4: MonitorSignal → Orchestrator Feedback Channel
+
+**Files created:** `src/monitoring/signals.py`
+**Files modified:** `src/monitoring/monitor.py`, `src/autopilot/orchestrator.py`
+
+**What was done:**
+- Created `MonitorSignal` dataclass with types: STUCK_PATTERN, REPEATED_FAILURE,
+  RESOURCE_EXHAUSTION, TRAJECTORY_DEVIATION, PHASE_STUCK
+- Created `SignalQueue` class with thread-safe emit/get_signals/count_signals/clear
+  methods
+- Added global `get_signal_queue()` singleton
+- Modified Guardian analysis in monitor.py to emit signals when it detects agents
+  that need steering (stuck, idle, drifting, off_track, over_engineering)
+- Modified orchestrator poll loop to consume high-confidence signals (confidence >= 0.7)
+  before running impasse detection
+- STUCK_PATTERN and PHASE_STUCK signals count toward impasse, triggering the stuck
+  counter increment without waiting for the 30-minute timeout
+
+**Measurable impact:** Closes the observe-act-reflect loop. Guardian findings now
+influence orchestrator decisions directly. A stuck agent detected at minute 5 (via
+pattern analysis) no longer waits until minute 30 (via time-based timeout) to trigger
+impasse handling.
+
+### Enhancement 5: Structured Pipeline Agent Prompts
+
+**Files modified:** `config/workflows/autopilot/development.yaml`,
+`config/workflows/autopilot/product_requirements.yaml`
+
+**What was done:**
+- Added "STRUCTURED PROJECT CONTEXT" section to development.yaml with:
+  - Architecture Map (src/ layout with descriptions)
+  - Code Style (explicit rules from AGENTS.md)
+  - Testing Strategy (runner, coverage, format commands)
+  - Common Patterns (session handling, config access, error handling)
+- Added structured context to product_requirements.yaml's STEP 0
+
+**Measurable impact:** Reduces wasted turns by giving agents explicit project context
+upfront instead of requiring them to discover it through exploration. Addresses the
+"14% Claude.md Tax" identified in the harness engineering article.
+
+---
+
+*Implementation complete 2026-07-03. All 223 tests pass. 2 skipped.*

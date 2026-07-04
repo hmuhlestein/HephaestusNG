@@ -3267,6 +3267,25 @@ def run_single_workflow(
             else:
                 credit_stuck_count = 0
 
+            # Enhancement 4: Consume monitor signals for orchestrator feedback
+            from src.monitoring.signals import SignalType, get_signal_queue
+
+            signal_queue = get_signal_queue()
+            high_confidence_signals = signal_queue.get_signals(
+                workflow_id=exec_id,
+                min_confidence=0.7,
+                consume=True,
+            )
+            if high_confidence_signals:
+                logger.info(
+                    f"[ORCHESTRATOR] Received {len(high_confidence_signals)} "
+                    f"monitor signals for workflow {exec_id[:8]}"
+                )
+                for sig in high_confidence_signals:
+                    logger.info(f"[ORCHESTRATOR] Signal: {sig}")
+                    # Signal metadata could be used for more nuanced decisions
+                    # For now, signals factor into stuck_count below
+
             hard_error, error_reason = detect_hard_error(
                 agents, failed, workflow_id=exec_id
             )
@@ -3277,6 +3296,20 @@ def run_single_workflow(
             impasse, impasse_reason = detect_impasse(
                 agents, pending, in_progress, elapsed
             )
+            # Enhancement 4: Monitor signals can also indicate impasse
+            if not impasse and high_confidence_signals:
+                stuck_signals = [
+                    s for s in high_confidence_signals
+                    if s.type in (SignalType.STUCK_PATTERN, SignalType.PHASE_STUCK)
+                ]
+                if stuck_signals:
+                    # Multiple high-confidence stuck signals count toward impasse
+                    impasse = True
+                    impasse_reason = (
+                        f"Monitor detected {len(stuck_signals)} stuck signals: "
+                        f"{'; '.join(s.evidence[:50] for s in stuck_signals[:3])}"
+                    )
+                    logger.warning(f"[ORCHESTRATOR] Signal-driven impasse: {impasse_reason}")
             if impasse:
                 stuck_count += 1
                 if stuck_count >= STUCK_THRESHOLD:
