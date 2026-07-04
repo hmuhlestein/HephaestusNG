@@ -285,6 +285,16 @@ const RealTimeAgentOutput: React.FC<RealTimeAgentOutputProps> = ({
                 ) : (
                   <WifiOff className="w-4 h-4 text-red-500" />
                 )}
+
+                <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${
+                  agent.status === 'working' ? 'text-green-600 bg-green-100' :
+                  agent.status === 'stuck' ? 'text-red-600 bg-red-100' :
+                  agent.status === 'idle' ? 'text-gray-600 bg-gray-100' :
+                  agent.status === 'terminated' ? 'text-gray-500 bg-gray-200' :
+                  'text-gray-600 bg-gray-100'
+                }`}>
+                  {agent.status}
+                </span>
               </div>
 
               {lastUpdateTime && (
