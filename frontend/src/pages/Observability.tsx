@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import { apiService } from '@/services/api';
 import { useWebSocket } from '@/context/WebSocketContext';
+import { useProject } from '@/context/ProjectContext';
 import ExecutionSelector from '@/components/ExecutionSelector';
 import ObservabilityPanel from '@/components/ObservabilityPanel';
 import ObservabilityControls from '@/components/ObservabilityControls';
@@ -57,15 +58,18 @@ const Observability: React.FC = () => {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [fullscreenAgent, setFullscreenAgent] = useState<string | null>(null);
   const [showCustomLayoutDialog, setShowCustomLayoutDialog] = useState(false);
+  const { activeProject } = useProject();
+  const projectId = activeProject?.id || null;
 
   // Fetch agents data - only fetch on mount and explicit WebSocket lifecycle events
   const { data: agentData, isLoading, error, refetch } = useQuery({
-    queryKey: ['agents'],
-    queryFn: () => apiService.getAgents('active'),
+    queryKey: ['agents', projectId],
+    queryFn: () => apiService.getAgents('active', 1, projectId || undefined),
     refetchInterval: false, // Disable automatic refetching
     refetchOnWindowFocus: false, // Don't refetch on window focus
     refetchOnMount: true, // Only fetch on initial mount
     staleTime: Infinity, // Consider data always fresh
+    enabled: !!projectId,
   });
 
   const agents = agentData?.agents || [];

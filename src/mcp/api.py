@@ -1920,12 +1920,12 @@ class FrontendAPI:
         finally:
             session.close()
 
-    async def get_blocked_tasks(self) -> List[Dict[str, Any]]:
+    async def get_blocked_tasks(self, project_id: Optional[str] = None) -> List[Dict[str, Any]]:
         """Get all blocked tasks with blocker information."""
         from src.services.task_blocking_service import TaskBlockingService
 
         try:
-            blocked_tasks = TaskBlockingService.get_all_blocked_tasks()
+            blocked_tasks = TaskBlockingService.get_all_blocked_tasks(project_id)
             return blocked_tasks
         except Exception as e:
             logger.error(f"Failed to get blocked tasks: {e}")
@@ -2920,9 +2920,9 @@ def create_frontend_routes(
         )
 
     @router.get("/blocked-tasks")
-    async def get_blocked_tasks():
+    async def get_blocked_tasks(project_id: Optional[str] = None):
         """Get all blocked tasks with blocker information."""
-        return await frontend_api.get_blocked_tasks()
+        return await frontend_api.get_blocked_tasks(project_id)
 
     @router.get("/blocked-tasks/{task_id}/blockers")
     async def get_task_blocker_details(task_id: str):
