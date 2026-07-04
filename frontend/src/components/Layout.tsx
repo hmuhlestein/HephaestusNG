@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { NavLink, Outlet } from 'react-router-dom';
-import { Home, FileText, Bot, Database, GitBranch, Activity, Layers, Monitor, Compass, ListChecks, Menu, ChevronLeft, Ticket, Workflow, Rocket } from 'lucide-react';
+import { Home, FileText, Bot, Database, GitBranch, Activity, Layers, Monitor, Compass, ListChecks, Menu, ChevronLeft, Ticket, Workflow, Rocket, Settings } from 'lucide-react';
 import { useWebSocket } from '@/context/WebSocketContext';
 import { format } from 'date-fns';
 import { motion, AnimatePresence } from 'framer-motion';
 import SidebarProjectSelector from '@/components/SidebarProjectSelector';
+import ProjectSettingsModal from '@/components/ProjectSettingsModal';
 
 const Layout: React.FC = () => {
   const { isConnected, lastUpdate } = useWebSocket();
@@ -12,6 +13,7 @@ const Layout: React.FC = () => {
     const saved = localStorage.getItem('sidebarCollapsed');
     return saved === 'true';
   });
+  const [showProjectSettings, setShowProjectSettings] = useState(false);
 
   // Save sidebar state to localStorage
   useEffect(() => {
@@ -100,6 +102,18 @@ const Layout: React.FC = () => {
             ))}
           </nav>
 
+          {/* Settings Gear */}
+          <div className={`${sidebarCollapsed ? 'px-2' : 'px-4'} py-2`}>
+            <button
+              onClick={() => setShowProjectSettings(true)}
+              className={`flex items-center ${sidebarCollapsed ? 'justify-center' : ''} w-full py-2 px-3 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors`}
+              title={sidebarCollapsed ? 'Project Settings' : undefined}
+            >
+              <Settings className={`w-5 h-5 ${sidebarCollapsed ? '' : 'mr-3'}`} />
+              {!sidebarCollapsed && 'Settings'}
+            </button>
+          </div>
+
           {/* Connection Status */}
           <div className={`${sidebarCollapsed ? 'p-3' : 'p-6'} border-t mt-auto`}>
             <div className={`flex ${sidebarCollapsed ? 'justify-center' : 'items-center'}`}>
@@ -144,6 +158,12 @@ const Layout: React.FC = () => {
           <Outlet />
         </main>
       </div>
+
+      {/* Project Settings Modal */}
+      <ProjectSettingsModal
+        isOpen={showProjectSettings}
+        onClose={() => setShowProjectSettings(false)}
+      />
     </div>
   );
 };
