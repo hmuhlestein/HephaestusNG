@@ -1473,6 +1473,14 @@ class PhaseManager:
 
             # Generate unique workflow ID
             workflow_id = str(uuid.uuid4())
+            
+            # Resolve project_id from design if provided
+            project_id = None
+            if design_id:
+                from src.core.database import AutopilotDesign
+                design = session.query(AutopilotDesign).filter_by(id=design_id).first()
+                if design:
+                    project_id = design.project_id
 
             # Create workflow execution
             workflow = Workflow(
@@ -1481,6 +1489,7 @@ class PhaseManager:
                 description=description,
                 definition_id=definition_id,
                 design_id=design_id,
+                project_id=project_id,
                 phases_folder_path=working_directory or ".",  # Store working dir
                 working_directory=working_directory,
                 launch_params=launch_params,  # Store launch params for reference

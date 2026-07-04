@@ -10,6 +10,7 @@ import TaskDetailModal from '@/components/TaskDetailModal';
 import QueueSection from '@/components/QueueSection';
 import { useWebSocket } from '@/context/WebSocketContext';
 import { useWorkflow } from '@/context/WorkflowContext';
+import { useProject } from '@/context/ProjectContext';
 import { formatDistanceToNow } from 'date-fns';
 import TaskFilterBar, { TaskFilters } from '@/components/TaskFilterBar';
 import { useDebounce } from '@/hooks/useDebounce';
@@ -176,15 +177,17 @@ const Tasks: React.FC = () => {
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const { subscribe } = useWebSocket();
   const { selectedExecutionId, selectedExecution } = useWorkflow();
+  const { activeProject } = useProject();
+  const projectId = activeProject?.id || null;
 
   // Debounce search text for performance
   const debouncedSearchText = useDebounce(filters.searchText, 300);
 
   const { data, isLoading, error, refetch } = useQuery({
-    queryKey: ['tasks', selectedExecutionId],
-    queryFn: () => apiService.getTasks(0, 10000, undefined, selectedExecutionId || undefined),
+    queryKey: ['tasks', projectId],
+    queryFn: () => apiService.getTasks(0, 10000, undefined, undefined, projectId || undefined),
     refetchInterval: 10000,
-    enabled: !!selectedExecutionId,
+    enabled: !!projectId,
   });
 
   const { data: blockedTasks } = useQuery({
