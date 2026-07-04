@@ -1549,6 +1549,24 @@ def _cleanup_worktree(
             wt_mgr = WorktreeManager(db_manager=db)
             wt_mgr.reload(project_path)
 
+            # Archive tmux transcripts before the worktree (and everything in
+            # it) is deleted -- .hephaestus/ is git-excluded, so it doesn't
+            # survive the merge like docs/*.md reports do. Copy to the same
+            # project-root .hephaestus/tmux/ location _assess_run_health
+            # already reads from, so these transcripts remain available for
+            # forensics/audit after the fact, same as the merged report
+            # artifacts.
+            try:
+                src_tmux = worktree / CONTEXT_DIR_NAME / "tmux"
+                if src_tmux.is_dir():
+                    dest_tmux = project_path / CONTEXT_DIR_NAME / "tmux"
+                    dest_tmux.mkdir(parents=True, exist_ok=True)
+                    for log_file in src_tmux.glob("*"):
+                        shutil.copy2(log_file, dest_tmux / log_file.name)
+                    logger.info(f"Archived tmux transcripts to {dest_tmux}")
+            except Exception as e:
+                logger.warning(f"Failed to archive tmux transcripts: {e}")
+
             # Remove worktree
             if worktree.exists():
                 try:
@@ -2771,6 +2789,35 @@ def _create_phase_task(
         import uuid
 
         with get_db() as db:
+            # forensics_analysis reviews every artifact + full tmux transcript
+            # of a completed feature run to propose prompt/methodology fixes —
+            # expensive (whole-pipeline review) and only actionable when
+            # something actually went wrong. Skip spawning that agent on a
+            # clean run (no tmux error patterns) and advance straight to the
+            # next phase instead, using the same completion path a real agent
+            # would trigger via update_task_status.
+            if phase_name == "forensics_analysis":
+                wf = db.query(Workflow).filter_by(id=workflow_id).first()
+                if wf and wf.working_directory:
+                    health = _assess_run_health(
+                        Path(wf.working_directory),
+                        workflow_id,
+                        None,
+                        logger,
+                    )
+                    if health["clean"]:
+                        logger.info(
+                            "[PHASE-TASK] forensics_analysis skipped — run was "
+                            "clean (no tmux error patterns detected)"
+                        )
+                        # _fire_phase_transition marks this phase complete via
+                        # PhaseManager itself and advances to the next phase —
+                        # the same completion path a real agent would trigger
+                        # via update_task_status, just fired synthetically.
+                        return _fire_phase_transition(
+                            workflow_id, phase_id, phase_name, logger
+                        )
+
             # Check if phase already has an active task
             existing = (
                 db.query(Task)
