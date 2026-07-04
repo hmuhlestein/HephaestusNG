@@ -14,6 +14,19 @@ class TestAutopilotService:
 
         return AutopilotService()
 
+    @pytest.fixture(autouse=True)
+    def _isolate_state_file(self, tmp_path, monkeypatch):
+        # start()/stop() persist run params to disk on every real call (see
+        # TestRunningStatePersistence below) — without this, tests here that
+        # call the unmocked start()/stop() write a live project_path straight
+        # into the real ~/.hephaestus/autopilot/running_pipeline.json, which
+        # the backend auto-resumes on its next startup_event.
+        import src.autopilot.service as service_module
+
+        monkeypatch.setattr(
+            service_module, "_RUNNING_STATE_PATH", tmp_path / "running_pipeline.json"
+        )
+
     def test_initial_state(self, service):
         assert service.running is False
         assert service._project_path is None

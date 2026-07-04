@@ -24,9 +24,8 @@ err()  { echo -e "${RED}[$(date +%H:%M:%S)]${NC} $*" >&2; }
 
 # ─── Stop services ────────────────────────────────────────────────────
 log "Stopping services..."
-pkill -9 -f run_server.py 2>/dev/null || true
+.venv/bin/heph stop --force 2>&1 || true
 pkill -9 -f "uvicorn src.mcp.server" 2>/dev/null || true
-pkill -9 -f run_monitor.py 2>/dev/null || true
 pkill -9 -f "heph autopilot" 2>/dev/null || true
 sleep 2
 
@@ -215,6 +214,7 @@ log "Clearing state..."
 rm -rf ~/.hephaestus/autopilot/run-* ~/.hephaestus/autopilot/pipeline_state.json \
        ~/.hephaestus/autopilot/processed_designs.json \
        ~/.hephaestus/autopilot/state.json ~/.hephaestus/autopilot/input_*.json \
+       ~/.hephaestus/autopilot/running_pipeline.json \
        /tmp/hephaestus_worktrees/*
 > hephaestus_server.log 2>/dev/null || true
 > ~/.hephaestus/logs/monitor.log 2>/dev/null || true
