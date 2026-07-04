@@ -100,6 +100,12 @@ class TaskCompletionService:
                 for candidate in [
                     _Path(wf.working_directory) / "docs" / declared_output,
                     _Path(wf.working_directory) / declared_output,
+                    # Some phases (e.g. Phase 0's Feature Architect) write
+                    # their declared output to the git-excluded .hephaestus/
+                    # dir as an internal orchestration artifact rather than
+                    # a docs/ deliverable — purely additive, no effect on
+                    # phases whose output never lives there.
+                    _Path(wf.working_directory) / CONTEXT_DIR_NAME / declared_output,
                 ]:
                     if candidate.exists():
                         found = True
