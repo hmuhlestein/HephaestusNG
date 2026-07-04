@@ -1345,8 +1345,18 @@ def pick_next_design(
     next_design = designs[0]
     logger.info(f"Selected: {next_design.name}")
 
-    # Try to look up DB ID for file-scanned design
+    # Try to look up DB ID for file-scanned design, creating the row if it
+    # doesn't exist yet (e.g. the project itself was just auto-created —
+    # see AutopilotService.start — so no AutopilotDesign row was ever
+    # created for this file under the new project_id). Leaving db_id as
+    # None here isn't a safe no-op: _create_feature_records requires a
+    # non-null design_id (NOT NULL constraint), so a design processed via
+    # this fallback with no DB row would crash later with an
+    # IntegrityError right after Phase 0 completes — observed live during
+    # smoke testing.
     try:
+        import uuid as _uuid
+
         from src.core.database import AutopilotDesign, AutopilotProject, get_db as _get_db
         with _get_db() as _db:
             project = _db.query(AutopilotProject).filter_by(is_active=True).first()
@@ -1354,10 +1364,26 @@ def pick_next_design(
                 db_design = _db.query(AutopilotDesign).filter_by(
                     project_id=project.id, filename=next_design.path.name
                 ).first()
-                if db_design:
-                    next_design.db_id = db_design.id
-    except Exception:
-        pass  # non-critical
+                if not db_design:
+                    db_design = AutopilotDesign(
+                        id=f"des-{_uuid.uuid4().hex[:12]}",
+                        project_id=project.id,
+                        filename=next_design.path.name,
+                        name=next_design.name,
+                        content_hash=next_design.content_hash,
+                        file_path=str(next_design.path),
+                        status="pending",
+                    )
+                    _db.add(db_design)
+                    _db.flush()
+                    logger.info(
+                        f"Auto-created AutopilotDesign row for "
+                        f"{next_design.path.name} (none existed for project "
+                        f"{project.id})"
+                    )
+                next_design.db_id = db_design.id
+    except Exception as e:
+        logger.warning(f"Could not link/create DB design row: {e}")
 
     return next_design
 

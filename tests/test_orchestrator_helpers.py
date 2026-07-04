@@ -328,6 +328,91 @@ class TestPickNextDesign:
         assert result is not None
         assert result.name == "Design"
 
+    def test_file_scan_fallback_creates_missing_design_row(
+        self, tmp_path, orch_db_env
+    ):
+        """A design picked via the file-scan fallback (no matching
+        AutopilotDesign row for the active project -- e.g. the project was
+        just auto-created and has no design rows yet) must get a real DB
+        row created, not silently return db_id=None. Regression: that None
+        used to reach _create_feature_records and crash with 'NOT NULL
+        constraint failed: features.design_id' right after Phase 0
+        completed (observed live during smoke testing)."""
+        from src.core.database import AutopilotProject
+        from src.autopilot.orchestrator import OrchestratorLogger, pick_next_design
+
+        session = orch_db_env.get_session()
+        session.add(
+            AutopilotProject(
+                id="proj-new123",
+                name="myproject",
+                base_dir=str(tmp_path),
+                is_active=True,
+            )
+        )
+        session.commit()
+        session.close()
+
+        (tmp_path / "design.md").write_text("# Design")
+        logger = OrchestratorLogger(tmp_path)
+        result = pick_next_design(tmp_path, set(), logger)
+
+        assert result is not None
+        assert result.db_id is not None
+
+        from src.core.database import AutopilotDesign, get_db
+
+        with get_db() as db:
+            row = db.query(AutopilotDesign).filter_by(id=result.db_id).first()
+            assert row is not None
+            assert row.project_id == "proj-new123"
+            assert row.filename == "design.md"
+
+    def test_file_scan_fallback_reuses_existing_design_row(
+        self, tmp_path, orch_db_env
+    ):
+        """Regression: must not create a duplicate row on every poll cycle
+        once one already exists for this file."""
+        from src.core.database import AutopilotDesign, AutopilotProject
+        from src.autopilot.orchestrator import OrchestratorLogger, pick_next_design
+
+        session = orch_db_env.get_session()
+        session.add(
+            AutopilotProject(
+                id="proj-new456",
+                name="myproject",
+                base_dir=str(tmp_path),
+                is_active=True,
+            )
+        )
+        session.add(
+            AutopilotDesign(
+                id="des-existing789",
+                project_id="proj-new456",
+                filename="design.md",
+                name="Design",
+                status="pending",
+            )
+        )
+        session.commit()
+        session.close()
+
+        (tmp_path / "design.md").write_text("# Design")
+        logger = OrchestratorLogger(tmp_path)
+        result = pick_next_design(tmp_path, set(), logger)
+
+        assert result.db_id == "des-existing789"
+
+        from src.core.database import get_db
+
+        with get_db() as db:
+            matches = (
+                db.query(AutopilotDesign)
+                .filter_by(project_id="proj-new456", filename="design.md")
+                .all()
+            )
+            assert len(matches) == 1
+
 
 class TestCreateFeatureFolder:
     def test_creates_folder(self, tmp_path):
