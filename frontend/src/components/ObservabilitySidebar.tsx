@@ -79,7 +79,7 @@ const ObservabilitySidebar: React.FC<ObservabilitySidebarProps> = ({
         return {
           color: 'text-gray-500 bg-gray-100',
           icon: <Bot className="w-3 h-3" />,
-          label: 'Terminated',
+          label: 'Done',
         };
       default:
         return {

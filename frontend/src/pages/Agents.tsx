@@ -436,7 +436,7 @@ const Agents: React.FC = () => {
           </p>
         </div>
         <div className="bg-white rounded-lg shadow-md p-4">
-          <p className="text-sm text-gray-600">Terminated</p>
+          <p className="text-sm text-gray-600">Done</p>
           <p className="text-2xl font-bold text-gray-500">{agents.filter(a => a.status === 'terminated').length}</p>
         </div>
       </div>
