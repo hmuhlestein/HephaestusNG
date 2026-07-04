@@ -648,7 +648,7 @@ class AgentManager:
             "session_name": session_name,
             "window_name": "agent",
             "attach": False,
-            "x": 220,  # Initial width in columns
+            "x": 150,  # Initial width in columns
             "y": 50,   # Initial height in rows
         }
         # Use provided working directory (which should be a worktree path)
@@ -691,9 +691,9 @@ class AgentManager:
         try:
             pane = session.attached_window.attached_pane
             # Try both methods for reliability
-            pane.set_width(300)
+            pane.set_width(150)
             try:
-                pane.resize_pane(width=300)
+                pane.resize_pane(width=150)
             except Exception:
                 pass
         except Exception:
