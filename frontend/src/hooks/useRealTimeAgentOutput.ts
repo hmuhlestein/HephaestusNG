@@ -46,7 +46,10 @@ export const useRealTimeAgentOutput = (
     }
 
     try {
-      setData(prev => ({ ...prev, isLoading: true, error: null }));
+      // Only show loading spinner on initial load, not every poll
+      if (!lastOutputRef.current) {
+        setData(prev => ({ ...prev, isLoading: true, error: null }));
+      }
 
       const result = await apiService.getAgentOutput(agentId);
 
