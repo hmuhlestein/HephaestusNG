@@ -37,7 +37,16 @@ for wt in $(git worktree list --porcelain 2>/dev/null | grep '^worktree ' | awk 
 done
 git worktree prune 2>/dev/null || true
 rm -rf "$PROJECT_PATH/.worktrees/"*
-git branch 2>/dev/null | sed 's/[*+]//' | tr -d ' ' | grep -E '^(agent-|feature/)' | xargs -I{} git branch -D {} 2>/dev/null || true
+# A crashed run (agent creation failure, mid-pipeline exception, etc.) can
+# leave a worktree registered but "prunable" (its directory already gone)
+# while still holding its branch checked out -- `git branch -D` refuses to
+# delete a branch checked out by a linked worktree, so a second prune AFTER
+# clearing .worktrees/ is needed before branch deletion can actually succeed.
+git worktree prune 2>/dev/null || true
+# autopilot-phase0/<design-id> branches (Phase 0's own integration worktree,
+# separate from feature/* and agent-* branches) accumulate across every
+# crashed run otherwise, since nothing else ever cleans them up.
+git branch 2>/dev/null | sed 's/[*+]//' | tr -d ' ' | grep -E '^(agent-|feature/|autopilot-phase0/)' | xargs -I{} git branch -D {} 2>/dev/null || true
 if git rev-parse smoke-baseline >/dev/null 2>&1; then
     git checkout main 2>/dev/null || true
     git reset --hard smoke-baseline
