@@ -670,29 +670,45 @@ async def verify_agent_authentication(agent_id: str) -> bool:
     if agent_id.startswith("sdk-") or agent_id.startswith("mcp-"):
         return True
 
-    # Check if agent exists in database
-    try:
-        session = server_state.db_manager.get_session()
-        try:
-            from src.core.database import Agent
+    # Check if agent exists in database. create_agent_for_task_direct runs
+    # agent creation in a background thread via asyncio.run() (a separate
+    # thread from this request-handling one), sharing the same StaticPool
+    # SQLite connection — under load, a freshly-committed Agent row has
+    # occasionally not been visible yet to a query landing microseconds
+    # later on this thread (observed live: "Rejected unknown agent" for an
+    # agent whose row demonstrably existed seconds later). One short retry
+    # bridges that race without weakening the check itself — an agent that
+    # is genuinely unknown or terminated still gets rejected either way.
+    from src.core.database import Agent
 
-            agent = session.query(Agent).filter_by(id=agent_id).first()
-            if agent and agent.status in ["idle", "working", "starting"]:
-                # Agent exists and is active - trusted
-                return True
-            elif agent and agent.status == "terminated":
-                # Agent was terminated - reject
-                logger.warning(f"Rejected terminated agent: {agent_id[:8]}")
-                return False
-            else:
-                # Unknown agent - reject
-                logger.warning(f"Rejected unknown agent: {agent_id[:8]}")
-                return False
-        finally:
-            session.close()
-    except Exception as e:
-        logger.error(f"Agent auth check failed: {e}")
-        return False
+    for attempt in range(2):
+        try:
+            session = server_state.db_manager.get_session()
+            try:
+                agent = session.query(Agent).filter_by(id=agent_id).first()
+                if agent and agent.status in ["idle", "working", "starting"]:
+                    # Agent exists and is active - trusted
+                    return True
+                elif agent and agent.status == "terminated":
+                    # Agent was terminated - reject (not a visibility race, no retry)
+                    logger.warning(f"Rejected terminated agent: {agent_id[:8]}")
+                    return False
+                elif attempt == 0:
+                    # Possibly a transient cross-thread commit-visibility race —
+                    # retry once before rejecting as genuinely unknown.
+                    import asyncio as _asyncio
+
+                    await _asyncio.sleep(0.3)
+                    continue
+                else:
+                    logger.warning(f"Rejected unknown agent: {agent_id[:8]}")
+                    return False
+            finally:
+                session.close()
+        except Exception as e:
+            logger.error(f"Agent auth check failed: {e}")
+            return False
+    return False
 
 
 def _tmux_session_alive(session_name: str) -> bool:
