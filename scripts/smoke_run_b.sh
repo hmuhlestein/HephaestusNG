@@ -218,6 +218,18 @@ All of the following must be true before QA can pass:
 3. `python -m pytest -p no:libtmux -v` exits 0 (all 3 tests green)
 TESTING
 
+# Commit the seeded files to main. Feature worktrees are created via
+# `git worktree add <path> <branch>` -- a checkout of the branch's
+# committed tree, not a copy of this working directory -- so an uncommitted
+# tests/test_calculator.py here silently never exists in ANY feature
+# worktree. Confirmed live: QA correctly failed a run reporting the
+# "PRE-SEEDED" test file didn't exist in any branch, because it never was
+# committed anywhere.
+cd "$PROJECT_PATH"
+git add -A docs/design tests/test_calculator.py TESTING.md
+git commit -q -m "smoke: seed design doc + pre-seeded test + testing guide" --allow-empty
+cd - >/dev/null
+
 # ─── Reset DB + state ─────────────────────────────────────────────────
 log "Clearing state..."
 rm -rf ~/.hephaestus/autopilot/run-* ~/.hephaestus/autopilot/pipeline_state.json \
