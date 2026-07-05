@@ -51,7 +51,6 @@ const RealTimeAgentOutput: React.FC<RealTimeAgentOutputProps> = ({
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const lastScrollPosition = useRef(0);
-  const savedSelection = useRef<{ start: number; end: number } | null>(null);
 
   const {
     output,
@@ -60,6 +59,7 @@ const RealTimeAgentOutput: React.FC<RealTimeAgentOutputProps> = ({
     isConnected,
     lastUpdateTime,
     retry,
+    setPauseUpdates,
   } = useRealTimeAgentOutput(agent?.id || null, {
     enabled: !isPaused && !!agent,
     updateInterval: 1000,
@@ -77,41 +77,18 @@ const RealTimeAgentOutput: React.FC<RealTimeAgentOutputProps> = ({
     }
   }, [output, autoScroll, lastUpdateTime]);
 
-  // Save selection before content update if user is selecting
+  // Listen for selectionchange to detect when selection is cleared
   useEffect(() => {
-    const sel = window.getSelection();
-    if (sel && sel.rangeCount > 0 && isSelecting && outputRef.current?.contains(sel.anchorNode)) {
-      const range = sel.getRangeAt(0);
-      savedSelection.current = {
-        start: range.startOffset,
-        end: range.endOffset,
-      };
-    }
-  }, [output, isSelecting]);
-
-  // Restore selection after content update
-  useEffect(() => {
-    if (savedSelection.current && outputRef.current) {
+    const handleSelectionChange = () => {
       const sel = window.getSelection();
-      if (sel) {
-        try {
-          const textNode = outputRef.current.firstChild;
-          if (textNode) {
-            const range = document.createRange();
-            const start = Math.min(savedSelection.current.start, textNode.textContent?.length || 0);
-            const end = Math.min(savedSelection.current.end, textNode.textContent?.length || 0);
-            range.setStart(textNode, start);
-            range.setEnd(textNode, end);
-            sel.removeAllRanges();
-            sel.addRange(range);
-          }
-        } catch (e) {
-          // Selection restore failed silently
-        }
+      if (isSelecting && (!sel || sel.toString().length === 0)) {
+        setIsSelecting(false);
+        setPauseUpdates(false);
       }
-      savedSelection.current = null;
-    }
-  }, [output]);
+    };
+    document.addEventListener('selectionchange', handleSelectionChange);
+    return () => document.removeEventListener('selectionchange', handleSelectionChange);
+  }, [isSelecting, setPauseUpdates]);
 
   // Handle scroll events to determine if user is at bottom
   const handleScroll = useCallback(() => {
@@ -126,7 +103,8 @@ const RealTimeAgentOutput: React.FC<RealTimeAgentOutputProps> = ({
   // Handle text selection to pause auto-scroll
   const handleMouseDown = useCallback(() => {
     setIsSelecting(true);
-  }, []);
+    setPauseUpdates(true);
+  }, [setPauseUpdates]);
 
   const handleMouseUp = useCallback(() => {
     // Small delay to allow selection to complete before clearing flag
@@ -135,9 +113,10 @@ const RealTimeAgentOutput: React.FC<RealTimeAgentOutputProps> = ({
       // Only clear selecting state if no text is actually selected
       if (!sel || sel.toString().length === 0) {
         setIsSelecting(false);
+        setPauseUpdates(false);
       }
     }, 200);
-  }, []);
+  }, [setPauseUpdates]);
 
   // Copy to clipboard functionality
   const copyToClipboard = async () => {
