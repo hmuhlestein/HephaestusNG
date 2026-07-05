@@ -39,6 +39,7 @@ export const useRealTimeAgentOutput = (
   const retryCountRef = useRef(0);
   const lastOutputRef = useRef('');
   const mountedRef = useRef(true);
+  const pauseUpdatesRef = useRef(false);
 
   const fetchAgentOutput = useCallback(async () => {
     if (!agentId || !enabled || !mountedRef.current) {
@@ -58,6 +59,9 @@ export const useRealTimeAgentOutput = (
       // Only update if output has changed to prevent unnecessary re-renders
       const hasChanged = result.output !== lastOutputRef.current;
       lastOutputRef.current = result.output;
+
+      // Don't update state while user is selecting text (preserves selection)
+      if (pauseUpdatesRef.current) return;
 
       setData(prev => ({
         ...prev,
@@ -118,6 +122,10 @@ export const useRealTimeAgentOutput = (
     startPolling();
   }, [startPolling]);
 
+  const setPauseUpdates = useCallback((paused: boolean) => {
+    pauseUpdatesRef.current = paused;
+  }, []);
+
   // Start/stop polling based on agentId and enabled
   useEffect(() => {
     if (agentId && enabled) {
@@ -148,5 +156,6 @@ export const useRealTimeAgentOutput = (
     retry,
     startPolling,
     stopPolling,
+    setPauseUpdates,
   };
 };
