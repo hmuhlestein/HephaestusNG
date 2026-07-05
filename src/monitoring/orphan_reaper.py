@@ -95,6 +95,7 @@ class OrphanSessionReaper:
                                 f"Terminating orphaned agent {agent.id[:8]} - workflow {task.workflow_id[:8]} not active"
                             )
                             agent.status = "terminated"
+                            agent.current_task_id = None  # Clear stale reference
                 session.commit()
 
             finally:

@@ -495,6 +495,11 @@ class AgentManager:
                 agent_type=agent_type,  # Set the agent type
             )
             session.add(agent)
+            
+            # Assign task to agent
+            task.assigned_agent_id = agent_id
+            task.status = "in_progress"
+            task.started_at = datetime.utcnow()
 
             # Log agent creation
             log_entry = AgentLog(
@@ -1184,6 +1189,7 @@ class AgentManager:
 
             # Update agent status
             agent.status = "terminated"
+            agent.current_task_id = None  # Clear stale task reference
 
             # Log termination with captured output
             log_entry = AgentLog(
