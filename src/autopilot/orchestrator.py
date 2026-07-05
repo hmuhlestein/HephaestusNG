@@ -3105,37 +3105,49 @@ def run_single_workflow(
         cfg = get_config()
         db = DbManager(cfg)
         wt_mgr = WorktreeManager(db_manager=db)
-        # Reload to point at the actual project repo (not config.main_repo_path)
-        wt_mgr.reload(Path(project_path))
 
-        # Create feature branch from main
-        import git as _git
+        # FIX: If project_path is already a worktree (contains .worktrees/),
+        # use it directly as the design worktree. Don't create a nested
+        # worktree inside it — that would be destroyed when the parent
+        # worktree is cleaned up.
+        if '.worktrees/' in str(project_path):
+            design_worktree_path = str(project_path)
+            logger.info(
+                f"Using existing worktree directly: {design_worktree_path}"
+            )
+        else:
+            # Reload to point at the actual project repo (not config.main_repo_path)
+            wt_mgr.reload(Path(project_path))
 
-        # Use design_entry name if available, otherwise derive from design_doc
-        _design_label = (
-            design_name.replace(" ", "-").lower() if design_name else "design"
-        )
-        feature_branch = f"feature/{_design_label}"
-        # Ensure branch name is unique (append short hash if needed)
-        try:
-            wt_mgr.main_repo.git.branch(feature_branch)
-        except _git.exc.GitCommandError:
-            # Branch exists — use it (idempotent)
-            pass
+            # Create feature branch from main
+            import git as _git
 
-        # Create worktree for the feature branch
-        # Use flattened name for worktree path (branch name has / which creates subdirs)
-        safe_branch = feature_branch.replace("/", "-")
-        wt_path = wt_mgr.worktree_base / f"wt_{safe_branch}"
-        if not wt_path.exists():
-            wt_mgr.main_repo.git.worktree("add", str(wt_path), feature_branch)
-        design_worktree_path = str(wt_path)
-        design_branch_name = feature_branch
-        logger.info(
-            f"Created shared worktree: {design_worktree_path} (branch: {feature_branch})"
-        )
+            # Use design_entry name if available, otherwise derive from design_doc
+            _design_label = (
+                design_name.replace(" ", "-").lower() if design_name else "design"
+            )
+            feature_branch = f"feature/{_design_label}"
+            # Ensure branch name is unique (append short hash if needed)
+            try:
+                wt_mgr.main_repo.git.branch(feature_branch)
+            except _git.exc.GitCommandError:
+                # Branch exists — use it (idempotent)
+                pass
+
+            # Create worktree for the feature branch
+            # Use flattened name for worktree path (branch name has / which creates subdirs)
+            safe_branch = feature_branch.replace("/", "-")
+            wt_path = wt_mgr.worktree_base / f"wt_{safe_branch}"
+            if not wt_path.exists():
+                wt_mgr.main_repo.git.worktree("add", str(wt_path), feature_branch)
+            design_worktree_path = str(wt_path)
+            design_branch_name = feature_branch
+            logger.info(
+                f"Created shared worktree: {design_worktree_path} (branch: {feature_branch})"
+            )
+
         # Copy design doc into worktree as .hephaestus/design.md so all phases can read it
-        wt_heph = wt_path / CONTEXT_DIR_NAME
+        wt_heph = Path(design_worktree_path) / CONTEXT_DIR_NAME
         wt_heph.mkdir(parents=True, exist_ok=True)
         if "design_document" in (launch_params or {}):
             _dd = Path(launch_params["design_document"])
