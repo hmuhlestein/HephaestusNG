@@ -238,7 +238,19 @@ sqlite3 "$DB" "
     DELETE FROM agents WHERE agent_type IN ('phase', 'orchestrator');
     DELETE FROM ticket_comments;
     DELETE FROM tickets;
-    UPDATE autopilot_designs SET status='pending', completed_at=NULL
+    -- Delete (not just reset to pending) the smoke project's design/feature
+    -- rows outright. UPDATE-to-pending let the same design_id (and its
+    -- design-derived deterministic branch name, autopilot-phase0/<id>)
+    -- survive forever across runs -- if a prior run's worktree/branch for
+    -- that id was ever left in a broken state (crash, manual cleanup that
+    -- missed the DB), every later run kept colliding with it instead of
+    -- starting clean. SQLite doesn't enforce the FK cascade here by
+    -- default, so features must be deleted explicitly before designs.
+    DELETE FROM features WHERE design_id IN (
+        SELECT id FROM autopilot_designs
+        WHERE project_id=(SELECT id FROM autopilot_projects WHERE base_dir='$PROJECT_PATH')
+    );
+    DELETE FROM autopilot_designs
     WHERE project_id=(SELECT id FROM autopilot_projects WHERE base_dir='$PROJECT_PATH');
 " 2>/dev/null
 
