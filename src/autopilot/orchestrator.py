@@ -3512,10 +3512,19 @@ def run_single_workflow(
         logger.info("Interrupted by user")
         return "interrupted"
     finally:
-        # Clean up: mark workflow as paused (not completed) so it can be resumed
-        # Only clean up if we have an exec_id and the workflow is still active
+        # Clean up: terminate all agents for this workflow and mark as paused
         if exec_id:
             try:
+                # Terminate all agents for this workflow first
+                agents = get_agents(workflow_id=exec_id)
+                for agent in agents:
+                    if agent.get("status") in ACTIVE_AGENT_STATUSES:
+                        try:
+                            terminate_agent_direct(agent["id"])
+                            logger.info(f"  Terminated agent {agent['id'][:8]} on workflow cleanup")
+                        except Exception:
+                            pass
+                
                 wf_status = get_workflow_status(exec_id)
                 if wf_status.get("status") == "active":
                     pause_workflow_direct(exec_id)
