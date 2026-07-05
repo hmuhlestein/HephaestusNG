@@ -582,7 +582,12 @@ def project_client(tmp_path, project_dirs):
 
     yield client, project_dirs
 
-    os.environ.pop("HEPHAESTUS_TEST_DB", None)
+    # Restore conftest.py's default instead of removing the key entirely —
+    # popping it left any test running immediately after this one (without
+    # its own override) falling through to get_db()'s literal default
+    # ("hephaestus.db"), silently writing test data into the real
+    # production database instead of the isolated :memory: default.
+    os.environ["HEPHAESTUS_TEST_DB"] = ":memory:"
     api_mod._cache.clear()
 
 

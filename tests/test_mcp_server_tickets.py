@@ -42,9 +42,18 @@ def setup_test_database():
 
     yield db_path
 
-    # Cleanup
-    if "HEPHAESTUS_TEST_DB" in os.environ:
-        del os.environ["HEPHAESTUS_TEST_DB"]
+    # Cleanup — restore the conftest.py default (":memory:"), don't delete
+    # the key entirely. This fixture is module-scoped, so its teardown runs
+    # once after this whole file's tests finish, inside a possibly much
+    # larger pytest session — deleting the key outright made every later
+    # test file's unmocked get_db() calls fall through to get_db()'s own
+    # literal default ("hephaestus.db"), silently writing test data into
+    # the real production database instead of failing loudly. Confirmed
+    # live: this caused AutopilotProject rows pointing at deleted pytest
+    # tmpdirs to end up in the real DB with is_active=True, crashing the
+    # real backend's startup (WorktreeManager tries to open a git repo at
+    # a path that no longer exists).
+    os.environ["HEPHAESTUS_TEST_DB"] = ":memory:"
 
 
 @pytest.fixture
