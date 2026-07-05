@@ -2137,7 +2137,7 @@ async def get_project_design_status(project_id: str, filename: str):
                         break
             
             if feat_wf_id:
-                wf_tasks = db.query(Task).filter_by(workflow_id=feat.workflow_id).all()
+                wf_tasks = db.query(Task).filter_by(workflow_id=feat_wf_id).all()
                 phase_ids = set(t.phase_id for t in wf_tasks if t.phase_id)
                 phases_q = db.query(Phase).filter(Phase.id.in_(phase_ids)).all() if phase_ids else []
                 phase_map = {p.id: p.name for p in phases_q}
