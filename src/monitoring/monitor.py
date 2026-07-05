@@ -1171,6 +1171,7 @@ class MonitoringLoop:
                 db_agent = session.query(Agent).filter_by(id=agent.id).first()
                 if db_agent:
                     db_agent.status = "terminated"
+                    db_agent.current_task_id = None  # Clear stale reference
                     db_agent.health_check_failures = 0
                 else:
                     logger.warning(f"Agent {agent.id} not found in DB during restart")

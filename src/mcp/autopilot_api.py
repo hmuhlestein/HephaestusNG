@@ -596,6 +596,7 @@ async def requeue_design(request: dict):
                             )
                             for agent in agents:
                                 agent.status = "terminated"
+                                agent.current_task_id = None  # Clear stale reference
 
                         # Pause the workflow
                         wf.status = "paused"
@@ -683,6 +684,7 @@ async def rerun_design(request: dict):
             )
             for agent in active_agents:
                 agent.status = "terminated"
+                agent.current_task_id = None  # Clear stale reference
 
             # Mark all active workflows as paused (not active/running)
             active_workflows = (
@@ -2298,6 +2300,7 @@ async def pause_feature(feature_id: str):
                 agent = db.query(Agent).filter_by(id=task.assigned_agent_id).first()
                 if agent and agent.status in ("working", "starting", "idle"):
                     agent.status = "terminated"
+                    agent.current_task_id = None  # Clear stale reference
             task.status = "blocked"
 
         wf.status = "paused"
@@ -2951,6 +2954,7 @@ async def stop_pipeline(clear_state: bool = False):
                     for agent in agents:
                         try:
                             agent.status = "terminated"
+                            agent.current_task_id = None  # Clear stale reference
                             terminated_count += 1
                         except Exception:
                             pass

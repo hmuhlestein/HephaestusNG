@@ -5551,6 +5551,7 @@ async def stop_workflow(workflow_id: str, request: Request):
                 except Exception:
                     pass
                 agent.status = "terminated"
+                agent.current_task_id = None  # Clear stale reference
                 terminated_count += 1
 
         workflow.status = "paused"
@@ -5647,6 +5648,7 @@ async def cancel_workflow(workflow_id: str, request: Request):
                 except Exception:
                     pass
                 agent.status = "terminated"
+                agent.current_task_id = None  # Clear stale reference
                 terminated_count += 1
 
         # Mark as failed (can't delete due to FK constraints, using failed to indicate user cancellation)

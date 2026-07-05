@@ -422,6 +422,7 @@ def terminate_agent_direct(agent_id: str) -> bool:
             agent = session.query(Agent).filter_by(id=agent_id).first()
             if agent:
                 agent.status = "terminated"
+                agent.current_task_id = None  # Clear stale reference
                 return True
         return False
     except Exception as e:
@@ -4492,6 +4493,7 @@ def run_continuous_pipeline(args) -> None:
                 existing = session.query(Agent).filter_by(tmux_session_name="orchestrator").first()
                 if existing:
                     existing.status = "terminated"
+                    existing.current_task_id = None  # Clear stale reference
                 orchestrator_agent = Agent(
                     id=_orchestrator_agent_id,
                     system_prompt=f"LOG_DIR:{log_dir}",

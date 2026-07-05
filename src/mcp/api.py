@@ -2115,6 +2115,7 @@ class FrontendAPI:
                                 ),
                             )
                         agent.status = "terminated"
+                        agent.current_task_id = None  # Clear stale reference
                         terminated_count += 1
                     except Exception as e:
                         logger.warning(f"Failed to terminate agent {agent.id}: {e}")
@@ -2965,6 +2966,7 @@ def create_frontend_routes(
             terminated_count = 0
             for agent in agents:
                 agent.status = "terminated"
+                agent.current_task_id = None  # Clear stale reference
                 terminated_count += 1
                 # Kill tmux session
                 if agent.tmux_session_name:

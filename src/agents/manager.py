@@ -598,6 +598,7 @@ class AgentManager:
                         )
                         if agent_record:
                             agent_record.status = "terminated"
+                            agent_record.current_task_id = None  # Clear stale reference
                             logger.info(f"Marked agent {agent_id} as terminated")
 
                     # Mark task as failed
@@ -1234,9 +1235,11 @@ class AgentManager:
                     f"Agent {agent_id[:8]} exceeded max restarts ({agent.restart_count}), terminating"
                 )
                 agent.status = "terminated"
-                session.commit()
                 # Mark task as failed so pipeline can recover
-                task = session.query(Task).filter_by(id=agent.current_task_id).first()
+                task_id = agent.current_task_id
+                agent.current_task_id = None  # Clear stale reference
+                session.commit()
+                task = session.query(Task).filter_by(id=task_id).first()
                 if task and task.status not in ("done", "failed"):
                     task.status = "failed"
                     task.failure_reason = (
