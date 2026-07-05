@@ -177,11 +177,24 @@ COMPLETION CRITERIA:
 
         # Add workflow result criteria if available
         result_criteria_section = ""
+        ticket_note = ""
         if hasattr(task, "workflow_id") and task.workflow_id and self.phase_manager:
             try:
                 workflow_config = self.phase_manager.get_workflow_config(
                     task.workflow_id
                 )
+                if workflow_config and getattr(workflow_config, "enable_tickets", False):
+                    # Ticket tracking makes hephaestus_create_task reject any
+                    # call with no ticket_id ("MCP agents MUST provide
+                    # ticket_id"). Without this note, every agent discovers
+                    # that the hard way on its first subtask-creation
+                    # attempt, wasting a full round trip every time —
+                    # observed live during smoke testing.
+                    ticket_note = (
+                        "\n  Ticket tracking is ON for this workflow — hephaestus_create_task "
+                        "REQUIRES ticket_id. Call hephaestus_create_ticket(...) first, then pass "
+                        "its id as ticket_id here."
+                    )
                 if (
                     workflow_config
                     and hasattr(workflow_config, "result_criteria")
@@ -218,7 +231,7 @@ INSTRUCTIONS (always pass agent_id="{agent_id}"; pass workflow_id="{workflow_id 
   Do NOT use this to create the next pipeline phase's task — the orchestrator creates that
   automatically, with the correct phase name and required output, once you mark this task done.
   Manually guessing a future phase number here has caused tasks to be created under the wrong
-  phase (e.g. full implementation work filed under an architecture-design phase) — never do this.
+  phase (e.g. full implementation work filed under an architecture-design phase) — never do this.{ticket_note}
 {phase_context_section}
 Begin now.
 """

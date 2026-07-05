@@ -50,3 +50,47 @@ class TestCreateTaskToolSignature:
             line for line in message.splitlines() if "hephaestus_create_task(" in line
         )
         assert "agent_id=" not in create_task_line
+
+
+class _FakeWorkflowConfig:
+    def __init__(self, enable_tickets):
+        self.enable_tickets = enable_tickets
+        self.result_criteria = None
+
+
+class _FakePhaseManager:
+    def __init__(self, enable_tickets):
+        self._enable_tickets = enable_tickets
+
+    def get_workflow_config(self, workflow_id):
+        return _FakeWorkflowConfig(self._enable_tickets)
+
+
+class TestTicketTrackingNote:
+    """Regression: hephaestus_create_task rejects any call with no ticket_id
+    when the workflow has ticket tracking enabled ("MCP agents MUST provide
+    ticket_id") -- observed live: every agent discovered this only after a
+    failed first attempt, wasting a full round trip each time, since nothing
+    in the prompt warned about it up front."""
+
+    def test_mentions_ticket_requirement_when_enabled(self):
+        builder = AgentPromptBuilder(phase_manager=_FakePhaseManager(True))
+        message = builder.format_initial_message(
+            task=_FakeTask(), agent_id="agent-abc"
+        )
+        assert "ticket_id" in message
+        assert "hephaestus_create_ticket" in message
+
+    def test_omits_ticket_requirement_when_disabled(self):
+        builder = AgentPromptBuilder(phase_manager=_FakePhaseManager(False))
+        message = builder.format_initial_message(
+            task=_FakeTask(), agent_id="agent-abc"
+        )
+        assert "Ticket tracking is ON" not in message
+
+    def test_omits_ticket_requirement_when_no_phase_manager(self):
+        builder = AgentPromptBuilder(phase_manager=None)
+        message = builder.format_initial_message(
+            task=_FakeTask(), agent_id="agent-abc"
+        )
+        assert "Ticket tracking is ON" not in message
