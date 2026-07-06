@@ -8,10 +8,10 @@ description: |
   corrections if scope has drifted.
 done_definitions:
   - "Original design doc read from ./.hephaestus/design.md"
-  - "requirements_analysis.md read and compared line-by-line against design doc"
-  - "Every requirement in requirements_analysis.md traced to a line in design.md"
+  - "./docs/requirements_analysis.md read and compared line-by-line against design doc"
+  - "Every requirement in ./docs/requirements_analysis.md traced to a line in design.md"
   - "Any requirement NOT in design.md flagged as out-of-scope"
-  - "Any design doc requirement missing from requirements_analysis.md flagged"
+  - "Any design doc requirement missing from ./docs/requirements_analysis.md flagged"
   - "scope_review_result.json written to ./docs/"
   - "Task marked as done with verdict PASS or FAIL"
 outputs:
