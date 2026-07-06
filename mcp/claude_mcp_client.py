@@ -40,9 +40,9 @@ def health_check() -> str:
 async def create_task(
     description: str,
     done_definition: str,
-    agent_id: str,
-    workflow_id: str,
-    phase_id: int,
+    agent_id: str = None,
+    workflow_id: str = None,
+    phase_id: int = None,
     priority: str = "medium",
     cwd: str = None,
     ticket_id: str = None,
@@ -52,10 +52,13 @@ async def create_task(
     Args:
         description: What needs to be done
         done_definition: Clear criteria for completion
-        agent_id: Your agent ID (REQUIRED - found in your initial prompt under "Your Agent ID:")
-        workflow_id: Your workflow ID (REQUIRED - found in your initial prompt under "Your Workflow ID:")
+        agent_id: Your agent ID (REQUIRED - found in your initial prompt under "Your Agent ID:").
+            Falls back to this process's own agent identity if omitted.
+        workflow_id: Your workflow ID (REQUIRED - found in your initial prompt under "Your Workflow ID:").
+            Falls back to this process's own workflow if omitted.
         phase_id: Phase order number for the task (REQUIRED). Use YOUR OWN phase's number — the
             same one from your task prompt — to create a SUBTASK within your current phase.
+            Falls back to this process's own phase if omitted.
         priority: Task priority (low/medium/high)
         cwd: Current working directory for the task (optional)
         ticket_id: Associated ticket ID (OPTIONAL for SDK/root tasks, REQUIRED when ticket tracking is enabled for MCP agents)
@@ -82,6 +85,15 @@ async def create_task(
 
     Omitting phase_id will cause workflow coordination issues.
     """
+    agent_id = agent_id or os.environ.get("HEPHAESTUS_AGENT_ID")
+    workflow_id = workflow_id or os.environ.get("HEPHAESTUS_WORKFLOW_ID")
+    phase_id = phase_id or os.environ.get("HEPHAESTUS_PHASE_ID")
+    if not agent_id:
+        return "❌ Error creating task: agent_id was not provided and HEPHAESTUS_AGENT_ID is not set in the environment"
+    if not workflow_id:
+        return "❌ Error creating task: workflow_id was not provided and HEPHAESTUS_WORKFLOW_ID is not set in the environment"
+    if not phase_id:
+        return "❌ Error creating task: phase_id was not provided and HEPHAESTUS_PHASE_ID is not set in the environment"
     try:
         async with httpx.AsyncClient() as client:
             request_data = {
@@ -161,7 +173,7 @@ async def get_tasks(status: str = "all") -> str:
 @mcp.tool()
 async def save_memory(
     content: str,
-    agent_id: str,
+    agent_id: str = None,
     memory_type: str = "discovery",
     workflow_id: str = None,
     task_id: str = None,
@@ -170,7 +182,8 @@ async def save_memory(
 
     Args:
         content: The memory content to save
-        agent_id: Your agent ID (CRITICAL: must match YOUR agent ID from your initial prompt)
+        agent_id: Your agent ID (CRITICAL: must match YOUR agent ID from your initial prompt).
+            Falls back to this process's own agent identity if omitted.
         memory_type: Type of memory (error_fix/discovery/decision/learning/warning/codebase_knowledge)
         workflow_id: Not used by this tool — accepted and ignored so agents that pass it
             (per the general "include workflow_id on every call" habit) don't get rejected.
@@ -180,6 +193,14 @@ async def save_memory(
     Example: agent_id="84f15f6c-35b1-4d57-97ac-92a3c0c94d29"
     DO NOT use 'agent-mcp' or any placeholder - it will cause errors!
     """
+    # Models frequently omit agent_id on this call even when the rendered
+    # prompt example shows it filled in -- fall back to the env var the
+    # orchestrator sets for this agent's tmux session (see
+    # src/agents/manager.py's HEPHAESTUS_AGENT_ID) instead of hard-failing
+    # a call whose real identity is unambiguous from the process environment.
+    agent_id = agent_id or os.environ.get("HEPHAESTUS_AGENT_ID")
+    if not agent_id:
+        return "❌ Error saving memory: agent_id was not provided and HEPHAESTUS_AGENT_ID is not set in the environment"
     try:
         async with httpx.AsyncClient() as client:
             response = await client.post(
@@ -257,9 +278,9 @@ async def search_memory(
 
 @mcp.tool()
 async def update_task_status(
-    task_id: str,
-    agent_id: str,
-    status: str,
+    task_id: str = None,
+    agent_id: str = None,
+    status: str = None,
     summary: str = "",
     failure_reason: str = "",
     key_learnings: list = None,
@@ -267,8 +288,10 @@ async def update_task_status(
     """Update the status of a task in Hephaestus.
 
     Args:
-        task_id: The ID of the task to update
-        agent_id: Your agent ID (CRITICAL: must match YOUR agent ID from your initial prompt)
+        task_id: The ID of the task to update. Falls back to this process's own
+            task if omitted.
+        agent_id: Your agent ID (CRITICAL: must match YOUR agent ID from your initial prompt).
+            Falls back to this process's own agent identity if omitted.
         status: New status (done/failed/in_progress)
         summary: Summary of what was accomplished (for done status)
         failure_reason: Reason for failure (for failed status)
@@ -285,6 +308,16 @@ async def update_task_status(
 
     DO NOT use 'agent-mcp' or any placeholder - it will cause "Agent not authorized" errors!
     """
+    # Same fallback as save_memory -- models occasionally omit these even
+    # when the rendered prompt example shows them filled in.
+    agent_id = agent_id or os.environ.get("HEPHAESTUS_AGENT_ID")
+    task_id = task_id or os.environ.get("HEPHAESTUS_TASK_ID")
+    if not agent_id:
+        return "❌ Failed to update task status: agent_id was not provided and HEPHAESTUS_AGENT_ID is not set in the environment"
+    if not task_id:
+        return "❌ Failed to update task status: task_id was not provided and HEPHAESTUS_TASK_ID is not set in the environment"
+    if not status:
+        return "❌ Failed to update task status: status is required (done/failed/in_progress)"
     try:
         async with httpx.AsyncClient() as client:
             payload = {
@@ -329,18 +362,20 @@ async def update_task_status(
 
 @mcp.tool()
 async def give_validation_review(
-    task_id: str,
-    validator_agent_id: str,
-    validation_passed: bool,
-    feedback: str,
+    task_id: str = None,
+    validator_agent_id: str = None,
+    validation_passed: bool = None,
+    feedback: str = "",
     evidence: list = None,
     recommendations: list = None,
 ) -> str:
     """Submit validation review for a task.
 
     Args:
-        task_id: The ID of the task being validated
-        validator_agent_id: Your validator agent ID
+        task_id: The ID of the task being validated. Falls back to this
+            process's own task if omitted.
+        validator_agent_id: Your validator agent ID. Falls back to this
+            process's own agent identity if omitted.
         validation_passed: Whether validation passed (true/false)
         feedback: Detailed feedback about what passed/failed
         evidence: List of evidence items supporting your decision (optional)
@@ -348,6 +383,14 @@ async def give_validation_review(
 
     This tool should only be called by validator agents after reviewing a task.
     """
+    validator_agent_id = validator_agent_id or os.environ.get("HEPHAESTUS_AGENT_ID")
+    task_id = task_id or os.environ.get("HEPHAESTUS_TASK_ID")
+    if not validator_agent_id:
+        return "❌ Error submitting validation review: validator_agent_id was not provided and HEPHAESTUS_AGENT_ID is not set in the environment"
+    if not task_id:
+        return "❌ Error submitting validation review: task_id was not provided and HEPHAESTUS_TASK_ID is not set in the environment"
+    if validation_passed is None:
+        return "❌ Error submitting validation review: validation_passed is required (true/false)"
     try:
         async with httpx.AsyncClient() as client:
             response = await client.post(
@@ -382,12 +425,13 @@ Iteration: {result.get("iteration", "N/A")}"""
 
 @mcp.tool()
 async def validate_my_agent_id(
-    agent_id: str, workflow_id: str = None, task_id: str = None
+    agent_id: str = None, workflow_id: str = None, task_id: str = None
 ) -> str:
     """Validate that your agent ID has the correct format before using it.
 
     Args:
-        agent_id: The agent ID you plan to use
+        agent_id: The agent ID you plan to use. Falls back to this process's
+            own agent identity if omitted.
         workflow_id: Not used by this tool — accepted and ignored so agents that pass it
             (per the general "include workflow_id on every call" habit) don't get rejected.
         task_id: Not used by this tool — accepted and ignored for the same reason.
@@ -397,6 +441,9 @@ async def validate_my_agent_id(
 
     Use this tool if you're unsure about your agent ID format!
     """
+    agent_id = agent_id or os.environ.get("HEPHAESTUS_AGENT_ID")
+    if not agent_id:
+        return "❌ Error validating agent ID: agent_id was not provided and HEPHAESTUS_AGENT_ID is not set in the environment"
     try:
         async with httpx.AsyncClient() as client:
             response = await client.get(
@@ -454,8 +501,8 @@ async def get_agent_status() -> str:
 @mcp.tool()
 async def submit_result(
     markdown_file_path: str,
-    agent_id: str,
-    explanation: str,
+    agent_id: str = None,
+    explanation: str = "",
     evidence: list = None,
     extra_files: list = None,
 ) -> str:
@@ -463,7 +510,7 @@ async def submit_result(
 
     Args:
         markdown_file_path: Path to markdown file with solution and evidence
-        agent_id: Your agent ID
+        agent_id: Your agent ID. Falls back to this process's own agent identity if omitted.
         explanation: Brief explanation of what was accomplished
         evidence: List of evidence supporting completion (optional)
         extra_files: List of additional file paths (e.g., patches, reproduction scripts) for validators (optional)
@@ -478,6 +525,9 @@ async def submit_result(
     For SWEBench workflows, you should include:
     - extra_files: ["./solution.patch", "./reproduction_instructions.md"]
     """
+    agent_id = agent_id or os.environ.get("HEPHAESTUS_AGENT_ID")
+    if not agent_id:
+        return "❌ Error submitting result: agent_id was not provided and HEPHAESTUS_AGENT_ID is not set in the environment"
     try:
         async with httpx.AsyncClient() as client:
             response = await client.post(
@@ -558,14 +608,18 @@ Result ID: {result.get("result_id", "unknown")}"""
 
 
 @mcp.tool()
-async def get_workflow_results(workflow_id: str) -> str:
+async def get_workflow_results(workflow_id: str = None) -> str:
     """Get all submitted results for a workflow.
 
     Args:
-        workflow_id: ID of the workflow
+        workflow_id: ID of the workflow. Falls back to this process's own
+            workflow if omitted.
 
     Returns list of results with their validation status and details.
     """
+    workflow_id = workflow_id or os.environ.get("HEPHAESTUS_WORKFLOW_ID")
+    if not workflow_id:
+        return "❌ Error getting workflow results: workflow_id was not provided and HEPHAESTUS_WORKFLOW_ID is not set in the environment"
     try:
         async with httpx.AsyncClient() as client:
             response = await client.get(
@@ -598,7 +652,7 @@ async def get_workflow_results(workflow_id: str) -> str:
 
 
 @mcp.tool()
-async def broadcast_message(message: str, sender_agent_id: str) -> str:
+async def broadcast_message(message: str, sender_agent_id: str = None) -> str:
     """Broadcast a message to all active agents in the system.
 
     Use this when you have information that ALL other agents should know about,
@@ -617,6 +671,9 @@ async def broadcast_message(message: str, sender_agent_id: str) -> str:
     The message will be delivered to all active agents with the prefix:
     [AGENT {your_id} BROADCAST]: {your_message}
     """
+    sender_agent_id = sender_agent_id or os.environ.get("HEPHAESTUS_AGENT_ID")
+    if not sender_agent_id:
+        return "❌ Error broadcasting message: sender_agent_id was not provided and HEPHAESTUS_AGENT_ID is not set in the environment"
     try:
         async with httpx.AsyncClient() as client:
             response = await client.post(
@@ -645,7 +702,7 @@ async def broadcast_message(message: str, sender_agent_id: str) -> str:
 
 @mcp.tool()
 async def send_message(
-    message: str, sender_agent_id: str, recipient_agent_id: str
+    message: str, sender_agent_id: str = None, recipient_agent_id: str = None
 ) -> str:
     """Send a direct message to a specific agent.
 
@@ -670,6 +727,11 @@ async def send_message(
     Tip: Use get_agent_status() to see which agents are currently active
     and what tasks they're working on before sending a message.
     """
+    sender_agent_id = sender_agent_id or os.environ.get("HEPHAESTUS_AGENT_ID")
+    if not sender_agent_id:
+        return "❌ Error sending message: sender_agent_id was not provided and HEPHAESTUS_AGENT_ID is not set in the environment"
+    if not recipient_agent_id:
+        return "❌ Error sending message: recipient_agent_id is required"
     try:
         async with httpx.AsyncClient() as client:
             response = await client.post(
@@ -701,10 +763,10 @@ async def send_message(
 
 @mcp.tool()
 async def create_ticket(
-    agent_id: str,
-    workflow_id: str,
     title: str,
     description: str,
+    agent_id: str = None,
+    workflow_id: str = None,
     ticket_type: str = "task",
     priority: str = "medium",
     tags: list = None,
@@ -743,6 +805,13 @@ async def create_ticket(
     import os
 
     logger = logging.getLogger(__name__)
+
+    agent_id = agent_id or os.environ.get("HEPHAESTUS_AGENT_ID")
+    workflow_id = workflow_id or os.environ.get("HEPHAESTUS_WORKFLOW_ID")
+    if not agent_id:
+        return "❌ Error creating ticket: agent_id was not provided and HEPHAESTUS_AGENT_ID is not set in the environment"
+    if not workflow_id:
+        return "❌ Error creating ticket: workflow_id was not provided and HEPHAESTUS_WORKFLOW_ID is not set in the environment"
 
     logger.info("[MCP_CLIENT_TICKET] ========== START ==========")
     logger.info(f"[MCP_CLIENT_TICKET] Agent: {agent_id}")
@@ -828,7 +897,7 @@ Message: {result.get("message", "")}{similar_msg}"""
 
 @mcp.tool()
 async def update_ticket(
-    ticket_id: str, agent_id: str, updates: dict, update_comment: str = None
+    ticket_id: str, updates: dict, agent_id: str = None, update_comment: str = None
 ) -> str:
     """Update ticket fields (title, description, priority, tags, assigned_agent_id, blocked_by_ticket_ids).
 
@@ -836,10 +905,13 @@ async def update_ticket(
 
     Args:
         ticket_id: ID of the ticket to update
-        agent_id: Your agent ID
+        agent_id: Your agent ID. Falls back to this process's own agent identity if omitted.
         updates: Fields to update (dict with keys: title, description, priority, assigned_agent_id, ticket_type, tags, blocked_by_ticket_ids)
         update_comment: Optional comment explaining the update
     """
+    agent_id = agent_id or os.environ.get("HEPHAESTUS_AGENT_ID")
+    if not agent_id:
+        return "❌ Error updating ticket: agent_id was not provided and HEPHAESTUS_AGENT_ID is not set in the environment"
     try:
         async with httpx.AsyncClient() as client:
             response = await client.post(
@@ -867,7 +939,11 @@ Message: {result.get("message", "")}"""
 
 @mcp.tool()
 async def change_ticket_status(
-    ticket_id: str, agent_id: str, new_status: str, comment: str, commit_sha: str = None
+    ticket_id: str,
+    new_status: str,
+    comment: str,
+    agent_id: str = None,
+    commit_sha: str = None,
 ) -> str:
     """Move ticket to a different status column.
 
@@ -875,11 +951,14 @@ async def change_ticket_status(
 
     Args:
         ticket_id: ID of the ticket
-        agent_id: Your agent ID
+        agent_id: Your agent ID. Falls back to this process's own agent identity if omitted.
         new_status: New status (must match board_config columns)
         comment: Required comment explaining status change (min 10 chars)
         commit_sha: Optional commit SHA to link to this status change
     """
+    agent_id = agent_id or os.environ.get("HEPHAESTUS_AGENT_ID")
+    if not agent_id:
+        return "❌ Error changing ticket status: agent_id was not provided and HEPHAESTUS_AGENT_ID is not set in the environment"
     try:
         async with httpx.AsyncClient() as client:
             response = await client.post(
@@ -916,8 +995,8 @@ To: {result.get("new_status", "unknown")}"""
 @mcp.tool()
 async def add_ticket_comment(
     ticket_id: str,
-    agent_id: str,
     comment_text: str,
+    agent_id: str = None,
     comment_type: str = "general",
     mentions: list = None,
 ) -> str:
@@ -927,11 +1006,14 @@ async def add_ticket_comment(
 
     Args:
         ticket_id: ID of the ticket
-        agent_id: Your agent ID
+        agent_id: Your agent ID. Falls back to this process's own agent identity if omitted.
         comment_text: Comment text (min 1 char)
         comment_type: Type of comment (general/status_change/blocker/resolution) - default: general
         mentions: Agent/ticket IDs mentioned in comment
     """
+    agent_id = agent_id or os.environ.get("HEPHAESTUS_AGENT_ID")
+    if not agent_id:
+        return "❌ Error adding comment: agent_id was not provided and HEPHAESTUS_AGENT_ID is not set in the environment"
     try:
         async with httpx.AsyncClient() as client:
             response = await client.post(
@@ -957,9 +1039,9 @@ async def add_ticket_comment(
 
 @mcp.tool()
 async def search_tickets(
-    agent_id: str,
-    workflow_id: str,
     query: str,
+    agent_id: str = None,
+    workflow_id: str = None,
     search_type: str = "hybrid",
     filters: dict = None,
     limit: int = 10,
@@ -970,8 +1052,9 @@ async def search_tickets(
     Use natural language queries. Shows blocked (🔒) and resolved (✅) indicators.
 
     Args:
-        agent_id: Your agent ID
-        workflow_id: Your workflow ID (REQUIRED - searches within this workflow only)
+        agent_id: Your agent ID. Falls back to this process's own agent identity if omitted.
+        workflow_id: Your workflow ID (REQUIRED - searches within this workflow only).
+            Falls back to this process's own workflow if omitted.
         query: Search query (natural language, min 3 chars)
         search_type: Search mode (semantic/keyword/hybrid) - DEFAULT: hybrid = 70% semantic + 30% keyword
         filters: Optional filters (dict with keys: status, priority, ticket_type, assigned_agent_id, tags, is_blocked)
@@ -983,6 +1066,12 @@ async def search_tickets(
     - Semantic search is good for conceptual queries
     - Keyword search is good for exact term matching
     """
+    agent_id = agent_id or os.environ.get("HEPHAESTUS_AGENT_ID")
+    workflow_id = workflow_id or os.environ.get("HEPHAESTUS_WORKFLOW_ID")
+    if not agent_id:
+        return "❌ Error searching tickets: agent_id was not provided and HEPHAESTUS_AGENT_ID is not set in the environment"
+    if not workflow_id:
+        return "❌ Error searching tickets: workflow_id was not provided and HEPHAESTUS_WORKFLOW_ID is not set in the environment"
     try:
         async with httpx.AsyncClient() as client:
             response = await client.post(
@@ -1171,8 +1260,8 @@ async def get_ticket(ticket_id: str) -> str:
 
 @mcp.tool()
 async def get_tickets(
-    agent_id: str,
-    workflow_id: str,
+    agent_id: str = None,
+    workflow_id: str = None,
     status: str = None,
     ticket_type: str = None,
     priority: str = None,
@@ -1188,8 +1277,9 @@ async def get_tickets(
     Shows blocked (🔒) and resolved (✅) indicators.
 
     Args:
-        agent_id: Your agent ID
-        workflow_id: Your workflow ID (REQUIRED - lists tickets in this workflow only)
+        agent_id: Your agent ID. Falls back to this process's own agent identity if omitted.
+        workflow_id: Your workflow ID (REQUIRED - lists tickets in this workflow only).
+            Falls back to this process's own workflow if omitted.
         status: Filter by status
         ticket_type: Filter by type
         priority: Filter by priority
@@ -1200,6 +1290,12 @@ async def get_tickets(
         sort_by: Sort field (created_at/updated_at/priority/status) - default: created_at
         sort_order: Sort order (asc/desc) - default: desc
     """
+    agent_id = agent_id or os.environ.get("HEPHAESTUS_AGENT_ID")
+    workflow_id = workflow_id or os.environ.get("HEPHAESTUS_WORKFLOW_ID")
+    if not agent_id:
+        return "❌ Error getting tickets: agent_id was not provided and HEPHAESTUS_AGENT_ID is not set in the environment"
+    if not workflow_id:
+        return "❌ Error getting tickets: workflow_id was not provided and HEPHAESTUS_WORKFLOW_ID is not set in the environment"
     try:
         async with httpx.AsyncClient() as client:
             params = {
@@ -1251,7 +1347,7 @@ Has more: {result.get("has_more", False)}
 
 @mcp.tool()
 async def link_commit_to_ticket(
-    ticket_id: str, agent_id: str, commit_sha: str, commit_message: str = None
+    ticket_id: str, commit_sha: str, agent_id: str = None, commit_message: str = None
 ) -> str:
     """Manually link a git commit to a ticket for traceability.
 
@@ -1259,10 +1355,13 @@ async def link_commit_to_ticket(
 
     Args:
         ticket_id: ID of the ticket
-        agent_id: Your agent ID
+        agent_id: Your agent ID. Falls back to this process's own agent identity if omitted.
         commit_sha: Git commit SHA
         commit_message: Optional commit message (auto-fetched if not provided)
     """
+    agent_id = agent_id or os.environ.get("HEPHAESTUS_AGENT_ID")
+    if not agent_id:
+        return "❌ Error linking commit: agent_id was not provided and HEPHAESTUS_AGENT_ID is not set in the environment"
     try:
         async with httpx.AsyncClient() as client:
             response = await client.post(
@@ -1286,15 +1385,18 @@ async def link_commit_to_ticket(
 
 
 @mcp.tool()
-async def get_commit_diff(commit_sha: str, agent_id: str) -> str:
+async def get_commit_diff(commit_sha: str, agent_id: str = None) -> str:
     """Get detailed git diff for a commit (used by Git Diff Window in UI).
 
     Returns structured diff data with file changes, insertions, deletions.
 
     Args:
         commit_sha: Git commit SHA to get diff for
-        agent_id: Your agent ID
+        agent_id: Your agent ID. Falls back to this process's own agent identity if omitted.
     """
+    agent_id = agent_id or os.environ.get("HEPHAESTUS_AGENT_ID")
+    if not agent_id:
+        return "❌ Error getting commit diff: agent_id was not provided and HEPHAESTUS_AGENT_ID is not set in the environment"
     try:
         async with httpx.AsyncClient() as client:
             response = await client.get(
@@ -1326,7 +1428,7 @@ Files changed: {result.get("files_changed", 0)}
 
 @mcp.tool()
 async def resolve_ticket(
-    ticket_id: str, agent_id: str, resolution_comment: str, commit_sha: str = None
+    ticket_id: str, resolution_comment: str, agent_id: str = None, commit_sha: str = None
 ) -> str:
     """Mark ticket as resolved.
 
@@ -1335,10 +1437,13 @@ async def resolve_ticket(
 
     Args:
         ticket_id: ID of the ticket to resolve
-        agent_id: Your agent ID
+        agent_id: Your agent ID. Falls back to this process's own agent identity if omitted.
         resolution_comment: Comment explaining resolution (min 10 chars)
         commit_sha: Optional commit SHA that resolved the ticket
     """
+    agent_id = agent_id or os.environ.get("HEPHAESTUS_AGENT_ID")
+    if not agent_id:
+        return "❌ Error resolving ticket: agent_id was not provided and HEPHAESTUS_AGENT_ID is not set in the environment"
     try:
         async with httpx.AsyncClient() as client:
             response = await client.post(
@@ -1371,8 +1476,8 @@ Message: {result.get("message", "")}{unblocked_msg}"""
 @mcp.tool()
 async def request_ticket_clarification(
     ticket_id: str,
-    agent_id: str,
     conflict_description: str,
+    agent_id: str = None,
     context: str = "",
     potential_solutions: list = None,
 ) -> str:
@@ -1427,6 +1532,10 @@ async def request_ticket_clarification(
     import logging
 
     potential_solutions = potential_solutions or []
+
+    agent_id = agent_id or os.environ.get("HEPHAESTUS_AGENT_ID")
+    if not agent_id:
+        return "❌ Error requesting clarification: agent_id was not provided and HEPHAESTUS_AGENT_ID is not set in the environment"
 
     logger = logging.getLogger(__name__)
     logger.info(
