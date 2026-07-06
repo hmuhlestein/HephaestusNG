@@ -154,12 +154,12 @@ class FrontendAPI:
                 project_workflow_ids = session.query(Workflow.id).filter(
                     Workflow.project_id == project_id
                 ).subquery()
+                project_agent_ids = session.query(Task.assigned_agent_id).filter(
+                    Task.workflow_id.in_(project_workflow_ids),
+                    Task.assigned_agent_id.isnot(None)
+                ).distinct().subquery()
                 agent_query = agent_query.filter(
-                    Agent.current_task_id.in_(
-                        session.query(Task.id).filter(
-                            Task.workflow_id.in_(project_workflow_ids)
-                        )
-                    )
+                    Agent.id.in_(project_agent_ids)
                 )
                 task_query = task_query.filter(
                     Task.workflow_id.in_(project_workflow_ids)
@@ -322,11 +322,12 @@ class FrontendAPI:
                 project_workflow_ids = session.query(Workflow.id).filter(
                     Workflow.project_id == project_id
                 ).subquery()
-                project_task_ids = session.query(Task.id).filter(
-                    Task.workflow_id.in_(project_workflow_ids)
-                ).subquery()
+                project_agent_ids = session.query(Task.assigned_agent_id).filter(
+                    Task.workflow_id.in_(project_workflow_ids),
+                    Task.assigned_agent_id.isnot(None)
+                ).distinct().subquery()
                 query = query.filter(
-                    Agent.current_task_id.in_(project_task_ids)
+                    Agent.id.in_(project_agent_ids)
                 )
             
             agents = query.order_by(desc(Agent.created_at)).all()
