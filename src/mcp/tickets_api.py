@@ -724,32 +724,49 @@ async def search_tickets_endpoint(
 
 
 @router.get("/stats/{workflow_id}", response_model=TicketStatsResponse)
+@router.get("/stats", response_model=TicketStatsResponse)
 async def get_ticket_stats_endpoint(
-    workflow_id: str,
+    workflow_id: Optional[str] = None,
+    project_id: Optional[str] = None,
     agent_id: str = Header(..., alias="X-Agent-ID"),
 ):
     """Retrieve aggregate statistics for workflow tickets."""
-    logger.info(f"Agent {agent_id} fetching ticket stats for workflow {workflow_id}")
+    logger.info(f"Agent {agent_id} fetching ticket stats (workflow={workflow_id}, project={project_id})")
 
     try:
         from sqlalchemy import func
 
-        from src.core.database import BoardConfig, Ticket, TicketComment, TicketCommit
+        from src.core.database import BoardConfig, Ticket, TicketComment, TicketCommit, Workflow
 
         session = server_state.db_manager.get_session()
         try:
+            # Determine workflow IDs to query
+            if workflow_id:
+                workflow_ids = [workflow_id]
+            elif project_id:
+                workflow_ids = [
+                    wf.id for wf in session.query(Workflow).filter_by(project_id=project_id).all()
+                ]
+            else:
+                return {
+                    "success": True,
+                    "workflow_id": None,
+                    "stats": {"total": 0, "by_status": {}, "by_type": {}, "by_priority": {}},
+                    "board_config": None,
+                }
+
             # Get board config for this workflow
             board_config = (
-                session.query(BoardConfig).filter_by(workflow_id=workflow_id).first()
+                session.query(BoardConfig).filter(BoardConfig.workflow_id.in_(workflow_ids)).first()
             )
             logger.info(
-                f"BoardConfig found: {board_config is not None}, workflow_id: {workflow_id}"
+                f"BoardConfig found: {board_config is not None}, workflow_ids: {workflow_ids}"
             )
 
             # Total tickets
             total_tickets = (
                 session.query(func.count(Ticket.id))
-                .filter_by(workflow_id=workflow_id)
+                .filter(Ticket.workflow_id.in_(workflow_ids))
                 .scalar()
             )
 
@@ -757,7 +774,7 @@ async def get_ticket_stats_endpoint(
             by_status = {}
             status_counts = (
                 session.query(Ticket.status, func.count(Ticket.id))
-                .filter_by(workflow_id=workflow_id)
+                .filter(Ticket.workflow_id.in_(workflow_ids))
                 .group_by(Ticket.status)
                 .all()
             )
@@ -768,7 +785,7 @@ async def get_ticket_stats_endpoint(
             by_type = {}
             type_counts = (
                 session.query(Ticket.ticket_type, func.count(Ticket.id))
-                .filter_by(workflow_id=workflow_id)
+                .filter(Ticket.workflow_id.in_(workflow_ids))
                 .group_by(Ticket.ticket_type)
                 .all()
             )

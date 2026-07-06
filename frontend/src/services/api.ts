@@ -503,8 +503,11 @@ export const apiService = {
     return data.results || [];
   },
 
-  getTicketStats: async (workflowId: string): Promise<TicketStats> => {
-    const { data } = await api.get(`/tickets/stats/${workflowId}`, {
+  getTicketStats: async (workflowOrProjectId: string): Promise<TicketStats> => {
+    const isProjectId = workflowOrProjectId.startsWith('proj-');
+    const params = isProjectId ? `?project_id=${workflowOrProjectId}` : '';
+    const path = isProjectId ? '/tickets/stats' : `/tickets/stats/${workflowOrProjectId}`;
+    const { data } = await api.get(`${path}${params}`, {
       headers: { 'X-Agent-ID': 'ui-user' },
     });
     // Backend returns {success, workflow_id, stats, board_config}
