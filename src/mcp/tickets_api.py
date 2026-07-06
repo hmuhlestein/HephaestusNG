@@ -631,6 +631,167 @@ async def get_pending_review_count_endpoint():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/stats/{workflow_id}", response_model=TicketStatsResponse)
+@router.get("/stats", response_model=TicketStatsResponse, include_in_schema=False)
+async def get_ticket_stats_endpoint(
+    workflow_id: Optional[str] = None,
+    project_id: Optional[str] = None,
+    agent_id: str = Header(..., alias="X-Agent-ID"),
+):
+    """Retrieve aggregate statistics for workflow tickets."""
+    logger.info(f"Agent {agent_id} fetching ticket stats (workflow={workflow_id}, project={project_id})")
+
+    try:
+        from sqlalchemy import func
+
+        from src.core.database import BoardConfig, Ticket, TicketComment, TicketCommit, Workflow
+
+        with get_db() as session:
+            # Determine workflow IDs to query
+            if workflow_id:
+                workflow_ids = [workflow_id]
+            elif project_id:
+                workflow_ids = [
+                    wf.id for wf in session.query(Workflow).filter_by(project_id=project_id).all()
+                ]
+            else:
+                return {
+                    "success": True,
+                    "workflow_id": None,
+                    "stats": {"total": 0, "by_status": {}, "by_type": {}, "by_priority": {}},
+                    "board_config": None,
+                }
+
+            # Get board config for this workflow
+            board_config = (
+                session.query(BoardConfig).filter(BoardConfig.workflow_id.in_(workflow_ids)).first()
+            )
+            logger.info(
+                f"BoardConfig found: {board_config is not None}, workflow_ids: {workflow_ids}"
+            )
+
+            # Total tickets
+            total_tickets = (
+                session.query(func.count(Ticket.id))
+                .filter(Ticket.workflow_id.in_(workflow_ids))
+                .scalar()
+            )
+
+            # By status
+            by_status = {}
+            status_counts = (
+                session.query(Ticket.status, func.count(Ticket.id))
+                .filter(Ticket.workflow_id.in_(workflow_ids))
+                .group_by(Ticket.status)
+                .all()
+            )
+            for status, count in status_counts:
+                by_status[status] = count
+
+            # By type
+            by_type = {}
+            type_counts = (
+                session.query(Ticket.ticket_type, func.count(Ticket.id))
+                .filter(Ticket.workflow_id.in_(workflow_ids))
+                .group_by(Ticket.ticket_type)
+                .all()
+            )
+            for ticket_type, count in type_counts:
+                by_type[ticket_type] = count
+
+            # By priority
+            by_priority = {}
+            priority_counts = (
+                session.query(Ticket.priority, func.count(Ticket.id))
+                .filter(Ticket.workflow_id.in_(workflow_ids))
+                .group_by(Ticket.priority)
+                .all()
+            )
+            for priority, count in priority_counts:
+                by_priority[priority] = count
+
+            # By agent
+            by_agent = {}
+            agent_counts = (
+                session.query(Ticket.assigned_agent_id, func.count(Ticket.id))
+                .filter(Ticket.workflow_id.in_(workflow_ids))
+                .filter(Ticket.assigned_agent_id.isnot(None))
+                .group_by(Ticket.assigned_agent_id)
+                .all()
+            )
+            for agent_id_val, count in agent_counts:
+                by_agent[agent_id_val] = count
+
+            # Blocked count
+            tickets_list = (
+                session.query(Ticket).filter(Ticket.workflow_id.in_(workflow_ids)).all()
+            )
+            blocked_count = sum(
+                1
+                for t in tickets_list
+                if t.blocked_by_ticket_ids and len(t.blocked_by_ticket_ids) > 0
+            )
+
+            # Resolved count
+            resolved_count = (
+                session.query(func.count(Ticket.id))
+                .filter(Ticket.workflow_id.in_(workflow_ids), Ticket.is_resolved == True)
+                .scalar()
+            )
+
+            # Average comments per ticket
+            total_comments = (
+                session.query(func.count(TicketComment.id))
+                .join(Ticket, TicketComment.ticket_id == Ticket.id)
+                .filter(Ticket.workflow_id.in_(workflow_ids))
+                .scalar()
+            )
+            avg_comments = total_comments / total_tickets if total_tickets > 0 else 0.0
+
+            # Average commits per ticket
+            total_commits = (
+                session.query(func.count(TicketCommit.id))
+                .join(Ticket, TicketCommit.ticket_id == Ticket.id)
+                .filter(Ticket.workflow_id.in_(workflow_ids))
+                .scalar()
+            )
+            avg_commits = total_commits / total_tickets if total_tickets > 0 else 0.0
+
+            stats = {
+                "total_tickets": total_tickets,
+                "by_status": by_status,
+                "by_type": by_type,
+                "by_priority": by_priority,
+                "by_agent": by_agent,
+                "blocked_count": blocked_count,
+                "resolved_count": resolved_count,
+                "avg_comments_per_ticket": avg_comments,
+                "avg_commits_per_ticket": avg_commits,
+            }
+
+            return {
+                "success": True,
+                "workflow_id": workflow_ids[0] if workflow_ids else "none",
+                "stats": stats,
+                "board_config": {
+                    "name": board_config.name,
+                    "columns": board_config.columns,
+                    "ticket_types": board_config.ticket_types,
+                    "default_ticket_type": board_config.default_ticket_type,
+                    "initial_status": board_config.initial_status,
+                    "auto_assign": board_config.auto_assign,
+                    "allow_reopen": board_config.allow_reopen,
+                    "track_time": board_config.track_time,
+                } if board_config else None,
+            }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get ticket stats: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/{ticket_id}")
 async def get_ticket_endpoint(
     ticket_id: str,
@@ -721,221 +882,6 @@ async def search_tickets_endpoint(
     except Exception as e:
         logger.error(f"Ticket search failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.get("/stats/{workflow_id}", response_model=TicketStatsResponse)
-@router.get("/stats", response_model=TicketStatsResponse)
-async def get_ticket_stats_endpoint(
-    workflow_id: Optional[str] = None,
-    project_id: Optional[str] = None,
-    agent_id: str = Header(..., alias="X-Agent-ID"),
-):
-    """Retrieve aggregate statistics for workflow tickets."""
-    logger.info(f"Agent {agent_id} fetching ticket stats (workflow={workflow_id}, project={project_id})")
-
-    try:
-        from sqlalchemy import func
-
-        from src.core.database import BoardConfig, Ticket, TicketComment, TicketCommit, Workflow
-
-        session = server_state.db_manager.get_session()
-        try:
-            # Determine workflow IDs to query
-            if workflow_id:
-                workflow_ids = [workflow_id]
-            elif project_id:
-                workflow_ids = [
-                    wf.id for wf in session.query(Workflow).filter_by(project_id=project_id).all()
-                ]
-            else:
-                return {
-                    "success": True,
-                    "workflow_id": None,
-                    "stats": {"total": 0, "by_status": {}, "by_type": {}, "by_priority": {}},
-                    "board_config": None,
-                }
-
-            # Get board config for this workflow
-            board_config = (
-                session.query(BoardConfig).filter(BoardConfig.workflow_id.in_(workflow_ids)).first()
-            )
-            logger.info(
-                f"BoardConfig found: {board_config is not None}, workflow_ids: {workflow_ids}"
-            )
-
-            # Total tickets
-            total_tickets = (
-                session.query(func.count(Ticket.id))
-                .filter(Ticket.workflow_id.in_(workflow_ids))
-                .scalar()
-            )
-
-            # By status
-            by_status = {}
-            status_counts = (
-                session.query(Ticket.status, func.count(Ticket.id))
-                .filter(Ticket.workflow_id.in_(workflow_ids))
-                .group_by(Ticket.status)
-                .all()
-            )
-            for status, count in status_counts:
-                by_status[status] = count
-
-            # By type
-            by_type = {}
-            type_counts = (
-                session.query(Ticket.ticket_type, func.count(Ticket.id))
-                .filter(Ticket.workflow_id.in_(workflow_ids))
-                .group_by(Ticket.ticket_type)
-                .all()
-            )
-            for ticket_type, count in type_counts:
-                by_type[ticket_type] = count
-
-            # By priority
-            by_priority = {}
-            priority_counts = (
-                session.query(Ticket.priority, func.count(Ticket.id))
-                .filter_by(workflow_id=workflow_id)
-                .group_by(Ticket.priority)
-                .all()
-            )
-            for priority, count in priority_counts:
-                by_priority[priority] = count
-
-            # By agent
-            by_agent = {}
-            agent_counts = (
-                session.query(Ticket.assigned_agent_id, func.count(Ticket.id))
-                .filter_by(workflow_id=workflow_id)
-                .filter(Ticket.assigned_agent_id.isnot(None))
-                .group_by(Ticket.assigned_agent_id)
-                .all()
-            )
-            for agent_id_val, count in agent_counts:
-                by_agent[agent_id_val] = count
-
-            # Blocked count
-            tickets_list = (
-                session.query(Ticket).filter_by(workflow_id=workflow_id).all()
-            )
-            blocked_count = sum(
-                1
-                for t in tickets_list
-                if t.blocked_by_ticket_ids and len(t.blocked_by_ticket_ids) > 0
-            )
-
-            # Resolved count
-            resolved_count = (
-                session.query(func.count(Ticket.id))
-                .filter_by(workflow_id=workflow_id, is_resolved=True)
-                .scalar()
-            )
-
-            # Average comments per ticket
-            total_comments = (
-                session.query(func.count(TicketComment.id))
-                .join(Ticket, TicketComment.ticket_id == Ticket.id)
-                .filter(Ticket.workflow_id == workflow_id)
-                .scalar()
-            )
-            avg_comments = total_comments / total_tickets if total_tickets > 0 else 0.0
-
-            # Average commits per ticket
-            total_commits = (
-                session.query(func.count(TicketCommit.id))
-                .join(Ticket, TicketCommit.ticket_id == Ticket.id)
-                .filter(Ticket.workflow_id == workflow_id)
-                .scalar()
-            )
-            avg_commits = total_commits / total_tickets if total_tickets > 0 else 0.0
-
-            # Created today
-            today_start = datetime.utcnow().replace(
-                hour=0, minute=0, second=0, microsecond=0
-            )
-            created_today = (
-                session.query(func.count(Ticket.id))
-                .filter(
-                    Ticket.workflow_id == workflow_id, Ticket.created_at >= today_start
-                )
-                .scalar()
-            )
-
-            # Completed today
-            completed_today = (
-                session.query(func.count(Ticket.id))
-                .filter(
-                    Ticket.workflow_id == workflow_id,
-                    Ticket.completed_at >= today_start,
-                )
-                .scalar()
-                if Ticket.completed_at
-                else 0
-            )
-
-            # Velocity last 7 days (tickets completed in last 7 days)
-            seven_days_ago = datetime.utcnow() - timedelta(days=7)
-            velocity_last_7_days = (
-                session.query(func.count(Ticket.id))
-                .filter(
-                    Ticket.workflow_id == workflow_id,
-                    Ticket.is_resolved,
-                    Ticket.resolved_at >= seven_days_ago,
-                )
-                .scalar()
-            )
-
-            stats = TicketStats(
-                total_tickets=total_tickets or 0,
-                by_status=by_status,
-                by_type=by_type,
-                by_priority=by_priority,
-                by_agent=by_agent,
-                blocked_count=blocked_count,
-                resolved_count=resolved_count or 0,
-                avg_comments_per_ticket=avg_comments or 0.0,
-                avg_commits_per_ticket=avg_commits or 0.0,
-                created_today=created_today or 0,
-                completed_today=completed_today or 0,
-                velocity_last_7_days=velocity_last_7_days or 0,
-            )
-
-            # Convert board_config to dict if it exists
-            board_config_dict = None
-            if board_config:
-                board_config_dict = {
-                    "name": board_config.name,
-                    "columns": board_config.columns,
-                    "ticket_types": board_config.ticket_types,
-                    "default_ticket_type": board_config.default_ticket_type,
-                    "initial_status": board_config.initial_status,
-                    "auto_assign": board_config.auto_assign
-                    if hasattr(board_config, "auto_assign")
-                    else False,
-                    "allow_reopen": board_config.allow_reopen
-                    if hasattr(board_config, "allow_reopen")
-                    else True,
-                    "track_time": board_config.track_time
-                    if hasattr(board_config, "track_time")
-                    else False,
-                }
-
-            return TicketStatsResponse(
-                success=True,
-                workflow_id=workflow_id,
-                stats=stats,
-                board_config=board_config_dict,
-            )
-
-        finally:
-            session.close()
-
-    except Exception as e:
-        logger.error(f"Failed to get ticket stats: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
 @router.get("/", response_model=GetTicketsResponse)
 async def get_tickets_endpoint(
     workflow_id: Optional[str] = None,  # Optional - can filter by project instead
