@@ -129,6 +129,19 @@ additional_notes: |
 
   Do not report speculative issues ("this could fail"). Show the exact sequence.
 
+  DESIGN SCOPE TAGGING: Every finding is ALSO real regardless of scope — but tag
+  each one so product_validation (which checks compliance with ./.hephaestus/design.md)
+  doesn't treat a legitimate architectural concern the design doc never asked for as
+  a release blocker:
+  - IN-SCOPE: the design doc specifies behavior this finding shows is violated
+  - OUT-OF-SCOPE: a real bug/fragility, but the design doc never specified this
+    behavior at all (e.g. hardening a function the design doc only asked to be
+    "correct for the happy path"). Still report it as a BLOCKER/WARNING/NIT on
+    its technical merits — just add "(out-of-scope: not specified in design.md)"
+    after the title so downstream phases know not to gate release on it.
+  Add the tag to each finding's title line, e.g. "### [BLOCKER] Logger swallows
+  IOError (out-of-scope: not specified in design.md)".
+
   ═══════════════════════════════════════════════════════════════════════
   STEP 4: WRITE adversarial_review_report.md
   ═══════════════════════════════════════════════════════════════════════
@@ -210,9 +223,10 @@ additional_notes: |
   CRITICAL: You MUST call the update_task_status tool. The pipeline will stall
   without it.
 
-  mcp__hephaestus__update_task_status({
-    "task_id": "<your task id>",
-    "status": "done",
-    "summary": "<brief summary: N BLOCKERs found, M WARNINGs found — see adversarial_review_report.md>",
-    "key_learnings": ["<specific failure modes found>"]
-  })
+  hephaestus_update_task_status(
+    task_id="<your task id>",
+    agent_id="<YOUR EXACT agent ID from the task assignment>",
+    status="done",
+    summary="<brief summary: N BLOCKERs found, M WARNINGs found — see adversarial_review_report.md>",
+    key_learnings=["<specific failure modes found>"]
+  )

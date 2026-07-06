@@ -124,7 +124,7 @@ additional_notes: |
   CRITICAL: You MUST call the update_task_status tool. The pipeline WILL
   get stuck without this call. Do NOT just print a summary and stop.
 
-  mcp__hephaestus__update_task_status({
+  hephaestus_update_task_status({
     "task_id": "<your task id>",
     "status": "done",
     "summary": "<brief summary>",

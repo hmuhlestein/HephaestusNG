@@ -187,31 +187,17 @@ additional_notes: |
   - Over-engineering (solved a harder problem than required)
   
   ═══════════════════════════════════════════════════════════════════════
-  STEP 3c: READ GUARDIAN / API LOGS
+  STEP 3c: FIND GUARDIAN STEERING IN THE TMUX LOGS
   ═══════════════════════════════════════════════════════════════════════
-  
-  Fetch agent logs from the API to understand Guardian steering decisions:
-  
-  ```python
-  # Get all agents from the workflow
-  import json
-  agents_data = json.loads(mcp__hephaestus__http_get({"url": "/api/agents"}))
-  
-  # For each agent, get its logs
-  for agent in agents_data:
-      agent_id = agent["id"]
-      logs = json.loads(mcp__hephaestus__http_get({
-          "url": f"/api/agents/{agent_id}/logs?limit=30"
-      }))
-      # Look for:
-      # - guardian_analysis: trajectory alignment scores
-      # - guardian_steering: messages sent to agent
-      # - agent errors or crashes
-  ```
-  
-  Analyze the logs for:
-  - Which agents had low alignment scores (off-track)
-  - Which agents received steering messages (interventions)
+
+  There is no separate API tool for this — Guardian steering messages are
+  injected directly into an agent's own tmux session, so they already
+  appear inline in the logs you read in Step 3b (look for lines starting
+  "[GUARDIAN...]"). Do NOT invent an http_get-style tool call here; none
+  exists, and doing so will just fail with "tool not found."
+
+  While re-scanning those same logs, specifically look for:
+  - Which agents received steering messages (interventions), and why
   - Which agents crashed or timed out
   - How long each agent took per task
   - Any repeated patterns (same error, same blocker)
@@ -352,7 +338,7 @@ additional_notes: |
   Save improvements to memory, scoped to this feature:
   
   ```python
-  mcp__hephaestus__save_memory({
+  hephaestus_save_memory({
       "content": f"Forensics [{feature_name}] Phase [N]: [finding]. Proposed fix: [fix].",
       "memory_type": "learning"
   })
@@ -395,7 +381,7 @@ additional_notes: |
   
   After writing all your output files, call:
   
-  mcp__hephaestus__update_task_status({
+  hephaestus_update_task_status({
     "task_id": "<your task id>",
     "status": "done",
     "summary": "<brief summary of what was accomplished>",

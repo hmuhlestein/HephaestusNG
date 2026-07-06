@@ -13,6 +13,7 @@ done_definitions:
   - "All feature components implemented and tested"
   - "Integration points implemented"
   - "Code follows project style guide"
+  - ".gitignore created if missing, covering standard runtime/tool artifacts for this language"
   - "Unit tests written and passing"
   - "`ruff check .` and `ruff format --check .` pass with ZERO errors (logging not print, imports at top, sorted) and `mypy` passes — run `ruff check --fix . && ruff format .` first, then verify clean before marking done"
   - "Implementation status documented"
@@ -81,6 +82,14 @@ additional_notes: |
   - Do NOT create additional test files unless the design doc explicitly asks
   - Do NOT create tests/test_compute.py unless it is explicitly in the design
   - Run the existing seeded tests to verify they pass
+
+  PROJECT SETUP: If no .gitignore exists at the project root yet, create one
+  now covering this language/toolchain's standard runtime and tool artifacts
+  (e.g. for Python: __pycache__/, *.pyc, .pytest_cache/, .ruff_cache/,
+  .mypy_cache/, *.log). Do this before your first commit — security_review
+  has had to catch and fix a missing .gitignore after the fact (runtime log
+  files ending up tracked in git); it belongs here, at project setup time,
+  not as a later review finding.
 
   Read:
   - ./.hephaestus/design.md — SCOPE AUTHORITY: only implement what this specifies
@@ -213,7 +222,7 @@ additional_notes: |
   
   After writing all your output files, call:
   
-  mcp__hephaestus__update_task_status({
+  hephaestus_update_task_status({
     "task_id": "<your task id>",
     "status": "done",
     "summary": "<brief summary of what was accomplished>",

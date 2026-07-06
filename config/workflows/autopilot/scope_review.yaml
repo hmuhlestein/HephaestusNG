@@ -116,7 +116,7 @@ additional_notes: |
   WHEN YOU ARE DONE - MARK YOUR TASK AS COMPLETE (DO NOT SKIP THIS)
   ═══════════════════════════════════════════════════════════════════════
 
-  mcp__hephaestus__update_task_status({
+  hephaestus_update_task_status({
     "task_id": "<your task id>",
     "status": "done",
     "summary": "SCOPE_PASS: ..." or "SCOPE_FAIL: ...",
