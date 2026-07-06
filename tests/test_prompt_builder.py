@@ -52,6 +52,44 @@ class TestCreateTaskToolSignature:
         assert "agent_id=" not in create_task_line
 
 
+class TestUpdateTaskStatusToolSignature:
+    """Regression coverage for a real bug found during smoke testing: the
+    prompt's own hephaestus_update_task_status examples omitted agent_id
+    even though the surrounding instructions say "always pass agent_id=...".
+    Agents copied the example verbatim and got
+    "Input validation error: 'agent_id' is a required property" on every
+    completion attempt.
+    """
+
+    def test_phase_agent_examples_include_agent_id(self):
+        builder = AgentPromptBuilder(phase_manager=None)
+        message = builder.format_initial_message(
+            task=_FakeTask(), agent_id="agent-abc"
+        )
+        status_lines = [
+            line
+            for line in message.splitlines()
+            if "hephaestus_update_task_status(" in line
+        ]
+        assert status_lines, "expected at least one update_task_status example"
+        for line in status_lines:
+            assert 'agent_id="agent-abc"' in line, line
+
+    def test_non_phase_agent_examples_include_agent_id(self):
+        task = _FakeTask()
+        task.phase_id = None
+        builder = AgentPromptBuilder(phase_manager=None)
+        message = builder.format_initial_message(task=task, agent_id="agent-abc")
+        status_lines = [
+            line
+            for line in message.splitlines()
+            if "hephaestus_update_task_status(" in line
+        ]
+        assert status_lines, "expected at least one update_task_status example"
+        for line in status_lines:
+            assert 'agent_id="agent-abc"' in line, line
+
+
 class _FakeWorkflowConfig:
     def __init__(self, enable_tickets):
         self.enable_tickets = enable_tickets
