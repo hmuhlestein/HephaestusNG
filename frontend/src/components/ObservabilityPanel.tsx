@@ -128,7 +128,7 @@ const ObservabilityPanel: React.FC<ObservabilityPanelProps> = ({
             <div className="flex items-center space-x-2">
               <Bot className="w-5 h-5 text-gray-400" />
               <h3 className="text-white font-semibold">
-                Agent {agent.id.substring(0, 8)}
+                {agent.current_task?.phase_info?.name || agent.agent_type || 'Agent'} {agent.id.substring(0, 8)}
               </h3>
             </div>
             <span className={`px-2 py-0.5 rounded text-xs font-medium ${getAgentStatusColor()}`}>
@@ -234,7 +234,7 @@ const ObservabilityPanel: React.FC<ObservabilityPanelProps> = ({
           <div className={`w-2 h-2 rounded-full flex-shrink-0 ${getStatusColor()}`} />
           <Bot className="w-4 h-4 text-gray-500 flex-shrink-0" />
           <span className="text-sm font-medium text-gray-800 truncate">
-            {agent.id.substring(0, 8)}
+            {agent.current_task?.phase_info?.name || agent.agent_type || 'Agent'} {agent.id.substring(0, 8)}
           </span>
           <span className={`px-1.5 py-0.5 rounded text-xs font-medium flex-shrink-0 ${getAgentStatusColor()}`}>
             {agent.status}

@@ -104,7 +104,7 @@ const AgentCard: React.FC<{
                 </span>
                 {agent.current_task.phase_info && (
                   <span className="text-xs px-2 py-1 bg-blue-100 text-blue-700 rounded">
-                    Phase {agent.current_task.phase_info.order}
+                    Phase {agent.current_task.phase_info.order}: {agent.current_task.phase_info.name}
                   </span>
                 )}
               </div>
