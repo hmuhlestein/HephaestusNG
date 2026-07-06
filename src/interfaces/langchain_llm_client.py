@@ -1099,7 +1099,7 @@ COMPLETION CRITERIA:
 {task.get("done_definition", "Complete the assigned task")}
 
 ═══ PRE-LOADED CONTEXT ═══
-Top 10 relevant memories (use qdrant-find for more):
+Top 10 relevant memories (use vector search for more):
 {memory_context}
 
 PROJECT:
@@ -1112,15 +1112,15 @@ Hephaestus MCP (task management):
 • update_task_status - Mark done/failed when complete (REQUIRED)
 • save_memory - Save discoveries for other agents
 
-Qdrant MCP (memory search):
-• qdrant-find - Search agent memories semantically
+Memory search:
+• search_memory - Search agent memories semantically
   Use when: encountering errors, needing implementation details, finding related work
-  Example: "qdrant-find 'PostgreSQL connection timeout solutions'"
+  Example: search_memory("PostgreSQL connection timeout solutions")
   Note: Pre-loaded context covers most needs; search for specifics
 
 ═══ WORKFLOW ═══
 1. Work on your task using pre-loaded context
-2. Use qdrant-find if you need specific information (errors, patterns, implementations)
+2. Use vector search if you need specific information (errors, patterns, implementations)
 3. Save important discoveries via save_memory (error fixes, decisions, warnings)
 4. Call update_task_status when done (status='done') or failed (status='failed')
 

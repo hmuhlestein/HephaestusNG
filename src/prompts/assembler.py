@@ -337,10 +337,10 @@ Hephaestus MCP (task management):
 • save_memory - Save discoveries for other agents
 • spawn_agent - Spawn a specialized Hephaestus subagent (see below)
 
-Qdrant MCP (memory search):
+Memory search:
 • search_memory - Search agent memories semantically
   Use when: encountering errors, needing implementation details, finding related work
-  Example: "qdrant-find 'PostgreSQL connection timeout solutions'"
+  Example: search_memory("PostgreSQL connection timeout solutions")
   Note: Pre-loaded context covers most needs; search for specifics
 
 ═══ SUBAGENT SPAWNING ═══
@@ -359,7 +359,7 @@ Note: workflow_id is required for task creation. Use your current workflow_id.
 
 ═══ WORKFLOW ═══
 1. Work on your task using pre-loaded context
-2. Use qdrant-find if you need specific information (errors, patterns, implementations)
+2. Use vector search if you need specific information (errors, patterns, implementations)
 3. Save important discoveries via save_memory (error fixes, decisions, warnings)
 4. Spawn subagents for specialized work (architecture, development, review, etc.)
 5. Call update_task_status when done (status='done') or failed (status='failed')
