@@ -893,6 +893,19 @@ class PhaseManager:
             if not orchestrator or orchestrator.config.type == "sequential":
                 return self._handle_sequential_mode(session, phase, execution, summary)
 
+            # Sync the persisted GOTO counter into the orchestrator before
+            # evaluating. WorkflowOrchestrator.total_gotos is in-memory only,
+            # and a fresh PhaseManager (hence a fresh, uncached orchestrator)
+            # gets constructed on nearly every mark_phase_complete call (see
+            # task_completion_service.py's fire_spec_gate_if_ready and
+            # autopilot/orchestrator.py's periodic sweep) — without this, the
+            # counter silently reset to 0 every time and max_total_gotos never
+            # actually fired, letting a failing gate goto-loop forever.
+            workflow_row = (
+                session.query(Workflow).filter_by(id=phase.workflow_id).first()
+            )
+            orchestrator.total_gotos = (workflow_row.total_gotos or 0) if workflow_row else 0
+
             # Evaluating mode - use orchestrator to decide flow
             phase_history = self._get_phase_history(session, phase.workflow_id)
             evaluation = orchestrator.evaluate(
@@ -900,6 +913,12 @@ class PhaseManager:
                 phase_output=phase_output or {},
                 phase_history=phase_history,
             )
+
+            if workflow_row is not None and orchestrator.total_gotos != (
+                workflow_row.total_gotos or 0
+            ):
+                workflow_row.total_gotos = orchestrator.total_gotos
+                session.commit()
 
             logger.info(
                 f"Orchestrator evaluated {phase.name}: "
