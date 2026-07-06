@@ -2176,8 +2176,53 @@ async def get_project_design_status(project_id: str, filename: str):
                 "completed_at": feat.completed_at.isoformat() if feat.completed_at else None,
             })
 
-        # Placeholder: if no DB features yet, show a single pending feature
-        # so the UI has something to display while waiting for Phase 0
+        # Feature Architect (Phase 0) pseudo-feature: it decomposes the design
+        # into the Feature rows above, but is itself a separate Workflow (see
+        # docs/LOOP_ENGINEERING_REVIEW.md -- a Feature:Workflow is 1:1, so
+        # Phase 0 can't be phase order=0 within one of them; it must be its
+        # own workflow that runs BEFORE those exist). That made it invisible
+        # here: nothing surfaced its live task/agent while it was running, so
+        # this list only ever showed a static "pending" placeholder or the
+        # real decomposed features, with no way to watch Phase 0 itself.
+        # Build a feature-shaped entry from its actual task/agent data (using
+        # the same shape as real features above) so FeatureRow renders it
+        # identically -- including the clickable agent-id link per task.
+        phase0_workflows = [
+            wf for wf in matching_workflows if wf.definition_id == "autopilot-phase0"
+        ]
+        if phase0_workflows:
+            phase0_wf = phase0_workflows[0]  # most recent (matching_workflows is desc-ordered)
+            phase0_tasks = [t for t in all_tasks if t["workflow_id"] == phase0_wf.id]
+            if phase0_tasks:
+                phase0_status = (
+                    "completed"
+                    if all(t["status"] == "done" for t in phase0_tasks)
+                    else "failed"
+                    if any(t["status"] == "failed" for t in phase0_tasks)
+                    else "active"
+                    if any(t["status"] in ("assigned", "in_progress") for t in phase0_tasks)
+                    else "pending"
+                )
+                features.insert(
+                    0,
+                    {
+                        "id": f"phase0-{phase0_wf.id}",
+                        "name": "Feature Architect",
+                        "feature_key": "phase-0-decomposition",
+                        "workflow_id": phase0_wf.id,
+                        "status": phase0_status,
+                        "scope": "Decomposes the design into the feature(s) below",
+                        "tasks": phase0_tasks,
+                        "created_at": phase0_wf.created_at.isoformat()
+                        if phase0_wf.created_at
+                        else None,
+                        "completed_at": None,
+                    },
+                )
+
+        # Placeholder: if no DB features yet (and no Phase 0 activity to show
+        # either), show a single pending feature so the UI has something to
+        # display while waiting for Phase 0 to even start.
         if not features:
             features.append({
                 "id": f"placeholder-{filename}",

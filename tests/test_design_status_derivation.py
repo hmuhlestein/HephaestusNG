@@ -70,14 +70,16 @@ def status_env(tmp_path, monkeypatch):
     }
 
 
-def _make_workflow(session, design_id, filename, status="active", **overrides):
+def _make_workflow(
+    session, design_id, filename, status="active", definition_id="autopilot", **overrides
+):
     wf_id = f"wf-{uuid.uuid4().hex[:8]}"
     wf = Workflow(
         id=wf_id,
         name="Test Workflow",
         phases_folder_path="/tmp",
         status=status,
-        definition_id="autopilot",
+        definition_id=definition_id,
         design_id=design_id,
         launch_params={"design_document": f"docs/design/{filename}"},
         **overrides,
@@ -273,3 +275,136 @@ class TestDesignOverallStatusDerivation:
             get_project_design_status(status_env["project_id"], status_env["filename"])
         )
         assert result["status"] == "active"
+
+
+class TestPhase0FeatureArchitectVisibility:
+    """Phase 0 (Feature Architect) decomposes a design into the Feature rows
+    the rest of this endpoint already surfaces, but is itself a separate
+    Workflow (1:1 Feature:Workflow means it can't be phase order=0 within
+    one). Nothing showed its live task/agent while it ran -- the Design
+    Queue UI only ever showed a static "pending" placeholder or the real
+    decomposed features, with no way to watch Phase 0 itself."""
+
+    def test_running_phase0_appears_as_pseudo_feature(self, status_env):
+        from src.mcp.autopilot_api import get_project_design_status
+
+        manager = status_env["manager"]
+        session = manager.get_session()
+        try:
+            phase0_wf_id = _make_workflow(
+                session,
+                status_env["design_id"],
+                status_env["filename"],
+                status="active",
+                definition_id="autopilot-phase0",
+            )
+            _make_task(session, phase0_wf_id, "in_progress")
+        finally:
+            session.close()
+
+        result = _run(
+            get_project_design_status(status_env["project_id"], status_env["filename"])
+        )
+
+        phase0_entries = [f for f in result["features"] if f["name"] == "Feature Architect"]
+        assert len(phase0_entries) == 1
+        assert phase0_entries[0]["status"] == "active"
+        assert phase0_entries[0]["workflow_id"] == phase0_wf_id
+        assert len(phase0_entries[0]["tasks"]) == 1
+
+    def test_phase0_entry_appears_before_real_features(self, status_env):
+        """Feature Architect ran first chronologically -- it should list
+        first, not get buried after the features it produced."""
+        from src.mcp.autopilot_api import get_project_design_status
+
+        manager = status_env["manager"]
+        session = manager.get_session()
+        try:
+            phase0_wf_id = _make_workflow(
+                session,
+                status_env["design_id"],
+                status_env["filename"],
+                status="completed",
+                definition_id="autopilot-phase0",
+            )
+            _make_task(session, phase0_wf_id, "done")
+
+            feature_wf_id = _make_workflow(
+                session, status_env["design_id"], status_env["filename"]
+            )
+            _make_feature(session, status_env["design_id"], feature_wf_id, status="active")
+        finally:
+            session.close()
+
+        result = _run(
+            get_project_design_status(status_env["project_id"], status_env["filename"])
+        )
+
+        assert result["features"][0]["name"] == "Feature Architect"
+
+    def test_completed_phase0_shows_completed_status(self, status_env):
+        from src.mcp.autopilot_api import get_project_design_status
+
+        manager = status_env["manager"]
+        session = manager.get_session()
+        try:
+            phase0_wf_id = _make_workflow(
+                session,
+                status_env["design_id"],
+                status_env["filename"],
+                status="completed",
+                definition_id="autopilot-phase0",
+            )
+            _make_task(session, phase0_wf_id, "done")
+        finally:
+            session.close()
+
+        result = _run(
+            get_project_design_status(status_env["project_id"], status_env["filename"])
+        )
+
+        phase0_entry = next(f for f in result["features"] if f["name"] == "Feature Architect")
+        assert phase0_entry["status"] == "completed"
+
+    def test_no_phase0_workflow_no_pseudo_feature_added(self, status_env):
+        """Regression: must not fabricate a Feature Architect entry for
+        designs that never had a Phase 0 workflow at all."""
+        from src.mcp.autopilot_api import get_project_design_status
+
+        manager = status_env["manager"]
+        session = manager.get_session()
+        try:
+            wf_id = _make_workflow(session, status_env["design_id"], status_env["filename"])
+            _make_feature(session, status_env["design_id"], wf_id, status="active")
+        finally:
+            session.close()
+
+        result = _run(
+            get_project_design_status(status_env["project_id"], status_env["filename"])
+        )
+
+        assert not any(f["name"] == "Feature Architect" for f in result["features"])
+
+    def test_no_phase0_task_yet_no_pseudo_feature_added(self, status_env):
+        """A Phase 0 Workflow row exists but no task has been created for it
+        yet -- don't show an empty, misleading entry."""
+        from src.mcp.autopilot_api import get_project_design_status
+
+        manager = status_env["manager"]
+        session = manager.get_session()
+        try:
+            _make_workflow(
+                session,
+                status_env["design_id"],
+                status_env["filename"],
+                status="active",
+                definition_id="autopilot-phase0",
+            )
+        finally:
+            session.close()
+
+        result = _run(
+            get_project_design_status(status_env["project_id"], status_env["filename"])
+        )
+
+        assert not any(f["name"] == "Feature Architect" for f in result["features"])
