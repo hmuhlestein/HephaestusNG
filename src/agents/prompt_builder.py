@@ -129,7 +129,7 @@ class AgentPromptBuilder:
 
                     if phase_ctx:
                         logger.info(
-                            f"Phase context found! Phase name: {phase_ctx.phase_definition.name}"
+                            f"Phase context found! Phase name: {phase_ctx.phase.name}"
                         )
                         logger.info(
                             f"Phase context all_phases count: {len(phase_ctx.all_phases)}"
