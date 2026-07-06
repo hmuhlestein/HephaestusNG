@@ -2154,7 +2154,17 @@ async def update_task_status(
         if request.status == "done" and task.phase_id:
             rejection = TaskCompletionService.verify_output_artifact(session, task)
             if rejection:
-                return rejection
+                # rejection is a plain {"status", "message"} dict (not the
+                # response_model's shape) — returning it directly makes
+                # FastAPI's response_model validation fail with a 500 (missing
+                # 'success'/'termination_scheduled'), which hides the actual
+                # "missing output artifact" reason from the agent and instead
+                # just looks like a broken server, causing blind retries.
+                return UpdateTaskStatusResponse(
+                    success=False,
+                    message=rejection.get("message", "Output validation failed"),
+                    termination_scheduled=False,
+                )
 
         # 3b-2. Auto-create tickets from forensics_analysis's own report —
         # "Tickets created for actionable findings" is mandated but easily
