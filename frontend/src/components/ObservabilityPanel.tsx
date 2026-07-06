@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useState, useCallback } from 'react';
+import React, { useRef, useEffect, useState, useCallback, useMemo } from 'react';
 import { motion } from 'framer-motion';
 import {
   Copy,
@@ -56,6 +56,16 @@ const ObservabilityPanel: React.FC<ObservabilityPanelProps> = ({
   const lastScrollPosition = useRef(0);
   const initialScrollDone = useRef(false);
 
+  // Filter out separator lines
+  const filteredOutput = useMemo(() => {
+    if (!output.output) return '';
+    return output.output.split('\n').filter(line => {
+      // Filter out horizontal separator lines (────────────────────...)
+      if (/^[─━═▬▪▫\-]{20,}$/.test(line.trim())) return false;
+      return true;
+    }).join('\n');
+  }, [output.output]);
+
   // Auto-scroll to bottom on initial mount
   useEffect(() => {
     if (outputRef.current && !initialScrollDone.current) {
@@ -111,10 +121,10 @@ const ObservabilityPanel: React.FC<ObservabilityPanelProps> = ({
   };
 
   // Calculate line count
-  const lineCount = output.output ? output.output.split('\n').length : 0;
+  const lineCount = filteredOutput ? filteredOutput.split('\n').length : 0;
 
   // Calculate data size
-  const dataSize = output.output ? (output.output.length / 1024).toFixed(1) : '0';
+  const dataSize = filteredOutput ? (filteredOutput.length / 1024).toFixed(1) : '0';
 
   const isPausedEffective = isPaused || localPaused;
 
@@ -191,7 +201,7 @@ const ObservabilityPanel: React.FC<ObservabilityPanelProps> = ({
               fontFamily: 'Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace'
             }}
           >
-            {output.output || 'Waiting for output...'}
+            {filteredOutput || 'Waiting for output...'}
           </pre>
 
           {!autoScroll && (
@@ -316,11 +326,11 @@ const ObservabilityPanel: React.FC<ObservabilityPanelProps> = ({
               fontSize: '10px',
             }}
           >
-            {output.output || 'No output yet...'}
+            {filteredOutput || 'No output yet...'}
           </pre>
         )}
 
-        {!autoScroll && output.output && (
+        {!autoScroll && filteredOutput && (
           <motion.button
             initial={{ opacity: 0, scale: 0.9 }}
             animate={{ opacity: 1, scale: 1 }}
