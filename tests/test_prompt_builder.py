@@ -11,6 +11,8 @@ with a validation error.
 """
 
 from src.agents.prompt_builder import AgentPromptBuilder
+from src.phases.models import PhaseContext
+from src.sdk.models import Phase as SdkPhase
 
 
 class _FakeTask:
@@ -50,6 +52,59 @@ class TestCreateTaskToolSignature:
             line for line in message.splitlines() if "hephaestus_create_task(" in line
         )
         assert "agent_id=" not in create_task_line
+
+
+def _make_phase_context(phase_id="phase-789"):
+    sdk_phase = SdkPhase(
+        id=1,
+        name="Test Phase",
+        description="Do the thing",
+        done_definitions=["done"],
+        working_directory=".",
+    )
+    return PhaseContext(
+        phase_id=phase_id,
+        workflow_id="wf-456",
+        phase=sdk_phase,
+        all_phases=[sdk_phase],
+        current_status="in_progress",
+    )
+
+
+class _FakePhaseManagerWithContext:
+    """Real PhaseContext/Phase objects, not Mocks -- so an attribute-name
+    mismatch (e.g. .phase_definition vs .phase) raises exactly like it would
+    in production instead of silently succeeding against a Mock's
+    auto-generated attributes."""
+
+    def __init__(self):
+        self.workflow_id = "wf-456"
+
+    def get_phase_context(self, phase_id):
+        return _make_phase_context(phase_id)
+
+    def get_workflow_config(self, workflow_id):
+        return _FakeWorkflowConfig(False)
+
+
+class TestPhaseContextSection:
+    """Regression: format_initial_message referenced
+    phase_ctx.phase_definition.name, but PhaseContext's actual field is
+    named `phase` -- every single phase-agent prompt hit an AttributeError
+    here (caught and logged, not crashed), silently dropping the entire
+    phase-context section (all_phases, current phase description) from
+    every agent's prompt. Found live via repeated
+    "Exception getting phase context ... 'PhaseContext' object has no
+    attribute 'phase_definition'" in backend.log across many different
+    phase_ids over an hour of a real run.
+    """
+
+    def test_phase_context_section_included_when_available(self):
+        builder = AgentPromptBuilder(phase_manager=_FakePhaseManagerWithContext())
+        message = builder.format_initial_message(
+            task=_FakeTask(), agent_id="agent-abc"
+        )
+        assert "Test Phase" in message
 
 
 class TestUpdateTaskStatusToolSignature:
