@@ -382,6 +382,15 @@ class Workflow(Base):
     )
     feature_id = Column(String, ForeignKey("features.id"), nullable=True)
 
+    # Persisted GOTO counter for the evaluating orchestrator's max_total_gotos
+    # safety limit. WorkflowOrchestrator instances are recreated on almost
+    # every mark_phase_complete call (fresh PhaseManager() in
+    # task_completion_service.py and autopilot/orchestrator.py), so an
+    # in-memory-only counter reset to 0 every time — the limit never actually
+    # fired, letting a phase goto-loop forever. PhaseManager.mark_phase_complete
+    # now syncs orchestrator.total_gotos to/from this column around each call.
+    total_gotos = Column(Integer, default=0, nullable=False)
+
     # Relationships
     definition = relationship("WorkflowDefinition", back_populates="executions")
     design = relationship(
@@ -1255,6 +1264,7 @@ class DatabaseManager:
         self._migrate_task_dependency_columns()
         self._migrate_autopilot_designs_columns()
         self._migrate_feature_model_columns()
+        self._migrate_total_gotos_column()
 
     def _create_fts5_tables(self):
         """Create FTS5 virtual tables and triggers for ticket search."""
@@ -1617,6 +1627,26 @@ class DatabaseManager:
             logger.info("Ensured features table exists")
         except Exception as e:
             logger.debug(f"features table creation (may already exist): {e}")
+
+    def _migrate_total_gotos_column(self):
+        """Add workflows.total_gotos for existing databases.
+
+        Idempotent - safe to call on every startup.
+        """
+        try:
+            with self.engine.connect() as conn:
+                try:
+                    conn.execute(
+                        text(
+                            "ALTER TABLE workflows ADD COLUMN total_gotos INTEGER DEFAULT 0 NOT NULL"
+                        )
+                    )
+                except Exception:
+                    pass  # Column already exists
+                conn.commit()
+                logger.info("Migrated workflows.total_gotos column")
+        except Exception as e:
+            logger.debug(f"workflows.total_gotos migration (may already exist): {e}")
 
     def get_session(self):
         """Get a database session."""

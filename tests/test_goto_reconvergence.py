@@ -294,6 +294,66 @@ def test_goto_does_not_skip_phases(db_session, db_manager, phase_ids):
     assert db_session.query(Workflow).first().status == "completed"
 
 
+def test_total_gotos_persists_across_fresh_phase_manager_instances(
+    db_session, db_manager, phase_ids
+):
+    """Regression: production creates a brand-new PhaseManager() (hence an
+    uncached WorkflowOrchestrator) on nearly every mark_phase_complete call
+    -- task_completion_service.py's fire_spec_gate_if_ready and
+    autopilot/orchestrator.py's periodic sweep both do this. Since
+    WorkflowOrchestrator.total_gotos was in-memory only, it silently reset to
+    0 every time, so max_total_gotos (3, per phase_ids' orchestrator_config)
+    never actually fired and a failing gate could goto-loop forever.
+
+    Drives the phase_1 <-> phase_2 goto cycle with a FRESH PhaseManager
+    instance each call (as production actually does) and asserts the 4th
+    goto attempt is forced to 'continue' instead of looping indefinitely.
+    """
+    from src.phases.phase_manager import PhaseManager
+
+    def simulate_monitor(result):
+        if result.get("should_continue") and result.get("target_phase_id"):
+            db_session.query(PhaseExecution).filter_by(
+                phase_id=result["target_phase_id"]
+            ).update({"status": "in_progress", "started_at": datetime.utcnow()})
+            db_session.commit()
+
+    db_session.query(PhaseExecution).filter_by(phase_id=phase_ids[0]).update(
+        {"status": "in_progress"}
+    )
+    db_session.commit()
+
+    # Complete phase 1 with a fresh PhaseManager (as every real call site does)
+    simulate_monitor(
+        PhaseManager(db_manager).mark_phase_complete(
+            phase_ids[0], "P1 done", phase_output={"score": 0.8}
+        )
+    )
+
+    actions = []
+    for i in range(4):
+        result = PhaseManager(db_manager).mark_phase_complete(
+            phase_ids[1], f"P2 failed #{i}", phase_output={"score": 0.3}
+        )
+        actions.append(result["action"])
+        simulate_monitor(result)
+        if result["action"] == "goto":
+            # Re-complete phase 1 (fresh instance again) to set up the next cycle
+            simulate_monitor(
+                PhaseManager(db_manager).mark_phase_complete(
+                    phase_ids[0], f"P1 re-done #{i}", phase_output={"score": 0.9}
+                )
+            )
+
+    assert actions == ["goto", "goto", "goto", "continue"], (
+        f"expected the 4th cycle to be forced to 'continue' once "
+        f"max_total_gotos=3 was exceeded, got {actions}"
+    )
+
+    workflow = db_session.query(Workflow).first()
+    assert workflow.total_gotos == 4
+
+
 def test_start_next_phase_returns_true_for_completed(db_session, db_manager, phase_ids):
     """3c fix: _start_next_phase returns True for completed phases (not just pending)."""
     from src.phases.phase_manager import PhaseManager
