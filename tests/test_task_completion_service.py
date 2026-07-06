@@ -20,8 +20,14 @@ def db(tmp_path):
     return manager
 
 
-def _seed(db, tmp_path, phase_name, phase_id=None):
-    """Seed a Workflow + Phase + Task, return (session, task)."""
+def _seed(db, tmp_path, phase_name, phase_id=None, outputs=None):
+    """Seed a Workflow + Phase + Task, return (session, task).
+
+    outputs, if given, is JSON-serialized before insert to match the real
+    production write path (Phase.outputs is a Text column; see
+    phase_manager.py's serialize_for_text)."""
+    import json
+
     session = db.get_session()
     workflow_id = f"wf-{uuid.uuid4().hex[:8]}"
     phase_id = phase_id or f"phase-{uuid.uuid4().hex[:8]}"
@@ -45,6 +51,7 @@ def _seed(db, tmp_path, phase_name, phase_id=None):
             name=phase_name,
             description="d",
             done_definitions=["done"],
+            outputs=json.dumps(outputs) if outputs is not None else None,
         )
     )
     session.add(
@@ -96,30 +103,29 @@ class TestVerifyOutputArtifactHephaestusPath:
         assert refreshed.status == "failed"
         session.close()
 
-    def test_docs_path_still_works_for_existing_phases(self, db, tmp_path, monkeypatch):
+    def test_docs_path_still_works_for_existing_phases(self, db, tmp_path):
         """Regression: adding the .hephaestus/ candidate must not break the
-        existing docs/<file> search used by every other gated phase."""
-        from src.autopilot import spec
-
-        monkeypatch.setitem(spec.PHASE_OUTPUT_ARTIFACTS, "qa_validation", "qa_result.json")
-
-        session, task = _seed(db, tmp_path, "qa_validation")
+        existing docs/<file> search used by every other gated phase. Output
+        is now derived from the phase's own declared outputs (Phase.outputs),
+        not a hardcoded dict."""
+        session, task = _seed(
+            db, tmp_path, "qa_validation", outputs=["qa_report.md", "qa_result.json"]
+        )
         (tmp_path / "docs").mkdir()
         (tmp_path / "docs" / "qa_result.json").write_text("{}")
+        (tmp_path / "docs" / "qa_report.md").write_text("# qa")
 
         result = TaskCompletionService.verify_output_artifact(session, task)
 
         assert result is None  # found via docs/ path, unaffected by the new candidate
         session.close()
 
-    def test_worktree_root_path_still_works(self, db, tmp_path, monkeypatch):
+    def test_worktree_root_path_still_works(self, db, tmp_path):
         """Regression: the worktree-root <file> search path (no docs/ prefix)
         must still work after adding the .hephaestus/ candidate."""
-        from src.autopilot import spec
-
-        monkeypatch.setitem(spec.PHASE_OUTPUT_ARTIFACTS, "architecture_design", "architecture.md")
-
-        session, task = _seed(db, tmp_path, "architecture_design")
+        session, task = _seed(
+            db, tmp_path, "architecture_design", outputs=["architecture.md"]
+        )
         (tmp_path / "architecture.md").write_text("# arch")
 
         result = TaskCompletionService.verify_output_artifact(session, task)
@@ -128,8 +134,76 @@ class TestVerifyOutputArtifactHephaestusPath:
         session.close()
 
     def test_no_declared_output_for_phase_returns_none(self, db, tmp_path):
-        """Phases with no PHASE_OUTPUT_ARTIFACTS entry get no enforcement."""
+        """Phases with no declared outputs (or only non-file, descriptive
+        deliverables) get no enforcement."""
         session, task = _seed(db, tmp_path, "some_undeclared_phase")
+
+        result = TaskCompletionService.verify_output_artifact(session, task)
+
+        assert result is None
+        session.close()
+
+    def test_non_file_descriptive_outputs_are_ignored(self, db, tmp_path):
+        """development/git_commit_push declare deliverables like 'source
+        code in project path' that aren't checkable files — must not be
+        treated as a missing artifact."""
+        session, task = _seed(
+            db, tmp_path, "development", outputs=["source code in project path"]
+        )
+
+        result = TaskCompletionService.verify_output_artifact(session, task)
+
+        assert result is None
+        session.close()
+
+    def test_previously_unenforced_phase_now_gets_hard_floor(self, db, tmp_path):
+        """The systemic fix: adversarial_review/security_review (and any
+        other phase with a declared outputs: file) previously had zero
+        enforcement — only 4 phases were in a hardcoded dict. A real smoke
+        run merged successfully despite adversarial_review_report.md and
+        security_report.md both being missing. Now derived straight from
+        the phase's own YAML outputs, so this can't happen silently."""
+        session, task = _seed(
+            db, tmp_path, "adversarial_review", outputs=["adversarial_review_report.md"]
+        )
+        # adversarial_review_report.md deliberately not written
+
+        result = TaskCompletionService.verify_output_artifact(session, task)
+
+        assert result is not None
+        assert result["status"] == "failed"
+        assert "adversarial_review_report.md" in result["message"]
+        session.close()
+
+    def test_multiple_declared_outputs_all_required(self, db, tmp_path):
+        """qa_validation declares two files (qa_report.md, qa_result.json).
+        Writing only one must still fail — every declared file is required."""
+        session, task = _seed(
+            db, tmp_path, "qa_validation", outputs=["qa_report.md", "qa_result.json"]
+        )
+        (tmp_path / "docs").mkdir()
+        (tmp_path / "docs" / "qa_result.json").write_text("{}")
+        # qa_report.md deliberately not written
+
+        result = TaskCompletionService.verify_output_artifact(session, task)
+
+        assert result is not None
+        assert "qa_report.md" in result["message"]
+        assert "qa_result.json" not in result["message"]
+        session.close()
+
+    def test_placeholder_path_segments_are_not_enforced(self, db, tmp_path):
+        """Phase 0's outputs: list includes '.hephaestus/features/<id>/scope.md'
+        — a templated path with no concrete '<id>', not a real filename to
+        check. Only the concrete features.json entry should be enforced."""
+        session, task = _seed(
+            db,
+            tmp_path,
+            "Feature Architect",
+            outputs=[".hephaestus/features.json", ".hephaestus/features/<id>/scope.md"],
+        )
+        (tmp_path / ".hephaestus").mkdir()
+        (tmp_path / ".hephaestus" / "features.json").write_text("{}")
 
         result = TaskCompletionService.verify_output_artifact(session, task)
 
