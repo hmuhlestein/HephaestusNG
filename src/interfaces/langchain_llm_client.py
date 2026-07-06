@@ -1092,12 +1092,6 @@ Return as JSON with keys: state, decision, message, reasoning, confidence"""
 
         return f"""You are an AI agent in the Hephaestus orchestration system.
 
-═══ TASK ═══
-{task.get("enriched_description", task.get("description", ""))}
-
-COMPLETION CRITERIA:
-{task.get("done_definition", "Complete the assigned task")}
-
 ═══ PRE-LOADED CONTEXT ═══
 Top 10 relevant memories (use vector search for more):
 {memory_context}

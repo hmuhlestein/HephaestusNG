@@ -184,8 +184,6 @@ class PromptAssembler:
         # Build system prompt
         system_prompt = self._build_system_prompt(
             description=description,
-            task_description=task_description,
-            task_done_definition=task_done_definition,
             project_context=project_context,
             memories=memories or [],
             agent_id=agent_id,
@@ -287,8 +285,6 @@ class PromptAssembler:
     def _build_system_prompt(
         self,
         description: str,
-        task_description: Optional[str],
-        task_done_definition: Optional[str],
         project_context: str,
         memories: List[Dict[str, Any]],
         agent_id: Optional[str] = None,
@@ -297,8 +293,10 @@ class PromptAssembler:
     ) -> str:
         """Build the system prompt the LLM receives.
 
-        Mirrors the structure in ``LLMInterface.generate_agent_prompt``
-        but uses the phase description as the root.
+        Intentionally does NOT include task description or completion
+        criteria — those arrive in the user turn (initial message) with
+        concrete IDs and worktree path already interpolated.  Repeating
+        them here wastes context tokens and creates two sources of truth.
         """
         memory_context = (
             "\n".join([f"- {mem.get('content', '')[:200]}" for mem in memories[:10]])
@@ -306,21 +304,12 @@ class PromptAssembler:
             else "(no memories loaded)"
         )
 
-        task_desc = task_description or "(no task description)"
-        task_done = task_done_definition or "Complete the assigned task"
-
         # Phase description becomes the agent identity
         identity = (
             description or "You are an AI agent in the Hephaestus orchestration system."
         )
 
         return f"""{identity}
-
-═══ TASK ═══
-{task_desc}
-
-COMPLETION CRITERIA:
-{task_done}
 
 ═══ PRE-LOADED CONTEXT ═══
 Top 10 relevant memories (use search_memory for more):

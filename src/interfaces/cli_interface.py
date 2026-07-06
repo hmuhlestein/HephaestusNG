@@ -187,51 +187,6 @@ class CLIAgentInterface(ABC):
                 parts.append(f"{label}={val}")
         return "IDs: " + " ".join(parts) if parts else ""
 
-    def _build_user_prompt(self, system_prompt: str, **kwargs) -> str:
-        """Build a minimal user prompt from system prompt.
-
-        Extracts task-specific sections and IDs. Falls back to full
-        prompt if no task section is found.
-
-        Args:
-            system_prompt: Full system prompt
-            **kwargs: May contain agent_id, task_id, workflow_id, phase_id
-
-        Returns:
-            Minimal user prompt string
-        """
-        # Extract task section from system prompt
-        task_lines = []
-        in_task_section = False
-        for line in system_prompt.split("\n"):
-            if line.startswith("=== TASK ===") or line.startswith("═══ TASK ═══"):
-                in_task_section = True
-            elif (
-                line.startswith("=== ") or line.startswith("═══ ")
-            ) and in_task_section:
-                in_task_section = False
-            elif in_task_section:
-                task_lines.append(line)
-
-        task_text = "\n".join(task_lines).strip()
-
-        # Build IDs line
-        ids = self._extract_ids_from_prompt(system_prompt)
-        # Override with kwargs
-        for key in ["agent_id", "task_id", "workflow_id", "phase_id"]:
-            if key in kwargs and kwargs[key]:
-                ids[key] = kwargs[key]
-        ids_line = self._build_ids_line(ids)
-
-        # Build prompt
-        parts = []
-        if task_text:
-            parts.append(task_text)
-        if ids_line:
-            parts.append(ids_line)
-
-        return "\n".join(parts) if parts else system_prompt
-
     def get_tui_status_patterns(self) -> List[str]:
         """Return patterns that are normal TUI status bar rendering.
 
