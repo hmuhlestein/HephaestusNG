@@ -217,8 +217,10 @@ export const apiService = {
   },
 
   // System Overview
-  getSystemOverview: async (): Promise<any> => {
-    const { data } = await api.get('/system-overview');
+  getSystemOverview: async (workflowId?: string | null): Promise<any> => {
+    const { data } = await api.get('/system-overview', {
+      params: workflowId ? { workflow_id: workflowId } : undefined,
+    });
     return data;
   },
 

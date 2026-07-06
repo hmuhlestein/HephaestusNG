@@ -692,12 +692,40 @@ class FrontendAPI:
         finally:
             session.close()
 
-    async def get_workflow_info(self) -> Dict[str, Any]:
-        """Get current workflow information."""
+    async def get_workflow_info(self, workflow_id: Optional[str] = None) -> Dict[str, Any]:
+        """Get current workflow information.
+
+        Args:
+            workflow_id: If given, return this specific workflow (e.g. the
+                one the frontend has selected). If omitted, fall back to the
+                most recently created active workflow -- NOT session.query
+                (Workflow).first(), which had no ORDER BY and returned
+                whatever row SQLite's B-tree happened to store first for the
+                UUID-string primary key: an arbitrary workflow unrelated to
+                "current" or "selected", so this view showed a effectively
+                random workflow's phases (sometimes a just-started Phase 0
+                run with a single "Feature Architect" phase, sometimes an
+                unrelated older pipeline) with no way to pick which.
+        """
         session = self.db_manager.get_session()
         try:
-            # Get the current workflow
-            workflow = session.query(Workflow).first()
+            if workflow_id:
+                workflow = session.query(Workflow).filter_by(id=workflow_id).first()
+            else:
+                workflow = (
+                    session.query(Workflow)
+                    .filter_by(status="active")
+                    .order_by(Workflow.created_at.desc())
+                    .first()
+                )
+                if not workflow:
+                    # No active workflow -- fall back to the most recent of
+                    # any status rather than showing nothing.
+                    workflow = (
+                        session.query(Workflow)
+                        .order_by(Workflow.created_at.desc())
+                        .first()
+                    )
             if not workflow:
                 return {
                     "id": None,
@@ -807,16 +835,16 @@ class FrontendAPI:
             return {
                 "id": workflow.id,
                 "name": workflow.name,
-                "status": "active",
+                "status": workflow.status or "active",
                 "total_phases": len(phases),
                 "phases": phase_data,
             }
         finally:
             session.close()
 
-    async def get_phases(self) -> List[Dict[str, Any]]:
+    async def get_phases(self, workflow_id: Optional[str] = None) -> List[Dict[str, Any]]:
         """Get all phases with their metrics."""
-        workflow_info = await self.get_workflow_info()
+        workflow_info = await self.get_workflow_info(workflow_id)
         return workflow_info.get("phases", [])
 
     async def get_phase_details(self, phase_id: str) -> Dict[str, Any]:
@@ -1298,7 +1326,7 @@ class FrontendAPI:
         finally:
             session.close()
 
-    async def get_system_overview(self) -> Dict[str, Any]:
+    async def get_system_overview(self, workflow_id: Optional[str] = None) -> Dict[str, Any]:
         """Get comprehensive system overview data."""
         from datetime import datetime, timedelta
 
@@ -1351,7 +1379,7 @@ class FrontendAPI:
                     )
 
             # Get workflow info with phases
-            workflow_info = await self.get_workflow_info()
+            workflow_info = await self.get_workflow_info(workflow_id)
 
             # Calculate system health (average alignment score)
             avg_alignment = 0
@@ -2790,9 +2818,9 @@ def create_frontend_routes(
         return await frontend_api.get_workflow_info()
 
     @router.get("/phases")
-    async def get_phases():
+    async def get_phases(workflow_id: Optional[str] = None):
         """Get all phases with metrics."""
-        return await frontend_api.get_phases()
+        return await frontend_api.get_phases(workflow_id)
 
     @router.get("/workflow-definitions/{definition_id}/phases")
     async def get_definition_phases(definition_id: str):
@@ -2863,9 +2891,9 @@ def create_frontend_routes(
         return await frontend_api.get_steering_interventions(agent_id, limit)
 
     @router.get("/system-overview")
-    async def get_system_overview():
+    async def get_system_overview(workflow_id: Optional[str] = None):
         """Get comprehensive system overview data."""
-        return await frontend_api.get_system_overview()
+        return await frontend_api.get_system_overview(workflow_id)
 
     @router.get("/results")
     async def get_results(

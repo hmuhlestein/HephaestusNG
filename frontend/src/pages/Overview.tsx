@@ -39,7 +39,7 @@ export default function Overview() {
 
   const { data: systemData, isLoading, error, refetch } = useQuery({
     queryKey: ['system-overview', selectedExecutionId],
-    queryFn: apiService.getSystemOverview,
+    queryFn: () => apiService.getSystemOverview(selectedExecutionId),
     refetchInterval: 5000, // Refresh every 5 seconds
   });
 

@@ -508,7 +508,7 @@ const LaunchWorkflowModal: React.FC<LaunchWorkflowModalProps> = ({
           <DialogTitle className="flex items-center gap-2">
             <Rocket className="w-5 h-5 text-blue-500" />
             {step === 'select' && 'Launch New Workflow'}
-            {step === 'form' && 'Configure Workflow'}
+            {step === 'form' && 'Launch Workflow'}
             {step === 'preview' && 'Review & Launch'}
           </DialogTitle>
         </DialogHeader>
