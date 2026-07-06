@@ -379,7 +379,17 @@ interface SortableDesignItemProps {
 }
 
 const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, isActive, onRemove, onDetail, onTaskClick, onPauseResume, status, workflowId, projectId }) => {
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(() => {
+    // Restore expanded state from localStorage
+    const saved = localStorage.getItem('autopilot-expanded-designs');
+    if (saved) {
+      try {
+        const expandedSet = new Set(JSON.parse(saved));
+        return expandedSet.has(item.filename);
+      } catch { return false; }
+    }
+    return false;
+  });
   const [features, setFeatures] = useState<any[]>([]);
 
   const fetchFeatures = async () => {
@@ -404,7 +414,23 @@ const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, is
 
   const handleToggleExpand = async (e: React.MouseEvent) => {
     e.stopPropagation();
-    setExpanded(!expanded);
+    const newExpanded = !expanded;
+    setExpanded(newExpanded);
+    
+    // Persist expanded state to localStorage
+    const saved = localStorage.getItem('autopilot-expanded-designs');
+    let expandedSet: Set<string>;
+    try {
+      expandedSet = new Set(saved ? JSON.parse(saved) : []);
+    } catch {
+      expandedSet = new Set();
+    }
+    if (newExpanded) {
+      expandedSet.add(item.filename);
+    } else {
+      expandedSet.delete(item.filename);
+    }
+    localStorage.setItem('autopilot-expanded-designs', JSON.stringify([...expandedSet]));
   };
 
   const {
@@ -582,7 +608,17 @@ const FeatureRow: React.FC<{
   projectId?: string;
   onFeatureUpdate?: () => void;
 }> = ({ feature, onTaskClick, onFeatureUpdate }) => {
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(() => {
+    // Restore expanded state from localStorage
+    const saved = localStorage.getItem('autopilot-expanded-features');
+    if (saved) {
+      try {
+        const expandedSet = new Set(JSON.parse(saved));
+        return expandedSet.has(feature.id);
+      } catch { return false; }
+    }
+    return false;
+  });
   const [pausing, setPausing] = useState(false);
   const tasks = feature.tasks || [];
   const doneCount = tasks.filter((t: any) => t.status === 'done').length;
@@ -610,7 +646,24 @@ const FeatureRow: React.FC<{
       <div className="flex items-center gap-3 px-3 py-2">
         <div
           className="flex items-center gap-3 flex-1 min-w-0 cursor-pointer hover:bg-gray-50 transition-colors rounded"
-          onClick={() => setExpanded(!expanded)}
+          onClick={() => {
+            const newExpanded = !expanded;
+            setExpanded(newExpanded);
+            // Persist expanded state to localStorage
+            const saved = localStorage.getItem('autopilot-expanded-features');
+            let expandedSet: Set<string>;
+            try {
+              expandedSet = new Set(saved ? JSON.parse(saved) : []);
+            } catch {
+              expandedSet = new Set();
+            }
+            if (newExpanded) {
+              expandedSet.add(feature.id);
+            } else {
+              expandedSet.delete(feature.id);
+            }
+            localStorage.setItem('autopilot-expanded-features', JSON.stringify([...expandedSet]));
+          }}
         >
           <div className="p-1 text-gray-400">
             {expanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
