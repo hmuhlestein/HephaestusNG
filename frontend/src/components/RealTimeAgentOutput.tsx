@@ -68,12 +68,12 @@ const RealTimeAgentOutput: React.FC<RealTimeAgentOutputProps> = ({
   // Auto-scroll to bottom when new content arrives
   useEffect(() => {
     if (autoScroll && outputRef.current && lastUpdateTime) {
-      const element = outputRef.current;
-      const isNearBottom = element.scrollTop + element.clientHeight >= element.scrollHeight - 100;
-
-      if (isNearBottom || element.scrollHeight <= element.clientHeight) {
-        element.scrollTop = element.scrollHeight;
-      }
+      // Use requestAnimationFrame to ensure DOM has updated before scrolling
+      requestAnimationFrame(() => {
+        if (outputRef.current) {
+          outputRef.current.scrollTop = outputRef.current.scrollHeight;
+        }
+      });
     }
   }, [output, autoScroll, lastUpdateTime]);
 
