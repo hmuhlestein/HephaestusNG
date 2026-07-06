@@ -666,6 +666,41 @@ async def get_ticket_stats_endpoint(
             board_config = (
                 session.query(BoardConfig).filter(BoardConfig.workflow_id.in_(workflow_ids)).first()
             )
+            
+            # If no board config found, use a default one
+            if not board_config:
+                # Return default board config for project-level view
+                return {
+                    "success": True,
+                    "workflow_id": workflow_ids[0] if workflow_ids else "none",
+                    "stats": {
+                        "total_tickets": 0,
+                        "by_status": {},
+                        "by_type": {},
+                        "by_priority": {},
+                        "by_agent": {},
+                        "blocked_count": 0,
+                        "resolved_count": 0,
+                        "avg_comments_per_ticket": 0.0,
+                        "avg_commits_per_ticket": 0.0,
+                    },
+                    "board_config": {
+                        "name": "Default Board",
+                        "columns": [
+                            {"id": "backlog", "name": "Backlog", "order": 1, "color": "#94a3b8"},
+                            {"id": "in-progress", "name": "In Progress", "order": 2, "color": "#f59e0b"},
+                            {"id": "review", "name": "In Review", "order": 3, "color": "#ec4899"},
+                            {"id": "done", "name": "Done", "order": 4, "color": "#22c55e"},
+                        ],
+                        "ticket_types": ["feature", "bug", "improvement", "task"],
+                        "default_ticket_type": "feature",
+                        "initial_status": "backlog",
+                        "auto_assign": False,
+                        "allow_reopen": True,
+                        "track_time": False,
+                    },
+                }
+            
             logger.info(
                 f"BoardConfig found: {board_config is not None}, workflow_ids: {workflow_ids}"
             )
