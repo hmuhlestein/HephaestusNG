@@ -385,7 +385,9 @@ const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, is
     if (saved) {
       try {
         const expandedSet = new Set(JSON.parse(saved));
-        return expandedSet.has(item.filename);
+        const isExpanded = expandedSet.has(item.filename);
+        console.log('[DesignQueuePanel] Restoring expanded state:', { filename: item.filename, isExpanded, savedItems: [...expandedSet] });
+        return isExpanded;
       } catch { return false; }
     }
     return false;
@@ -431,6 +433,7 @@ const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, is
       expandedSet.delete(item.filename);
     }
     localStorage.setItem('autopilot-expanded-designs', JSON.stringify([...expandedSet]));
+    console.log('[DesignQueuePanel] Saved expanded state:', { filename: item.filename, newExpanded, items: [...expandedSet] });
   };
 
   const {
