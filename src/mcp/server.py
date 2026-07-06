@@ -2156,6 +2156,16 @@ async def update_task_status(
             if rejection:
                 return rejection
 
+        # 3b-2. Auto-create tickets from forensics_analysis's own report —
+        # "Tickets created for actionable findings" is mandated but easily
+        # skipped once the agent's analysis work is done (observed live: a
+        # thorough report with zero ticket calls). Best-effort side effect,
+        # never blocks "done".
+        if request.status == "done" and task.phase_id:
+            await TaskCompletionService.create_tickets_from_forensics_report(
+                session, task
+            )
+
         # 3c. Spec gate firing — when a gated phase task completes and the phase
         # is now complete, trigger the gate immediately (don't wait for monitor poll).
         # The orchestrator's _advance_phases only fires when the next phase is
@@ -4082,15 +4092,21 @@ async def list_agents(
         
         if project_id:
             # Filter agents that have tasks in the specified project
+            # Include agents whose current_task_id is in the project, OR
+            # agents that were assigned to any task in the project's workflows
+            from src.core.database import Task
             project_workflow_ids = session.query(Workflow.id).filter(
                 Workflow.project_id == project_id
             ).subquery()
-            from src.core.database import Task
             project_task_ids = session.query(Task.id).filter(
                 Task.workflow_id.in_(project_workflow_ids)
             ).subquery()
+            project_agent_ids = session.query(Task.assigned_agent_id).filter(
+                Task.workflow_id.in_(project_workflow_ids),
+                Task.assigned_agent_id.isnot(None)
+            ).distinct().subquery()
             query = query.filter(
-                Agent.current_task_id.in_(project_task_ids)
+                Agent.id.in_(project_agent_ids)
             )
 
         total = query.count()
