@@ -377,18 +377,18 @@ Return as JSON with keys: state, decision, message, reasoning, confidence"""
         memories: List[Dict[str, Any]],
         project_context: str,
     ) -> str:
-        """Generate agent system prompt."""
+        """Generate agent system prompt.
+
+        Task description and completion criteria are intentionally omitted —
+        they arrive in the initial user-turn message with concrete IDs and
+        worktree path already interpolated.  Repeating them here wastes
+        context tokens and creates two sources of truth.
+        """
         memory_context = "\n".join(
             [f"- {mem.get('content', '')[:200]}" for mem in memories[:10]]
         )
 
         return f"""You are an AI agent in the Hephaestus orchestration system.
-
-═══ TASK ═══
-{task.get("enriched_description", task.get("description", ""))}
-
-COMPLETION CRITERIA:
-{task.get("done_definition", "Complete the assigned task")}
 
 ═══ PRE-LOADED CONTEXT ═══
 Top 10 relevant memories (use vector search for more):
@@ -696,12 +696,6 @@ Make the description actionable and criteria verifiable."""
         )
 
         return f"""You are an AI agent in the Hephaestus orchestration system.
-
-═══ TASK ═══
-{task.get("enriched_description", task.get("description", ""))}
-
-COMPLETION CRITERIA:
-{task.get("done_definition", "Complete the assigned task")}
 
 ═══ PRE-LOADED CONTEXT ═══
 Top 10 relevant memories (use vector search for more):
