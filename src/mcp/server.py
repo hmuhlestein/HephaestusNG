@@ -4886,6 +4886,40 @@ async def list_tools():
                 },
             },
             {
+                "name": "update_task_status",
+                "description": "Update the status of a task (done, failed, etc.)",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "task_id": {
+                            "type": "string",
+                            "description": "ID of the task to update",
+                        },
+                        "status": {
+                            "type": "string",
+                            "enum": ["done", "failed", "in_progress", "blocked"],
+                            "description": "New status for the task",
+                        },
+                        "summary": {
+                            "type": "string",
+                            "description": "Summary of what was done or why it failed",
+                            "default": "",
+                        },
+                        "failure_reason": {
+                            "type": "string",
+                            "description": "Reason for failure (if status is failed)",
+                            "default": "",
+                        },
+                        "key_learnings": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Key learnings to save as memories",
+                        },
+                    },
+                    "required": ["task_id", "status"],
+                },
+            },
+            {
                 "name": "create_ticket",
                 "description": "Create a new ticket in the Kanban board",
                 "input_schema": {
@@ -5864,6 +5898,42 @@ async def _tool_send_message(arguments: Dict[str, Any]):
     return {"success": True, "message": f"Message sent to {target_agent_id[:8]}"}
 
 
+async def _tool_update_task_status(arguments: Dict[str, Any]):
+    """Update task status - bridges MCP tool call to HTTP endpoint."""
+    task_id = arguments.get("task_id")
+    status = arguments.get("status")
+    summary = arguments.get("summary", "")
+    failure_reason = arguments.get("failure_reason")
+    key_learnings = arguments.get("key_learnings", [])
+    agent_id = arguments.get("agent_id")
+
+    if not task_id or not status:
+        raise HTTPException(status_code=400, detail="task_id and status are required")
+
+    # Resolve agent_id: use provided, or look up from task
+    if not agent_id:
+        session = server_state.db_manager.get_session()
+        try:
+            task = session.query(Task).filter_by(id=task_id).first()
+            if task:
+                agent_id = task.assigned_agent_id
+        finally:
+            session.close()
+
+    if not agent_id:
+        raise HTTPException(status_code=400, detail="agent_id is required (could not auto-detect from task)")
+
+    # Call the HTTP endpoint handler directly
+    request = UpdateTaskStatusRequest(
+        task_id=task_id,
+        status=status,
+        summary=summary or "Task completed",
+        key_learnings=key_learnings or [],
+        failure_reason=failure_reason,
+    )
+    return await update_task_status(request, agent_id=agent_id)
+
+
 # Registry for non-devtools MCP tools: name -> async handler(arguments).
 # Replaces a 9-branch if/elif chain (SOLID review 1.5) — a new tool is added
 # by defining one handler and registering it here, instead of editing this
@@ -5875,6 +5945,7 @@ _MCP_TOOLS: Dict[str, Any] = {
     "save_memory": _tool_save_memory,
     "search_memory": _tool_search_memory,
     "get_task_status": _tool_get_task_status,
+    "update_task_status": _tool_update_task_status,
     "create_ticket": _tool_create_ticket,
     "search_tickets": _tool_search_tickets,
     "update_ticket_status": _tool_update_ticket_status,
