@@ -221,8 +221,8 @@ NOTE: Having a workflow-level goal does NOT mean you skip hephaestus_update_task
 
 INSTRUCTIONS (always pass agent_id="{agent_id}"; pass workflow_id="{workflow_id if workflow_id else "N/A"}" only for tools that accept it — save_memory and validate_my_agent_id do NOT take workflow_id, don't pass it to those):
 - Complete the task described above
-- hephaestus_update_task_status(task_id="{task.id}", status="done") — REQUIRED when done
-- hephaestus_update_task_status(task_id="{task.id}", status="failed", failure_reason="...") — on unrecoverable error
+- hephaestus_update_task_status(task_id="{task.id}", agent_id="{agent_id}", status="done") — REQUIRED when done
+- hephaestus_update_task_status(task_id="{task.id}", agent_id="{agent_id}", status="failed", failure_reason="...") — on unrecoverable error
 - hephaestus_save_memory(content="...", agent_id="{agent_id}", memory_type="<type>"): save as you go, not just at end
   types: error_fix | discovery | decision | learning | warning | codebase_knowledge
 - hephaestus_search_memory(query="..."): search before reinventing
@@ -256,13 +256,13 @@ IMPORTANT INSTRUCTIONS:
   (use hephaestus_get_agent_status first to find agent IDs)
 
 3. **TASK COMPLETION** (REQUIRED):
-   hephaestus_update_task_status(task_id="{task.id}", status="done", ...)
+   hephaestus_update_task_status(task_id="{task.id}", agent_id="{agent_id}", status="done", ...)
 
 4. **WORKFLOW RESULT** (only if you solved the ENTIRE workflow):
    hephaestus_submit_result(markdown_file_path="...", agent_id="{agent_id}", explanation="...", evidence=[...])
 
 5. On unrecoverable failure:
-   hephaestus_update_task_status(task_id="{task.id}", status="failed", failure_reason="...")
+   hephaestus_update_task_status(task_id="{task.id}", agent_id="{agent_id}", status="failed", failure_reason="...")
 
 6. Memory — save liberally throughout (not just at end):
    Types: error_fix, discovery, decision, learning, warning, codebase_knowledge
@@ -272,8 +272,8 @@ IMPORTANT INSTRUCTIONS:
 Begin working on your task now.
 
 REMEMBER:
-- Task done → hephaestus_update_task_status(status="done") [ALWAYS required]
-- Entire workflow solved → also hephaestus_submit_result() [separate action]
+- Task done → hephaestus_update_task_status(task_id="{task.id}", agent_id="{agent_id}", status="done") [ALWAYS required]
+- Entire workflow solved → also hephaestus_submit_result(agent_id="{agent_id}", ...) [separate action]
 """
 
         logger.info(
