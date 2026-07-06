@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useState, useCallback } from 'react';
+import React, { useRef, useEffect, useState, useCallback, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   X,
@@ -23,6 +23,7 @@ import { useRealTimeAgentOutput } from '@/hooks/useRealTimeAgentOutput';
 import { Agent } from '@/types';
 import { apiService } from '@/services/api';
 import StatusBadge from './StatusBadge';
+import AnsiToHtml from 'ansi-to-html';
 
 interface RealTimeAgentOutputProps {
   agent: Agent | null;
@@ -51,6 +52,15 @@ const RealTimeAgentOutput: React.FC<RealTimeAgentOutputProps> = ({
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const lastScrollPosition = useRef(0);
+
+  // ANSI to HTML converter
+  const ansiConverter = useMemo(() => new AnsiToHtml({
+    fg: '#d4d4d4',
+    bg: '#1e1e1e',
+    newline: true,
+    escapeXML: true,
+    stream: false,
+  }), []);
 
   const {
     output,
@@ -188,6 +198,17 @@ const RealTimeAgentOutput: React.FC<RealTimeAgentOutputProps> = ({
       line.toLowerCase().includes(searchTerm.toLowerCase())
     ).join('\n') :
     output;
+
+  // Convert ANSI codes to HTML
+  const htmlOutput = useMemo(() => {
+    const text = filteredOutput || '';
+    if (!text) return '';
+    try {
+      return ansiConverter.toHtml(text);
+    } catch {
+      return text;
+    }
+  }, [filteredOutput, ansiConverter]);
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -376,9 +397,8 @@ const RealTimeAgentOutput: React.FC<RealTimeAgentOutputProps> = ({
                 lineHeight: '1.4',
                 fontFamily: 'Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace'
               }}
-            >
-              {filteredOutput || (output ? 'No matching lines found' : 'No output available yet...')}
-            </pre>
+              dangerouslySetInnerHTML={{ __html: htmlOutput || (output ? 'No matching lines found' : 'No output available yet...') }}
+            />
 
             {/* Scroll indicator */}
             {!autoScroll && (
