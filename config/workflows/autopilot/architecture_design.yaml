@@ -13,11 +13,10 @@ done_definitions:
   - "Component interfaces defined (APIs, data models, contracts)"
   - "Data flow documented"
   - "Infrastructure requirements specified"
-  - "Task breakdown with blocking relationships created"
+  - "Task breakdown with blocking relationships documented in architecture.md"
   - "Each task has detailed acceptance criteria"
   - "architecture.md created with complete technical design"
   - "Memory saved with architectural decisions"
-  - "Phase 3 development tasks created for each component"
   - "Task marked as done"
 outputs:
   - "architecture.md"
@@ -90,7 +89,8 @@ additional_notes: |
   - Implementation order
   
   Also read the original design document to understand the overall vision.
-  This context will be passed to developers via the 'context' field in create_task.
+  This context goes into architecture.md — the development agent reads it
+  from there (see STEP 5: do not call create_task to hand this to developers).
   
   CRITICAL — CHECK EXISTING TEST FILES AND ESTABLISH FILE LAYOUT:
   Run: find . -name "test_*.py" -o -name "*_test.py" | head -20
@@ -161,10 +161,12 @@ additional_notes: |
   - Environment setup
   
   ═══════════════════════════════════════════════════════════════════════
-  STEP 3: CREATE TASK BREAKDOWN
+  STEP 3: WRITE THE TASK BREAKDOWN INTO architecture.md (documentation only —
+  do not call hephaestus_create_task here, see STEP 5)
   ═══════════════════════════════════════════════════════════════════════
-  
-  Create detailed tasks for Phase 3 (Development). For EACH component:
+
+  Document a detailed task breakdown for Phase 3 (Development) as TEXT in
+  architecture.md. For EACH component:
   
   ### Task: [Component Name]
   **Ticket ID:** (will be assigned)
@@ -203,112 +205,67 @@ additional_notes: |
   - Tags for categorization
   
   ═══════════════════════════════════════════════════════════════════════
-  STEP 5: CREATE DEVELOPMENT TASKS WITH DEPENDENCY GRAPH
+  STEP 5: DOCUMENT THE DEVELOPMENT TASK BREAKDOWN IN architecture.md
   ═══════════════════════════════════════════════════════════════════════
-  
-  Create ONE Phase 3 task per ticket (1:1 relationship):
-  - Reference the ticket ID in the task description
-  - Include detailed implementation instructions
-  - Specify files to create/modify
-  - Include test requirements
-  - Include code snippets showing key interfaces, function signatures, or data structures
-  - Specify logging requirements: what to log, at what level, with what context
-  
+
+  Do NOT call hephaestus_create_task for Phase 3 (development) work. The
+  orchestrator automatically creates the next phase's task once you mark
+  this task done — creating it yourself here files real implementation
+  work under the architecture_design phase, which is the exact "tasks
+  created under the wrong phase" failure the general MCP tool
+  instructions warn about (hephaestus_create_task only creates SUBTASKS
+  within YOUR OWN current phase). Observed live: an architecture_design
+  agent created a task this way whose content was actually QA-validation
+  work — it got filed under architecture_design, the real development
+  task never got created, and the pipeline reached qa_validation without
+  calculator.py ever having been implemented.
+
+  Instead, write the full breakdown as TEXT in architecture.md — one
+  section per component, with the same dependency/parallel-group
+  information below expressed as a table or list. The development agent
+  reads this from Docs Path and follows it; if IT decides the
+  implementation needs its own parallel subtasks, it creates those itself
+  using hephaestus_create_task within its own phase (the standard rule
+  every phase follows), using the dependency/parallel-group mechanics
+  below as its reference.
+
   ═══════════════════════════════════════════════════════════════════════
-  CRITICAL: TASK DEPENDENCIES AND PARALLEL EXECUTION
+  REFERENCE: TASK DEPENDENCIES AND PARALLEL EXECUTION MECHANICS
   ═══════════════════════════════════════════════════════════════════════
-  
-  When creating tasks via create_task, you MUST specify dependencies to enable
-  parallel execution. The system defaults to SEQUENTIAL (one task at a time)
-  unless you explicitly set dependencies.
-  
+
+  Document dependencies in architecture.md using this model (for whichever
+  phase agent later creates real tasks via hephaestus_create_task):
+
   **How it works:**
   - `depends_on`: List of task IDs that must complete before this task starts
   - `parallel_group`: Tasks in the same group CAN run in parallel (optional)
   - If `depends_on` is omitted or null → task runs SEQUENTIALLY (one at a time)
   - If `depends_on` is set to `[]` (empty array) → task runs IMMEDIATELY (parallel)
   - If `depends_on` has task IDs → task runs when ALL listed tasks are complete
-  
-  **⚠️ CRITICAL: If you omit depends_on, tasks will run ONE AT A TIME.**
-  **To enable parallelism, you MUST explicitly set depends_on: [] or depends_on: [task_ids]**
-  
+
   **PARALLEL GROUPS:**
   - Tasks with the same `parallel_group` value can run together
   - Tasks in different groups (or no group) run sequentially
   - Example: all tasks with `parallel_group: "types"` run in parallel
   - But `parallel_group: "handlers"` waits for `parallel_group: "types"` to finish
-  
+
   **Example - Sequential (no parallelism):**
   task1: {"depends_on": null}  → runs first
   task2: {"depends_on": null}  → waits for task1
   task3: {"depends_on": null}  → waits for task2
-  
+
   **Example - Parallel with dependencies:**
   task1: {"depends_on": []}           → runs immediately
   task2: {"depends_on": [task1_id]}  → runs when task1 done
   task3: {"depends_on": [task1_id]}  → runs when task1 done (parallel with task2!)
   task4: {"depends_on": [task2_id, task3_id]} → runs when both task2 and task3 done
-  
+
   **Example - Parallel group:**
   task1: {"parallel_group": "types"}     → can run with other "types" tasks
   task2: {"parallel_group": "types"}     → can run with task1
   task3: {"parallel_group": "handlers"}  → waits for "types" group to finish
-  
-  **Example - Combined (dependencies + parallel group):**
-  task1: {"depends_on": [], "parallel_group": "types"}     → runs immediately
-  task2: {"depends_on": [], "parallel_group": "types"}     → runs immediately, parallel with task1
-  task3: {"depends_on": [task1_id, task2_id], "parallel_group": "handlers"} → runs after both types tasks
-  task4: {"depends_on": [task1_id, task2_id], "parallel_group": "handlers"} → runs parallel with task3
-  
-  **YOUR RESPONSIBILITY AS ARCHITECT:**
-  1. Analyze which tasks can run in parallel (no data dependencies)
-  2. Create tasks with `depends_on` listing prerequisite task IDs
-  3. Store task IDs as you create them so you can reference them
-  4. Tasks without dependencies will run ONE AT A TIME (slow!)
-  
-  **RELIABLE COMMUNICATION PATTERN:**
-  When creating tasks, use this structure:
-  
-  ```python
-  # First, read the design document and requirements for context
-  design_doc = read_file('design_document.md')
-  requirements = read_file('requirements_analysis.md')
-  
-  # Create a context summary to pass to each task
-  context_summary = "DESIGN OVERVIEW:\n" + design_doc[:2000] + "\n\nREQUIREMENTS SUMMARY:\n" + requirements[:1000]
-  
-  # Create tasks with context
-  # First, create all tasks and collect their IDs
-  task_ids = {}
-  task_ids['types'] = create_task({
-      "task_description": "Create type definitions...",
-      "context": context_summary,  # Pass design context to developer
-      "depends_on": [],  # No dependencies - runs first
-  })
-  task_ids['config'] = create_task({
-      "task_description": "Create config module...",
-      "context": context_summary,  # Pass design context to developer
-      "depends_on": [],  # No dependencies - runs parallel with types
-  })
-  task_ids['handlers'] = create_task({
-      "task_description": "Create HTTP handlers...",
-      "context": context_summary,  # Pass design context to developer
-      "depends_on": [task_ids['types'], task_ids['config']],  # Wait for types and config
-  })
-  task_ids['tests'] = create_task({
-      "task_description": "Create integration tests...",
-      "context": context_summary,  # Pass design context to developer
-      "depends_on": [task_ids['handlers']],  # Wait for handlers
-  })
-  ```
-  
-  **PARALLELISM RULES:**
-  - Tasks with `depends_on: []` run immediately (up to max_concurrent_agents)
-  - Tasks with `depends_on: [X]` run after X completes
-  - The orchestrator automatically manages the dependency graph
-  - If you don't specify dependencies, tasks run ONE AT A TIME (sequential)
-  
-  **Task structure with dependencies:**
+
+  **Task structure with dependencies (document this per component, do not call create_task):**
   ```
   Task: Implement [Component]
   Ticket: TICKET-001
