@@ -192,12 +192,17 @@ const RealTimeAgentOutput: React.FC<RealTimeAgentOutputProps> = ({
     }
   };
 
-  // Filter output based on search
-  const filteredOutput = searchTerm ?
-    output.split('\n').filter(line =>
-      line.toLowerCase().includes(searchTerm.toLowerCase())
-    ).join('\n') :
-    output;
+  // Filter output based on search and remove separator lines
+  const filteredOutput = useMemo(() => {
+    const lines = (output || '').split('\n');
+    const filtered = lines.filter(line => {
+      // Filter out horizontal separator lines (────────────────────...)
+      if (/^[─━═▬▪▫\-]{20,}$/.test(line.trim())) return false;
+      if (searchTerm && !line.toLowerCase().includes(searchTerm.toLowerCase())) return false;
+      return true;
+    });
+    return filtered.join('\n');
+  }, [output, searchTerm]);
 
   // Convert ANSI codes to HTML
   const htmlOutput = useMemo(() => {
