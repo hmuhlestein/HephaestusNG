@@ -3,7 +3,7 @@
 import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 
@@ -935,11 +935,19 @@ class TestIsDesignFullyComplete:
 
 
 class TestAttemptRecovery:
+    @patch("src.autopilot.orchestrator.get_db")
     @patch("src.autopilot.orchestrator.api_post")
     @patch("src.autopilot.orchestrator.get_agents")
     @patch("src.autopilot.orchestrator.get_tasks")
-    def test_no_recovery_needed(self, mock_tasks, mock_agents, mock_post):
+    def test_no_recovery_needed(self, mock_tasks, mock_agents, mock_post, mock_get_db):
         from src.autopilot.orchestrator import OrchestratorLogger, attempt_recovery
+
+        # Mock get_db to avoid database queries
+        mock_db = MagicMock()
+        mock_db.query.return_value.filter.return_value.all.return_value = []
+        mock_db.__enter__ = MagicMock(return_value=mock_db)
+        mock_db.__exit__ = MagicMock(return_value=False)
+        mock_get_db.return_value = mock_db
 
         logger = OrchestratorLogger(Path("/tmp/logs"))
         mock_tasks.return_value = []
@@ -948,14 +956,22 @@ class TestAttemptRecovery:
         assert success is False
         assert "No recovery" in msg
 
+    @patch("src.autopilot.orchestrator.get_db")
     @patch("src.autopilot.orchestrator.update_task_status")
     @patch("src.autopilot.orchestrator.create_agent_for_task_direct")
     @patch("src.autopilot.orchestrator.get_agents")
     @patch("src.autopilot.orchestrator.get_tasks")
     def test_retries_failed_tasks(
-        self, mock_tasks, mock_agents, mock_create_agent, mock_update_status
+        self, mock_tasks, mock_agents, mock_create_agent, mock_update_status, mock_get_db
     ):
         from src.autopilot.orchestrator import OrchestratorLogger, attempt_recovery
+
+        # Mock get_db to avoid database queries
+        mock_db = MagicMock()
+        mock_db.query.return_value.filter.return_value.all.return_value = []
+        mock_db.__enter__ = MagicMock(return_value=mock_db)
+        mock_db.__exit__ = MagicMock(return_value=False)
+        mock_get_db.return_value = mock_db
 
         logger = OrchestratorLogger(Path("/tmp/logs"))
         mock_tasks.side_effect = [
@@ -969,11 +985,19 @@ class TestAttemptRecovery:
         assert success is True
         assert "retried" in msg.lower()
 
+    @patch("src.autopilot.orchestrator.get_db")
     @patch("src.autopilot.orchestrator.api_post")
     @patch("src.autopilot.orchestrator.get_agents")
     @patch("src.autopilot.orchestrator.get_tasks")
-    def test_skips_max_retries(self, mock_tasks, mock_agents, mock_post):
+    def test_skips_max_retries(self, mock_tasks, mock_agents, mock_post, mock_get_db):
         from src.autopilot.orchestrator import OrchestratorLogger, attempt_recovery
+
+        # Mock get_db to avoid database queries
+        mock_db = MagicMock()
+        mock_db.query.return_value.filter.return_value.all.return_value = []
+        mock_db.__enter__ = MagicMock(return_value=mock_db)
+        mock_db.__exit__ = MagicMock(return_value=False)
+        mock_get_db.return_value = mock_db
 
         logger = OrchestratorLogger(Path("/tmp/logs"))
         mock_tasks.side_effect = [
@@ -983,11 +1007,19 @@ class TestAttemptRecovery:
         success, msg = attempt_recovery("wf-1", logger)
         assert success is False
 
+    @patch("src.autopilot.orchestrator.get_db")
     @patch("src.autopilot.orchestrator.api_post")
     @patch("src.autopilot.orchestrator.get_agents")
     @patch("src.autopilot.orchestrator.get_tasks")
-    def test_terminates_stale_agents(self, mock_tasks, mock_agents, mock_post):
+    def test_terminates_stale_agents(self, mock_tasks, mock_agents, mock_post, mock_get_db):
         from src.autopilot.orchestrator import OrchestratorLogger, attempt_recovery
+
+        # Mock get_db to avoid database queries
+        mock_db = MagicMock()
+        mock_db.query.return_value.filter.return_value.all.return_value = []
+        mock_db.__enter__ = MagicMock(return_value=mock_db)
+        mock_db.__exit__ = MagicMock(return_value=False)
+        mock_get_db.return_value = mock_db
 
         logger = OrchestratorLogger(Path("/tmp/logs"))
         mock_tasks.return_value = []
