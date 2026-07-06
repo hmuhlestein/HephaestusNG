@@ -66,25 +66,25 @@ additional_notes: |
   3. Search the vector database for existing knowledge using search_memory():
      ```python
      # Search for technology decisions
-     mcp__hephaestus__search_memory({
+     hephaestus_search_memory({
          "query": "technology stack decisions framework language",
          "limit": 10
      })
 
      # Search for architecture patterns
-     mcp__hephaestus__search_memory({
+     hephaestus_search_memory({
          "query": "architecture patterns system design components",
          "limit": 10
      })
 
      # Search for constraints
-     mcp__hephaestus__search_memory({
+     hephaestus_search_memory({
          "query": "constraints must not rules security requirements",
          "limit": 10
      })
 
      # Search for previous feature context
-     mcp__hephaestus__search_memory({
+     hephaestus_search_memory({
          "query": "completed features implemented components",
          "limit": 10,
          "memory_type": "decision"
@@ -246,28 +246,28 @@ additional_notes: |
 
   ```python
   # Save technology decisions
-  mcp__hephaestus__save_memory({
+  hephaestus_save_memory({
       "content": f"Technology stack for {project_name}: [list stack] because [reasons]",
       "memory_type": "decision",
       "tags": ["technology", "architecture"]
   })
 
   # Save architecture decisions
-  mcp__hephaestus__save_memory({
+  hephaestus_save_memory({
       "content": f"Architecture pattern: [pattern] for {project_name} because [reasons]",
       "memory_type": "decision",
       "tags": ["architecture", "design"]
   })
 
   # Save constraints
-  mcp__hephaestus__save_memory({
+  hephaestus_save_memory({
       "content": f"Constraints for {feature_name}: [list constraints and MUST NOT rules]",
       "memory_type": "warning",
       "tags": ["constraints", "rules"]
   })
 
   # Save component inventory
-  mcp__hephaestus__save_memory({
+  hephaestus_save_memory({
       "content": f"Components identified for {feature_name}: [list components with dependencies]",
       "memory_type": "discovery",
       "tags": ["components", "inventory"]
@@ -312,7 +312,7 @@ additional_notes: |
 
   After writing all your output files, call:
 
-  mcp__hephaestus__update_task_status({
+  hephaestus_update_task_status({
     "task_id": "<your task id>",
     "status": "done",
     "summary": "<brief summary of what was accomplished>",

@@ -264,7 +264,7 @@ additional_notes: |
   
   After writing all your output files, call:
   
-  mcp__hephaestus__update_task_status({
+  hephaestus_update_task_status({
     "task_id": "<your task id>",
     "status": "done",
     "summary": "<brief summary of what was accomplished>",
