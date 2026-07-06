@@ -99,13 +99,31 @@ const Tickets: React.FC = () => {
               className="flex items-center px-4 py-2 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors shadow-sm min-w-[200px]"
             >
               <span className="flex-1 text-left text-sm text-gray-700 truncate">
-                {selectedWorkflow?.definition_name || selectedWorkflow?.description?.split('\n')[0] || 'Select Workflow'}
+                {!selectedExecutionId ? `📁 ${activeProject?.name || 'Project'} Level` : selectedWorkflow?.definition_name || selectedWorkflow?.description?.split('\n')[0] || 'Select Workflow'}
               </span>
               <ChevronDown className={`w-4 h-4 ml-2 text-gray-500 transition-transform ${showWorkflowDropdown ? 'rotate-180' : ''}`} />
             </button>
 
             {showWorkflowDropdown && (
               <div className="absolute right-0 mt-2 w-72 bg-white border border-gray-200 rounded-lg shadow-lg z-50 max-h-64 overflow-y-auto">
+                {/* Project Level option */}
+                <button
+                  onClick={() => {
+                    selectExecution(null);
+                    setShowWorkflowDropdown(false);
+                  }}
+                  className={`w-full text-left px-4 py-3 hover:bg-gray-50 border-b border-gray-100 bg-violet-50 ${
+                    !selectedExecutionId ? 'bg-violet-100' : ''
+                  }`}
+                >
+                  <div className="text-sm font-medium text-violet-800">
+                    📁 Project Level
+                  </div>
+                  <div className="text-xs text-violet-600 mt-1">
+                    All tickets in {activeProject?.name || 'project'}
+                  </div>
+                </button>
+                
                 {executions.length === 0 ? (
                   <div className="px-4 py-3 text-sm text-gray-500">No workflows available</div>
                 ) : (
