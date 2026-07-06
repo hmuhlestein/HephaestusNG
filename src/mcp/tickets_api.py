@@ -921,7 +921,8 @@ async def get_ticket_stats_endpoint(
 
 @router.get("/", response_model=GetTicketsResponse)
 async def get_tickets_endpoint(
-    workflow_id: str,  # Now required
+    workflow_id: Optional[str] = None,  # Optional - can filter by project instead
+    project_id: Optional[str] = None,  # Filter by project
     agent_id: str = Header(..., alias="X-Agent-ID"),
     status: Optional[str] = None,
     ticket_type: Optional[str] = None,
@@ -936,8 +937,7 @@ async def get_tickets_endpoint(
     """Get/list tickets with filtering and pagination."""
 
     try:
-        # workflow_id is now required
-        logger.info(f"Agent {agent_id} fetching tickets for workflow {workflow_id}")
+        logger.info(f"Agent {agent_id} fetching tickets (workflow={workflow_id}, project={project_id})")
 
         # Build filters dict, only including non-None values
         filters = {}
@@ -952,10 +952,30 @@ async def get_tickets_endpoint(
         if not include_completed:
             filters["include_completed"] = include_completed
 
-        result = await _get_ticket_service().get_tickets_by_workflow(
-            workflow_id=workflow_id,
-            filters=filters,
-        )
+        ticket_service = _get_ticket_service()
+
+        if workflow_id:
+            result = await ticket_service.get_tickets_by_workflow(
+                workflow_id=workflow_id,
+                filters=filters,
+            )
+        elif project_id:
+            # Get all workflows for this project, then get tickets for all of them
+            from src.core.database import Workflow, get_db
+            with get_db() as db:
+                workflow_ids = [
+                    wf.id for wf in db.query(Workflow).filter_by(project_id=project_id).all()
+                ]
+            result = []
+            for wf_id in workflow_ids:
+                wf_tickets = await ticket_service.get_tickets_by_workflow(
+                    workflow_id=wf_id,
+                    filters=filters,
+                )
+                result.extend(wf_tickets)
+        else:
+            # No workflow_id or project_id - return empty
+            result = []
 
         # Result is a list of ticket dicts
         tickets = [TicketDetail(**t) for t in result]

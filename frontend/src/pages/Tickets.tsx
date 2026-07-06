@@ -6,6 +6,7 @@ import TicketStats from '@/components/tickets/TicketStats';
 import TicketGraph from '@/components/tickets/TicketGraph';
 import PendingReviewIndicator from '@/components/tickets/PendingReviewIndicator';
 import { useWorkflow } from '@/context/WorkflowContext';
+import { useProject } from '@/context/ProjectContext';
 
 const Tickets: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'kanban' | 'search' | 'stats' | 'graph'>('kanban');
@@ -14,6 +15,8 @@ const Tickets: React.FC = () => {
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   const { executions, selectedExecutionId, selectExecution, loading } = useWorkflow();
+  const { activeProject } = useProject();
+  const projectId = activeProject?.id;
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -178,6 +181,7 @@ const Tickets: React.FC = () => {
         {activeTab === 'kanban' && (
           <KanbanBoard
             workflowId={selectedWorkflowId}
+            projectId={projectId}
             onNavigateToSearchTab={handleNavigateToSearchTab}
           />
         )}

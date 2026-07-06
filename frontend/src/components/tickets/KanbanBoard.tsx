@@ -10,11 +10,12 @@ import { cn } from '@/lib/utils';
 import { useWebSocket } from '@/context/WebSocketContext';
 
 interface KanbanBoardProps {
-  workflowId: string;
+  workflowId?: string;
+  projectId?: string;
   onNavigateToSearchTab?: (tag: string) => void;
 }
 
-const KanbanBoard: React.FC<KanbanBoardProps> = ({ workflowId, onNavigateToSearchTab }) => {
+const KanbanBoard: React.FC<KanbanBoardProps> = ({ workflowId, projectId, onNavigateToSearchTab }) => {
   const [selectedTicketId, setSelectedTicketId] = useState<string | null>(null);
   const [draggedTicketId, setDraggedTicketId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
@@ -53,16 +54,16 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ workflowId, onNavigateToSearc
 
   // Fetch board stats to get column configuration
   const { data: stats, isLoading: statsLoading } = useQuery({
-    queryKey: ['ticketStats', workflowId],
-    queryFn: () => apiService.getTicketStats(workflowId),
-    enabled: !!workflowId,
+    queryKey: ['ticketStats', workflowId || projectId],
+    queryFn: () => apiService.getTicketStats(workflowId || projectId || ''),
+    enabled: !!(workflowId || projectId),
   });
 
   // Fetch all tickets
   const { data: tickets, isLoading: ticketsLoading } = useQuery({
-    queryKey: ['tickets', workflowId],
-    queryFn: () => apiService.getTickets({ workflow_id: workflowId }),
-    enabled: !!workflowId,
+    queryKey: ['tickets', workflowId || projectId],
+    queryFn: () => apiService.getTickets({ workflow_id: workflowId, project_id: projectId }),
+    enabled: !!(workflowId || projectId),
     refetchInterval: 10000, // Refresh every 10 seconds
   });
 
