@@ -309,6 +309,21 @@ class AgentManager:
                 env_vars = env_vars or {}
                 env_vars["MCP_TOOL_TIMEOUT"] = str(timeout_ms)
 
+            # Fallback for MCP tool calls that omit required ID params —
+            # models frequently drop them (e.g. hephaestus_save_memory's
+            # agent_id) even when the prompt's own example shows them filled
+            # in. mcp/claude_mcp_client.py falls back to these env vars
+            # instead of hard-failing the call. workflow_id/phase_id are
+            # only set when this task actually has one (standalone tasks
+            # have neither).
+            env_vars = env_vars or {}
+            env_vars["HEPHAESTUS_AGENT_ID"] = agent_id
+            env_vars["HEPHAESTUS_TASK_ID"] = task.id
+            if task.workflow_id:
+                env_vars["HEPHAESTUS_WORKFLOW_ID"] = task.workflow_id
+            if task.phase_id:
+                env_vars["HEPHAESTUS_PHASE_ID"] = task.phase_id
+
             # 4. Create tmux session IN THE WORKTREE with env vars
             # Use agent_id for unique session names (not task_id which can be reused on restarts)
             session_name = f"{self.config.tmux_session_prefix}_{agent_id[:8]}"
@@ -1288,6 +1303,14 @@ class AgentManager:
             if timeout_ms is not None:
                 env_vars = env_vars or {}
                 env_vars["MCP_TOOL_TIMEOUT"] = str(timeout_ms)
+
+            env_vars = env_vars or {}
+            env_vars["HEPHAESTUS_AGENT_ID"] = agent_id
+            env_vars["HEPHAESTUS_TASK_ID"] = task.id
+            if task.workflow_id:
+                env_vars["HEPHAESTUS_WORKFLOW_ID"] = task.workflow_id
+            if task.phase_id:
+                env_vars["HEPHAESTUS_PHASE_ID"] = task.phase_id
 
             # Create new tmux session with env vars
             # Use agent_id for unique session names (not task_id which can be reused on restarts)
