@@ -4204,6 +4204,60 @@ async def list_agents(
                                 "description": (wf.description or "")[:100],
                             }
 
+            # Fallback for terminated agents: look up their last task
+            if not agent_data["current_task"] and a.status == "terminated":
+                from src.core.database import Task
+                last_task = (
+                    session.query(Task)
+                    .filter_by(assigned_agent_id=a.id)
+                    .order_by(Task.completed_at.desc().nullslast(), Task.created_at.desc())
+                    .first()
+                )
+                if last_task:
+                    task_data = {
+                        "id": last_task.id,
+                        "description": (
+                            last_task.enriched_description or last_task.raw_description or ""
+                        )[:200],
+                        "status": last_task.status,
+                        "priority": last_task.priority,
+                        "runtime_seconds": int(
+                            (last_task.completed_at - last_task.started_at).total_seconds()
+                        )
+                        if last_task.started_at and last_task.completed_at
+                        else 0,
+                        "phase_info": None,
+                    }
+                    if last_task.phase_id:
+                        from src.core.database import Phase
+                        if last_task.phase_id.isdigit():
+                            phase = (
+                                session.query(Phase)
+                                .filter_by(
+                                    order=int(last_task.phase_id),
+                                    workflow_id=last_task.workflow_id,
+                                )
+                                .first()
+                            )
+                        else:
+                            phase = session.query(Phase).filter_by(id=last_task.phase_id).first()
+                        if phase:
+                            task_data["phase_info"] = {
+                                "id": phase.id,
+                                "name": phase.name,
+                                "order": phase.order,
+                            }
+                    agent_data["current_task"] = task_data
+                    if last_task.workflow_id:
+                        wf = session.query(Workflow).filter_by(id=last_task.workflow_id).first()
+                        if wf:
+                            agent_data["workflow"] = {
+                                "id": wf.id,
+                                "name": wf.name,
+                                "status": wf.status,
+                                "description": (wf.description or "")[:100],
+                            }
+
             result.append(agent_data)
 
         return {
