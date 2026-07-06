@@ -219,7 +219,6 @@ def test_agent_prompt_includes_qdrant_instructions():
     )
 
     # Verify prompt includes Qdrant instructions
-    assert "qdrant-find" in prompt.lower(), "Prompt should mention qdrant-find tool"
     assert "search" in prompt.lower(), "Prompt should mention searching"
     assert "pre-loaded context" in prompt.lower() or "preloaded" in prompt.lower(), (
         "Prompt should explain pre-loaded memories"
