@@ -74,6 +74,14 @@ def worktree_manager(test_db, temp_repo, monkeypatch):
     }
 
     monkeypatch.setattr("src.core.simple_config.get_config", lambda: config)
+    # WorktreeManager does `from src.core.simple_config import get_config`, which
+    # binds its own module-local name at import time -- patching the attribute
+    # on src.core.simple_config alone does NOT affect that already-bound name.
+    # Without this, WorktreeManager.__init__ calls the REAL get_config() and
+    # opens hephaestus_config.yaml's real main_repo_path (a live project
+    # directory on this machine), silently creating test branches/commits/
+    # worktrees there on every run instead of in the isolated temp_repo.
+    monkeypatch.setattr("src.core.worktree_manager.get_config", lambda: config)
 
     manager = WorktreeManager(test_db)
 
@@ -89,11 +97,18 @@ def agent_manager(test_db, mock_llm_provider, worktree_manager, monkeypatch):
     import src.core.simple_config
 
     config = src.core.simple_config.Config()
-    config.default_cli_tool = "test"
+    # Must be a real CLI_AGENTS key -- get_cli_agent(cli_type) validates this
+    # even though the actual tmux/process launch is mocked below, so a
+    # placeholder like "test" raises ValueError: Unsupported CLI agent type.
+    config.default_cli_tool = "claude"
     config.system_prompt_max_length = 4000
     config.tmux_session_prefix = "test_agent"
 
     monkeypatch.setattr("src.core.simple_config.get_config", lambda: config)
+    # Same "from ... import get_config" name-binding issue as the
+    # worktree_manager fixture above -- AgentManager.__init__ calls its own
+    # module-local get_config(), unaffected by patching src.core.simple_config.
+    monkeypatch.setattr("src.agents.manager.get_config", lambda: config)
 
     # Mock tmux server
     with patch("src.agents.manager.libtmux.Server"):
@@ -571,6 +586,7 @@ def test_child_merge_with_active_parent_worktree(worktree_manager, test_db):
     # Create child worktree based on parent
     child_result = worktree_manager.create_agent_worktree(
         agent_id=child_id,
+        parent_agent_id=parent_id,
     )
     child_path = Path(child_result["working_directory"])
     child_branch = child_result["branch_name"]
