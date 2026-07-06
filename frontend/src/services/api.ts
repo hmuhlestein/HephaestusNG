@@ -458,6 +458,7 @@ export const apiService = {
 
   getTickets: async (params?: {
     workflow_id?: string;
+    project_id?: string;
     status?: string;
     assigned_agent_id?: string;
     is_blocked?: boolean;
