@@ -37,19 +37,61 @@ DEFAULT_SPEC: Dict[str, Any] = {
 # Phases gated by the hybrid spec (engine evaluation point keys).
 GATED_PHASES = ("scope_review", "qa_validation", "product_validation")
 
-# Declared output artifacts per phase — used as completion hard floors.
-# If a phase declares an output, update_task_status rejects 'done' when
-# the artifact is missing (catches hallucinated completions at the source).
-# Default artifacts (can be overridden by workflow.yaml required_output config)
-DEFAULT_PHASE_OUTPUT_ARTIFACTS = {
-    "architecture_design": "architecture.md",
-    "scope_review": "scope_review_result.json",
-    "qa_validation": "qa_result.json",
-    "product_validation": "product_validation.json",
-}
+# Single-file overrides per phase, keyed by phase name — used when a phase's
+# real output lives somewhere its own declared `outputs:` list doesn't
+# literally spell out (e.g. Phase 0's Feature Architect writes to the
+# git-excluded .hephaestus/ dir). Loaded from workflow.yaml's
+# `required_output:` block. Every other phase's hard floor is now derived
+# directly from its own YAML `outputs:` list (see get_phase_required_files
+# below) instead of a hardcoded dict — previously only 4 of ~11 phases had
+# any output-artifact enforcement at all, so e.g. adversarial_review and
+# security_review could silently skip producing their declared report with
+# zero consequence.
+DEFAULT_PHASE_OUTPUT_ARTIFACTS: Dict[str, str] = {}
 
 # Runtime-loaded artifacts from workflow.yaml
 PHASE_OUTPUT_ARTIFACTS = dict(DEFAULT_PHASE_OUTPUT_ARTIFACTS)
+
+# Matches entries in a phase's declared `outputs:` YAML list that look like a
+# real, existence-checkable filename (has an extension, no spaces) as
+# opposed to a descriptive, non-file deliverable ("source code in project
+# path", "pull request created and merged") that can't be checked this way.
+_FILENAME_RE = re.compile(r"^[\w.][\w./\-]*\.[A-Za-z0-9]+$")
+
+
+def _extract_declared_files(outputs: Any) -> list:
+    """Normalise a Phase.outputs DB value (a list, or a JSON-ish/repr-ish
+    string of one, depending on how it was written) into a list of real,
+    checkable filenames."""
+    if isinstance(outputs, str):
+        try:
+            outputs = json.loads(outputs)
+        except Exception:
+            try:
+                import ast
+
+                outputs = ast.literal_eval(outputs)
+            except Exception:
+                outputs = [outputs]
+    if not isinstance(outputs, list):
+        return []
+    return [
+        o.strip()
+        for o in outputs
+        if isinstance(o, str) and _FILENAME_RE.match(o.strip())
+    ]
+
+
+def get_phase_required_files(phase: Any, workflow_id: Optional[str] = None) -> list:
+    """The list of output files `phase` must produce for its 'done' claim
+    to be accepted, derived from its own YAML-declared `outputs:` (stored on
+    Phase.outputs), with an optional single-file override from
+    workflow.yaml's `required_output:` block.
+    """
+    override = load_phase_output_artifacts(workflow_id).get(phase.name)
+    if override:
+        return [override]
+    return _extract_declared_files(getattr(phase, "outputs", None))
 
 
 def load_phase_output_artifacts(workflow_id: Optional[str] = None) -> dict:

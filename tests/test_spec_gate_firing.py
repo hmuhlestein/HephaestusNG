@@ -100,38 +100,58 @@ class TestOptionalPhases:
         assert "forensics_analysis" in result
 
     def test_required_output_loaded(self):
-        """Test that required output artifacts are loaded."""
+        """PHASE_OUTPUT_ARTIFACTS now holds only workflow.yaml required_output
+        overrides (e.g. Phase 0's Feature Architect); per-phase artifacts are
+        derived from each phase's own YAML outputs: list at verification time
+        (see get_phase_required_files / TestOutputExistenceFloor below)."""
         from src.autopilot.spec import (
             PHASE_OUTPUT_ARTIFACTS,
             load_phase_output_artifacts,
         )
 
-        # Default required output should include qa_validation
-        assert "qa_validation" in PHASE_OUTPUT_ARTIFACTS
-        assert PHASE_OUTPUT_ARTIFACTS["qa_validation"] == "qa_result.json"
-
-        # Test loading with None workflow_id (returns defaults)
         result = load_phase_output_artifacts(None)
-        assert "qa_validation" in result
+        assert result is PHASE_OUTPUT_ARTIFACTS
 
 
 class TestOutputExistenceFloor:
-    """Test that the output existence floor works correctly."""
+    """Test that the output existence floor derives required files from
+    each phase's own declared outputs: list rather than a hardcoded dict."""
 
-    def test_phase_output_artifacts_defined(self):
-        """Test that PHASE_OUTPUT_ARTIFACTS is properly defined."""
-        from src.autopilot.spec import PHASE_OUTPUT_ARTIFACTS
+    def test_phase_required_files_derived_from_yaml_outputs(self):
+        from src.autopilot.spec import get_phase_required_files
 
-        # Verify key phases have required outputs
-        assert "architecture_design" in PHASE_OUTPUT_ARTIFACTS
-        assert "scope_review" in PHASE_OUTPUT_ARTIFACTS
-        assert "qa_validation" in PHASE_OUTPUT_ARTIFACTS
-        assert "product_validation" in PHASE_OUTPUT_ARTIFACTS
+        class _FakePhase:
+            name = "qa_validation"
+            outputs = ["qa_report.md", "qa_result.json"]
 
-    def test_optional_phases_not_in_required_output(self):
-        """Test that optional phases are not in required output."""
-        from src.autopilot.spec import OPTIONAL_PHASES, PHASE_OUTPUT_ARTIFACTS
+        assert get_phase_required_files(_FakePhase()) == [
+            "qa_report.md",
+            "qa_result.json",
+        ]
 
-        # Optional phases should not have required outputs
-        for phase in OPTIONAL_PHASES:
-            assert phase not in PHASE_OUTPUT_ARTIFACTS
+    def test_non_file_descriptive_outputs_filtered_out(self):
+        from src.autopilot.spec import get_phase_required_files
+
+        class _FakePhase:
+            name = "development"
+            outputs = ["source code in project path"]
+
+        assert get_phase_required_files(_FakePhase()) == []
+
+    def test_previously_uncovered_phases_now_get_required_files(self):
+        """The systemic fix: adversarial_review/security_review (and any
+        other phase with a declared outputs: file) previously had zero
+        enforcement -- only 4 phases were in a hardcoded dict."""
+        from src.autopilot.spec import get_phase_required_files
+
+        class _FakePhase:
+            def __init__(self, name, outputs):
+                self.name = name
+                self.outputs = outputs
+
+        assert get_phase_required_files(
+            _FakePhase("adversarial_review", ["adversarial_review_report.md"])
+        ) == ["adversarial_review_report.md"]
+        assert get_phase_required_files(
+            _FakePhase("security_review", ["security_report.md"])
+        ) == ["security_report.md"]

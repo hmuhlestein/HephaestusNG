@@ -65,37 +65,45 @@ class TaskCompletionService:
 
     @staticmethod
     def verify_output_artifact(session, task) -> Optional[Dict[str, Any]]:
-        """Output-existence hard floor: reject 'done' when the phase's
-        declared output artifact is missing from the worktree/feature folder.
+        """Output-existence hard floor: reject 'done' when any of the phase's
+        own YAML-declared output files (Phase.outputs) is missing from the
+        worktree/feature folder.
 
-        Returns a rejection response dict (already committed to DB) if the
-        artifact is required and missing, else None (caller should continue).
+        Every phase with at least one checkable declared output gets this
+        floor now, not just a hardcoded handful — a phase can no longer
+        silently skip producing its report with zero consequence.
+
+        Returns a rejection response dict (already committed to DB) if a
+        required file is missing, else None (caller should continue).
         """
         from pathlib import Path as _Path
 
-        from src.autopilot.spec import (
-            PHASE_OUTPUT_ARTIFACTS,
-            load_optional_phases,
-            load_phase_output_artifacts,
-        )
+        from src.autopilot.spec import get_phase_required_files, load_optional_phases
         from src.core.constants import CONTEXT_DIR_NAME
         from src.core.database import Phase
         from src.core.simple_config import get_config
 
         config = get_config()
 
-        required_output = load_phase_output_artifacts(task.workflow_id)
         phase = session.query(Phase).filter_by(id=task.phase_id).first()
-        if not phase or phase.name not in required_output:
+        if not phase:
             return None
 
-        declared_output = PHASE_OUTPUT_ARTIFACTS[phase.name]
-        found = False
-        # 1. Check the workflow's shared worktree
+        required_files = get_phase_required_files(phase, task.workflow_id)
+        if not required_files:
+            return None
+
+        wf = None
         if task.workflow_id:
             from src.core.database import Workflow as _WF
 
             wf = session.query(_WF).filter_by(id=task.workflow_id).first()
+
+        feature_dir = _Path(config.project_root) / CONTEXT_DIR_NAME / "features"
+        missing = []
+        for declared_output in required_files:
+            found = False
+            # 1. Check the workflow's shared worktree
             if wf and wf.working_directory:
                 for candidate in [
                     _Path(wf.working_directory) / "docs" / declared_output,
@@ -103,45 +111,44 @@ class TaskCompletionService:
                     # Some phases (e.g. Phase 0's Feature Architect) write
                     # their declared output to the git-excluded .hephaestus/
                     # dir as an internal orchestration artifact rather than
-                    # a docs/ deliverable — purely additive, no effect on
-                    # phases whose output never lives there.
+                    # a docs/ deliverable.
                     _Path(wf.working_directory) / CONTEXT_DIR_NAME / declared_output,
                 ]:
                     if candidate.exists():
                         found = True
                         break
-        # 2. Check feature folder
-        if not found:
-            feature_dir = _Path(config.project_root) / CONTEXT_DIR_NAME / "features"
-            if feature_dir.exists():
+            # 2. Check feature folder
+            if not found and feature_dir.exists():
                 for d in sorted(feature_dir.iterdir(), reverse=True):
                     candidate = d / "docs" / declared_output
                     if candidate.exists():
                         found = True
                         break
+            if not found:
+                missing.append(declared_output)
 
-        if found:
+        if not missing:
             return None
 
-        # Optional phases may complete without the declared output.
+        # Optional phases may complete without their declared output(s).
         optional_phases = load_optional_phases(task.workflow_id)
         if phase.name in optional_phases:
             logger.info(
-                f"Agent completed optional phase {phase.name} without {declared_output} — allowing"
+                f"Agent completed optional phase {phase.name} without {missing} — allowing"
             )
             return None
 
         logger.warning(
-            f"Agent claimed done on {phase.name} but {declared_output} not found — rejecting"
+            f"Agent claimed done on {phase.name} but {missing} not found — rejecting"
         )
         task.status = "failed"
         task.failure_reason = (
-            f"Agent claimed completion but {declared_output} was not created."
+            f"Agent claimed completion but required output(s) missing: {', '.join(missing)}"
         )
         session.commit()
         return {
             "status": "failed",
-            "message": f"Output validation failed: {declared_output} not found",
+            "message": f"Output validation failed: missing {', '.join(missing)}",
         }
 
     @staticmethod

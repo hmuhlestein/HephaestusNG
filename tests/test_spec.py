@@ -354,8 +354,10 @@ class TestConstants:
         assert "development" not in GATED_PHASES
 
     def test_phase_artifacts(self):
-        assert PHASE_OUTPUT_ARTIFACTS["qa_validation"] == "qa_result.json"
-        assert PHASE_OUTPUT_ARTIFACTS["architecture_design"] == "architecture.md"
+        """PHASE_OUTPUT_ARTIFACTS now only holds workflow.yaml required_output
+        overrides (e.g. Phase 0) -- per-phase artifacts are derived from each
+        phase's own YAML outputs: list, see get_phase_required_files."""
+        assert PHASE_OUTPUT_ARTIFACTS == {}
 
     def test_default_spec_keys(self):
         assert "max_failed_tests" in DEFAULT_SPEC
