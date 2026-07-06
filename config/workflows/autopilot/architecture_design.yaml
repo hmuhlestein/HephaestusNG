@@ -8,7 +8,7 @@ description: |
   creates detailed task breakdowns with blocking relationships, and produces
   implementation-ready specifications for each component.
 done_definitions:
-  - "requirements_analysis.md reviewed and understood"
+  - "./docs/requirements_analysis.md reviewed and understood"
   - "System architecture diagram/description created"
   - "Component interfaces defined (APIs, data models, contracts)"
   - "Data flow documented"

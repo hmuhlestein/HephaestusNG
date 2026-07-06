@@ -11,8 +11,8 @@ description: |
   DEFER (nice to have). Report findings clearly — do NOT edit production code.
   The developer will fix based on your report.
 done_definitions:
-  - "architecture.md reviewed and design rationale understood"
-  - "requirements_analysis.md reviewed and requirements verified"
+  - "./docs/architecture.md reviewed and design rationale understood"
+  - "./docs/requirements_analysis.md reviewed and requirements verified"
   - "All implemented code reviewed against architecture"
   - "Component boundaries verified"
   - "Interface contracts verified"
