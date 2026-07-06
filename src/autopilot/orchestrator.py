@@ -872,7 +872,9 @@ def attempt_recovery(workflow_id: str, logger: OrchestratorLogger) -> Tuple[bool
         if not project_path:
             project_path = os.getenv("PROJECT_PATH")
         if not project_path:
-            return recovered  # Can't determine project path
+            if recovered:
+                return True, f"Recovered: {', '.join(recovered)}"
+            return False, "No recovery actions needed"  # Can't determine project path
         # Check if repo needs cleanup
         status_result = subprocess.run(
             ["git", "status", "--porcelain"],
