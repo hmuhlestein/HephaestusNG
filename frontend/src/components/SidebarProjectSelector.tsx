@@ -153,16 +153,44 @@ const SidebarProjectSelector: React.FC<SidebarProjectSelectorProps> = ({ collaps
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Repository Path</label>
-                  <input
-                    type="text"
-                    value={newPath}
-                    onChange={(e) => setNewPath(e.target.value)}
-                    placeholder="/path/to/your/project"
-                    className="w-full px-4 py-2.5 border border-gray-200 rounded-xl text-sm font-mono focus:outline-none focus:ring-2 focus:ring-violet-500"
-                    autoFocus
-                  />
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={newPath}
+                      onChange={(e) => setNewPath(e.target.value)}
+                      placeholder="/path/to/your/project"
+                      className="flex-1 px-4 py-2.5 border border-gray-200 rounded-xl text-sm font-mono focus:outline-none focus:ring-2 focus:ring-violet-500"
+                    />
+                    <label
+                      className="px-3 py-2.5 border border-gray-200 rounded-xl text-sm hover:bg-gray-50 transition-colors flex items-center gap-1.5 cursor-pointer"
+                      title="Browse for folder"
+                    >
+                      <FolderOpen className="w-4 h-4 text-gray-500" />
+                      Browse
+                      <input
+                        type="file"
+                        accept=".md,.txt,.json,.yaml,.yml,.toml,.gitignore"
+                        className="hidden"
+                        onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          if (file) {
+                            // Extract folder path from the file's webkitRelativePath
+                            // or use the file name to hint at the project folder
+                            const relativePath = (file as any).webkitRelativePath;
+                            if (relativePath) {
+                              // e.g. "my-project/README.md" -> "my-project"
+                              const folderName = relativePath.split('/')[0];
+                              setNewPath(folderName);
+                            }
+                          }
+                          // Reset input so same file can be selected again
+                          e.target.value = '';
+                        }}
+                      />
+                    </label>
+                  </div>
                   <p className="text-xs text-gray-400 mt-1">
-                    Must be a git repository
+                    Must be a git repository. Use Browse to select a file in the project folder.
                   </p>
                 </div>
                 <div className="flex justify-end gap-3 pt-2">
