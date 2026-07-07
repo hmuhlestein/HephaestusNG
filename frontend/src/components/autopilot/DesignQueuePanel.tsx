@@ -165,8 +165,9 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
     onSuccess: (_data, variables) => {
       queryClient.invalidateQueries({ queryKey: ['workflows'] });
       queryClient.invalidateQueries({ queryKey: ['autopilot-project-designs', projectId] });
-      // Invalidate design statuses to trigger immediate refetch (M-5 fix)
       queryClient.invalidateQueries({ queryKey: ['autopilot-design-statuses', projectId] });
+      queryClient.invalidateQueries({ queryKey: ['autopilot-status', projectId] });
+      queryClient.invalidateQueries({ queryKey: ['autopilot-status'] });
       toast.success('Workflow updated');
 
       // Pausing/stopping this one design doesn't touch the continuously-running
@@ -205,6 +206,9 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['autopilot-project-designs', projectId] });
       queryClient.invalidateQueries({ queryKey: ['autopilot-design-statuses', projectId] });
+      queryClient.invalidateQueries({ queryKey: ['workflows'] });
+      queryClient.invalidateQueries({ queryKey: ['autopilot-status', projectId] });
+      queryClient.invalidateQueries({ queryKey: ['autopilot-status'] });
       toast.success('Pipeline restarted for this design');
     },
     onError: (error: any) => {
