@@ -53,6 +53,16 @@ const Tickets: React.FC = () => {
   // Unique statuses from executions
   const availableStatuses = [...new Set(executions.map(e => e.status))].sort();
 
+  // Clear selected execution if it's filtered out
+  useEffect(() => {
+    if (selectedExecutionId && statusFilter !== 'all') {
+      const isSelected = filteredExecutions.some(e => e.id === selectedExecutionId);
+      if (!isSelected) {
+        selectExecution(null);
+      }
+    }
+  }, [statusFilter, filteredExecutions, selectedExecutionId, selectExecution]);
+
   const handleNewTicket = () => {
     // TODO: Open create ticket modal
     console.log('Create new ticket');
