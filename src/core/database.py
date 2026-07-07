@@ -214,6 +214,12 @@ class Task(Base):
     # checklist once. Set True BEFORE messaging the agent (not after), so a
     # crash between send and commit can't re-trigger the prompt.
     self_review_done = Column(Boolean, default=False, nullable=False)
+    # Telemetry only (see design doc "Telemetry" section): when self-review
+    # fired and the worktree HEAD at that moment, so the second "done" call
+    # can log elapsed time + a diff-stat of what actually changed during the
+    # review pass -- the signal for whether one pass is worth the extra turn.
+    self_review_started_at = Column(DateTime)
+    self_review_started_commit = Column(String)
 
     # Results tracking
     has_results = Column(Boolean, default=False)

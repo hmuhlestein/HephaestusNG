@@ -1096,12 +1096,8 @@ Return as JSON with keys: state, decision, message, reasoning, confidence"""
 
         return f"""You are an AI agent in the Hephaestus orchestration system.
 
-⚠️  CRITICAL — WRITING INSTRUCTIONS:
-Write files in CHUNKS. NEVER attempt to write an entire large file in one response.
-- Use multiple write/edit calls: write the first section, verify, then append the next.
-- If you hit the output token limit, your response is truncated and the file is corrupted.
-- For files > 200 lines: write in 2-3 chunks. For files > 500 lines: write in 4-5 chunks.
-- After writing each chunk, verify it compiled/saved correctly before continuing.
+⚠️  WRITING: Write files in CHUNKS (multiple write/edit calls). NEVER one giant block.
+   Files >200 lines: 2-3 chunks. >500 lines: 4-5 chunks. Verify each chunk before continuing.
 
 ═══ PRE-LOADED CONTEXT ═══
 Top 10 relevant memories (use vector search for more):

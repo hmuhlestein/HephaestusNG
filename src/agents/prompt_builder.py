@@ -15,6 +15,16 @@ from src.core.database import Task
 
 logger = logging.getLogger(__name__)
 
+# Shared writing instructions — appended to every agent prompt to prevent
+# max-output-token truncation when agents write large files.
+WRITING_INSTRUCTIONS = """
+WRITING INSTRUCTIONS (CRITICAL):
+- Write files in CHUNKS (multiple write/edit calls), NOT one giant block.
+- Files > 200 lines: 2-3 chunks. Files > 500 lines: 4-5 chunks.
+- Verify each chunk compiles/saves before writing the next.
+- Hitting the output token limit truncates and CORRUPTS the file.
+"""
+
 
 class AgentPromptBuilder:
     """Formats the initial task-assignment message for a new agent."""
@@ -218,14 +228,7 @@ NOTE: Having a workflow-level goal does NOT mean you skip hephaestus_update_task
         if is_phase_agent:
             # Compact instructions for workflow phase agents — keep context window lean
             base_message += f"""
-
-WRITING INSTRUCTIONS (CRITICAL — read before writing any files):
-- Write files in CHUNKS. Do NOT attempt to write an entire large file in one response.
-- Use multiple write/edit calls: write the first section, verify, then append the next.
-- If you hit the output token limit, your response is truncated and the file is corrupted.
-- For files > 200 lines: write in 2-3 chunks. For files > 500 lines: write in 4-5 chunks.
-- After writing each chunk, verify it compiled/saved correctly before continuing.
-- NEVER try to write a complete implementation in one giant code block.
+{{WRITING_INSTRUCTIONS}}
 
 INSTRUCTIONS (always pass agent_id="{agent_id}"; pass workflow_id="{workflow_id if workflow_id else "N/A"}" only for tools that accept it — save_memory and validate_my_agent_id do NOT take workflow_id, don't pass it to those):
 - Complete the task described above
@@ -245,51 +248,21 @@ Begin now.
 """
         else:
             base_message += f"""
+{{WRITING_INSTRUCTIONS}}
 
-WRITING INSTRUCTIONS (CRITICAL — read before writing any files):
-- Write files in CHUNKS. Do NOT attempt to write an entire large file in one response.
-- Use multiple write/edit calls: write the first section, verify, then append the next.
-- If you hit the output token limit, your response is truncated and the file is corrupted.
-- For files > 200 lines: write in 2-3 chunks. For files > 500 lines: write in 4-5 chunks.
-- After writing each chunk, verify it compiled/saved correctly before continuing.
-- NEVER try to write a complete implementation in one giant code block.
-
-IMPORTANT INSTRUCTIONS:
-1. Complete all the requirements listed in the COMPLETION CRITERIA above
-
-2. MCP tools (always use agent_id="{agent_id}"):
-   - hephaestus_update_task_status: Mark your task as done (task_id: {task.id})
-   - hephaestus_save_memory: Save discoveries for other agents
-   - hephaestus_search_memory: Search past memories
-   - hephaestus_create_task: Create sub-tasks
-   - hephaestus_get_tasks: Check status of other tasks
-   - hephaestus_broadcast_message: Send message to ALL active agents
-   - hephaestus_send_message: Send direct message to a SPECIFIC agent
-
-**Agent Communication**:
-- hephaestus_broadcast_message: Use when all agents need to know something
-- hephaestus_send_message: Use for direct agent-to-agent coordination
-  (use hephaestus_get_agent_status first to find agent IDs)
-
-3. **TASK COMPLETION** (REQUIRED):
-   hephaestus_update_task_status(task_id="{task.id}", agent_id="{agent_id}", status="done", ...)
-
-4. **WORKFLOW RESULT** (only if you solved the ENTIRE workflow):
-   hephaestus_submit_result(markdown_file_path="...", agent_id="{agent_id}", explanation="...", evidence=[...])
-
-5. On unrecoverable failure:
-   hephaestus_update_task_status(task_id="{task.id}", agent_id="{agent_id}", status="failed", failure_reason="...")
-
-6. Memory — save liberally throughout (not just at end):
-   Types: error_fix, discovery, decision, learning, warning, codebase_knowledge
-   Search before reinventing: hephaestus_search_memory(query="specific topic")
+INSTRUCTIONS (agent_id="{agent_id}"):
+1. Complete the task per COMPLETION CRITERIA above
+2. Task done (REQUIRED): hephaestus_update_task_status(task_id="{task.id}", agent_id="{agent_id}", status="done")
+3. On failure: hephaestus_update_task_status(task_id="{task.id}", agent_id="{agent_id}", status="failed", failure_reason="...")
+4. Solved entire workflow? Also: hephaestus_submit_result(agent_id="{agent_id}", ...)
+5. Save memories throughout: hephaestus_save_memory(content="...", agent_id="{agent_id}", memory_type="<type>")
+   Types: error_fix | discovery | decision | learning | warning | codebase_knowledge
+6. Search before reinventing: hephaestus_search_memory(query="...")
+7. Create sub-tasks: hephaestus_create_task(task_description="...", done_definition="...")
+8. Agent comms: hephaestus_broadcast_message (all agents) | hephaestus_send_message (specific agent)
 {phase_context_section}
 
-Begin working on your task now.
-
-REMEMBER:
-- Task done → hephaestus_update_task_status(task_id="{task.id}", agent_id="{agent_id}", status="done") [ALWAYS required]
-- Entire workflow solved → also hephaestus_submit_result(agent_id="{agent_id}", ...) [separate action]
+Begin now.
 """
 
         logger.info(
