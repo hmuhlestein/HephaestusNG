@@ -1600,11 +1600,17 @@ class AgentManager:
                     return "Agent terminated. Last logs:\n" + "\n".join(log_lines[-10:])
                 return "Agent terminated - no output was captured"
 
-            # For non-terminated agents, get output from tmux session
+            # For non-terminated agents, get output from transcript log or tmux
             if not agent.tmux_session_name:
                 logger.warning(f"Agent {agent_id} has no tmux session name")
                 return ""
 
+            # Try transcript log first (full history, written by pipe-pane)
+            transcript_output = self._read_transcript_log(agent, lines)
+            if transcript_output:
+                return transcript_output
+
+            # Fall back to tmux capture-pane (limited by scrollback)
             logger.debug(
                 f"Attempting to access tmux session: {agent.tmux_session_name}"
             )
@@ -1649,6 +1655,55 @@ class AgentManager:
             return ""
         finally:
             session.close()
+
+    def _read_transcript_log(self, agent, lines: int) -> str:
+        """Read output from the pipe-pane transcript log file.
+        
+        Returns the last `lines` lines from the transcript, or empty string
+        if no transcript is available.
+        """
+        try:
+            # Get the working directory from the agent's current task's workflow
+            working_dir = None
+            if agent.current_task_id:
+                from src.core.database import Task
+                session = self.db_manager.get_session()
+                try:
+                    task = session.query(Task).filter_by(id=agent.current_task_id).first()
+                    if task and task.workflow and task.workflow.working_directory:
+                        working_dir = task.workflow.working_directory
+                finally:
+                    session.close()
+            
+            # If no working dir from task, try to find transcript by searching
+            if not working_dir:
+                # Search in common locations using the session name
+                import glob
+                pattern = f"*/{CONTEXT_DIR_NAME}/tmux/{agent.tmux_session_name}.transcript.log"
+                matches = glob.glob(pattern, recursive=True)
+                if matches:
+                    transcript_path = Path(matches[0])
+                else:
+                    return ""
+            else:
+                transcript_path = Path(working_dir) / CONTEXT_DIR_NAME / "tmux" / f"{agent.tmux_session_name}.transcript.log"
+            
+            if not transcript_path.exists() or transcript_path.stat().st_size == 0:
+                return ""
+            
+            # Read last N lines efficiently
+            with open(transcript_path, 'r', errors='replace') as f:
+                if lines > 0:
+                    # Read all and take last N lines
+                    all_lines = f.readlines()
+                    tail_lines = all_lines[-lines:]
+                    return "".join(tail_lines).rstrip()
+                else:
+                    return f.read().rstrip()
+                    
+        except Exception as e:
+            logger.debug(f"Could not read transcript log: {e}")
+            return ""
 
     def _get_orchestrator_output(self, agent, lines: int) -> str:
         """Return the orchestrator's run log as human-readable text."""
