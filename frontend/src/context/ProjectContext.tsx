@@ -77,23 +77,27 @@ export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ child
       }
     },
     onSuccess: () => {
-      // Invalidate all project-scoped query families
-      queryClient.invalidateQueries({ queryKey: ['autopilot-status'] });
-      queryClient.invalidateQueries({ queryKey: ['autopilot-queue'] });
-      queryClient.invalidateQueries({ queryKey: ['autopilot-features'] });
-      queryClient.invalidateQueries({ queryKey: ['autopilot-messages'] });
-      queryClient.invalidateQueries({ queryKey: ['autopilot-logs'] });
-      queryClient.invalidateQueries({ queryKey: ['autopilot-input'] });
-      queryClient.invalidateQueries({ queryKey: ['autopilot-archived-messages'] });
-      queryClient.invalidateQueries({ queryKey: ['autopilot-project-designs'] });
-      queryClient.invalidateQueries({ queryKey: ['workflow-definitions'] });
-      queryClient.invalidateQueries({ queryKey: ['workflow-executions'] });
-      queryClient.invalidateQueries({ queryKey: ['tasks'] });
-      queryClient.invalidateQueries({ queryKey: ['agents'] });
+      // Invalidate project-scoped queries in background (don't block UI)
+      setTimeout(() => {
+        queryClient.invalidateQueries({ queryKey: ['autopilot-status'] });
+        queryClient.invalidateQueries({ queryKey: ['autopilot-queue'] });
+        queryClient.invalidateQueries({ queryKey: ['autopilot-features'] });
+        queryClient.invalidateQueries({ queryKey: ['autopilot-messages'] });
+        queryClient.invalidateQueries({ queryKey: ['autopilot-logs'] });
+        queryClient.invalidateQueries({ queryKey: ['autopilot-input'] });
+        queryClient.invalidateQueries({ queryKey: ['autopilot-archived-messages'] });
+        queryClient.invalidateQueries({ queryKey: ['autopilot-project-designs'] });
+        queryClient.invalidateQueries({ queryKey: ['workflow-definitions'] });
+        queryClient.invalidateQueries({ queryKey: ['workflow-executions'] });
+        queryClient.invalidateQueries({ queryKey: ['tasks'] });
+        queryClient.invalidateQueries({ queryKey: ['agents'] });
+      }, 0);
     },
     onSettled: () => {
-      // Always refetch to ensure we have the server state
-      queryClient.invalidateQueries({ queryKey: ['projects'] });
+      // Refetch projects in background
+      setTimeout(() => {
+        queryClient.invalidateQueries({ queryKey: ['projects'] });
+      }, 0);
     },
   });
 
