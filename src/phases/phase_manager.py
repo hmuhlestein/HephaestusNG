@@ -258,16 +258,20 @@ class PhaseManager:
                 for phase_def in workflow_def.phases:
                     phase_id = str(uuid.uuid4())
                     # phase_def is a sdk Phase dataclass; use .id as the order value
-                    outputs_val = (
+                    # Convert lists to JSON strings for Text columns
+                    import json as _json
+                    outputs_raw = (
                         phase_def.outputs
                         if isinstance(phase_def.outputs, list)
                         else ([phase_def.outputs] if phase_def.outputs else [])
                     )
-                    next_steps_val = (
+                    outputs_val = _json.dumps(outputs_raw) if outputs_raw else "[]"
+                    next_steps_raw = (
                         phase_def.next_steps
                         if isinstance(phase_def.next_steps, list)
                         else ([phase_def.next_steps] if phase_def.next_steps else [])
                     )
+                    next_steps_val = _json.dumps(next_steps_raw) if next_steps_raw else "[]"
                     phase = Phase(
                         id=phase_id,
                         workflow_id=workflow_id,

@@ -315,11 +315,10 @@ class TestEndpointValidation:
         response = client.get(
             "/api/tickets",
             headers={"X-Agent-ID": "test-agent"},
-            # Missing workflow_id query param
+            # Missing workflow_id query param - now optional, returns empty list
         )
-        # Should get 422 (validation error) because workflow_id is missing
-        assert response.status_code == 422
-        assert "workflow_id" in response.text.lower()
+        # Should get 200 with empty results (workflow_id and project_id are optional)
+        assert response.status_code == 200
 
     def test_get_tickets_with_workflow_id(self, client):
         """GET /api/tickets should work with workflow_id query param."""

@@ -210,6 +210,33 @@ class TestVerifyOutputArtifactHephaestusPath:
         assert result is None
         session.close()
 
+    def test_errors_loudly_when_working_directory_missing_rather_than_searching_elsewhere(
+        self, db, tmp_path, monkeypatch
+    ):
+        """A workflow with a workflow_id but no working_directory is a
+        worktree-tracking bug, not a normal 'agent didn't write the file'
+        case -- this must reject with a distinct system-error message, not
+        silently search some other directory (e.g. the agent's own isolated
+        worktree) for the file. See the cleanup_all_stale_branches race this
+        used to paper over via such a fallback, now fixed at the source in
+        worktree_manager.py instead."""
+        from src.autopilot import spec
+
+        monkeypatch.setitem(spec.PHASE_OUTPUT_ARTIFACTS, "Feature Architect", "features.json")
+
+        session, task = _seed(db, tmp_path, "Feature Architect")
+        wf = session.query(Workflow).filter_by(id=task.workflow_id).first()
+        wf.working_directory = None
+        session.commit()
+
+        result = TaskCompletionService.verify_output_artifact(session, task)
+
+        assert result is not None
+        assert result["status"] == "failed"
+        assert "working_directory" in result["message"]
+        assert "system error" in result["message"].lower()
+        session.close()
+
 
 SAMPLE_REPORT = """# Hephaestus Forensics Report
 
