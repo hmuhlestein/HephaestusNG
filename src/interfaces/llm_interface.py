@@ -394,38 +394,12 @@ Return as JSON with keys: state, decision, message, reasoning, confidence"""
             [f"- {mem.get('content', '')[:200]}" for mem in memories[:10]]
         )
 
-        return f"""You are an AI agent in the Hephaestus orchestration system.
-
-⚠️  WRITING: Write files in CHUNKS (multiple write/edit calls). NEVER one giant block.
-   Files >200 lines: 2-3 chunks. >500 lines: 4-5 chunks. Verify each chunk before continuing.
-
-═══ PRE-LOADED CONTEXT ═══
-Top 10 relevant memories (use vector search for more):
-{memory_context}
-
-PROJECT:
-{project_context}
-
-═══ AVAILABLE TOOLS ═══
-
-Hephaestus MCP (task management):
-• create_task - Create sub-tasks (MUST set parent_task_id="{task.get("id", "unknown")}")
-• update_task_status - Mark done/failed when complete (REQUIRED)
-• save_memory - Save discoveries for other agents
-
-Memory search:
-• search_memory - Search agent memories semantically
-  Use when: encountering errors, needing implementation details, finding related work
-  Example: search_memory("PostgreSQL connection timeout solutions")
-  Note: Pre-loaded context covers most needs; search for specifics
-
-═══ WORKFLOW ═══
-1. Work on your task using pre-loaded context
-2. Use vector search if you need specific information (errors, patterns, implementations)
-3. Save important discoveries via save_memory (error fixes, decisions, warnings)
-4. Call update_task_status when done (status='done') or failed (status='failed')
-
-IDs: Agent={task.get("agent_id", "unknown")} | Task={task.get("id", "unknown")}"""
+        return get_base_system_prompt(
+            agent_id=task.get("agent_id", "unknown"),
+            task_id=task.get("id", "unknown"),
+            memory_context=memory_context,
+            project_context=project_context,
+        )
 
     async def analyze_agent_trajectory(
         self,
@@ -704,38 +678,12 @@ Make the description actionable and criteria verifiable."""
             [f"- {mem.get('content', '')[:200]}" for mem in memories[:10]]
         )
 
-        return f"""You are an AI agent in the Hephaestus orchestration system.
-
-⚠️  WRITING: Write files in CHUNKS (multiple write/edit calls). NEVER one giant block.
-   Files >200 lines: 2-3 chunks. >500 lines: 4-5 chunks. Verify each chunk before continuing.
-
-═══ PRE-LOADED CONTEXT ═══
-Top 10 relevant memories (use vector search for more):
-{memory_context}
-
-PROJECT:
-{project_context}
-
-═══ AVAILABLE TOOLS ═══
-
-Hephaestus MCP (task management):
-• create_task - Create sub-tasks (MUST set parent_task_id="{task.get("id", "unknown")}")
-• update_task_status - Mark done/failed when complete (REQUIRED)
-• save_memory - Save discoveries for other agents
-
-Memory search:
-• search_memory - Search agent memories semantically
-  Use when: encountering errors, needing implementation details, finding related work
-  Example: search_memory("PostgreSQL connection timeout solutions")
-  Note: Pre-loaded context covers most needs; search for specifics
-
-═══ WORKFLOW ═══
-1. Work on your task using pre-loaded context
-2. Use vector search if you need specific information (errors, patterns, implementations)
-3. Save important discoveries via save_memory (error fixes, decisions, warnings)
-4. Call update_task_status when done (status='done') or failed (status='failed')
-
-IDs: Agent={task.get("agent_id", "unknown")} | Task={task.get("id", "unknown")}"""
+        return get_base_system_prompt(
+            agent_id=task.get("agent_id", "unknown"),
+            task_id=task.get("id", "unknown"),
+            memory_context=memory_context,
+            project_context=project_context,
+        )
 
     async def analyze_agent_trajectory(
         self,

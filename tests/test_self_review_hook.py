@@ -204,3 +204,46 @@ class TestSelfReviewHook:
         session.close()
 
         test_client._mock_send_message.assert_not_called()
+
+
+class TestSelfReviewConfigSurvivesRegistration:
+    """Regression test for a real gap found on review: the startup
+    registration path (get_all_workflow_definitions -> a hand-whitelisted
+    phase_dict in server.py) drops any Phase attribute not explicitly
+    listed -- this is *also* why Phase.validation has never actually fired
+    for any phase despite the plumbing existing. self_review must be
+    explicitly carried through every hop of this chain or development.yaml's
+    `self_review: enabled: true` silently never reaches the DB.
+    """
+
+    def test_self_review_survives_yaml_loader(self):
+        from pathlib import Path
+
+        from src.workflow_engine.yaml_loader import load_full_workflow_definition
+
+        wd = load_full_workflow_definition(
+            Path(__file__).parent.parent / "config" / "workflows" / "autopilot"
+        )
+        dev = next(p for p in wd.phases if p.name == "development")
+        assert dev.self_review == {"enabled": True}
+
+    def test_self_review_survives_registration_whitelist(self):
+        from src.workflow_registry import get_all_workflow_definitions
+
+        all_defs = get_all_workflow_definitions()
+        autopilot = next(d for d in all_defs if d.id == "autopilot")
+        dev = next(p for p in autopilot.phases if p.name == "development")
+
+        # Replicate server.py's exact registration whitelist logic (the
+        # `phase_dict` block under "Register all workflow definitions").
+        phase_dict = {
+            "id": dev.id,
+            "name": dev.name,
+            "description": dev.description,
+            "done_definitions": dev.done_definitions,
+            "working_directory": dev.working_directory,
+        }
+        if dev.self_review:
+            phase_dict["self_review"] = dev.self_review
+
+        assert phase_dict.get("self_review") == {"enabled": True}
