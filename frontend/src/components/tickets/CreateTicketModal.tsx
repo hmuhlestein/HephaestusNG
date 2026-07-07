@@ -143,6 +143,13 @@ const CreateTicketModal: React.FC<CreateTicketModalProps> = ({ isOpen, onClose, 
             />
           </div>
 
+          {/* Warning when no workflows available */}
+          {!workflowId && executions && executions.length === 0 && (
+            <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-sm text-amber-700">
+              No active workflows found. Start a pipeline first to create tickets.
+            </div>
+          )}
+
           {/* Workflow selector (only when no workflow is pre-selected) */}
           {!workflowId && executions && executions.length > 0 && (
             <div>
@@ -215,7 +222,7 @@ const CreateTicketModal: React.FC<CreateTicketModalProps> = ({ isOpen, onClose, 
             </button>
             <button
               type="submit"
-              disabled={createMutation.isPending || !title.trim()}
+              disabled={createMutation.isPending || !title.trim() || (!workflowId && !selectedWorkflow && (!executions || executions.length === 0))}
               className="px-4 py-2 text-sm bg-blue-600 text-white rounded-xl hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2"
             >
               {createMutation.isPending && <Loader2 className="w-4 h-4 animate-spin" />}
