@@ -13,12 +13,22 @@ import { useWebSocket } from '@/context/WebSocketContext';
 import { useProject } from '@/context/ProjectContext';
 import { formatDistanceToNow } from 'date-fns';
 
+const AGENT_TYPE_LABELS: Record<string, string> = {
+  phase: 'Pipeline Agent',
+  validator: 'Validator',
+  result_validator: 'Result Validator',
+  monitor: 'Monitor',
+  diagnostic: 'Diagnostic',
+  orchestrator: 'Autopilot Orchestrator',
+};
+
 function agentTitle(agent: Agent): string {
   if (agent.agent_type === 'orchestrator') return 'Autopilot Orchestrator';
   const shortId = agent.id.substring(0, 8);
-  const label = (agent.current_task?.phase_info?.name ?? agent.agent_type)
-    ?.replace(/_/g, ' ');
-  return label ? `${shortId} — ${label}` : shortId;
+  const label = agent.current_task?.phase_info?.name
+    ?? AGENT_TYPE_LABELS[agent.agent_type]
+    ?? agent.agent_type;
+  return `${shortId} — ${label.replace(/_/g, ' ')}`;
 }
 
 const AgentCard: React.FC<{

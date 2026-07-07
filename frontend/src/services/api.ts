@@ -374,6 +374,16 @@ export const apiService = {
     return data;
   },
 
+  pauseTask: async (taskId: string): Promise<{ success: boolean; task_id: string; status: string }> => {
+    const { data } = await api.post(`/tasks/${encodeURIComponent(taskId)}/pause`);
+    return data;
+  },
+
+  cancelTask: async (taskId: string): Promise<{ success: boolean; task_id: string }> => {
+    const { data } = await api.post(`/tasks/${encodeURIComponent(taskId)}/cancel`);
+    return data;
+  },
+
   // Ticket Tracking System Endpoints
 
   createTicket: async (
