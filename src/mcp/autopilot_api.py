@@ -320,7 +320,7 @@ class MessageItem(BaseModel):
 
 
 @router.get("/status", response_model=PipelineStatus)
-async def get_pipeline_status():
+async def get_pipeline_status(project_id: Optional[str] = None):
     from src.autopilot.service import get_autopilot_service
 
     cached = _cached("status", ttl=2.0)
@@ -340,21 +340,25 @@ async def get_pipeline_status():
             from src.core.database import Agent, Workflow, get_db
 
             with get_db() as db:
-                active_wf = (
-                    db.query(Workflow)
-                    .filter(Workflow.status.in_(["active", "paused"]))
-                    .first()
+                wf_query = db.query(Workflow).filter(
+                    Workflow.status.in_(["active", "paused"])
                 )
+                if project_id:
+                    wf_query = wf_query.filter(Workflow.project_id == project_id)
+                active_wf = wf_query.first()
                 if active_wf:
-                    active_agents = (
-                        db.query(Agent)
-                        .filter(
-                            Agent.agent_type == "phase",
-                            Agent.status.in_(["working", "idle", "starting"]),
-                        )
-                        .count()
+                    agent_query = db.query(Agent).filter(
+                        Agent.agent_type == "phase",
+                        Agent.status.in_(["working", "idle", "starting"]),
                     )
-                    if active_agents > 0:
+                    if project_id:
+                        # Filter agents assigned to tasks in this project's workflows
+                        from src.core.database import Task
+                        wf_ids = [wf.id for wf in db.query(Workflow).filter_by(project_id=project_id).all()]
+                        task_ids = [t.id for t in db.query(Task).filter(Task.workflow_id.in_(wf_ids)).all()]
+                        agent_query = agent_query.filter(Agent.current_task_id.in_(task_ids))
+                    active_agents_count = agent_query.count()
+                    if active_agents_count > 0:
                         running = True
         except Exception:
             pass
@@ -398,11 +402,15 @@ async def get_pipeline_status():
 
     try:
         with _get_db() as _db:
-            active_agents = (
-                _db.query(Agent)
-                .filter(Agent.status.in_(["working", "starting", "idle"]))
-                .count()
+            agent_query = _db.query(Agent).filter(
+                Agent.status.in_(["working", "starting", "idle"])
             )
+            if project_id:
+                from src.core.database import Task, Workflow
+                wf_ids = [wf.id for wf in _db.query(Workflow).filter_by(project_id=project_id).all()]
+                task_ids = [t.id for t in _db.query(Task).filter(Task.workflow_id.in_(wf_ids)).all()]
+                agent_query = agent_query.filter(Agent.current_task_id.in_(task_ids))
+            active_agents = agent_query.count()
     except Exception:
         active_agents = 0
 
