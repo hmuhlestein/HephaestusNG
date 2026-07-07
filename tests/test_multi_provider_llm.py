@@ -187,8 +187,8 @@ class TestLangChainLLMClient:
     def test_initialize_models(self, mock_config):
         """Test model initialization."""
         with (
-            patch("src.interfaces.langchain_llm_client.ChatOpenAI") as MockOpenAI,
-            patch("src.interfaces.langchain_llm_client.ChatGroq") as MockGroq,
+            patch("src.interfaces.langchain_llm_client.ChatOpenAI"),
+            patch("src.interfaces.langchain_llm_client.ChatGroq"),
             patch(
                 "src.interfaces.langchain_llm_client.OpenAIEmbeddings"
             ) as MockEmbeddings,
@@ -449,7 +449,7 @@ llm:
 """)
 
         config = SimpleConfig(str(config_file))
-        client = LangChainLLMClient(config.get_llm_config())
+        LangChainLLMClient(config.get_llm_config())
 
         # Verify AzureChatOpenAI was called with correct parameters
         assert mock_azure_chat.called
@@ -479,7 +479,7 @@ llm:
 """)
 
         config = SimpleConfig(str(config_file))
-        client = LangChainLLMClient(config.get_llm_config())
+        LangChainLLMClient(config.get_llm_config())
 
         # Verify AzureOpenAIEmbeddings was called
         assert mock_azure_embeddings.called
@@ -544,7 +544,7 @@ llm:
 """)
 
         config = SimpleConfig(str(config_file))
-        client = LangChainLLMClient(config.get_llm_config())
+        LangChainLLMClient(config.get_llm_config())
 
         # Verify ChatGoogleGenerativeAI was called with correct parameters
         assert mock_google_chat.called
@@ -570,7 +570,7 @@ llm:
 """)
 
         config = SimpleConfig(str(config_file))
-        client = LangChainLLMClient(config.get_llm_config())
+        LangChainLLMClient(config.get_llm_config())
 
         # Verify GoogleGenerativeAIEmbeddings was called
         assert mock_google_embeddings.called
@@ -625,7 +625,7 @@ llm:
 """)
 
         config = SimpleConfig(str(config_file))
-        client = LangChainLLMClient(config.get_llm_config())
+        LangChainLLMClient(config.get_llm_config())
 
         # Verify both chat providers were initialized
         assert mock_azure.called

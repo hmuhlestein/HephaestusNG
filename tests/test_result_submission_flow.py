@@ -129,7 +129,7 @@ Used reverse engineering tools to analyze the binary:
             "workflow-123"
         )
 
-        assert should_validate == True
+        assert should_validate
         assert criteria == "Must provide correct password with execution proof"
 
         # Step 3: Process validation outcome (passed)
@@ -180,7 +180,7 @@ Used reverse engineering tools to analyze the binary:
                 validator_agent_id="validator-789",
             )
 
-        assert outcome["validation_passed"] == True
+        assert outcome["validation_passed"]
         assert "terminate_workflow" in outcome["next_actions"]
         assert outcome["workflow_id"] == "workflow-123"
 
@@ -289,7 +289,7 @@ Used reverse engineering tools to analyze the binary:
             )
 
         # Verify workflow continues
-        assert outcome["validation_passed"] == True
+        assert outcome["validation_passed"]
         assert "continue_workflow" in outcome["next_actions"]
         assert "terminate_workflow" not in outcome["next_actions"]
 
@@ -381,7 +381,7 @@ Used reverse engineering tools to analyze the binary:
             )
 
         # Verify no workflow termination
-        assert outcome["validation_passed"] == False
+        assert not outcome["validation_passed"]
         assert outcome["next_actions"] == []  # No actions when validation fails
 
     def test_no_validation_required_flow(self):
@@ -400,5 +400,5 @@ Used reverse engineering tools to analyze the binary:
             "workflow-123"
         )
 
-        assert should_validate == False
+        assert not should_validate
         assert criteria is None

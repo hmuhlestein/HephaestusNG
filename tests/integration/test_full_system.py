@@ -431,7 +431,7 @@ class HephaestusIntegrationTest:
         mock_get_llm.return_value = mock_llm
 
         # 1. Create workflow with validation
-        workflow_id = self._create_test_workflow_with_validation()
+        self._create_test_workflow_with_validation()
 
         # 2. Create task with validation enabled
         response = requests.post(
@@ -516,7 +516,7 @@ class HephaestusIntegrationTest:
         mock_get_llm.return_value = mock_llm
 
         # 1. Create task with validation
-        workflow_id = self._create_test_workflow_with_validation()
+        self._create_test_workflow_with_validation()
 
         response = requests.post(
             f"{self.base_url}/create_task",

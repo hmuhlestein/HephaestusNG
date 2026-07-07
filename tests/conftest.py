@@ -1,16 +1,20 @@
 """Shared pytest fixtures for Hephaestus tests."""
 
+import builtins
+import json
 import os
 import tempfile
 import uuid
-import builtins
 from pathlib import Path
-from unittest.mock import MagicMock, AsyncMock, patch
+from typing import Generator
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.pool import StaticPool
 
-# Set test database environment variable before any imports
-os.environ["HEPHAESTUS_TEST_DB"] = ":memory:"
+from src.core.database import Base, DatabaseManager
 
 # Set test database environment variable before any imports
 os.environ["HEPHAESTUS_TEST_DB"] = ":memory:"
@@ -86,8 +90,6 @@ def clean_db(temp_db):
 @pytest.fixture
 def db_manager():
     """Create a fresh in-memory database manager for each test."""
-    from src.core.database import DatabaseManager
-
     manager = DatabaseManager(":memory:")
     manager.create_tables()
     yield manager
@@ -325,18 +327,6 @@ Provides fixture factories for:
 - FastAPI TestClient with all dependencies overridden
 """
 
-import json
-import os
-from typing import Generator
-from unittest.mock import Mock, patch
-
-import pytest
-from sqlalchemy import create_engine
-from sqlalchemy.orm import Session, sessionmaker
-from sqlalchemy.pool import StaticPool
-
-from src.core.database import Base, DatabaseManager
-
 # ── In-memory database ────────────────────────────────────────────
 
 
@@ -349,20 +339,12 @@ def db_session() -> Generator[Session, None, None]:
         poolclass=StaticPool,
     )
     Base.metadata.create_all(engine)
-    SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-    session = SessionLocal()
+    session_local = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    session = session_local()
     try:
         yield session
     finally:
         session.close()
-
-
-@pytest.fixture
-def db_manager(db_session) -> DatabaseManager:
-    """Create a DatabaseManager backed by in-memory SQLite."""
-    manager = Mock(spec=DatabaseManager)
-    manager.get_session.return_value = db_session
-    return manager
 
 
 # ── Autopilot service mock ────────────────────────────────────────

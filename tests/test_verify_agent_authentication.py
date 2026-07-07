@@ -12,7 +12,7 @@ hephaestus_update_task_status call kept failing with 401), so the pipeline
 retried the whole phase forever.
 """
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 

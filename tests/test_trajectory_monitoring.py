@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 
 from src.core.database import Agent, AgentLog, Task
-from src.monitoring.conductor import Conductor, SystemDecision
+from src.monitoring.conductor import Conductor
 from src.monitoring.guardian import Guardian
 from src.monitoring.trajectory_context import TrajectoryContext
 
@@ -243,7 +243,7 @@ class TestConductor:
 
     def _make_mock_llm(self):
         """Create a properly configured mock LLM provider."""
-        from unittest.mock import MagicMock, AsyncMock
+        from unittest.mock import AsyncMock, MagicMock
         mock_llm = MagicMock()
         mock_llm.analyze_system_coherence = AsyncMock()
         mock_llm.get_model_for_component = MagicMock(return_value="test-model")

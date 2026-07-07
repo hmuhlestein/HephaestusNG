@@ -177,8 +177,8 @@ class AgentDispatchService:
         FIX #12: Added rollback on commit failure.
         FIX #16: Accept optional session to avoid double-session issue.
         """
-        from src.core.database import Task
         from src.core.app_context import get_app_state
+        from src.core.database import Task
 
         server_state = get_app_state()
 

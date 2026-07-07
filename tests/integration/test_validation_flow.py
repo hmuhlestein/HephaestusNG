@@ -189,10 +189,10 @@ class TestEndToEndValidationFlow:
         session.commit()
 
         # 5. Verify inheritance
-        assert task1.validation_enabled == True, (
+        assert task1.validation_enabled, (
             "Task in validation phase should have validation enabled"
         )
-        assert task2.validation_enabled == False, (
+        assert not task2.validation_enabled, (
             "Task in non-validation phase should not have validation enabled"
         )
 
@@ -233,7 +233,7 @@ class TestEndToEndValidationFlow:
         # Verify validation was triggered
         assert task1.status == "validation_in_progress"
         assert task1.validation_iteration == 1
-        assert agent1.kept_alive_for_validation == True
+        assert agent1.kept_alive_for_validation
 
         # 7. Simulate agent completing task2 (without validation)
         agent2 = Agent(
@@ -377,15 +377,15 @@ class TestEndToEndValidationFlow:
 
         # Verify complete flow
         assert task.status == "done"
-        assert task.review_done == True
+        assert task.review_done
         assert task.validation_iteration == 2
         assert agent.status == "terminated"
 
         # Check validation history
         reviews = session.query(ValidationReview).filter_by(task_id=task.id).all()
         assert len(reviews) == 2
-        assert reviews[0].validation_passed == False
-        assert reviews[1].validation_passed == True
+        assert not reviews[0].validation_passed
+        assert reviews[1].validation_passed
 
         session.close()
 
@@ -451,7 +451,7 @@ class TestEndToEndValidationFlow:
         session.commit()
 
         # Verify validation is disabled
-        assert task.validation_enabled == False, (
+        assert not task.validation_enabled, (
             "Task should not have validation when explicitly disabled"
         )
 
@@ -486,7 +486,7 @@ class TestValidationErrorHandling:
         session.commit()
 
         # Verify no validation
-        assert task.validation_enabled == False
+        assert not task.validation_enabled
         assert task.phase_id is None
 
         session.close()
@@ -515,6 +515,6 @@ class TestValidationErrorHandling:
         session.commit()
 
         # Should default to no validation
-        assert task.validation_enabled == False
+        assert not task.validation_enabled
 
         session.close()

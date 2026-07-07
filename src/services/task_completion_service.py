@@ -12,7 +12,6 @@ low-risk extraction; the handler itself now just sequences these calls.
 import asyncio
 import logging
 import uuid
-from datetime import datetime
 from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
@@ -30,8 +29,8 @@ class TaskCompletionService:
         code_changes: list,
     ) -> None:
         """Embed and persist each reported learning as a Memory."""
-        from src.core.database import Memory
         from src.core.app_context import get_app_state
+        from src.core.database import Memory
 
         server_state = get_app_state()
 
@@ -64,7 +63,7 @@ class TaskCompletionService:
             session.add(memory)
 
     @staticmethod
-    def verify_output_artifact(session, task) -> Optional[Dict[str, Any]]:
+    def verify_output_artifact(session, task, phase=None) -> Optional[Dict[str, Any]]:
         """Output-existence hard floor: reject 'done' when any of the phase's
         own YAML-declared output files (Phase.outputs) is missing from the
         worktree/feature folder.
@@ -72,6 +71,12 @@ class TaskCompletionService:
         Every phase with at least one checkable declared output gets this
         floor now, not just a hardcoded handful — a phase can no longer
         silently skip producing its report with zero consequence.
+
+        Args:
+            phase: Pass the caller's already-fetched Phase row to skip
+                re-querying it (update_task_status's self-review gate fetches
+                the same row moments earlier for the same task_id). If not
+                given, fetched here as before.
 
         Returns a rejection response dict (already committed to DB) if a
         required file is missing, else None (caller should continue).
@@ -85,7 +90,8 @@ class TaskCompletionService:
 
         config = get_config()
 
-        phase = session.query(Phase).filter_by(id=task.phase_id).first()
+        if phase is None:
+            phase = session.query(Phase).filter_by(id=task.phase_id).first()
         if not phase:
             return None
 
@@ -212,7 +218,6 @@ class TaskCompletionService:
 
         recommendations = []
         current_priority = "medium"
-        pos = 0
         heading_re = re.compile(r"^###\s*(.+)$", re.MULTILINE)
         # Walk headings and items in document order so each item picks up
         # whichever priority heading most recently preceded it.
@@ -355,9 +360,8 @@ class TaskCompletionService:
         if not (wf and wf.working_directory):
             return
 
-        from pathlib import Path as _P
-        import asyncio
         import functools
+        from pathlib import Path as _P
 
         # build_phase_output may run pytest (Enhancement 1: independent test
         # verification). Run it in a thread pool executor so the async event
@@ -505,8 +509,8 @@ class TaskCompletionService:
         """
         from git import Repo
 
-        from src.core.database import Phase
         from src.core.app_context import get_app_state
+        from src.core.database import Phase
 
         server_state = get_app_state()
         from src.services.ticket_service import TicketService

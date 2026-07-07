@@ -415,7 +415,7 @@ class TestWriteAgentTmuxLog:
             "agent-123", "development", "test output"
         )
 
-        log_file = tmp_path / ".hephaestus" / "tmux" / "development_agent-.log"
+        tmp_path / ".hephaestus" / "tmux" / "development_agent-.log"
         # File might not exist due to path matching, but no error should occur
 
 

@@ -35,8 +35,8 @@ def setup_test_database():
     os.environ["HEPHAESTUS_TEST_DB"] = db_path
 
     # Initialize only the database manager (not full server state)
-    from src.mcp.server import server_state
     from src.core.database import DatabaseManager
+    from src.mcp.server import server_state
     
     server_state.db_manager = DatabaseManager(db_path)
 

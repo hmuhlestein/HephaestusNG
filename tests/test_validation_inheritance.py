@@ -134,10 +134,10 @@ class TestValidationInheritance:
         task1_check = session.query(Task).filter_by(id=task1.id).first()
         task2_check = session.query(Task).filter_by(id=task2.id).first()
 
-        assert task1_check.validation_enabled == True, (
+        assert task1_check.validation_enabled, (
             "Task with validation phase should have validation_enabled=True"
         )
-        assert task2_check.validation_enabled == False, (
+        assert not task2_check.validation_enabled, (
             "Task without validation phase should have validation_enabled=False"
         )
 
@@ -196,7 +196,7 @@ class TestValidationInheritance:
 
         # Verify
         task_check = session.query(Task).filter_by(id=task.id).first()
-        assert task_check.validation_enabled == True, (
+        assert task_check.validation_enabled, (
             "Task with empty validation dict should still have validation_enabled=True"
         )
 
@@ -255,7 +255,7 @@ class TestValidationInheritance:
 
         # Verify
         task_check = session.query(Task).filter_by(id=task.id).first()
-        assert task_check.validation_enabled == False, (
+        assert not task_check.validation_enabled, (
             "Task with explicitly disabled validation should have validation_enabled=False"
         )
 
@@ -358,7 +358,7 @@ class TestValidationInheritanceIntegration:
 
             # Verify
             task_check = session.query(Task).filter_by(id=task.id).first()
-            assert task_check.validation_enabled == True
+            assert task_check.validation_enabled
             assert task_check.phase_id == "test-phase-id"
 
         session.close()
@@ -445,7 +445,7 @@ class TestValidationFlowWithInheritance:
                 # In the real flow, this would be the update_task_status endpoint
 
                 # Check current task state
-                assert task.validation_enabled == True
+                assert task.validation_enabled
                 assert task.status == "in_progress"
 
                 # What should happen when agent marks done:
@@ -467,7 +467,7 @@ class TestValidationFlowWithInheritance:
                 # Verify the state changes
                 assert task.status == "validation_in_progress"
                 assert task.validation_iteration == 1
-                assert agent.kept_alive_for_validation == True
+                assert agent.kept_alive_for_validation
 
         session.close()
 
@@ -510,6 +510,6 @@ def test_phases_with_validation_yaml():
 
     # Verify validation was stored
     assert phase.validation is not None
-    assert phase.validation["enabled"] == True
+    assert phase.validation["enabled"]
     assert len(phase.validation["criteria"]) == 2
     assert phase.validation["validator_instructions"] == "Pay attention to edge cases"

@@ -11,8 +11,6 @@ verifies that behavior is correct.
 import uuid
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 
 class TestResolvePhaseId:
     """Tests for TaskEnrichmentService.resolve_phase_id."""

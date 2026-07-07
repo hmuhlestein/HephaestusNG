@@ -4,8 +4,6 @@ import asyncio
 import json
 import logging
 import os
-
-from src.prompts.loader import get_base_system_prompt
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
@@ -20,6 +18,8 @@ from langchain_openai import (
     OpenAIEmbeddings,
 )
 from pydantic import BaseModel
+
+from src.prompts.loader import get_base_system_prompt
 
 logger = logging.getLogger(__name__)
 

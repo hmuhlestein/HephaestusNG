@@ -126,6 +126,52 @@ class TestCleanupDoesNotRemoveActiveWorktree:
         assert "autopilot-phase0/live-design" in branch_names
         assert "autopilot-phase0/old-design" not in branch_names
 
+    def test_paused_workflows_worktree_survives_cleanup(
+        self, test_db, temp_repo, worktree_manager
+    ):
+        """Found on adversarial review: pause_feature (autopilot_api.py) sets
+        a workflow to 'paused' while deliberately keeping working_directory
+        intact so _resume_interrupted_workflows can restart the agent on its
+        'existing worktree branch' later. Only protecting 'active' workflows
+        left every paused one exposed to the identical worktree-deletion /
+        branch-merge-and-delete race this whole fix exists to close."""
+        import src.core.simple_config
+
+        base_path = src.core.simple_config.get_config().worktree_base_path
+        paused_path = _add_worktree(temp_repo, base_path, "autopilot-phase0/paused-design")
+
+        session = test_db.get_session()
+        session.add(
+            Workflow(
+                id=f"wf-{uuid.uuid4().hex[:8]}",
+                name="Phase 0",
+                phases_folder_path="/tmp",
+                status="paused",
+                definition_id="autopilot-phase0",
+                working_directory=str(paused_path),
+            )
+        )
+        session.add(
+            AgentBranch(
+                agent_id=f"agent-{uuid.uuid4().hex[:8]}",
+                worktree_path=str(paused_path),
+                branch_name="autopilot-phase0/paused-design",
+                parent_commit_sha=temp_repo.head.commit.hexsha,
+                base_commit_sha=temp_repo.head.commit.hexsha,
+                merge_status="active",
+            )
+        )
+        session.commit()
+        session.close()
+
+        worktree_manager.cleanup_all_stale_branches()
+
+        assert paused_path.exists(), "worktree claimed by a paused (resumable) workflow must survive cleanup"
+        branch_names = Repo(temp_repo.working_dir).git.branch(
+            "--format=%(refname:short)"
+        ).split("\n")
+        assert "autopilot-phase0/paused-design" in branch_names
+
     def test_agent_branch_still_in_progress_is_not_merged_and_deleted(
         self, test_db, temp_repo, worktree_manager
     ):
@@ -173,3 +219,53 @@ class TestCleanupDoesNotRemoveActiveWorktree:
             "while its worktree belongs to an active workflow"
         )
         assert working_path.exists()
+
+
+class TestCleanupNeverTouchesMainRepo:
+    """Critical regression test: git worktree list --porcelain reports the
+    *resolved* path for every entry, including the main repo's own, while
+    main_repo.working_dir is whatever unresolved form the Repo object was
+    opened with. On any system where the repo path involves a symlink
+    (guaranteed on macOS: /var -> /private/var), a raw string comparison
+    between the two never matches -- so the "skip the main repo" guard
+    silently never worked, and this function would try to `git worktree
+    remove` the main project repository itself, falling back to a raw
+    shutil.rmtree on failure. Confirmed live via direct reproduction.
+    """
+
+    def test_main_repo_directory_and_git_history_survive(
+        self, test_db, temp_repo, worktree_manager
+    ):
+        import src.core.simple_config
+
+        # Sanity-check the assumption this bug depended on: tempfile.mkdtemp()
+        # paths on macOS resolve through /var -> /private/var, so raw and
+        # resolved forms of the same path differ.
+        main_repo_path = Path(temp_repo.working_dir)
+        if str(main_repo_path) == str(main_repo_path.resolve()):
+            pytest.skip("main repo path has no symlink component on this platform")
+
+        base_path = src.core.simple_config.get_config().worktree_base_path
+        _add_worktree(temp_repo, base_path, "autopilot-phase0/some-design")
+
+        worktree_manager.cleanup_all_stale_branches()
+
+        assert main_repo_path.exists(), "main repo directory must survive cleanup"
+        assert (main_repo_path / ".git").exists(), "main repo's .git must survive cleanup"
+        # A real commit from before cleanup must still be reachable.
+        assert temp_repo.head.commit.message.strip() == "Initial commit"
+
+    def test_remove_worktree_refuses_main_repo_path_directly(
+        self, test_db, temp_repo, worktree_manager
+    ):
+        """Defense-in-depth: _remove_worktree itself must refuse to touch the
+        main repo, independent of whether any caller's own path-matching
+        logic correctly identified it as such. This is the sole choke point
+        every removal path goes through -- a hard guard here means a future
+        bug in a *caller's* comparison (like the one this test class's
+        sibling test found) can't reach shutil.rmtree on the main repo again."""
+        worktree_manager._remove_worktree(str(Path(temp_repo.working_dir).resolve()))
+
+        assert Path(temp_repo.working_dir).exists()
+        assert (Path(temp_repo.working_dir) / ".git").exists()
+        assert temp_repo.head.commit.message.strip() == "Initial commit"

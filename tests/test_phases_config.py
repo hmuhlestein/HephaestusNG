@@ -38,7 +38,7 @@ class TestPhasesConfig:
             on_result_found="stop_all",
         )
 
-        assert config.has_result == True
+        assert config.has_result
         assert "password" in config.result_criteria
         assert config.on_result_found == "stop_all"
 
@@ -53,7 +53,7 @@ class TestPhasesConfig:
         """Test default values for phases configuration."""
         config = PhasesConfig()
 
-        assert config.has_result == False
+        assert not config.has_result
         assert config.result_criteria is None
         assert config.on_result_found == "do_nothing"
 
@@ -67,7 +67,7 @@ class TestPhasesConfig:
 
         config = PhasesConfig.from_yaml_content(yaml_content)
 
-        assert config.has_result == True
+        assert config.has_result
         assert config.result_criteria == "Must solve the challenge and provide proof"
         assert config.on_result_found == "stop_all"
 
@@ -78,7 +78,7 @@ class TestPhasesConfig:
 
         config = PhasesConfig.from_yaml_content(yaml_content)
 
-        assert config.has_result == True
+        assert config.has_result
         assert config.result_criteria == "Some criteria"
         assert config.on_result_found == "do_nothing"  # default
 
@@ -93,7 +93,7 @@ class TestPhasesConfig:
 
         config = PhaseLoader.load_phases_config(self.temp_dir)
 
-        assert config.has_result == True
+        assert config.has_result
         assert config.result_criteria == "Find the flag and prove it works"
         assert config.on_result_found == "stop_all"
 
@@ -103,7 +103,7 @@ class TestPhasesConfig:
         config = PhaseLoader.load_phases_config(self.temp_dir)
 
         # Should return defaults
-        assert config.has_result == False
+        assert not config.has_result
         assert config.result_criteria is None
         assert config.on_result_found == "do_nothing"
 
@@ -116,7 +116,7 @@ class TestPhasesConfig:
         config = PhaseLoader.load_phases_config(self.temp_dir)
 
         # Should return defaults
-        assert config.has_result == False
+        assert not config.has_result
         assert config.result_criteria is None
         assert config.on_result_found == "do_nothing"
 
@@ -143,7 +143,7 @@ class TestPhasesConfig:
 
         config = PhaseLoader.load_phases_config(self.temp_dir)
 
-        assert config.has_result == True
+        assert config.has_result
         assert "password or flag" in config.result_criteria
         assert (
             "Execution proof" in config.result_criteria
@@ -165,7 +165,7 @@ class TestPhasesConfig:
 
         config = PhaseLoader.load_phases_config(self.temp_dir)
 
-        assert config.has_result == True
+        assert config.has_result
         assert "5+ sources" in config.result_criteria
         assert "recommendations" in config.result_criteria
         assert config.on_result_found == "do_nothing"
@@ -184,7 +184,7 @@ class TestPhasesConfig:
 
         config = PhaseLoader.load_phases_config(self.temp_dir)
 
-        assert config.has_result == True
+        assert config.has_result
         assert "root cause" in config.result_criteria.lower()
         assert "fix implemented" in config.result_criteria.lower()
         assert "tests passing" in config.result_criteria.lower()

@@ -85,7 +85,7 @@ class TestResultService:
         assert "created_at" in result
 
         # Verify task was updated
-        assert mock_task.has_results == True
+        assert mock_task.has_results
         mock_db.commit.assert_called()
 
     @patch("src.services.result_service.get_db")

@@ -262,7 +262,7 @@ async def run_monitoring_cycle(db_manager, agent_manager):
                         )
 
                 # Generate and save report
-                report = await conductor.generate_detailed_report(system_analysis)
+                await conductor.generate_detailed_report(system_analysis)
                 print("\n📄 Report generated and saved to database")
 
                 return system_analysis

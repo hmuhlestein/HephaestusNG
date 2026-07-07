@@ -7,8 +7,6 @@ import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-logger = logging.getLogger(__name__)
-
 from src.core.database import (
     Agent,
     BoardConfig,
@@ -22,6 +20,8 @@ from src.core.database import (
 )
 from src.services.ticket_history_service import TicketHistoryService
 from src.services.ticket_search_service import TicketSearchService
+
+logger = logging.getLogger(__name__)
 
 
 class TicketApprovalManager:

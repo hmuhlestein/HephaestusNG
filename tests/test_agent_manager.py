@@ -4,17 +4,17 @@ These tests address the critical test coverage gap identified in ARCHITECTURE_RE
 "create_agent_for_task and restart_agent have no direct test coverage"
 """
 
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
-from datetime import datetime
-from unittest.mock import MagicMock, patch, AsyncMock, PropertyMock
 
 from src.core.database import (
     Agent,
     AgentLog,
     DatabaseManager,
+    Phase,
     Task,
     Workflow,
-    Phase,
 )
 
 

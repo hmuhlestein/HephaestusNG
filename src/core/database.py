@@ -20,11 +20,14 @@ from sqlalchemy import (
     UniqueConstraint,
     create_engine,
     event,
+)
+from sqlalchemy import (
     exc as sqlalchemy_exc,
 )
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import backref, relationship, sessionmaker
 from sqlalchemy.pool import StaticPool
+from sqlalchemy.sql import text
 
 Base = declarative_base()
 logger = logging.getLogger(__name__)
@@ -1789,10 +1792,6 @@ class DatabaseManager:
     def drop_tables(self):
         """Drop all database tables (for testing)."""
         Base.metadata.drop_all(bind=self.engine)
-
-
-# Context manager for database sessions
-from sqlalchemy.sql import text
 
 
 @contextmanager

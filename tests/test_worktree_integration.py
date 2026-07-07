@@ -306,13 +306,13 @@ async def test_agent_termination_with_merge(agent_manager, test_db, worktree_man
     await agent_manager.terminate_agent(agent.id)
 
     # Verify merge happened - check if the file exists in main branch
-    main_repo = Repo(worktree_manager.main_repo.working_dir)
+    Repo(worktree_manager.main_repo.working_dir)
 
     # Check that merge attempted (may have failed due to uncommitted changes in test)
     # In tests, the main repo might have uncommitted changes from other tests
     # So we check the merge was at least attempted
     session = test_db.get_session()
-    updated_worktree = session.query(AgentWorktree).filter_by(agent_id=agent.id).first()
+    session.query(AgentWorktree).filter_by(agent_id=agent.id).first()
     # The worktree should be cleaned even if merge failed
     session.close()
 
@@ -379,7 +379,7 @@ def test_workspace_changes_tracking(worktree_manager, test_db):
     worktree_path = Path(result["working_directory"])
 
     # Get the base commit for comparison
-    base_commit = result["parent_commit"]
+    result["parent_commit"]
 
     # Make various changes
     # Create new file

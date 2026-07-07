@@ -481,7 +481,7 @@ class TestIntegration:
         task.validation_iteration = 1
 
         # 3. Validator spawned (mocked)
-        validator_id = f"validator-{uuid.uuid4().hex[:8]}"
+        f"validator-{uuid.uuid4().hex[:8]}"
 
         # 4. Validation fails
         task.status = "needs_work"

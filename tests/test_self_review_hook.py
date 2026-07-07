@@ -10,7 +10,7 @@ self_review enabled is unaffected.
 import os
 import tempfile
 import uuid
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -204,6 +204,102 @@ class TestSelfReviewHook:
         session.close()
 
         test_client._mock_send_message.assert_not_called()
+
+
+class TestSelfReviewComposesWithValidatorLoop:
+    """Found on adversarial review: a phase can have both self_review and
+    validation_enabled True at once. Nothing but block ordering in
+    update_task_status keeps them from firing on the same call -- this test
+    pins down the intended composition explicitly (self-review first, then
+    validation, never both on the same "done" call) so a future reordering
+    of the 3a/3b/4 blocks can't silently break it without a test noticing.
+    """
+
+    def test_self_review_fires_before_validator_not_alongside_it(
+        self, test_db, test_client
+    ):
+        session = test_db.get_session()
+        workflow_id = f"wf-{uuid.uuid4().hex[:8]}"
+        phase_id = f"phase-{uuid.uuid4().hex[:8]}"
+        task_id = f"task-{uuid.uuid4().hex[:8]}"
+        agent_id = f"agent-{uuid.uuid4().hex[:8]}"
+
+        session.add(
+            Workflow(id=workflow_id, name="t", phases_folder_path="/tmp", status="active")
+        )
+        session.add(
+            Phase(
+                id=phase_id,
+                workflow_id=workflow_id,
+                order=1,
+                name="development",
+                description="d",
+                done_definitions=["done"],
+                self_review={"enabled": True},
+            )
+        )
+        session.add(
+            Agent(id=agent_id, system_prompt="p", status="working", cli_type="claude", agent_type="phase")
+        )
+        session.add(
+            Task(
+                id=task_id,
+                raw_description="raw",
+                done_definition="done",
+                status="in_progress",
+                workflow_id=workflow_id,
+                phase_id=phase_id,
+                assigned_agent_id=agent_id,
+                validation_enabled=True,
+            )
+        )
+        session.commit()
+        session.close()
+
+        # First "done": self-review must intercept -- task must NOT reach
+        # the validator branch (status stays in_progress, not under_review).
+        resp1 = test_client.post(
+            "/update_task_status",
+            json={"task_id": task_id, "status": "done", "summary": "first pass", "key_learnings": []},
+            headers={"X-Agent-ID": agent_id},
+        )
+        assert resp1.status_code == 200, resp1.text
+        assert "self-review" in resp1.json()["message"].lower()
+
+        session = test_db.get_session()
+        task = session.query(Task).filter_by(id=task_id).first()
+        assert task.status == "in_progress"
+        assert task.validation_iteration == 0, "validator must not have fired on the first call"
+        session.close()
+
+        # Second "done": self_review_done is now True, so this call must reach
+        # the validator branch instead of re-triggering self-review. Mock out
+        # the fire-and-forget validator spawn itself: this test's minimal
+        # mocks don't provide a full agent_manager/branch_manager, so an
+        # unmocked spawn_validation fails asynchronously and its own error
+        # path flips task.status to "failed" moments after the response
+        # returns -- unrelated to (and would mask) what this test checks.
+        with patch(
+            "src.services.task_completion_service.TaskCompletionService.spawn_validation",
+            AsyncMock(),
+        ):
+            resp2 = test_client.post(
+                "/update_task_status",
+                json={"task_id": task_id, "status": "done", "summary": "re-checked", "key_learnings": []},
+                headers={"X-Agent-ID": agent_id},
+            )
+        assert resp2.status_code == 200, resp2.text
+        assert "validation" in resp2.json()["message"].lower()
+
+        session = test_db.get_session()
+        task = session.query(Task).filter_by(id=task_id).first()
+        assert task.status == "under_review", "second call must reach the validator, not self-review again"
+        assert task.validation_iteration == 1
+        session.close()
+
+        # Self-review's own message is sent exactly once, not again on the
+        # second call.
+        assert test_client._mock_send_message.call_count == 1
 
 
 class TestSelfReviewConfigSurvivesRegistration:

@@ -829,7 +829,33 @@ class WorktreeManager:
     # ── Cleanup ──────────────────────────────────────────────────
 
     def _remove_worktree(self, worktree_path: str) -> None:
-        """Remove a git worktree and its directory."""
+        """Remove a git worktree and its directory.
+
+        Hard safety guard: refuses to touch the main repo, regardless of
+        what any caller's own path-matching logic decided. This is the sole
+        choke point every removal (git worktree remove, and its shutil.rmtree
+        fallback) goes through -- putting the check here means a future bug
+        in a caller's "is this the main repo" comparison (like the resolved-
+        vs-unresolved path mismatch found and fixed in
+        cleanup_all_stale_branches, which let this exact function attempt to
+        delete the main repository) can't reach shutil.rmtree on it again.
+        """
+        try:
+            target = Path(worktree_path).resolve()
+        except OSError:
+            target = Path(worktree_path)
+        try:
+            main_repo_path = Path(self.main_repo.working_dir).resolve()
+        except OSError:
+            main_repo_path = Path(self.main_repo.working_dir)
+        if target == main_repo_path:
+            logger.error(
+                f"[WORKTREE] Refusing to remove {worktree_path} -- resolves to "
+                "the main repository, not a linked worktree. This should never "
+                "be reached; a caller's path-matching logic has a bug."
+            )
+            return
+
         try:
             self.main_repo.git.worktree("remove", worktree_path, "--force")
         except GitCommandError:
@@ -931,13 +957,34 @@ class WorktreeManager:
             # paths, but Workflow.working_directory may be stored unresolved
             # (e.g. macOS's /var -> /private/var symlink) -- comparing raw
             # strings would silently never match and defeat this guard.
+            #
+            # "paused" is protected here too, not just "active": pause_feature
+            # (autopilot_api.py) sets a workflow to "paused" while deliberately
+            # keeping working_directory intact so _resume_interrupted_workflows
+            # can restart the agent on its "existing worktree branch (prior
+            # commits + context intact)" later. Only excluding "active" left
+            # every paused workflow exposed to the identical worktree-deletion
+            # race this guard exists to fix -- found on review.
             active_working_directories = {
                 str(Path(wf.working_directory).resolve())
                 for wf in session.query(Workflow)
-                .filter(Workflow.status == "active")
+                .filter(Workflow.status.in_(["active", "paused"]))
                 .all()
                 if wf.working_directory
             }
+            # Resolved, not raw: git worktree list --porcelain reports the
+            # canonical path for EVERY entry, including the main repo's own.
+            # self.main_repo.working_dir is whatever unresolved form the Repo
+            # object was opened with. On any system where the repo lives under
+            # a symlink (guaranteed on macOS: /var -> /private/var), a raw
+            # string comparison would NEVER match -- meaning a "skip the main
+            # repo" guard built that way silently never works, and this
+            # function would try to `git worktree remove` the main project
+            # repository itself, falling back to a raw shutil.rmtree on
+            # failure. Confirmed live via direct reproduction. (_remove_worktree
+            # itself also hard-refuses the main repo path as defense-in-depth,
+            # independent of this check.)
+            main_repo_path = str(Path(self.main_repo.working_dir).resolve())
             # Branch checked out at each active workflow's worktree, so Step 2
             # below can skip it too -- protecting the worktree directory alone
             # isn't enough: `git merge <branch>` doesn't require the branch to
@@ -947,24 +994,11 @@ class WorktreeManager:
             # though its worktree directory now survives.
             active_branch_names = set()
             try:
-                blocks = self.main_repo.git.worktree("list", "--porcelain").split(
-                    "\n\n"
-                )
-                for wt in blocks:
-                    lines = wt.strip().split("\n")
-                    if not lines or not lines[0].startswith("worktree "):
-                        continue
-                    wt_path = lines[0].split(" ", 1)[1]
-                    if str(Path(wt_path).resolve()) not in active_working_directories:
-                        continue
-                    for line in lines[1:]:
-                        if line.startswith("branch "):
-                            ref = line.split(" ", 1)[1]
-                            active_branch_names.add(ref.removeprefix("refs/heads/"))
-            except GitCommandError:
-                pass
-
-            try:
+                # prune first (removes admin entries for worktrees whose
+                # directories are already gone -- never touches ones that
+                # still exist on disk), then a single porcelain listing
+                # serves both the removal loop and active-branch collection
+                # instead of parsing the same output twice.
                 self.main_repo.git.worktree("prune")
                 blocks = self.main_repo.git.worktree("list", "--porcelain").split(
                     "\n\n"
@@ -974,9 +1008,14 @@ class WorktreeManager:
                     if not lines or not lines[0].startswith("worktree "):
                         continue
                     wt_path = lines[0].split(" ", 1)[1]
-                    if wt_path == str(self.main_repo.working_dir):
+                    resolved = str(Path(wt_path).resolve())
+                    if resolved == main_repo_path:
                         continue
-                    if str(Path(wt_path).resolve()) in active_working_directories:
+                    if resolved in active_working_directories:
+                        for line in lines[1:]:
+                            if line.startswith("branch "):
+                                ref = line.split(" ", 1)[1]
+                                active_branch_names.add(ref.removeprefix("refs/heads/"))
                         continue
                     self._remove_worktree(wt_path)
                     worktrees_cleaned += 1

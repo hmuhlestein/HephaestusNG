@@ -143,7 +143,7 @@ class TestGetPhaseForTaskWithWorkflowId:
 
         # Start both workflows
         result1 = manager.start_execution("prd-to-software", "First workflow")
-        workflow_id_1 = result1[0] if isinstance(result1, tuple) else result1
+        result1[0] if isinstance(result1, tuple) else result1
 
         result2 = manager.start_execution("bugfix", "Second workflow")
         workflow_id_2 = result2[0] if isinstance(result2, tuple) else result2
@@ -179,7 +179,7 @@ class TestGetPhaseForTaskWithWorkflowId:
 
         # Start second workflow
         result2 = manager.start_execution("bugfix", "Second workflow")
-        workflow_id_2 = result2[0] if isinstance(result2, tuple) else result2
+        result2[0] if isinstance(result2, tuple) else result2
 
         # Get Phase 1 WITHOUT explicit workflow_id (should use singleton = first workflow)
         phase_id_no_explicit = manager.get_phase_for_task(
@@ -340,7 +340,7 @@ class TestWorkflowIdSingletonBehavior:
 
         # Start two workflows
         result1 = manager.start_execution("test-def", "First")
-        wf_id_1 = result1[0] if isinstance(result1, tuple) else result1
+        result1[0] if isinstance(result1, tuple) else result1
 
         result2 = manager.start_execution("test-def", "Second")
         wf_id_2 = result2[0] if isinstance(result2, tuple) else result2

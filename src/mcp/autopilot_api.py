@@ -7,6 +7,7 @@ import logging
 import os
 import subprocess
 import time
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, TypeVar
@@ -67,7 +68,6 @@ def _get_effective_queue_dir() -> str:
     if current_project_id != _active_project_id_cache:
         # Project changed — invalidate cached dirs
         DESIGN_QUEUE_DIR = ""
-        FEATURES_DIR = ""
         _active_project_id_cache = current_project_id
 
     if DESIGN_QUEUE_DIR:
@@ -112,7 +112,6 @@ def _get_effective_features_dir() -> str:
     current_project_id = _get_active_project_id()
     if current_project_id != _active_project_id_cache:
         # Project changed — invalidate cached dirs
-        DESIGN_QUEUE_DIR = ""
         FEATURES_DIR = ""
         _active_project_id_cache = current_project_id
 
@@ -1400,11 +1399,6 @@ async def get_queue_item_content(filename: str):
 
 # ── Projects ────────────────────────────────────────────────────
 
-import asyncio as _asyncio
-import hashlib
-import re
-import uuid
-
 _ORDINAL_RE = re.compile(r"^(\d+)[-_]")
 
 
@@ -1457,14 +1451,14 @@ class DesignAddRequest(BaseModel):
     extension: str = ".md"
 
 
-_project_sync_locks: Dict[str, _asyncio.Lock] = {}
-_project_lock_guard = _asyncio.Lock()
+_project_sync_locks: Dict[str, asyncio.Lock] = {}
+_project_lock_guard = asyncio.Lock()
 
 
-async def _get_project_lock(project_id: str) -> _asyncio.Lock:
+async def _get_project_lock(project_id: str) -> asyncio.Lock:
     async with _project_lock_guard:
         if project_id not in _project_sync_locks:
-            _project_sync_locks[project_id] = _asyncio.Lock()
+            _project_sync_locks[project_id] = asyncio.Lock()
         return _project_sync_locks[project_id]
 
 

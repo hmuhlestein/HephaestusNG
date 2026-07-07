@@ -251,7 +251,7 @@ def test_cleanup_worktree(worktree_manager, test_db):
     cleanup_result = worktree_manager.cleanup_worktree(agent_id)
 
     assert cleanup_result["status"] == "cleaned"
-    assert cleanup_result["branch_preserved"] == True
+    assert cleanup_result["branch_preserved"]
 
     # Verify worktree is gone
     assert not worktree_path.exists()
