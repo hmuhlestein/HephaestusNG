@@ -336,7 +336,13 @@ async def get_pipeline_status(
 ):
     from src.autopilot.service import get_autopilot_service
 
-    cache_key = f"status:{project_id}" if project_id else "status"
+    # project_path must be part of the key too, not just project_id: the
+    # self-conflict check calls this with project_id=None (global status)
+    # but a real project_path, and is_self_conflict depends on it -- without
+    # this, two different projects' self-conflict checks within the 2s TTL
+    # could get each other's cached result (both fall into the same "status"
+    # bucket since project_id is None for both).
+    cache_key = f"status:{project_id}:{project_path}" if (project_id or project_path) else "status"
     cached = _cached(cache_key, ttl=2.0)
     if cached is not None:
         return cached
@@ -2024,6 +2030,7 @@ async def reorder_project_designs(project_id: str, req: DesignReorderRequest):
 
 @router.delete("/projects/{project_id}/designs/{filename}")
 async def remove_project_design(project_id: str, filename: str):
+    logger.info(f"[DELETE] remove_project_design called: project={project_id}, file={filename}")
     from src.core.database import (
         Agent,
         AgentResult,
