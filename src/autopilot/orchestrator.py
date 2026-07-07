@@ -479,6 +479,28 @@ def complete_workflow_direct(workflow_id: str) -> bool:
         return False
 
 
+def fail_workflow_direct(workflow_id: str) -> bool:
+    """Mark workflow as failed directly in database.
+
+    For workflows that never actually finished (e.g. still "active" with
+    unfinished phases when the backend restarts) -- distinct from
+    complete_workflow_direct, which asserts the pipeline genuinely
+    succeeded. Mislabeling an abandoned/interrupted workflow "completed"
+    corrupts downstream status derivation (feature status, design
+    completeness checks) that trusts that value.
+    """
+    try:
+        with get_db() as session:
+            wf = session.query(Workflow).filter_by(id=workflow_id).first()
+            if wf:
+                wf.status = "failed"
+                return True
+        return False
+    except Exception as e:
+        logger.debug(f"[fail_workflow_direct] Failed: {e}")
+        return False
+
+
 def create_agent_for_task_direct(
     task_id: str, workflow_id: str, phase_id: Optional[str] = None
 ) -> Optional[dict]:
@@ -4581,8 +4603,31 @@ def run_continuous_pipeline(args) -> None:
             for wf in active_workflows:
                 wf_id = wf.get("id", "")
                 try:
-                    complete_workflow_direct(wf_id)
-                    logger.info(f"  Cleaned up stale workflow {wf_id[:8]}")
+                    # A workflow only reaches here because it was still
+                    # "active" when the backend died mid-run -- but if every
+                    # phase had actually finished (its final "mark completed"
+                    # step just hadn't run yet), calling it "failed" would be
+                    # just as wrong as the old unconditional "completed" was.
+                    # Check real phase completion instead of assuming either way.
+                    with get_db() as _db:
+                        incomplete_phases = (
+                            _db.query(PhaseExecution)
+                            .join(Phase)
+                            .filter(
+                                Phase.workflow_id == wf_id,
+                                PhaseExecution.status != "completed",
+                            )
+                            .count()
+                        )
+                    if incomplete_phases == 0:
+                        complete_workflow_direct(wf_id)
+                        logger.info(f"  Cleaned up stale workflow {wf_id[:8]} (all phases done -> completed)")
+                    else:
+                        fail_workflow_direct(wf_id)
+                        logger.info(
+                            f"  Cleaned up stale workflow {wf_id[:8]} "
+                            f"({incomplete_phases} phase(s) unfinished -> failed, not completed)"
+                        )
                 except Exception as e:
                     logger.warning(f"  Failed to clean up {wf_id[:8]}: {e}")
     except Exception as e:

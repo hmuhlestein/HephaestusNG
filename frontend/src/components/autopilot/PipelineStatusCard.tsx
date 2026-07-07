@@ -5,12 +5,13 @@ import { formatTime } from '@/pages/Autopilot';
 
 interface PipelineStatusCardProps {
   status: any;
+  projectName?: string;
   onToggle?: () => void;
   onMetricClick?: (metric: string) => void;
   loading?: boolean;
 }
 
-const PipelineStatusCard: React.FC<PipelineStatusCardProps> = ({ status, onToggle, onMetricClick, loading }) => {
+const PipelineStatusCard: React.FC<PipelineStatusCardProps> = ({ status, projectName, onToggle, onMetricClick, loading }) => {
   const running = status?.running ?? false;
   const currentDesign = status?.current_design;
   const designsProcessed = status?.designs_processed ?? 0;
@@ -68,7 +69,7 @@ const PipelineStatusCard: React.FC<PipelineStatusCardProps> = ({ status, onToggl
             </button>
             <div>
               <h2 className="text-2xl font-bold text-white">
-                {running ? 'Pipeline Running' : 'Pipeline Idle'}
+                {projectName || 'Pipeline'} {running ? 'Running' : 'Idle'}
               </h2>
               {currentDesign ? (
                 <div className="text-white/80 text-sm mt-1">

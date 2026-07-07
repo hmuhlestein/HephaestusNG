@@ -54,6 +54,8 @@ const Autopilot: React.FC = () => {
     queryFn: () => apiService.getAutopilotStatus(projectId || undefined),
     refetchInterval: 3000,  // Poll every 3 seconds
     enabled: !!projectId,
+    staleTime: 0,  // Always refetch when project changes
+    placeholderData: undefined,  // Don't carry over stale data from previous project
   });
 
   const togglePipeline = useMutation({
@@ -141,6 +143,7 @@ const Autopilot: React.FC = () => {
       {/* Pipeline Status Hero */}
       <PipelineStatusCard
         status={status}
+        projectName={activeProject?.name}
         onToggle={() => togglePipeline.mutate()}
         onMetricClick={(metric) => {
           if (metric === 'agents') {
