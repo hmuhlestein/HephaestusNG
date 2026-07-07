@@ -581,7 +581,7 @@ class TestDiagnosticIntegration:
             diagnostic_task = diagnostic_tasks[0]
             assert diagnostic_task.workflow_id == "integration-test-workflow"
             assert diagnostic_task.priority == "high"
-            assert diagnostic_task.phase_id is None  # Phase-agnostic
+            assert diagnostic_task.phase_id == "phase-2"  # Uses most recent phase
 
         finally:
             session.close()

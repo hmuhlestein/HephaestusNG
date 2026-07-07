@@ -3,6 +3,8 @@
 import json
 import os
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -180,6 +182,129 @@ class TestDesignQueue:
             "/api/autopilot/queue/reorder", json={"filenames": ["a.md", "ghost.md"]}
         )
         assert resp.status_code == 400
+
+
+class TestQueueRerun:
+    """Rerun must drive the in-process AutopilotService singleton (the same
+    one the play/pause button uses), not spawn/kill a separate
+    `python -m src.autopilot.orchestrator` subprocess. The subprocess path
+    could run concurrently with the in-process service -- both independently
+    calling run_phase0 -- which was the root cause of design docs getting
+    copied twice.
+    """
+
+    def test_rerun_uses_in_process_service_not_subprocess(
+        self, client, autopilot_dirs, monkeypatch, tmp_path
+    ):
+        import subprocess as subprocess_mod
+
+        project_dir = tmp_path / "project"
+        (project_dir / "docs" / "design").mkdir(parents=True)
+        design_file = project_dir / "docs" / "design" / "my_design.md"
+        design_file.write_text("# Design")
+
+        fake_service = Mock()
+        fake_service.running = False
+        fake_service.start = AsyncMock(return_value={"started": True})
+        fake_service.stop = AsyncMock(return_value={"stopped": True})
+        monkeypatch.setattr(
+            "src.autopilot.service.get_autopilot_service", lambda: fake_service
+        )
+
+        popen_mock = Mock(side_effect=AssertionError("subprocess.Popen must not be called by rerun"))
+        monkeypatch.setattr(subprocess_mod, "Popen", popen_mock)
+
+        resp = client.post(
+            "/api/autopilot/queue/rerun",
+            json={"filename": "my_design.md", "project_path": str(project_dir)},
+        )
+
+        assert resp.status_code == 200, resp.text
+        popen_mock.assert_not_called()
+        fake_service.start.assert_called_once()
+        call_kwargs = fake_service.start.call_args.kwargs
+        assert call_kwargs["project_path"] == str(project_dir)
+        assert not (Path(autopilot_dirs["state"]) / "orchestrator.pid").exists()
+
+    def test_rerun_stops_running_service_before_restarting(
+        self, client, autopilot_dirs, monkeypatch, tmp_path
+    ):
+        project_dir = tmp_path / "project"
+        (project_dir / "docs" / "design").mkdir(parents=True)
+        (project_dir / "docs" / "design" / "my_design.md").write_text("# Design")
+
+        fake_service = Mock()
+        fake_service.running = True  # already running -- rerun must stop it first
+        fake_service.start = AsyncMock(return_value={"started": True})
+        fake_service.stop = AsyncMock(return_value={"stopped": True})
+        monkeypatch.setattr(
+            "src.autopilot.service.get_autopilot_service", lambda: fake_service
+        )
+
+        resp = client.post(
+            "/api/autopilot/queue/rerun",
+            json={"filename": "my_design.md", "project_path": str(project_dir)},
+        )
+
+        assert resp.status_code == 200, resp.text
+        fake_service.stop.assert_called_once()
+        fake_service.start.assert_called_once()
+
+    def test_rerun_maps_runtime_error_to_409_not_400(
+        self, client, autopilot_dirs, monkeypatch, tmp_path
+    ):
+        """service.start() raising RuntimeError means "already running" (its
+        own docstring: "Raises: RuntimeError: If pipeline is already
+        running") -- matches /start's own convention of mapping that to 409,
+        not the generic 400 a first pass at this used. Real scenario: another
+        request races in and starts something else between Step 1's stop()
+        and Step 6's start()."""
+        project_dir = tmp_path / "project"
+        (project_dir / "docs" / "design").mkdir(parents=True)
+        (project_dir / "docs" / "design" / "my_design.md").write_text("# Design")
+
+        fake_service = Mock()
+        fake_service.running = False
+        fake_service.start = AsyncMock(
+            side_effect=RuntimeError("Pipeline is already running")
+        )
+        fake_service.stop = AsyncMock(return_value={"stopped": True})
+        monkeypatch.setattr(
+            "src.autopilot.service.get_autopilot_service", lambda: fake_service
+        )
+
+        resp = client.post(
+            "/api/autopilot/queue/rerun",
+            json={"filename": "my_design.md", "project_path": str(project_dir)},
+        )
+
+        assert resp.status_code == 409, resp.text
+
+    def test_rerun_maps_value_error_to_400(
+        self, client, autopilot_dirs, monkeypatch, tmp_path
+    ):
+        """service.start() raising ValueError means bad input (e.g. project
+        path isn't a git repo) -- matches /start's own convention of 400."""
+        project_dir = tmp_path / "project"
+        (project_dir / "docs" / "design").mkdir(parents=True)
+        (project_dir / "docs" / "design" / "my_design.md").write_text("# Design")
+
+        fake_service = Mock()
+        fake_service.running = False
+        fake_service.start = AsyncMock(
+            side_effect=ValueError("Project path is not a git repository")
+        )
+        fake_service.stop = AsyncMock(return_value={"stopped": True})
+        monkeypatch.setattr(
+            "src.autopilot.service.get_autopilot_service", lambda: fake_service
+        )
+
+        resp = client.post(
+            "/api/autopilot/queue/rerun",
+            json={"filename": "my_design.md", "project_path": str(project_dir)},
+        )
+
+        assert resp.status_code == 400, resp.text
 
 
 # ── Caching ──────────────────────────────────────────────────────
@@ -459,6 +584,44 @@ class TestPipelineStatus:
         assert data["designs_processed"] == 5
         assert data["current_design"] == "My Feature"
 
+    def test_status_reports_which_project_is_running(self, client, autopilot_dirs, monkeypatch):
+        """The (single, global) AutopilotService's running project must be
+        surfaced so the frontend can tell the user what's actually running
+        on a 409 conflict, instead of a generic "another project" message
+        that's equally confusing whether it's a genuine cross-project
+        conflict or the caller's own just-started run (a self-conflict from
+        status-polling lag)."""
+        import src.mcp.autopilot_api as api_mod
+
+        api_mod._cache.clear()
+
+        class FakeService:
+            running = True
+
+            def status(self):
+                return {
+                    "running": True,
+                    "project_path": "/Users/test/some-project",
+                    "current_design": None,
+                    "designs_processed": 0,
+                    "designs_succeeded": 0,
+                    "designs_failed": 0,
+                    "elapsed_seconds": 0,
+                    "error": None,
+                }
+
+        monkeypatch.setattr(
+            "src.autopilot.service.get_autopilot_service", lambda: FakeService()
+        )
+
+        resp = client.get("/api/autopilot/status")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["running_project_path"] == "/Users/test/some-project"
+        # No AutopilotProject DB row registered for this path (no DB wired
+        # in this test) -- falls back to the directory basename.
+        assert data["running_project_name"] == "some-project"
+
 
 # ── Messages ─────────────────────────────────────────────────────
 
@@ -541,9 +704,9 @@ class TestLogs:
 
 @pytest.fixture
 def project_dirs(tmp_path):
-    """Create a project directory with docs/design-queue containing test files."""
+    """Create a project directory with docs/design containing test files."""
     project_dir = tmp_path / "myproject"
-    design_dir = project_dir / "docs" / "design-queue"
+    design_dir = project_dir / "docs" / "design"
     design_dir.mkdir(parents=True)
 
     (design_dir / "01-auth.md").write_text("# Auth Design\nImplement OAuth2.")
@@ -799,7 +962,7 @@ class TestProjectDesigns:
         assert data["extension"] == ".md"
 
         # Verify file was created on disk
-        design_dir = dirs["project_dir"] / "docs" / "design-queue"
+        design_dir = dirs["design_dir"]
         assert (design_dir / "New_Feature.md").exists()
 
     def test_add_design_duplicate(self, project_client):
@@ -830,7 +993,7 @@ class TestProjectDesigns:
         assert resp.status_code == 200
 
         # Verify file was deleted
-        design_dir = dirs["project_dir"] / "docs" / "design-queue"
+        design_dir = dirs["design_dir"]
         assert not (design_dir / "01-auth.md").exists()
 
         # Verify DB record was deleted
@@ -887,7 +1050,7 @@ class TestProjectDesigns:
         pid = self._create_project(client, dirs)
 
         # Add a new file to the filesystem
-        design_dir = dirs["project_dir"] / "docs" / "design-queue"
+        design_dir = dirs["design_dir"]
         (design_dir / "03-api.md").write_text("# API Design")
 
         resp = client.post(f"/api/autopilot/projects/{pid}/sync")
@@ -902,7 +1065,7 @@ class TestProjectDesigns:
         pid = self._create_project(client, dirs)
 
         # Delete a file from filesystem
-        design_dir = dirs["project_dir"] / "docs" / "design-queue"
+        design_dir = dirs["design_dir"]
         (design_dir / "01-auth.md").unlink()
 
         resp = client.post(f"/api/autopilot/projects/{pid}/sync")

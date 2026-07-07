@@ -688,11 +688,8 @@ async def requeue_design(request: dict):
 async def rerun_design(request: dict):
     """Rerun a design: stop everything, move to front, start pipeline."""
     import signal
-    import subprocess
     import time
     from pathlib import Path
-
-    from dotenv import load_dotenv
 
     from src.core.database import (
         Agent,
@@ -723,7 +720,27 @@ async def rerun_design(request: dict):
     if not design_path.exists():
         raise HTTPException(404, f"Design not found in queue: {filename}")
 
-    # Step 1: Kill orchestrator process if running
+    # Step 1: Stop the pipeline if running. Uses the in-process AutopilotService
+    # (the same one the play/pause button drives) instead of spawning/killing a
+    # separate `python -m src.autopilot.orchestrator` subprocess -- that older
+    # subprocess path could run concurrently with the in-process service (both
+    # calling run_phase0 independently), and was the root cause of design docs
+    # ending up copied twice. See docs/MULTI_PROJECT_CONCURRENCY_DESIGN.md and
+    # src/autopilot/service.py's module docstring for why the in-process
+    # service replaced the subprocess approach in the first place.
+    try:
+        from src.autopilot.service import get_autopilot_service
+
+        service = get_autopilot_service()
+        if service.running:
+            await service.stop()
+    except Exception as e:
+        logger.error(f"Error stopping in-process pipeline for rerun: {e}")
+
+    # Defensive cleanup: kill any stray subprocess left over from before this
+    # endpoint stopped spawning one (a currently-running old-style process
+    # started by a previous backend version). Harmless no-op once nothing
+    # writes orchestrator.pid anymore.
     try:
         pid_dir = Path(AUTOPILOT_STATE_DIR)
         pid_file = pid_dir / "orchestrator.pid"
@@ -731,14 +748,12 @@ async def rerun_design(request: dict):
             pid = int(pid_file.read_text().strip())
             try:
                 os.kill(pid, signal.SIGTERM)
-                # Wait for process to die (up to 5 seconds)
                 for _ in range(10):
                     time.sleep(0.5)
                     try:
                         os.kill(pid, 0)  # Check if alive
                     except ProcessLookupError:
                         break
-                # Force kill if still alive
                 try:
                     os.kill(pid, signal.SIGKILL)
                     time.sleep(0.5)  # Give OS time to clean up
@@ -748,7 +763,7 @@ async def rerun_design(request: dict):
                 pass
             pid_file.unlink(missing_ok=True)
     except Exception as e:
-        logger.error(f"Error killing orchestrator: {e}")
+        logger.error(f"Error killing stray orchestrator subprocess: {e}")
 
     # Step 2: Stop all active workflows and agents
     try:
@@ -922,48 +937,26 @@ async def rerun_design(request: dict):
     except Exception as e:
         logger.error(f"Error clearing pipeline state: {e}")
 
-    # Step 6: Start pipeline
+    # Step 6: Start pipeline via the in-process AutopilotService (the same
+    # singleton the play/pause button drives), not a spawned subprocess.
     try:
-        venv_python = (
-            Path(__file__).parent.parent.parent.parent / ".venv" / "bin" / "python"
-        )
-        python = str(venv_python) if venv_python.exists() else "python"
+        from src.autopilot.service import get_autopilot_service
 
-        env_file = Path(__file__).parent.parent.parent.parent / ".env"
-        if env_file.exists():
-            load_dotenv(env_file, override=False)
-
-        env = os.environ.copy()
-
-        cmd = [
-            python,
-            "-m",
-            "src.autopilot.orchestrator",
-            "--project-path",
-            str(project),
-            "--design-queue",
-            str(queue_dir),
-            "--max-iterations",
-            "3",
-        ]
-
-        proc = subprocess.Popen(
-            cmd,
-            cwd=str(Path(__file__).parent.parent.parent.parent),
-            env=env,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True,
+        service = get_autopilot_service()
+        await service.start(
+            project_path=str(project),
+            design_queue=str(queue_dir),
+            max_iterations=3,
         )
 
-        pid_dir.mkdir(parents=True, exist_ok=True)
-        (pid_dir / "orchestrator.pid").write_text(str(proc.pid))
-
-        # Wait for new workflow to be created (up to 15 seconds)
+        # Wait for new workflow to be created (up to 15 seconds). asyncio.sleep,
+        # not time.sleep -- this is an async route handler, and a blocking
+        # sleep here would stall every other request the whole backend is
+        # serving for up to 15s, not just this one.
         new_workflow_id = None
         design_name_clean = filename.replace(".md", "").replace("_", " ").lower()
         for _ in range(30):  # 30 * 0.5s = 15s max
-            time.sleep(0.5)
+            await asyncio.sleep(0.5)
             try:
                 with get_db() as db:
                     # Check for new active workflow
@@ -985,6 +978,20 @@ async def rerun_design(request: dict):
                             break
             except Exception:
                 pass
+    except HTTPException:
+        raise
+    except ValueError as e:
+        # Matches /start's own convention: bad input (e.g. project path isn't
+        # a git repo -- a real check service.start() does that the old
+        # subprocess never surfaced clearly).
+        logger.error(f"Error starting pipeline for rerun: {e}")
+        raise HTTPException(400, f"Failed to start pipeline: {e}")
+    except RuntimeError as e:
+        # Matches /start's own convention: 409 means "already running" --
+        # possible here despite Step 1's stop() if another request raced in
+        # and started something else in the meantime.
+        logger.error(f"Error starting pipeline for rerun: {e}")
+        raise HTTPException(409, f"Failed to start pipeline: {e}")
     except Exception as e:
         logger.error(f"Error starting pipeline for rerun: {e}")
         raise HTTPException(500, f"Failed to start pipeline: {e}")

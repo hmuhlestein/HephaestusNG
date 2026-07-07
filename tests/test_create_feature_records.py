@@ -1,11 +1,24 @@
 """Tests for _create_feature_records function."""
 
+import os
 from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
 
 from src.autopilot.orchestrator import _create_feature_records
+
+
+@pytest.fixture(autouse=True)
+def test_db(tmp_path):
+    """Set up test database for all tests."""
+    db_path = str(tmp_path / "test.db")
+    os.environ["HEPHAESTUS_TEST_DB"] = db_path
+    from src.core.database import DatabaseManager
+    db = DatabaseManager(db_path)
+    db.create_tables()
+    yield db
+    os.environ["HEPHAESTUS_TEST_DB"] = ":memory:"
 
 
 @pytest.fixture
@@ -135,10 +148,16 @@ class TestCreateFeatureRecords:
             ],
         }
 
+        # Create the scope.md file so scope_doc_path gets set
+        scope_doc = designs_folder / "features" / "auth" / "scope.md"
+        scope_doc.parent.mkdir(parents=True, exist_ok=True)
+        scope_doc.write_text("# Auth Scope")
+
         records = _create_feature_records(
             design_id, features_json, designs_folder, mock_logger
         )
 
+        assert records[0]["scope_doc_path"] is not None
         scope_doc_path = Path(records[0]["scope_doc_path"])
         assert scope_doc_path.name == "scope.md"
         assert "auth" in str(scope_doc_path)

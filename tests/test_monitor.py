@@ -247,6 +247,8 @@ class TestIsTaskTimedOut:
 
 class TestGetPastSummaries:
     def test_returns_summaries(self, make_monitoring_loop, mock_db):
+        from contextlib import contextmanager
+
         session = Mock()
         # Mock GuardianAnalysis query to return empty (so fallback to AgentLog)
         session.query.return_value.filter.return_value.order_by.return_value.limit.return_value.all.return_value = []
@@ -273,7 +275,12 @@ class TestGetPastSummaries:
                 )
             ),  # AgentLog
         ]
-        mock_db.get_session.return_value = session
+
+        @contextmanager
+        def mock_session_scope():
+            yield session
+
+        mock_db.session_scope = mock_session_scope
 
         result = make_monitoring_loop._get_past_summaries_for_agent("a1", limit=5)
         assert len(result) == 2
@@ -281,18 +288,32 @@ class TestGetPastSummaries:
         assert result[0]["trajectory_summary"] == "Good progress"
 
     def test_returns_empty_when_no_logs(self, make_monitoring_loop, mock_db):
+        from contextlib import contextmanager
+
         session = Mock()
         # Both GuardianAnalysis and AgentLog return empty
         session.query.return_value.filter.return_value.order_by.return_value.limit.return_value.all.return_value = []
-        mock_db.get_session.return_value = session
+
+        @contextmanager
+        def mock_session_scope():
+            yield session
+
+        mock_db.session_scope = mock_session_scope
 
         result = make_monitoring_loop._get_past_summaries_for_agent("a1")
         assert result == []
 
     def test_skips_logs_without_details(self, make_monitoring_loop, mock_db):
+        from contextlib import contextmanager
+
         session = Mock()
         session.query.return_value.filter.return_value.order_by.return_value.limit.return_value.all.return_value = []
-        mock_db.get_session.return_value = session
+
+        @contextmanager
+        def mock_session_scope():
+            yield session
+
+        mock_db.session_scope = mock_session_scope
 
         result = make_monitoring_loop._get_past_summaries_for_agent("a1")
         assert result == []
@@ -678,24 +699,37 @@ class TestUpdateAgentHealth:
 class TestSaveConductorAnalysis:
     @pytest.mark.asyncio
     async def test_saves_analysis(self, make_monitoring_loop, mock_db):
+        from contextlib import contextmanager
+
         analysis = {
             "system_status": "healthy",
             "agents_summary": [],
             "recommendations": [],
         }
         session = Mock()
-        mock_db.get_session.return_value = session
+
+        @contextmanager
+        def mock_session_scope():
+            yield session
+
+        mock_db.session_scope = mock_session_scope
 
         await make_monitoring_loop._save_conductor_analysis(analysis)
         session.add.assert_called()
-        session.commit.assert_called()
 
     @pytest.mark.asyncio
     async def test_handles_exception(self, make_monitoring_loop, mock_db):
+        from contextlib import contextmanager
+
         analysis = {"system_status": "healthy"}
         session = Mock()
         session.add.side_effect = Exception("DB error")
-        mock_db.get_session.return_value = session
+
+        @contextmanager
+        def mock_session_scope():
+            yield session
+
+        mock_db.session_scope = mock_session_scope
 
         # Should not raise
         await make_monitoring_loop._save_conductor_analysis(analysis)

@@ -449,7 +449,7 @@ class TestAutopilotCommand:
         from src.cli.commands.autopilot import show_queue
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            queue_dir = Path(tmpdir) / "docs" / "design-queue"
+            queue_dir = Path(tmpdir) / "docs" / "design"
             queue_dir.mkdir(parents=True)
             args.project_path = tmpdir
             result = show_queue(args)
@@ -461,7 +461,7 @@ class TestAutopilotCommand:
         from src.cli.commands.autopilot import show_queue
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            queue_dir = Path(tmpdir) / "docs" / "design-queue"
+            queue_dir = Path(tmpdir) / "docs" / "design"
             queue_dir.mkdir(parents=True)
             (queue_dir / "design1.md").write_text("# Design 1")
             (queue_dir / "design2.md").write_text("# Design 2")

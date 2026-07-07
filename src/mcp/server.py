@@ -159,7 +159,7 @@ class CreateTaskRequest(BaseModel):
         ..., description="What constitutes completion", max_length=10000
     )
     ai_agent_id: str = Field(..., description="ID of requesting agent")
-    workflow_id: str = Field(..., description="ID of the workflow this task belongs to")
+    workflow_id: Optional[str] = Field(default=None, description="ID of the workflow this task belongs to")
     priority: Optional[str] = Field(default="medium", pattern="^(low|medium|high)$")
     parent_task_id: Optional[str] = Field(
         default=None, description="Parent task ID for sub-tasks"

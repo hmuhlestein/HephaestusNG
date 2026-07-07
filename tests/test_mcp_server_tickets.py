@@ -252,9 +252,10 @@ class TestMCPTicketEndpoints:
 
         assert response.status_code == 200
         data = response.json()
-        assert "total_tickets" in data
-        assert data["total_tickets"] >= 1
-        print(f"✅ Ticket stats: {data['total_tickets']} total tickets")
+        assert "stats" in data
+        assert "total_tickets" in data["stats"]
+        assert data["stats"]["total_tickets"] >= 1
+        print(f"✅ Ticket stats: {data['stats']['total_tickets']} total tickets")
 
     def test_10_resolve_ticket(self, client, headers):
         """Test POST /tickets/resolve - Resolve a ticket."""

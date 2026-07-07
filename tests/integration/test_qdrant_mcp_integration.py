@@ -11,6 +11,23 @@ from src.interfaces import get_llm_provider
 from src.memory.vector_store import VectorStoreManager
 
 
+def _qdrant_available():
+    """Check if Qdrant is running and accessible."""
+    try:
+        import httpx
+        config = get_config()
+        resp = httpx.get(f"{config.qdrant_url}/healthz", timeout=2)
+        return resp.status_code == 200
+    except Exception:
+        return False
+
+
+pytestmark = pytest.mark.skipif(
+    not _qdrant_available(),
+    reason="Qdrant not running",
+)
+
+
 @pytest.fixture
 def db_manager():
     """Create test database manager."""
