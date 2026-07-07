@@ -1176,7 +1176,7 @@ def prompt_human(reason: str, logger: OrchestratorLogger, timeout: int = 600) ->
     while time.time() - start < timeout:
         # Check if request file was dismissed (deleted by API)
         if not request_file.exists():
-            logger.info("Input request was dismissed (auto-continuing)", "WARN")
+            logger.warning("Input request was dismissed (auto-continuing)")
             response_file.unlink(missing_ok=True)
             return "c"  # Auto-continue when dismissed
 
@@ -1549,7 +1549,7 @@ def _create_integration_worktree(
         from src.core.worktree_manager import WorktreeManager
 
         cfg = get_config()
-        db = DbManager(cfg)
+        db = DbManager(str(cfg.database_path))
         try:
             wt_mgr = WorktreeManager(db_manager=db)
             wt_mgr.reload(project_path)
@@ -1600,7 +1600,7 @@ def _cleanup_worktree(
         from src.core.worktree_manager import WorktreeManager
 
         cfg = get_config()
-        db = DbManager(cfg)
+        db = DbManager(str(cfg.database_path))
         try:
             wt_mgr = WorktreeManager(db_manager=db)
             wt_mgr.reload(project_path)
@@ -3150,7 +3150,7 @@ def run_single_workflow(
         from src.core.worktree_manager import WorktreeManager
 
         cfg = get_config()
-        db = DbManager(cfg)
+        db = DbManager(str(cfg.database_path))
         wt_mgr = WorktreeManager(db_manager=db)
 
         # FIX: If project_path is already a worktree (contains .worktrees/),
@@ -3430,7 +3430,7 @@ def run_single_workflow(
                             from src.core.worktree_manager import WorktreeManager
 
                             cfg = get_config()
-                            db = DbManager(cfg)
+                            db = DbManager(str(cfg.database_path))
                             wt_mgr = WorktreeManager(db_manager=db)
                             wt_mgr.reload(Path(project_path))
 
