@@ -772,6 +772,61 @@ async def _resume_interrupted_workflows(
 
         resumed = 0
         for wf in active:
+            # On-demand retry only (never the passive startup-wide scan, which
+            # runs with reactivate=False): also reset tasks that outright
+            # failed, not just ones whose agent process died mid-flight.
+            # Without this, clicking Resume/Rerun on a workflow with a genuinely
+            # failed task flips the workflow back to "active" but leaves the
+            # failed task untouched — status derivation then flips it straight
+            # back to "failed" and nothing appears to have happened.
+            if reactivate:
+                failed_tasks = (
+                    session.query(Task)
+                    .filter(Task.workflow_id == wf.id, Task.status == "failed")
+                    .all()
+                )
+                for t in failed_tasks:
+                    t.status = "pending"
+                    t.failure_reason = None
+                    t.assigned_agent_id = None
+                if failed_tasks:
+                    session.commit()
+                    logger.info(
+                        f"[RESUME] Workflow {wf.id[:8]}: resetting "
+                        f"{len(failed_tasks)} failed task(s) for on-demand retry"
+                    )
+                for t in failed_tasks:
+                    try:
+                        if server_state.queue_service.should_queue_task():
+                            server_state.queue_service.enqueue_task(t.id)
+                        else:
+                            from src.services.agent_dispatch_service import (
+                                AgentDispatchService,
+                            )
+
+                            dispatch_context = (
+                                await AgentDispatchService.build_dispatch_context(
+                                    task_description_for_rag=t.enriched_description
+                                    or t.raw_description,
+                                    phase_id=t.phase_id,
+                                )
+                            )
+                            agent = await AgentDispatchService.dispatch(
+                                task=t,
+                                enriched_data={
+                                    "enriched_description": t.enriched_description
+                                },
+                                dispatch_context=dispatch_context,
+                            )
+                            AgentDispatchService.mark_assigned(
+                                t.id, agent.id, status="assigned"
+                            )
+                        resumed += 1
+                    except Exception as e:
+                        logger.warning(
+                            f"[RESUME] Failed to restart failed task {t.id[:8]}: {e}"
+                        )
+
             # Only tasks that still need work — a 'done' task advances via the
             # monitor's phase-completion check, not by restarting its old agent.
             task_ids = [

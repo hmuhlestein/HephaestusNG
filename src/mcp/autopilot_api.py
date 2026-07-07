@@ -643,7 +643,15 @@ async def rerun_design(request: dict):
 
     from dotenv import load_dotenv
 
-    from src.core.database import Agent, Workflow, get_db
+    from src.core.database import (
+        Agent,
+        AutopilotDesign,
+        AutopilotProject,
+        Feature,
+        Task,
+        Workflow,
+        get_db,
+    )
 
     filename = request.get("filename")
     if not filename:
@@ -716,6 +724,66 @@ async def rerun_design(request: dict):
             db.commit()
     except Exception as e:
         logger.error(f"Error stopping workflows for rerun: {e}")
+
+    # Step 2b: Clear this design's own failed state. Rerun means "clean
+    # slate" -- without this, the old failed workflow/task/feature rows
+    # stick around and derive_design_status/derive_feature_status keep
+    # rolling them up as "failed" indefinitely (they only get superseded
+    # once a brand new workflow goes "active", which can lag well behind
+    # the restarted orchestrator actually picking the design back up, or
+    # never happen if Phase 0 skips re-decomposition because Feature rows
+    # for this design already exist).
+    try:
+        with get_db() as db:
+            matching_wfs = (
+                db.query(Workflow)
+                .filter(
+                    Workflow.definition_id.in_(["autopilot", "autopilot-phase0"]),
+                    Workflow.launch_params.like(f"%{filename}%"),
+                )
+                .all()
+            )
+            wf_ids = [wf.id for wf in matching_wfs]
+            for wf in matching_wfs:
+                if wf.status == "failed":
+                    wf.status = "paused"
+
+            if wf_ids:
+                failed_tasks = (
+                    db.query(Task)
+                    .filter(Task.workflow_id.in_(wf_ids), Task.status == "failed")
+                    .all()
+                )
+                for t in failed_tasks:
+                    t.status = "pending"
+                    t.failure_reason = None
+                    t.assigned_agent_id = None
+
+            db.commit()
+
+            proj = (
+                db.query(AutopilotProject)
+                .filter_by(base_dir=str(project))
+                .first()
+            )
+            design = (
+                db.query(AutopilotDesign)
+                .filter_by(project_id=proj.id, filename=filename)
+                .first()
+                if proj
+                else None
+            )
+            if design:
+                from src.core.status_derivation import (
+                    derive_design_status,
+                    derive_feature_status,
+                )
+
+                for feat in db.query(Feature).filter_by(design_id=design.id).all():
+                    derive_feature_status(db, feat.id, write_back=True)
+                derive_design_status(db, design.id, write_back=True)
+    except Exception as e:
+        logger.error(f"Error clearing failed state for rerun: {e}")
 
     # Step 3: Clean up branches (non-blocking)
     try:
