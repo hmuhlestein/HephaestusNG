@@ -3836,7 +3836,12 @@ def run_phase0(
         features_json_path = worktree / CONTEXT_DIR_NAME / "features.json"
         if not features_json_path.exists():
             # Agent may have written to a different location inside the worktree.
-            # Search the whole worktree as a fallback before giving up.
+            # Search the whole worktree as a fallback before giving up. Deliberately
+            # NOT searching any other worktree (e.g. an agent's own isolated one) --
+            # if the file isn't in the shared worktree this workflow was launched
+            # with, that's a worktree-tracking bug to surface loudly (see
+            # cleanup_all_stale_branches's fix in worktree_manager.py), not
+            # something to route around by looking elsewhere.
             candidates = [
                 p for p in worktree.rglob("features.json")
                 if p.stat().st_size > 0
@@ -3872,8 +3877,12 @@ def run_phase0(
         # Copy Phase 0 outputs to permanent storage
         shutil.copy2(features_json_path, designs_folder / "features.json")
 
-        # Copy scope.md files
-        features_dir = worktree / CONTEXT_DIR_NAME / "features"
+        # Copy scope.md files. Derived from features_json_path's own parent
+        # (.hephaestus/), not hardcoded to the shared `worktree` -- when
+        # features_json_path was found via the agent-worktree fallback above,
+        # the scope.md files live next to it there too, not in the shared
+        # worktree this used to assume unconditionally.
+        features_dir = features_json_path.parent / "features"
         if features_dir.exists():
             for feat in features_json.get("features", []):
                 feat_id = feat.get("id", "")

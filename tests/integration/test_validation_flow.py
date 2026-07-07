@@ -52,6 +52,7 @@ orchestrator:
   evaluation_points: []
 workflow:
   has_result: false
+  result_criteria: ""
   on_result_found: do_nothing
   enable_tickets: false
   board:
@@ -198,10 +199,12 @@ class TestEndToEndValidationFlow:
         # 6. Simulate agent completing task1 (with validation)
         agent1 = Agent(
             id=str(uuid.uuid4()),
-            name="Agent 1",
-            status="active",
+            
+            status="working",
             current_task_id=task1.id,
             agent_type="phase",
+            system_prompt="test prompt",
+            cli_type="claude",
         )
         session.add(agent1)
         task1.assigned_agent_id = agent1.id
@@ -235,10 +238,12 @@ class TestEndToEndValidationFlow:
         # 7. Simulate agent completing task2 (without validation)
         agent2 = Agent(
             id=str(uuid.uuid4()),
-            name="Agent 2",
-            status="active",
+            
+            status="working",
             current_task_id=task2.id,
             agent_type="phase",
+            system_prompt="test prompt",
+            cli_type="claude",
         )
         session.add(agent2)
         task2.assigned_agent_id = agent2.id
@@ -250,7 +255,7 @@ class TestEndToEndValidationFlow:
             task2.status = "under_review"  # This shouldn't happen
         else:
             task2.status = "done"  # Direct to done
-            agent2.status = "completed"
+            agent2.status = "terminated"
 
         session.commit()
 
@@ -313,10 +318,12 @@ class TestEndToEndValidationFlow:
 
         agent = Agent(
             id="agent-123",
-            name="Implementation Agent",
-            status="active",
+            
+            status="working",
             current_task_id=task.id,
             agent_type="phase",
+            system_prompt="test prompt",
+            cli_type="claude",
         )
         session.add(agent)
         session.commit()
@@ -343,7 +350,7 @@ class TestEndToEndValidationFlow:
         session.commit()
 
         # Agent is still alive and can work on feedback
-        assert agent.status == "active"
+        assert agent.status == "working"
         assert task.status == "needs_work"
 
         # Second validation attempt - PASS
@@ -365,14 +372,14 @@ class TestEndToEndValidationFlow:
 
         task.status = "done"
         task.review_done = True
-        agent.status = "completed"
+        agent.status = "terminated"
         session.commit()
 
         # Verify complete flow
         assert task.status == "done"
         assert task.review_done == True
         assert task.validation_iteration == 2
-        assert agent.status == "completed"
+        assert agent.status == "terminated"
 
         # Check validation history
         reviews = session.query(ValidationReview).filter_by(task_id=task.id).all()

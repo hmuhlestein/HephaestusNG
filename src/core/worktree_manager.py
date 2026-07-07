@@ -33,6 +33,7 @@ from src.core.database import (
     AgentBranch,
     DatabaseManager,
     MergeConflictResolution,
+    Workflow,
     WorktreeCommit,
 )
 from src.core.simple_config import get_config
@@ -910,7 +911,59 @@ class WorktreeManager:
                 except Exception:
                     pass
 
-            # Step 1: remove all linked worktrees (except the main one)
+            # Step 1: remove all linked worktrees (except the main one and any
+            # currently claimed by an active workflow).
+            #
+            # This used to remove every linked worktree unconditionally, with
+            # no check for whether a workflow was still using it -- despite
+            # the "stale" naming, "stale" was never actually verified. This
+            # runs from a background thread fired by /autopilot/queue/rerun
+            # at the same moment a brand-new orchestrator process starts and
+            # creates a fresh Phase 0 worktree at a deterministic,
+            # design-derived path (same path reused across every retry of the
+            # same design) -- so this could, and reliably did, delete the
+            # brand-new worktree the new run had just created or was about to
+            # use, moments after Rerun was clicked. Observed live: a Feature
+            # Architect run completed successfully, but its worktree vanished
+            # ~16s later and the whole design got marked "failed" even though
+            # nothing had actually gone wrong.
+            # Resolved (not raw) paths: `git worktree list` reports canonical
+            # paths, but Workflow.working_directory may be stored unresolved
+            # (e.g. macOS's /var -> /private/var symlink) -- comparing raw
+            # strings would silently never match and defeat this guard.
+            active_working_directories = {
+                str(Path(wf.working_directory).resolve())
+                for wf in session.query(Workflow)
+                .filter(Workflow.status == "active")
+                .all()
+                if wf.working_directory
+            }
+            # Branch checked out at each active workflow's worktree, so Step 2
+            # below can skip it too -- protecting the worktree directory alone
+            # isn't enough: `git merge <branch>` doesn't require the branch to
+            # be un-checked-out anywhere, so an active workflow's in-progress
+            # branch could still get merged into main (with whatever partial
+            # commits exist so far) and force-deleted out from under it, even
+            # though its worktree directory now survives.
+            active_branch_names = set()
+            try:
+                blocks = self.main_repo.git.worktree("list", "--porcelain").split(
+                    "\n\n"
+                )
+                for wt in blocks:
+                    lines = wt.strip().split("\n")
+                    if not lines or not lines[0].startswith("worktree "):
+                        continue
+                    wt_path = lines[0].split(" ", 1)[1]
+                    if str(Path(wt_path).resolve()) not in active_working_directories:
+                        continue
+                    for line in lines[1:]:
+                        if line.startswith("branch "):
+                            ref = line.split(" ", 1)[1]
+                            active_branch_names.add(ref.removeprefix("refs/heads/"))
+            except GitCommandError:
+                pass
+
             try:
                 self.main_repo.git.worktree("prune")
                 blocks = self.main_repo.git.worktree("list", "--porcelain").split(
@@ -923,18 +976,29 @@ class WorktreeManager:
                     wt_path = lines[0].split(" ", 1)[1]
                     if wt_path == str(self.main_repo.working_dir):
                         continue
+                    if str(Path(wt_path).resolve()) in active_working_directories:
+                        continue
                     self._remove_worktree(wt_path)
                     worktrees_cleaned += 1
             except GitCommandError:
                 pass
 
-            # Step 2: merge + delete tracked active branches
-            records = (
-                session.query(AgentBranch)
+            # Step 2: merge + delete tracked active branches (skipping any
+            # branch still checked out at an active workflow's worktree --
+            # see active_branch_names above. Also skips AgentBranch rows:
+            # merge_status="active" only means "not yet merged/cleaned", the
+            # state for every currently-in-progress agent's branch, not "the
+            # agent finished" -- without this, any agent still genuinely
+            # working when this runs would have its branch merged into main
+            # and deleted mid-task.)
+            records = [
+                r
+                for r in session.query(AgentBranch)
                 .filter(AgentBranch.merge_status.in_(["active", None]))
                 .all()
-            )
-            tracked_branches = {r.branch_name for r in records}
+                if r.branch_name not in active_branch_names
+            ]
+            tracked_branches = {r.branch_name for r in records} | active_branch_names
             all_branches = [b.name for b in self.main_repo.branches]
             untracked_branches = [
                 b
