@@ -51,7 +51,7 @@ const Autopilot: React.FC = () => {
 
   const { data: status, refetch: refetchStatus } = useQuery({
     queryKey: ['autopilot-status', projectId],
-    queryFn: () => apiService.getAutopilotStatus(),
+    queryFn: () => apiService.getAutopilotStatus(projectId || undefined),
     refetchInterval: 3000,  // Poll every 3 seconds
     enabled: !!projectId,
   });

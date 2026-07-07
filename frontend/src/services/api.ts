@@ -604,8 +604,9 @@ export const apiService = {
   },
 
   // Autopilot
-  getAutopilotStatus: async (): Promise<any> => {
-    const { data } = await api.get('/autopilot/status');
+  getAutopilotStatus: async (projectId?: string): Promise<any> => {
+    const params = projectId ? `?project_id=${projectId}` : '';
+    const { data } = await api.get(`/autopilot/status${params}`);
     return data;
   },
 
