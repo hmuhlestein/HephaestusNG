@@ -98,19 +98,20 @@ def _seed(test_db, self_review_enabled: bool):
 
 
 class TestSelfReviewHook:
-    def test_first_done_defers_and_messages_agent(self, test_db, test_client):
+    def test_first_done_defers_and_messages_agent(self, test_db, test_client, caplog):
         task_id, agent_id = _seed(test_db, self_review_enabled=True)
 
-        resp = test_client.post(
-            "/update_task_status",
-            json={
-                "task_id": task_id,
-                "status": "done",
-                "summary": "finished implementing",
-                "key_learnings": [],
-            },
-            headers={"X-Agent-ID": agent_id},
-        )
+        with caplog.at_level("INFO"):
+            resp = test_client.post(
+                "/update_task_status",
+                json={
+                    "task_id": task_id,
+                    "status": "done",
+                    "summary": "finished implementing",
+                    "key_learnings": [],
+                },
+                headers={"X-Agent-ID": agent_id},
+            )
 
         assert resp.status_code == 200, resp.text
         body = resp.json()
@@ -125,9 +126,13 @@ class TestSelfReviewHook:
         task = session.query(Task).filter_by(id=task_id).first()
         assert task.self_review_done is True
         assert task.status == "in_progress"  # NOT completed yet
+        assert task.self_review_started_at is not None
         session.close()
 
-    def test_second_done_completes_normally(self, test_db, test_client):
+        fired_logs = [r.message for r in caplog.records if "[SELF-REVIEW]" in r.message]
+        assert any("fired" in m for m in fired_logs), fired_logs
+
+    def test_second_done_completes_normally(self, test_db, test_client, caplog):
         task_id, agent_id = _seed(test_db, self_review_enabled=True)
 
         # First call: deferred by self-review.
@@ -143,16 +148,17 @@ class TestSelfReviewHook:
         )
 
         # Second call: should complete normally now that self_review_done is set.
-        resp = test_client.post(
-            "/update_task_status",
-            json={
-                "task_id": task_id,
-                "status": "done",
-                "summary": "re-checked, fixed one edge case",
-                "key_learnings": [],
-            },
-            headers={"X-Agent-ID": agent_id},
-        )
+        with caplog.at_level("INFO"):
+            resp = test_client.post(
+                "/update_task_status",
+                json={
+                    "task_id": task_id,
+                    "status": "done",
+                    "summary": "re-checked, fixed one edge case",
+                    "key_learnings": [],
+                },
+                headers={"X-Agent-ID": agent_id},
+            )
 
         assert resp.status_code == 200, resp.text
         assert resp.json()["success"] is True
@@ -160,10 +166,18 @@ class TestSelfReviewHook:
         session = test_db.get_session()
         task = session.query(Task).filter_by(id=task_id).first()
         assert task.status == "done"
+        # Telemetry fields cleared after logging, so this doesn't re-log later.
+        assert task.self_review_started_at is None
+        assert task.self_review_started_commit is None
         session.close()
 
         # Self-review only fires once, not on every subsequent "done".
         assert test_client._mock_send_message.call_count == 1
+
+        completed_logs = [
+            r.message for r in caplog.records if "[SELF-REVIEW]" in r.message
+        ]
+        assert any("completed" in m for m in completed_logs), completed_logs
 
     def test_phase_without_self_review_completes_immediately(
         self, test_db, test_client

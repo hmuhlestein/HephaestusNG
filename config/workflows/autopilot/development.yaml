@@ -130,19 +130,6 @@ additional_notes: |
   logical unit ("Add Feature class to database.py", "Add run_phase0 to
   orchestrator.py"). Implement them one at a time: implement → commit → next.
 
-  EDIT SIZE LIMIT — CRITICAL: Every single edit call must add ≤50 lines.
-  Never write an entire class, module, or set of functions in one edit.
-  The correct pattern for adding a 200-line function to a file:
-    1. Edit: add the function signature + first 40 lines
-    2. Edit: add the next 40 lines (append inside the function)
-    3. Edit: add the remaining lines + closing
-    4. Run tests, then commit
-  If you try to write >50 lines in one edit your stream will die and you
-  will lose all progress. Short edits always succeed.
-
-  LARGE FILE RULE: If a file is >300 lines, never write all additions in
-  a single edit. One function or class at a time, commit each.
-
   COMMIT AFTER EACH COMPONENT: `git add -p && git commit` after every
   logical unit. Small commits = recoverable progress on session restart.
 

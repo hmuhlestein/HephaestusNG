@@ -1748,6 +1748,18 @@ class DatabaseManager:
                     )
                 except Exception:
                     pass  # Column already exists
+                try:
+                    conn.execute(
+                        text("ALTER TABLE tasks ADD COLUMN self_review_started_at DATETIME")
+                    )
+                except Exception:
+                    pass  # Column already exists
+                try:
+                    conn.execute(
+                        text("ALTER TABLE tasks ADD COLUMN self_review_started_commit VARCHAR")
+                    )
+                except Exception:
+                    pass  # Column already exists
                 conn.commit()
                 logger.info("Migrated tasks.self_review_done / phases.self_review columns")
         except Exception as e:

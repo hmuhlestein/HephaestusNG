@@ -74,6 +74,47 @@ with status="done" again — record what you changed (if anything) in the
 summary.
 """
 
+
+def _resolve_worktree_path(session, task) -> Optional[str]:
+    """Find the worktree a task's work actually lives in: the workflow's
+    shared worktree if set, else the task's own agent's isolated worktree
+    (see src/services/task_completion_service.py's verify_output_artifact
+    for the same fallback, needed for the same reason — agent creation
+    silently falls back to an isolated worktree when the shared one is
+    missing/stale).
+    """
+    if task.workflow_id:
+        wf = session.query(Workflow).filter_by(id=task.workflow_id).first()
+        if wf and wf.working_directory:
+            return wf.working_directory
+    if task.assigned_agent_id:
+        from src.core.database import AgentWorktree
+
+        record = (
+            session.query(AgentWorktree)
+            .filter_by(agent_id=task.assigned_agent_id)
+            .first()
+        )
+        if record and record.worktree_path:
+            return record.worktree_path
+    return None
+
+
+def _resolve_worktree_head_sha(session, task) -> Optional[str]:
+    """Current git HEAD commit of the worktree the task's agent is working
+    in, for self-review telemetry (see docs/GAP_CHECK_SELF_LOOP_DESIGN.md).
+    Best-effort: returns None if the worktree can't be resolved or read.
+    """
+    worktree_path = _resolve_worktree_path(session, task)
+    if not worktree_path:
+        return None
+    try:
+        return Repo(worktree_path).head.commit.hexsha
+    except Exception as e:
+        logger.debug(f"[SELF-REVIEW] Could not read worktree HEAD for task {task.id[:8]}: {e}")
+        return None
+
+
 # Initialize FastAPI app
 app = FastAPI(
     title="Hephaestus MCP Server",
@@ -2231,8 +2272,16 @@ async def update_task_status(
                 # the message is delivered, the worst case is a skipped prompt,
                 # not an infinite re-trigger of this branch on retry.
                 task.self_review_done = True
+                task.self_review_started_at = datetime.utcnow()
+                task.self_review_started_commit = _resolve_worktree_head_sha(session, task)
                 task.completion_notes = request.summary
                 session.commit()
+
+                logger.info(
+                    f"[SELF-REVIEW] Task {task.id[:8]} (phase {phase.name}) fired — "
+                    f"agent {agent_id[:8]}, worktree HEAD "
+                    f"{(task.self_review_started_commit or 'unknown')[:8]}"
+                )
 
                 await server_state.agent_manager.send_message_to_agent(
                     agent_id, SELF_REVIEW_CHECKLIST_PROMPT
@@ -2243,6 +2292,36 @@ async def update_task_status(
                     message="Self-review requested — re-check your work, then call update_task_status(done) again.",
                     termination_scheduled=False,
                 )
+
+        # 3a-2. Self-review telemetry — this task went through the gate above
+        # on a prior call and is now completing for real. Log elapsed time and
+        # a diff-stat of what changed during the review pass: the actual signal
+        # for whether one pass is worth the extra LLM turn (design doc "Telemetry").
+        if request.status == "done" and task.self_review_started_at is not None:
+            elapsed = (datetime.utcnow() - task.self_review_started_at).total_seconds()
+            diff_stat = None
+            if task.self_review_started_commit:
+                worktree_path = _resolve_worktree_path(session, task)
+                if worktree_path:
+                    try:
+                        repo = Repo(worktree_path)
+                        diff_stat = repo.git.diff(
+                            task.self_review_started_commit, "HEAD", stat=True
+                        )
+                    except Exception as e:
+                        logger.debug(
+                            f"[SELF-REVIEW] Could not diff worktree for task {task.id[:8]}: {e}"
+                        )
+            logger.info(
+                f"[SELF-REVIEW] Task {task.id[:8]} completed {elapsed:.0f}s after "
+                f"self-review fired. Diff since review: "
+                f"{diff_stat.strip() if diff_stat else '(no changes / diff unavailable)'}"
+            )
+            # Clear so this doesn't re-log if 'done' is ever seen again for the
+            # same task (shouldn't normally happen once status is terminal).
+            task.self_review_started_at = None
+            task.self_review_started_commit = None
+            session.commit()
 
         # 3b. Output-existence hard floor — reject done when declared output
         # artifact is missing. General, not phase-special-cased: drives off
