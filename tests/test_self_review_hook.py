@@ -10,7 +10,7 @@ self_review enabled is unaffected.
 import os
 import tempfile
 import uuid
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from fastapi.testclient import TestClient
@@ -33,16 +33,18 @@ def test_db():
 
 
 @pytest.fixture
-def test_client(test_db):
-    with patch("src.mcp.server.server_state.db_manager", test_db):
-        with patch("src.mcp.server.server_state.initialized", True):
-            with patch(
-                "src.mcp.server.server_state.agent_manager.send_message_to_agent",
-                AsyncMock(),
-            ) as mock_send:
-                client = TestClient(app)
-                client._mock_send_message = mock_send
-                yield client
+def test_client(test_db, monkeypatch):
+    import src.mcp.server as server_module
+
+    monkeypatch.setattr(server_module.server_state, "db_manager", test_db)
+    monkeypatch.setattr(server_module.server_state, "initialized", True, raising=False)
+    mock_send = AsyncMock()
+    mock_agent_manager = Mock()
+    mock_agent_manager.send_message_to_agent = mock_send
+    monkeypatch.setattr(server_module.server_state, "agent_manager", mock_agent_manager)
+    client = TestClient(app)
+    client._mock_send_message = mock_send
+    yield client
 
 
 def _seed(test_db, self_review_enabled: bool):
