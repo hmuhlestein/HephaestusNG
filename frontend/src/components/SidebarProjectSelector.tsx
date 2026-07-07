@@ -161,30 +161,30 @@ const SidebarProjectSelector: React.FC<SidebarProjectSelectorProps> = ({ collaps
                       placeholder="/path/to/your/project"
                       className="flex-1 px-4 py-2.5 border border-gray-200 rounded-xl text-sm font-mono focus:outline-none focus:ring-2 focus:ring-violet-500"
                     />
-                    <button
-                      type="button"
-                      onClick={async () => {
-                        try {
-                          // @ts-ignore - showDirectoryPicker is available in Chromium browsers
-                          const dirHandle = await window.showDirectoryPicker();
-                          // Try to get the actual path from the handle
-                          // Note: The File System Access API doesn't expose full paths directly
-                          // We'll use a workaround via resolve() or just show the name
-                          setNewPath(dirHandle.name);
-                          toast.success(`Selected: ${dirHandle.name}`);
-                        } catch (err: any) {
-                          if (err.name !== 'AbortError') {
-                            // Fallback: just prompt the user
-                            toast.error('Browser folder picker not available. Please type the path manually.');
-                          }
-                        }
-                      }}
-                      className="px-3 py-2.5 border border-gray-200 rounded-xl text-sm hover:bg-gray-50 transition-colors flex items-center gap-1.5"
+                    <label
+                      className="px-3 py-2.5 border border-gray-200 rounded-xl text-sm hover:bg-gray-50 transition-colors flex items-center gap-1.5 cursor-pointer"
                       title="Browse for folder"
                     >
                       <FolderOpen className="w-4 h-4 text-gray-500" />
                       Browse
-                    </button>
+                      <input
+                        type="file"
+                        // @ts-ignore
+                        webkitdirectory=""
+                        className="hidden"
+                        onChange={(e) => {
+                          const files = e.target.files;
+                          if (files && files.length > 0) {
+                            const relativePath = files[0].webkitRelativePath;
+                            if (relativePath) {
+                              // relativePath is "foldername/file.txt" — extract folder name
+                              const folderName = relativePath.split('/')[0];
+                              setNewPath(folderName);
+                            }
+                          }
+                        }}
+                      />
+                    </label>
                   </div>
                   <p className="text-xs text-gray-400 mt-1">
                     Must be a git repository
