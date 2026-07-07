@@ -208,6 +208,13 @@ class Task(Base):
     validation_iteration = Column(Integer, default=0)
     last_validation_feedback = Column(Text)
 
+    # One-shot self-review (see docs/GAP_CHECK_SELF_LOOP_DESIGN.md). Distinct
+    # from review_done above, which marks a *separate validator's* approval —
+    # this marks whether the same agent has already been sent the self-review
+    # checklist once. Set True BEFORE messaging the agent (not after), so a
+    # crash between send and commit can't re-trigger the prompt.
+    self_review_done = Column(Boolean, default=False, nullable=False)
+
     # Results tracking
     has_results = Column(Boolean, default=False)
 
@@ -436,6 +443,11 @@ class Phase(Base):
 
     # Validation configuration
     validation = Column(JSON)  # Stores validation criteria and settings
+
+    # One-shot self-review configuration, e.g. {"enabled": true} (see
+    # docs/GAP_CHECK_SELF_LOOP_DESIGN.md). Read from this phase's own YAML
+    # `self_review:` key at task-enrichment time.
+    self_review = Column(JSON)
 
     # Per-phase CLI configuration (optional - falls back to global defaults)
     cli_tool = Column(
@@ -1285,6 +1297,7 @@ class DatabaseManager:
         self._migrate_total_gotos_column()
         self._migrate_task_retry_count_column()
         self._migrate_phase_retry_count_column()
+        self._migrate_self_review_columns()
 
     def _create_fts5_tables(self):
         """Create FTS5 virtual tables and triggers for ticket search."""
@@ -1707,6 +1720,32 @@ class DatabaseManager:
                 logger.info("Migrated phases.retry_count column")
         except Exception as e:
             logger.debug(f"phases.retry_count migration (may already exist): {e}")
+
+    def _migrate_self_review_columns(self):
+        """Add tasks.self_review_done and phases.self_review for existing databases.
+
+        Idempotent - safe to call on every startup.
+        """
+        try:
+            with self.engine.connect() as conn:
+                try:
+                    conn.execute(
+                        text(
+                            "ALTER TABLE tasks ADD COLUMN self_review_done BOOLEAN DEFAULT 0 NOT NULL"
+                        )
+                    )
+                except Exception:
+                    pass  # Column already exists
+                try:
+                    conn.execute(
+                        text("ALTER TABLE phases ADD COLUMN self_review JSON")
+                    )
+                except Exception:
+                    pass  # Column already exists
+                conn.commit()
+                logger.info("Migrated tasks.self_review_done / phases.self_review columns")
+        except Exception as e:
+            logger.debug(f"self_review columns migration (may already exist): {e}")
 
     def get_session(self):
         """Get a database session."""

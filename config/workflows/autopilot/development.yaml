@@ -1,6 +1,8 @@
 id: 4
 name: development
 thinking_level: medium
+self_review:
+  enabled: true
 description: |
   Implement all components according to the architecture.
 

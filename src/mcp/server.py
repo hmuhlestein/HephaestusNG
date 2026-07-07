@@ -58,6 +58,22 @@ from src.services.workflow_result_service import WorkflowResultService
 
 logger = logging.getLogger(__name__)
 
+# One-shot self-review checklist (see docs/GAP_CHECK_SELF_LOOP_DESIGN.md).
+# Concrete and checkable by design, not an open-ended "find your own gaps" —
+# makes a no-op pass (nothing changed, same completion_notes) easy to spot
+# later against the before/after diff.
+SELF_REVIEW_CHECKLIST_PROMPT = """
+Before this is actually done, re-check your own work:
+- Re-read the design/requirements — is every requirement implemented?
+- Edge cases and error handling — anything unhandled?
+- Tests exist for new code, and they pass?
+- Any TODOs, stubs, or dead code left behind?
+
+Fix anything real you find, then call hephaestus_update_task_status
+with status="done" again — record what you changed (if anything) in the
+summary.
+"""
+
 # Initialize FastAPI app
 app = FastAPI(
     title="Hephaestus MCP Server",
@@ -2201,6 +2217,32 @@ async def update_task_status(
             logger.warning(
                 f"Task {request.task_id} completed without formal results reported"
             )
+
+        # 3a. One-shot self-review (docs/GAP_CHECK_SELF_LOOP_DESIGN.md) — the
+        # first "done" from a phase with self_review enabled doesn't complete
+        # the task; it sends a fixed checklist back to the same (still-running)
+        # agent and requires a second "done" call. Runs before the output-artifact
+        # floor and the validator loop: self-review is the cheapest, warmest-context
+        # gate and should catch what it can before either of those engage.
+        if request.status == "done" and task.phase_id and not task.self_review_done:
+            phase = session.query(Phase).filter_by(id=task.phase_id).first()
+            if phase and phase.self_review and phase.self_review.get("enabled", False):
+                # Set BEFORE messaging -- crash-safe. If the process dies before
+                # the message is delivered, the worst case is a skipped prompt,
+                # not an infinite re-trigger of this branch on retry.
+                task.self_review_done = True
+                task.completion_notes = request.summary
+                session.commit()
+
+                await server_state.agent_manager.send_message_to_agent(
+                    agent_id, SELF_REVIEW_CHECKLIST_PROMPT
+                )
+
+                return UpdateTaskStatusResponse(
+                    success=True,
+                    message="Self-review requested — re-check your work, then call update_task_status(done) again.",
+                    termination_scheduled=False,
+                )
 
         # 3b. Output-existence hard floor — reject done when declared output
         # artifact is missing. General, not phase-special-cased: drives off
