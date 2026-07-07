@@ -2,6 +2,7 @@
 
 import asyncio
 import collections
+import hashlib
 import json
 import logging
 import os
@@ -896,6 +897,7 @@ async def rerun_design(request: dict):
             env=env,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
+            start_new_session=True,
         )
 
         pid_dir.mkdir(parents=True, exist_ok=True)
