@@ -906,6 +906,13 @@ class PhaseManager:
             )
             orchestrator.total_gotos = (workflow_row.total_gotos or 0) if workflow_row else 0
 
+            # Same sync for the per-phase RETRY budget (eval_point.max_retries)
+            # -- WorkflowOrchestrator.phase_retry_counts is the same kind of
+            # in-memory-only dict as total_gotos was, and gets reset for the
+            # same reason (fresh orchestrator per call). Only this phase's
+            # entry needs syncing since evaluate() only touches phase_name's.
+            orchestrator.phase_retry_counts[phase.name] = phase.retry_count or 0
+
             # Evaluating mode - use orchestrator to decide flow
             phase_history = self._get_phase_history(session, phase.workflow_id)
             evaluation = orchestrator.evaluate(
@@ -918,6 +925,11 @@ class PhaseManager:
                 workflow_row.total_gotos or 0
             ):
                 workflow_row.total_gotos = orchestrator.total_gotos
+                session.commit()
+
+            new_phase_retry_count = orchestrator.phase_retry_counts.get(phase.name, 0)
+            if new_phase_retry_count != (phase.retry_count or 0):
+                phase.retry_count = new_phase_retry_count
                 session.commit()
 
             logger.info(
