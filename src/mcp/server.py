@@ -5841,6 +5841,20 @@ async def cancel_workflow(workflow_id: str, request: Request):
                 agent.terminated_at = datetime.utcnow()
                 terminated_count += 1
 
+        # Mark every non-terminal task failed too -- otherwise a task whose
+        # agent was just terminated above is left showing its last live
+        # status (e.g. still "in_progress") even though nothing is working
+        # on it anymore. Mirrors what pause_feature does for its "blocked" case.
+        non_terminal = {
+            "pending", "queued", "blocked", "assigned", "in_progress",
+            "under_review", "validation_in_progress", "needs_work",
+        }
+        for task in tasks:
+            if task.status in non_terminal:
+                task.status = "failed"
+                task.failure_reason = "Workflow cancelled by user"
+                task.completed_at = datetime.utcnow()
+
         # Mark as failed (can't delete due to FK constraints, using failed to indicate user cancellation)
         workflow.status = "failed"
         session.commit()
