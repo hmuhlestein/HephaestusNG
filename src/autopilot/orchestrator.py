@@ -1653,13 +1653,26 @@ def _cleanup_worktree(
                 except Exception as e:
                     logger.warning(f"Failed to remove worktree: {e}")
 
-                # Clear stale working_directory from any workflows pointing to this worktree
+                # Clear stale working_directory from any workflows pointing to
+                # this worktree -- but never touch a workflow that's still
+                # "active". This worktree path is deterministic (derived only
+                # from design_id, reused across every retry), so an old,
+                # already-finished attempt's cleanup can otherwise null out a
+                # *different*, currently-active workflow that has since
+                # legitimately reused the same path (e.g. after an abrupt
+                # orchestrator kill left an earlier attempt's cleanup
+                # deferred). Once working_directory is wrongly nulled, agent
+                # creation can't find the shared worktree (falls back to an
+                # isolated per-agent one) and output validation can't check
+                # any candidate path at all -- silently breaking a workflow
+                # that's still genuinely in progress.
                 try:
                     from src.core.database import Workflow
                     _s = db.get_session()
                     try:
                         wfs = _s.query(Workflow).filter(
-                            Workflow.working_directory == str(worktree)
+                            Workflow.working_directory == str(worktree),
+                            Workflow.status != "active",
                         ).all()
                         for wf in wfs:
                             wf.working_directory = None
