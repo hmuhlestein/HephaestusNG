@@ -760,10 +760,32 @@ Make the description actionable and criteria verifiable."""
         return self.model
 
 
+class OpenRouterProvider(OpenAIProvider):
+    """OpenRouter provider (OpenAI-compatible API with custom base URL)."""
+
+    def __init__(
+        self,
+        api_key: str,
+        model: str = "xiaomi/mimo-v2.5",
+        embedding_model: str = "text-embedding-ada-002",
+    ):
+        import httpx
+        import openai
+
+        self.client = openai.AsyncOpenAI(
+            api_key=api_key,
+            base_url="https://openrouter.ai/api/v1",
+            http_client=httpx.AsyncClient(),
+        )
+        self.model = model
+        self.embedding_model = embedding_model
+
+
 # Registry for LLM providers
 LLM_PROVIDERS = {
     "openai": OpenAIProvider,
     "anthropic": AnthropicProvider,
+    "openrouter": OpenRouterProvider,
 }
 
 
