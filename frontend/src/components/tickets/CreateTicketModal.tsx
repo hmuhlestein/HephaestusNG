@@ -35,6 +35,7 @@ const CreateTicketModal: React.FC<CreateTicketModalProps> = ({ isOpen, onClose, 
   const [ticketType, setTicketType] = useState('feature');
   const [priority, setPriority] = useState('medium');
   const [tags, setTags] = useState('');
+  const [selectedWorkflow, setSelectedWorkflow] = useState<string>('');
 
   // Fetch workflows for the dropdown
   const { data: executions } = useQuery({
@@ -55,8 +56,8 @@ const CreateTicketModal: React.FC<CreateTicketModalProps> = ({ isOpen, onClose, 
 
   const createMutation = useMutation({
     mutationFn: async () => {
-      const targetWorkflowId = workflowId || executions?.[0]?.id;
-      if (!targetWorkflowId) throw new Error('No workflow selected');
+      const targetWorkflowId = workflowId || selectedWorkflow || executions?.[0]?.id;
+      if (!targetWorkflowId) throw new Error('No workflow selected — please select one');
 
       return apiService.createTicket({
         workflow_id: targetWorkflowId,
@@ -141,6 +142,25 @@ const CreateTicketModal: React.FC<CreateTicketModalProps> = ({ isOpen, onClose, 
               className="w-full px-4 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
             />
           </div>
+
+          {/* Workflow selector (only when no workflow is pre-selected) */}
+          {!workflowId && executions && executions.length > 0 && (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Workflow</label>
+              <select
+                value={selectedWorkflow}
+                onChange={(e) => setSelectedWorkflow(e.target.value)}
+                className="w-full px-4 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+              >
+                <option value="">Select workflow...</option>
+                {executions.map((exec: any) => (
+                  <option key={exec.id} value={exec.id}>
+                    {exec.definition_name || exec.description?.split('\n')[0] || exec.id.slice(0, 12)}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
 
           {/* Type and Priority */}
           <div className="grid grid-cols-2 gap-4">
