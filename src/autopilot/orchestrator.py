@@ -423,6 +423,7 @@ def terminate_agent_direct(agent_id: str) -> bool:
             if agent:
                 agent.status = "terminated"
                 agent.current_task_id = None  # Clear stale reference
+                agent.terminated_at = datetime.utcnow()
                 return True
         return False
     except Exception as e:

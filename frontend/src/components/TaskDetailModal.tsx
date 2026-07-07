@@ -1271,6 +1271,7 @@ ${taskDetails.child_tasks.map((t: any) => `- ${t.description} (${t.status})`).jo
             tmux_session_name: null,
             health_check_failures: 0,
             created_at: taskDetails.agent_info.created_at || '',
+            terminated_at: null,
             last_activity: taskDetails.agent_info.last_activity,
           }}
           onClose={() => setShowAgentOutput(false)}

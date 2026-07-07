@@ -147,6 +147,63 @@ class TestCreateAgentForTask:
             assert saved_agent.current_task_id == "task-1"
     
     @pytest.mark.asyncio
+    async def test_session_id_uses_feature_model_launch_params(
+        self, mock_agent_manager, sample_task, db_manager
+    ):
+        """Regression: feature-model workflows (the standard shape since the
+        Feature Architect split) store project_path/feature_id in
+        launch_params, not project_id/design_slug. Without a fallback to
+        those keys, session_id was silently always "" for every such
+        workflow, so phases meant to share a session (e.g.
+        architectural_review resuming architecture_design's context, per
+        workflow.yaml's session_roles) always launched a cold --no-session
+        agent instead -- while the phase's own prompt still claimed
+        continuity ("You have warm context...").
+
+        Found live: architectural_review agent re-ran pytest and cat'd
+        runtime logs from scratch instead of using prior context, because
+        it never actually had any.
+        """
+        with db_manager.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-1").first()
+            wf.launch_params = {
+                "project_path": "/private/tmp/heph-smoke-test",
+                "feature_id": "calculator-module",
+            }
+
+        mock_agent_manager.branch_manager.create_worktree = MagicMock(
+            return_value="/tmp/test-project-agent"
+        )
+        mock_agent_manager.llm_provider.generate_agent_prompt = AsyncMock(
+            return_value="You are an AI agent."
+        )
+
+        mock_session = MagicMock()
+        mock_session.name = "agent-session-3"
+        mock_agent_manager.tmux_server.new_session.return_value = mock_session
+        mock_session.attached_window.attached_pane = MagicMock()
+
+        with patch("src.agents.manager.get_cli_agent") as mock_get_cli:
+            mock_cli = MagicMock()
+            mock_cli.get_launch_command.return_value = ["pi", "--task", "test"]
+            mock_get_cli.return_value = mock_cli
+
+            await mock_agent_manager.create_agent_for_task(
+                task=sample_task,
+                enriched_data={"description": "Implement feature X"},
+                memories=[],
+                project_context="Test project context",
+                cli_type="pi",
+                working_directory="/tmp/test-project",
+            )
+
+        _, call_kwargs = mock_cli.get_launch_command.call_args
+        assert call_kwargs["session_id"], (
+            "session_id should be derived from project_path/feature_id "
+            "when project_id/design_slug are absent"
+        )
+
+    @pytest.mark.asyncio
     async def test_creates_agent_log_entry(self, mock_agent_manager, sample_task, db_manager):
         """Should create agent log entry when agent is created."""
         mock_agent_manager.branch_manager.create_worktree = MagicMock(

@@ -263,6 +263,34 @@ const AgentCard: React.FC<{
             {agent.tmux_session_name}
           </div>
         )}
+
+        {/* Timestamps */}
+        <div className="pt-2 border-t border-gray-100 space-y-1">
+          {agent.created_at && (
+            <div className="flex items-center text-xs text-gray-400">
+              <Clock className="w-3 h-3 mr-1" />
+              <span>Started: {new Date(agent.created_at).toLocaleString()}</span>
+            </div>
+          )}
+          {agent.current_task?.started_at && (
+            <div className="flex items-center text-xs text-gray-400">
+              <Clock className="w-3 h-3 mr-1" />
+              <span>Task: {new Date(agent.current_task.started_at).toLocaleString()}</span>
+            </div>
+          )}
+          {agent.current_task?.runtime_seconds != null && agent.current_task.runtime_seconds > 0 && (
+            <div className="flex items-center text-xs text-gray-400">
+              <Clock className="w-3 h-3 mr-1" />
+              <span>Elapsed: {formatRuntime(agent.current_task.runtime_seconds)}</span>
+            </div>
+          )}
+          {(agent.status === 'terminated' || agent.current_task?.completed_at) && (
+            <div className="flex items-center text-xs text-gray-400">
+              <Clock className="w-3 h-3 mr-1" />
+              <span>Finished: {agent.terminated_at ? new Date(agent.terminated_at).toLocaleString() : agent.current_task?.completed_at ? new Date(agent.current_task.completed_at).toLocaleString() : 'N/A'}</span>
+            </div>
+          )}
+        </div>
       </div>
     </motion.div>
   );

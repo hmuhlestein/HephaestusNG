@@ -7,6 +7,7 @@ export interface Agent {
   tmux_session_name: string | null;
   health_check_failures: number;
   created_at: string;
+  terminated_at: string | null;
   last_activity: string | null;
   workflow?: {
     id: string;
@@ -20,6 +21,7 @@ export interface Agent {
     status: string;
     priority: string;
     started_at: string | null;
+    completed_at: string | null;
     runtime_seconds: number;
     phase_info?: {
       id: string;

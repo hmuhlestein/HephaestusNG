@@ -4139,6 +4139,7 @@ async def list_agents(
                 if a.last_activity
                 else None,
                 "created_at": a.created_at.isoformat() if a.created_at else None,
+                "terminated_at": getattr(a, 'terminated_at', None).isoformat() if getattr(a, 'terminated_at', None) else None,
                 "tmux_session_name": a.tmux_session_name,
                 "cli_type": getattr(a, "cli_type", None),
                 "current_task": None,
@@ -4157,6 +4158,8 @@ async def list_agents(
                         )[:200],
                         "status": task.status,
                         "priority": task.priority,
+                        "started_at": task.started_at.isoformat() if task.started_at else None,
+                        "completed_at": task.completed_at.isoformat() if task.completed_at else None,
                         "runtime_seconds": int(
                             (datetime.utcnow() - task.started_at).total_seconds()
                         )
@@ -4231,6 +4234,8 @@ async def list_agents(
                         )[:200],
                         "status": last_task.status,
                         "priority": last_task.priority,
+                        "started_at": last_task.started_at.isoformat() if last_task.started_at else None,
+                        "completed_at": last_task.completed_at.isoformat() if last_task.completed_at else None,
                         "runtime_seconds": int(
                             (last_task.completed_at - last_task.started_at).total_seconds()
                         )
@@ -5682,6 +5687,7 @@ async def stop_workflow(workflow_id: str, request: Request):
                     pass
                 agent.status = "terminated"
                 agent.current_task_id = None  # Clear stale reference
+                agent.terminated_at = datetime.utcnow()
                 terminated_count += 1
 
         workflow.status = "paused"
@@ -5779,6 +5785,7 @@ async def cancel_workflow(workflow_id: str, request: Request):
                     pass
                 agent.status = "terminated"
                 agent.current_task_id = None  # Clear stale reference
+                agent.terminated_at = datetime.utcnow()
                 terminated_count += 1
 
         # Mark as failed (can't delete due to FK constraints, using failed to indicate user cancellation)
