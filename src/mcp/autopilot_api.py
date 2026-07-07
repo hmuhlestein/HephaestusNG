@@ -18,7 +18,7 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel
 
-from src.core.constants import AUTOPILOT_STATE_DIR, CONTEXT_DIR_NAME, DESIGN_SUBDIR
+from src.core.constants import AUTOPILOT_STATE_DIR, CONTEXT_DIR_NAME, DESIGN_CONTEXT_SUBDIR, DESIGN_SUBDIR
 
 logger = logging.getLogger(__name__)
 
@@ -89,11 +89,8 @@ def _get_effective_queue_dir() -> str:
                 "No active project configured. Set DESIGN_QUEUE_DIR or activate a project."
             )
 
-        queue_dir = Path(proj.base_dir) / DESIGN_SUBDIR
-        if not queue_dir.exists():
-            raise FileNotFoundError(
-                f"Design queue directory does not exist: {queue_dir}. Create it and add design documents."
-            )
+        queue_dir = Path(proj.base_dir) / DESIGN_CONTEXT_SUBDIR
+        queue_dir.mkdir(parents=True, exist_ok=True)
 
         DESIGN_QUEUE_DIR = str(queue_dir)
         return DESIGN_QUEUE_DIR
@@ -715,7 +712,8 @@ async def rerun_design(request: dict):
         raise HTTPException(400, f"Project path does not exist: {project_path}")
 
     # Validate design exists in queue
-    queue_dir = project / DESIGN_SUBDIR
+    queue_dir = project / DESIGN_CONTEXT_SUBDIR
+    queue_dir.mkdir(parents=True, exist_ok=True)
     design_path = queue_dir / filename
     if not design_path.exists():
         raise HTTPException(404, f"Design not found in queue: {filename}")
@@ -1095,7 +1093,7 @@ Tasks:
 {chr(10).join(task_summary) if task_summary else "No tasks found"}
 
 YOUR JOB:
-1. Read the design doc at {project / DESIGN_SUBDIR / filename} (READ ONLY - do not modify)
+1. Read the design doc at {project / DESIGN_CONTEXT_SUBDIR / filename} (READ ONLY - do not modify)
 2. Check what has been completed so far in the feature folder
 3. Identify what's blocking progress
 4. You have FULL AUTHORITY to:
@@ -1220,7 +1218,7 @@ def _run_repair(repair_id: str, filename: str, project: Path, logger):
                 status="active",
                 launch_params=json.dumps(
                     {
-                        "design_document": str(project / DESIGN_SUBDIR / filename),
+                        "design_document": str(project / DESIGN_CONTEXT_SUBDIR / filename),
                         "project_path": str(project),
                         "repair_mode": True,
                     }
@@ -1577,7 +1575,7 @@ def _get_design_queue_dir(project_base: str) -> Path:
     
     Designs are stored outside the git repo so commits don't delete them.
     """
-    return Path(project_base) / CONTEXT_DIR_NAME / "designs"
+    return Path(project_base) / DESIGN_CONTEXT_SUBDIR
 
 
 def _extract_ordinal(filename: str) -> Optional[int]:
@@ -1598,25 +1596,11 @@ def _sync_project_designs(
 
     MUST be called within an active DB session (the `db` parameter).
     Returns list of design dicts.
-    
-    Only checks .hephaestus/designs/ (not git-tracked). Logs a warning
-    if old docs/design/ files are found.
     """
     from src.core.database import AutopilotDesign
 
-    design_dir = Path(project_base) / CONTEXT_DIR_NAME / "designs"
+    design_dir = Path(project_base) / DESIGN_CONTEXT_SUBDIR
     design_dir.mkdir(parents=True, exist_ok=True)
-    
-    # Warn if old location has files
-    old_dir = Path(project_base) / DESIGN_SUBDIR
-    if old_dir.exists():
-        old_files = list(old_dir.glob("*.md")) + list(old_dir.glob("*.txt"))
-        if old_files:
-            logger.warning(
-                f"[DESIGN] Found {len(old_files)} design(s) in {old_dir} "
-                f"(git-tracked). Move them to {design_dir} to prevent "
-                f"git commits from deleting them."
-            )
 
     fs_files: Dict[str, Path] = {}
     for ext in ALLOWED_EXTENSIONS:
@@ -1983,7 +1967,7 @@ async def add_project_design(project_id: str, req: DesignAddRequest):
 
     # Store in .hephaestus/designs/ (not git-tracked) so git commits
     # don't delete design files.
-    design_dir = Path(base_dir) / CONTEXT_DIR_NAME / "designs"
+    design_dir = Path(base_dir) / DESIGN_CONTEXT_SUBDIR
     design_dir.mkdir(parents=True, exist_ok=True)
 
     ext = req.extension if req.extension in ALLOWED_EXTENSIONS else ".md"

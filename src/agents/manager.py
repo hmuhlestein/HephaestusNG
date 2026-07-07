@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional
 
 import libtmux
 
-from src.core.constants import AUTOPILOT_STATE_DIR, CONTEXT_DIR_NAME, DESIGN_SUBDIR
+from src.core.constants import AUTOPILOT_STATE_DIR, CONTEXT_DIR_NAME, DESIGN_CONTEXT_SUBDIR, DESIGN_SUBDIR
 from src.core.database import (
     Agent,
     AgentLog,
@@ -398,7 +398,7 @@ class AgentManager:
                             if working_directory:
                                 wd = _P(working_directory)
                                 cands = []
-                                dq = wd / DESIGN_SUBDIR
+                                dq = wd / DESIGN_CONTEXT_SUBDIR
                                 if dq.is_dir():
                                     cands += sorted(dq.glob("*.md"))
                                 cands += [
