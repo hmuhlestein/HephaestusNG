@@ -16,7 +16,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from src.core.constants import AUTOPILOT_STATE_DIR, DESIGN_SUBDIR
+from src.core.constants import AUTOPILOT_STATE_DIR, DESIGN_CONTEXT_SUBDIR, DESIGN_SUBDIR
 
 logger = logging.getLogger(__name__)
 
@@ -91,7 +91,7 @@ class AutopilotService:
         if not (project / ".git").exists():
             raise ValueError(f"Project path is not a git repository: {project_path}")
 
-        dq = design_queue or str(project / DESIGN_SUBDIR)
+        dq = design_queue or str(project / DESIGN_CONTEXT_SUBDIR)
         Path(dq).mkdir(parents=True, exist_ok=True)
 
         # Activate the matching project so pick_next_design() finds its designs.

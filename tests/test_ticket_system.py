@@ -22,11 +22,9 @@ from src.services.ticket_service import TicketService
 
 
 @pytest.fixture
-def db_manager():
+def db_manager(tmp_path):
     """Create a test database."""
-    db_path = "test_ticket_system.db"
-    if os.path.exists(db_path):
-        os.remove(db_path)
+    db_path = str(tmp_path / "test_ticket_system.db")
 
     # Set environment variable so services use the test database
     os.environ["HEPHAESTUS_TEST_DB"] = db_path
@@ -38,8 +36,6 @@ def db_manager():
     # Cleanup
     if "HEPHAESTUS_TEST_DB" in os.environ:
         del os.environ["HEPHAESTUS_TEST_DB"]
-    if os.path.exists(db_path):
-        os.remove(db_path)
 
 
 @pytest.fixture

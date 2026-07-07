@@ -30,7 +30,7 @@ import git as _git
 import requests
 
 from src.autopilot.spec import GATED_PHASES, build_phase_output
-from src.core.constants import AUTOPILOT_STATE_DIR, CONTEXT_DIR_NAME, DESIGN_SUBDIR
+from src.core.constants import AUTOPILOT_STATE_DIR, CONTEXT_DIR_NAME, DESIGN_CONTEXT_SUBDIR, DESIGN_SUBDIR
 from src.core.database import (
     Agent,
     DatabaseManager,
@@ -1359,7 +1359,7 @@ def pick_next_design(
                     if design_path is None:
                         # Fall back to filename-based path
                         design_path = (
-                            Path(project.base_dir) / DESIGN_SUBDIR / design.filename
+                            Path(project.base_dir) / DESIGN_CONTEXT_SUBDIR / design.filename
                         )
 
                     if design_path.exists():
@@ -5029,7 +5029,7 @@ def main():
     parser.add_argument(
         "--design-queue",
         default=None,
-        help="Directory to watch for design documents (default: <project-path>/docs/design)",
+        help="Directory to watch for design documents (default: <project-path>/.hephaestus/designs)",
     )
     parser.add_argument(
         "--project-path",
@@ -5063,9 +5063,9 @@ def main():
             # Process not alive or invalid PID, clean up
             pid_file.unlink(missing_ok=True)
 
-    # Default design queue to <project-path>/docs/design
+    # Default design queue to <project-path>/.hephaestus/designs
     if not args.design_queue:
-        args.design_queue = str(Path(args.project_path) / DESIGN_SUBDIR)
+        args.design_queue = str(Path(args.project_path) / DESIGN_CONTEXT_SUBDIR)
 
     if args.drop_db:
         db = HEPHAESTUS_DIR / "hephaestus.db"

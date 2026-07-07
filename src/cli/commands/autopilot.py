@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 
 from src.cli.utils import output
-from src.core.constants import DESIGN_SUBDIR
+from src.core.constants import DESIGN_CONTEXT_SUBDIR, DESIGN_SUBDIR
 
 
 def register(subparsers):
@@ -15,7 +15,7 @@ def register(subparsers):
     s = sub.add_parser("start", help="Start the autopilot pipeline")
     s.add_argument("--project-path", "-p", required=True, help="Project directory")
     s.add_argument(
-        "--design-queue", help="Design queue directory (default: <project>/docs/design)"
+        "--design-queue", help="Design queue directory (default: <project>/.hephaestus/designs)"
     )
     s.add_argument(
         "--max-iterations", type=int, default=3, help="Max iterations per design"
@@ -49,7 +49,7 @@ def start_pipeline(args):
     import requests
 
     project_path = Path(args.project_path).resolve()
-    design_queue = args.design_queue or str(project_path / DESIGN_SUBDIR)
+    design_queue = args.design_queue or str(project_path / DESIGN_CONTEXT_SUBDIR)
 
     if not project_path.exists():
         print(f"Error: Project path does not exist: {project_path}")
@@ -191,7 +191,7 @@ def _print_pipeline_status(data):
 
 
 def show_queue(args):
-    queue_dir = Path(args.project_path) / DESIGN_SUBDIR
+    queue_dir = Path(args.project_path) / DESIGN_CONTEXT_SUBDIR
     if not queue_dir.exists():
         print(f"Queue directory not found: {queue_dir}")
         return 0
