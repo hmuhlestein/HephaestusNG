@@ -19,6 +19,7 @@ import AddDesignModal from '@/components/autopilot/AddDesignModal';
 import LoadDesignModal from '@/components/autopilot/LoadDesignModal';
 import HumanInputBanner from '@/components/autopilot/HumanInputBanner';
 import { useProject } from '@/context/ProjectContext';
+import toast from 'react-hot-toast';
 
 type Tab = 'overview' | 'queue' | 'features' | 'messages' | 'logs';
 const VALID_TABS: Tab[] = ['overview', 'queue', 'features', 'messages', 'logs'];
@@ -64,24 +65,50 @@ const Autopilot: React.FC = () => {
       if (status?.running) {
         return apiService.stopAutopilot(projectId || undefined);
       } else if (activeProject) {
-        // Try to start; if 409, warn user and ask to stop the other pipeline
+        // Try to start; if 409, the (single, global) service is already
+        // running something -- find out what before deciding what to do.
         try {
           return await apiService.startAutopilot(activeProject.base_dir);
         } catch (err: any) {
           const is409 = err?.response?.status === 409 || err?.status === 409;
           if (!is409) throw err;
 
+          // Query the global (no project_id) status to learn what's actually
+          // running -- the 409 alone doesn't say, and it's frequently this
+          // same project (a self-conflict from status polling not having
+          // caught up yet after a just-started run), not a genuine
+          // cross-project conflict. Stopping-and-restarting your own
+          // just-started pipeline in that case just interrupts it for no
+          // reason and looks like "the button doesn't work."
+          //
+          // Pass project_path so the backend can do realpath-resolved
+          // comparison (handles /tmp -> /private/tmp on macOS).
+          const globalStatus = await apiService.getAutopilotStatus(undefined, activeProject.base_dir);
+          const runningProjectName = globalStatus?.running_project_name;
+          const isSelfConflict = globalStatus?.is_self_conflict ?? false;
+
+          if (isSelfConflict) {
+            toast.success(`${activeProject.name} is already running — no action needed.`);
+            return;
+          }
+
+          const label = runningProjectName || 'Another project';
           const confirmed = window.confirm(
-            'Another project pipeline is currently running.\n\nStop it and start ' + activeProject.name + '?'
+            `${label} is currently running.\n\nStop it and start ${activeProject.name}?`
           );
-          if (!confirmed) return;
+          if (!confirmed) {
+            toast(`Left ${label} running. ${activeProject.name} was not started.`);
+            return;
+          }
 
           // Stop the global pipeline and wait for it to complete
           await apiService.stopAutopilot();
           // Small delay to let the backend fully stop
           await new Promise(r => setTimeout(r, 500));
           // Retry start
-          return await apiService.startAutopilot(activeProject.base_dir);
+          const result = await apiService.startAutopilot(activeProject.base_dir);
+          toast.success(`Stopped ${label}, started ${activeProject.name}.`);
+          return result;
         }
       }
     },
