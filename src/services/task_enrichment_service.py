@@ -110,6 +110,16 @@ class TaskEnrichmentService:
             context=context_strings,
             phase_context=phase_context_str if phase_context_str else None,
         )
+        # Guard against None return from LLM parser
+        if not enriched_task:
+            logger.warning("enrich_task returned None, using fallback")
+            enriched_task = {
+                "enriched_description": raw_description,
+                "completion_criteria": [done_definition or "Task completed successfully"],
+                "agent_prompt": f"Complete this task: {raw_description}",
+                "required_capabilities": ["general"],
+                "estimated_complexity": 5,
+            }
         TaskEnrichmentService._normalize_enriched_description(
             enriched_task, raw_description
         )

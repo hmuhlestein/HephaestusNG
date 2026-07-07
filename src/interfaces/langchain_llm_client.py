@@ -439,6 +439,10 @@ class LangChainLLMClient:
             parser = JsonOutputParser()
             result = parser.parse(response.content)
 
+            if not result or not isinstance(result, dict):
+                logger.warning(f"enrich_task parser returned non-dict: {type(result)}, using fallback")
+                return self._default_task_enrichment(task_description, done_definition)
+
             logger.info(
                 f"✅ [LLM CALL] enrich_task completed | Provider: {assignment.provider} | Model: {assignment.model}"
             )
