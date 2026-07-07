@@ -2100,8 +2100,9 @@ def _validate_features_json(features_json: dict) -> None:
 
         for f in files:
             for existing in all_files:
-                # Check for overlap (one path contains the other)
-                if f.startswith(existing) or existing.startswith(f):
+                # Check for overlap: exact match or directory containment
+                # (e.g. src/ contains src/utils/file.py, but .env does NOT contain .env.example)
+                if f == existing or f.startswith(existing + "/") or existing.startswith(f + "/"):
                     raise ValueError(
                         f"File overlap between features: {f} and {existing}"
                     )
