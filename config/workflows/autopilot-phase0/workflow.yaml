@@ -6,7 +6,7 @@ description: >-
   Workflow rows get created, so it can't be phase order=0 within one of them.
 
 default_model: xiaomi/mimo-v2.5
-default_thinking_level: low
+default_thinking_level: high
 
 # Phase 0: Feature Architect - decomposes design into features
 execution_order: [1]

@@ -8,6 +8,38 @@ projects concurrently** in one backend, each with its own design queue,
 its own set of feature pipelines, and its own start/stop/status control —
 without one project's activity pausing, stopping, or corrupting another's.
 
+**Initial target: 2 concurrent projects, not unbounded N.** The design
+below is written generally (nothing here is specific to the number 2), but
+the first implementation caps concurrency at a configurable limit rather
+than removing the limit entirely. This bounds the blast radius of the
+riskiest part of this change (§6.1's service registry and the two
+orchestrator hazard fixes in §6.2) to a scale that's easy to reason about
+and test, before deciding whether to raise the cap.
+
+The cap lives in config, not code:
+
+```yaml
+# hephaestus_config.yaml
+autopilot:
+  max_concurrent_projects: 2
+```
+
+Read the same way `workflow_timeout_seconds` already is
+(`simple_config.py:195`):
+
+```python
+self.max_concurrent_projects = autopilot.get("max_concurrent_projects", 2)
+```
+
+`AutopilotServiceRegistry.get_or_create` (§6.1) enforces it: starting a
+pipeline for a project not already in the registry, when the number of
+currently-`running` services already equals the configured cap, is
+rejected with a 409 (same status code `/start` already uses for "pipeline
+already running", `autopilot_api.py:2953`) and a message naming which
+projects are occupying the two slots. Raising the cap later is a config
+change, not a code change, once the underlying registry exists — the
+number 2 is not hardcoded anywhere in the design below.
+
 Within a single project, concurrency already works: `run_feature_pipelines`
 (`src/autopilot/orchestrator.py:4067`) runs up to `MAX_PARALLEL_FEATURES`
 (currently 4, line 86) features in parallel via a `ThreadPoolExecutor`, each
@@ -157,14 +189,16 @@ running.
 
 ## Design
 
-### 6.1 `AutopilotService` → per-project registry
+### 6.1 `AutopilotService` → per-project registry, capped
 
-Replace the single `_service` global with a registry keyed by `project_id`:
+Replace the single `_service` global with a registry keyed by `project_id`,
+enforcing `Config.max_concurrent_projects`:
 
 ```python
 class AutopilotServiceRegistry:
-    def __init__(self):
+    def __init__(self, max_concurrent: int):
         self._services: Dict[str, AutopilotService] = {}
+        self._max_concurrent = max_concurrent
         self._lock = threading.Lock()
 
     def get_or_create(self, project_id: str) -> AutopilotService:
@@ -176,26 +210,62 @@ class AutopilotServiceRegistry:
     def get(self, project_id: str) -> Optional[AutopilotService]:
         return self._services.get(project_id)
 
-    def all_running(self) -> List[AutopilotService]:
+    def running(self) -> List[AutopilotService]:
         return [s for s in self._services.values() if s.running]
+
+    def can_start(self, project_id: str) -> Tuple[bool, str]:
+        """Check the concurrency cap before starting. Doesn't reserve a
+        slot -- caller still needs its own check against a concurrent
+        second start() for the same project (existing `service.running`
+        check in the /start route already covers that case)."""
+        running = self.running()
+        if any(s.project_id == project_id for s in running):
+            return True, ""  # restarting/already-tracked project, not a new slot
+        if len(running) >= self._max_concurrent:
+            names = ", ".join(s.project_id for s in running)
+            return False, (
+                f"Max concurrent projects ({self._max_concurrent}) reached: "
+                f"{names}. Stop one before starting another."
+            )
+        return True, ""
 ```
 
 `AutopilotService.__init__` takes `project_id` and uses it to namespace its
 own persisted-state file (`_RUNNING_STATE_PATH`,
 `service.py:27`, currently one fixed path for the whole backend — needs to
 become `running_pipeline_{project_id}.json` so two projects' crash-recovery
-state doesn't collide) and its stop event (see 6.2). `get_autopilot_service()`
-becomes `get_autopilot_service(project_id)`, and every API route that calls
-it (`server.py`'s `/api/autopilot/start`, `/stop`, `/status`) takes
-`project_id` as a required param — most already accept it as an optional
-query param for the read side (per #6), so this mainly means making it
-required and threading it into the two write-side routes.
+state doesn't collide) and its stop event (see 6.2).
 
-Old behavior (no `project_id` passed) has no reasonable default with N
-concurrent projects — this is a breaking API change for those two routes,
-not a compat shim. Frontend already sends `project_id` on every relevant
-call it makes (confirmed for the status/design-queue reads); the
-start/stop buttons need the same param added.
+The actual routes live in `src/mcp/autopilot_api.py`, not `server.py`
+(corrected from an earlier draft of this doc):
+
+- `GET /status` (`autopilot_api.py:322`) already takes optional
+  `project_id` and already works around the singleton by querying
+  `Workflow.project_id` directly when given one (see the comment at
+  `autopilot_api.py:335`: *"the service.running flag is global, not
+  per-project"*) — this becomes unnecessary once services are truly
+  per-project, but isn't harmful to leave as a belt-and-suspenders check.
+- `POST /start` (`autopilot_api.py:2940`) currently takes only
+  `project_path` — no `project_id` at all. Resolve it server-side via
+  `AutopilotProject.filter_by(base_dir=project_path)` (the same lookup
+  `AutopilotService.start()` already does at `service.py:104-107` to
+  activate the project) rather than requiring a frontend change; call
+  `registry.can_start(project_id)` right after that lookup and before
+  calling `service.start()`.
+- `POST /stop` (`autopilot_api.py:2968`) already takes optional
+  `project_id` and already uses it to scope which workflows get paused/
+  which agents get terminated (`autopilot_api.py`'s `query.filter(Workflow.project_id
+  == project_id)` when given) — but it still calls the one global
+  `service.stop()` regardless. Once `get_autopilot_service` takes
+  `project_id`, this becomes `get_autopilot_service(project_id).stop()`,
+  making the existing optional param actually control which pipeline
+  stops instead of only scoping the side effects around a global stop.
+
+No frontend changes are required for `/start`/`/stop` to work correctly —
+`project_path` is already sufficient to resolve `project_id` server-side.
+Passing `project_id` explicitly from the frontend (it already has it
+everywhere else, per §6.6) is a nice-to-have that avoids the extra DB
+lookup, not a requirement for correctness.
 
 ### 6.2 Orchestrator: fix the two concrete hazards, not the whole module
 
@@ -262,7 +332,10 @@ decision and should be picked before implementation, not during it.
 
 ### 6.6 Frontend / API
 
-- `POST /api/autopilot/start` and `/stop`: add required `project_id`.
+- `POST /api/autopilot/start`: no required frontend change — `project_id`
+  is resolved server-side from `project_path` (§6.1). `/stop` already
+  accepts optional `project_id`; no change needed there either, though
+  the frontend could start passing it explicitly to skip a DB lookup.
 - Status/design-queue endpoints: no change, already correct.
 - One new consideration not in the original 6 areas: the **queue
   processor's own trigger** (`trigger_queue_processing()`,
@@ -283,14 +356,20 @@ decision and should be picked before implementation, not during it.
    the service registry — they're real bugs today (single-project mode
    just never triggers them) and are safe, additive changes with no
    behavior change for the single-project case.
-3. `AutopilotServiceRegistry` (6.1) — the actual "turn on multi-project"
-   switch. Ship behind a check that refuses a second concurrent `start()`
-   until this lands, rather than half-shipping it.
-4. Queue scoping (6.5) — can ship independently once 6.1 exists, since
-   it's the mechanism that actually prevents one project from starving
-   another.
-5. Frontend param threading (6.6) — trivial once the API contract is
-   settled, do last.
+3. `max_concurrent_projects` config value (§Goal) + `AutopilotServiceRegistry`
+   (6.1), cap included from day one — this is the actual "turn on
+   multi-project" switch, and per the initial 2-project scope, it ships
+   *with* the cap enforced, not as a follow-on hardening step.
+4. Queue scoping (6.5) — at a cap of 2 projects, one project starving the
+   other for agent-concurrency budget is a real but bounded, directly
+   observable problem (unlike at N=10+, where it's a silent, hard-to-debug
+   fairness issue). Reasonable to ship the 2-project cap first and land
+   6.5 as a fast follow once real usage shows whether it's actually
+   needed at this scale — but don't defer it indefinitely; revisit before
+   raising `max_concurrent_projects` past 2.
+5. Frontend param threading (6.6) — not required for the 2-project cut
+   (§6.1's server-side `project_id` resolution covers it); do only if/when
+   the extra DB lookup on `/start` is worth trimming.
 
 ## Non-Goals
 
@@ -321,3 +400,14 @@ small, targeted fixes (~30-50 lines total, not part of the "~100 lines" of
 broader isolation work) and are worth landing *before* the service
 registry regardless of the rest of this design's timeline — they're latent
 bugs today, not new surface area multi-project introduces.
+
+**Capping at 2 (vs. unbounded N) shrinks the estimate**, mainly by
+deferring 6.5 (queue scoping) out of the initial cut (see Rollout Order
+step 4) and by removing any need to think about registry scaling — a
+plain `dict` + lock comfortably handles 2 entries with no further design.
+Rough initial-cut estimate: §6.2's two hazard fixes (~30-50 lines) + config
+value (~5 lines) + `AutopilotServiceRegistry` with the cap check (~80-100
+lines, smaller than the original ~200 since it's not also solving queue
+fairness) + tests for the cap-rejection path and the two hazard fixes.
+Small-medium, not medium-large — the medium-large estimate was carrying
+the queue-fairness work, which this cut defers.
