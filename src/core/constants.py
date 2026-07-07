@@ -15,6 +15,7 @@ WORKTREES_SUBDIR = ".worktrees"
 
 # Design document queue/inbox (relative to project root)
 DESIGN_SUBDIR = "docs/design"
+DESIGN_CONTEXT_SUBDIR = ".hephaestus/designs"
 
 # Pipeline metrics filename
 PIPELINE_METRICS_FILE = "pipeline_metrics.json"

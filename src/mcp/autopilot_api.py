@@ -1573,7 +1573,11 @@ async def _get_project_lock(project_id: str) -> asyncio.Lock:
 
 
 def _get_design_queue_dir(project_base: str) -> Path:
-    return Path(project_base) / DESIGN_SUBDIR
+    """Return the design queue directory (.hephaestus/designs/).
+    
+    Designs are stored outside the git repo so commits don't delete them.
+    """
+    return Path(project_base) / CONTEXT_DIR_NAME / "designs"
 
 
 def _extract_ordinal(filename: str) -> Optional[int]:
@@ -1594,11 +1598,25 @@ def _sync_project_designs(
 
     MUST be called within an active DB session (the `db` parameter).
     Returns list of design dicts.
+    
+    Only checks .hephaestus/designs/ (not git-tracked). Logs a warning
+    if old docs/design/ files are found.
     """
     from src.core.database import AutopilotDesign
 
-    design_dir = _get_design_queue_dir(project_base)
+    design_dir = Path(project_base) / CONTEXT_DIR_NAME / "designs"
     design_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Warn if old location has files
+    old_dir = Path(project_base) / DESIGN_SUBDIR
+    if old_dir.exists():
+        old_files = list(old_dir.glob("*.md")) + list(old_dir.glob("*.txt"))
+        if old_files:
+            logger.warning(
+                f"[DESIGN] Found {len(old_files)} design(s) in {old_dir} "
+                f"(git-tracked). Move them to {design_dir} to prevent "
+                f"git commits from deleting them."
+            )
 
     fs_files: Dict[str, Path] = {}
     for ext in ALLOWED_EXTENSIONS:
@@ -1963,7 +1981,9 @@ async def add_project_design(project_id: str, req: DesignAddRequest):
             raise HTTPException(404, "Project not found")
         base_dir = proj.base_dir
 
-    design_dir = _get_design_queue_dir(base_dir)
+    # Store in .hephaestus/designs/ (not git-tracked) so git commits
+    # don't delete design files.
+    design_dir = Path(base_dir) / CONTEXT_DIR_NAME / "designs"
     design_dir.mkdir(parents=True, exist_ok=True)
 
     ext = req.extension if req.extension in ALLOWED_EXTENSIONS else ".md"
