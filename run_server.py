@@ -41,6 +41,16 @@ def main():
 
     # Run the server
     try:
+        # Log to file so we can trace API events (tmux scrollback is limited)
+        log_dir = Path(__file__).parent / "logs"
+        log_dir.mkdir(exist_ok=True)
+        file_handler = logging.FileHandler(log_dir / "server.log")
+        file_handler.setLevel(logging.INFO)
+        file_handler.setFormatter(
+            logging.Formatter("%(asctime)s %(name)s %(levelname)s %(message)s")
+        )
+        logging.getLogger().addHandler(file_handler)
+
         uvicorn.run(
             "src.mcp.server:app",
             host=config.mcp_host,
