@@ -354,6 +354,98 @@ def test_total_gotos_persists_across_fresh_phase_manager_instances(
     assert workflow.total_gotos == 4
 
 
+def test_phase_retry_count_persists_across_fresh_phase_manager_instances(db_session, db_manager):
+    """Sibling regression to total_gotos: WorkflowOrchestrator.phase_retry_counts
+    is the same kind of in-memory-only dict, reset to {} whenever a fresh
+    PhaseManager (hence a fresh, uncached orchestrator) is constructed --
+    exactly what production does on nearly every mark_phase_complete call.
+    Without persisting it on Phase.retry_count, eval_point.max_retries never
+    actually capped a phase's RETRY budget."""
+    from src.phases.phase_manager import PhaseManager
+
+    workflow_id = str(uuid.uuid4())
+    definition_id = "test-retry-workflow"
+
+    orchestrator_config = {
+        "type": "evaluating",
+        "max_phase_retries": 5,
+        "max_total_gotos": 10,
+        "evaluation_points": [
+            {
+                "after_phase": "phase_1",
+                "evaluator": "heuristic",
+                "conditions": [
+                    {
+                        "if": "score < 0.5",
+                        "action": "retry",
+                        "reason": "Not good enough yet",
+                    },
+                    {"if": "score >= 0.5", "action": "continue", "reason": "Passed"},
+                ],
+                "max_retries": 2,
+            },
+        ],
+    }
+
+    definition = WorkflowDefinition(
+        id=definition_id,
+        name="Test Retry Workflow",
+        phases_config=[{"name": "phase_1", "order": 1, "description": "Phase 1"}],
+        orchestrator_config=orchestrator_config,
+    )
+    db_session.add(definition)
+
+    workflow = Workflow(
+        id=workflow_id,
+        name="Test Retry Workflow",
+        description="Test phase retry persistence",
+        definition_id=definition_id,
+        phases_folder_path="/tmp/test",
+        working_directory="/tmp/test",
+        status="active",
+    )
+    db_session.add(workflow)
+
+    phase_id = str(uuid.uuid4())
+    phase = Phase(
+        id=phase_id,
+        workflow_id=workflow_id,
+        order=1,
+        name="phase_1",
+        description="Phase 1",
+        done_definitions=["Phase 1 done"],
+    )
+    db_session.add(phase)
+    execution = PhaseExecution(
+        id=str(uuid.uuid4()),
+        phase_id=phase_id,
+        workflow_execution_id=workflow_id,
+        status="in_progress",
+    )
+    db_session.add(execution)
+    db_session.commit()
+
+    actions = []
+    for i in range(3):
+        result = PhaseManager(db_manager).mark_phase_complete(
+            phase_id, f"attempt #{i}", phase_output={"score": 0.2}
+        )
+        actions.append(result["action"])
+        # RETRY resets the execution to pending -- re-mark in_progress for the next cycle
+        db_session.query(PhaseExecution).filter_by(phase_id=phase_id).update(
+            {"status": "in_progress"}
+        )
+        db_session.commit()
+
+    assert actions == ["retry", "retry", "continue"], (
+        f"expected the 3rd cycle to be forced to 'continue' once "
+        f"max_retries=2 was exceeded, got {actions}"
+    )
+
+    phase_row = db_session.query(Phase).filter_by(id=phase_id).first()
+    assert phase_row.retry_count == 2
+
+
 def test_start_next_phase_returns_true_for_completed(db_session, db_manager, phase_ids):
     """3c fix: _start_next_phase returns True for completed phases (not just pending)."""
     from src.phases.phase_manager import PhaseManager

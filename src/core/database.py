@@ -451,6 +451,15 @@ class Phase(Base):
         String, nullable=True
     )  # pi reasoning budget: off|minimal|low|medium|high|xhigh
 
+    # Persisted count of WorkflowOrchestrator's per-phase RETRY evaluations
+    # (eval_point.max_retries). Same architectural issue as
+    # Workflow.total_gotos: WorkflowOrchestrator.phase_retry_counts is an
+    # in-memory dict that resets to {} every time a fresh orchestrator gets
+    # constructed, which happens on nearly every mark_phase_complete call
+    # (see PhaseManager._get_orchestrator callers) -- without persisting
+    # this, a phase's RETRY budget never actually ran out.
+    retry_count = Column(Integer, default=0, nullable=False)
+
     # Relationships
     workflow = relationship("Workflow", back_populates="phases")
     tasks = relationship("Task", back_populates="phase")
@@ -1275,6 +1284,7 @@ class DatabaseManager:
         self._migrate_feature_model_columns()
         self._migrate_total_gotos_column()
         self._migrate_task_retry_count_column()
+        self._migrate_phase_retry_count_column()
 
     def _create_fts5_tables(self):
         """Create FTS5 virtual tables and triggers for ticket search."""
@@ -1677,6 +1687,26 @@ class DatabaseManager:
                 logger.info("Migrated tasks.retry_count column")
         except Exception as e:
             logger.debug(f"tasks.retry_count migration (may already exist): {e}")
+
+    def _migrate_phase_retry_count_column(self):
+        """Add phases.retry_count for existing databases.
+
+        Idempotent - safe to call on every startup.
+        """
+        try:
+            with self.engine.connect() as conn:
+                try:
+                    conn.execute(
+                        text(
+                            "ALTER TABLE phases ADD COLUMN retry_count INTEGER DEFAULT 0 NOT NULL"
+                        )
+                    )
+                except Exception:
+                    pass  # Column already exists
+                conn.commit()
+                logger.info("Migrated phases.retry_count column")
+        except Exception as e:
+            logger.debug(f"phases.retry_count migration (may already exist): {e}")
 
     def get_session(self):
         """Get a database session."""
