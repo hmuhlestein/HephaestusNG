@@ -765,7 +765,7 @@ def is_design_fully_complete(
                 from src.core.database import Workflow, get_db
                 with get_db() as _db:
                     _wf = _db.query(Workflow).filter_by(id=workflow_id).first()
-                    if _wf and _wf.working_directory:
+                    if _wf and _wf.working_directory and Path(_wf.working_directory).exists():
                         project_path = _wf.working_directory
             except Exception:
                 pass
@@ -892,7 +892,7 @@ def attempt_recovery(workflow_id: str, logger: OrchestratorLogger) -> Tuple[bool
         try:
             with get_db() as _db:
                 _wf = _db.query(Workflow).filter_by(id=workflow_id).first()
-                if _wf and _wf.working_directory:
+                if _wf and _wf.working_directory and Path(_wf.working_directory).exists():
                     project_path = _wf.working_directory
         except Exception:
             pass
@@ -2785,7 +2785,7 @@ def _fire_phase_transition(
         if phase_name in GATED_PHASES:
             with get_db() as db:
                 wf = db.query(Workflow).filter_by(id=workflow_id).first()
-                if wf and wf.working_directory:
+                if wf and wf.working_directory and Path(wf.working_directory).exists():
                     from pathlib import Path
 
                     phase_output = build_phase_output(
@@ -2896,7 +2896,7 @@ def _create_phase_task(
             # remember a "MANDATORY" prompt instruction.
             if phase_name == "security_review":
                 wf = db.query(Workflow).filter_by(id=workflow_id).first()
-                if wf and wf.working_directory:
+                if wf and wf.working_directory and Path(wf.working_directory).exists():
                     _run_ash_scan(Path(wf.working_directory), logger)
 
             # forensics_analysis reviews every artifact + full tmux transcript
@@ -2908,7 +2908,7 @@ def _create_phase_task(
             # would trigger via update_task_status.
             if phase_name == "forensics_analysis":
                 wf = db.query(Workflow).filter_by(id=workflow_id).first()
-                if wf and wf.working_directory:
+                if wf and wf.working_directory and Path(wf.working_directory).exists():
                     health = _assess_run_health(
                         Path(wf.working_directory),
                         workflow_id,
