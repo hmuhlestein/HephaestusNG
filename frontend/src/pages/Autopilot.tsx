@@ -68,17 +68,20 @@ const Autopilot: React.FC = () => {
         try {
           return await apiService.startAutopilot(activeProject.base_dir);
         } catch (err: any) {
-          if (err?.response?.status === 409 || err?.status === 409) {
-            const confirmed = window.confirm(
-              'Another project pipeline is currently running.\n\nStop it and start ' + activeProject.name + '?'
-            );
-            if (confirmed) {
-              await apiService.stopAutopilot();
-              return await apiService.startAutopilot(activeProject.base_dir);
-            }
-            return; // User cancelled
-          }
-          throw err;
+          const is409 = err?.response?.status === 409 || err?.status === 409;
+          if (!is409) throw err;
+
+          const confirmed = window.confirm(
+            'Another project pipeline is currently running.\n\nStop it and start ' + activeProject.name + '?'
+          );
+          if (!confirmed) return;
+
+          // Stop the global pipeline and wait for it to complete
+          await apiService.stopAutopilot();
+          // Small delay to let the backend fully stop
+          await new Promise(r => setTimeout(r, 500));
+          // Retry start
+          return await apiService.startAutopilot(activeProject.base_dir);
         }
       }
     },
