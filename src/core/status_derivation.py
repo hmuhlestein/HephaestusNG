@@ -127,9 +127,16 @@ def derive_design_status(db: Session, design_id: str, write_back: bool = True) -
         logger.warning(f"Design {design_id} not found")
         return "unknown"
     
-    # Respect paused status
+    # Respect paused status only if there are active workflows
+    # (otherwise a stale "paused" status blocks reruns from taking effect)
     if design.status == WorkflowStatus.PAUSED:
-        return WorkflowStatus.PAUSED
+        from src.core.database import Workflow
+        has_active_wfs = db.query(Workflow).filter(
+            Workflow.design_id == design_id,
+            Workflow.status.in_(["active", "paused"]),
+        ).first()
+        if has_active_wfs:
+            return WorkflowStatus.PAUSED
     
     # Get features for this design
     features = db.query(Feature).filter_by(design_id=design_id).all()

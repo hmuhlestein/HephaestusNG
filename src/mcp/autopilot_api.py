@@ -869,6 +869,8 @@ async def rerun_design(request: dict):
                 db.query(Feature).filter_by(design_id=design.id).delete(
                     synchronize_session=False
                 )
+                # Reset design status so orchestrator picks it up fresh
+                design.status = "pending"
 
             db.commit()
             logger.info(
