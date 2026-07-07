@@ -986,7 +986,13 @@ a cold generic reviewer misses. Implementation:
   `score < 0.7 → goto development`, `score >= 0.7 → continue`.
 - Zero additional LLM calls (replaces the generic reviewer 1:1).
 
-**Near-term enhancement — one-shot intra-agent self-review at completion.** Empirically,
+**Near-term enhancement — one-shot intra-agent self-review at completion.**
+See `docs/GAP_CHECK_SELF_LOOP_DESIGN.md` for the full design (verified against
+current code: exact hook-point line numbers, the `Task.review_done` vs.
+`self_review_done` column conflict, the `kept_alive_for_validation` dead-flag
+precedent to avoid repeating, and confirmation via `git show cc35043` that the
+removed Tier-1 nudge block was an unrelated stuck-agent mechanism, not this
+same idea under an old name). Empirically,
 a dev agent asked to "find your own gaps and fix them" right after it thinks it's done
 catches a lot, because it has *peak, warm context* — cheaper and higher-yield than a cold
 review agent rebuilding context. Implement as a deterministic, bounded self-review gate at

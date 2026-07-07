@@ -219,6 +219,14 @@ NOTE: Having a workflow-level goal does NOT mean you skip hephaestus_update_task
             # Compact instructions for workflow phase agents — keep context window lean
             base_message += f"""
 
+WRITING INSTRUCTIONS (CRITICAL — read before writing any files):
+- Write files in CHUNKS. Do NOT attempt to write an entire large file in one response.
+- Use multiple write/edit calls: write the first section, verify, then append the next.
+- If you hit the output token limit, your response is truncated and the file is corrupted.
+- For files > 200 lines: write in 2-3 chunks. For files > 500 lines: write in 4-5 chunks.
+- After writing each chunk, verify it compiled/saved correctly before continuing.
+- NEVER try to write a complete implementation in one giant code block.
+
 INSTRUCTIONS (always pass agent_id="{agent_id}"; pass workflow_id="{workflow_id if workflow_id else "N/A"}" only for tools that accept it — save_memory and validate_my_agent_id do NOT take workflow_id, don't pass it to those):
 - Complete the task described above
 - hephaestus_update_task_status(task_id="{task.id}", agent_id="{agent_id}", status="done") — REQUIRED when done
@@ -237,6 +245,14 @@ Begin now.
 """
         else:
             base_message += f"""
+
+WRITING INSTRUCTIONS (CRITICAL — read before writing any files):
+- Write files in CHUNKS. Do NOT attempt to write an entire large file in one response.
+- Use multiple write/edit calls: write the first section, verify, then append the next.
+- If you hit the output token limit, your response is truncated and the file is corrupted.
+- For files > 200 lines: write in 2-3 chunks. For files > 500 lines: write in 4-5 chunks.
+- After writing each chunk, verify it compiled/saved correctly before continuing.
+- NEVER try to write a complete implementation in one giant code block.
 
 IMPORTANT INSTRUCTIONS:
 1. Complete all the requirements listed in the COMPLETION CRITERIA above
