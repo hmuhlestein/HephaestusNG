@@ -3053,7 +3053,31 @@ async def start_pipeline(
 
     service = get_autopilot_service()
     if service.running:
-        raise HTTPException(409, "Pipeline is already running.")
+        # Check for zombie state: service says running but no active agents/workflows.
+        # This happens when the pipeline task gets stuck. Auto-stop and restart.
+        try:
+            from src.core.database import Agent, Workflow, get_db
+
+            with get_db() as db:
+                active_agents = db.query(Agent).filter(
+                    Agent.status.in_(["working", "starting", "idle"])
+                ).count()
+                active_wfs = db.query(Workflow).filter(
+                    Workflow.status == "active"
+                ).count()
+            if active_agents == 0 and active_wfs == 0:
+                logger.warning(
+                    "[START] Zombie pipeline detected (running=True but no "
+                    "active agents/workflows) — auto-stopping"
+                )
+                await service.stop()
+            else:
+                raise HTTPException(409, "Pipeline is already running.")
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.warning(f"[START] Zombie check failed, proceeding with start: {e}")
+            await service.stop()
 
     try:
         result = await service.start(
