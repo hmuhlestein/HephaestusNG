@@ -262,28 +262,22 @@ async def activate_project(project_id: str):
 
 
 def _apply_active_project(proj):
-    """Apply project path to runtime config and reinitialize WorktreeManager.
+    """Apply project path to runtime config.
 
-    Validates the path is a valid git repo BEFORE mutating config.
-    If reload fails, config is not mutated.
+    Updates config immediately (fast). The WorktreeManager will
+    reload lazily when next used, not during the API call.
     """
-    from src.core.app_context import get_app_state
     from src.core.simple_config import get_config
 
-    server_state = get_app_state()
     config = get_config()
     new_path = Path(proj.base_dir)
 
-    # Validate first — don't mutate config if path is invalid
-    if server_state.branch_manager:
-        try:
-            server_state.branch_manager.reload(new_path)
-        except Exception as e:
-            logger.error(f"Failed to reload WorktreeManager for {new_path}: {e}")
-            raise ValueError(
-                f"Cannot activate project — not a valid git repository: {new_path}"
-            )
+    # Validate path exists and is a directory (fast check)
+    if not new_path.exists() or not new_path.is_dir():
+        raise ValueError(
+            f"Cannot activate project — path does not exist: {new_path}"
+        )
 
-    # Only mutate config after successful reload
+    # Update config immediately — no git reload here
     config.main_repo_path = new_path
     config.project_root = new_path
