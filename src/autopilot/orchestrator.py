@@ -2656,6 +2656,22 @@ def _case_start_first_phase(
             .count()
         )
         if existing == 0:
+            # Race guard: /start_workflow_execution creates phase 1's
+            # initial task synchronously right after launching the
+            # workflow, but this polling loop's first iteration can still
+            # land before that commit is visible here -- observed live: a
+            # duplicate task+agent got created for phase 1, and once the
+            # "real" initial task completed the phase, the duplicate's
+            # agent was terminated without ever resolving the duplicate
+            # task itself, leaving it permanently stuck in "assigned".
+            # One short re-check closes the vast majority of this window.
+            time.sleep(0.5)
+            existing = (
+                db.query(Task)
+                .filter_by(phase_id=first_phase["phase"].id)
+                .count()
+            )
+        if existing == 0:
             logger.info(
                 f"[PHASE-ADVANCE] Starting first phase: {first_phase['phase'].name}"
             )

@@ -160,6 +160,58 @@ class TestCaseStartFirstPhase:
                 mock_create.assert_called_once()
 
 
+    def test_race_guard_skips_duplicate_when_task_appears_during_recheck(
+        self, db_manager, sample_workflow
+    ):
+        """Regression: /start_workflow_execution creates phase 1's initial
+        task synchronously, but _advance_phases's polling loop can still run
+        its first iteration before that commit is visible here, creating a
+        duplicate task+agent for the same phase. Observed live: the
+        duplicate's agent was later terminated without the duplicate task
+        ever being resolved, leaving it permanently stuck in "assigned".
+
+        Simulates the other code path's task landing during the race-guard's
+        sleep -- the re-check must see it and skip creating a second one.
+        """
+        from src.autopilot.orchestrator import _case_start_first_phase, _get_phase_statuses
+
+        with db_manager.session_scope() as session:
+            exec = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            if exec:
+                exec.status = "pending"
+
+            phase_statuses = _get_phase_statuses(session, "wf-1")
+            pending = [p for p in phase_statuses if p["status"] == "pending"]
+            in_progress = [p for p in phase_statuses if p["status"] == "in_progress"]
+            completed = [p for p in phase_statuses if p["status"] == "completed"]
+
+        def _sleep_and_create_competing_task(_seconds):
+            with db_manager.session_scope() as session:
+                session.add(
+                    Task(
+                        id="task-from-other-code-path",
+                        workflow_id="wf-1",
+                        phase_id="phase-1",
+                        raw_description="initial task created by /start_workflow_execution",
+                        done_definition="done",
+                        status="assigned",
+                    )
+                )
+
+        logger = MagicMock()
+        with patch("src.autopilot.orchestrator.time.sleep", side_effect=_sleep_and_create_competing_task):
+            with patch("src.autopilot.orchestrator._create_phase_task", return_value=True) as mock_create:
+                with db_manager.session_scope() as session:
+                    result = _case_start_first_phase(
+                        session, "wf-1", pending, in_progress, completed, logger
+                    )
+                    assert result is None, (
+                        "should not create a duplicate task once the "
+                        "re-check sees the other path's task"
+                    )
+                    mock_create.assert_not_called()
+
+
 class TestCaseInProgressNoTasks:
     """Tests for _case_in_progress_no_tasks function."""
     
