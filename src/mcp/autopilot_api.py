@@ -770,14 +770,9 @@ async def rerun_design(request: dict):
     except Exception as e:
         logger.error(f"Error stopping workflows for rerun: {e}")
 
-    # Step 2b: Clear this design's own failed state. Rerun means "clean
-    # slate" -- without this, the old failed workflow/task/feature rows
-    # stick around and derive_design_status/derive_feature_status keep
-    # rolling them up as "failed" indefinitely (they only get superseded
-    # once a brand new workflow goes "active", which can lag well behind
-    # the restarted orchestrator actually picking the design back up, or
-    # never happen if Phase 0 skips re-decomposition because Feature rows
-    # for this design already exist).
+    # Step 2b: Clean slate for this design's workflows, tasks, and features.
+    # Rerun means "start fresh" — delete old rows so the orchestrator
+    # doesn't see stale Feature rows and skip re-decomposition.
     try:
         with get_db() as db:
             matching_wfs = (
@@ -789,23 +784,8 @@ async def rerun_design(request: dict):
                 .all()
             )
             wf_ids = [wf.id for wf in matching_wfs]
-            for wf in matching_wfs:
-                if wf.status == "failed":
-                    wf.status = "paused"
 
-            if wf_ids:
-                failed_tasks = (
-                    db.query(Task)
-                    .filter(Task.workflow_id.in_(wf_ids), Task.status == "failed")
-                    .all()
-                )
-                for t in failed_tasks:
-                    t.status = "pending"
-                    t.failure_reason = None
-                    t.assigned_agent_id = None
-
-            db.commit()
-
+            # Get design to find features
             proj = (
                 db.query(AutopilotProject)
                 .filter_by(base_dir=str(project))
@@ -818,17 +798,37 @@ async def rerun_design(request: dict):
                 if proj
                 else None
             )
-            if design:
-                from src.core.status_derivation import (
-                    derive_design_status,
-                    derive_feature_status,
+
+            if wf_ids:
+                # Delete phase executions
+                from src.core.database import PhaseExecution
+                db.query(PhaseExecution).filter(
+                    PhaseExecution.workflow_execution_id.in_(wf_ids)
+                ).delete(synchronize_session=False)
+
+                # Delete tasks
+                db.query(Task).filter(Task.workflow_id.in_(wf_ids)).delete(
+                    synchronize_session=False
                 )
 
-                for feat in db.query(Feature).filter_by(design_id=design.id).all():
-                    derive_feature_status(db, feat.id, write_back=True)
-                derive_design_status(db, design.id, write_back=True)
+                # Delete workflows
+                db.query(Workflow).filter(Workflow.id.in_(wf_ids)).delete(
+                    synchronize_session=False
+                )
+
+            # Delete features for this design
+            if design:
+                db.query(Feature).filter_by(design_id=design.id).delete(
+                    synchronize_session=False
+                )
+
+            db.commit()
+            logger.info(
+                f"[RERUN] Cleaned up {len(wf_ids)} workflows and features "
+                f"for {filename}"
+            )
     except Exception as e:
-        logger.error(f"Error clearing failed state for rerun: {e}")
+        logger.error(f"Error cleaning up design state for rerun: {e}")
 
     # Step 3: Clean up branches (non-blocking)
     try:
@@ -1974,7 +1974,17 @@ async def reorder_project_designs(project_id: str, req: DesignReorderRequest):
 
 @router.delete("/projects/{project_id}/designs/{filename}")
 async def remove_project_design(project_id: str, filename: str):
-    from src.core.database import AutopilotDesign, AutopilotProject, get_db
+    import subprocess
+    from src.core.database import (
+        Agent,
+        AutopilotDesign,
+        AutopilotProject,
+        Feature,
+        PhaseExecution,
+        Task,
+        Workflow,
+        get_db,
+    )
 
     # Delete DB record first, then file (atomic rollback if file delete fails)
     found = False
@@ -1990,6 +2000,63 @@ async def remove_project_design(project_id: str, filename: str):
             .first()
         )
         if d:
+            # Cascade: terminate agents, delete tasks, workflows, features
+            design_features = db.query(Feature).filter_by(design_id=d.id).all()
+            wf_ids = []
+            for feat in design_features:
+                if feat.workflow_id:
+                    wf_ids.append(feat.workflow_id)
+            # Also get workflows directly linked to the design
+            design_wfs = db.query(Workflow).filter_by(design_id=d.id).all()
+            for wf in design_wfs:
+                if wf.id not in wf_ids:
+                    wf_ids.append(wf.id)
+
+            if wf_ids:
+                # Terminate active agents for these workflows
+                tasks = db.query(Task).filter(Task.workflow_id.in_(wf_ids)).all()
+                task_ids = [t.id for t in tasks]
+                if task_ids:
+                    agents = (
+                        db.query(Agent)
+                        .filter(Agent.current_task_id.in_(task_ids))
+                        .filter(Agent.status.in_(["working", "starting", "idle"]))
+                        .all()
+                    )
+                    for agent in agents:
+                        try:
+                            subprocess.run(
+                                ["tmux", "kill-session", "-t", agent.tmux_session_name],
+                                capture_output=True,
+                                timeout=3,
+                            )
+                        except Exception:
+                            pass
+                        agent.status = "terminated"
+                        agent.current_task_id = None
+                        agent.terminated_at = datetime.utcnow()
+
+                # Delete phase executions
+                db.query(PhaseExecution).filter(
+                    PhaseExecution.workflow_execution_id.in_(wf_ids)
+                ).delete(synchronize_session=False)
+
+                # Delete tasks
+                db.query(Task).filter(Task.workflow_id.in_(wf_ids)).delete(
+                    synchronize_session=False
+                )
+
+                # Delete workflows
+                db.query(Workflow).filter(Workflow.id.in_(wf_ids)).delete(
+                    synchronize_session=False
+                )
+
+            # Delete features
+            db.query(Feature).filter_by(design_id=d.id).delete(
+                synchronize_session=False
+            )
+
+            # Delete the design itself
             db.delete(d)
             found = True
 
@@ -2003,6 +2070,28 @@ async def remove_project_design(project_id: str, filename: str):
         raise HTTPException(404, f"Design '{filename}' not found")
 
     _invalidate("queue", "status", f"project_designs:{project_id}")
+
+    # Also remove from processed_designs.json so re-adding triggers reprocessing
+    try:
+        import hashlib
+        processed_file = Path(AUTOPILOT_STATE_DIR) / "processed_designs.json"
+        if processed_file.exists():
+            with open(processed_file) as f:
+                hashes = json.load(f)
+            # Compute hash of the design file to remove it
+            if filepath.exists():
+                content = filepath.read_bytes()
+            else:
+                # File already deleted, try to compute from remaining data
+                content = filename.encode()
+            h = hashlib.sha256(content).hexdigest()[:16]
+            if h in hashes:
+                hashes.remove(h)
+                with open(processed_file, "w") as f:
+                    json.dump(hashes, f)
+    except Exception:
+        pass  # Non-critical
+
     return {"removed": filename}
 
 
