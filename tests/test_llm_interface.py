@@ -7,10 +7,65 @@ import sys
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import pytest
+from unittest.mock import patch
+
 from src.core.simple_config import Config
-from src.interfaces.llm_interface import OpenAIProvider
+from src.interfaces.llm_interface import OpenAIProvider, OpenRouterProvider, LLM_PROVIDERS
 
 
+def test_openrouter_in_providers_registry():
+    """OpenRouterProvider should be in the LLM_PROVIDERS registry."""
+    assert "openrouter" in LLM_PROVIDERS
+    assert LLM_PROVIDERS["openrouter"] is OpenRouterProvider
+
+
+def test_openrouter_provider_init():
+    """OpenRouterProvider should initialize with OpenRouter base URL."""
+    provider = OpenRouterProvider(api_key="test-key", model="test-model")
+    assert provider.model == "test-model"
+    assert str(provider.client.base_url) == "https://openrouter.ai/api/v1/"
+
+
+def test_openrouter_get_api_key():
+    """Config.get_api_key() should return openrouter_api_key for openrouter provider."""
+    with patch.dict(os.environ, {
+        "OPENROUTER_API_KEY": "sk-or-test-key",
+        "LLM_PROVIDER": "openrouter",
+    }):
+        config = Config()
+        config.llm_provider = "openrouter"
+        assert config.get_api_key() == "sk-or-test-key"
+
+
+def test_openrouter_validate():
+    """Config.validate() should pass when openrouter key is set."""
+    with patch.dict(os.environ, {"OPENROUTER_API_KEY": "sk-or-test-key"}):
+        config = Config()
+        config.llm_provider = "openrouter"
+        config.openrouter_api_key = "sk-or-test-key"
+        assert config.validate() is True
+
+
+def test_openrouter_validate_missing_key():
+    """Config.validate() should raise when openrouter key is missing."""
+    config = Config()
+    config.llm_provider = "openrouter"
+    config.openrouter_api_key = None
+    with pytest.raises(ValueError, match="OPENROUTER_API_KEY"):
+        config.validate()
+
+
+def _has_openai_key():
+    """Check if OpenAI API key is available."""
+    try:
+        config = Config()
+        return bool(config.openai_api_key and config.openai_api_key.startswith("sk-"))
+    except Exception:
+        return False
+
+
+@pytest.mark.skipif(not _has_openai_key(), reason="No OpenAI API key")
 async def test_embedding_generation():
     """Test embedding generation with text-embedding-3-large."""
     print("\n🧪 Testing Embedding Generation...")
@@ -68,6 +123,7 @@ async def test_embedding_generation():
     return True
 
 
+@pytest.mark.skipif(not _has_openai_key(), reason="No OpenAI API key")
 async def test_task_enrichment():
     """Test task enrichment with GPT-5."""
     print("\n🧪 Testing Task Enrichment...")
@@ -145,6 +201,7 @@ async def test_task_enrichment():
     return True
 
 
+@pytest.mark.skipif(not _has_openai_key(), reason="No OpenAI API key")
 async def test_agent_state_analysis():
     """Test agent state analysis."""
     print("\n🧪 Testing Agent State Analysis...")
@@ -251,6 +308,7 @@ Please enter your choice:
     return True
 
 
+@pytest.mark.skipif(not _has_openai_key(), reason="No OpenAI API key")
 async def test_agent_prompt_generation():
     """Test agent prompt generation."""
     print("\n🧪 Testing Agent Prompt Generation...")
@@ -323,6 +381,7 @@ async def test_agent_prompt_generation():
     return True
 
 
+@pytest.mark.skipif(not _has_openai_key(), reason="No OpenAI API key")
 async def test_error_handling():
     """Test error handling and fallback behavior."""
     print("\n🧪 Testing Error Handling...")
