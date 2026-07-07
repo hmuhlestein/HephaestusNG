@@ -5,7 +5,14 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 PROJECT_PATH="/private/tmp/heph-smoke-test"
-DB="hephaestus.db"
+# Absolute path: the script cd's into $PROJECT_PATH and back multiple times
+# (design-seeding, DB reset). If a cd out ever doesn't run (e.g. an error
+# path exits between a paired cd/cd -), a relative "hephaestus.db" would
+# silently resolve inside $PROJECT_PATH instead of the real DB, and the
+# poll loop below would query whatever's there (or nothing) instead of
+# erroring -- observed live: agents/done counts frozen for 20+ minutes
+# while `heph status` showed the real pipeline actively progressing.
+DB="$(pwd)/hephaestus.db"
 KEEP=false
 [[ "${1:-}" == "--keep" ]] && KEEP=true
 
