@@ -1585,6 +1585,23 @@ def _create_integration_worktree(
             # Create worktree
             safe_branch = branch.replace("/", "-")
             wt_path = wt_mgr.worktree_base / f"wt_{safe_branch}"
+            # A directory can exist here without being a valid git worktree --
+            # e.g. a prior run got killed mid-`git worktree add`, or a stale
+            # cleanup left a stub behind (observed live: only a leftover
+            # .hephaestus/.placeholder, no .git). Reusing it silently as-is
+            # then breaks everything downstream: agent creation later
+            # discovers it has no .git, falls back to an isolated per-agent
+            # worktree, and nulls the workflow's working_directory -- so
+            # output validation can never find what the agent wrote. Treat
+            # "exists but not a real worktree" the same as "doesn't exist".
+            if wt_path.exists() and not (wt_path / ".git").exists():
+                logger.warning(
+                    f"Found stale non-worktree directory at {wt_path} "
+                    "(no .git) -- removing before recreating"
+                )
+                import shutil as _shutil
+
+                _shutil.rmtree(wt_path, ignore_errors=True)
             if not wt_path.exists():
                 wt_mgr.main_repo.git.worktree("add", str(wt_path), branch)
 
