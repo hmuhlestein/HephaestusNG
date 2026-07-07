@@ -159,8 +159,8 @@ class UpdateTaskStatusRequest(BaseModel):
 
     task_id: str
     status: str = Field(..., pattern="^(done|failed)$")
-    summary: str = Field(..., description="What was accomplished")
-    key_learnings: List[str] = Field(..., description="Important discoveries")
+    summary: str = Field(default="", description="What was accomplished")
+    key_learnings: List[str] = Field(default=[], description="Important discoveries")
     code_changes: Optional[List[str]] = Field(
         default=None, description="Files modified/created"
     )
