@@ -246,6 +246,12 @@ class WorktreeManager:
             Dict with branch_name, parent_commit, and working_directory (the
             worktree path — the only directory the agent should ever see).
         """
+        # Lazy reload: if config path changed (e.g. project switch), reload now
+        config_path = Path(self.config.main_repo_path)
+        if self.main_repo.working_dir != str(config_path):
+            logger.info(f"[WORKTREE] Lazy reload: {self.main_repo.working_dir} -> {config_path}")
+            self.reload(config_path)
+
         logger.info(
             f"[WORKTREE] Creating worktree for agent {agent_id} (parent={parent_agent_id})"
         )

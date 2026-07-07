@@ -2099,10 +2099,13 @@ def _validate_features_json(features_json: dict) -> None:
             raise ValueError(f"Feature {feat_id} files must be an array")
 
         for f in files:
+            # Normalize: strip trailing slashes for comparison
+            f_norm = f.rstrip("/")
             for existing in all_files:
+                existing_norm = existing.rstrip("/")
                 # Check for overlap: exact match or directory containment
                 # (e.g. src/ contains src/utils/file.py, but .env does NOT contain .env.example)
-                if f == existing or f.startswith(existing + "/") or existing.startswith(f + "/"):
+                if f_norm == existing_norm or f_norm.startswith(existing_norm + "/") or existing_norm.startswith(f_norm + "/"):
                     raise ValueError(
                         f"File overlap between features: {f} and {existing}"
                     )
