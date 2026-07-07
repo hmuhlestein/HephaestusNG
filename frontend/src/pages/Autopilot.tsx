@@ -63,7 +63,22 @@ const Autopilot: React.FC = () => {
       if (status?.running) {
         return apiService.stopAutopilot(projectId || undefined);
       } else if (activeProject) {
-        return apiService.startAutopilot(activeProject.base_dir);
+        // Try to start; if 409, warn user and ask to stop the other pipeline
+        try {
+          return await apiService.startAutopilot(activeProject.base_dir);
+        } catch (err: any) {
+          if (err?.response?.status === 409 || err?.status === 409) {
+            const confirmed = window.confirm(
+              'Another project pipeline is currently running.\n\nStop it and start ' + activeProject.name + '?'
+            );
+            if (confirmed) {
+              await apiService.stopAutopilot();
+              return await apiService.startAutopilot(activeProject.base_dir);
+            }
+            return; // User cancelled
+          }
+          throw err;
+        }
       }
     },
     onSuccess: async () => {
