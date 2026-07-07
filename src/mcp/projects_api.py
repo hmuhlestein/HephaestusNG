@@ -272,10 +272,14 @@ def _apply_active_project(proj):
     config = get_config()
     new_path = Path(proj.base_dir)
 
-    # Validate path exists and is a directory (fast check)
+    # Validate path exists and is a git repo (fast check — just look for .git)
     if not new_path.exists() or not new_path.is_dir():
         raise ValueError(
             f"Cannot activate project — path does not exist: {new_path}"
+        )
+    if not (new_path / ".git").exists():
+        raise ValueError(
+            f"Cannot activate project — not a git repository: {new_path}"
         )
 
     # Update config immediately — no git reload here

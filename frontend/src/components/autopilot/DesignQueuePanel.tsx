@@ -21,9 +21,9 @@ import { CSS } from '@dnd-kit/utilities';
 import {
   Plus, Trash2, FileText, Clock, GripVertical, Search, ListOrdered, RefreshCw,
   CheckCircle2, XCircle, Loader2, Pause, Play, Upload, ChevronRight, ChevronDown, Layers,
-  PauseCircle
+  PauseCircle, Square, RotateCcw
 } from 'lucide-react';
-import { apiService } from '@/services/api';
+import { apiService, api } from '@/services/api';
 import { Button } from '@/components/ui/button';
 import { formatDistanceToNow } from 'date-fns';
 import toast from 'react-hot-toast';
@@ -142,20 +142,22 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
     },
   });
 
-  const pauseResumeMutation = useMutation({
-    mutationFn: async ({ workflowId, action }: { workflowId: string; action: 'pause' | 'resume' }) => {
-      // workflowId is actually the design filename here
-      const designName = workflowId;
-      const status = await apiService.getAutopilotProjectDesignStatus(projectId!, designName);
+  // Handles Pause/Stop/Resume for a design row by applying the matching
+  // workflow-execution endpoint to every one of the design's workflows in
+  // the applicable status (a design can have more than one workflow run).
+  const workflowActionMutation = useMutation({
+    mutationFn: async ({ filename, action }: { filename: string; action: 'pause' | 'stop' | 'resume' }) => {
+      const status = await apiService.getAutopilotProjectDesignStatus(projectId!, filename);
       const workflows = status.workflows || [];
-      
-      // Pause/resume all active workflows
+
       const results = [];
       for (const wf of workflows) {
         if (action === 'pause' && wf.status === 'active') {
           results.push(await apiService.pauseWorkflow(wf.id));
-        } else if (action === 'resume' && wf.status === 'paused') {
-          results.push(await apiService.resumeWorkflow(wf.id));
+        } else if (action === 'stop' && ['active', 'paused'].includes(wf.status)) {
+          results.push(await apiService.cancelWorkflow(wf.id));
+        } else if (action === 'resume' && ['paused', 'failed'].includes(wf.status)) {
+          results.push(await apiService.recoverWorkflow(wf.id));
         }
       }
       return results;
@@ -169,6 +171,27 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
     },
     onError: () => {
       toast.error('Failed to update workflow');
+    },
+  });
+
+  // Rerun: restarts the design's pipeline from scratch (Phase 0 onward).
+  const rerunDesignMutation = useMutation({
+    mutationFn: async (filename: string) => {
+      const projects = await apiService.getProjects();
+      const project = projects.find((p: any) => p.id === projectId);
+      if (!project) throw new Error('Project not found');
+      return api.post('/autopilot/queue/rerun', {
+        filename,
+        project_path: project.base_dir,
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['autopilot-project-designs', projectId] });
+      queryClient.invalidateQueries({ queryKey: ['autopilot-design-statuses', projectId] });
+      toast.success('Pipeline restarted for this design');
+    },
+    onError: (error: any) => {
+      toast.error(error?.response?.data?.detail || error?.message || 'Failed to rerun');
     },
   });
 
@@ -268,7 +291,25 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
                   projectId={projectId}
                   onDetail={handleDetail}
                   onTaskClick={setSelectedTaskId}
-                  onPauseResume={(_workflowId, action) => pauseResumeMutation.mutate({ workflowId: item.filename, action })}
+                  onAction={(action) => {
+                    if (action === 'rerun') {
+                      // /autopilot/queue/rerun stops the orchestrator and
+                      // terminates every active agent/workflow system-wide,
+                      // not just this design's -- confirm before firing since
+                      // this icon is one click away, unlike the modal's button.
+                      if (confirm(`Rerun "${item.name}"? This restarts its pipeline from scratch and will also pause every other currently running pipeline.`)) {
+                        rerunDesignMutation.mutate(item.filename);
+                      }
+                    } else {
+                      workflowActionMutation.mutate({ filename: item.filename, action });
+                    }
+                  }}
+                  actionPending={{
+                    pause: workflowActionMutation.isPending && workflowActionMutation.variables?.filename === item.filename && workflowActionMutation.variables?.action === 'pause',
+                    stop: workflowActionMutation.isPending && workflowActionMutation.variables?.filename === item.filename && workflowActionMutation.variables?.action === 'stop',
+                    resume: workflowActionMutation.isPending && workflowActionMutation.variables?.filename === item.filename && workflowActionMutation.variables?.action === 'resume',
+                    rerun: rerunDesignMutation.isPending && rerunDesignMutation.variables === item.filename,
+                  }}
                   onRemove={(filename) => {
                     if (confirm(`Remove "${item.name}" from queue?`)) {
                       removeMutation.mutate(filename);
@@ -363,6 +404,63 @@ const TaskStatusIcon: React.FC<{ status: string }> = ({ status }) => {
   return <span className={config.color}>{config.icon}</span>;
 };
 
+// ── Shared row action icons (Pause / Stop / Resume / Rerun) ────
+// Mirrors the four actions in DesignDetailModal's footer, exposed inline on
+// design/feature/task rows so they don't require opening the modal.
+
+interface RowActionIconsProps {
+  canPause?: boolean;
+  canStop?: boolean;
+  canResume?: boolean;
+  canRerun?: boolean;
+  onPause?: () => void;
+  onStop?: () => void;
+  onResume?: () => void;
+  onRerun?: () => void;
+  pending?: { pause?: boolean; stop?: boolean; resume?: boolean; rerun?: boolean };
+  size?: 'sm' | 'md';
+}
+
+const RowActionIcons: React.FC<RowActionIconsProps> = ({
+  canPause, canStop, canResume, canRerun, onPause, onStop, onResume, onRerun, pending = {}, size = 'md',
+}) => {
+  const iconCls = size === 'sm' ? 'w-3.5 h-3.5' : 'w-4 h-4';
+  const btnCls = size === 'sm' ? 'p-1 rounded' : 'p-2 rounded-lg';
+
+  const items: Array<{
+    key: string;
+    enabled?: boolean;
+    isPending?: boolean;
+    onClick?: () => void;
+    icon: React.ReactNode;
+    hoverColor: string;
+    title: string;
+  }> = [
+    { key: 'pause', enabled: canPause, isPending: pending.pause, onClick: onPause, icon: <Pause className={iconCls} />, hoverColor: 'hover:bg-yellow-50 hover:text-yellow-600', title: 'Pause' },
+    { key: 'stop', enabled: canStop, isPending: pending.stop, onClick: onStop, icon: <Square className={iconCls} />, hoverColor: 'hover:bg-red-50 hover:text-red-600', title: 'Stop' },
+    { key: 'resume', enabled: canResume, isPending: pending.resume, onClick: onResume, icon: <Play className={iconCls} />, hoverColor: 'hover:bg-green-50 hover:text-green-600', title: 'Resume' },
+    { key: 'rerun', enabled: canRerun, isPending: pending.rerun, onClick: onRerun, icon: <RotateCcw className={iconCls} />, hoverColor: 'hover:bg-violet-50 hover:text-violet-600', title: 'Rerun' },
+  ];
+
+  return (
+    <>
+      {items.map((item) => (
+        <button
+          key={item.key}
+          disabled={!item.enabled || item.isPending}
+          onClick={(e) => { e.stopPropagation(); item.onClick?.(); }}
+          className={`${btnCls} transition-colors text-gray-300 ${
+            item.enabled ? `${item.hoverColor} text-gray-400` : 'opacity-30 cursor-not-allowed'
+          }`}
+          title={item.title}
+        >
+          {item.isPending ? <Loader2 className={`${iconCls} animate-spin`} /> : item.icon}
+        </button>
+      ))}
+    </>
+  );
+};
+
 // ── Sortable Item ───────────────────────────────────────────────
 
 interface SortableDesignItemProps {
@@ -372,13 +470,14 @@ interface SortableDesignItemProps {
   onRemove: (filename: string) => void;
   onDetail: (filename: string) => void;
   onTaskClick: (taskId: string) => void;
-  onPauseResume?: (workflowId: string, action: 'pause' | 'resume') => void;
+  onAction?: (action: 'pause' | 'stop' | 'resume' | 'rerun') => void;
+  actionPending?: { pause?: boolean; stop?: boolean; resume?: boolean; rerun?: boolean };
   status?: string;
   workflowId?: string;
   projectId: string | null;
 }
 
-const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, isActive, onRemove, onDetail, onTaskClick, onPauseResume, status, workflowId, projectId }) => {
+const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, isActive, onRemove, onDetail, onTaskClick, onAction, actionPending, status, projectId }) => {
   const [expanded, setExpanded] = useState(() => {
     // Restore expanded state from localStorage
     const saved = localStorage.getItem('autopilot-expanded-designs');
@@ -509,22 +608,17 @@ const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, is
             {status && status !== 'pending' && (
               <StatusBadge status={status} />
             )}
-            {workflowId && status && (status === 'active' || status === 'paused') && (
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onPauseResume?.(workflowId, status === 'paused' ? 'resume' : 'pause');
-                }}
-                className={`p-2 rounded-lg transition-colors ${
-                  status === 'paused'
-                    ? 'hover:bg-green-50 text-gray-400 hover:text-green-600'
-                    : 'hover:bg-yellow-50 text-gray-400 hover:text-yellow-600'
-                }`}
-                title={status === 'paused' ? 'Resume' : 'Pause'}
-              >
-                {status === 'paused' ? <Play className="w-4 h-4" /> : <Pause className="w-4 h-4" />}
-              </button>
-            )}
+            <RowActionIcons
+              canPause={status === 'active'}
+              canStop={status === 'active' || status === 'paused'}
+              canResume={status === 'paused' || status === 'failed'}
+              canRerun={status === 'completed' || status === 'failed'}
+              onPause={() => onAction?.('pause')}
+              onStop={() => onAction?.('stop')}
+              onResume={() => onAction?.('resume')}
+              onRerun={() => onAction?.('rerun')}
+              pending={actionPending}
+            />
             <button
               onClick={(e) => {
                 e.stopPropagation();
@@ -622,25 +716,40 @@ const FeatureRow: React.FC<{
     }
     return false;
   });
-  const [pausing, setPausing] = useState(false);
+  const [actionPending, setActionPending] = useState<{ pause?: boolean; stop?: boolean; resume?: boolean; rerun?: boolean }>({});
   const tasks = feature.tasks || [];
   const doneCount = tasks.filter((t: any) => t.status === 'done').length;
   const activeCount = tasks.filter((t: any) => ['in_progress', 'assigned'].includes(t.status)).length;
 
-  const handlePauseResume = async (e: React.MouseEvent) => {
-    e.stopPropagation();
-    setPausing(true);
+  // The Feature Architect (Phase 0) and placeholder entries aren't real
+  // `Feature` DB rows (see the synthetic ids built in autopilot_api.py), so
+  // pauseFeature/resumeFeature (which look up Feature by id) don't apply to
+  // them -- fall back to the workflow-level endpoints those synthetic
+  // entries' own `workflow_id` supports instead.
+  const isRealFeature = !feature.id.startsWith('phase0-') && !feature.id.startsWith('placeholder-');
+  const hasWorkflow = !!feature.workflow_id;
+
+  const runFeatureAction = async (action: 'pause' | 'stop' | 'resume' | 'rerun') => {
+    setActionPending((p) => ({ ...p, [action]: true }));
     try {
-      if (feature.status === 'active') {
-        await apiService.pauseFeature(feature.id);
-      } else if (feature.status === 'paused' || feature.status === 'failed') {
-        await apiService.resumeFeature(feature.id);
+      if (action === 'pause') {
+        if (isRealFeature) await apiService.pauseFeature(feature.id);
+        else await apiService.pauseWorkflow(feature.workflow_id);
+      } else if (action === 'resume') {
+        if (isRealFeature) await apiService.resumeFeature(feature.id);
+        else await apiService.recoverWorkflow(feature.workflow_id);
+      } else if (action === 'stop') {
+        await apiService.cancelWorkflow(feature.workflow_id);
+      } else if (action === 'rerun') {
+        // No true "restart this feature from scratch" endpoint exists yet;
+        // recover non-destructively continues from the last committed phase.
+        await apiService.recoverWorkflow(feature.workflow_id);
       }
       onFeatureUpdate?.();
     } catch (err) {
-      console.error('Pause/resume failed:', err);
+      console.error(`Feature ${action} failed:`, err);
     } finally {
-      setPausing(false);
+      setActionPending((p) => ({ ...p, [action]: false }));
     }
   };
 
@@ -689,24 +798,18 @@ const FeatureRow: React.FC<{
             </span>
           )}
           <FeatureStatusBadge status={feature.status} />
-          {(feature.status === 'active' || feature.status === 'paused' || feature.status === 'failed') && (
-            <button
-              onClick={handlePauseResume}
-              disabled={pausing}
-              className={`p-1 rounded transition-colors ${
-                feature.status === 'active'
-                  ? 'text-amber-500 hover:bg-amber-50'
-                  : 'text-green-500 hover:bg-green-50'
-              } ${pausing ? 'opacity-50' : ''}`}
-              title={feature.status === 'active' ? 'Pause feature' : 'Resume feature'}
-            >
-              {feature.status === 'active' ? (
-                <Pause className="w-3.5 h-3.5" />
-              ) : (
-                <Play className="w-3.5 h-3.5" />
-              )}
-            </button>
-          )}
+          <RowActionIcons
+            size="sm"
+            canPause={hasWorkflow && feature.status === 'active'}
+            canStop={hasWorkflow && (feature.status === 'active' || feature.status === 'paused')}
+            canResume={hasWorkflow && (feature.status === 'paused' || feature.status === 'failed')}
+            canRerun={hasWorkflow}
+            onPause={() => runFeatureAction('pause')}
+            onStop={() => runFeatureAction('stop')}
+            onResume={() => runFeatureAction('resume')}
+            onRerun={() => runFeatureAction('rerun')}
+            pending={actionPending}
+          />
         </div>
       </div>
 
@@ -714,53 +817,99 @@ const FeatureRow: React.FC<{
         <div className="border-t border-gray-100 bg-gray-50 px-3 py-2">
           <div className="space-y-1">
             {tasks.map((task: any) => (
-              <div
-                key={task.id}
-                className="flex items-center gap-2 px-2 py-1.5 bg-white rounded border border-gray-100 cursor-pointer hover:bg-gray-50 hover:border-gray-200 transition-colors"
-              >
-                <TaskStatusIcon
-                  status={task.status}
-                />
-                <div
-                  className="flex-1 min-w-0"
-                  onClick={() => onTaskClick(task.id)}
-                >
-                  <p className="text-xs text-gray-600 truncate">{task.description || task.id.substring(0, 8)}</p>
-                  <div className="flex items-center gap-2 mt-0.5">
-                    {task.phase_name && (
-                      <span className="text-[10px] text-gray-400">{task.phase_name}</span>
-                    )}
-                    {task.agent_status && task.agent_status !== 'terminated' && (
-                      <span className={`text-[10px] px-1 py-0.5 rounded ${
-                        task.agent_status === 'working' ? 'bg-green-100 text-green-700' :
-                        task.agent_status === 'idle' ? 'bg-gray-100 text-gray-600' :
-                        'bg-gray-100 text-gray-500'
-                      }`}>
-                        {task.agent_status}
-                      </span>
-                    )}
-                    {task.agent_status === 'terminated' && task.status === 'done' && (
-                      <span className="text-[10px] px-1 py-0.5 rounded bg-green-100 text-green-700">
-                        done
-                      </span>
-                    )}
-                  </div>
-                </div>
-                {task.agent_id && (
-                  <a
-                    href={`/agents/${task.agent_id}`}
-                    className="flex items-center gap-1 px-1.5 py-0.5 text-[10px] bg-violet-100 text-violet-700 rounded hover:bg-violet-200 transition-colors"
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                    <span className={task.agent_status === 'working' ? 'w-1 h-1 rounded-full bg-green-500' : 'w-1 h-1 rounded-full bg-gray-400'}></span>
-                    {task.agent_id.substring(0, 6)}
-                  </a>
-                )}
-              </div>
+              <TaskRow key={task.id} task={task} onTaskClick={onTaskClick} onTaskUpdate={onFeatureUpdate} />
             ))}
           </div>
         </div>
       )}
+    </div>
+  );
+};
+
+// ── Task Row (Pause/Stop/Resume/Rerun mapped onto the task's agent lifecycle) ──
+
+const TaskRow: React.FC<{
+  task: any;
+  onTaskClick: (taskId: string) => void;
+  onTaskUpdate?: () => void;
+}> = ({ task, onTaskClick, onTaskUpdate }) => {
+  const [actionPending, setActionPending] = useState<{ pause?: boolean; stop?: boolean; resume?: boolean; rerun?: boolean }>({});
+
+  const runTaskAction = async (action: 'pause' | 'stop' | 'resume' | 'rerun') => {
+    setActionPending((p) => ({ ...p, [action]: true }));
+    try {
+      if (action === 'pause') {
+        await apiService.pauseTask(task.id);
+      } else if (action === 'stop') {
+        // Terminating the agent preserves its WIP commit; if the task never
+        // got an agent (still pending/queued), fall back to the plain cancel.
+        if (task.agent_id) await apiService.terminateAgent(task.agent_id, 'Stopped by user');
+        else await apiService.cancelTask(task.id);
+      } else if (action === 'resume' || action === 'rerun') {
+        // Same underlying action (reset + spawn a fresh agent) -- Resume
+        // applies to a paused ('blocked') task, Rerun to a done/failed one.
+        await apiService.restartTask(task.id);
+      }
+      onTaskUpdate?.();
+    } catch (err) {
+      console.error(`Task ${action} failed:`, err);
+    } finally {
+      setActionPending((p) => ({ ...p, [action]: false }));
+    }
+  };
+
+  const activeStatuses = ['pending', 'queued', 'assigned', 'in_progress', 'under_review', 'validation_in_progress', 'needs_work'];
+
+  return (
+    <div className="flex items-center gap-2 px-2 py-1.5 bg-white rounded border border-gray-100 hover:bg-gray-50 hover:border-gray-200 transition-colors">
+      <TaskStatusIcon status={task.status} />
+      <div
+        className="flex-1 min-w-0 cursor-pointer"
+        onClick={() => onTaskClick(task.id)}
+      >
+        <p className="text-xs text-gray-600 truncate">{task.description || task.id.substring(0, 8)}</p>
+        <div className="flex items-center gap-2 mt-0.5">
+          {task.phase_name && (
+            <span className="text-[10px] text-gray-400">{task.phase_name}</span>
+          )}
+          {task.agent_status && task.agent_status !== 'terminated' && (
+            <span className={`text-[10px] px-1 py-0.5 rounded ${
+              task.agent_status === 'working' ? 'bg-green-100 text-green-700' :
+              task.agent_status === 'idle' ? 'bg-gray-100 text-gray-600' :
+              'bg-gray-100 text-gray-500'
+            }`}>
+              {task.agent_status}
+            </span>
+          )}
+          {task.agent_status === 'terminated' && task.status === 'done' && (
+            <span className="text-[10px] px-1 py-0.5 rounded bg-green-100 text-green-700">
+              done
+            </span>
+          )}
+        </div>
+      </div>
+      {task.agent_id && (
+        <a
+          href={`/agents/${task.agent_id}`}
+          className="flex items-center gap-1 px-1.5 py-0.5 text-[10px] bg-violet-100 text-violet-700 rounded hover:bg-violet-200 transition-colors"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <span className={task.agent_status === 'working' ? 'w-1 h-1 rounded-full bg-green-500' : 'w-1 h-1 rounded-full bg-gray-400'}></span>
+          {task.agent_id.substring(0, 6)}
+        </a>
+      )}
+      <RowActionIcons
+        size="sm"
+        canPause={activeStatuses.includes(task.status)}
+        canStop={activeStatuses.includes(task.status)}
+        canResume={task.status === 'blocked'}
+        canRerun={task.status === 'done' || task.status === 'failed'}
+        onPause={() => runTaskAction('pause')}
+        onStop={() => runTaskAction('stop')}
+        onResume={() => runTaskAction('resume')}
+        onRerun={() => runTaskAction('rerun')}
+        pending={actionPending}
+      />
     </div>
   );
 };

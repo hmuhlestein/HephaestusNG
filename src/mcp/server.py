@@ -3706,6 +3706,59 @@ async def terminate_agent_endpoint(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/api/tasks/{task_id}/pause")
+async def pause_task_endpoint(task_id: str):
+    """Pause a single task: terminate its agent (if any, WIP is committed by
+    terminate_agent) and mark it 'blocked' so it won't be picked up again until
+    Resume is pressed. Mirrors /features/{id}/pause's per-task logic, scoped to
+    just this one task.
+    """
+    logger.info(f"Pause request for task {task_id}")
+
+    try:
+        session = server_state.db_manager.get_session()
+        try:
+            task = session.query(Task).filter_by(id=task_id).first()
+            if not task:
+                raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+
+            if task.status not in (
+                "pending",
+                "queued",
+                "assigned",
+                "in_progress",
+                "under_review",
+                "validation_in_progress",
+                "needs_work",
+            ):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Cannot pause task in '{task.status}' status",
+                )
+
+            agent_id = task.assigned_agent_id
+            task.status = "blocked"
+            task.assigned_agent_id = None
+            session.commit()
+        finally:
+            session.close()
+
+        if agent_id:
+            await server_state.agent_manager.terminate_agent(agent_id)
+
+        await server_state.broadcast_update(
+            {"type": "task_paused", "task_id": task_id}
+        )
+
+        return {"success": True, "task_id": task_id, "status": "blocked"}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to pause task {task_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/api/bump_task_priority")
 async def bump_task_priority_endpoint(
     task_id: str = Body(..., embed=True),
@@ -3934,10 +3987,10 @@ async def restart_task_endpoint(
             if not task:
                 raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
 
-            if task.status not in ["done", "failed"]:
+            if task.status not in ["done", "failed", "blocked"]:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Can only restart completed or failed tasks (current status: {task.status})",
+                    detail=f"Can only restart completed, failed, or paused tasks (current status: {task.status})",
                 )
 
             # Get agent ID before clearing (to delete trajectory data)
