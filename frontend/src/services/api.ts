@@ -614,9 +614,12 @@ export const apiService = {
   },
 
   // Autopilot
-  getAutopilotStatus: async (projectId?: string): Promise<any> => {
-    const params = projectId ? `?project_id=${projectId}` : '';
-    const { data } = await api.get(`/autopilot/status${params}`);
+  getAutopilotStatus: async (projectId?: string, projectPath?: string): Promise<any> => {
+    const params = new URLSearchParams();
+    if (projectId) params.set('project_id', projectId);
+    if (projectPath) params.set('project_path', projectPath);
+    const qs = params.toString();
+    const { data } = await api.get(`/autopilot/status${qs ? '?' + qs : ''}`);
     return data;
   },
 

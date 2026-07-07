@@ -308,6 +308,15 @@ class PipelineStatus(BaseModel):
     queue_depth: int = 0
     last_event: Optional[Dict[str, Any]] = None
     active_agents: int = 0
+    # Which project the (globally single) AutopilotService is actually
+    # running, if any -- lets the UI say "X is running" instead of a vague
+    # "another project pipeline is running" that doesn't even distinguish
+    # a genuine cross-project conflict from the caller's own just-started run.
+    running_project_path: Optional[str] = None
+    running_project_name: Optional[str] = None
+    # True when the running project matches the requested project (after
+    # realpath resolution, so /tmp == /private/tmp on macOS).
+    is_self_conflict: bool = False
 
 
 class MessageItem(BaseModel):
@@ -320,7 +329,10 @@ class MessageItem(BaseModel):
 
 
 @router.get("/status", response_model=PipelineStatus)
-async def get_pipeline_status(project_id: Optional[str] = None):
+async def get_pipeline_status(
+    project_id: Optional[str] = None,
+    project_path: Optional[str] = None,
+):
     from src.autopilot.service import get_autopilot_service
 
     cache_key = f"status:{project_id}" if project_id else "status"
@@ -388,7 +400,9 @@ async def get_pipeline_status(project_id: Optional[str] = None):
                 except Exception:
                     state = {}
 
-        state = _store("state", state)
+        # No run dir AND no persistent state file: state was never assigned
+        # above and stays None, crashing every state.get(...) call below.
+        state = _store("state", state or {})
 
     queue_depth = 0
     try:
@@ -424,6 +438,27 @@ async def get_pipeline_status(project_id: Optional[str] = None):
     except Exception:
         active_agents = 0
 
+    # Resolve which project the (single, global) service is actually running,
+    # if any -- so the UI can tell the user what's really running instead of
+    # a generic "another project" message that's just as misleading when
+    # it's actually the caller's own just-started run.
+    running_project_path = service_status.get("project_path")
+    running_project_name = None
+    if running_project_path:
+        try:
+            from src.core.database import AutopilotProject
+            from src.core.database import get_db as _get_db
+
+            with _get_db() as _db:
+                _rp = (
+                    _db.query(AutopilotProject)
+                    .filter_by(base_dir=running_project_path)
+                    .first()
+                )
+                running_project_name = _rp.name if _rp else Path(running_project_path).name
+        except Exception:
+            running_project_name = Path(running_project_path).name
+
     # Merge service status with file-based state
     result = PipelineStatus(
         running=running,
@@ -441,6 +476,15 @@ async def get_pipeline_status(project_id: Optional[str] = None):
         queue_depth=queue_depth,
         last_event=last_event,
         active_agents=active_agents,
+        running_project_path=running_project_path,
+        running_project_name=running_project_name,
+        # Compute self-conflict server-side using realpath to handle
+        # symlink resolution (/tmp -> /private/tmp on macOS).
+        is_self_conflict=(
+            running_project_path is not None
+            and project_path is not None
+            and os.path.realpath(running_project_path) == os.path.realpath(project_path)
+        ),
     )
     return _store(cache_key, result)
 
