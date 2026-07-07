@@ -2701,6 +2701,18 @@ def _case_in_progress_no_tasks(
             .count()
         )
         if task_count == 0:
+            # Same race as _case_start_first_phase: other paths (e.g. the
+            # spec-gate immediate-fire path in task_completion_service.py)
+            # can set a phase to in_progress and create its task
+            # synchronously in the same request, while this background poll
+            # checks independently and can land in between.
+            time.sleep(0.5)
+            task_count = (
+                db.query(Task)
+                .filter_by(phase_id=phase.id)
+                .count()
+            )
+        if task_count == 0:
             logger.info(
                 f"[PHASE-ADVANCE] Phase {phase.name} is in_progress but has no tasks — creating one"
             )
