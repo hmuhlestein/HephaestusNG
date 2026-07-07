@@ -554,6 +554,47 @@ class TestGetTasks:
         assert result[0]["retry_count"] == 2
 
 
+class TestPromptHumanDismissed:
+    def test_dismissed_request_auto_continues_without_crashing(self, tmp_path):
+        """Regression: the "dismissed" branch called
+        logger.info(message, "WARN") -- OrchestratorLogger.info takes only
+        (self, message), so this raised TypeError every time a pending
+        human-input request got deleted (e.g. via the UI's designs/reload
+        endpoint) instead of answered. Observed live: this crashed
+        _run_one_feature's whole try block, which then hit the finally
+        block and deleted the feature's worktree while its workflow was
+        still legitimately active (just waiting on a stuck-task
+        diagnostic agent), not because the feature had actually failed.
+        """
+        import threading
+        import time as time_mod
+
+        from src.autopilot.orchestrator import OrchestratorLogger, prompt_human
+
+        with patch("src.autopilot.orchestrator.AUTOPILOT_STATE_DIR", str(tmp_path)):
+            logger = OrchestratorLogger(tmp_path / "logs")
+            result = {}
+
+            def _run():
+                result["choice"] = prompt_human("test stuck reason", logger, timeout=5)
+
+            t = threading.Thread(target=_run)
+            t.start()
+
+            # Wait for prompt_human to create its request file, then delete
+            # it to simulate the UI dismissing the request.
+            for _ in range(50):
+                request_files = list(tmp_path.glob("input_request_*.json"))
+                if request_files:
+                    request_files[0].unlink()
+                    break
+                time_mod.sleep(0.1)
+
+            t.join(timeout=10)
+            assert not t.is_alive(), "prompt_human should have returned promptly"
+            assert result.get("choice") == "c"
+
+
 class TestIncrementTaskRetryCount:
     def test_persists_across_calls(self, orch_db_env):
         from src.autopilot.orchestrator import increment_task_retry_count
