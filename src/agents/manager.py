@@ -1548,12 +1548,18 @@ class AgentManager:
             if agent.agent_type == "orchestrator":
                 return self._get_orchestrator_output(agent, lines)
 
-            # Check if agent is terminated - if so, retrieve from AgentLog
+            # Check if agent is terminated - try transcript log first, then AgentLog
             if agent.status == "terminated":
                 logger.debug(
-                    f"Agent {agent_id} is terminated, retrieving stored output"
+                    f"Agent {agent_id} is terminated, trying transcript log"
                 )
-
+                
+                # Try transcript log first (has full history)
+                transcript_output = self._read_transcript_log(agent, lines)
+                if transcript_output:
+                    return transcript_output
+                
+                # Fall back to stored output in AgentLog
                 # Get the most recent termination log with output
                 termination_log = (
                     session.query(AgentLog)
@@ -1663,26 +1669,30 @@ class AgentManager:
         if no transcript is available.
         """
         try:
-            # Get the working directory from the agent's current task's workflow
+            # Get the working directory from the agent's task workflow
             working_dir = None
-            if agent.current_task_id:
-                from src.core.database import Task
-                session = self.db_manager.get_session()
-                try:
+            from src.core.database import Task
+            session = self.db_manager.get_session()
+            try:
+                # Try current task first, then most recent task
+                task = None
+                if agent.current_task_id:
                     task = session.query(Task).filter_by(id=agent.current_task_id).first()
-                    if task and task.workflow and task.workflow.working_directory:
-                        working_dir = task.workflow.working_directory
-                finally:
-                    session.close()
+                if not task:
+                    task = session.query(Task).filter_by(assigned_agent_id=agent.id).order_by(Task.created_at.desc()).first()
+                if task and task.workflow and task.workflow.working_directory:
+                    working_dir = task.workflow.working_directory
+            finally:
+                session.close()
             
-            # If no working dir from task, try to find transcript by searching
             if not working_dir:
                 # Search in common locations using the session name
                 import glob
-                pattern = f"*/{CONTEXT_DIR_NAME}/tmux/{agent.tmux_session_name}.transcript.log"
+                pattern = f"**/{CONTEXT_DIR_NAME}/tmux/{agent.tmux_session_name}.transcript.log"
                 matches = glob.glob(pattern, recursive=True)
                 if matches:
-                    transcript_path = Path(matches[0])
+                    # Use most recently modified
+                    transcript_path = Path(max(matches, key=lambda p: Path(p).stat().st_mtime))
                 else:
                     return ""
             else:
@@ -1694,12 +1704,23 @@ class AgentManager:
             # Read last N lines efficiently
             with open(transcript_path, 'r', errors='replace') as f:
                 if lines > 0:
-                    # Read all and take last N lines
                     all_lines = f.readlines()
+                    # Drop trailing empty lines (partial writes from pipe-pane)
+                    while all_lines and not all_lines[-1].strip():
+                        all_lines.pop()
                     tail_lines = all_lines[-lines:]
-                    return "".join(tail_lines).rstrip()
+                    text = "".join(tail_lines).rstrip()
                 else:
-                    return f.read().rstrip()
+                    text = f.read().rstrip()
+            
+            # Strip TUI chrome (prompts, spinners) that ANSI stripping doesn't catch
+            from src.interfaces.cli_interface import get_cli_agent
+            try:
+                text = get_cli_agent(agent.cli_type).strip_tui_chrome(text)
+            except Exception:
+                pass
+            
+            return text
                     
         except Exception as e:
             logger.debug(f"Could not read transcript log: {e}")
