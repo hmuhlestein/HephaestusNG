@@ -1630,6 +1630,24 @@ def _cleanup_worktree(
                     logger.info(f"Removed worktree: {worktree}")
                 except Exception as e:
                     logger.warning(f"Failed to remove worktree: {e}")
+
+                # Clear stale working_directory from any workflows pointing to this worktree
+                try:
+                    from src.core.database import Workflow
+                    _s = db.get_session()
+                    try:
+                        wfs = _s.query(Workflow).filter(
+                            Workflow.working_directory == str(worktree)
+                        ).all()
+                        for wf in wfs:
+                            wf.working_directory = None
+                            logger.info(f"Cleared stale working_directory from workflow {wf.id[:8]}")
+                        if wfs:
+                            _s.commit()
+                    finally:
+                        _s.close()
+                except Exception as e:
+                    logger.warning(f"Failed to clear workflow working_directory: {e}")
         finally:
             session = getattr(db, "_session", None) or getattr(db, "session", None)
             if session is not None:
