@@ -7,6 +7,7 @@ from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional
 
 from src.monitoring.models import ConductorSystemAnalysis, GuardianTrajectoryAnalysis
+from src.prompts.loader import get_base_system_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -83,19 +84,24 @@ class LLMProviderInterface(ABC):
         memories: List[Dict[str, Any]],
         project_context: str,
     ) -> str:
-        """Generate specialized system prompt for an agent.
+        """Generate agent system prompt.
 
-        Args:
-            task: Task information
-            memories: Relevant memories from RAG
-            project_context: Current project context
-
-        Returns:
-            System prompt for the agent
+        Task description and completion criteria are intentionally omitted —
+        they arrive in the initial user-turn message with concrete IDs and
+        worktree path already interpolated.  Repeating them here wastes
+        context tokens and creates two sources of truth.
         """
-        pass
+        memory_context = "\n".join(
+            [f"- {mem.get('content', '')[:200]}" for mem in memories[:10]]
+        )
 
-    @abstractmethod
+        return get_base_system_prompt(
+            agent_id=task.get("agent_id", "unknown"),
+            task_id=task.get("id", "unknown"),
+            memory_context=memory_context,
+            project_context=project_context,
+        )
+
     def get_model_name(self) -> str:
         """Get the name of the model being used.
 

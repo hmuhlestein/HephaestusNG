@@ -108,6 +108,10 @@ def build_phase(phase_cfg: dict, default_model: str, default_thinking: str) -> P
                 criteria=v.get("criteria", []),
             )
 
+    # Parse optional self_review block (see docs/GAP_CHECK_SELF_LOOP_DESIGN.md).
+    # Passed through as a plain dict, not a typed dataclass like ValidationCriteria.
+    self_review = phase_cfg.get("self_review") if isinstance(phase_cfg.get("self_review"), dict) else None
+
     return Phase(
         id=phase_cfg["id"],
         name=phase_cfg["name"],
@@ -120,6 +124,7 @@ def build_phase(phase_cfg: dict, default_model: str, default_thinking: str) -> P
         outputs=phase_cfg.get("outputs", []),
         next_steps=phase_cfg.get("next_steps", []),
         validation=validation,
+        self_review=self_review,
     )
 
 

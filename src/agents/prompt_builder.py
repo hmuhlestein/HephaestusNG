@@ -12,18 +12,19 @@ building the message itself.
 import logging
 
 from src.core.database import Task
+from src.prompts.loader import (
+    get_writing_instructions,
+    get_phase_agent_instructions,
+    get_non_phase_agent_instructions,
+    get_workflow_result_criteria,
+    get_ticket_note,
+    get_validator_prompt,
+)
 
 logger = logging.getLogger(__name__)
 
-# Shared writing instructions — appended to every agent prompt to prevent
-# max-output-token truncation when agents write large files.
-WRITING_INSTRUCTIONS = """
-WRITING INSTRUCTIONS (CRITICAL):
-- Write files in CHUNKS (multiple write/edit calls), NOT one giant block.
-- Files > 200 lines: 2-3 chunks. Files > 500 lines: 4-5 chunks.
-- Verify each chunk compiles/saves before writing the next.
-- Hitting the output token limit truncates and CORRUPTS the file.
-"""
+# Shared writing instructions — loaded from YAML
+WRITING_INSTRUCTIONS = get_writing_instructions()
 
 
 class AgentPromptBuilder:
@@ -70,13 +71,7 @@ class AgentPromptBuilder:
                 logger.warning(
                     f"No specialized prompt found in enriched_data for {agent_type} agent {agent_id}"
                 )
-                # Fallback message
-                if agent_type == "result_validator":
-                    return "You are a result validator agent. Please check the task details for validation instructions."
-                elif agent_type == "diagnostic":
-                    return "You are a diagnostic agent. Please analyze the workflow state and create tasks to progress toward the goal."
-                else:
-                    return "You are a task validator agent. Please check the task details for validation instructions."
+                return get_validator_prompt(agent_type)
 
         # Use the actual worktree path for the agent
         cwd_info = f"Working Directory: {branch_path}" if branch_path else ""
@@ -194,30 +189,13 @@ COMPLETION CRITERIA:
                     task.workflow_id
                 )
                 if workflow_config and getattr(workflow_config, "enable_tickets", False):
-                    # Ticket tracking makes hephaestus_create_task reject any
-                    # call with no ticket_id ("MCP agents MUST provide
-                    # ticket_id"). Without this note, every agent discovers
-                    # that the hard way on its first subtask-creation
-                    # attempt, wasting a full round trip every time —
-                    # observed live during smoke testing.
-                    ticket_note = (
-                        "\n  Ticket tracking is ON for this workflow — hephaestus_create_task "
-                        "REQUIRES ticket_id. Call hephaestus_create_ticket(...) first, then pass "
-                        "its id as ticket_id here."
-                    )
+                    ticket_note = "\n" + get_ticket_note()
                 if (
                     workflow_config
                     and hasattr(workflow_config, "result_criteria")
                     and workflow_config.result_criteria
                 ):
-                    result_criteria_section = f"""
-
-**WORKFLOW-LEVEL GOAL** (Ultimate objective for all phases):
-{workflow_config.result_criteria}
-
-This is the final deliverable this entire workflow is working toward. All phases and tasks should contribute to achieving this goal.
-
-NOTE: Having a workflow-level goal does NOT mean you skip hephaestus_update_task_status. You must still mark your individual task as done when you complete it. The workflow result submission is ONLY for when someone achieves the final goal."""
+                    result_criteria_section = "\n" + get_workflow_result_criteria(workflow_config.result_criteria)
             except Exception as e:
                 logger.warning(f"Could not get workflow result criteria: {e}")
 
@@ -227,43 +205,20 @@ NOTE: Having a workflow-level goal does NOT mean you skip hephaestus_update_task
 
         if is_phase_agent:
             # Compact instructions for workflow phase agents — keep context window lean
-            base_message += f"""
-{{WRITING_INSTRUCTIONS}}
-
-INSTRUCTIONS (always pass agent_id="{agent_id}"; pass workflow_id="{workflow_id if workflow_id else "N/A"}" only for tools that accept it — save_memory and validate_my_agent_id do NOT take workflow_id, don't pass it to those):
-- Complete the task described above
-- hephaestus_update_task_status(task_id="{task.id}", agent_id="{agent_id}", status="done") — REQUIRED when done
-- hephaestus_update_task_status(task_id="{task.id}", agent_id="{agent_id}", status="failed", failure_reason="...") — on unrecoverable error
-- hephaestus_save_memory(content="...", agent_id="{agent_id}", memory_type="<type>"): save as you go, not just at end
-  types: error_fix | discovery | decision | learning | warning | codebase_knowledge
-- hephaestus_search_memory(query="..."): search before reinventing
-- hephaestus_create_task(task_description="...", done_definition="...", phase_id="{task.phase_id if hasattr(task, "phase_id") and task.phase_id else "N/A"}", workflow_id="{workflow_id if workflow_id else "N/A"}"): create SUBTASKS within YOUR OWN current phase only.
-  This tool does NOT take agent_id — omit it here even though other tools need it.
-  Do NOT use this to create the next pipeline phase's task — the orchestrator creates that
-  automatically, with the correct phase name and required output, once you mark this task done.
-  Manually guessing a future phase number here has caused tasks to be created under the wrong
-  phase (e.g. full implementation work filed under an architecture-design phase) — never do this.{ticket_note}
-{phase_context_section}
-Begin now.
-"""
+            base_message += "\n" + get_phase_agent_instructions(
+                agent_id=agent_id,
+                task_id=task.id,
+                workflow_id=workflow_id if workflow_id else "N/A",
+                phase_id=task.phase_id if hasattr(task, "phase_id") and task.phase_id else "N/A",
+                ticket_note=ticket_note,
+                phase_context_section=phase_context_section,
+            )
         else:
-            base_message += f"""
-{{WRITING_INSTRUCTIONS}}
-
-INSTRUCTIONS (agent_id="{agent_id}"):
-1. Complete the task per COMPLETION CRITERIA above
-2. Task done (REQUIRED): hephaestus_update_task_status(task_id="{task.id}", agent_id="{agent_id}", status="done")
-3. On failure: hephaestus_update_task_status(task_id="{task.id}", agent_id="{agent_id}", status="failed", failure_reason="...")
-4. Solved entire workflow? Also: hephaestus_submit_result(agent_id="{agent_id}", ...)
-5. Save memories throughout: hephaestus_save_memory(content="...", agent_id="{agent_id}", memory_type="<type>")
-   Types: error_fix | discovery | decision | learning | warning | codebase_knowledge
-6. Search before reinventing: hephaestus_search_memory(query="...")
-7. Create sub-tasks: hephaestus_create_task(task_description="...", done_definition="...")
-8. Agent comms: hephaestus_broadcast_message (all agents) | hephaestus_send_message (specific agent)
-{phase_context_section}
-
-Begin now.
-"""
+            base_message += "\n" + get_non_phase_agent_instructions(
+                agent_id=agent_id,
+                task_id=task.id,
+                phase_context_section=phase_context_section,
+            )
 
         logger.info(
             f"🔍 PROMPT SIZE DEBUG: Message before adding phase context: {len(base_message)} chars"

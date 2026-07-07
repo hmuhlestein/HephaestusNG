@@ -30,6 +30,10 @@ class Phase:
     outputs: List[str] = field(default_factory=list)
     next_steps: List[str] = field(default_factory=list)
     validation: Optional[ValidationCriteria] = None
+    # One-shot self-review config, e.g. {"enabled": True} (see
+    # docs/GAP_CHECK_SELF_LOOP_DESIGN.md). Plain dict, not a typed dataclass
+    # like ValidationCriteria -- deliberately kept simple.
+    self_review: Optional[Dict[str, Any]] = None
 
     # Per-phase CLI configuration (optional - falls back to global defaults)
     cli_tool: Optional[str] = (

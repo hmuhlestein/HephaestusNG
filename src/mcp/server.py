@@ -1080,6 +1080,15 @@ async def startup_event():
                         phase_dict["outputs"] = phase.outputs
                     if phase.next_steps:
                         phase_dict["next_steps"] = phase.next_steps
+                    # NOTE: `phase.validation` is NOT carried through here even
+                    # though phase_manager.py reads phase_config.get("validation")
+                    # when building Phase DB rows -- a pre-existing gap (not
+                    # introduced by self_review below) that's why validation has
+                    # never actually fired for any phase despite the plumbing
+                    # existing. Not fixed here — out of scope for self_review,
+                    # flagging so it isn't mistaken for "already working."
+                    if phase.self_review:
+                        phase_dict["self_review"] = phase.self_review
                     phases_config.append(phase_dict)
 
                 workflow_config = {
