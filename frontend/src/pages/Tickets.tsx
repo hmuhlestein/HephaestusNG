@@ -5,6 +5,7 @@ import TicketSearch from '@/components/tickets/TicketSearch';
 import TicketStats from '@/components/tickets/TicketStats';
 import TicketGraph from '@/components/tickets/TicketGraph';
 import PendingReviewIndicator from '@/components/tickets/PendingReviewIndicator';
+import CreateTicketModal from '@/components/tickets/CreateTicketModal';
 import { useWorkflow } from '@/context/WorkflowContext';
 import { useProject } from '@/context/ProjectContext';
 
@@ -14,6 +15,7 @@ const Tickets: React.FC = () => {
   const [showWorkflowDropdown, setShowWorkflowDropdown] = useState(false);
   const [showStatusFilter, setShowStatusFilter] = useState(false);
   const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [showCreateTicket, setShowCreateTicket] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const statusFilterRef = useRef<HTMLDivElement>(null);
 
@@ -64,8 +66,7 @@ const Tickets: React.FC = () => {
   }, [statusFilter, filteredExecutions, selectedExecutionId, selectExecution]);
 
   const handleNewTicket = () => {
-    // TODO: Open create ticket modal
-    console.log('Create new ticket');
+    setShowCreateTicket(true);
   };
 
   const handleNavigateToSearchTab = (tag: string) => {
@@ -277,6 +278,13 @@ const Tickets: React.FC = () => {
           />
         )}
       </div>
+      {/* Create Ticket Modal */}
+      <CreateTicketModal
+        isOpen={showCreateTicket}
+        onClose={() => setShowCreateTicket(false)}
+        workflowId={selectedWorkflowId}
+        projectId={projectId}
+      />
     </div>
   );
 };
