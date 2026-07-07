@@ -215,6 +215,7 @@ class Config:
             self.llm_provider = os.getenv("LLM_PROVIDER")
         self.openai_api_key = os.getenv("OPENAI_API_KEY")
         self.anthropic_api_key = os.getenv("ANTHROPIC_API_KEY")
+        self.openrouter_api_key = os.getenv("OPENROUTER_API_KEY")
         # LLM_MODEL and EMBEDDING_MODEL are deprecated - all model config comes from YAML
 
         # Database settings
@@ -390,6 +391,8 @@ class Config:
             return self.openai_api_key
         elif self.llm_provider == "anthropic":
             return self.anthropic_api_key
+        elif self.llm_provider == "openrouter":
+            return self.openrouter_api_key
         return None
 
     def validate(self):
@@ -399,6 +402,10 @@ class Config:
         if self.llm_provider == "anthropic" and not self.anthropic_api_key:
             raise ValueError(
                 "ANTHROPIC_API_KEY is required when using Anthropic provider"
+            )
+        if self.llm_provider == "openrouter" and not self.openrouter_api_key:
+            raise ValueError(
+                "OPENROUTER_API_KEY is required when using OpenRouter provider"
             )
         return True
 

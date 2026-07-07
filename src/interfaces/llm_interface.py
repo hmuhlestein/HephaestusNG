@@ -847,5 +847,7 @@ def get_llm_provider() -> LLMProviderInterface:
         )
     elif config.llm_provider == "anthropic":
         return provider_class(api_key=api_key, model=config.llm_model)
+    elif config.llm_provider == "openrouter":
+        return provider_class(api_key=api_key, model=config.llm_model)
     else:
         raise ValueError(f"Unsupported provider: {config.llm_provider}")
