@@ -99,24 +99,50 @@ class TaskCompletionService:
 
             wf = session.query(_WF).filter_by(id=task.workflow_id).first()
 
+        # The agent's own worktree, if it has one. Normally the same as
+        # wf.working_directory (the shared worktree), but agent creation
+        # silently falls back to an isolated per-agent worktree whenever
+        # wf.working_directory is missing/stale (e.g. a worktree-cleanup
+        # race nulled it out from under a still-active workflow) -- in that
+        # case the agent's real output lives here, not at wf.working_directory,
+        # and would otherwise be reported "missing" despite existing.
+        agent_worktree_path = None
+        if task.assigned_agent_id:
+            from src.core.database import AgentWorktree
+
+            record = (
+                session.query(AgentWorktree)
+                .filter_by(agent_id=task.assigned_agent_id)
+                .first()
+            )
+            if record and record.worktree_path:
+                agent_worktree_path = record.worktree_path
+
         feature_dir = _Path(config.project_root) / CONTEXT_DIR_NAME / "features"
         missing = []
         for declared_output in required_files:
             found = False
-            # 1. Check the workflow's shared worktree
+            search_dirs = []
             if wf and wf.working_directory:
+                search_dirs.append(wf.working_directory)
+            if agent_worktree_path and agent_worktree_path not in search_dirs:
+                search_dirs.append(agent_worktree_path)
+            # 1. Check the workflow's shared worktree, then the agent's own
+            for base_dir in search_dirs:
                 for candidate in [
-                    _Path(wf.working_directory) / "docs" / declared_output,
-                    _Path(wf.working_directory) / declared_output,
+                    _Path(base_dir) / "docs" / declared_output,
+                    _Path(base_dir) / declared_output,
                     # Some phases (e.g. Phase 0's Feature Architect) write
                     # their declared output to the git-excluded .hephaestus/
                     # dir as an internal orchestration artifact rather than
                     # a docs/ deliverable.
-                    _Path(wf.working_directory) / CONTEXT_DIR_NAME / declared_output,
+                    _Path(base_dir) / CONTEXT_DIR_NAME / declared_output,
                 ]:
                     if candidate.exists():
                         found = True
                         break
+                if found:
+                    break
             # 2. Check feature folder
             if not found and feature_dir.exists():
                 for d in sorted(feature_dir.iterdir(), reverse=True):
