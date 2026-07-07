@@ -55,9 +55,29 @@ export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
   const activateMutation = useMutation({
     mutationFn: (projectId: string) => apiService.activateProject(projectId),
+    onMutate: async (projectId) => {
+      // Cancel any outgoing refetches so they don't overwrite our optimistic update
+      await queryClient.cancelQueries({ queryKey: ['projects'] });
+
+      // Snapshot the previous value
+      const previousProjects = queryClient.getQueryData<Project[]>(['projects']);
+
+      // Optimistically update to the new value
+      queryClient.setQueryData(['projects'], (old: Project[] | undefined) => {
+        if (!old) return old;
+        return old.map(p => ({ ...p, is_active: p.id === projectId }));
+      });
+
+      return { previousProjects };
+    },
+    onError: (_err, _projectId, context) => {
+      // If the mutation fails, roll back to the previous value
+      if (context?.previousProjects) {
+        queryClient.setQueryData(['projects'], context.previousProjects);
+      }
+    },
     onSuccess: () => {
-      // Invalidate all project-scoped query families (prefix match catches [key, projectId] variants)
-      queryClient.invalidateQueries({ queryKey: ['projects'] });
+      // Invalidate all project-scoped query families
       queryClient.invalidateQueries({ queryKey: ['autopilot-status'] });
       queryClient.invalidateQueries({ queryKey: ['autopilot-queue'] });
       queryClient.invalidateQueries({ queryKey: ['autopilot-features'] });
@@ -70,6 +90,10 @@ export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ child
       queryClient.invalidateQueries({ queryKey: ['workflow-executions'] });
       queryClient.invalidateQueries({ queryKey: ['tasks'] });
       queryClient.invalidateQueries({ queryKey: ['agents'] });
+    },
+    onSettled: () => {
+      // Always refetch to ensure we have the server state
+      queryClient.invalidateQueries({ queryKey: ['projects'] });
     },
   });
 
