@@ -774,6 +774,18 @@ async def rerun_design(request: dict):
     # Rerun means "start fresh" — delete old rows so the orchestrator
     # doesn't see stale Feature rows and skip re-decomposition.
     try:
+        from src.core.database import (
+            AgentResult,
+            BoardConfig,
+            DiagnosticRun,
+            Memory,
+            PhaseExecution,
+            TaskPromptOverride,
+            Ticket,
+            ValidationReview,
+            WorkflowResult,
+        )
+
         with get_db() as db:
             matching_wfs = (
                 db.query(Workflow)
@@ -800,8 +812,44 @@ async def rerun_design(request: dict):
             )
 
             if wf_ids:
+                # Get task IDs for dependent record cleanup
+                task_ids = [
+                    t.id for t in db.query(Task).filter(Task.workflow_id.in_(wf_ids)).all()
+                ]
+
+                # Delete dependent records (order matters for FK constraints)
+                if task_ids:
+                    db.query(TaskPromptOverride).filter(
+                        TaskPromptOverride.task_id.in_(task_ids)
+                    ).delete(synchronize_session=False)
+                    db.query(ValidationReview).filter(
+                        ValidationReview.task_id.in_(task_ids)
+                    ).delete(synchronize_session=False)
+                    db.query(AgentResult).filter(
+                        AgentResult.task_id.in_(task_ids)
+                    ).delete(synchronize_session=False)
+                    db.query(Memory).filter(
+                        Memory.related_task_id.in_(task_ids)
+                    ).delete(synchronize_session=False)
+                    db.query(Ticket).filter(
+                        Ticket.task_id.in_(task_ids)
+                    ).delete(synchronize_session=False)
+
+                # Delete workflow-level dependents
+                db.query(DiagnosticRun).filter(
+                    DiagnosticRun.workflow_id.in_(wf_ids)
+                ).delete(synchronize_session=False)
+                db.query(WorkflowResult).filter(
+                    WorkflowResult.workflow_id.in_(wf_ids)
+                ).delete(synchronize_session=False)
+                db.query(BoardConfig).filter(
+                    BoardConfig.workflow_id.in_(wf_ids)
+                ).delete(synchronize_session=False)
+                db.query(Ticket).filter(
+                    Ticket.workflow_id.in_(wf_ids)
+                ).delete(synchronize_session=False)
+
                 # Delete phase executions
-                from src.core.database import PhaseExecution
                 db.query(PhaseExecution).filter(
                     PhaseExecution.workflow_execution_id.in_(wf_ids)
                 ).delete(synchronize_session=False)
@@ -1974,15 +2022,22 @@ async def reorder_project_designs(project_id: str, req: DesignReorderRequest):
 
 @router.delete("/projects/{project_id}/designs/{filename}")
 async def remove_project_design(project_id: str, filename: str):
-    import subprocess
     from src.core.database import (
         Agent,
+        AgentResult,
         AutopilotDesign,
         AutopilotProject,
+        BoardConfig,
+        DiagnosticRun,
         Feature,
+        Memory,
         PhaseExecution,
         Task,
+        TaskPromptOverride,
+        Ticket,
+        ValidationReview,
         Workflow,
+        WorkflowResult,
         get_db,
     )
 
@@ -2035,6 +2090,38 @@ async def remove_project_design(project_id: str, filename: str):
                         agent.status = "terminated"
                         agent.current_task_id = None
                         agent.terminated_at = datetime.utcnow()
+
+                # Delete dependent records (order matters for FK constraints)
+                if task_ids:
+                    db.query(TaskPromptOverride).filter(
+                        TaskPromptOverride.task_id.in_(task_ids)
+                    ).delete(synchronize_session=False)
+                    db.query(ValidationReview).filter(
+                        ValidationReview.task_id.in_(task_ids)
+                    ).delete(synchronize_session=False)
+                    db.query(AgentResult).filter(
+                        AgentResult.task_id.in_(task_ids)
+                    ).delete(synchronize_session=False)
+                    db.query(Memory).filter(
+                        Memory.related_task_id.in_(task_ids)
+                    ).delete(synchronize_session=False)
+                    db.query(Ticket).filter(
+                        Ticket.task_id.in_(task_ids)
+                    ).delete(synchronize_session=False)
+
+                # Delete workflow-level dependents
+                db.query(DiagnosticRun).filter(
+                    DiagnosticRun.workflow_id.in_(wf_ids)
+                ).delete(synchronize_session=False)
+                db.query(WorkflowResult).filter(
+                    WorkflowResult.workflow_id.in_(wf_ids)
+                ).delete(synchronize_session=False)
+                db.query(BoardConfig).filter(
+                    BoardConfig.workflow_id.in_(wf_ids)
+                ).delete(synchronize_session=False)
+                db.query(Ticket).filter(
+                    Ticket.workflow_id.in_(wf_ids)
+                ).delete(synchronize_session=False)
 
                 # Delete phase executions
                 db.query(PhaseExecution).filter(
