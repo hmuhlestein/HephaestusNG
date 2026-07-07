@@ -620,6 +620,39 @@ class TestIncrementTaskRetryCount:
         assert increment_task_retry_count("does-not-exist") == 0
 
 
+class TestFailWorkflowDirect:
+    """Regression: the backend-startup stale-workflow cleanup used
+    complete_workflow_direct unconditionally for any workflow still "active"
+    after a restart -- even one abandoned mid-run with most phases
+    unfinished, mislabeling it "completed" and corrupting downstream status
+    derivation. fail_workflow_direct gives that path a way to mark it
+    accurately instead."""
+
+    def test_marks_failed(self, orch_db_env):
+        from src.autopilot.orchestrator import fail_workflow_direct
+        from src.core.database import Workflow
+
+        with orch_db_env.session_scope() as session:
+            session.add(
+                Workflow(
+                    id="wf-1",
+                    name="t",
+                    phases_folder_path="/tmp",
+                    status="active",
+                )
+            )
+
+        assert fail_workflow_direct("wf-1") is True
+        with orch_db_env.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-1").first()
+            assert wf.status == "failed"
+
+    def test_missing_workflow_returns_false(self, orch_db_env):
+        from src.autopilot.orchestrator import fail_workflow_direct
+
+        assert fail_workflow_direct("does-not-exist") is False
+
+
 class TestGetAgents:
     def _make_agent(self, db, agent_id, status="working"):
         from src.core.database import Agent
