@@ -440,8 +440,20 @@ class AgentManager:
                                 if isinstance(_wf.launch_params, dict)
                                 else {}
                             )
-                            _pid = _lp.get("project_id", "")
-                            _dsl = _lp.get("design_slug", "")
+                            # Feature-model workflows (the standard autopilot
+                            # shape since the Feature Architect split) never
+                            # populate project_id/design_slug — their
+                            # launch_params carry project_path/feature_id
+                            # instead. Without this fallback, session_id was
+                            # silently always "" for every such workflow,
+                            # meaning phases that are supposed to share a
+                            # session (e.g. architectural_review resuming
+                            # architecture_design's "warm context", per
+                            # session_roles in workflow.yaml) always got a
+                            # cold --no-session agent instead — while the
+                            # phase's own prompt still claimed continuity.
+                            _pid = _lp.get("project_id") or _lp.get("project_path", "")
+                            _dsl = _lp.get("design_slug") or _lp.get("feature_id", "")
                             if _pid and _dsl and phase_name:
                                 from src.autopilot.phases import get_session_id
 
@@ -614,6 +626,7 @@ class AgentManager:
                         if agent_record:
                             agent_record.status = "terminated"
                             agent_record.current_task_id = None  # Clear stale reference
+                            agent_record.terminated_at = datetime.utcnow()
                             logger.info(f"Marked agent {agent_id} as terminated")
 
                     # Mark task as failed
@@ -1206,6 +1219,7 @@ class AgentManager:
             # Update agent status
             agent.status = "terminated"
             agent.current_task_id = None  # Clear stale task reference
+            agent.terminated_at = datetime.utcnow()
 
             # Log termination with captured output
             log_entry = AgentLog(
@@ -1250,6 +1264,7 @@ class AgentManager:
                     f"Agent {agent_id[:8]} exceeded max restarts ({agent.restart_count}), terminating"
                 )
                 agent.status = "terminated"
+                agent.terminated_at = datetime.utcnow()
                 # Mark task as failed so pipeline can recover
                 task_id = agent.current_task_id
                 agent.current_task_id = None  # Clear stale reference
@@ -1388,8 +1403,11 @@ class AgentManager:
                                 if isinstance(_wf.launch_params, dict)
                                 else {}
                             )
-                            _pid = _lp.get("project_id", "")
-                            _dsl = _lp.get("design_slug", "")
+                            # See matching comment in create_agent_for_task above —
+                            # feature-model workflows use project_path/feature_id,
+                            # not project_id/design_slug.
+                            _pid = _lp.get("project_id") or _lp.get("project_path", "")
+                            _dsl = _lp.get("design_slug") or _lp.get("feature_id", "")
                             if _pid and _dsl and restart_phase_name:
                                 from src.autopilot.phases import get_session_id
 

@@ -117,6 +117,15 @@ additional_notes: |
   - Check for unused imports, variables, or dead code
   - Verify type hints are present and correct
 
+  STATIC REVIEW ONLY: This is a design-compliance review, not a QA pass —
+  `qa_validation` (a later phase) owns running the test suite and executing
+  the program. Do not run `pytest`, execute the program's entry point, or
+  cat runtime log files to "see if it works" — read the source and compare
+  it against architecture.md/requirements_analysis.md. If you cannot tell
+  whether something is correct from reading the code, note it as a
+  DEFER/FIX with the specific uncertainty rather than running the program
+  to check.
+
   ═══════════════════════════════════════════════════════════════════════
   STEP 3: VERIFY FINDINGS BEFORE REPORTING
   ═══════════════════════════════════════════════════════════════════════

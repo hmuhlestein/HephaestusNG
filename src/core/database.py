@@ -144,6 +144,7 @@ class Agent(Base):
         nullable=False,
     )
     kept_alive_for_validation = Column(Boolean, default=False)
+    terminated_at = Column(DateTime, nullable=True)  # When agent was terminated
 
     # Relationships
     created_tasks = relationship(
