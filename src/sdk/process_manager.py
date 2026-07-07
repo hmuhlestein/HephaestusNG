@@ -183,9 +183,6 @@ class ProcessManager:
                 for name, process_info in list(self.processes.items()):
                     if not self.is_process_alive(name):
                         # Process died
-                        print(
-                            f"[Watchdog] Process {name} died unexpectedly (exit code: {process_info.process.returncode})"
-                        )
 
                         # Check restart count
                         if process_info.restart_count >= max_restarts:
@@ -195,9 +192,6 @@ class ProcessManager:
                                 and time.time() - process_info.last_restart
                                 < restart_window
                             ):
-                                print(
-                                    f"[Watchdog] Process {name} exceeded max restarts ({max_restarts}), not restarting"
-                                )
                                 if self.error_callback:
                                     self.error_callback(
                                         f"Process {name} failed repeatedly"
@@ -206,11 +200,8 @@ class ProcessManager:
 
                         # Attempt restart
                         try:
-                            print(f"[Watchdog] Attempting to restart {name}...")
                             self.restart_process(name)
-                            print(f"[Watchdog] Successfully restarted {name}")
                         except Exception as e:
-                            print(f"[Watchdog] Failed to restart {name}: {e}")
                             if self.error_callback:
                                 self.error_callback(f"Failed to restart {name}: {e}")
 

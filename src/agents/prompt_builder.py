@@ -13,12 +13,12 @@ import logging
 
 from src.core.database import Task
 from src.prompts.loader import (
-    get_writing_instructions,
-    get_phase_agent_instructions,
     get_non_phase_agent_instructions,
-    get_workflow_result_criteria,
+    get_phase_agent_instructions,
     get_ticket_note,
     get_validator_prompt,
+    get_workflow_result_criteria,
+    get_writing_instructions,
 )
 
 logger = logging.getLogger(__name__)

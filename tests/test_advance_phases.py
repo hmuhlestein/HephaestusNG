@@ -4,18 +4,16 @@ These tests address the critical test coverage gap identified in ARCHITECTURE_RE
 "_advance_phases has no test referencing it anywhere in tests/"
 """
 
+from unittest.mock import MagicMock, patch
+
 import pytest
-from datetime import datetime
-from unittest.mock import MagicMock, patch, AsyncMock
 
 from src.core.database import (
-    Agent,
     DatabaseManager,
     Phase,
     PhaseExecution,
     Task,
     Workflow,
-    get_db,
 )
 
 
@@ -139,7 +137,10 @@ class TestCaseStartFirstPhase:
     
     def test_starts_first_phase_when_no_progress(self, db_manager, sample_workflow):
         """Should start first phase when no phases are in progress or completed."""
-        from src.autopilot.orchestrator import _case_start_first_phase, _get_phase_statuses
+        from src.autopilot.orchestrator import (
+            _case_start_first_phase,
+            _get_phase_statuses,
+        )
         
         with db_manager.session_scope() as session:
             # Reset phase execution to pending
@@ -173,7 +174,10 @@ class TestCaseStartFirstPhase:
         Simulates the other code path's task landing during the race-guard's
         sleep -- the re-check must see it and skip creating a second one.
         """
-        from src.autopilot.orchestrator import _case_start_first_phase, _get_phase_statuses
+        from src.autopilot.orchestrator import (
+            _case_start_first_phase,
+            _get_phase_statuses,
+        )
 
         with db_manager.session_scope() as session:
             exec = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()

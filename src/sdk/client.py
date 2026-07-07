@@ -11,8 +11,6 @@ from typing import Any, Dict, List, Optional
 import requests
 import yaml
 
-logger = logging.getLogger(__name__)
-
 from src.core.constants import HEPHAESTUS_LOGS_DIR
 from src.sdk.config import HephaestusConfig
 from src.sdk.exceptions import (
@@ -31,6 +29,8 @@ from src.sdk.models import (
     WorkflowExecution,
 )
 from src.sdk.process_manager import ProcessManager
+
+logger = logging.getLogger(__name__)
 
 
 class HephaestusSDK:
@@ -273,7 +273,7 @@ class HephaestusSDK:
             log_path = Path(log_dir)
         else:
             # Default: ~/.hephaestus/logs/session-{timestamp}/
-            home = Path.home()
+            Path.home()
             timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
             log_path = Path(HEPHAESTUS_LOGS_DIR) / f"session-{timestamp}"
 
@@ -322,7 +322,6 @@ class HephaestusSDK:
             QdrantConnectionError: If Qdrant is not accessible
         """
         if self.running:
-            print("Hephaestus is already running")
             return True
 
         # Create log directory
@@ -349,7 +348,6 @@ class HephaestusSDK:
         """Start in headless mode with console output."""
         # Check Qdrant only if using qdrant backend
         if self.config.vector_store_backend == "qdrant":
-            print("[Hephaestus] Checking Qdrant connectivity...")
             if not self._check_qdrant_health():
                 raise QdrantConnectionError(
                     f"Qdrant is not accessible at {self.config.qdrant_url}. "
@@ -429,22 +427,15 @@ class HephaestusSDK:
         self.process_manager.start_watchdog()
 
         self.running = True
-        print("\n[Hephaestus] ✓ All systems ready (headless mode)")
 
     def _register_workflow_definitions(self):
         """Register workflow definitions with the backend."""
-        print(
-            f"[SDK] _register_workflow_definitions called, definitions count: {len(self.definitions)}"
-        )
         if not self.definitions:
-            print("[SDK] No definitions to register, returning early")
             return
 
         url = f"http://{self.config.mcp_host}:{self.config.mcp_port}/api/workflow-definitions"
-        print(f"[SDK] Registering {len(self.definitions)} definitions to {url}")
 
         for def_id, defn in self.definitions.items():
-            print(f"[SDK] Registering definition: {def_id}")
             # Convert Phase objects to dicts for the API
             phases_config = []
             for phase in defn.phases:
@@ -500,11 +491,8 @@ class HephaestusSDK:
             try:
                 response = requests.post(url, json=payload, timeout=10)
                 response.raise_for_status()
-                print(f"[SDK] ✓ Successfully registered definition: {def_id}")
-            except Exception as e:
-                print(
-                    f"[Warning] Failed to register workflow definition '{def_id}': {e}"
-                )
+            except Exception:
+                pass
 
     def _start_with_tui(self, timeout: int):
         """Start with TUI interface."""
@@ -740,8 +728,7 @@ class HephaestusSDK:
 
             return tasks
 
-        except Exception as e:
-            print(f"Failed to get tasks: {e}")
+        except Exception:
             return []
 
     # ==================== Multi-Workflow Methods ====================
@@ -871,8 +858,7 @@ class HephaestusSDK:
 
             return executions
 
-        except Exception as e:
-            print(f"Failed to list workflow executions: {e}")
+        except Exception:
             return []
 
     def get_workflow_execution(self, workflow_id: str) -> Optional[WorkflowExecution]:
@@ -918,8 +904,7 @@ class HephaestusSDK:
             if e.response.status_code == 404:
                 return None
             raise
-        except Exception as e:
-            print(f"Failed to get workflow execution: {e}")
+        except Exception:
             return None
 
     def create_task_in_workflow(
@@ -1148,7 +1133,6 @@ class HephaestusSDK:
         if not self.running:
             return
 
-        print("\n[Hephaestus] Shutting down...")
 
         if self.process_manager:
             self.process_manager.shutdown_all(graceful=graceful, timeout=timeout)
@@ -1158,7 +1142,6 @@ class HephaestusSDK:
             shutil.rmtree(self.temp_phases_dir)
 
         self.running = False
-        print("[Hephaestus] ✓ Shutdown complete")
 
     def __enter__(self):
         """Context manager entry."""

@@ -205,8 +205,8 @@ class TestGetNextQueuedTask:
     def test_priority_ordering(self, queue_service, db_manager):
         """Should return highest priority task."""
         # Create tasks in different order
-        low_id = create_test_task(db_manager, priority="low", status="queued")
-        medium_id = create_test_task(db_manager, priority="medium", status="queued")
+        create_test_task(db_manager, priority="low", status="queued")
+        create_test_task(db_manager, priority="medium", status="queued")
         high_id = create_test_task(db_manager, priority="high", status="queued")
 
         task = queue_service.get_next_queued_task()
@@ -427,7 +427,7 @@ class TestBoostTaskPriority:
     def test_boost_moves_to_front(self, queue_service, db_manager):
         """Boosted task should be returned first by get_next_queued_task."""
         # Create multiple queued tasks
-        high_id = create_test_task(db_manager, priority="high", status="queued")
+        create_test_task(db_manager, priority="high", status="queued")
         low_id = create_test_task(db_manager, priority="low", status="queued")
 
         # Boost the low priority task

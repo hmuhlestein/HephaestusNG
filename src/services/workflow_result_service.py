@@ -70,12 +70,10 @@ class WorkflowResultService:
 
                     # Check file exists
                     if not os.path.exists(abs_path):
-                        print(f"[Warning] Extra file not found, skipping: {file_path}")
                         continue
 
                     # Check it's actually a file
                     if not os.path.isfile(abs_path):
-                        print(f"[Warning] Path is not a file, skipping: {file_path}")
                         continue
 
                     # Validate file size (10MB limit per extra file)
@@ -83,8 +81,8 @@ class WorkflowResultService:
 
                     validated_extra_files.append(abs_path)
 
-                except Exception as e:
-                    print(f"[Warning] Failed to validate extra file {file_path}: {e}")
+                except Exception:
+                    pass
                     # Continue processing other files
 
         # Read markdown content

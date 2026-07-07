@@ -21,9 +21,9 @@ import re
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
-logger = logging.getLogger(__name__)
-
 from src.core.constants import AUTOPILOT_STATE_DIR
+
+logger = logging.getLogger(__name__)
 
 SPEC_PATH = Path(AUTOPILOT_STATE_DIR) / "qa_spec.json"
 

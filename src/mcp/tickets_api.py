@@ -5,14 +5,12 @@ Extracted from server.py for better modularity (M-1 fix).
 
 import logging
 import time
-import traceback
-from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException, Header
+from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel, Field
 
-from src.core.database import DatabaseManager, get_db
+from src.core.database import get_db
 from src.services.ticket_search_service import TicketSearchService
 
 logger = logging.getLogger(__name__)
@@ -644,7 +642,13 @@ async def get_ticket_stats_endpoint(
     try:
         from sqlalchemy import func
 
-        from src.core.database import BoardConfig, Ticket, TicketComment, TicketCommit, Workflow
+        from src.core.database import (
+            BoardConfig,
+            Ticket,
+            TicketComment,
+            TicketCommit,
+            Workflow,
+        )
 
         with get_db() as session:
             # Determine workflow IDs to query
@@ -770,7 +774,7 @@ async def get_ticket_stats_endpoint(
             # Resolved count
             resolved_count = (
                 session.query(func.count(Ticket.id))
-                .filter(Ticket.workflow_id.in_(workflow_ids), Ticket.is_resolved == True)
+                .filter(Ticket.workflow_id.in_(workflow_ids), Ticket.is_resolved)
                 .scalar()
             )
 

@@ -37,7 +37,7 @@ class TestReportResultsEndpointAsync:
 
     async def create_test_task(self):
         """Helper to create a task for testing."""
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient():
             # Create a task
             task_id = str(uuid.uuid4())
             agent_id = f"test-agent-{uuid.uuid4()}"

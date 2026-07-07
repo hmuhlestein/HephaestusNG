@@ -3,7 +3,7 @@ extracted from MonitoringLoop (SOLID review 3.4).
 """
 
 from datetime import datetime, timedelta
-from unittest.mock import MagicMock, PropertyMock
+from unittest.mock import MagicMock
 
 import pytest
 

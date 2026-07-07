@@ -119,7 +119,7 @@ def run(args):
     backend_running = check_backend(args)
     frontend_pid = read_pid("frontend")
     frontend_running = frontend_pid and is_process_running(frontend_pid)
-    monitor_pid = read_pid("monitor")
+    read_pid("monitor")
     monitor_running = is_monitor_running()
 
     # Frontend (start first so output shows it first)

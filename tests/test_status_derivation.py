@@ -3,20 +3,19 @@
 Tests for src/core/status_derivation.py (H-3 fix).
 """
 
+
 import pytest
-from datetime import datetime
 
 from src.core.database import (
     AutopilotDesign,
     DatabaseManager,
     Feature,
-    PhaseExecution,
     Task,
     Workflow,
 )
 from src.core.status_derivation import (
-    derive_feature_status,
     derive_design_status,
+    derive_feature_status,
     derive_workflow_status,
 )
 

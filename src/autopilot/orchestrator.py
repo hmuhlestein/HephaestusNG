@@ -29,12 +29,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 import git as _git
 import requests
 
-# Module-level logger for persistent state operations
-logger = logging.getLogger(__name__)
-
-HEPHAESTUS_DIR = Path(__file__).parent.parent.parent
-API_BASE = os.environ.get("HEPHAESTUS_API_BASE", "http://127.0.0.1:8300")
-
+from src.autopilot.spec import GATED_PHASES, build_phase_output
 from src.core.constants import AUTOPILOT_STATE_DIR, CONTEXT_DIR_NAME, DESIGN_SUBDIR
 from src.core.database import (
     Agent,
@@ -46,8 +41,14 @@ from src.core.database import (
     get_db,
 )
 from src.core.simple_config import get_config
-from src.autopilot.spec import GATED_PHASES, build_phase_output
 from src.phases import PhaseManager
+
+# Module-level logger for persistent state operations
+logger = logging.getLogger(__name__)
+
+HEPHAESTUS_DIR = Path(__file__).parent.parent.parent
+API_BASE = os.environ.get("HEPHAESTUS_API_BASE", "http://127.0.0.1:8300")
+
 
 def _get_workflow_timeout() -> int:
     """Get workflow timeout from config, with fallback to default."""
@@ -325,7 +326,7 @@ class OrchestratorLogger:
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         line = f"[{timestamp}] [{level}] {message}"
         try:
-            print(line, flush=True)
+            pass
         except OSError:
             pass  # Broken pipe when running as subprocess with DEVNULL
         with self._lock:
@@ -879,7 +880,9 @@ def attempt_recovery(workflow_id: str, logger: OrchestratorLogger) -> Tuple[bool
 
     # 1b. Clean stale "assigned" tasks whose agent is terminated
     try:
-        from src.core.database import get_db as _get_db, Task as _Task, Agent as _Agent
+        from src.core.database import Agent as _Agent
+        from src.core.database import Task as _Task
+        from src.core.database import get_db as _get_db
 
         with _get_db() as _db:
             assigned_tasks = (
@@ -1185,14 +1188,6 @@ def prompt_human(reason: str, logger: OrchestratorLogger, timeout: int = 600) ->
 
     logger.event("human_input_required", {"reason": reason, "request_id": request_id})
 
-    print("\n" + "=" * 60)
-    print("HUMAN INTERVENTION REQUIRED")
-    print("=" * 60)
-    print(f"Reason: {reason}")
-    print(f"Request ID: {request_id}")
-    print(f"Options: [c] Continue  [s] Skip  [q] Quit  (auto-continue in {timeout}s)")
-    print("Respond via web UI or terminal.")
-    print("=" * 60)
 
     start = time.time()
     while time.time() - start < timeout:
@@ -1409,7 +1404,8 @@ def pick_next_design(
     try:
         import uuid as _uuid
 
-        from src.core.database import AutopilotDesign, AutopilotProject, get_db as _get_db
+        from src.core.database import AutopilotDesign, AutopilotProject
+        from src.core.database import get_db as _get_db
         with _get_db() as _db:
             project = _db.query(AutopilotProject).filter_by(is_active=True).first()
             if project:
@@ -1672,24 +1668,26 @@ def _cleanup_worktree(
 
                 # Clear stale working_directory from any workflows pointing to
                 # this worktree -- but never touch a workflow that's still
-                # "active". This worktree path is deterministic (derived only
-                # from design_id, reused across every retry), so an old,
-                # already-finished attempt's cleanup can otherwise null out a
-                # *different*, currently-active workflow that has since
+                # "active" or "paused" (resumable -- see the same exclusion in
+                # worktree_manager.py's cleanup_all_stale_branches). This
+                # worktree path is deterministic (derived only from design_id,
+                # reused across every retry), so an old, already-finished
+                # attempt's cleanup can otherwise null out a *different*,
+                # currently-active-or-paused workflow that has since
                 # legitimately reused the same path (e.g. after an abrupt
                 # orchestrator kill left an earlier attempt's cleanup
                 # deferred). Once working_directory is wrongly nulled, agent
                 # creation can't find the shared worktree (falls back to an
                 # isolated per-agent one) and output validation can't check
                 # any candidate path at all -- silently breaking a workflow
-                # that's still genuinely in progress.
+                # that's still genuinely in progress or waiting to be resumed.
                 try:
                     from src.core.database import Workflow
                     _s = db.get_session()
                     try:
                         wfs = _s.query(Workflow).filter(
                             Workflow.working_directory == str(worktree),
-                            Workflow.status != "active",
+                            Workflow.status.notin_(["active", "paused"]),
                         ).all()
                         for wf in wfs:
                             wf.working_directory = None
@@ -1962,7 +1960,13 @@ def _get_phase0_completion(design_id: Optional[str]) -> Optional[dict]:
     """
     if not design_id:
         return None
-    from src.core.database import AutopilotDesign, Phase, PhaseExecution, Workflow, get_db
+    from src.core.database import (
+        AutopilotDesign,
+        Phase,
+        PhaseExecution,
+        Workflow,
+        get_db,
+    )
 
     with get_db() as db:
         design = db.query(AutopilotDesign).filter_by(id=design_id).first()
@@ -2008,6 +2012,7 @@ def _relink_features_to_workflows(design_id: str, logger: OrchestratorLogger) ->
     was lost. Matches features to workflows by feature_key in launch_params.
     """
     import json as _json
+
     from src.core.database import Feature, Workflow, get_db
 
     with get_db() as db:
@@ -2499,7 +2504,8 @@ def generate_html_feature_report(
     html_path = feature_folder / "feature_report.html"
     html_path.write_text(html)
     logger.info(f"HTML feature report: {html_path}")
-    import subprocess, sys
+    import subprocess
+    import sys
     if sys.platform == "darwin":
         subprocess.Popen(["open", str(html_path)])
     return html_path
@@ -2901,7 +2907,7 @@ def _fire_phase_transition(
         pm.workflow_id = workflow_id
         result = pm.mark_phase_complete(
             phase_id,
-            f"Phase completed",
+            "Phase completed",
             phase_output=phase_output,
         )
 
@@ -3530,7 +3536,7 @@ def run_single_workflow(
 
                             # Merge the design branch
                             try:
-                                result = wt_mgr.main_repo.git.merge(
+                                wt_mgr.main_repo.git.merge(
                                     design_branch,
                                     no_ff=True,
                                     m=f"Merge design branch {design_branch} into main",
@@ -3705,7 +3711,8 @@ def run_phase0(
     # This is the only thing preventing _create_feature_records from creating
     # duplicate Feature rows on a re-entrant call (that function is not itself
     # idempotent), so it must be checked first and preserved as-is.
-    from src.core.database import Feature as FeatureModel, get_db as _get_db
+    from src.core.database import Feature as FeatureModel
+    from src.core.database import get_db as _get_db
     with _get_db() as _db:
         existing_features = _db.query(FeatureModel).filter_by(design_id=design_entry.db_id).all()
         # Copy data out of session to avoid DetachedInstanceError
@@ -5051,9 +5058,6 @@ def main():
             os.kill(existing_pid, 0)
             # Process is alive - check if it's us
             if existing_pid != os.getpid():
-                print(
-                    f"Another orchestrator is already running (PID: {existing_pid}). Exiting."
-                )
                 sys.exit(1)
         except (ProcessLookupError, ValueError):
             # Process not alive or invalid PID, clean up
@@ -5067,10 +5071,8 @@ def main():
         db = HEPHAESTUS_DIR / "hephaestus.db"
         if db.exists():
             db.unlink()
-            print(f"Dropped {db}")
 
     # Ensure DB tables and migrations are applied
-    from src.core.database import DatabaseManager
 
     db_manager = DatabaseManager(str(HEPHAESTUS_DIR / "hephaestus.db"))
     db_manager.create_tables()

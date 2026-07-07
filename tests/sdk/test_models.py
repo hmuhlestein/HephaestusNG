@@ -37,7 +37,7 @@ def test_phase_to_yaml_dict():
     yaml_dict = phase.to_yaml_dict()
 
     assert "description" in yaml_dict
-    assert "Done_Definitions" in yaml_dict
+    assert "done_definitions" in yaml_dict
     assert "working_directory" in yaml_dict
     assert yaml_dict["description"] == "Plan the implementation"
 

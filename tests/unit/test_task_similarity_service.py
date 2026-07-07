@@ -251,7 +251,7 @@ class TestTaskSimilarityService:
 
         # Verify filter was called with correct parameters
         query_mock.filter.assert_called_once()
-        call_args = query_mock.filter.call_args[0]
+        query_mock.filter.call_args[0]
 
         # Should filter for non-null embeddings and exclude failed/duplicated
         assert result["is_duplicate"] is False
@@ -359,7 +359,7 @@ class TestTaskSimilarityService:
         session.query().filter().all.return_value = [task1, task2, task3]
         mock_embedding_service.calculate_batch_similarities.return_value = [0.5]
 
-        result = await similarity_service.check_for_duplicates("New task", [0.5] * 3072)
+        await similarity_service.check_for_duplicates("New task", [0.5] * 3072)
 
         # Should only compare with task2
         mock_embedding_service.calculate_batch_similarities.assert_called_once()
@@ -387,7 +387,7 @@ class TestTaskSimilarityService:
         session.query().filter().all.return_value = [task]
         mock_embedding_service.calculate_batch_similarities.return_value = [0.5]
 
-        result = await similarity_service.check_for_duplicates("New task", [0.5] * 3072)
+        await similarity_service.check_for_duplicates("New task", [0.5] * 3072)
 
         # Should parse and use the JSON embedding
         mock_embedding_service.calculate_batch_similarities.assert_called_once()

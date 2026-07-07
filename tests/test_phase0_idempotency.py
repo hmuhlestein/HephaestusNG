@@ -22,7 +22,6 @@ from src.core.database import (
     Phase,
     PhaseExecution,
     Workflow,
-    get_db,
 )
 
 

@@ -32,7 +32,7 @@ def vector_store():
 @pytest.fixture
 def llm_provider():
     """Create LLM provider for embeddings."""
-    config = get_config()
+    get_config()
     return get_llm_provider()
 
 
@@ -192,7 +192,7 @@ def test_agent_prompt_includes_qdrant_instructions():
     Test that agent prompts include instructions for using Qdrant MCP.
     This ensures agents know about the qdrant-find tool.
     """
-    config = get_config()
+    get_config()
     llm_provider = get_llm_provider()
 
     # Create a test task

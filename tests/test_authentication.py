@@ -115,7 +115,7 @@ class TestJWTTokens:
 
     def test_access_token_expiry(self):
         """Test access token expiration."""
-        config = get_auth_config()
+        get_auth_config()
         data = {"sub": "user123", "email": "test@example.com"}
 
         # Create token with 1 second expiry

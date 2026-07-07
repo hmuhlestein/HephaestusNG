@@ -338,8 +338,8 @@ class TestPickNextDesign:
         used to reach _create_feature_records and crash with 'NOT NULL
         constraint failed: features.design_id' right after Phase 0
         completed (observed live during smoke testing)."""
-        from src.core.database import AutopilotProject
         from src.autopilot.orchestrator import OrchestratorLogger, pick_next_design
+        from src.core.database import AutopilotProject
 
         session = orch_db_env.get_session()
         session.add(
@@ -373,8 +373,8 @@ class TestPickNextDesign:
     ):
         """Regression: must not create a duplicate row on every poll cycle
         once one already exists for this file."""
-        from src.core.database import AutopilotDesign, AutopilotProject
         from src.autopilot.orchestrator import OrchestratorLogger, pick_next_design
+        from src.core.database import AutopilotDesign, AutopilotProject
 
         session = orch_db_env.get_session()
         session.add(
@@ -702,8 +702,8 @@ class TestGetAgents:
 
 class TestPeekAgentOutput:
     def test_returns_output(self, orch_db_env):
-        from src.core.database import Agent
         from src.autopilot.orchestrator import peek_agent_output
+        from src.core.database import Agent
 
         with orch_db_env.session_scope() as session:
             session.add(
@@ -779,6 +779,7 @@ class TestOrchestratorLogger:
 class TestSweepStrayFiles:
     def test_moves_root_files(self, tmp_path):
         from unittest.mock import patch
+
         from src.autopilot.orchestrator import OrchestratorLogger, _sweep_stray_files
 
         logger = OrchestratorLogger(tmp_path / "logs")
@@ -798,6 +799,7 @@ class TestSweepStrayFiles:
 
     def test_skips_root_files(self, tmp_path):
         from unittest.mock import patch
+
         from src.autopilot.orchestrator import OrchestratorLogger, _sweep_stray_files
 
         logger = OrchestratorLogger(tmp_path / "logs")
@@ -819,6 +821,7 @@ class TestSweepStrayFiles:
 
     def test_moves_feature_files(self, tmp_path):
         from unittest.mock import patch
+
         from src.autopilot.orchestrator import OrchestratorLogger, _sweep_stray_files
 
         logger = OrchestratorLogger(tmp_path / "logs")
@@ -837,6 +840,7 @@ class TestSweepStrayFiles:
 
     def test_moves_stray_dirs(self, tmp_path):
         from unittest.mock import patch
+
         from src.autopilot.orchestrator import OrchestratorLogger, _sweep_stray_files
 
         logger = OrchestratorLogger(tmp_path / "logs")
@@ -856,6 +860,7 @@ class TestSweepStrayFiles:
 
     def test_copies_report_docs(self, tmp_path):
         from unittest.mock import patch
+
         from src.autopilot.orchestrator import OrchestratorLogger, _sweep_stray_files
 
         logger = OrchestratorLogger(tmp_path / "logs")
@@ -1174,11 +1179,16 @@ class TestAttemptRecovery:
         success, msg = attempt_recovery("wf-1", logger)
         assert success is False
 
+    @patch("src.autopilot.orchestrator.terminate_agent_direct")
+    @patch("src.core.database.get_db")
     @patch("src.autopilot.orchestrator.get_db")
     @patch("src.autopilot.orchestrator.api_post")
     @patch("src.autopilot.orchestrator.get_agents")
     @patch("src.autopilot.orchestrator.get_tasks")
-    def test_terminates_stale_agents(self, mock_tasks, mock_agents, mock_post, mock_get_db):
+    def test_terminates_stale_agents(
+        self, mock_tasks, mock_agents, mock_post, mock_get_db,
+        mock_core_get_db, mock_terminate, tmp_path
+    ):
         from src.autopilot.orchestrator import OrchestratorLogger, attempt_recovery
 
         # Mock get_db to avoid database queries
@@ -1187,6 +1197,14 @@ class TestAttemptRecovery:
         mock_db.__enter__ = MagicMock(return_value=mock_db)
         mock_db.__exit__ = MagicMock(return_value=False)
         mock_get_db.return_value = mock_db
+        mock_core_get_db.return_value = mock_db
+
+        # Mock terminate_agent_direct to succeed
+        mock_terminate.return_value = True
+
+        # Set PROJECT_PATH so code doesn't return early
+        import os
+        os.environ["PROJECT_PATH"] = str(tmp_path)
 
         logger = OrchestratorLogger(Path("/tmp/logs"))
         mock_tasks.return_value = []

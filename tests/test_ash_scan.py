@@ -8,7 +8,6 @@ starts, removing the compliance gap.
 """
 
 import subprocess
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from src.core.constants import CONTEXT_DIR_NAME
