@@ -6,7 +6,8 @@ import logging
 import os
 import time
 import uuid
-from datetime import datetime, timedelta
+from collections import defaultdict
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from fastapi import (
@@ -26,7 +27,6 @@ from pydantic import BaseModel, Field
 
 from src.agents.manager import AgentManager
 from src.auth.auth_api import router as auth_router
-from src.core.constants import CONTEXT_DIR_NAME
 from src.core.database import (
     Agent,
     AgentResult,
@@ -76,27 +76,20 @@ summary.
 
 
 def _resolve_worktree_path(session, task) -> Optional[str]:
-    """Find the worktree a task's work actually lives in: the workflow's
-    shared worktree if set, else the task's own agent's isolated worktree
-    (see src/services/task_completion_service.py's verify_output_artifact
-    for the same fallback, needed for the same reason — agent creation
-    silently falls back to an isolated worktree when the shared one is
-    missing/stale).
+    """The workflow's shared worktree, for self-review telemetry.
+
+    Deliberately does NOT fall back to the task's agent's own isolated
+    worktree if the shared one is missing -- that class of fallback is what
+    let a worktree-tracking bug in cleanup_all_stale_branches go unnoticed
+    (see worktree_manager.py's fix and its regression test). A missing
+    working_directory here means telemetry just can't compute a diff for
+    this round, logged plainly by the caller; it should not silently
+    resolve against a different worktree instead.
     """
     if task.workflow_id:
         wf = session.query(Workflow).filter_by(id=task.workflow_id).first()
         if wf and wf.working_directory:
             return wf.working_directory
-    if task.assigned_agent_id:
-        from src.core.database import AgentWorktree
-
-        record = (
-            session.query(AgentWorktree)
-            .filter_by(agent_id=task.assigned_agent_id)
-            .first()
-        )
-        if record and record.worktree_path:
-            return record.worktree_path
     return None
 
 
@@ -1261,7 +1254,6 @@ def verify_agent_id(agent_id: str = Header(None, alias="X-Agent-ID")) -> str:
 
 
 # SECURITY: Rate limiting for sensitive endpoints
-from collections import defaultdict
 
 _rate_limit_store: Dict[str, List[float]] = defaultdict(list)
 RATE_LIMIT_WINDOW = 60  # seconds
@@ -2268,6 +2260,14 @@ async def update_task_status(
                 f"Task {request.task_id} completed without formal results reported"
             )
 
+        # Fetched once and reused below (self-review gate + the output-artifact
+        # floor a few lines down both need this same task's Phase row).
+        phase = (
+            session.query(Phase).filter_by(id=task.phase_id).first()
+            if task.phase_id
+            else None
+        )
+
         # 3a. One-shot self-review (docs/GAP_CHECK_SELF_LOOP_DESIGN.md) — the
         # first "done" from a phase with self_review enabled doesn't complete
         # the task; it sends a fixed checklist back to the same (still-running)
@@ -2275,7 +2275,6 @@ async def update_task_status(
         # floor and the validator loop: self-review is the cheapest, warmest-context
         # gate and should catch what it can before either of those engage.
         if request.status == "done" and task.phase_id and not task.self_review_done:
-            phase = session.query(Phase).filter_by(id=task.phase_id).first()
             if phase and phase.self_review and phase.self_review.get("enabled", False):
                 # Set BEFORE messaging -- crash-safe. If the process dies before
                 # the message is delivered, the worst case is a skipped prompt,
@@ -2337,7 +2336,7 @@ async def update_task_status(
         # PHASE_OUTPUT_ARTIFACTS in spec.py. Same class as ruff/tests: a
         # mechanical, hard floor check.
         if request.status == "done" and task.phase_id:
-            rejection = TaskCompletionService.verify_output_artifact(session, task)
+            rejection = TaskCompletionService.verify_output_artifact(session, task, phase=phase)
             if rejection:
                 # rejection is a plain {"status", "message"} dict (not the
                 # response_model's shape) — returning it directly makes
@@ -4346,7 +4345,7 @@ async def list_agents(
             project_workflow_ids = session.query(Workflow.id).filter(
                 Workflow.project_id == project_id
             ).subquery()
-            project_task_ids = session.query(Task.id).filter(
+            session.query(Task.id).filter(
                 Task.workflow_id.in_(project_workflow_ids)
             ).subquery()
             project_agent_ids = session.query(Task.assigned_agent_id).filter(
@@ -4577,11 +4576,11 @@ async def get_agent_logs(agent_id: str, limit: int = 50, request: Request = None
 
 
 @app.get("/api/agents/{agent_id}/output")
-async def get_agent_output(agent_id: str, lines: int = 30, request: Request = None):
-    """Peek at the last N lines of an agent's tmux output."""
+async def get_agent_output(agent_id: str, lines: int = 200, request: Request = None):
+    """Get agent output from transcript log (full history) or tmux (fallback)."""
     if request:
         _require_localhost(request)
-    lines = min(lines, 2000)  # Cap to prevent abuse
+    lines = min(lines, 5000)  # Cap to prevent abuse (transcript can be large)
     session = server_state.db_manager.get_session()
     try:
         agent = session.query(Agent).filter_by(id=agent_id).first()
@@ -6161,7 +6160,6 @@ async def _tool_create_ticket(arguments: Dict[str, Any]):
 
 
 async def _tool_search_tickets(arguments: Dict[str, Any]):
-    from src.services.ticket_search_service import TicketSearchService
 
     session = server_state.db_manager.get_session()
     try:
