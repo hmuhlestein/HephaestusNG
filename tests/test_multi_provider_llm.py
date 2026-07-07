@@ -10,6 +10,9 @@ import pytest
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+# Skip entire module if langchain_core is not installed
+pytest.importorskip("langchain_core")
+
 from src.core.llm_config import (
     ModelAssignment,
     MultiProviderLLMConfig,

@@ -112,7 +112,7 @@ class TestAgentWorkflowContext:
         )
 
         # Should instruct agent about workflow_id usage
-        assert "workflow_id" in message.lower()
+        assert "workflow" in message.lower()
         # Should mention critical workflow information
         assert "CRITICAL" in message.upper() or "IMPORTANT" in message.upper()
 

@@ -3,6 +3,7 @@
 import time
 import uuid
 from datetime import datetime
+from unittest.mock import Mock, patch
 
 import libtmux
 import pytest
@@ -48,8 +49,7 @@ class TestAgentOutputIntegration:
     @pytest.fixture
     def agent_manager(self, db_manager):
         """Create a real agent manager."""
-        llm_provider = get_llm_provider()
-        return AgentManager(db_manager, llm_provider)
+        return AgentManager(db_manager, Mock())
 
     @pytest.mark.asyncio
     @pytest.mark.skipif(

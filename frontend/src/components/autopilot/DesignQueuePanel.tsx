@@ -75,7 +75,8 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
     },
     enabled: !!projectId && !!designs && designs.length > 0,
     refetchInterval: 10000,
-    staleTime: 5000,
+    staleTime: 0,
+    refetchOnWindowFocus: true,
   });
 
   // Periodically reload designs from disk every 30 seconds

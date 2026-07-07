@@ -19,7 +19,9 @@ class TestTaskDeduplicationFlow:
     async def initialized_server(self):
         """Initialize server with mocked services."""
         # Mock the services
-        with patch("src.mcp.server.get_config") as mock_config:
+        with patch("src.mcp.server.get_config") as mock_config, \
+             patch("src.interfaces.llm_interface.get_llm_provider") as mock_llm, \
+             patch("src.mcp.server.verify_agent_authentication", return_value=True):
             config = Mock()
             config.openai_api_key = "test-key"
             config.task_dedup_enabled = True
@@ -33,6 +35,17 @@ class TestTaskDeduplicationFlow:
             config.llm_model = "gpt-4"
             config.embedding_model = "text-embedding-ada-002"
             mock_config.return_value = config
+
+            # Mock LLM provider to avoid needing langchain_core
+            mock_provider = Mock()
+            mock_provider.enrich_task = AsyncMock(return_value={
+                "enriched_description": "Enriched task",
+                "completion_criteria": ["Done"],
+                "agent_prompt": "Build it",
+                "required_capabilities": ["coding"],
+                "estimated_complexity": 5,
+            })
+            mock_llm.return_value = mock_provider
 
             # Initialize server state
             await server_state.initialize()
@@ -330,7 +343,7 @@ class TestTaskDeduplicationFlow:
                         "task_description": "Identical task description",
                         "done_definition": "Same completion",
                         "ai_agent_id": f"agent-{i}",
-                    },
+                            },
                     headers={"X-Agent-ID": f"agent-{i}"},
                 )
 
@@ -451,7 +464,7 @@ class TestTaskDeduplicationFlow:
                     "task_description": "Concurrent task",
                     "done_definition": "Task done",
                     "ai_agent_id": agent_id,
-                },
+                    },
                 headers={"X-Agent-ID": agent_id},
             )
             return response

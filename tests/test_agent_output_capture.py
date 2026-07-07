@@ -159,6 +159,8 @@ class TestAgentOutputCapture:
         mock_agent = Mock(spec=Agent)
         mock_agent.id = agent_id
         mock_agent.status = "terminated"
+        mock_agent.current_task_id = None  # No current task
+        mock_agent.tmux_session_name = None
 
         # Create mock AgentLog with stored output
         mock_log = Mock(spec=AgentLog)
@@ -169,11 +171,21 @@ class TestAgentOutputCapture:
 
         # Setup database session mock
         mock_db_session = Mock()
-        mock_db_session.query.return_value.filter_by.side_effect = [
-            Mock(first=Mock(return_value=mock_agent)),  # First call for Agent
-            Mock(
-                order_by=Mock(return_value=Mock(first=Mock(return_value=mock_log)))
-            ),  # Second call for AgentLog
+        # Flow: 1) Agent query, 2) _read_transcript_log Task query, 3) AgentLog query
+        mock_agent_query = Mock()
+        mock_agent_query.filter_by.return_value.first.return_value = mock_agent
+
+        mock_task_query = Mock()
+        mock_task_query.filter_by.return_value.order_by.return_value.first.return_value = None
+        mock_task_query.filter_by.return_value.first.return_value = None
+
+        mock_log_query = Mock()
+        mock_log_query.filter_by.return_value.order_by.return_value.first.return_value = mock_log
+
+        mock_db_session.query.side_effect = [
+            mock_agent_query,  # Agent query
+            mock_task_query,   # _read_transcript_log Task query
+            mock_log_query,    # AgentLog query
         ]
         mock_db_manager.get_session.return_value = mock_db_session
 
@@ -195,6 +207,8 @@ class TestAgentOutputCapture:
         mock_agent = Mock(spec=Agent)
         mock_agent.id = agent_id
         mock_agent.status = "terminated"
+        mock_agent.current_task_id = None  # No current task
+        mock_agent.tmux_session_name = None
 
         # Create mock AgentLog with stored output
         mock_log = Mock(spec=AgentLog)
@@ -205,11 +219,21 @@ class TestAgentOutputCapture:
 
         # Setup database session mock
         mock_db_session = Mock()
-        mock_db_session.query.return_value.filter_by.side_effect = [
-            Mock(first=Mock(return_value=mock_agent)),  # First call for Agent
-            Mock(
-                order_by=Mock(return_value=Mock(first=Mock(return_value=mock_log)))
-            ),  # Second call for AgentLog
+        # Flow: 1) Agent query, 2) _read_transcript_log Task query, 3) AgentLog query
+        mock_agent_query = Mock()
+        mock_agent_query.filter_by.return_value.first.return_value = mock_agent
+
+        mock_task_query = Mock()
+        mock_task_query.filter_by.return_value.order_by.return_value.first.return_value = None
+        mock_task_query.filter_by.return_value.first.return_value = None
+
+        mock_log_query = Mock()
+        mock_log_query.filter_by.return_value.order_by.return_value.first.return_value = mock_log
+
+        mock_db_session.query.side_effect = [
+            mock_agent_query,  # Agent query
+            mock_task_query,   # _read_transcript_log Task query
+            mock_log_query,    # AgentLog query
         ]
         mock_db_manager.get_session.return_value = mock_db_session
 

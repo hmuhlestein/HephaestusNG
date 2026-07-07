@@ -3,6 +3,10 @@
 import os
 import tempfile
 from datetime import datetime
+
+import pytest
+from fastapi.testclient import TestClient
+from src.mcp.server import app, server_state
 from unittest.mock import AsyncMock, patch
 
 import httpx
@@ -13,10 +17,9 @@ class TestReportResultsEndpoint:
     """Test suite for the /report_results MCP endpoint."""
 
     @pytest.fixture
-    async def client(self):
-        """Create async HTTP client for testing."""
-        async with httpx.AsyncClient(base_url="http://testserver") as client:
-            yield client
+    def client(self):
+        """Create sync test client for testing."""
+        return TestClient(app)
 
     @pytest.fixture
     def valid_markdown_file(self):
@@ -37,7 +40,7 @@ class TestReportResultsEndpoint:
         yield temp_path
         os.unlink(temp_path)
 
-    @patch("src.mcp.server.ResultService.create_result")
+    @patch("src.services.result_service.ResultService.create_result")
     @patch("src.mcp.server.server_state.broadcast_update")
     def test_report_results_success(
         self, mock_broadcast, mock_create_result, client, valid_markdown_file
@@ -84,7 +87,7 @@ class TestReportResultsEndpoint:
             summary="Test implementation completed",
         )
 
-    @patch("src.mcp.server.ResultService.create_result")
+    @patch("src.services.result_service.ResultService.create_result")
     def test_report_results_missing_file(self, mock_create_result, client):
         """Test result reporting with missing file."""
         # Setup mock to raise FileNotFoundError
@@ -108,7 +111,7 @@ class TestReportResultsEndpoint:
         assert response.status_code == 404
         assert "Markdown file not found" in response.json()["detail"]
 
-    @patch("src.mcp.server.ResultService.create_result")
+    @patch("src.services.result_service.ResultService.create_result")
     def test_report_results_invalid_task(
         self, mock_create_result, client, valid_markdown_file
     ):
@@ -132,7 +135,7 @@ class TestReportResultsEndpoint:
         assert response.status_code == 400
         assert "Task not found" in response.json()["detail"]
 
-    @patch("src.mcp.server.ResultService.create_result")
+    @patch("src.services.result_service.ResultService.create_result")
     def test_report_results_wrong_agent(
         self, mock_create_result, client, valid_markdown_file
     ):
@@ -158,7 +161,7 @@ class TestReportResultsEndpoint:
         assert response.status_code == 400
         assert "not assigned to agent" in response.json()["detail"]
 
-    @patch("src.mcp.server.ResultService.create_result")
+    @patch("src.services.result_service.ResultService.create_result")
     def test_report_results_file_too_large(
         self, mock_create_result, client, large_markdown_file
     ):
@@ -219,7 +222,7 @@ class TestReportResultsEndpoint:
         assert response.status_code == 422  # Validation error
         assert "String should match pattern" in str(response.json())
 
-    @patch("src.mcp.server.ResultService.create_result")
+    @patch("src.services.result_service.ResultService.create_result")
     def test_report_results_path_traversal_attack(self, mock_create_result, client):
         """Test protection against path traversal attacks."""
         # Setup mock to raise ValueError
@@ -243,7 +246,7 @@ class TestReportResultsEndpoint:
         assert response.status_code == 400
         assert "directory traversal" in response.json()["detail"].lower()
 
-    @patch("src.mcp.server.ResultService.create_result")
+    @patch("src.services.result_service.ResultService.create_result")
     @patch("src.mcp.server.server_state.broadcast_update")
     def test_multiple_results_per_task(
         self, mock_broadcast, mock_create_result, client, valid_markdown_file
