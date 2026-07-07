@@ -2948,11 +2948,12 @@ async def start_pipeline(
 
 
 @router.post("/stop")
-async def stop_pipeline(clear_state: bool = False):
+async def stop_pipeline(clear_state: bool = False, project_id: Optional[str] = None):
     """Stop the autopilot pipeline and all its agents.
 
     Args:
         clear_state: If True, clear persistent pipeline state (fresh start next time)
+        project_id: If provided, only stop workflows for this project
     """
     from src.autopilot.service import get_autopilot_service
     from src.core.database import Agent, Task, get_db
@@ -2968,13 +2969,15 @@ async def stop_pipeline(clear_state: bool = False):
         with get_db() as db:
             from src.core.database import Workflow
 
-            autopilot_wf_ids = [
-                wf.id
-                for wf in db.query(Workflow)
+            query = (
+                db.query(Workflow)
                 .filter_by(definition_id="autopilot")
                 .filter(Workflow.status.in_(["active", "running"]))
-                .all()
-            ]
+            )
+            if project_id:
+                query = query.filter(Workflow.project_id == project_id)
+
+            autopilot_wf_ids = [wf.id for wf in query.all()]
 
             if autopilot_wf_ids:
                 task_ids = [

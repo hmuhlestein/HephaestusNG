@@ -59,7 +59,7 @@ const Autopilot: React.FC = () => {
   const togglePipeline = useMutation({
     mutationFn: async () => {
       if (status?.running) {
-        return apiService.stopAutopilot();
+        return apiService.stopAutopilot(projectId || undefined);
       } else if (activeProject) {
         return apiService.startAutopilot(activeProject.base_dir);
       }

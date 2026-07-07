@@ -617,8 +617,9 @@ export const apiService = {
     return data;
   },
 
-  stopAutopilot: async (): Promise<any> => {
-    const { data } = await api.post('/autopilot/stop');
+  stopAutopilot: async (projectId?: string): Promise<any> => {
+    const params = projectId ? `?project_id=${projectId}` : '';
+    const { data } = await api.post(`/autopilot/stop${params}`);
     return data;
   },
 
