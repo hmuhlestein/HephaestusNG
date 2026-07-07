@@ -333,32 +333,41 @@ async def get_pipeline_status(project_id: Optional[str] = None):
     run_dir = _get_latest_run_dir()
     running = service_status.get("running", False)
 
-    # Fallback: if service says not running, check DB for active workflows+agents
-    # (handles case where server process changed but pipeline is still active)
-    if not running:
+    # When project_id is provided, check if THIS project has active workflows
+    # (the service.running flag is global, not per-project)
+    if project_id:
+        try:
+            from src.core.database import Workflow, get_db
+            with get_db() as db:
+                has_active = db.query(Workflow).filter(
+                    Workflow.project_id == project_id,
+                    Workflow.status.in_(["active", "running"])
+                ).first()
+                # Override running flag for this specific project
+                running = has_active is not None
+        except Exception:
+            pass
+    elif not running:
+        # No project_id specified, fallback to checking any active workflow
         try:
             from src.core.database import Agent, Workflow, get_db
 
             with get_db() as db:
-                wf_query = db.query(Workflow).filter(
-                    Workflow.status.in_(["active", "paused"])
+                active_wf = (
+                    db.query(Workflow)
+                    .filter(Workflow.status.in_(["active", "paused"]))
+                    .first()
                 )
-                if project_id:
-                    wf_query = wf_query.filter(Workflow.project_id == project_id)
-                active_wf = wf_query.first()
                 if active_wf:
-                    agent_query = db.query(Agent).filter(
-                        Agent.agent_type == "phase",
-                        Agent.status.in_(["working", "idle", "starting"]),
+                    active_agents = (
+                        db.query(Agent)
+                        .filter(
+                            Agent.agent_type == "phase",
+                            Agent.status.in_(["working", "idle", "starting"]),
+                        )
+                        .count()
                     )
-                    if project_id:
-                        # Filter agents assigned to tasks in this project's workflows
-                        from src.core.database import Task
-                        wf_ids = [wf.id for wf in db.query(Workflow).filter_by(project_id=project_id).all()]
-                        task_ids = [t.id for t in db.query(Task).filter(Task.workflow_id.in_(wf_ids)).all()]
-                        agent_query = agent_query.filter(Agent.current_task_id.in_(task_ids))
-                    active_agents_count = agent_query.count()
-                    if active_agents_count > 0:
+                    if active_agents > 0:
                         running = True
         except Exception:
             pass
