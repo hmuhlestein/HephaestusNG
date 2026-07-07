@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useQuery, useMutation } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useParams } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
@@ -35,6 +35,7 @@ const Autopilot: React.FC = () => {
   const [featureStatusFilter, setFeatureStatusFilter] = useState<'all' | 'validated' | 'needs_review' | 'failed'>('all');
   const { activeProject } = useProject();
   const projectId = activeProject?.id || null;
+  const queryClient = useQueryClient();
 
   // Sync tab state to URL path
   const handleTabChange = (tab: Tab) => {
@@ -81,9 +82,26 @@ const Autopilot: React.FC = () => {
         }
       }
     },
-    onSuccess: async () => {
-      // Immediately refetch to get real status
-      await refetchStatus();
+    onMutate: async () => {
+      // Cancel outgoing refetches
+      await queryClient.cancelQueries({ queryKey: ['autopilot-status', projectId] });
+      // Optimistically toggle the running state
+      const previous = queryClient.getQueryData<any>(['autopilot-status', projectId]);
+      queryClient.setQueryData(['autopilot-status', projectId], (old: any) => {
+        if (!old) return old;
+        return { ...old, running: !old.running };
+      });
+      return { previous };
+    },
+    onError: (_err, _vars, context) => {
+      // Rollback on error
+      if (context?.previous) {
+        queryClient.setQueryData(['autopilot-status', projectId], context.previous);
+      }
+    },
+    onSettled: () => {
+      // Refetch to get real state
+      queryClient.invalidateQueries({ queryKey: ['autopilot-status', projectId] });
     },
   });
 
