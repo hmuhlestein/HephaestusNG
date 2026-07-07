@@ -162,12 +162,29 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
       }
       return results;
     },
-    onSuccess: () => {
+    onSuccess: (_data, variables) => {
       queryClient.invalidateQueries({ queryKey: ['workflows'] });
       queryClient.invalidateQueries({ queryKey: ['autopilot-project-designs', projectId] });
       // Invalidate design statuses to trigger immediate refetch (M-5 fix)
       queryClient.invalidateQueries({ queryKey: ['autopilot-design-statuses', projectId] });
       toast.success('Workflow updated');
+
+      // Pausing/stopping this one design doesn't touch the continuously-running
+      // autopilot pipeline for the project -- it can pick this design right back
+      // up on its next queue scan. Offer to stop the whole pipeline too, since
+      // that's usually what "pause/stop this design" actually meant.
+      if ((variables.action === 'pause' || variables.action === 'stop') && projectId) {
+        if (confirm(
+          `This ${variables.action === 'pause' ? 'paused' : 'stopped'} just this one design. ` +
+          `The autopilot pipeline is still running and may automatically pick it back up. ` +
+          `Stop the whole pipeline too? Note: there's currently only one shared pipeline ` +
+          `process for the whole backend, so this stops autopilot for every project, not just this one.`
+        )) {
+          apiService.stopAutopilot(projectId)
+            .then(() => toast.success('Autopilot pipeline stopped'))
+            .catch(() => toast.error('Failed to stop the autopilot pipeline'));
+        }
+      }
     },
     onError: () => {
       toast.error('Failed to update workflow');
