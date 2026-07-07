@@ -323,7 +323,8 @@ class MessageItem(BaseModel):
 async def get_pipeline_status(project_id: Optional[str] = None):
     from src.autopilot.service import get_autopilot_service
 
-    cached = _cached("status", ttl=2.0)
+    cache_key = f"status:{project_id}" if project_id else "status"
+    cached = _cached(cache_key, ttl=2.0)
     if cached is not None:
         return cached
 
@@ -441,7 +442,7 @@ async def get_pipeline_status(project_id: Optional[str] = None):
         last_event=last_event,
         active_agents=active_agents,
     )
-    return _store("status", result)
+    return _store(cache_key, result)
 
 
 # ── Design Queue ─────────────────────────────────────────────────
