@@ -194,6 +194,14 @@ class Task(Base):
     estimated_complexity = Column(Integer)
     action = Column(String, default="")  # Engine action: 'continue', 'retry', 'goto'
 
+    # Persisted count of orchestrator.attempt_recovery's automatic retries.
+    # attempt_recovery previously read this from the get_tasks() dict, which
+    # never included it (no such column existed) -- task.get("retry_count", 0)
+    # silently always returned 0, so the "skip retry after 2 attempts" guard
+    # never engaged and a permanently-broken task (e.g. its worktree deleted
+    # out from under it) retried forever, every ~60s, indefinitely.
+    retry_count = Column(Integer, default=0, nullable=False)
+
     # Validation-related fields
     review_done = Column(Boolean, default=False)
     validation_enabled = Column(Boolean, default=False)
@@ -1266,6 +1274,7 @@ class DatabaseManager:
         self._migrate_autopilot_designs_columns()
         self._migrate_feature_model_columns()
         self._migrate_total_gotos_column()
+        self._migrate_task_retry_count_column()
 
     def _create_fts5_tables(self):
         """Create FTS5 virtual tables and triggers for ticket search."""
@@ -1648,6 +1657,26 @@ class DatabaseManager:
                 logger.info("Migrated workflows.total_gotos column")
         except Exception as e:
             logger.debug(f"workflows.total_gotos migration (may already exist): {e}")
+
+    def _migrate_task_retry_count_column(self):
+        """Add tasks.retry_count for existing databases.
+
+        Idempotent - safe to call on every startup.
+        """
+        try:
+            with self.engine.connect() as conn:
+                try:
+                    conn.execute(
+                        text(
+                            "ALTER TABLE tasks ADD COLUMN retry_count INTEGER DEFAULT 0 NOT NULL"
+                        )
+                    )
+                except Exception:
+                    pass  # Column already exists
+                conn.commit()
+                logger.info("Migrated tasks.retry_count column")
+        except Exception as e:
+            logger.debug(f"tasks.retry_count migration (may already exist): {e}")
 
     def get_session(self):
         """Get a database session."""

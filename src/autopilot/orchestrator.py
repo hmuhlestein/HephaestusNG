@@ -415,6 +415,26 @@ def update_task_status(task_id: str, status: str) -> bool:
         return False
 
 
+def increment_task_retry_count(task_id: str) -> int:
+    """Persist +1 to a task's retry_count, returning the new value.
+
+    attempt_recovery's "stop retrying after 2 attempts" guard reads this
+    column via get_tasks() — without actually persisting the increment here,
+    the column stays 0 forever and a permanently-broken task (e.g. its
+    worktree deleted out from under it) retries indefinitely, every ~60s.
+    """
+    try:
+        with get_db() as session:
+            task = session.query(Task).filter_by(id=task_id).first()
+            if task:
+                task.retry_count = (task.retry_count or 0) + 1
+                return task.retry_count
+        return 0
+    except Exception as e:
+        logger.debug(f"[increment_task_retry_count] Failed: {e}")
+        return 0
+
+
 def terminate_agent_direct(agent_id: str) -> bool:
     """Terminate agent directly in database (H-2 fix)."""
     try:
@@ -550,6 +570,7 @@ def get_tasks(status: str = None, workflow_id: str = None) -> list:
                     "created_at": t.created_at.isoformat() if t.created_at else None,
                     "started_at": t.started_at.isoformat() if t.started_at else None,
                     "completed_at": t.completed_at.isoformat() if t.completed_at else None,
+                    "retry_count": t.retry_count or 0,
                 }
                 for t in tasks
             ]
@@ -816,6 +837,11 @@ def attempt_recovery(workflow_id: str, logger: OrchestratorLogger) -> Tuple[bool
             continue
 
         logger.info(f"  Retrying failed task {task_id[:8]} (retry #{retry_count + 1})")
+        # Persist the increment before attempting — counting only successful
+        # attempts would let a task that fails every single retry (e.g. a
+        # deleted worktree) loop forever, since retry_count would never
+        # reach the >= 2 cutoff above.
+        increment_task_retry_count(task_id)
         try:
             # Reset task status to pending
             update_task_status(task_id, "pending")

@@ -538,6 +538,46 @@ class TestGetTasks:
         assert len(result) == 1
         assert result[0]["id"] == "t1"
 
+    def test_includes_retry_count(self, orch_db_env):
+        """Regression: get_tasks previously omitted retry_count entirely, so
+        attempt_recovery's task.get("retry_count", 0) always silently
+        defaulted to 0 -- the "stop after 2 retries" guard never engaged and
+        a permanently-broken task retried forever."""
+        from src.autopilot.orchestrator import get_tasks, increment_task_retry_count
+
+        self._make_task(orch_db_env, "t1")
+        assert get_tasks()[0]["retry_count"] == 0
+
+        increment_task_retry_count("t1")
+        increment_task_retry_count("t1")
+        result = get_tasks()
+        assert result[0]["retry_count"] == 2
+
+
+class TestIncrementTaskRetryCount:
+    def test_persists_across_calls(self, orch_db_env):
+        from src.autopilot.orchestrator import increment_task_retry_count
+        from src.core.database import Task
+
+        with orch_db_env.session_scope() as session:
+            session.add(
+                Task(
+                    id="t1",
+                    raw_description="do work",
+                    done_definition="done",
+                    status="failed",
+                )
+            )
+
+        assert increment_task_retry_count("t1") == 1
+        assert increment_task_retry_count("t1") == 2
+        assert increment_task_retry_count("t1") == 3
+
+    def test_missing_task_returns_zero(self, orch_db_env):
+        from src.autopilot.orchestrator import increment_task_retry_count
+
+        assert increment_task_retry_count("does-not-exist") == 0
+
 
 class TestGetAgents:
     def _make_agent(self, db, agent_id, status="working"):
@@ -984,6 +1024,59 @@ class TestAttemptRecovery:
         success, msg = attempt_recovery("wf-1", logger)
         assert success is True
         assert "retried" in msg.lower()
+
+    @patch("src.autopilot.orchestrator.create_agent_for_task_direct")
+    @patch("src.autopilot.orchestrator.get_agents")
+    def test_retry_count_persists_and_eventually_stops(
+        self, mock_agents, mock_create_agent, orch_db_env
+    ):
+        """Regression (real DB, no get_db mocking): a task whose retry
+        always fails (e.g. its worktree was deleted out from under it) must
+        stop retrying after 2 attempts, not loop forever. Before this fix,
+        retry_count was never persisted, so this ran every ~60s indefinitely
+        in production."""
+        from src.autopilot.orchestrator import OrchestratorLogger, attempt_recovery
+        from src.core.database import Task
+
+        with orch_db_env.session_scope() as session:
+            session.add(
+                Task(
+                    id="t1",
+                    raw_description="do work",
+                    done_definition="done",
+                    status="failed",
+                    workflow_id="wf-1",
+                    phase_id="p1",
+                )
+            )
+
+        def _permanently_fails(task_id, workflow_id, phase_id=None):
+            # Mirrors real AgentManager.create_agent_for_task's own cleanup
+            # path, which re-marks the task "failed" on every failed
+            # attempt (see manager.py's except block) -- without this the
+            # task would incorrectly sit at "pending" between retries.
+            with orch_db_env.session_scope() as session:
+                t = session.query(Task).filter_by(id=task_id).first()
+                t.status = "failed"
+            return None
+
+        mock_agents.return_value = []
+        mock_create_agent.side_effect = _permanently_fails
+
+        logger = OrchestratorLogger(Path("/tmp/logs"))
+        attempt_recovery("wf-1", logger)
+        attempt_recovery("wf-1", logger)
+        with orch_db_env.session_scope() as session:
+            task = session.query(Task).filter_by(id="t1").first()
+            assert task.retry_count == 2
+
+        # Third call must skip retrying entirely -- retry_count already at cap
+        calls_before = mock_create_agent.call_count
+        attempt_recovery("wf-1", logger)
+        assert mock_create_agent.call_count == calls_before
+        with orch_db_env.session_scope() as session:
+            task = session.query(Task).filter_by(id="t1").first()
+            assert task.retry_count == 2  # unchanged -- never even attempted
 
     @patch("src.autopilot.orchestrator.get_db")
     @patch("src.autopilot.orchestrator.api_post")
