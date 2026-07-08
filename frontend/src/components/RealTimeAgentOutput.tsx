@@ -204,9 +204,21 @@ const RealTimeAgentOutput: React.FC<RealTimeAgentOutputProps> = ({
     return filtered.join('\n');
   }, [output, searchTerm]);
 
+  // Collapse carriage returns (\r) before converting to HTML.
+  // TUI spinners redraw lines using \r — keep only the final state.
+  const collapsedOutput = useMemo(() => {
+    if (!filteredOutput) return '';
+    return filteredOutput.split('\n').map(line => {
+      if (line.includes('\r')) {
+        return line.split('\r').pop() || '';
+      }
+      return line;
+    }).join('\n');
+  }, [filteredOutput]);
+
   // Convert ANSI codes to HTML
   const htmlOutput = useMemo(() => {
-    const text = filteredOutput || '';
+    const text = collapsedOutput || '';
     if (!text) return '';
     try {
       return ansiConverter.toHtml(text);
