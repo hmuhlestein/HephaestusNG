@@ -5,7 +5,7 @@ Extracted from server.py for better modularity (M-1 fix).
 
 import logging
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel, Field
@@ -88,7 +88,7 @@ class CreateTicketRequest(BaseModel):
     task_id: Optional[str] = Field(
         default=None, description="Task ID this ticket relates to"
     )
-    phase_id: Optional[str] = Field(
+    phase_id: Optional[Union[str, int]] = Field(
         default=None, description="Phase ID where this ticket was created"
     )
 
@@ -439,7 +439,7 @@ async def create_ticket_endpoint(
             tags=request.tags,
             related_task_ids=request.related_task_ids,
             task_id=request.task_id,
-            phase_id=request.phase_id,
+            phase_id=str(request.phase_id) if request.phase_id is not None else None,
         )
 
         logger.info(
