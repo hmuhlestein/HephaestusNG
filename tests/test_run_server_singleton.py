@@ -46,3 +46,16 @@ class TestExitIfPortInUse:
     def test_lsof_failure_fails_open(self):
         with patch("run_server.subprocess.run", side_effect=OSError("lsof not found")):
             run_server._exit_if_port_in_use(8300)  # should not raise/exit
+
+    def test_lsof_call_filters_to_listen_sockets_only(self):
+        """Regression: without -sTCP:LISTEN, this check could see a
+        legitimate in-flight client request (curl, Vite's API proxy, the
+        monitor's health polling) and conclude "another backend already
+        owns this port" when no server is running there at all -- refusing
+        to start a legitimate restart over nothing."""
+        with patch("run_server.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(stdout="")
+            run_server._exit_if_port_in_use(8300)
+
+        args = mock_run.call_args[0][0]
+        assert "-sTCP:LISTEN" in args

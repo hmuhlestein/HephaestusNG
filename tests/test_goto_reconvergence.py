@@ -465,3 +465,28 @@ def test_start_next_phase_returns_true_for_completed(db_session, db_manager, pha
         db_session.query(PhaseExecution).filter_by(phase_id=phase_ids[2]).first().status
         == "in_progress"
     )
+
+
+def test_start_next_phase_resets_task_creation_claim(db_session, db_manager, phase_ids):
+    """Regression: task_creation_claimed_at is a one-time-per-cycle lock
+    (see orchestrator.py's _claim_phase_task_creation), not permanent.
+    Re-running a phase after goto reconvergence must clear a claim left
+    over from the PREVIOUS cycle, or the self-heal task-creation checks
+    would find it already set and never create a fresh task for the
+    re-run."""
+    from src.phases.phase_manager import PhaseManager
+
+    pm = PhaseManager(db_manager)
+
+    next_execution = (
+        db_session.query(PhaseExecution).filter_by(phase_id=phase_ids[2]).first()
+    )
+    next_execution.status = "pending"
+    next_execution.task_creation_claimed_at = datetime.utcnow()
+    db_session.commit()
+
+    pm._start_next_phase(db_session, phase_ids[1])
+
+    db_session.refresh(next_execution)
+    assert next_execution.status == "in_progress"
+    assert next_execution.task_creation_claimed_at is None

@@ -714,6 +714,11 @@ class PhaseManager:
     ) -> Dict[str, Any]:
         execution.status = "pending"
         execution.started_at = None
+        # Same reset as _start_next_phase -- the task-creation/evaluation
+        # claim is one-time-per-cycle, not permanent. Without this, a
+        # retried phase would find its claim already set from the attempt
+        # just evaluated and never get a fresh task created for the retry.
+        execution.task_creation_claimed_at = None
         session.commit()
 
         logger.info(
@@ -778,6 +783,10 @@ class PhaseManager:
         # The monitor will spawn an arbitration agent; once it writes
         # arbitration_result.json the pipeline resumes (proceed) or stops (impasse).
         execution.status = "pending"  # keep phase alive until arbitration resolves
+        # Same reset as _start_next_phase/_handle_evaluation_retry -- see
+        # those for why this one-time-per-cycle claim must not survive a
+        # phase being reopened for further work.
+        execution.task_creation_claimed_at = None
         session.commit()
         logger.warning(
             f"[ARBITRATE] Phase {phase.name} needs arbitration: {evaluation.reason}"
@@ -1126,6 +1135,12 @@ class PhaseManager:
             if execution and execution.status in ("pending", "completed"):
                 execution.status = "in_progress"
                 execution.started_at = datetime.utcnow()
+                # Reset the task-creation/evaluation claim (see orchestrator.py's
+                # _claim_phase_task_creation) -- it's a one-time-per-cycle lock,
+                # not a permanent one. Without this reset, a phase re-run after
+                # goto reconvergence would find its claim already set from the
+                # PREVIOUS cycle and never let a new task get created for it.
+                execution.task_creation_claimed_at = None
                 session.commit()
 
                 logger.info(f"Started next phase: {next_phase.name}")
