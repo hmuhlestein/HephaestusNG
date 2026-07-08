@@ -48,6 +48,11 @@ class AgentManager:
         self.phase_manager = phase_manager
         self.config = get_config()
         self.tmux_server = libtmux.Server()
+        
+        # Track agents that have had their initial transcript load done.
+        # First call reads full history from transcript log; subsequent calls
+        # use tmux capture-pane for clean live updates.
+        self._transcript_initial_load_done: set = set()
 
         # Branch manager for agent isolation
         self.branch_manager = WorktreeManager(db_manager)
@@ -1606,14 +1611,20 @@ class AgentManager:
                     return "Agent terminated. Last logs:\n" + "\n".join(log_lines[-10:])
                 return "Agent terminated - no output was captured"
 
-            # For live agents, use tmux capture-pane directly (not transcript log).
-            # Transcript log can have partial writes and mismatched content during
-            # active sessions. Only use transcript log for terminated agents (above).
+            # For live agents, do a one-time load from transcript log for full
+            # history, then use tmux capture-pane for clean live updates.
             if not agent.tmux_session_name:
                 logger.warning(f"Agent {agent_id} has no tmux session name")
                 return ""
 
-            # Use tmux capture-pane for live agents (limited by scrollback)
+            # First call: load full history from transcript log
+            if agent_id not in self._transcript_initial_load_done:
+                transcript_output = self._read_transcript_log(agent, lines)
+                if transcript_output:
+                    self._transcript_initial_load_done.add(agent_id)
+                    return transcript_output
+
+            # Subsequent calls: use tmux capture-pane (clean, limited by scrollback)
             logger.debug(
                 f"Attempting to access tmux session: {agent.tmux_session_name}"
             )
