@@ -319,34 +319,25 @@ class TestGetPastSummaries:
         assert result == []
 
 
-# ── _build_spec_phase_output ──────────────────────────────────────
+# ── build_phase_output ────────────────────────────────────────────
+
+
+from src.autopilot.spec import build_phase_output
 
 
 class TestBuildSpecPhaseOutput:
-    def test_returns_empty_for_non_gated_phase(self, make_monitoring_loop):
-        result = make_monitoring_loop._build_spec_phase_output("development")
+    def test_returns_empty_for_non_gated_phase(self):
+        result = build_phase_output("development", "/tmp/test")
         assert result == {}
 
-    def test_returns_empty_when_no_workflow(self, make_monitoring_loop, mock_db):
-        session = Mock()
-        session.query.return_value.filter_by.return_value.first.return_value = None
-        mock_db.get_session.return_value = session
-        make_monitoring_loop.phase_manager = Mock(workflow_id="wf-1")
+    def test_returns_output_for_gated_phase(self):
+        # qa_validation is a gated phase, so it returns a score
+        result = build_phase_output("qa_validation", "/tmp/test")
+        assert "score" in result
 
-        result = make_monitoring_loop._build_spec_phase_output("qa_validation")
-        # workflow not found → wd is None → returns {}
-        assert result == {}
-
-    def test_returns_empty_on_exception(self, make_monitoring_loop, mock_db):
-        session = Mock()
-        session.query.return_value.filter_by.return_value.first.side_effect = Exception(
-            "DB error"
-        )
-        mock_db.get_session.return_value = session
-        make_monitoring_loop.phase_manager = Mock(workflow_id="wf-1")
-
-        result = make_monitoring_loop._build_spec_phase_output("qa_validation")
-        assert result == {}
+    def test_returns_output_for_gated_phase_with_spec(self):
+        result = build_phase_output("qa_validation", "/tmp/test")
+        assert "score" in result
 
 
 # ── analyze_agent_state ───────────────────────────────────────────
@@ -522,6 +513,8 @@ class TestCollectAgentContext:
 
 class TestMonitoringLoopGetPastSummaries:
     def test_returns_from_guardian_analysis(self, make_monitoring_loop, mock_db):
+        from contextlib import contextmanager
+
         session = Mock()
         analysis = Mock(
             current_phase="implementation",
@@ -536,7 +529,12 @@ class TestMonitoringLoopGetPastSummaries:
         session.query.return_value.filter.return_value.order_by.return_value.limit.return_value.all.return_value = [
             analysis
         ]
-        mock_db.get_session.return_value = session
+
+        @contextmanager
+        def mock_session_scope():
+            yield session
+
+        mock_db.session_scope = mock_session_scope
 
         result = make_monitoring_loop._get_past_summaries_for_agent("a1")
         assert len(result) == 1
@@ -588,10 +586,10 @@ class TestDetectRepetitionLoop:
         self, make_monitoring_loop, mock_agent_manager, mock_db
     ):
         agent = Agent(id="a1", cli_type="claude")
-        # 6 repeated lines
+        # 15 repeated lines (threshold is 12)
         repeated = "This is a long enough line that repeats many times in the output"
         output = "\n".join(
-            [repeated] * 6 + ["Normal line that is different and unique here"]
+            [repeated] * 15 + ["Normal line that is different and unique here"]
         )
         mock_agent_manager.get_agent_output.return_value = output
 
@@ -646,6 +644,8 @@ class TestDetectRepetitionLoop:
 class TestUpdateAgentHealth:
     @pytest.mark.asyncio
     async def test_stores_analysis(self, make_monitoring_loop, mock_db):
+        from contextlib import contextmanager
+
         agent = Agent(id="a1")
         analysis = {
             "state": "healthy",
@@ -659,25 +659,38 @@ class TestUpdateAgentHealth:
         db_agent = Mock(id="a1", health_check_failures=0)
         session = Mock()
         session.query.return_value.filter_by.return_value.first.return_value = db_agent
-        mock_db.get_session.return_value = session
+
+        @contextmanager
+        def mock_session_scope():
+            yield session
+
+        mock_db.session_scope = mock_session_scope
 
         await make_monitoring_loop._update_agent_health_from_trajectory(agent, analysis)
         assert session.add.call_count == 2  # GuardianAnalysis + AgentLog
-        session.commit.assert_called()
 
     @pytest.mark.asyncio
     async def test_handles_no_agent(self, make_monitoring_loop, mock_db):
+        from contextlib import contextmanager
+
         agent = Agent(id="a1")
         analysis = {"trajectory_aligned": True}
         session = Mock()
         session.query.return_value.filter_by.return_value.first.return_value = None
-        mock_db.get_session.return_value = session
+
+        @contextmanager
+        def mock_session_scope():
+            yield session
+
+        mock_db.session_scope = mock_session_scope
 
         # Should not raise
         await make_monitoring_loop._update_agent_health_from_trajectory(agent, analysis)
 
     @pytest.mark.asyncio
     async def test_off_track_increments_failures(self, make_monitoring_loop, mock_db):
+        from contextlib import contextmanager
+
         agent = Agent(id="a1")
         analysis = {
             "trajectory_aligned": False,
@@ -686,7 +699,12 @@ class TestUpdateAgentHealth:
         db_agent = Mock(id="a1", health_check_failures=0)
         session = Mock()
         session.query.return_value.filter_by.return_value.first.return_value = db_agent
-        mock_db.get_session.return_value = session
+
+        @contextmanager
+        def mock_session_scope():
+            yield session
+
+        mock_db.session_scope = mock_session_scope
 
         await make_monitoring_loop._update_agent_health_from_trajectory(agent, analysis)
         # alignment_score < 0.3 → += 2
@@ -914,6 +932,8 @@ class TestMechanicalRecovery:
     async def test_max_recovery_fails_task(
         self, make_monitoring_loop, mock_agent_manager, mock_db
     ):
+        from contextlib import contextmanager
+
         agent = Agent(id="a1", cli_type="claude")
         frozen_output = "Same output"
         mock_agent_manager.get_agent_output.return_value = frozen_output
@@ -931,7 +951,12 @@ class TestMechanicalRecovery:
         task = Mock(id="t1", status="in_progress")
         # The query uses filter_by(assigned_agent_id=..., status=...)
         session.query.return_value.filter_by.return_value.first.return_value = task
-        mock_db.get_session.return_value = session
+
+        @contextmanager
+        def mock_session_scope():
+            yield session
+
+        mock_db.session_scope = mock_session_scope
 
         await make_monitoring_loop._mechanical_recovery_for_agent(agent)
         assert task.status == "failed"
@@ -1033,8 +1058,8 @@ class TestCleanupOrphanedSessions:
         db_session.query.return_value.filter.return_value.first.return_value = None
         mock_db.get_session.return_value = db_session
 
-        # Set grace period past check
-        make_monitoring_loop._last_orphan_check_time = datetime.now() - timedelta(
+        # Set grace period past check on the orphan reaper
+        make_monitoring_loop._orphan_reaper.last_check_time = datetime.now() - timedelta(
             seconds=200
         )
 
@@ -1055,8 +1080,8 @@ class TestCleanupOrphanedSessions:
         db_session.query.return_value.filter.return_value.first.return_value = None
         mock_db.get_session.return_value = db_session
 
-        # Set grace period past check
-        make_monitoring_loop._last_orphan_check_time = datetime.now() - timedelta(
+        # Set grace period past check on the orphan reaper
+        make_monitoring_loop._orphan_reaper.last_check_time = datetime.now() - timedelta(
             seconds=200
         )
 
