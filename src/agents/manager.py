@@ -1726,17 +1726,21 @@ class AgentManager:
             if not transcript_path.exists() or transcript_path.stat().st_size == 0:
                 return ""
             
-            # Read last N lines efficiently
+            # Read ALL lines for terminated agents (full history),
+            # or last N lines for live agents
             with open(transcript_path, 'r', errors='replace') as f:
-                if lines > 0:
-                    all_lines = f.readlines()
-                    # Drop trailing empty lines (partial writes from pipe-pane)
-                    while all_lines and not all_lines[-1].strip():
-                        all_lines.pop()
+                all_lines = f.readlines()
+                # Drop trailing empty lines (partial writes from pipe-pane)
+                while all_lines and not all_lines[-1].strip():
+                    all_lines.pop()
+                
+                if lines > 0 and agent.status != 'terminated':
+                    # Live agents: return last N lines
                     tail_lines = all_lines[-lines:]
                     text = "".join(tail_lines).rstrip()
                 else:
-                    text = f.read().rstrip()
+                    # Terminated agents: return ALL lines
+                    text = "".join(all_lines).rstrip()
             
             # Collapse carriage-return redraws: TUI spinners redraw the same
             # line using \r. Each redraw becomes a separate line in the log.
