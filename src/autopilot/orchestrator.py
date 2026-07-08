@@ -4794,9 +4794,22 @@ def run_continuous_pipeline(args) -> None:
                                 )
                                 # Mark workflow as failed — required phase was abandoned
                                 try:
-                                    from src.core.database import Workflow, get_db
+                                    # Aliased: a bare `get_db` import here makes
+                                    # Python treat `get_db` as local for this
+                                    # entire enclosing function (run_continuous_
+                                    # pipeline), shadowing the module-level
+                                    # import and raising UnboundLocalError at
+                                    # every earlier `get_db()` call in the same
+                                    # function (observed live: broke the stale-
+                                    # workflow cleanup near the top of this
+                                    # function, which then left a dead workflow
+                                    # row permanently "active" and blocked
+                                    # get_active_workflows() from ever letting a
+                                    # new design start).
+                                    from src.core.database import Workflow
+                                    from src.core.database import get_db as _get_db2
 
-                                    with get_db() as db:
+                                    with _get_db2() as db:
                                         wf = (
                                             db.query(Workflow)
                                             .filter_by(id=state.current_workflow_id)

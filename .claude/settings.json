@@ -10,7 +10,10 @@
       "Bash(python *)",
       "Bash(grep *)",
       "Bash(find *)",
+      "Bash(ls *)",
       "Bash(head *)",
+      "Bash(tail *)",
+      "Bash(awk *)",
       "Bash(sed *)",
       "Bash(wc *)"
     ]
