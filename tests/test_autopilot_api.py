@@ -1077,6 +1077,89 @@ class TestProjectDesigns:
         resp = client.get("/api/autopilot/projects/nonexistent/designs")
         assert resp.status_code == 404
 
+    def test_remove_design_cascades_orphaned_workflow_with_no_design_id(
+        self, project_client
+    ):
+        """Regression test: observed live in production that a completed
+        Phase 0 workflow (and its first per-feature workflow) can end up with
+        Workflow.design_id left NULL and Feature.workflow_id never linked
+        (both cascade lookups miss it), so deleting the design that spawned
+        them left the workflows permanently orphaned -- they survived the
+        delete and their tasks/phase executions kept accumulating. The fix
+        adds a fallback match on launch_params (design_id or
+        design_document filename), the same way _relink_features_to_workflows
+        already matches Feature.workflow_id when the direct link is missing.
+        """
+        client, dirs = project_client
+        pid = self._create_project(client, dirs)
+
+        from src.core.database import AutopilotDesign, Workflow, get_db
+
+        design_id = "des-test-auth"
+        with get_db() as db:
+            db.add(
+                AutopilotDesign(
+                    id=design_id,
+                    project_id=pid,
+                    filename="01-auth.md",
+                    name="Auth",
+                    ordinal=1,
+                    size_bytes=10,
+                    extension=".md",
+                    status="pending",
+                )
+            )
+
+            # Orphaned Phase 0 workflow: design_id column never got set, but
+            # launch_params carries the real design_id.
+            db.add(
+                Workflow(
+                    id="wf-orphan-phase0",
+                    name="autopilot-phase0",
+                    description="Phase 0: Feature Architect for Auth",
+                    definition_id="autopilot-phase0",
+                    design_id=None,
+                    phases_folder_path=".",
+                    status="completed",
+                    launch_params={
+                        "design_document": str(dirs["design_dir"] / "01-auth.md"),
+                        "project_path": str(dirs["project_dir"]),
+                        "design_id": design_id,
+                    },
+                )
+            )
+            # Orphaned per-feature workflow: neither design_id nor
+            # Feature.workflow_id got linked, but launch_params still points
+            # at the same design document.
+            db.add(
+                Workflow(
+                    id="wf-orphan-feature",
+                    name="autopilot",
+                    description="Autopilot: Auth - Feature: Core",
+                    definition_id="autopilot",
+                    design_id=None,
+                    phases_folder_path=".",
+                    status="failed",
+                    launch_params={
+                        "design_document": str(dirs["design_dir"] / "01-auth.md"),
+                        "project_path": str(dirs["project_dir"]),
+                        "feature_id": "core",
+                    },
+                )
+            )
+            db.commit()
+
+        resp = client.delete(f"/api/autopilot/projects/{pid}/designs/01-auth.md")
+        assert resp.status_code == 200, resp.text
+
+        with get_db() as db:
+            remaining = (
+                db.query(Workflow)
+                .filter(Workflow.id.in_(["wf-orphan-phase0", "wf-orphan-feature"]))
+                .all()
+            )
+            assert remaining == []
+
 
 class TestProjectPathTraversal:
     def test_design_content_rejects_traversal(self, project_client):
