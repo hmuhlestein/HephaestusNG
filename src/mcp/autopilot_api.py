@@ -408,13 +408,25 @@ async def get_pipeline_status(
         # above and stays None, crashing every state.get(...) call below.
         state = _store("state", state or {})
 
+    # Count queue depth from DB when project_id is provided (consistent with
+    # the queue panel which reads from the DB). Fall back to filesystem count.
     queue_depth = 0
-    try:
-        effective_dir = _get_effective_queue_dir()
-        for ext in ALLOWED_EXTENSIONS:
-            queue_depth += len(list(Path(effective_dir).glob(f"*{ext}")))
-    except (FileNotFoundError, RuntimeError):
-        pass  # Queue dir not configured or missing — return queue_depth=0
+    if project_id:
+        from src.core.database import AutopilotDesign, get_db
+        try:
+            with get_db() as db:
+                queue_depth = db.query(AutopilotDesign).filter_by(
+                    project_id=project_id, status="pending"
+                ).count()
+        except Exception:
+            pass
+    else:
+        try:
+            effective_dir = _get_effective_queue_dir()
+            for ext in ALLOWED_EXTENSIONS:
+                queue_depth += len(list(Path(effective_dir).glob(f"*{ext}")))
+        except (FileNotFoundError, RuntimeError):
+            pass  # Queue dir not configured or missing — return queue_depth=0
 
     last_event = _cached("last_event", ttl=5.0)
     if last_event is None:
