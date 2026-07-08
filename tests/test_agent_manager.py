@@ -204,6 +204,67 @@ class TestCreateAgentForTask:
         )
 
     @pytest.mark.asyncio
+    async def test_diagnostic_agent_never_gets_session_id(
+        self, mock_agent_manager, sample_task, db_manager
+    ):
+        """Regression: session_id is derived from (project, design, phase_name)
+        only -- it has no agent_type or agent_id component. A diagnostic
+        agent is deliberately assigned the SAME phase_id as the stuck phase
+        it's investigating (see monitor.py's _create_diagnostic_agent), so
+        with the same launch_params as any normal phase agent it would
+        resolve to the identical session_id as every phase agent that has
+        ever worked that phase. Since the CLI (`pi --session-id X`) resumes
+        an existing session for that ID, the diagnostic agent would
+        silently resume a PRIOR phase agent's live conversation -- inheriting
+        that agent's stale agent_id/task_id as part of the resumed context.
+
+        Observed live: a diagnostic agent spent its entire run trying to
+        close out a stale, already-terminated agent's task using that
+        agent's identity, because its resumed session told it that was who
+        it was -- never touching its own actual diagnostic task.
+        """
+        with db_manager.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-1").first()
+            wf.launch_params = {
+                "project_path": "/private/tmp/heph-smoke-test",
+                "feature_id": "calculator-module",
+            }
+
+        mock_agent_manager.branch_manager.create_worktree = MagicMock(
+            return_value="/tmp/test-project-agent"
+        )
+        mock_agent_manager.llm_provider.generate_agent_prompt = AsyncMock(
+            return_value="You are an AI agent."
+        )
+
+        mock_session = MagicMock()
+        mock_session.name = "agent-session-diagnostic"
+        mock_agent_manager.tmux_server.new_session.return_value = mock_session
+        mock_session.attached_window.attached_pane = MagicMock()
+
+        with patch("src.agents.manager.get_cli_agent") as mock_get_cli:
+            mock_cli = MagicMock()
+            mock_cli.get_launch_command.return_value = ["pi", "--task", "test"]
+            mock_get_cli.return_value = mock_cli
+
+            await mock_agent_manager.create_agent_for_task(
+                task=sample_task,
+                enriched_data={"validation_prompt": "diagnose the stall"},
+                memories=[],
+                project_context="Test project context",
+                cli_type="pi",
+                working_directory="/tmp/test-project",
+                agent_type="diagnostic",
+                use_existing_worktree=True,
+            )
+
+        _, call_kwargs = mock_cli.get_launch_command.call_args
+        assert call_kwargs["session_id"] == "", (
+            "diagnostic agents must never resolve a session_id, even when "
+            "launch_params would otherwise produce one for a phase agent"
+        )
+
+    @pytest.mark.asyncio
     async def test_creates_agent_log_entry(self, mock_agent_manager, sample_task, db_manager):
         """Should create agent log entry when agent is created."""
         mock_agent_manager.branch_manager.create_worktree = MagicMock(

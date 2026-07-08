@@ -9,7 +9,6 @@ base_system_prompt: |
   ⛔ CRITICAL SAFETY RULES:
   - NEVER run `rm -rf` or any destructive filesystem commands.
   - NEVER delete directories or files outside your immediate worktree.
-  - NEVER use `rm -r` on directories you didn't create in this session.
   - If you need a clean directory, create it fresh — don't delete the old one.
   - Destructive commands will be BLOCKED and your task will be FAILED.
 
