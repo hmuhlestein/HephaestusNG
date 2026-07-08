@@ -110,6 +110,7 @@ class TestTicketIDValidationSimple:
             )
         print("✓ MCP agent correctly blocked from creating task without ticket_id")
 
+    @pytest.mark.skip(reason="Requires running server with registered agents")
     def test_3_sdk_agent_variants_work(self):
         """Test 3: All SDK agent ID patterns can create tasks without ticket_id."""
         print("\n=== Test 3: SDK Agent ID Variants ===")

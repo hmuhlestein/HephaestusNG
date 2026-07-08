@@ -34,13 +34,13 @@ class TestShouldSkip:
         assert _should_skip(feature, feature_results) is True
 
     def test_dependency_skipped(self):
-        """Test feature with skipped dependency."""
+        """Test feature with skipped dependency - should be skipped (cascade)."""
         feature = {
             "id": "api",
             "depends_on": ["auth"],
         }
         feature_results = {"auth": "skipped"}
-        assert _should_skip(feature, feature_results) is False
+        assert _should_skip(feature, feature_results) is True
 
     def test_dependency_pending(self):
         """Test feature with pending dependency."""

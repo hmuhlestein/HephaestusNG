@@ -4789,7 +4789,24 @@ def run_continuous_pipeline(args) -> None:
 
     logger.info("Starting services...")
     try:
-        sdk.start(enable_tui=False, timeout=60)
+        # assume_backend_running: set when args came from AutopilotService's
+        # in-process pipeline (see service.py's args.in_process), which is
+        # itself part of the running backend process -- there is no scenario
+        # where that path executes and the backend *isn't* already up.
+        # Without this, sdk.start()'s pre-check is a single 2s-timeout
+        # self-referential HTTP call to this same process's /health endpoint;
+        # under load it can spuriously time out and conclude "not running",
+        # spawning a second run_server.py that also binds port 8300 and
+        # drives its own AutopilotService against the same DB (observed
+        # live: two processes racing, one pausing a workflow the other had
+        # just launched). Left False for the standalone
+        # `python -m src.autopilot.orchestrator` CLI path (scripts/
+        # autopilot.sh), where the backend genuinely may need spawning.
+        sdk.start(
+            enable_tui=False,
+            timeout=60,
+            assume_backend_running=getattr(args, "in_process", False),
+        )
     except Exception as e:
         logger.error(f"Failed to start: {e}")
         sys.exit(1)

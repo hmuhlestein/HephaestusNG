@@ -280,6 +280,12 @@ class AutopilotService:
                 cycle_on_failure=False,
                 description="",
                 max_hours=0,
+                # Tells run_continuous_pipeline it's executing inside this
+                # already-running backend process (as opposed to the
+                # standalone `python -m src.autopilot.orchestrator` CLI path,
+                # which builds its own argparse.Namespace without this flag)
+                # -- see sdk.start()'s assume_backend_running.
+                in_process=True,
             )
 
             # Run the synchronous pipeline in a thread executor

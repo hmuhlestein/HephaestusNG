@@ -304,7 +304,11 @@ class HephaestusSDK:
             return False
 
     def start(
-        self, timeout: int = 30, enable_tui: bool = False, log_dir: Optional[str] = None
+        self,
+        timeout: int = 30,
+        enable_tui: bool = False,
+        log_dir: Optional[str] = None,
+        assume_backend_running: bool = False,
     ) -> bool:
         """
         Start Hephaestus services.
@@ -313,6 +317,19 @@ class HephaestusSDK:
             timeout: Maximum seconds to wait for services to become healthy
             enable_tui: Enable TUI mode (default: False, headless)
             log_dir: Custom log directory (default: ~/.hephaestus/logs/session-{timestamp}/)
+            assume_backend_running: Set when the caller is already executing
+                inside the backend process itself (e.g. AutopilotService's
+                background pipeline) -- skips the HTTP self-health-check
+                entirely instead of possibly spawning a second backend.
+                That check is a single 2s-timeout self-referential HTTP call
+                to this same process's /health endpoint; under load (many
+                concurrent unrelated requests queued on the same event loop)
+                it can spuriously time out even though the backend is
+                obviously running -- we ARE it. Observed live: this caused
+                two independent run_server.py processes to both end up
+                bound to port 8300 and both driving their own
+                AutopilotService singleton against the same DB, each
+                unaware of the other's workflows/pauses.
 
         Returns:
             True if all services are healthy
@@ -340,11 +357,11 @@ class HephaestusSDK:
             self._start_with_tui(timeout)
         else:
             # Headless mode
-            self._start_headless(timeout)
+            self._start_headless(timeout, assume_backend_running=assume_backend_running)
 
         return True
 
-    def _start_headless(self, timeout: int):
+    def _start_headless(self, timeout: int, assume_backend_running: bool = False):
         """Start in headless mode with console output."""
         # Check Qdrant only if using qdrant backend
         if self.config.vector_store_backend == "qdrant":
@@ -359,7 +376,7 @@ class HephaestusSDK:
             )
 
         # Check if backend is already running (e.g., when orchestrator runs inside the backend)
-        backend_already_running = self._check_backend_health()
+        backend_already_running = assume_backend_running or self._check_backend_health()
 
         # Create process manager
         self.process_manager = ProcessManager(self.config, self.log_dir)
