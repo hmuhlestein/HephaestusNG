@@ -309,6 +309,70 @@ class TestMaybeRetryFailedTasks:
             tasks = session.query(Task).filter_by(phase_id="phase-1", status="pending").all()
             assert len(tasks) == 3
 
+    def test_folds_failure_reason_into_description_before_clearing(
+        self, db_manager, sample_workflow
+    ):
+        """Regression: a blind bulk reset used to wipe failure_reason
+        without ever surfacing it anywhere, so the retried agent got the
+        exact same generic task description and no idea what went wrong
+        last time -- e.g. a specific 'missing output artifact: X' from
+        update_task_status's validation gate. The reason must survive into
+        enriched_description (what the agent's prompt actually reads)."""
+        from src.autopilot.orchestrator import _maybe_retry_failed_tasks
+
+        with db_manager.session_scope() as session:
+            session.add(
+                Task(
+                    id="task-fail-0",
+                    workflow_id="wf-1",
+                    phase_id="phase-1",
+                    raw_description="Execute phase X",
+                    enriched_description="Execute phase X: do the thing",
+                    done_definition="Done",
+                    status="failed",
+                    failure_reason="Missing output artifact: docs/report.md",
+                )
+            )
+
+        logger = MagicMock()
+        with db_manager.session_scope() as session:
+            phase = session.query(Phase).filter_by(id="phase-1").first()
+            result = _maybe_retry_failed_tasks(session, phase, logger)
+            assert result is True
+
+            task = session.query(Task).filter_by(id="task-fail-0").first()
+            assert task.status == "pending"
+            assert task.failure_reason is None
+            assert "Execute phase X: do the thing" in task.enriched_description
+            assert "Missing output artifact: docs/report.md" in task.enriched_description
+
+    def test_task_without_failure_reason_gets_plain_reset(self, db_manager, sample_workflow):
+        """A failed task with no recorded reason (e.g. a hard crash before
+        anything could be logged) just resets normally -- nothing to fold in."""
+        from src.autopilot.orchestrator import _maybe_retry_failed_tasks
+
+        with db_manager.session_scope() as session:
+            session.add(
+                Task(
+                    id="task-fail-0",
+                    workflow_id="wf-1",
+                    phase_id="phase-1",
+                    raw_description="Execute phase X",
+                    done_definition="Done",
+                    status="failed",
+                    failure_reason=None,
+                )
+            )
+
+        logger = MagicMock()
+        with db_manager.session_scope() as session:
+            phase = session.query(Phase).filter_by(id="phase-1").first()
+            _maybe_retry_failed_tasks(session, phase, logger)
+
+            task = session.query(Task).filter_by(id="task-fail-0").first()
+            assert task.status == "pending"
+            assert task.enriched_description is None
+
 
 class TestGetPhaseStatuses:
     """Tests for _get_phase_statuses helper."""

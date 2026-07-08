@@ -1180,6 +1180,13 @@ class AutopilotDesign(Base):
     file_path = Column(Text, nullable=True)  # absolute path to design file
     designs_folder = Column(Text, nullable=True)  # path to designs/<ts>_<name>_<id>/
     phase0_workflow_id = Column(String, ForeignKey("workflows.id"), nullable=True)
+    # Why status == "failed" -- orchestrator.py's run_phase0/_update_design_status
+    # has always passed error=... on every failure path, but there was no
+    # column to store it: _update_design_status silently dropped it (logging
+    # "unknown field 'error'") and the design modal had nothing to show,
+    # even for a specific, actionable reason like "Invalid features.json:
+    # features array must have 1-5 entries, got 6".
+    error = Column(Text, nullable=True)
 
     # Relationships
     project = relationship("AutopilotProject", back_populates="designs")
@@ -1318,6 +1325,7 @@ class DatabaseManager:
         self._migrate_phase_retry_count_column()
         self._migrate_self_review_columns()
         self._migrate_phase_execution_task_claim_column()
+        self._migrate_autopilot_designs_error_column()
 
     def _create_fts5_tables(self):
         """Create FTS5 virtual tables and triggers for ticket search."""
@@ -1798,6 +1806,24 @@ class DatabaseManager:
                 logger.info("Migrated phase_executions.task_creation_claimed_at column")
         except Exception as e:
             logger.debug(f"phase_executions.task_creation_claimed_at migration (may already exist): {e}")
+
+    def _migrate_autopilot_designs_error_column(self):
+        """Add autopilot_designs.error for existing databases.
+
+        Idempotent - safe to call on every startup.
+        """
+        try:
+            with self.engine.connect() as conn:
+                try:
+                    conn.execute(
+                        text("ALTER TABLE autopilot_designs ADD COLUMN error TEXT")
+                    )
+                except Exception:
+                    pass  # Column already exists
+                conn.commit()
+                logger.info("Migrated autopilot_designs.error column")
+        except Exception as e:
+            logger.debug(f"autopilot_designs.error migration (may already exist): {e}")
 
     def get_session(self):
         """Get a database session."""

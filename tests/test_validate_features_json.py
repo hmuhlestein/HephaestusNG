@@ -76,11 +76,15 @@ class TestValidateFeaturesJson:
     def test_empty_features(self):
         """Test empty features array."""
         features_json = {"design_name": "Test", "features": []}
-        with pytest.raises(ValueError, match="must have 1-5 entries"):
+        with pytest.raises(ValueError, match="at least 1 entry"):
             _validate_features_json(features_json)
 
-    def test_too_many_features(self):
-        """Test too many features."""
+    def test_more_than_five_features_is_allowed(self):
+        """Regression: the count is a rough prompt target (~5), not a hard
+        cap. A well-formed 6+ feature decomposition for a genuinely
+        multi-concern design must not be rejected -- observed live: a valid
+        6-feature decomposition got its entire Phase 0 output discarded by
+        a strict 1-5 check, throwing away real analysis work."""
         features_json = {
             "design_name": "Test",
             "features": [
@@ -88,14 +92,33 @@ class TestValidateFeaturesJson:
                     "id": f"f{i}",
                     "name": f"Feature {i}",
                     "scope": f"Scope {i}",
-                    "files": [],
+                    "files": [f"src/f{i}/"],
                     "depends_on": [],
                     "execution": "parallel",
                 }
-                for i in range(6)
+                for i in range(10)
             ],
         }
-        with pytest.raises(ValueError, match="must have 1-5 entries"):
+        _validate_features_json(features_json)  # Should not raise
+
+    def test_absurdly_many_features_still_rejected(self):
+        """Sanity ceiling: not a product cap, just a guard against garbage
+        like one 'feature' per file."""
+        features_json = {
+            "design_name": "Test",
+            "features": [
+                {
+                    "id": f"f{i}",
+                    "name": f"Feature {i}",
+                    "scope": f"Scope {i}",
+                    "files": [f"src/f{i}.py"],
+                    "depends_on": [],
+                    "execution": "parallel",
+                }
+                for i in range(51)
+            ],
+        }
+        with pytest.raises(ValueError, match="one feature per file"):
             _validate_features_json(features_json)
 
     def test_duplicate_ids(self):

@@ -1160,6 +1160,78 @@ class TestProjectDesigns:
             )
             assert remaining == []
 
+    def test_design_status_surfaces_failure_reason(self, project_client):
+        """Regression: AutopilotDesign had no column to store *why* a design
+        failed -- orchestrator.py's run_phase0 always passed error=... to
+        _update_design_status, but it was silently dropped ("unknown field
+        'error'") and the design detail modal had nothing to show, even for
+        a specific, actionable reason. The status endpoint must surface it
+        once the design is actually failed."""
+        client, dirs = project_client
+        pid = self._create_project(client, dirs)
+
+        from src.core.database import AutopilotDesign, get_db
+
+        design_dir = dirs["project_dir"] / ".hephaestus" / "designs"
+        design_dir.mkdir(parents=True, exist_ok=True)
+        (design_dir / "failed-design.md").write_text("# Design")
+
+        with get_db() as db:
+            db.add(
+                AutopilotDesign(
+                    id="des-test-failed",
+                    project_id=pid,
+                    filename="failed-design.md",
+                    name="Failed Design",
+                    ordinal=10,
+                    size_bytes=10,
+                    extension=".md",
+                    status="failed",
+                    error="Invalid features.json: features array must have at least 1 entry, got 0",
+                )
+            )
+            db.commit()
+
+        resp = client.get(f"/api/autopilot/projects/{pid}/designs/failed-design.md/status")
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["status"] == "failed"
+        assert body["error"] == (
+            "Invalid features.json: features array must have at least 1 entry, got 0"
+        )
+
+    def test_design_status_omits_error_when_not_failed(self, project_client):
+        """The error field shouldn't leak a stale message from a previous
+        failed attempt once the design is no longer in a failed state."""
+        client, dirs = project_client
+        pid = self._create_project(client, dirs)
+
+        from src.core.database import AutopilotDesign, get_db
+
+        design_dir = dirs["project_dir"] / ".hephaestus" / "designs"
+        design_dir.mkdir(parents=True, exist_ok=True)
+        (design_dir / "ok-design.md").write_text("# Design")
+
+        with get_db() as db:
+            db.add(
+                AutopilotDesign(
+                    id="des-test-ok",
+                    project_id=pid,
+                    filename="ok-design.md",
+                    name="OK Design",
+                    ordinal=11,
+                    size_bytes=10,
+                    extension=".md",
+                    status="pending",
+                    error="stale error from a previous run",
+                )
+            )
+            db.commit()
+
+        resp = client.get(f"/api/autopilot/projects/{pid}/designs/ok-design.md/status")
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["error"] is None
+
 
 class TestProjectPathTraversal:
     def test_design_content_rejects_traversal(self, project_client):

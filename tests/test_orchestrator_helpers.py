@@ -620,6 +620,71 @@ class TestIncrementTaskRetryCount:
         assert increment_task_retry_count("does-not-exist") == 0
 
 
+class TestCleanStaleAssignedTasks:
+    """Regression: marking a stale task (assigned to a terminated agent)
+    failed used to unconditionally overwrite failure_reason with a generic
+    "agent terminated" message -- clobbering a specific reason
+    update_task_status had already recorded (e.g. a missing output
+    artifact), which the retry path then has no way to surface to the next
+    agent."""
+
+    def _make_workflow_task_agent(self, db, task_status="in_progress", failure_reason=None):
+        from src.core.database import Agent, Task, Workflow
+
+        with db.session_scope() as session:
+            session.add(
+                Workflow(id="wf-1", name="t", phases_folder_path="/tmp", status="active")
+            )
+            session.add(
+                Agent(id="agent-1", system_prompt="p", status="terminated", cli_type="pi")
+            )
+            session.add(
+                Task(
+                    id="task-1",
+                    workflow_id="wf-1",
+                    raw_description="r",
+                    done_definition="d",
+                    status=task_status,
+                    assigned_agent_id="agent-1",
+                    failure_reason=failure_reason,
+                )
+            )
+
+    def test_preserves_existing_specific_reason(self, orch_db_env, tmp_path):
+        from src.autopilot.orchestrator import (
+            OrchestratorLogger,
+            _clean_stale_assigned_tasks,
+        )
+        from src.core.database import Task
+
+        self._make_workflow_task_agent(
+            orch_db_env, failure_reason="Missing output artifact: docs/report.md"
+        )
+
+        _clean_stale_assigned_tasks("wf-1", OrchestratorLogger(tmp_path))
+
+        with orch_db_env.session_scope() as session:
+            task = session.query(Task).filter_by(id="task-1").first()
+            assert task.status == "failed"
+            assert task.failure_reason == "Missing output artifact: docs/report.md"
+
+    def test_falls_back_to_generic_reason_when_none_recorded(self, orch_db_env, tmp_path):
+        from src.autopilot.orchestrator import (
+            OrchestratorLogger,
+            _clean_stale_assigned_tasks,
+        )
+        from src.core.database import Task
+
+        self._make_workflow_task_agent(orch_db_env, failure_reason=None)
+
+        _clean_stale_assigned_tasks("wf-1", OrchestratorLogger(tmp_path))
+
+        with orch_db_env.session_scope() as session:
+            task = session.query(Task).filter_by(id="task-1").first()
+            assert task.status == "failed"
+            assert "terminated unexpectedly" in task.failure_reason
+
+
 class TestFailWorkflowDirect:
     """Regression: the backend-startup stale-workflow cleanup used
     complete_workflow_direct unconditionally for any workflow still "active"
@@ -766,6 +831,261 @@ class TestResumeStuckWorkflowTasks:
         with orch_db_env.session_scope() as session:
             task = session.query(Task).filter_by(id="task-1").first()
             assert task.assigned_agent_id == "live-agent"
+
+
+class TestCreateAgentForTaskDirectAppStateGuard:
+    """Regression: get_app_state() was called BEFORE create_agent_for_task_
+    direct's own try/except, so when app state isn't initialized it raised
+    RuntimeError straight out of the function instead of the documented
+    "returns None on failure" contract. Every caller (self-heal task
+    creation, resume, and the new corrective-negotiation retries) relies on
+    that contract to fail gracefully rather than crash the whole pipeline
+    run. Hit live while testing manually outside the running server."""
+
+    def test_app_state_not_initialized_returns_none_not_raises(self, orch_db_env):
+        from src.autopilot.orchestrator import create_agent_for_task_direct
+        from src.core.database import Task
+
+        with orch_db_env.session_scope() as session:
+            session.add(
+                Task(id="task-1", raw_description="r", done_definition="d", status="pending")
+            )
+
+        with patch(
+            "src.core.app_context.get_app_state",
+            side_effect=RuntimeError("App state not initialized"),
+        ):
+            result = create_agent_for_task_direct("task-1", "wf-1", "phase-1")
+
+        assert result is None
+
+
+class TestCreateCorrectiveTask:
+    """Regression: a phase's output failing validation used to discard the
+    whole run outright. _create_corrective_task instead asks the same
+    worktree's agent to fix the specific problem, reopening the phase/
+    workflow the engine had already marked complete."""
+
+    def _seed_workflow_and_phase(self, db, wf_status="completed", phase_status="completed"):
+        from src.core.database import Phase, PhaseExecution, Workflow
+
+        with db.session_scope() as session:
+            session.add(
+                Workflow(id="wf-1", name="t", phases_folder_path="/tmp", status=wf_status)
+            )
+            session.add(
+                Phase(
+                    id="phase-1",
+                    workflow_id="wf-1",
+                    order=1,
+                    name="Feature Architect",
+                    description="d",
+                    done_definitions=["features.json valid"],
+                )
+            )
+            session.add(
+                PhaseExecution(
+                    id="exec-1", phase_id="phase-1", workflow_execution_id="wf-1",
+                    status=phase_status,
+                )
+            )
+
+    @patch("src.autopilot.orchestrator.create_agent_for_task_direct")
+    def test_creates_task_with_feedback_and_reopens_phase(self, mock_create_agent, orch_db_env, tmp_path):
+        from src.autopilot.orchestrator import OrchestratorLogger, _create_corrective_task
+        from src.core.database import PhaseExecution, Task, Workflow
+
+        self._seed_workflow_and_phase(orch_db_env)
+        mock_create_agent.return_value = {"agent_id": "new-agent"}
+
+        task_id = _create_corrective_task(
+            "wf-1", "phase-1", "Feature Architect", "got 6, expected 1-5",
+            OrchestratorLogger(tmp_path),
+        )
+
+        assert task_id is not None
+        mock_create_agent.assert_called_once()
+        with orch_db_env.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-1").first()
+            assert wf.status == "active"
+            execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            assert execution.status == "in_progress"
+            task = session.query(Task).filter_by(id=task_id).first()
+            assert "got 6, expected 1-5" in task.enriched_description
+            assert task.status == "in_progress"
+            assert task.assigned_agent_id == "new-agent"
+
+    @patch("src.autopilot.orchestrator.create_agent_for_task_direct")
+    def test_missing_workflow_returns_none(self, mock_create_agent, orch_db_env, tmp_path):
+        from src.autopilot.orchestrator import OrchestratorLogger, _create_corrective_task
+
+        result = _create_corrective_task(
+            "does-not-exist", "phase-1", "Feature Architect", "bad output",
+            OrchestratorLogger(tmp_path),
+        )
+
+        assert result is None
+        mock_create_agent.assert_not_called()
+
+    @patch("src.autopilot.orchestrator.create_agent_for_task_direct", return_value=None)
+    def test_agent_creation_failure_marks_task_failed(self, mock_create_agent, orch_db_env, tmp_path):
+        from src.autopilot.orchestrator import OrchestratorLogger, _create_corrective_task
+        from src.core.database import Task
+
+        self._seed_workflow_and_phase(orch_db_env)
+
+        task_id = _create_corrective_task(
+            "wf-1", "phase-1", "Feature Architect", "bad output",
+            OrchestratorLogger(tmp_path),
+        )
+
+        assert task_id is None
+        with orch_db_env.session_scope() as session:
+            tasks = session.query(Task).filter_by(workflow_id="wf-1").all()
+            assert len(tasks) == 1
+            assert tasks[0].status == "failed"
+
+
+class TestWaitForTaskTerminal:
+    def test_returns_done_status(self, orch_db_env, tmp_path):
+        from src.autopilot.orchestrator import OrchestratorLogger, _wait_for_task_terminal
+        from src.core.database import Task
+
+        with orch_db_env.session_scope() as session:
+            session.add(
+                Task(id="t-1", raw_description="r", done_definition="d", status="done")
+            )
+
+        result = _wait_for_task_terminal("t-1", timeout_seconds=5, logger=OrchestratorLogger(tmp_path))
+        assert result == "done"
+
+    def test_returns_failed_status(self, orch_db_env, tmp_path):
+        from src.autopilot.orchestrator import OrchestratorLogger, _wait_for_task_terminal
+        from src.core.database import Task
+
+        with orch_db_env.session_scope() as session:
+            session.add(
+                Task(id="t-1", raw_description="r", done_definition="d", status="failed")
+            )
+
+        result = _wait_for_task_terminal("t-1", timeout_seconds=5, logger=OrchestratorLogger(tmp_path))
+        assert result == "failed"
+
+    def test_times_out_on_non_terminal_status(self, orch_db_env, tmp_path):
+        from src.autopilot.orchestrator import OrchestratorLogger, _wait_for_task_terminal
+        from src.core.database import Task
+
+        with orch_db_env.session_scope() as session:
+            session.add(
+                Task(id="t-1", raw_description="r", done_definition="d", status="in_progress")
+            )
+
+        with patch("src.autopilot.orchestrator.POLL_INTERVAL", 0.01):
+            result = _wait_for_task_terminal("t-1", timeout_seconds=0.05, logger=OrchestratorLogger(tmp_path))
+        assert result == "timeout"
+
+    def test_stop_requested_returns_interrupted(self, orch_db_env, tmp_path):
+        from src.autopilot.orchestrator import OrchestratorLogger, _wait_for_task_terminal
+        from src.core.database import Task
+
+        with orch_db_env.session_scope() as session:
+            session.add(
+                Task(id="t-1", raw_description="r", done_definition="d", status="in_progress")
+            )
+
+        with patch("src.autopilot.orchestrator._should_stop", return_value=True):
+            result = _wait_for_task_terminal("t-1", timeout_seconds=5, logger=OrchestratorLogger(tmp_path))
+        assert result == "interrupted"
+
+
+class TestNegotiateValidationFix:
+    """The end-to-end negotiation loop: on a validation failure, ask the
+    agent to fix it, re-validate, retry up to max_attempts, else give up."""
+
+    def test_success_on_first_attempt(self, tmp_path):
+        from src.autopilot.orchestrator import OrchestratorLogger, _negotiate_validation_fix
+
+        output_path = tmp_path / "features.json"
+
+        def fake_create_task(*a, **k):
+            # Simulate the agent fixing the file before task completes.
+            output_path.write_text('{"features": [1, 2]}')
+            return "task-1"
+
+        def validate_fn(parsed):
+            if len(parsed["features"]) > 5:
+                raise ValueError("too many")
+
+        with patch(
+            "src.autopilot.orchestrator._create_corrective_task", side_effect=fake_create_task
+        ), patch(
+            "src.autopilot.orchestrator._wait_for_task_terminal", return_value="done"
+        ):
+            success, result = _negotiate_validation_fix(
+                "wf-1", "phase-1", "Feature Architect", output_path, validate_fn,
+                "got 6, expected 1-5", OrchestratorLogger(tmp_path),
+            )
+
+        assert success is True
+        assert result == {"features": [1, 2]}
+
+    def test_gives_up_after_max_attempts_still_invalid(self, tmp_path):
+        from src.autopilot.orchestrator import OrchestratorLogger, _negotiate_validation_fix
+
+        output_path = tmp_path / "features.json"
+        output_path.write_text('{"features": [1, 2, 3, 4, 5, 6]}')  # never fixed
+
+        def validate_fn(parsed):
+            if len(parsed["features"]) > 5:
+                raise ValueError("too many")
+
+        with patch(
+            "src.autopilot.orchestrator._create_corrective_task", return_value="task-1"
+        ), patch(
+            "src.autopilot.orchestrator._wait_for_task_terminal", return_value="done"
+        ) as mock_wait:
+            success, result = _negotiate_validation_fix(
+                "wf-1", "phase-1", "Feature Architect", output_path, validate_fn,
+                "too many", OrchestratorLogger(tmp_path), max_attempts=2,
+            )
+
+        assert success is False
+        assert result is None
+        assert mock_wait.call_count == 2  # exhausted both attempts
+
+    def test_gives_up_immediately_if_task_creation_fails(self, tmp_path):
+        from src.autopilot.orchestrator import OrchestratorLogger, _negotiate_validation_fix
+
+        output_path = tmp_path / "features.json"
+
+        with patch(
+            "src.autopilot.orchestrator._create_corrective_task", return_value=None
+        ):
+            success, result = _negotiate_validation_fix(
+                "wf-1", "phase-1", "Feature Architect", output_path, lambda x: None,
+                "bad output", OrchestratorLogger(tmp_path),
+            )
+
+        assert success is False
+        assert result is None
+
+    def test_gives_up_if_corrective_task_fails(self, tmp_path):
+        from src.autopilot.orchestrator import OrchestratorLogger, _negotiate_validation_fix
+
+        output_path = tmp_path / "features.json"
+
+        with patch(
+            "src.autopilot.orchestrator._create_corrective_task", return_value="task-1"
+        ), patch(
+            "src.autopilot.orchestrator._wait_for_task_terminal", return_value="failed"
+        ):
+            success, result = _negotiate_validation_fix(
+                "wf-1", "phase-1", "Feature Architect", output_path, lambda x: None,
+                "bad output", OrchestratorLogger(tmp_path),
+            )
+
+        assert success is False
+        assert result is None
 
 
 class TestGetAgents:

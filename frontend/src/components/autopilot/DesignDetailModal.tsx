@@ -167,6 +167,19 @@ const DesignDetailModal: React.FC<DesignDetailModalProps> = ({ projectId, filena
               </div>
             ) : (
               <div className="p-6 space-y-6">
+                {/* Failure reason */}
+                {status?.error && (
+                  <div className="rounded-lg border border-red-200 bg-red-50 p-3">
+                    <h3 className="text-sm font-semibold text-red-800 mb-1 flex items-center gap-2">
+                      <XCircle className="w-4 h-4" />
+                      Why this failed
+                    </h3>
+                    <p className="text-sm text-red-700 whitespace-pre-wrap font-mono">
+                      {status.error}
+                    </p>
+                  </div>
+                )}
+
                 {/* Branches */}
                 {status?.branches?.length > 0 && (
                   <div>

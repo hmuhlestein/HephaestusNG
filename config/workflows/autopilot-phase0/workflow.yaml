@@ -1,7 +1,8 @@
 name: Feature Architect
 description: >-
-  Decomposes a design document into 1-5 discrete, implementable features
-  before the per-feature pipelines run. Runs as its own workflow (see
+  Decomposes a design document into discrete, implementable features (aim
+  for around 5, but the actual count follows the design's structure) before
+  the per-feature pipelines run. Runs as its own workflow (see
   docs/LOOP_ENGINEERING_REVIEW.md) since it determines how many per-feature
   Workflow rows get created, so it can't be phase order=0 within one of them.
 
