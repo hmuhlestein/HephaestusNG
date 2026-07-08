@@ -39,10 +39,18 @@ def _exit_if_port_in_use(port: int) -> None:
     an extra instance after the fact, but that leaves a window where both
     are live. Checking here, before uvicorn ever binds, closes it to
     effectively zero -- mirrors run_monitor.py's _exit_if_already_running.
+
+    Must filter to LISTEN sockets only (-sTCP:LISTEN) -- a plain
+    `lsof -ti :port` also matches outbound CLIENT connections to that port
+    (e.g. an in-flight request from a curl call, the frontend's Vite proxy,
+    or the monitor's health polling). Without the filter, this check could
+    see a legitimate in-flight client request and conclude "another backend
+    already owns this port" when no server is running there at all yet --
+    refusing to start a legitimate restart over nothing.
     """
     try:
         result = subprocess.run(
-            ["lsof", "-ti", f":{port}"],
+            ["lsof", "-ti", f":{port}", "-sTCP:LISTEN"],
             capture_output=True,
             text=True,
             timeout=5,

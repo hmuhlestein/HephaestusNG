@@ -2873,18 +2873,36 @@ def _case_completed_with_successor(
                 .filter_by(phase_id=successor["phase"].id)
                 .count()
             )
+            # This case only fires when last_completed's PhaseExecution.status
+            # is ALREADY "completed" (that's what put it in the `completed`
+            # list). Re-running the transition via _fire_phase_transition ->
+            # mark_phase_complete on that same phase_id therefore always hit
+            # mark_phase_complete's own idempotency guard (execution.status ==
+            # "completed") and returned "already_completed" -- a permanent
+            # no-op. The one real scenario this case exists for -- the process
+            # crashing between mark_phase_complete's _close_execution commit
+            # (goto/continue decision, marks last_completed done) and
+            # _create_phase_task's Task-row insert for the successor -- could
+            # never actually recover: every future poll repeated the same
+            # no-op forever, leaving the workflow permanently stalled with a
+            # completed phase, a pending successor, and zero tasks. The
+            # decision to advance to `successor` was already made; call
+            # _create_phase_task directly instead of re-deciding it.
+            if existing_tasks == 0 and not _claim_phase_task_creation(db, successor["phase"].id):
+                existing_tasks = 1
             if existing_tasks > 0:
-                return False  # Already fired
+                return False  # Already fired (or someone else just claimed it)
 
             logger.info(
                 f"[PHASE-ADVANCE] {last_completed['phase'].name} completed, "
                 f"advancing to {successor['phase'].name}"
             )
-            # Extract primitives before session closes to avoid DetachedInstanceError
-            phase_id = last_completed["phase"].id
-            phase_name = last_completed["phase"].name
-            return _fire_phase_transition(
-                workflow_id, phase_id, phase_name, logger
+            return _create_phase_task(
+                workflow_id,
+                successor["phase"].id,
+                successor["phase"].name,
+                "continue",
+                logger,
             )
     return None
 
@@ -2922,7 +2940,33 @@ def _case_in_progress_complete(
                 return result
             continue  # No completed tasks yet
 
-        # Phase is complete — fire transition
+        # Phase is complete — fire transition. mark_phase_complete's engine
+        # evaluation can take minutes (an LLM call in phase_manager.py), and
+        # nothing previously stopped a concurrent poll (this same
+        # orchestrator's next cycle, or monitor.py's separate
+        # _check_workflow_stuck_state process examining the same workflow)
+        # from re-entering this exact branch while the first evaluation was
+        # still in flight -- "all tasks done, 0 active" stays true the
+        # whole time, since the phase's completed task doesn't disappear
+        # and no new one exists yet. Observed live: a second, orphaned task
+        # + agent got created for an already-completed qa_validation phase
+        # a minute into the first evaluation; by the time that first
+        # evaluation's "goto -> development" decision landed and the
+        # pipeline moved on, the second agent was left running against a
+        # phase the pipeline had already abandoned, confusedly trying to
+        # manually create the next phase's task on its own.
+        #
+        # Reuses the same claim _create_phase_task's callers already use --
+        # this closes the analogous "two things decide to act on the same
+        # phase" race for the evaluate-and-transition path, not just the
+        # create-the-first-task path.
+        if not _claim_phase_task_creation(db, phase.id):
+            logger.info(
+                f"[PHASE-ADVANCE] {phase.name} transition already being "
+                "evaluated by another caller — skipping"
+            )
+            continue
+
         logger.info(
             f"[PHASE-ADVANCE] {phase.name} appears complete "
             f"({done_count} tasks done, 0 active), evaluating transition"

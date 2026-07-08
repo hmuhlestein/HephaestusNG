@@ -374,6 +374,182 @@ class TestMaybeRetryFailedTasks:
             assert task.enriched_description is None
 
 
+class TestCaseInProgressComplete:
+    """Regression: mark_phase_complete's engine evaluation can take minutes
+    (an LLM call in phase_manager.py), and nothing previously stopped a
+    concurrent poll (this same orchestrator's next cycle, or monitor.py's
+    separate _check_workflow_stuck_state process examining the same
+    workflow) from re-entering this exact branch while the first
+    evaluation was still in flight -- "all tasks done, 0 active" stays
+    true the whole time. Observed live: a second, orphaned task + agent
+    got created for an already-completed qa_validation phase a minute
+    into the first evaluation; the pipeline moved on via that first
+    evaluation's goto decision, leaving the second agent running against
+    an abandoned phase, confusedly trying to manually create the next
+    phase's task on its own."""
+
+    def _seed_done_task(self, db_manager, phase_id="phase-1", workflow_id="wf-1"):
+        with db_manager.session_scope() as session:
+            session.add(
+                Task(
+                    id="task-done-1",
+                    workflow_id=workflow_id,
+                    phase_id=phase_id,
+                    raw_description="r",
+                    done_definition="d",
+                    status="done",
+                )
+            )
+
+    @patch("src.autopilot.orchestrator._fire_phase_transition")
+    def test_fires_transition_when_claim_succeeds(self, mock_fire, db_manager, sample_workflow):
+        from src.autopilot.orchestrator import _case_in_progress_complete, _get_phase_statuses
+
+        self._seed_done_task(db_manager)
+        mock_fire.return_value = True
+
+        with db_manager.session_scope() as session:
+            phase_statuses = _get_phase_statuses(session, "wf-1")
+            in_progress = [p for p in phase_statuses if p["status"] == "in_progress"]
+            result = _case_in_progress_complete(session, "wf-1", in_progress, MagicMock())
+
+        assert result is True
+        mock_fire.assert_called_once()
+
+    @patch("src.autopilot.orchestrator._fire_phase_transition")
+    def test_skips_when_evaluation_already_claimed(self, mock_fire, db_manager, sample_workflow):
+        """Simulates a concurrent caller having already claimed this
+        phase's evaluation (e.g. still awaiting a slow engine decision) --
+        this call must not also fire a transition for the same phase."""
+        from src.autopilot.orchestrator import (
+            _case_in_progress_complete,
+            _claim_phase_task_creation,
+            _get_phase_statuses,
+        )
+
+        self._seed_done_task(db_manager)
+        with db_manager.session_scope() as session:
+            won = _claim_phase_task_creation(session, "phase-1")
+            assert won is True
+
+        with db_manager.session_scope() as session:
+            phase_statuses = _get_phase_statuses(session, "wf-1")
+            in_progress = [p for p in phase_statuses if p["status"] == "in_progress"]
+            result = _case_in_progress_complete(session, "wf-1", in_progress, MagicMock())
+
+        assert result is None
+        mock_fire.assert_not_called()
+
+
+class TestCaseCompletedWithSuccessor:
+    """Regression: this case only ever fires when last_completed's
+    PhaseExecution.status is ALREADY "completed" (that's what puts it in the
+    `completed` list). The old code re-ran the transition via
+    _fire_phase_transition -> mark_phase_complete on that same phase_id,
+    which always hit mark_phase_complete's own idempotency guard
+    (execution.status == "completed") and returned "already_completed" -- a
+    permanent no-op. The one real scenario this case exists for -- the
+    process crashing between mark_phase_complete's commit of the goto/
+    continue decision and _create_phase_task's Task-row insert for the
+    successor -- could therefore never actually recover: every future poll
+    repeated the same no-op forever, leaving the workflow permanently
+    stalled with a completed phase, a pending successor, and zero tasks."""
+
+    def _seed_completed_with_pending_successor(self, db_manager):
+        """Matches real Workflow-creation shape: every Phase gets a
+        PhaseExecution row upfront (status="pending") -- see
+        phase_manager.py's Phase/PhaseExecution creation loop. The
+        `sample_workflow` fixture only seeds phase-1's execution row, so
+        phase-2 needs one added here for the claim (an UPDATE against an
+        existing row) to have anything to claim."""
+        with db_manager.session_scope() as session:
+            exec1 = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            exec1.status = "completed"
+            session.add(
+                PhaseExecution(
+                    id="exec-2", phase_id="phase-2", workflow_execution_id="wf-1",
+                    status="pending",
+                )
+            )
+
+    @patch("src.autopilot.orchestrator._create_phase_task")
+    def test_creates_successor_task_directly(self, mock_create, db_manager, sample_workflow):
+        """The fix: call _create_phase_task for the successor directly
+        instead of re-deciding an already-made decision."""
+        from src.autopilot.orchestrator import _case_completed_with_successor, _get_phase_statuses
+
+        self._seed_completed_with_pending_successor(db_manager)
+        mock_create.return_value = True
+
+        with db_manager.session_scope() as session:
+            phase_statuses = _get_phase_statuses(session, "wf-1")
+            completed = [p for p in phase_statuses if p["status"] == "completed"]
+            pending = [p for p in phase_statuses if p["status"] == "pending"]
+            in_progress = [p for p in phase_statuses if p["status"] == "in_progress"]
+            result = _case_completed_with_successor(
+                session, "wf-1", completed, pending, in_progress, MagicMock()
+            )
+
+        assert result is True
+        assert mock_create.call_args[0][:4] == ("wf-1", "phase-2", "implementation", "continue")
+
+    @patch("src.autopilot.orchestrator._create_phase_task")
+    def test_skips_when_successor_already_has_task(self, mock_create, db_manager, sample_workflow):
+        from src.autopilot.orchestrator import _case_completed_with_successor, _get_phase_statuses
+
+        self._seed_completed_with_pending_successor(db_manager)
+        with db_manager.session_scope() as session:
+            session.add(
+                Task(
+                    id="task-1",
+                    workflow_id="wf-1",
+                    phase_id="phase-2",
+                    raw_description="r",
+                    done_definition="d",
+                    status="pending",
+                )
+            )
+
+        with db_manager.session_scope() as session:
+            phase_statuses = _get_phase_statuses(session, "wf-1")
+            completed = [p for p in phase_statuses if p["status"] == "completed"]
+            pending = [p for p in phase_statuses if p["status"] == "pending"]
+            in_progress = [p for p in phase_statuses if p["status"] == "in_progress"]
+            result = _case_completed_with_successor(
+                session, "wf-1", completed, pending, in_progress, MagicMock()
+            )
+
+        assert result is False
+        mock_create.assert_not_called()
+
+    @patch("src.autopilot.orchestrator._create_phase_task")
+    def test_skips_when_claim_already_held(self, mock_create, db_manager, sample_workflow):
+        """Simulates a concurrent caller having already claimed the
+        successor's task creation -- this call must not also create one."""
+        from src.autopilot.orchestrator import (
+            _case_completed_with_successor,
+            _claim_phase_task_creation,
+            _get_phase_statuses,
+        )
+
+        self._seed_completed_with_pending_successor(db_manager)
+        with db_manager.session_scope() as session:
+            won = _claim_phase_task_creation(session, "phase-2")
+            assert won is True
+
+        with db_manager.session_scope() as session:
+            phase_statuses = _get_phase_statuses(session, "wf-1")
+            completed = [p for p in phase_statuses if p["status"] == "completed"]
+            pending = [p for p in phase_statuses if p["status"] == "pending"]
+            in_progress = [p for p in phase_statuses if p["status"] == "in_progress"]
+            result = _case_completed_with_successor(
+                session, "wf-1", completed, pending, in_progress, MagicMock()
+            )
+
+        assert result is False
+        mock_create.assert_not_called()
+
+
 class TestGetPhaseStatuses:
     """Tests for _get_phase_statuses helper."""
     

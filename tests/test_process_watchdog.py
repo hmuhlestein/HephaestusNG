@@ -71,6 +71,25 @@ class TestCheckDuplicatePortListeners:
         with patch("subprocess.run", side_effect=OSError("lsof not found")):
             watchdog.check_duplicate_port_listeners(8300)  # should not raise
 
+    def test_lsof_call_filters_to_listen_sockets_only(self):
+        """Regression: plain `lsof -ti :port` (no -sTCP:LISTEN) also
+        matches outbound CLIENT connections to that port -- e.g. an
+        in-flight curl call, the frontend's Vite API proxy, or the
+        monitor's own health polling. Without the filter, every
+        short-lived client process making a request at the moment this
+        check ran got misidentified as a rogue duplicate SERVER and
+        killed. Observed live: a fresh, unrelated PID "duplicate"
+        appearing and getting killed every single watchdog cycle,
+        indefinitely, long after the actual backend-duplication bug
+        (assume_backend_running) was already fixed."""
+        watchdog = ProcessWatchdog()
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(stdout="")
+            watchdog.check_duplicate_port_listeners(8300)
+
+        args = mock_run.call_args[0][0]
+        assert "-sTCP:LISTEN" in args
+
     def test_kill_failure_on_one_pid_does_not_stop_others(self):
         watchdog = ProcessWatchdog()
 
