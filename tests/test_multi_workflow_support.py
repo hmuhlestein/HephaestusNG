@@ -26,7 +26,7 @@ class TestRequestModels:
     """Test that request models properly validate workflow_id as required."""
 
     def test_create_task_request_requires_workflow_id(self):
-        """CreateTaskRequest should require workflow_id field."""
+        """CreateTaskRequest should accept workflow_id field (now optional)."""
         # Should work with workflow_id
         request = CreateTaskRequest(
             task_description="Test task",
@@ -36,14 +36,13 @@ class TestRequestModels:
         )
         assert request.workflow_id == "test-workflow-id"
 
-        # Should fail without workflow_id
-        with pytest.raises(ValidationError) as exc_info:
-            CreateTaskRequest(
-                task_description="Test task",
-                done_definition="Task is done",
-                ai_agent_id="test-agent",
-            )
-        assert "workflow_id" in str(exc_info.value)
+        # Should also work without workflow_id (now optional)
+        request = CreateTaskRequest(
+            task_description="Test task",
+            done_definition="Task is done",
+            ai_agent_id="test-agent",
+        )
+        assert request.workflow_id is None
 
     def test_create_ticket_request_requires_workflow_id(self):
         """CreateTicketRequest should require workflow_id field."""
@@ -158,20 +157,19 @@ class TestEndpointValidation:
         return TestClient(app, raise_server_exceptions=False)
 
     def test_create_task_validates_workflow_id(self, client):
-        """POST /create_task should require workflow_id."""
+        """POST /create_task should accept requests without workflow_id (now optional)."""
         response = client.post(
             "/create_task",
             json={
                 "task_description": "Test task",
                 "done_definition": "Task is done",
                 "ai_agent_id": "test-agent",
-                # Missing workflow_id
+                # Missing workflow_id - now optional
             },
             headers={"X-Agent-ID": "test-agent"},
         )
-        # Should get 422 (validation error) because workflow_id is missing
-        assert response.status_code == 422
-        assert "workflow_id" in response.text.lower()
+        # Should not get 422 - workflow_id is optional
+        assert response.status_code != 422
 
     def test_create_ticket_validates_workflow_id(self, client):
         """POST /api/tickets/create should require workflow_id."""

@@ -140,3 +140,39 @@ class TestUpdateTaskStatusResponseShape:
 
         assert resp.status_code == 200, resp.text
         assert resp.json()["success"] is True
+
+    def test_metadata_field_accepted_and_folded_into_summary(
+        self, test_db, test_client, tmp_path
+    ):
+        """Regression: agents naturally want to attach structured verdict
+        data (e.g. a scope-review gate's PASS/FAIL + issue counts) to a
+        status update. Observed live via the update_task_status MCP tool:
+        an agent sent {"metadata": {"verdict": "FAIL", "issues_count": 3}}
+        and got "Additional properties are not allowed ('metadata' was
+        unexpected)" -- the tool's declared schema didn't have a metadata
+        property. There's no dedicated column for this, so the field is
+        accepted and folded into the summary text instead of hard-rejected.
+        """
+        import json
+
+        task_id, agent_id = _seed(test_db, tmp_path, json.dumps([]))
+
+        resp = test_client.post(
+            "/update_task_status",
+            json={
+                "task_id": task_id,
+                "status": "done",
+                "summary": "Scope review FAILED",
+                "key_learnings": [],
+                "metadata": {"verdict": "FAIL", "issues_count": 3},
+            },
+            headers={"X-Agent-ID": agent_id},
+        )
+
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["success"] is True
+
+        session = test_db.get_session()
+        task = session.query(Task).filter_by(id=task_id).first()
+        assert "Scope review FAILED" in task.completion_notes
+        assert '"verdict": "FAIL"' in task.completion_notes

@@ -506,6 +506,16 @@ class PhaseExecution(Base):
     started_at = Column(DateTime)
     completed_at = Column(DateTime)
     completion_summary = Column(Text)
+    # Atomic claim for "who gets to create this phase's first task" -- set the
+    # instant a task-creation attempt begins (before any of the slow work:
+    # agent spawning, LLM enrichment), via a single UPDATE ... WHERE column
+    # IS NULL. Two independent code paths can decide to create phase 1's
+    # first task (server.py's synchronous "create initial task" step when a
+    # workflow launches, and the orchestrator's background self-heal for
+    # "in_progress phase with no tasks") -- a plain Task.count()==0 check
+    # raced between them and produced a live duplicate task+agent. See
+    # _claim_phase_task_creation in orchestrator.py.
+    task_creation_claimed_at = Column(DateTime, nullable=True)
 
     # Relationships
     phase = relationship("Phase", back_populates="executions")
@@ -1307,6 +1317,7 @@ class DatabaseManager:
         self._migrate_task_retry_count_column()
         self._migrate_phase_retry_count_column()
         self._migrate_self_review_columns()
+        self._migrate_phase_execution_task_claim_column()
 
     def _create_fts5_tables(self):
         """Create FTS5 virtual tables and triggers for ticket search."""
@@ -1767,6 +1778,26 @@ class DatabaseManager:
                 logger.info("Migrated tasks.self_review_done / phases.self_review columns")
         except Exception as e:
             logger.debug(f"self_review columns migration (may already exist): {e}")
+
+    def _migrate_phase_execution_task_claim_column(self):
+        """Add phase_executions.task_creation_claimed_at for existing databases.
+
+        Idempotent - safe to call on every startup.
+        """
+        try:
+            with self.engine.connect() as conn:
+                try:
+                    conn.execute(
+                        text(
+                            "ALTER TABLE phase_executions ADD COLUMN task_creation_claimed_at DATETIME"
+                        )
+                    )
+                except Exception:
+                    pass  # Column already exists
+                conn.commit()
+                logger.info("Migrated phase_executions.task_creation_claimed_at column")
+        except Exception as e:
+            logger.debug(f"phase_executions.task_creation_claimed_at migration (may already exist): {e}")
 
     def get_session(self):
         """Get a database session."""

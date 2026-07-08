@@ -78,6 +78,49 @@ def sample_workflow(db_manager):
         return wf
 
 
+class TestClaimPhaseTaskCreation:
+    """Tests for _claim_phase_task_creation, the atomic guard that stops two
+    independent code paths (server.py's synchronous initial-task creation
+    and the orchestrator's background self-heal) from both creating a
+    phase's first task."""
+
+    def test_first_caller_wins(self, db_manager, sample_workflow):
+        from src.autopilot.orchestrator import _claim_phase_task_creation
+
+        with db_manager.session_scope() as session:
+            assert _claim_phase_task_creation(session, "phase-1") is True
+
+    def test_second_caller_loses(self, db_manager, sample_workflow):
+        """The core guarantee: only one of two callers racing for the same
+        phase can ever win the claim, regardless of ordering."""
+        from src.autopilot.orchestrator import _claim_phase_task_creation
+
+        with db_manager.session_scope() as session:
+            first = _claim_phase_task_creation(session, "phase-1")
+        with db_manager.session_scope() as session:
+            second = _claim_phase_task_creation(session, "phase-1")
+
+        assert first is True
+        assert second is False
+
+    def test_different_phases_both_win(self, db_manager, sample_workflow):
+        """Claims are scoped per phase -- unrelated phases don't block each other."""
+        from src.autopilot.orchestrator import _claim_phase_task_creation
+
+        with db_manager.session_scope() as session:
+            session.add(
+                PhaseExecution(
+                    id="exec-2", phase_id="phase-2", workflow_execution_id="wf-1",
+                    status="pending",
+                )
+            )
+
+        with db_manager.session_scope() as session:
+            assert _claim_phase_task_creation(session, "phase-1") is True
+        with db_manager.session_scope() as session:
+            assert _claim_phase_task_creation(session, "phase-2") is True
+
+
 class TestAdvancePhases:
     """Tests for _advance_phases function."""
     
@@ -161,21 +204,25 @@ class TestCaseStartFirstPhase:
                 mock_create.assert_called_once()
 
 
-    def test_race_guard_skips_duplicate_when_task_appears_during_recheck(
+    def test_race_guard_skips_duplicate_when_other_path_wins_the_claim(
         self, db_manager, sample_workflow
     ):
         """Regression: /start_workflow_execution creates phase 1's initial
-        task synchronously, but _advance_phases's polling loop can still run
-        its first iteration before that commit is visible here, creating a
-        duplicate task+agent for the same phase. Observed live: the
-        duplicate's agent was later terminated without the duplicate task
-        ever being resolved, leaving it permanently stuck in "assigned".
+        task synchronously, but _advance_phases's polling loop can also
+        decide to create phase 1's task independently, racing it. A plain
+        Task.count()==0 check (even with a sleep-and-retry) isn't safe --
+        both sides can observe zero tasks. Observed live: a duplicate
+        task+agent got spawned for the same phase, burning a full agent run
+        duplicating work the first task had already completed.
 
-        Simulates the other code path's task landing during the race-guard's
-        sleep -- the re-check must see it and skip creating a second one.
+        _case_start_first_phase now closes this by construction: it must
+        win an atomic claim (PhaseExecution.task_creation_claimed_at) before
+        creating a task. Simulates the other code path winning that claim
+        first -- _case_start_first_phase must see the lost claim and skip.
         """
         from src.autopilot.orchestrator import (
             _case_start_first_phase,
+            _claim_phase_task_creation,
             _get_phase_statuses,
         )
 
@@ -189,31 +236,25 @@ class TestCaseStartFirstPhase:
             in_progress = [p for p in phase_statuses if p["status"] == "in_progress"]
             completed = [p for p in phase_statuses if p["status"] == "completed"]
 
-        def _sleep_and_create_competing_task(_seconds):
-            with db_manager.session_scope() as session:
-                session.add(
-                    Task(
-                        id="task-from-other-code-path",
-                        workflow_id="wf-1",
-                        phase_id="phase-1",
-                        raw_description="initial task created by /start_workflow_execution",
-                        done_definition="done",
-                        status="assigned",
-                    )
-                )
+        # Simulate /start_workflow_execution's synchronous path winning the
+        # claim first (it hasn't created the Task row yet -- e.g. still
+        # queued behind agent creation -- which is exactly the live scenario
+        # this regression came from).
+        with db_manager.session_scope() as session:
+            won = _claim_phase_task_creation(session, "phase-1")
+            assert won is True
 
         logger = MagicMock()
-        with patch("src.autopilot.orchestrator.time.sleep", side_effect=_sleep_and_create_competing_task):
-            with patch("src.autopilot.orchestrator._create_phase_task", return_value=True) as mock_create:
-                with db_manager.session_scope() as session:
-                    result = _case_start_first_phase(
-                        session, "wf-1", pending, in_progress, completed, logger
-                    )
-                    assert result is None, (
-                        "should not create a duplicate task once the "
-                        "re-check sees the other path's task"
-                    )
-                    mock_create.assert_not_called()
+        with patch("src.autopilot.orchestrator._create_phase_task", return_value=True) as mock_create:
+            with db_manager.session_scope() as session:
+                result = _case_start_first_phase(
+                    session, "wf-1", pending, in_progress, completed, logger
+                )
+                assert result is None, (
+                    "should not create a duplicate task once the other "
+                    "path has already won the task-creation claim"
+                )
+                mock_create.assert_not_called()
 
 
 class TestCaseInProgressNoTasks:

@@ -1691,6 +1691,7 @@ class PhaseManager:
                     initial_task_info = {
                         "task_description": phase_1_task_prompt,
                         "phase_id": "1",  # Phase order, not UUID
+                        "phase_uuid": first_phase_id,  # real Phase.id, for the task-creation claim
                         "priority": "high",
                         "workflow_id": workflow_id,
                     }
