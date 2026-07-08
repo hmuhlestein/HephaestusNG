@@ -60,7 +60,6 @@ def monitoring_system(mock_db_manager, mock_agent_manager, mock_llm_provider):
     }
 
 
-@pytest.mark.skip(reason="Complex integration tests - need full monitoring loop mock setup")
 class TestMonitoringIntegration:
     """Test the complete monitoring system integration."""
 
@@ -69,6 +68,19 @@ class TestMonitoringIntegration:
         self, monitoring_system, mock_db_manager, mock_agent_manager
     ):
         """Test full monitoring cycle with healthy, aligned agents."""
+        # Mock Guardian internal methods to avoid DB queries
+        guardian = monitoring_system["guardian"]
+        guardian._build_accumulated_context = AsyncMock(return_value={
+            "overall_goal": "Build the application",
+            "constraints": [],
+            "conversation_history": [],
+        })
+        guardian._get_agent_task = AsyncMock(side_effect=[
+            {"id": "task-1", "enriched_description": "Build auth API", "raw_description": "Build auth API", "done_definition": "Auth working", "phase_id": None, "workflow_id": None},
+            {"id": "task-2", "enriched_description": "Create frontend", "raw_description": "Create frontend", "done_definition": "UI complete", "phase_id": None, "workflow_id": None},
+            {"id": "task-3", "enriched_description": "Write tests", "raw_description": "Write tests", "done_definition": "90% coverage", "phase_id": None, "workflow_id": None},
+        ])
+
         # Setup agents and tasks
         agents = [
             Agent(id="agent-1", current_task_id="task-1", tmux_session_name="agent-1"),
@@ -95,11 +107,19 @@ class TestMonitoringIntegration:
         ]
 
         # Mock database responses
+        from contextlib import contextmanager
+
         mock_session = Mock()
         mock_session.query.return_value.filter_by.return_value.all.return_value = agents
         mock_session.query.return_value.filter_by.return_value.first.side_effect = tasks
         mock_session.query.return_value.filter_by.return_value.order_by.return_value.all.return_value = []
         mock_db_manager.get_session.return_value = mock_session
+
+        @contextmanager
+        def mock_session_scope():
+            yield mock_session
+
+        mock_db_manager.session_scope = mock_session_scope
 
         # Mock healthy Guardian analyses
         monitoring_system["llm_provider"].analyze_agent_trajectory.side_effect = [
@@ -168,6 +188,7 @@ class TestMonitoringIntegration:
         mock_agent_manager.terminate_agent.assert_not_called()
 
     @pytest.mark.asyncio
+    @pytest.mark.skip(reason="Complex integration test - needs more mocking")
     async def test_monitoring_with_duplicate_detection(
         self, monitoring_system, mock_db_manager, mock_agent_manager
     ):
@@ -248,6 +269,7 @@ class TestMonitoringIntegration:
         mock_agent_manager.terminate_agent.assert_called_once_with("agent-2")
 
     @pytest.mark.asyncio
+    @pytest.mark.skip(reason="Complex integration test - needs more mocking")
     async def test_monitoring_with_steering_intervention(
         self, monitoring_system, mock_db_manager, mock_agent_manager
     ):
@@ -309,6 +331,7 @@ class TestMonitoringIntegration:
         assert "no external libraries" in call_args[1]
 
     @pytest.mark.asyncio
+    @pytest.mark.skip(reason="Complex integration test - needs more mocking")
     async def test_monitoring_with_resource_coordination(
         self, monitoring_system, mock_db_manager, mock_agent_manager
     ):
@@ -383,6 +406,7 @@ class TestMonitoringIntegration:
         assert mock_agent_manager.send_message_to_agent.call_count == 2
 
     @pytest.mark.asyncio
+    @pytest.mark.skip(reason="Complex integration test - needs more mocking")
     async def test_monitoring_escalation_on_low_coherence(
         self, monitoring_system, mock_db_manager
     ):
@@ -442,6 +466,7 @@ class TestMonitoringIntegration:
         assert "too low" in escalation[0]["reason"]
 
     @pytest.mark.asyncio
+    @pytest.mark.skip(reason="Complex integration test - needs more mocking")
     async def test_monitoring_cache_usage(self, monitoring_system, mock_db_manager):
         """Test monitoring uses caching to avoid redundant analysis."""
         agent = Agent(id="agent-cached", current_task_id="task-1")
@@ -480,6 +505,7 @@ class TestMonitoringIntegration:
         assert "agent-cached" in guardian.trajectory_cache
 
     @pytest.mark.asyncio
+    @pytest.mark.skip(reason="Complex integration test - needs more mocking")
     async def test_monitoring_error_recovery(self, monitoring_system, mock_db_manager):
         """Test monitoring handles errors gracefully."""
         agent = Agent(id="agent-error", current_task_id="task-1")
@@ -497,6 +523,7 @@ class TestMonitoringIntegration:
         assert result["trajectory_aligned"] is True  # Safe default
 
     @pytest.mark.asyncio
+    @pytest.mark.skip(reason="Complex integration test - needs more mocking")
     async def test_full_monitor_loop_simulation(
         self, monitoring_system, mock_db_manager, mock_agent_manager
     ):
