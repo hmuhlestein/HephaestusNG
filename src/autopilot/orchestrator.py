@@ -2681,11 +2681,44 @@ def _get_phase_statuses(db, workflow_id: str) -> list:
     return phase_statuses
 
 
+def _claim_phase_task_creation(db, phase_id: str) -> bool:
+    """Atomically claim the right to create a phase's first task.
+
+    Two independent code paths can decide "this phase needs its first task":
+    server.py's synchronous /start_workflow_execution step (fires the moment
+    a workflow launches) and the orchestrator's own background self-heal
+    (_case_start_first_phase / _case_in_progress_no_tasks, polling for
+    in-progress phases with no tasks). A plain `Task.count() == 0` check --
+    even with a short sleep-and-retry -- is a race: both sides can observe
+    zero tasks and both create one. Observed live: a duplicate task+agent
+    got spawned for the same phase, burning a full agent run on work the
+    first task had already completed.
+
+    This closes the race by construction instead of by timing: a single
+    UPDATE ... WHERE task_creation_claimed_at IS NULL can only succeed for
+    one caller no matter how the two paths interleave, because SQLite
+    serializes writes to the same row. Returns True if this call won the
+    claim (go ahead and create the task), False if someone else already
+    holds it (skip -- a task is already being created for this phase).
+    """
+    claimed_at = datetime.now()
+    result = (
+        db.query(PhaseExecution)
+        .filter(
+            PhaseExecution.phase_id == phase_id,
+            PhaseExecution.task_creation_claimed_at.is_(None),
+        )
+        .update({"task_creation_claimed_at": claimed_at}, synchronize_session=False)
+    )
+    db.commit()
+    return result > 0
+
+
 def _case_start_first_phase(
     db, workflow_id: str, pending: list, in_progress: list, completed: list, logger: OrchestratorLogger
 ) -> Optional[bool]:
     """Case 0: No in-progress phase and first phase is pending — start it.
-    
+
     Returns None if this case doesn't apply, True/False otherwise.
     """
     if not in_progress and not completed and pending:
@@ -2696,22 +2729,10 @@ def _case_start_first_phase(
             .filter_by(phase_id=first_phase["phase"].id)
             .count()
         )
-        if existing == 0:
-            # Race guard: /start_workflow_execution creates phase 1's
-            # initial task synchronously right after launching the
-            # workflow, but this polling loop's first iteration can still
-            # land before that commit is visible here -- observed live: a
-            # duplicate task+agent got created for phase 1, and once the
-            # "real" initial task completed the phase, the duplicate's
-            # agent was terminated without ever resolving the duplicate
-            # task itself, leaving it permanently stuck in "assigned".
-            # One short re-check closes the vast majority of this window.
-            time.sleep(0.5)
-            existing = (
-                db.query(Task)
-                .filter_by(phase_id=first_phase["phase"].id)
-                .count()
-            )
+        if existing == 0 and not _claim_phase_task_creation(db, first_phase["phase"].id):
+            # Someone else (or a previous iteration of this same loop) is
+            # already creating this phase's first task -- don't duplicate it.
+            existing = 1
         if existing == 0:
             logger.info(
                 f"[PHASE-ADVANCE] Starting first phase: {first_phase['phase'].name}"
@@ -2741,18 +2762,15 @@ def _case_in_progress_no_tasks(
             .filter_by(phase_id=phase.id)
             .count()
         )
-        if task_count == 0:
+        if task_count == 0 and not _claim_phase_task_creation(db, phase.id):
             # Same race as _case_start_first_phase: other paths (e.g. the
-            # spec-gate immediate-fire path in task_completion_service.py)
-            # can set a phase to in_progress and create its task
-            # synchronously in the same request, while this background poll
-            # checks independently and can land in between.
-            time.sleep(0.5)
-            task_count = (
-                db.query(Task)
-                .filter_by(phase_id=phase.id)
-                .count()
-            )
+            # spec-gate immediate-fire path in task_completion_service.py,
+            # or /start_workflow_execution's synchronous initial-task step)
+            # can set a phase to in_progress and create its task while this
+            # background poll checks independently. The claim above is the
+            # actual fix -- it's atomic regardless of how long the other
+            # path takes to finish creating its task, unlike a fixed sleep.
+            task_count = 1
         if task_count == 0:
             logger.info(
                 f"[PHASE-ADVANCE] Phase {phase.name} is in_progress but has no tasks — creating one"

@@ -217,6 +217,10 @@ class UpdateTaskStatusRequest(BaseModel):
     failure_reason: Optional[str] = Field(
         default=None, description="Required if status is 'failed'"
     )
+    metadata: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Optional structured data (verdict, counts, etc.) — folded into summary",
+    )
 
 
 class UpdateTaskStatusResponse(BaseModel):
@@ -2232,6 +2236,16 @@ async def update_task_status(
 
     _touch_agent_activity(agent_id)
     logger.info(f"Updating task {request.task_id} status to {request.status}")
+
+    # There's no dedicated column for structured verdict/count data agents
+    # sometimes attach (e.g. a scope-review gate's verdict + issue counts) --
+    # fold it into the summary text so it's preserved everywhere summary
+    # already flows (completion_notes, memories, etc.) instead of adding a
+    # new storage path for what's still just descriptive detail.
+    if request.metadata:
+        request.summary = (
+            f"{request.summary}\n\n[metadata] {json.dumps(request.metadata)}"
+        ).strip()
 
     from src.services.task_completion_service import TaskCompletionService
 
@@ -5221,6 +5235,10 @@ async def list_tools():
                             "items": {"type": "string"},
                             "description": "Key learnings to save as memories",
                         },
+                        "metadata": {
+                            "type": "object",
+                            "description": "Optional structured data (e.g. verdict, issue counts) — folded into summary",
+                        },
                     },
                     "required": ["task_id", "status"],
                 },
@@ -5739,6 +5757,29 @@ async def start_workflow_execution(request: StartWorkflowRequest):
 
         # If there's an initial task to create, create it through the proper flow
         if initial_task_info:
+            # Claim the right to create this phase's first task before doing
+            # any of the slower work below. The orchestrator's background
+            # self-heal (_case_start_first_phase / _case_in_progress_no_tasks
+            # in orchestrator.py) independently creates a task for any
+            # in-progress phase it finds with zero tasks -- without this
+            # claim, both paths can decide to create phase 1's task and a
+            # duplicate agent gets spawned (observed live: burned a full
+            # agent run duplicating work the first task had already done).
+            phase_uuid = initial_task_info.get("phase_uuid")
+            if phase_uuid:
+                from src.autopilot.orchestrator import _claim_phase_task_creation
+                from src.core.database import get_db as _get_db_for_claim
+
+                with _get_db_for_claim() as _claim_db:
+                    won_claim = _claim_phase_task_creation(_claim_db, phase_uuid)
+                if not won_claim:
+                    logger.info(
+                        f"Phase 1 task for workflow {workflow_id} is already "
+                        "being created by another path -- skipping"
+                    )
+                    initial_task_info = None
+
+        if initial_task_info:
             logger.info(f"Creating initial Phase 1 task for workflow {workflow_id}")
             try:
                 # Create the task using internal task creation
@@ -6226,6 +6267,7 @@ async def _tool_update_task_status(arguments: Dict[str, Any]):
     summary = arguments.get("summary", "")
     failure_reason = arguments.get("failure_reason")
     key_learnings = arguments.get("key_learnings", [])
+    metadata = arguments.get("metadata")
     agent_id = arguments.get("agent_id")
 
     if not task_id or not status:
@@ -6251,6 +6293,7 @@ async def _tool_update_task_status(arguments: Dict[str, Any]):
         summary=summary or "Task completed",
         key_learnings=key_learnings or [],
         failure_reason=failure_reason,
+        metadata=metadata,
     )
     return await update_task_status(request, agent_id=agent_id)
 
