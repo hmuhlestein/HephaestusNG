@@ -2358,6 +2358,17 @@ async def update_task_status(
                 # 'success'/'termination_scheduled'), which hides the actual
                 # "missing output artifact" reason from the agent and instead
                 # just looks like a broken server, causing blind retries.
+                #
+                # Persist the reason on the task even though status stays
+                # non-terminal: if this agent's session ends (times out,
+                # killed) before it retries, _clean_stale_assigned_tasks
+                # will mark this task "failed" with only a generic "agent
+                # terminated" message -- without this, the specific
+                # validation problem is lost, and the orchestrator's retry
+                # (_maybe_retry_failed_tasks) respawns a fresh agent with no
+                # memory of what actually needs fixing.
+                task.failure_reason = rejection.get("message", "Output validation failed")
+                session.commit()
                 return UpdateTaskStatusResponse(
                     success=False,
                     message=rejection.get("message", "Output validation failed"),

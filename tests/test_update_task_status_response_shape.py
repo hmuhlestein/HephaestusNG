@@ -121,6 +121,16 @@ class TestUpdateTaskStatusResponseShape:
         assert "features.json" in body["message"]
         assert body["termination_scheduled"] is False
 
+        # Regression: the rejection reason must be persisted on the task,
+        # not just returned in the response -- if this agent's session ends
+        # before it retries, _clean_stale_assigned_tasks/_maybe_retry_failed_
+        # tasks need it to give the next agent specific feedback instead of
+        # a generic "agent terminated" message with no memory of why.
+        session = test_db.get_session()
+        task = session.query(Task).filter_by(id=task_id).first()
+        assert task.failure_reason is not None
+        assert "features.json" in task.failure_reason
+
     def test_output_artifact_present_still_succeeds(self, test_db, test_client, tmp_path):
         import json
 

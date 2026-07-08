@@ -2412,6 +2412,7 @@ async def get_project_design_status(project_id: str, filename: str):
         # over workflow-level heuristics, because workflow statuses may include
         # retries, gotos, or partial failures that don't reflect final outcome.
         _design_id = None
+        design_error = None
         with get_db() as _db:
             _design = (
                 _db.query(AutopilotDesign)
@@ -2426,6 +2427,7 @@ async def get_project_design_status(project_id: str, filename: str):
                 # written by run_design_aggregate at the very end of a run.
                 design_status = derive_design_status(_db, _design.id, write_back=True)
                 _design_id = _design.id
+                design_error = _design.error
             else:
                 design_status = None
 
@@ -2606,6 +2608,7 @@ async def get_project_design_status(project_id: str, filename: str):
             "name": design_name,
             "content": design_content,
             "status": overall_status,
+            "error": design_error if overall_status == "failed" else None,
             "workflows": [
                 {
                     "id": wf.id,

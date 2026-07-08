@@ -5,7 +5,7 @@ description: "Decomposes a design document into discrete, implementable features
 done_definitions:
   - ".hephaestus/features.json exists and contains valid JSON"
   - "features.json has 'design_name' field"
-  - "features.json has 'features' array with 1-5 entries"
+  - "features.json has 'features' array with at least 1 entry"
   - "Each feature has 'id', 'name', 'scope', 'files', 'depends_on', 'execution' fields"
   - "All 'id' values are unique slugs"
   - "All 'depends_on' values reference existing feature ids"
@@ -37,8 +37,10 @@ description: |
   - Any dependencies or constraints
 
   ### Step 2: Decompose into Features
-  Break the design into 1-5 discrete features. For simple designs, a single feature is fine.
-  For complex designs, create multiple features that can be developed in parallel where possible.
+  Break the design into discrete features — aim for around 5 as a rough target, but let the
+  design's actual structure decide the count. For simple designs, a single feature is fine. For
+  complex designs, use as many features as the natural functional boundaries call for; don't
+  force unrelated concerns together just to hit a number.
 
   Each feature should:
   - Have a clear, bounded scope

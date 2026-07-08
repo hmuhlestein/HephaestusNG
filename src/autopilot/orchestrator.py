@@ -517,9 +517,13 @@ def create_agent_for_task_direct(
     from src.core.app_context import get_app_state
     from src.core.database import Task
 
-    server_state = get_app_state()
-
     try:
+        # get_app_state() itself can raise (RuntimeError: "App state not
+        # initialized") -- must be inside this try, not before it, or every
+        # caller (self-heal task creation, and _create_corrective_task's
+        # negotiation retries) gets an unhandled exception instead of the
+        # documented "return None on failure" contract.
+        server_state = get_app_state()
         session = server_state.db_manager.get_session()
         try:
             task = session.query(Task).filter_by(id=task_id).first()
@@ -2110,7 +2114,16 @@ def _clean_stale_assigned_tasks(workflow_id: str, logger: OrchestratorLogger) ->
                     f"{task.assigned_agent_id[:8]} — marking failed"
                 )
                 task.status = "failed"
-                task.failure_reason = f"Agent {task.assigned_agent_id[:8]} terminated unexpectedly"
+                # Don't clobber a real reason: update_task_status already
+                # records why a "done" claim was rejected (e.g. a missing
+                # output artifact) on this same field before the agent's
+                # session ends. Only fall back to the generic message when
+                # nothing more specific is already there -- otherwise the
+                # retry below loses exactly the feedback it needs to fix.
+                if not task.failure_reason:
+                    task.failure_reason = (
+                        f"Agent {task.assigned_agent_id[:8]} terminated unexpectedly"
+                    )
                 db.commit()
 
 
@@ -2136,8 +2149,21 @@ def _validate_features_json(features_json: dict) -> None:
     if not isinstance(features, list):
         raise ValueError("'features' must be an array")
 
-    if len(features) < 1 or len(features) > 5:
-        raise ValueError(f"features array must have 1-5 entries, got {len(features)}")
+    # The prompt targets "around 5" as a rough guide, but the actual count
+    # should follow the design's own structure -- a complex design
+    # legitimately needing 6-10 features shouldn't have its entire Phase 0
+    # output discarded over a headcount. Observed live: a well-formed
+    # 6-feature decomposition for a genuinely multi-concern backend design
+    # got rejected outright by a strict 1-5 cap, throwing away real analysis
+    # work and forcing a full re-run. Keep only a generous sanity ceiling to
+    # catch actual garbage (e.g. one "feature" per file).
+    if len(features) < 1:
+        raise ValueError("features array must have at least 1 entry, got 0")
+    if len(features) > 50:
+        raise ValueError(
+            f"features array has {len(features)} entries -- that's not a "
+            "feature decomposition, it looks like one feature per file"
+        )
 
     # Check for required fields and unique IDs
     ids = set()
@@ -2924,14 +2950,29 @@ def _maybe_retry_failed_tasks(db, phase, logger: OrchestratorLogger) -> Optional
             f"[PHASE-ADVANCE] Phase {phase.name} has {failed_count} failed tasks "
             f"and 0 done — retrying all"
         )
-        # Reset all failed tasks to pending for retry
-        db.query(Task).filter(
-            Task.phase_id == phase.id,
-            Task.status == "failed",
-        ).update({
-            Task.status: "pending",
-            Task.failure_reason: None,
-        })
+        # Reset all failed tasks to pending for retry. Per-task (not a bulk
+        # .update()) so each one's own failure_reason -- e.g. a specific
+        # "missing output artifact: X" from update_task_status's validation
+        # gate, or a real error preserved by _clean_stale_assigned_tasks --
+        # gets folded into what the next agent actually reads
+        # (enriched_description) before being cleared. A blind reset here
+        # previously threw the reason away entirely, so the retried agent
+        # got the same generic phase description and no idea what to fix.
+        failed_tasks = (
+            db.query(Task)
+            .filter(Task.phase_id == phase.id, Task.status == "failed")
+            .all()
+        )
+        for task in failed_tasks:
+            if task.failure_reason:
+                base = task.enriched_description or task.raw_description or ""
+                task.enriched_description = (
+                    f"{base}\n\n--- RETRY: your previous attempt failed with this "
+                    f"specific error, fix it rather than repeating the same "
+                    f"mistake ---\n{task.failure_reason}"
+                )
+            task.status = "pending"
+            task.failure_reason = None
         db.commit()
         return True
     return None
@@ -3212,6 +3253,169 @@ def _create_phase_task(
     except Exception as e:
         logger.warning(f"[PHASE-TASK] Error creating task for {phase_name}: {e}")
         return False
+
+
+def _create_corrective_task(
+    workflow_id: str,
+    phase_id: str,
+    phase_name: str,
+    feedback: str,
+    logger: OrchestratorLogger,
+) -> Optional[str]:
+    """Create a task asking the agent to fix a specific, known validation
+    failure in its already-written output, instead of the phase's whole
+    output getting discarded and the entire (expensive) run redone from
+    scratch. Reopens the phase/workflow if the engine already marked them
+    complete -- a normal 'done' claim doesn't know a downstream hard-floor
+    check will later reject it.
+
+    Returns the new task's id, or None if agent creation failed.
+    """
+    import uuid
+
+    from src.core.database import Phase, PhaseExecution, Task, Workflow, get_db
+
+    task_id = str(uuid.uuid4())
+    with get_db() as db:
+        wf = db.query(Workflow).filter_by(id=workflow_id).first()
+        if not wf:
+            logger.warning(f"[CORRECTIVE-TASK] Workflow {workflow_id[:8]} not found")
+            return None
+        if wf.status != "active":
+            wf.status = "active"
+
+        execution = db.query(PhaseExecution).filter_by(phase_id=phase_id).first()
+        if execution and execution.status != "in_progress":
+            execution.status = "in_progress"
+
+        phase = db.query(Phase).filter_by(id=phase_id).first()
+        done_def = (
+            " AND ".join(phase.done_definitions)
+            if phase and phase.done_definitions
+            else "Complete phase objectives"
+        )
+
+        task = Task(
+            id=task_id,
+            raw_description=f"Fix validation failure in {phase_name}: {feedback}",
+            enriched_description=(
+                f"Your previous '{phase_name}' output failed validation:\n\n"
+                f"    {feedback}\n\n"
+                "Your existing work is still in this worktree — do NOT start "
+                "over from scratch. Read what you already wrote, fix ONLY the "
+                f"specific problem above, and re-check it against: {done_def}\n\n"
+                "When fixed, call update_task_status(done) again."
+            ),
+            done_definition=done_def,
+            status="pending",
+            priority="high",
+            phase_id=phase_id,
+            workflow_id=workflow_id,
+            created_by_agent_id="orchestrator",
+            action="retry",
+        )
+        db.add(task)
+        db.commit()
+
+    agent_data = create_agent_for_task_direct(task_id, workflow_id, phase_id)
+    if not agent_data:
+        logger.warning(
+            f"[CORRECTIVE-TASK] Failed to create agent for corrective task on {phase_name}"
+        )
+        with get_db() as db:
+            t = db.query(Task).filter_by(id=task_id).first()
+            if t:
+                t.status = "failed"
+                db.commit()
+        return None
+
+    agent_id = agent_data.get("agent_id", "unknown")
+    with get_db() as db:
+        t = db.query(Task).filter_by(id=task_id).first()
+        if t:
+            t.assigned_agent_id = agent_id
+            t.status = "in_progress"
+            t.started_at = datetime.utcnow()
+            db.commit()
+
+    logger.info(
+        f"[CORRECTIVE-TASK] Created task {task_id[:8]} and agent {agent_id[:8]} "
+        f"to fix: {feedback}"
+    )
+    return task_id
+
+
+def _wait_for_task_terminal(task_id: str, timeout_seconds: int, logger: OrchestratorLogger) -> str:
+    """Poll a task until it reaches a terminal status or times out.
+
+    Returns "done", "failed", "timeout", or "interrupted".
+    """
+    from src.core.database import Task, get_db
+
+    start = time.time()
+    while time.time() - start < timeout_seconds:
+        if _should_stop():
+            return "interrupted"
+        with get_db() as db:
+            task = db.query(Task).filter_by(id=task_id).first()
+            status = task.status if task else None
+        if status in ("done", "failed"):
+            return status
+        time.sleep(POLL_INTERVAL)
+    logger.warning(f"[CORRECTIVE-TASK] Task {task_id[:8]} timed out after {timeout_seconds}s")
+    return "timeout"
+
+
+def _negotiate_validation_fix(
+    workflow_id: str,
+    phase_id: str,
+    phase_name: str,
+    output_path: Path,
+    validate_fn,
+    initial_error: str,
+    logger: OrchestratorLogger,
+    max_attempts: int = 2,
+    timeout_seconds: int = 900,
+) -> Tuple[bool, Optional[dict]]:
+    """When a phase's output fails a validation check, don't discard the
+    whole run — ask the same worktree's agent to fix the specific problem,
+    up to max_attempts times, before giving up.
+
+    validate_fn(dict) must raise (json.JSONDecodeError, ValueError) on
+    invalid content, matching _validate_features_json's contract.
+
+    Returns (success, parsed_json_or_None).
+    """
+    error = initial_error
+    for attempt in range(1, max_attempts + 1):
+        logger.info(
+            f"[NEGOTIATE] Attempt {attempt}/{max_attempts} for {phase_name}: {error}"
+        )
+        task_id = _create_corrective_task(workflow_id, phase_id, phase_name, error, logger)
+        if not task_id:
+            return False, None
+
+        result = _wait_for_task_terminal(task_id, timeout_seconds, logger)
+        if result not in ("done",):
+            logger.warning(
+                f"[NEGOTIATE] Corrective task {result} for {phase_name} — giving up"
+            )
+            return False, None
+
+        try:
+            parsed = json.loads(output_path.read_text())
+            validate_fn(parsed)
+            logger.info(f"[NEGOTIATE] {phase_name} fixed on attempt {attempt}")
+            return True, parsed
+        except (json.JSONDecodeError, ValueError) as e:
+            error = str(e)
+            logger.warning(f"[NEGOTIATE] Still invalid after attempt {attempt}: {error}")
+
+    logger.error(
+        f"[NEGOTIATE] {phase_name} still failing validation after {max_attempts} "
+        f"corrective attempts: {error}"
+    )
+    return False, None
 
 
 def _resume_stuck_workflow_tasks(workflow_id: str, logger: OrchestratorLogger) -> int:
@@ -3868,7 +4072,7 @@ def run_phase0(
             "features": existing_feature_data,
         }
         designs_folder = _create_designs_folder(project_path, design_entry, logger)
-        _update_design_status(design_entry.db_id, "active", logger=logger)
+        _update_design_status(design_entry.db_id, "active", error=None, logger=logger)
         return features_json, designs_folder
 
     # Tier 2: no Feature rows yet, but Phase 0's workflow already completed (using
@@ -4013,14 +4217,72 @@ def run_phase0(
             features_json = json.loads(features_json_path.read_text())
             _validate_features_json(features_json)
         except (json.JSONDecodeError, ValueError) as e:
-            logger.error(f"Invalid features.json: {e}")
-            _update_design_status(
-                design_entry.db_id,
-                "failed",
-                error=f"Invalid features.json: {e}",
-                logger=logger,
-            )
-            return None, None
+            # Don't discard a whole Phase 0 run (worktree, agent analysis,
+            # scope docs) over a fixable validation problem — ask the same
+            # worktree's agent to correct it in place first. Only fail the
+            # design outright if negotiation is unavailable or exhausted.
+            logger.warning(f"Invalid features.json: {e} — attempting corrective negotiation")
+
+            # Negotiation touches the DB, spawns an agent, and polls for up
+            # to max_attempts * timeout_seconds -- any unexpected failure in
+            # that path (e.g. create_agent_for_task_direct's app-state
+            # lookup failing) must not propagate past this except block and
+            # skip the design-failed bookkeeping below; treat it the same
+            # as "negotiation didn't fix it" and fall through with the
+            # *original* validation error, not whatever broke internally.
+            fixed = False
+            try:
+                from src.core.database import Phase as _NegPhase
+                from src.core.database import Workflow as _NegWF
+                with _get_db() as _ndb:
+                    neg_wf = (
+                        _ndb.query(_NegWF)
+                        .filter_by(design_id=design_entry.db_id, definition_id="autopilot-phase0")
+                        .order_by(_NegWF.created_at.desc())
+                        .first()
+                    )
+                    neg_phase = (
+                        _ndb.query(_NegPhase)
+                        .filter_by(workflow_id=neg_wf.id)
+                        .order_by(_NegPhase.order)
+                        .first()
+                        if neg_wf else None
+                    )
+
+                if neg_wf and neg_phase:
+                    fixed, negotiated_json = _negotiate_validation_fix(
+                        neg_wf.id,
+                        neg_phase.id,
+                        neg_phase.name,
+                        features_json_path,
+                        _validate_features_json,
+                        str(e),
+                        logger,
+                    )
+                    if fixed:
+                        features_json = negotiated_json
+                else:
+                    logger.warning(
+                        "Could not locate Phase 0 workflow/phase for corrective "
+                        "negotiation — failing outright"
+                    )
+            except Exception as negotiate_err:
+                logger.error(
+                    f"Corrective negotiation itself failed unexpectedly: "
+                    f"{negotiate_err} — failing design with the original "
+                    "validation error"
+                )
+                fixed = False
+
+            if not fixed:
+                logger.error(f"Invalid features.json (uncorrected): {e}")
+                _update_design_status(
+                    design_entry.db_id,
+                    "failed",
+                    error=f"Invalid features.json: {e}",
+                    logger=logger,
+                )
+                return None, None
 
         # Copy Phase 0 outputs to permanent storage
         shutil.copy2(features_json_path, designs_folder / "features.json")
@@ -4058,7 +4320,12 @@ def run_phase0(
         # broken channel for this new code). Query the just-created Workflow
         # row directly instead, via the design_id/definition_id it was
         # created with — robust regardless of that state-clearing behavior.
-        update_kwargs = {"designs_folder": str(designs_folder)}
+        # Clear any stale error from a prior failed attempt on this same
+        # design (e.g. a validation failure that negotiation then fixed, or
+        # an earlier run that failed before a later retry succeeded) --
+        # otherwise a resolved problem keeps showing up in the design modal
+        # forever, since nothing else ever clears this column.
+        update_kwargs = {"designs_folder": str(designs_folder), "error": None}
         from src.core.database import Workflow as _WF
         with _get_db() as _db:
             phase0_wf = (
