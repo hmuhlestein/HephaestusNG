@@ -1606,17 +1606,14 @@ class AgentManager:
                     return "Agent terminated. Last logs:\n" + "\n".join(log_lines[-10:])
                 return "Agent terminated - no output was captured"
 
-            # For non-terminated agents, get output from transcript log or tmux
+            # For live agents, use tmux capture-pane directly (not transcript log).
+            # Transcript log can have partial writes and mismatched content during
+            # active sessions. Only use transcript log for terminated agents (above).
             if not agent.tmux_session_name:
                 logger.warning(f"Agent {agent_id} has no tmux session name")
                 return ""
 
-            # Try transcript log first (full history, written by pipe-pane)
-            transcript_output = self._read_transcript_log(agent, lines)
-            if transcript_output:
-                return transcript_output
-
-            # Fall back to tmux capture-pane (limited by scrollback)
+            # Use tmux capture-pane for live agents (limited by scrollback)
             logger.debug(
                 f"Attempting to access tmux session: {agent.tmux_session_name}"
             )
