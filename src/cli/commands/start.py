@@ -72,6 +72,96 @@ class ProcessWatchdog:
                 logger.warning(f"Process {name} (PID {pid}) died unexpectedly")
                 self._maybe_restart(name, callback)
 
+    def _kill_duplicates(self, service_name: str, pids: list[int], context: str) -> None:
+        """Kill every pid in `pids` except the one tracked for `service_name`.
+
+        Shared by the port-based (backend) and pgrep-based (monitor) checks
+        below. If the tracked PID isn't among `pids` at all (e.g. a stale
+        PID file), keep the lowest PID (oldest/first-started) rather than
+        guessing further, and kill the rest.
+        """
+        tracked_pid = read_pid(service_name)
+        keep = tracked_pid if tracked_pid in pids else min(pids)
+        logger.warning(
+            f"Found {len(pids)} {service_name} processes {context} ({pids}) -- "
+            f"expected 1 (keeping PID {keep})"
+        )
+        import signal
+
+        for pid in pids:
+            if pid == keep:
+                continue
+            try:
+                os.kill(pid, signal.SIGKILL)
+                logger.warning(f"Killed duplicate {service_name} process {pid} ({context})")
+            except OSError as e:
+                logger.debug(f"Could not kill duplicate process {pid}: {e}")
+
+    def check_duplicate_port_listeners(self, port: int) -> None:
+        """Kill any extra process bound to `port` beyond the tracked backend.
+
+        A second backend process racing the tracked one creates two
+        independent AutopilotService singletons against the same DB -- one
+        can pause a workflow the other just started, or a task can get
+        assigned by one process and never picked back up by the other.
+        Observed live: a standalone `python -m src.autopilot.orchestrator`
+        CLI run left running for hours (its own health-self-check spuriously
+        failing against a momentarily-busy backend) spawned a competing
+        backend on the tracked one's port. Neither _check_services above
+        (which only watches the *tracked* PID) nor the backend's own
+        assume_backend_running fix (which only covers the in-process
+        AutopilotService path) catches a rogue process like that -- this
+        does, by looking at what's actually bound to the port instead of
+        trusting any single PID-tracking mechanism.
+        """
+        try:
+            result = subprocess.run(
+                ["lsof", "-ti", f":{port}"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            pids = [int(p) for p in result.stdout.strip().split("\n") if p.strip()]
+        except Exception as e:
+            logger.debug(f"Duplicate-backend port check failed: {e}")
+            return
+
+        if len(pids) <= 1:
+            return
+
+        self._kill_duplicates("backend", pids, f"bound to port {port}")
+
+    def check_duplicate_monitor_processes(self) -> None:
+        """Kill any extra run_monitor.py process beyond the tracked one.
+
+        Unlike the backend, the monitor doesn't bind a port, so this uses
+        `pgrep -f` instead of `lsof`. Observed live immediately after a
+        `heph restart`: two run_monitor.py processes ended up running
+        simultaneously -- the CLI's own spawn_monitor and (very likely) the
+        in-process AutopilotService's sdk.start() call both raced through
+        is_monitor_running()'s pgrep check before either process was
+        visible to the other's check yet (a plain TOCTOU race any
+        check-then-spawn pattern has without a lock). Two monitors
+        independently evaluating and acting on the same agents/workflows is
+        the same class of problem as two backends.
+        """
+        try:
+            result = subprocess.run(
+                ["pgrep", "-f", "run_monitor.py"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            pids = [int(p) for p in result.stdout.strip().split("\n") if p.strip()]
+        except Exception as e:
+            logger.debug(f"Duplicate-monitor check failed: {e}")
+            return
+
+        if len(pids) <= 1:
+            return
+
+        self._kill_duplicates("monitor", pids, "running")
+
     def _maybe_restart(self, name: str, callback: callable) -> None:
         """Restart a service if restart limits allow it."""
         now = time.time()
@@ -277,6 +367,25 @@ def _start_backend(python: str, port: int, reload: bool) -> bool:
             stderr=subprocess.STDOUT,
             start_new_session=True,  # detach into own session — survives launcher/shell exit
         )
+        # Give run_server.py's own _exit_if_port_in_use guard a moment to
+        # fire and self-terminate if another backend already owns the port.
+        # Without this, save_pid below unconditionally overwrites the PID
+        # file with this about-to-die PID, orphaning the tracking of the
+        # REAL, still-alive backend. The watchdog's next _check_services
+        # cycle then sees the (already-dead) tracked PID, concludes the
+        # backend "died", and spawns yet another one -- which also hits the
+        # same guard and dies the same way. Observed live: a fresh
+        # duplicate backend process appearing every single watchdog cycle,
+        # indefinitely, once the PID file got poisoned by one bad spawn.
+        time.sleep(1.0)
+        if proc.poll() is not None:
+            logger.warning(
+                f"Backend process {proc.pid} exited immediately (code "
+                f"{proc.returncode}) -- likely refused to start because "
+                "another instance already owns the port. Not overwriting "
+                "the tracked PID."
+            )
+            return False
         save_pid("backend", proc.pid)
         return True
     except Exception as e:
@@ -297,6 +406,18 @@ def _start_monitor(python: str) -> bool:
             stderr=subprocess.STDOUT,
             start_new_session=True,  # detach into own session — survives launcher/shell exit (else reaped by SIGKILL)
         )
+        # Same reasoning as _start_backend above: give run_monitor.py's own
+        # _exit_if_already_running guard a moment to fire before trusting
+        # this PID enough to overwrite the tracked one.
+        time.sleep(1.0)
+        if proc.poll() is not None:
+            logger.warning(
+                f"Monitor process {proc.pid} exited immediately (code "
+                f"{proc.returncode}) -- likely refused to start because "
+                "another instance is already running. Not overwriting "
+                "the tracked PID."
+            )
+            return False
         save_pid("monitor", proc.pid)
         return True
     except Exception as e:

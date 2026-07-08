@@ -417,6 +417,48 @@ class TestFirePhaseTransition:
         mock_pm.mark_phase_complete.assert_called_once()
         mock_create.assert_called_once()
 
+    @patch("src.autopilot.orchestrator.PhaseManager")
+    @patch("src.autopilot.orchestrator._create_phase_task")
+    @patch("src.autopilot.orchestrator.build_phase_output")
+    def test_gated_phase_with_working_directory_does_not_raise(
+        self, mock_build_output, mock_create, mock_pm_class, db_manager, sample_workflow, tmp_path
+    ):
+        """Regression: a redundant `from pathlib import Path` inside this
+        function (after Path was already used on an earlier line in the
+        same block) made Python treat Path as local to the whole function,
+        so the earlier use raised UnboundLocalError every single time for
+        any of the three GATED_PHASES (scope_review, qa_validation,
+        product_validation). Silently caught by this function's own
+        try/except and logged as "[PHASE-ADVANCE] Transition error" --
+        meaning a gated phase could complete its task but never actually
+        advance, forever. Only a gated phase name with a real,
+        existing working_directory exercises the buggy line at all (the
+        Path(...).exists() check on the same line as the redundant import).
+        """
+        from src.autopilot.orchestrator import _fire_phase_transition
+
+        with db_manager.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-1").first()
+            wf.working_directory = str(tmp_path)
+
+        mock_pm = MagicMock()
+        mock_pm_class.return_value = mock_pm
+        mock_pm.mark_phase_complete.return_value = {
+            "action": "continue",
+            "target_phase_id": "phase-2",
+            "target_phase": "architecture_design",
+        }
+        mock_create.return_value = True
+        mock_build_output.return_value = {}
+
+        logger = MagicMock()
+        result = _fire_phase_transition("wf-1", "phase-1", "scope_review", logger)
+
+        assert result is True
+        logger.warning.assert_not_called()  # no "[PHASE-ADVANCE] Transition error"
+        mock_build_output.assert_called_once()
+        mock_pm.mark_phase_complete.assert_called_once()
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

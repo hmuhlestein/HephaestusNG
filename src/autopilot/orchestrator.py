@@ -2991,9 +2991,17 @@ def _fire_phase_transition(
         if phase_name in GATED_PHASES:
             with get_db() as db:
                 wf = db.query(Workflow).filter_by(id=workflow_id).first()
+                # Path is already imported at module level -- a redundant
+                # local "from pathlib import Path" here previously made
+                # Python treat Path as local to this whole function, so the
+                # EARLIER use on this same line raised UnboundLocalError
+                # every time, silently caught by this function's own
+                # try/except and logged as "[PHASE-ADVANCE] Transition
+                # error" -- which meant a gated phase (scope_review,
+                # architecture_design, etc.) could never advance past
+                # completion, forever, since the exception fired before
+                # mark_phase_complete ever got called.
                 if wf and wf.working_directory and Path(wf.working_directory).exists():
-                    from pathlib import Path
-
                     phase_output = build_phase_output(
                         phase_name, Path(wf.working_directory)
                     )

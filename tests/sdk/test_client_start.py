@@ -58,6 +58,34 @@ class TestAssumeBackendRunning:
             # calls return -- that loop only waits, it never spawns.
             mock_pm.spawn_backend.assert_not_called()
 
+    def test_assume_backend_running_skips_monitor_spawn_and_watchdog_thread(
+        self, sdk, tmp_path
+    ):
+        """Regression: every pipeline run constructs a fresh HephaestusSDK
+        (and therefore a fresh ProcessManager). Before this fix, each one
+        called spawn_monitor()/start_watchdog() regardless of
+        assume_backend_running -- the resulting per-instance watchdog
+        THREAD (ProcessManager.start_watchdog, distinct from the external
+        run_watchdog.py process) has no cleanup path for the in-process
+        case, so they silently accumulated across every "play" click /
+        design processed for the life of the backend. Each one
+        independently polled its OWN local, incomplete ProcessManager.
+        processes view and called spawn_backend()/spawn_monitor() again on
+        a false "died" reading -- observed live as a fresh duplicate
+        backend or monitor process appearing every ~10-30s, indefinitely,
+        long after any single pipeline run's sdk.start() call had
+        returned."""
+        with patch.object(sdk, "_check_qdrant_health", return_value=True), patch.object(
+            sdk, "_check_backend_health", return_value=True
+        ), patch("src.sdk.client.ProcessManager") as MockPM:
+            mock_pm = MockPM.return_value
+            mock_pm.is_process_alive.return_value = True
+
+            sdk._start_headless(timeout=5, assume_backend_running=True)
+
+            mock_pm.spawn_monitor.assert_not_called()
+            mock_pm.start_watchdog.assert_not_called()
+
     def test_default_still_spawns_when_backend_unhealthy(self, sdk):
         """Preserves existing behavior for the standalone CLI path
         (scripts/autopilot.sh), where the backend genuinely might not be
@@ -94,6 +122,22 @@ class TestAssumeBackendRunning:
             sdk._start_headless(timeout=5, assume_backend_running=False)
 
             mock_pm.spawn_backend.assert_not_called()
+
+    def test_default_still_starts_watchdog(self, sdk):
+        """The standalone CLI path (assume_backend_running=False) must
+        still get the normal ProcessManager watchdog thread -- only the
+        in-process AutopilotService path skips it."""
+        with patch.object(sdk, "_check_qdrant_health", return_value=True), patch.object(
+            sdk, "_check_backend_health", return_value=True
+        ), patch("src.sdk.client.ProcessManager") as MockPM, patch(
+            "src.cli.utils.is_monitor_running", return_value=True
+        ):
+            mock_pm = MockPM.return_value
+            mock_pm.is_process_alive.return_value = True
+
+            sdk._start_headless(timeout=5, assume_backend_running=False)
+
+            mock_pm.start_watchdog.assert_called_once()
 
 
 class TestRunContinuousPipelinePassesInProcessFlag:
