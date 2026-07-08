@@ -4605,12 +4605,17 @@ async def get_agent_output(agent_id: str, lines: int = 200, request: Request = N
     """Get agent output from transcript log (full history) or tmux (fallback)."""
     if request:
         _require_localhost(request)
-    lines = min(lines, 5000)  # Cap to prevent abuse (transcript can be large)
     session = server_state.db_manager.get_session()
     try:
         agent = session.query(Agent).filter_by(id=agent_id).first()
         if not agent or not agent.tmux_session_name:
             return {"output": ""}
+
+        # For terminated agents, don't limit lines (return full history)
+        if agent.status == 'terminated':
+            lines = 0  # 0 = no limit in get_agent_output
+        else:
+            lines = min(lines, 5000)  # Cap for live agents
 
         # Get output from tmux
         try:
