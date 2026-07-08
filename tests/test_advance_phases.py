@@ -4,6 +4,7 @@ These tests address the critical test coverage gap identified in ARCHITECTURE_RE
 "_advance_phases has no test referencing it anywhere in tests/"
 """
 
+from datetime import datetime
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -567,9 +568,68 @@ class TestGetPhaseStatuses:
             assert statuses[1]["status"] == "pending"
 
 
+class TestCreatePhaseTaskResetsClaim:
+    """Regression: _create_phase_task is the only place that actually flips
+    a GOTO target phase's PhaseExecution back to in_progress --
+    _handle_evaluation_goto itself never touches the target phase's
+    execution row at all. Every OTHER reopen point (_start_next_phase,
+    _handle_evaluation_retry, _handle_evaluation_arbitrate) resets
+    task_creation_claimed_at when it reopens a phase; this one didn't.
+    Observed live: a phase visited earlier in the pipeline (its claim
+    already consumed from that prior cycle) came back in_progress with a
+    stale non-null task_creation_claimed_at. When its new task finished,
+    _case_in_progress_complete's claim guard saw the stale claim and
+    concluded another caller already owned the evaluation -- permanently
+    skipping the transition. The task was done; the phase just never
+    advanced, until a stall-detector eventually noticed and spawned a
+    (confused, chasing-a-red-herring) diagnostic agent."""
+
+    @patch("src.autopilot.orchestrator.create_agent_for_task_direct")
+    def test_resets_stale_claim_on_reactivation(self, mock_create_agent, db_manager, sample_workflow):
+        from src.autopilot.orchestrator import _create_phase_task
+
+        mock_create_agent.return_value = {"agent_id": "new-agent"}
+
+        with db_manager.session_scope() as session:
+            exec1 = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            exec1.status = "completed"
+            # Stale claim from a prior cycle through this same phase.
+            exec1.task_creation_claimed_at = datetime(2020, 1, 1)
+
+        result = _create_phase_task("wf-1", "phase-1", "requirements", "goto", MagicMock())
+
+        assert result is True
+        with db_manager.session_scope() as session:
+            execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            assert execution.status == "in_progress"
+            assert execution.task_creation_claimed_at is None
+
+    @patch("src.autopilot.orchestrator.create_agent_for_task_direct")
+    def test_reactivated_phase_can_claim_after_completion(
+        self, mock_create_agent, db_manager, sample_workflow
+    ):
+        """End-to-end version of the same regression: after reactivation via
+        _create_phase_task, a fresh _claim_phase_task_creation call for that
+        same phase must succeed -- proving the transition-evaluation claim
+        isn't permanently blocked by the stale value from the prior cycle."""
+        from src.autopilot.orchestrator import _claim_phase_task_creation, _create_phase_task
+
+        mock_create_agent.return_value = {"agent_id": "new-agent"}
+
+        with db_manager.session_scope() as session:
+            exec1 = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            exec1.status = "completed"
+            exec1.task_creation_claimed_at = datetime(2020, 1, 1)
+
+        _create_phase_task("wf-1", "phase-1", "requirements", "goto", MagicMock())
+
+        with db_manager.session_scope() as session:
+            assert _claim_phase_task_creation(session, "phase-1") is True
+
+
 class TestFirePhaseTransition:
     """Tests for _fire_phase_transition function."""
-    
+
     @patch("src.autopilot.orchestrator.PhaseManager")
     @patch("src.autopilot.orchestrator._create_phase_task")
     def test_fires_transition_successfully(self, mock_create, mock_pm_class, db_manager, sample_workflow):

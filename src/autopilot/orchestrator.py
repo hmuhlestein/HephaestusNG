@@ -3268,6 +3268,21 @@ def _create_phase_task(
                 execution.status = "in_progress"
                 from datetime import datetime
                 execution.started_at = datetime.utcnow()
+                # This is the reactivation point for a GOTO target: unlike
+                # _start_next_phase/_handle_evaluation_retry/_handle_evaluation_arbitrate
+                # (which each reset this claim when they reopen a phase),
+                # _handle_evaluation_goto itself never touches the target
+                # phase's PhaseExecution at all -- this is the only place
+                # that actually flips it back to in_progress. Without this
+                # reset, a phase visited earlier in the pipeline (its claim
+                # already consumed from that prior cycle) would come back
+                # in_progress with a stale non-null task_creation_claimed_at,
+                # permanently blocking _case_in_progress_complete's claim
+                # once this new cycle's task finished -- the transition
+                # would never fire again. Observed live: the task finished
+                # successfully, but the phase stayed in_progress forever,
+                # eventually triggering the monitor's stall-detector.
+                execution.task_creation_claimed_at = None
 
             db.commit()
 
@@ -3339,6 +3354,14 @@ def _create_corrective_task(
         execution = db.query(PhaseExecution).filter_by(phase_id=phase_id).first()
         if execution and execution.status != "in_progress":
             execution.status = "in_progress"
+            # Same reopen-point fix as _create_phase_task -- this phase may
+            # have been marked "completed" with its task_creation_claimed_at
+            # already consumed by that prior cycle's evaluation. Without
+            # resetting it here, the new corrective task's eventual
+            # completion would find the claim already held and
+            # _case_in_progress_complete would skip evaluating the
+            # transition forever.
+            execution.task_creation_claimed_at = None
 
         phase = db.query(Phase).filter_by(id=phase_id).first()
         done_def = (

@@ -82,13 +82,19 @@ class TestFeatures:
 class TestProjects:
     @pytest.mark.skip(reason="Needs deep mock chain for project listing")
     def test_list_projects(self, client):
+        """Test GET /api/autopilot/projects - List all projects."""
         resp = client.get("/api/autopilot/projects")
-        assert resp.status_code in (200, 404, 500)
+        # Should return 200 with a list (empty or populated)
+        assert resp.status_code in (200, 500)
+        if resp.status_code == 200:
+            assert isinstance(resp.json(), list)
 
     @pytest.mark.skip(reason="Needs deep mock chain for project lookup")
     def test_get_project(self, client):
+        """Test GET /api/autopilot/projects/{id} - Get project by ID."""
         resp = client.get("/api/autopilot/projects/nonexistent")
-        assert resp.status_code in (404, 200, 500)
+        # Should return 404 for nonexistent project
+        assert resp.status_code in (404, 500)
 
 
 # ── Repair ────────────────────────────────────────────────────────
