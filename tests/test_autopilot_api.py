@@ -199,8 +199,8 @@ class TestQueueRerun:
         import subprocess as subprocess_mod
 
         project_dir = tmp_path / "project"
-        (project_dir / "docs" / "design").mkdir(parents=True)
-        design_file = project_dir / "docs" / "design" / "my_design.md"
+        (project_dir / ".hephaestus" / "designs").mkdir(parents=True)
+        design_file = project_dir / ".hephaestus" / "designs" / "my_design.md"
         design_file.write_text("# Design")
 
         fake_service = Mock()
@@ -230,8 +230,8 @@ class TestQueueRerun:
         self, client, autopilot_dirs, monkeypatch, tmp_path
     ):
         project_dir = tmp_path / "project"
-        (project_dir / "docs" / "design").mkdir(parents=True)
-        (project_dir / "docs" / "design" / "my_design.md").write_text("# Design")
+        (project_dir / ".hephaestus" / "designs").mkdir(parents=True)
+        (project_dir / ".hephaestus" / "designs" / "my_design.md").write_text("# Design")
 
         fake_service = Mock()
         fake_service.running = True  # already running -- rerun must stop it first
@@ -260,8 +260,8 @@ class TestQueueRerun:
         request races in and starts something else between Step 1's stop()
         and Step 6's start()."""
         project_dir = tmp_path / "project"
-        (project_dir / "docs" / "design").mkdir(parents=True)
-        (project_dir / "docs" / "design" / "my_design.md").write_text("# Design")
+        (project_dir / ".hephaestus" / "designs").mkdir(parents=True)
+        (project_dir / ".hephaestus" / "designs" / "my_design.md").write_text("# Design")
 
         fake_service = Mock()
         fake_service.running = False
@@ -286,8 +286,8 @@ class TestQueueRerun:
         """service.start() raising ValueError means bad input (e.g. project
         path isn't a git repo) -- matches /start's own convention of 400."""
         project_dir = tmp_path / "project"
-        (project_dir / "docs" / "design").mkdir(parents=True)
-        (project_dir / "docs" / "design" / "my_design.md").write_text("# Design")
+        (project_dir / ".hephaestus" / "designs").mkdir(parents=True)
+        (project_dir / ".hephaestus" / "designs" / "my_design.md").write_text("# Design")
 
         fake_service = Mock()
         fake_service.running = False
@@ -704,9 +704,9 @@ class TestLogs:
 
 @pytest.fixture
 def project_dirs(tmp_path):
-    """Create a project directory with docs/design containing test files."""
+    """Create a project directory with .hephaestus/designs containing test files."""
     project_dir = tmp_path / "myproject"
-    design_dir = project_dir / "docs" / "design"
+    design_dir = project_dir / ".hephaestus" / "designs"
     design_dir.mkdir(parents=True)
 
     (design_dir / "01-auth.md").write_text("# Auth Design\nImplement OAuth2.")
@@ -1095,15 +1095,15 @@ class TestProjectDesigns:
 
         from src.core.database import AutopilotDesign, Workflow, get_db
 
-        design_id = "des-test-auth"
+        design_id = "des-test-orphan"
         with get_db() as db:
             db.add(
                 AutopilotDesign(
                     id=design_id,
                     project_id=pid,
-                    filename="01-auth.md",
-                    name="Auth",
-                    ordinal=1,
+                    filename="orphan-design.md",
+                    name="Orphan Design",
+                    ordinal=10,
                     size_bytes=10,
                     extension=".md",
                     status="pending",
@@ -1116,13 +1116,13 @@ class TestProjectDesigns:
                 Workflow(
                     id="wf-orphan-phase0",
                     name="autopilot-phase0",
-                    description="Phase 0: Feature Architect for Auth",
+                    description="Phase 0: Feature Architect for Orphan",
                     definition_id="autopilot-phase0",
                     design_id=None,
                     phases_folder_path=".",
                     status="completed",
                     launch_params={
-                        "design_document": str(dirs["design_dir"] / "01-auth.md"),
+                        "design_document": str(dirs["design_dir"] / "orphan-design.md"),
                         "project_path": str(dirs["project_dir"]),
                         "design_id": design_id,
                     },
@@ -1135,13 +1135,13 @@ class TestProjectDesigns:
                 Workflow(
                     id="wf-orphan-feature",
                     name="autopilot",
-                    description="Autopilot: Auth - Feature: Core",
+                    description="Autopilot: Orphan - Feature: Core",
                     definition_id="autopilot",
                     design_id=None,
                     phases_folder_path=".",
                     status="failed",
                     launch_params={
-                        "design_document": str(dirs["design_dir"] / "01-auth.md"),
+                        "design_document": str(dirs["design_dir"] / "orphan-design.md"),
                         "project_path": str(dirs["project_dir"]),
                         "feature_id": "core",
                     },
@@ -1149,7 +1149,7 @@ class TestProjectDesigns:
             )
             db.commit()
 
-        resp = client.delete(f"/api/autopilot/projects/{pid}/designs/01-auth.md")
+        resp = client.delete(f"/api/autopilot/projects/{pid}/designs/orphan-design.md")
         assert resp.status_code == 200, resp.text
 
         with get_db() as db:
