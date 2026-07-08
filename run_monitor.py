@@ -12,6 +12,7 @@ import faulthandler
 import logging
 import os
 import signal
+import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -127,6 +128,40 @@ async def setup_monitoring_system():
         raise
 
 
+def _exit_if_already_running() -> None:
+    """Refuse to start if another run_monitor.py process is already alive.
+
+    Two live monitors independently track their own in-memory stuck-agent
+    state (MonitoringLoop._mechanical_recovery_for_agent's _stuck_state
+    dict isn't shared across processes) and can send competing tmux
+    recovery keystrokes to the same agent's session, or run duplicate
+    Guardian LLM analysis on the same agents every cycle. The watchdog's
+    periodic duplicate-process check (see src/cli/commands/start.py's
+    check_duplicate_monitor_processes) already cleans up an extra instance
+    after the fact, but that leaves up to a ~30s window where both are live
+    and actively interfering. Checking here, at startup, closes that
+    window to effectively zero by never letting the second one run at all.
+    """
+    try:
+        result = subprocess.run(
+            ["pgrep", "-f", "run_monitor.py"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        pids = [int(p) for p in result.stdout.strip().split("\n") if p.strip()]
+    except Exception:
+        return  # can't check (no pgrep, etc.) -- fail open rather than block startup
+
+    other_pids = [p for p in pids if p != os.getpid()]
+    if other_pids:
+        logger.critical(
+            f"Another run_monitor.py process is already running "
+            f"(PID(s) {other_pids}) -- refusing to start a second one. Exiting."
+        )
+        sys.exit(1)
+
+
 def signal_handler(signum, frame):
     """Handle shutdown signals gracefully."""
     logger.critical(f"RECEIVED SIGNAL {signum} — shutting down")
@@ -187,6 +222,11 @@ async def main():
 
 
 if __name__ == "__main__":
+    # Must run before the PID file below gets overwritten -- that write is
+    # unconditional and would otherwise silently paper over a second
+    # instance actually running.
+    _exit_if_already_running()
+
     # Ensure logs directory exists
     Path("logs").mkdir(exist_ok=True)
 

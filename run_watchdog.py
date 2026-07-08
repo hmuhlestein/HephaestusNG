@@ -27,6 +27,7 @@ from src.cli.commands.start import (
     ProcessWatchdog,
     _find_python,
     _start_backend,
+    _start_frontend,
     _start_monitor,
 )
 from src.cli.utils import save_pid
@@ -41,6 +42,7 @@ def main():
     parser.add_argument("--port", type=int, default=8300)
     parser.add_argument("--backend-only", action="store_true")
     parser.add_argument("--no-monitor", action="store_true")
+    parser.add_argument("--no-frontend", action="store_true")
     parser.add_argument("--reload", action="store_true")
     parser.add_argument("--check-interval", type=int, default=30)
     args = parser.parse_args()
@@ -53,6 +55,13 @@ def main():
     )
     if not args.backend_only and not args.no_monitor:
         watchdog.register_service("monitor", lambda: _start_monitor(python))
+    # Frontend previously wasn't supervised at all -- if the Vite dev server
+    # died for any reason (no crash trace observed live; it just stopped
+    # appearing in the process list and logging), nothing brought it back
+    # until a human noticed and ran `heph restart` manually. Same
+    # PID-liveness check backend/monitor already get.
+    if not args.backend_only and not args.no_frontend:
+        watchdog.register_service("frontend", _start_frontend)
 
     logger.info(
         f"Watchdog running (PID {os.getpid()}), checking every {args.check_interval}s"
@@ -62,6 +71,8 @@ def main():
         while watchdog.running:
             time.sleep(watchdog.check_interval)
             watchdog._check_services()
+            watchdog.check_duplicate_port_listeners(args.port)
+            watchdog.check_duplicate_monitor_processes()
     except KeyboardInterrupt:
         logger.info("Watchdog interrupted, shutting down")
 

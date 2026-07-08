@@ -394,7 +394,27 @@ class HephaestusSDK:
             self.process_manager.spawn_backend()
 
         logger.info("Starting monitor process...")
-        if backend_already_running:
+        if assume_backend_running:
+            # The in-process AutopilotService path (run_continuous_pipeline)
+            # runs inside an already-running backend that's supervised
+            # externally by run_watchdog.py -- which now has its own
+            # process-existence-based spawn/singleton guards. Spawning or
+            # checking here too is redundant at best; at worst it's actively
+            # harmful: each pipeline run constructs a fresh HephaestusSDK
+            # (and therefore a fresh ProcessManager), and every one of them
+            # used to call spawn_monitor()/start_watchdog() below regardless.
+            # Those per-instance watchdog threads (see start_watchdog) are
+            # daemon threads with no cleanup path for the in-process case,
+            # so they silently accumulate across every "play" click / design
+            # processed for the life of the backend -- each independently
+            # polling is_process_alive() against its OWN local, incomplete
+            # ProcessManager.processes view and calling spawn_backend()/
+            # spawn_monitor() again on a false "died" reading. Observed
+            # live: a fresh duplicate backend or monitor process appearing
+            # every ~10-30s, indefinitely, long after any single pipeline
+            # run's sdk.start() call had returned.
+            logger.info("Skipping monitor spawn (external watchdog supervises it)")
+        elif backend_already_running:
             # Don't assume monitor is running — check and spawn if needed
             from src.cli.utils import is_monitor_running
 
@@ -440,8 +460,15 @@ class HephaestusSDK:
         # Register workflow definitions with backend
         self._register_workflow_definitions()
 
-        # Start watchdog
-        self.process_manager.start_watchdog()
+        # Start watchdog -- skipped for assume_backend_running (see the
+        # matching comment above spawn_monitor): this ProcessManager
+        # instance didn't spawn anything to supervise, and its watchdog
+        # thread has no cleanup path for the in-process case, so it would
+        # just accumulate one more daemon thread per pipeline run for the
+        # life of the backend process, each independently (and wrongly)
+        # deciding to spawn duplicate backend/monitor processes.
+        if not assume_backend_running:
+            self.process_manager.start_watchdog()
 
         self.running = True
 
