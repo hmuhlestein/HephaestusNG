@@ -62,7 +62,7 @@ class TestTurboVecStoreInit:
         s1 = TurboVecStore(data_dir=tmp_data_dir, collection_prefix="test")
         mem_id = _random_id()
         emb = _random_embedding()
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             s1.store_memory("agent_memories", mem_id, emb, "hello", {"tag": "a"})
         )
         del s1
@@ -238,7 +238,7 @@ class TestSearchAllCollections:
 class TestDeleteMemory:
     def test_delete_existing(self, store):
         mem_id = _random_id()
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             store.store_memory("agent_memories", mem_id, _random_embedding(), "del", {})
         )
         assert store.delete_memory("agent_memories", mem_id) is True
@@ -253,7 +253,7 @@ class TestDeleteMemory:
 
     def test_delete_removes_from_str_to_int(self, store):
         mem_id = _random_id()
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             store.store_memory("agent_memories", mem_id, _random_embedding(), "", {})
         )
         assert mem_id in store._str_to_int
@@ -283,7 +283,7 @@ class TestGetStats:
 class TestFlushAll:
     def test_flush_creates_files(self, store):
         mem_id = _random_id()
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             store.store_memory("agent_memories", mem_id, _random_embedding(), "", {})
         )
         store.flush_all()

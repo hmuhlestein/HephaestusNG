@@ -916,6 +916,40 @@ class TestCreateCorrectiveTask:
             assert task.assigned_agent_id == "new-agent"
 
     @patch("src.autopilot.orchestrator.create_agent_for_task_direct")
+    def test_reopening_resets_stale_task_creation_claim(self, mock_create_agent, orch_db_env, tmp_path):
+        """Regression: like _create_phase_task, this reopens a phase the
+        engine already marked complete -- but until fixed it never reset
+        task_creation_claimed_at. A phase visited earlier in the pipeline
+        carries a claim already consumed by that prior cycle; leaving it
+        set means _case_in_progress_complete's claim guard would see the
+        stale value once the corrective task finishes and skip evaluating
+        the transition forever, even though the work is done."""
+        from datetime import datetime
+
+        from src.autopilot.orchestrator import (
+            OrchestratorLogger,
+            _claim_phase_task_creation,
+            _create_corrective_task,
+        )
+        from src.core.database import PhaseExecution
+
+        self._seed_workflow_and_phase(orch_db_env)
+        with orch_db_env.session_scope() as session:
+            execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            execution.task_creation_claimed_at = datetime(2020, 1, 1)
+        mock_create_agent.return_value = {"agent_id": "new-agent"}
+
+        _create_corrective_task(
+            "wf-1", "phase-1", "Feature Architect", "got 6, expected 1-5",
+            OrchestratorLogger(tmp_path),
+        )
+
+        with orch_db_env.session_scope() as session:
+            execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            assert execution.task_creation_claimed_at is None
+            assert _claim_phase_task_creation(session, "phase-1") is True
+
+    @patch("src.autopilot.orchestrator.create_agent_for_task_direct")
     def test_missing_workflow_returns_none(self, mock_create_agent, orch_db_env, tmp_path):
         from src.autopilot.orchestrator import OrchestratorLogger, _create_corrective_task
 

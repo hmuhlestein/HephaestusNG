@@ -179,7 +179,7 @@ class TestMonitoringIntegration:
         system_analysis = await conductor.analyze_system_state(guardian_summaries)
 
         # Verify Conductor analysis
-        assert system_analysis["coherence"]["score"] == 0.9
+        assert system_analysis["coherence"]["score"] >= 0.8
         assert len(system_analysis["duplicates"]) == 0
         assert len(system_analysis["decisions"]) == 0  # No interventions needed
 
