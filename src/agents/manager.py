@@ -1697,12 +1697,28 @@ class AgentManager:
             if not working_dir:
                 # Search in common locations using the session name
                 import glob
-                pattern = f"**/{CONTEXT_DIR_NAME}/tmux/{agent.tmux_session_name}.transcript.log"
-                matches = glob.glob(pattern, recursive=True)
-                if matches:
-                    # Use most recently modified
-                    transcript_path = Path(max(matches, key=lambda p: Path(p).stat().st_mtime))
-                else:
+                # Try project base_dir first, then home directory
+                search_paths = []
+                if agent.project_id:
+                    from src.core.database import AutopilotProject
+                    sess = self.db_manager.get_session()
+                    try:
+                        proj = sess.query(AutopilotProject).get(agent.project_id)
+                        if proj:
+                            search_paths.append(proj.base_dir)
+                    finally:
+                        sess.close()
+                search_paths.append(str(Path.home()))
+                
+                transcript_path = None
+                for base in search_paths:
+                    pattern = f"{base}/**/{CONTEXT_DIR_NAME}/tmux/{agent.tmux_session_name}.transcript.log"
+                    matches = glob.glob(pattern, recursive=True)
+                    if matches:
+                        transcript_path = Path(max(matches, key=lambda p: Path(p).stat().st_mtime))
+                        break
+                
+                if not transcript_path:
                     return ""
             else:
                 transcript_path = Path(working_dir) / CONTEXT_DIR_NAME / "tmux" / f"{agent.tmux_session_name}.transcript.log"
