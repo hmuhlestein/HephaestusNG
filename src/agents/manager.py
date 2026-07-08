@@ -442,8 +442,32 @@ class AgentManager:
 
             # Generate deterministic session ID for persistent agent sessions.
             # Same project + design + role = same session across gotos (§10.1.1).
+            #
+            # EXCLUDED: validator/result_validator/diagnostic agents. The key is
+            # (project_id, design_slug, phase_name) -- it doesn't factor in
+            # agent_type or task_id at all. A diagnostic agent is deliberately
+            # assigned the SAME phase_id as the stuck phase it's investigating
+            # (see monitor.py's _create_diagnostic_agent), so it would compute
+            # the identical session_id as every normal phase agent that has
+            # ever worked that phase. Since the CLI (`pi --session-id X`)
+            # resumes an existing session for that ID rather than starting
+            # fresh, the diagnostic agent would silently resume a PRIOR phase
+            # agent's live conversation -- inheriting that agent's old
+            # "=== TASK ASSIGNMENT ===" header (its agent_id, its task_id) as
+            # part of the resumed context, on top of its own fresh
+            # --append-system-prompt. Observed live: a diagnostic agent spent
+            # its entire run trying to close out a stale, already-terminated
+            # agent's task using that agent's identity, because its resumed
+            # session told it that was who it was -- never touching its own
+            # actual diagnostic task. These agent types are one-shot
+            # investigations/verifications, never meant to share warm context
+            # across runs, so they must always get a fresh (empty) session_id.
             session_id = ""
-            if task.workflow_id:
+            if task.workflow_id and agent_type not in (
+                "validator",
+                "result_validator",
+                "diagnostic",
+            ):
                 try:
                     _s = self.db_manager.get_session()
                     try:
@@ -1407,8 +1431,19 @@ class AgentManager:
             )
 
             # Generate session ID for restart — same session, agent picks up where it left off.
+            # Same exclusion as create_agent_for_task above: the session key is
+            # (project, design, phase_name) only, with no agent_type or agent_id
+            # component. A restarted validator/result_validator/diagnostic agent
+            # would otherwise resolve to the SAME session_id as ordinary phase
+            # agents on that phase and resume THEIR conversation instead of its
+            # own (or start cold with someone else's identity, if none of its
+            # own runs ever set a session at all).
             session_id = ""
-            if task.workflow_id:
+            if task.workflow_id and agent.agent_type not in (
+                "validator",
+                "result_validator",
+                "diagnostic",
+            ):
                 try:
                     _s = self.db_manager.get_session()
                     try:
@@ -1680,6 +1715,7 @@ class AgentManager:
         try:
             # Get the working directory from the agent's task workflow
             working_dir = None
+            project_base = None
             from src.core.database import Task
             session = self.db_manager.get_session()
             try:
@@ -1689,25 +1725,24 @@ class AgentManager:
                     task = session.query(Task).filter_by(id=agent.current_task_id).first()
                 if not task:
                     task = session.query(Task).filter_by(assigned_agent_id=agent.id).order_by(Task.created_at.desc()).first()
-                if task and task.workflow and task.workflow.working_directory:
-                    working_dir = task.workflow.working_directory
+                if task and task.workflow:
+                    if task.workflow.working_directory:
+                        working_dir = task.workflow.working_directory
+                    # Get project base_dir from workflow's design
+                    if task.workflow.project_id:
+                        from src.core.database import AutopilotProject
+                        proj = session.query(AutopilotProject).get(task.workflow.project_id)
+                        if proj:
+                            project_base = proj.base_dir
             finally:
                 session.close()
             
             if not working_dir:
                 # Search in common locations using the session name
                 import glob
-                # Try project base_dir first, then home directory
                 search_paths = []
-                if agent.project_id:
-                    from src.core.database import AutopilotProject
-                    sess = self.db_manager.get_session()
-                    try:
-                        proj = sess.query(AutopilotProject).get(agent.project_id)
-                        if proj:
-                            search_paths.append(proj.base_dir)
-                    finally:
-                        sess.close()
+                if project_base:
+                    search_paths.append(project_base)
                 search_paths.append(str(Path.home()))
                 
                 transcript_path = None
