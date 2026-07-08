@@ -741,7 +741,8 @@ class AgentManager:
             _ansi_strip = (
                 r"s/\x1b\[[0-9;?]*[a-zA-Z]//g; "
                 r"s/\x1b\][^\x07]*\x07//g; "
-                r"s/\x1b[()][A-Za-z0-9]//g"
+                r"s/\x1b[()][A-Za-z0-9]//g; "
+                r"s/\r//g"
             )
             pipe_cmd = f"perl -pe {shlex.quote(_ansi_strip)} >> {shlex.quote(str(transcript_path))}"
             session.attached_window.attached_pane.cmd("pipe-pane", "-o", pipe_cmd)
@@ -1720,6 +1721,17 @@ class AgentManager:
                     text = "".join(tail_lines).rstrip()
                 else:
                     text = f.read().rstrip()
+            
+            # Collapse carriage-return redraws: TUI spinners redraw the same
+            # line using \r. Each redraw becomes a separate line in the log.
+            # Keep only the last state of each line.
+            collapsed = []
+            for line in text.split("\n"):
+                if "\r" in line:
+                    # Take the last segment after the last \r
+                    line = line.rsplit("\r", 1)[-1]
+                collapsed.append(line)
+            text = "\n".join(collapsed)
             
             # Strip TUI chrome (prompts, spinners) that ANSI stripping doesn't catch
             from src.interfaces.cli_interface import get_cli_agent
