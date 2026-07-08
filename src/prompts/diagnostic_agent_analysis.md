@@ -67,7 +67,7 @@ Read the workflow goal carefully. What is the concrete deliverable? What does "s
 **MANDATORY**: Search qdrant for context before proceeding:
 
 ```python
-qdrant_find(query="[workflow goal keywords + stuck issue]", limit=10)
+search_memory(query="[workflow goal keywords + stuck issue]", limit=10)
 ```
 
 Look for: past workflow attempts, error patterns, implementation details, codebase learnings.
@@ -143,7 +143,7 @@ create_task(
 ## ⚠️ CRITICAL CHECKLIST
 
 Before marking yourself done, verify:
-- [ ] Used `qdrant_find` to search memories (Step 2)
+- [ ] Used `search_memory` to search memories (Step 2)
 - [ ] Mapped gaps to phases in Step 5
 - [ ] Every phase_id is from AVAILABLE WORKFLOW PHASES (no made-up numbers!)
 - [ ] Tasks span multiple phases based on Step 5 mapping
@@ -182,7 +182,7 @@ create_task(description="...", phase_id=3, ...)  # Must be in available list
 
 Follow all 6 steps in order:
 1. Understand Goal
-2. Search Memory (qdrant_find)
+2. Search Memory (search_memory)
 3. Analyze State
 4. Identify Gap
 5. **Map Gap to Phases** (verify phase numbers!)
