@@ -2087,6 +2087,37 @@ async def remove_project_design(project_id: str, filename: str):
                 if wf.id not in wf_ids:
                     wf_ids.append(wf.id)
 
+            # Fallback: catch orphaned phase0/feature workflows whose design_id
+            # link never got set (observed live: Workflow.design_id ended up
+            # NULL for a completed Phase 0 run + its first feature workflow,
+            # so neither of the two lookups above found them, and they survived
+            # a delete of the design that spawned them). Match by launch_params
+            # instead, the same way _relink_features_to_workflows already does
+            # for Feature.workflow_id.
+            orphan_candidates = (
+                db.query(Workflow)
+                .filter(
+                    Workflow.design_id.is_(None),
+                    Workflow.definition_id.in_(["autopilot-phase0", "autopilot"]),
+                )
+                .all()
+            )
+            for wf in orphan_candidates:
+                if wf.id in wf_ids:
+                    continue
+                try:
+                    params = (
+                        wf.launch_params
+                        if isinstance(wf.launch_params, dict)
+                        else json.loads(wf.launch_params or "{}")
+                    )
+                except Exception:
+                    continue
+                if params.get("design_id") == d.id or Path(
+                    params.get("design_document", "")
+                ).name == filename:
+                    wf_ids.append(wf.id)
+
             if wf_ids:
                 # Terminate active agents for these workflows
                 tasks = db.query(Task).filter(Task.workflow_id.in_(wf_ids)).all()

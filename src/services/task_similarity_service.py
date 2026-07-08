@@ -58,7 +58,7 @@ class TaskSimilarityService:
         try:
             # Build query for existing tasks
             query = session.query(Task).filter(
-                Task.embedding is not None, Task.status.notin_(["failed", "duplicated"])
+                Task.embedding.isnot(None), Task.status.notin_(["failed", "duplicated"])
             )
 
             # If phase_id is provided, only check tasks within the same phase
@@ -344,7 +344,7 @@ class TaskSimilarityService:
                 # Get all tasks with embeddings
                 tasks = (
                     session.query(Task)
-                    .filter(Task.embedding is not None, Task.status != "duplicated")
+                    .filter(Task.embedding.isnot(None), Task.status != "duplicated")
                     .all()
                 )
 

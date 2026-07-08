@@ -9,6 +9,9 @@
       "Bash(python3 *)",
       "Bash(python *)",
       "Bash(grep *)",
+      "Bash(find *)",
+      "Bash(head *)",
+      "Bash(sed *)",
       "Bash(wc *)"
     ]
   }

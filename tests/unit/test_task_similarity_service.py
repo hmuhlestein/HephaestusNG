@@ -14,6 +14,13 @@ from src.services.task_similarity_service import TaskSimilarityService
 class TestTaskSimilarityService:
     """Test cases for TaskSimilarityService."""
 
+    def _setup_query_mock(self, session, return_value):
+        """Helper to setup the query chain mock."""
+        query_mock = Mock()
+        query_mock.filter.return_value = query_mock
+        query_mock.all.return_value = return_value
+        session.query.return_value = query_mock
+
     @pytest.fixture
     def mock_db_manager(self):
         """Create a mock database manager."""
@@ -62,7 +69,7 @@ class TestTaskSimilarityService:
 
         # Setup existing task
         sample_task.embedding = [0.1] * 3072
-        session.query().filter().all.return_value = [sample_task]
+        self._setup_query_mock(session, [sample_task])
 
         # Mock perfect similarity
         mock_embedding_service.calculate_batch_similarities.return_value = [1.0]
@@ -86,7 +93,7 @@ class TestTaskSimilarityService:
         """Test detection of duplicate above threshold (similarity > 0.7)."""
         _, session = mock_db_manager
 
-        session.query().filter().all.return_value = [sample_task]
+        self._setup_query_mock(session, [sample_task])
         mock_embedding_service.calculate_batch_similarities.return_value = [0.85]
 
         result = await similarity_service.check_for_duplicates(
@@ -104,7 +111,7 @@ class TestTaskSimilarityService:
         """Test no duplicate when below threshold (similarity < 0.7)."""
         _, session = mock_db_manager
 
-        session.query().filter().all.return_value = [sample_task]
+        self._setup_query_mock(session, [sample_task])
         mock_embedding_service.calculate_batch_similarities.return_value = [0.65]
 
         result = await similarity_service.check_for_duplicates(
@@ -145,7 +152,7 @@ class TestTaskSimilarityService:
             embedding=[0.3] * 3072,
         )
 
-        session.query().filter().all.return_value = [task1, task2, task3]
+        self._setup_query_mock(session, [task1, task2, task3])
 
         # Mock similarities: task1 related, task2 not related, task3 related
         mock_embedding_service.calculate_batch_similarities.return_value = [
@@ -178,7 +185,7 @@ class TestTaskSimilarityService:
         """Test when no duplicates or related tasks found (similarity < 0.4)."""
         _, session = mock_db_manager
 
-        session.query().filter().all.return_value = [sample_task]
+        self._setup_query_mock(session, [sample_task])
         mock_embedding_service.calculate_batch_similarities.return_value = [0.2]
 
         result = await similarity_service.check_for_duplicates(
@@ -209,7 +216,7 @@ class TestTaskSimilarityService:
             for i in range(5)
         ]
 
-        session.query().filter().all.return_value = tasks
+        self._setup_query_mock(session, tasks)
 
         # Similarities: mix of related and not
         mock_embedding_service.calculate_batch_similarities.return_value = [
@@ -263,7 +270,7 @@ class TestTaskSimilarityService:
         _, session = mock_db_manager
 
         # Setup returns no tasks (all filtered out)
-        session.query().filter().all.return_value = []
+        self._setup_query_mock(session, [])
 
         result = await similarity_service.check_for_duplicates("New task", [0.5] * 3072)
 
@@ -276,7 +283,7 @@ class TestTaskSimilarityService:
         """Test behavior with no existing tasks."""
         _, session = mock_db_manager
 
-        session.query().filter().all.return_value = []
+        self._setup_query_mock(session, [])
 
         result = await similarity_service.check_for_duplicates(
             "First task ever", [0.5] * 3072
@@ -356,7 +363,7 @@ class TestTaskSimilarityService:
         task2 = Mock(id="task-2", embedding=[0.1] * 3072)
         task3 = Mock(id="task-3", embedding="")  # Empty string
 
-        session.query().filter().all.return_value = [task1, task2, task3]
+        self._setup_query_mock(session, [task1, task2, task3])
         mock_embedding_service.calculate_batch_similarities.return_value = [0.5]
 
         await similarity_service.check_for_duplicates("New task", [0.5] * 3072)
@@ -384,7 +391,7 @@ class TestTaskSimilarityService:
         )
         task.embedding = json.dumps([0.1] * 3072)
 
-        session.query().filter().all.return_value = [task]
+        self._setup_query_mock(session, [task])
         mock_embedding_service.calculate_batch_similarities.return_value = [0.5]
 
         await similarity_service.check_for_duplicates("New task", [0.5] * 3072)
@@ -434,7 +441,7 @@ class TestTaskSimilarityService:
             for i in range(20)
         ]
 
-        session.query().filter().all.return_value = tasks
+        self._setup_query_mock(session, tasks)
 
         # All with similarity between 0.4 and 0.7
         similarities = [0.4 + (i * 0.01) for i in range(20)]
