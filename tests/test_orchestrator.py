@@ -501,6 +501,118 @@ class TestPickNextDesign:
         assert designs is None
 
 
+class TestPickNextDesignResume:
+    """Regression: a design that already finished Phase 0 (status moved to
+    "active") but was stopped mid-feature-pipeline is invisible to
+    pick_next_design's "pending" query, and its content hash is already in
+    processed_hashes so the file-scan fallback skips it too. Observed live:
+    clicking play again after a stop found "queue empty" and did nothing,
+    even though the design had features still stuck mid-flight.
+    pick_next_design must fall back to an "active" design with incomplete
+    features when no "pending" one exists.
+    """
+
+    @pytest.fixture
+    def db_env(self, tmp_path, monkeypatch):
+        from src.core.database import DatabaseManager
+
+        db_path = tmp_path / "test.db"
+        monkeypatch.setenv("HEPHAESTUS_TEST_DB", str(db_path))
+        db = DatabaseManager(str(db_path))
+        db.create_tables()
+        return db
+
+    def _seed_project_and_design(self, db, tmp_path, design_status, feature_statuses):
+        from src.core.database import AutopilotDesign, AutopilotProject, Feature
+
+        design_dir = tmp_path / ".hephaestus" / "designs"
+        design_dir.mkdir(parents=True)
+        (design_dir / "design.md").write_text("# Design")
+
+        with db.session_scope() as session:
+            session.add(
+                AutopilotProject(
+                    id="proj-1",
+                    name="proj",
+                    base_dir=str(tmp_path),
+                    is_default=True,
+                    is_active=True,
+                )
+            )
+            session.add(
+                AutopilotDesign(
+                    id="des-1",
+                    project_id="proj-1",
+                    filename="design.md",
+                    name="Design",
+                    ordinal=1,
+                    size_bytes=1,
+                    extension=".md",
+                    status=design_status,
+                )
+            )
+            for i, status in enumerate(feature_statuses):
+                session.add(
+                    Feature(
+                        id=f"feat-{i}",
+                        design_id="des-1",
+                        feature_key=f"feature-{i}",
+                        name=f"Feature {i}",
+                        scope="",
+                        status=status,
+                    )
+                )
+
+    def test_resumes_active_design_with_incomplete_feature(self, db_env, tmp_path):
+        self._seed_project_and_design(
+            db_env, tmp_path, "active", ["active"]
+        )
+
+        result = pick_next_design(tmp_path, set(), MockLogger())
+
+        assert result is not None
+        assert result.db_id == "des-1"
+
+    def test_does_not_resume_active_design_with_all_features_terminal(
+        self, db_env, tmp_path
+    ):
+        self._seed_project_and_design(
+            db_env, tmp_path, "active", ["completed", "skipped"]
+        )
+
+        result = pick_next_design(tmp_path, set(), MockLogger())
+
+        assert result is None
+
+    def test_pending_design_still_wins_over_active(self, db_env, tmp_path):
+        """A genuinely new pending design must still be picked before
+        resuming an in-flight one -- resume is only a fallback."""
+        from src.core.database import AutopilotDesign
+
+        self._seed_project_and_design(
+            db_env, tmp_path, "active", ["active"]
+        )
+        (tmp_path / ".hephaestus" / "designs" / "design2.md").write_text("# Design 2")
+        with db_env.session_scope() as session:
+            session.add(
+                AutopilotDesign(
+                    id="des-2",
+                    project_id="proj-1",
+                    filename="design2.md",
+                    name="Design 2",
+                    ordinal=2,
+                    size_bytes=1,
+                    extension=".md",
+                    status="pending",
+                )
+            )
+
+        result = pick_next_design(tmp_path, set(), MockLogger())
+
+        assert result is not None
+        assert result.db_id == "des-2"
+
+
 class TestDesignEntry:
     """Tests for DesignEntry dataclass."""
 

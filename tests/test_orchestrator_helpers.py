@@ -653,6 +653,121 @@ class TestFailWorkflowDirect:
         assert fail_workflow_direct("does-not-exist") is False
 
 
+class TestResumeStuckWorkflowTasks:
+    """Regression: a design that had features created (Phase 0 complete) but
+    got stopped mid-feature-pipeline previously had no way to continue --
+    _run_one_feature always started a brand new workflow for every feature,
+    discarding whatever phases had already completed. _resume_stuck_workflow_
+    tasks un-pauses the workflow and restarts exactly the tasks left stuck
+    (mirrors autopilot_api.py's resume_feature endpoint, but sync since this
+    runs from the orchestrator's own background thread)."""
+
+    def _make_workflow(self, db, wf_id, status):
+        from src.core.database import Workflow
+
+        with db.session_scope() as session:
+            session.add(
+                Workflow(id=wf_id, name="t", phases_folder_path="/tmp", status=status)
+            )
+
+    def _make_task(self, db, task_id, wf_id, status, agent_id=None, phase_id=None):
+        from src.core.database import Task
+
+        with db.session_scope() as session:
+            session.add(
+                Task(
+                    id=task_id,
+                    raw_description="r",
+                    done_definition="d",
+                    status=status,
+                    workflow_id=wf_id,
+                    phase_id=phase_id,
+                    assigned_agent_id=agent_id,
+                )
+            )
+
+    def _make_agent(self, db, agent_id, status):
+        from src.core.database import Agent
+
+        with db.session_scope() as session:
+            session.add(Agent(id=agent_id, system_prompt="p", status=status, cli_type="pi"))
+
+    def test_missing_workflow_returns_zero(self, orch_db_env, tmp_path):
+        from src.autopilot.orchestrator import OrchestratorLogger, _resume_stuck_workflow_tasks
+
+        result = _resume_stuck_workflow_tasks("does-not-exist", OrchestratorLogger(tmp_path))
+        assert result == 0
+
+    def test_unpauses_workflow(self, orch_db_env, tmp_path):
+        from src.autopilot.orchestrator import OrchestratorLogger, _resume_stuck_workflow_tasks
+        from src.core.database import Workflow
+
+        self._make_workflow(orch_db_env, "wf-1", "paused")
+
+        _resume_stuck_workflow_tasks("wf-1", OrchestratorLogger(tmp_path))
+
+        with orch_db_env.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-1").first()
+            assert wf.status == "active"
+
+    @patch("src.autopilot.orchestrator.create_agent_for_task_direct")
+    def test_restarts_failed_and_blocked_tasks(self, mock_create_agent, orch_db_env, tmp_path):
+        from src.autopilot.orchestrator import OrchestratorLogger, _resume_stuck_workflow_tasks
+        from src.core.database import Task
+
+        mock_create_agent.return_value = {"agent_id": "new-agent"}
+        self._make_workflow(orch_db_env, "wf-1", "paused")
+        self._make_task(orch_db_env, "task-failed", "wf-1", "failed")
+        self._make_task(orch_db_env, "task-blocked", "wf-1", "blocked")
+
+        restarted = _resume_stuck_workflow_tasks("wf-1", OrchestratorLogger(tmp_path))
+
+        assert restarted == 2
+        assert mock_create_agent.call_count == 2
+        with orch_db_env.session_scope() as session:
+            for task_id in ("task-failed", "task-blocked"):
+                task = session.query(Task).filter_by(id=task_id).first()
+                assert task.status == "in_progress"
+                assert task.assigned_agent_id == "new-agent"
+                assert task.failure_reason is None
+
+    @patch("src.autopilot.orchestrator.create_agent_for_task_direct")
+    def test_restarts_task_whose_agent_was_terminated(self, mock_create_agent, orch_db_env, tmp_path):
+        """A task can be stuck 'in_progress' pointing at an agent that was
+        already terminated (e.g. the service stop killed it) -- resume must
+        detect this and restart it, not just plain 'failed'/'blocked'."""
+        from src.autopilot.orchestrator import OrchestratorLogger, _resume_stuck_workflow_tasks
+
+        mock_create_agent.return_value = {"agent_id": "new-agent"}
+        self._make_workflow(orch_db_env, "wf-1", "paused")
+        self._make_agent(orch_db_env, "dead-agent", "terminated")
+        self._make_task(orch_db_env, "task-1", "wf-1", "in_progress", agent_id="dead-agent")
+
+        restarted = _resume_stuck_workflow_tasks("wf-1", OrchestratorLogger(tmp_path))
+
+        assert restarted == 1
+        mock_create_agent.assert_called_once()
+
+    @patch("src.autopilot.orchestrator.create_agent_for_task_direct")
+    def test_does_not_restart_task_with_live_agent(self, mock_create_agent, orch_db_env, tmp_path):
+        """A task genuinely still being worked by a live agent must be left
+        alone -- resume is for stuck work, not active work."""
+        from src.autopilot.orchestrator import OrchestratorLogger, _resume_stuck_workflow_tasks
+        from src.core.database import Task
+
+        self._make_workflow(orch_db_env, "wf-1", "active")
+        self._make_agent(orch_db_env, "live-agent", "working")
+        self._make_task(orch_db_env, "task-1", "wf-1", "in_progress", agent_id="live-agent")
+
+        restarted = _resume_stuck_workflow_tasks("wf-1", OrchestratorLogger(tmp_path))
+
+        assert restarted == 0
+        mock_create_agent.assert_not_called()
+        with orch_db_env.session_scope() as session:
+            task = session.query(Task).filter_by(id="task-1").first()
+            assert task.assigned_agent_id == "live-agent"
+
+
 class TestGetAgents:
     def _make_agent(self, db, agent_id, status="working"):
         from src.core.database import Agent

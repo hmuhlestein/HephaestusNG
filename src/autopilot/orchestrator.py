@@ -1328,7 +1328,7 @@ def pick_next_design(
     """
     # Try DB-based queue first
     try:
-        from src.core.database import AutopilotDesign, AutopilotProject, get_db
+        from src.core.database import AutopilotDesign, AutopilotProject, Feature, get_db
 
         with get_db() as db:
             # Find active project
@@ -1341,6 +1341,44 @@ def pick_next_design(
                     .order_by(AutopilotDesign.ordinal, AutopilotDesign.filename)
                     .first()
                 )
+
+                if design is None:
+                    # Resume support: a design that already finished Phase 0
+                    # (status moved to "active") but was stopped mid-feature-
+                    # pipeline is invisible to the "pending" query above --
+                    # its content hash is also already in processed_hashes,
+                    # so the file-scan fallback below would skip it too.
+                    # Without this, clicking play again after a stop finds
+                    # "queue empty" and does nothing, even though the design
+                    # has features still stuck mid-flight. run_phase0's own
+                    # tier-1 check (existing Feature rows) already makes
+                    # re-selecting this design cheap -- it skips straight to
+                    # run_feature_pipelines, which now knows how to resume
+                    # (rather than restart) each feature via its
+                    # existing_workflow_id.
+                    active_designs = (
+                        db.query(AutopilotDesign)
+                        .filter_by(project_id=project.id, status="active")
+                        .order_by(AutopilotDesign.ordinal, AutopilotDesign.filename)
+                        .all()
+                    )
+                    for candidate in active_designs:
+                        incomplete = (
+                            db.query(Feature)
+                            .filter(
+                                Feature.design_id == candidate.id,
+                                Feature.status.notin_(["completed", "skipped"]),
+                            )
+                            .count()
+                        )
+                        if incomplete > 0:
+                            design = candidate
+                            logger.info(
+                                f"Resuming active design {design.name} "
+                                f"({incomplete} feature(s) not yet complete)"
+                            )
+                            break
+
                 if design:
                     # Mark as processing
                     design.status = "processing"
@@ -3176,6 +3214,76 @@ def _create_phase_task(
         return False
 
 
+def _resume_stuck_workflow_tasks(workflow_id: str, logger: OrchestratorLogger) -> int:
+    """Un-pause a workflow and restart its stuck tasks in-process.
+
+    Mirrors autopilot_api.py's resume_feature endpoint (un-pause the
+    workflow, reset blocked/failed tasks plus any assigned/in_progress task
+    whose agent was terminated, spawn a fresh agent for each) -- but sync,
+    since this runs from the orchestrator's own background thread rather
+    than a FastAPI request, so there's no event loop to await
+    agent_manager calls on. Uses create_agent_for_task_direct, the same
+    in-process agent-creation path _create_phase_task already uses.
+
+    Returns the number of tasks restarted.
+    """
+    from src.core.database import Agent, Task, Workflow, get_db
+
+    to_restart: List[tuple] = []
+    with get_db() as db:
+        wf = db.query(Workflow).filter_by(id=workflow_id).first()
+        if not wf:
+            return 0
+        if wf.status in ("paused", "failed"):
+            wf.status = "active"
+
+        candidates = (
+            db.query(Task)
+            .filter(
+                Task.workflow_id == workflow_id,
+                Task.status.in_(["blocked", "failed", "assigned", "in_progress"]),
+            )
+            .all()
+        )
+        restartable = []
+        for t in candidates:
+            if t.status in ("blocked", "failed"):
+                restartable.append(t)
+            elif t.assigned_agent_id:
+                agent = db.query(Agent).filter_by(id=t.assigned_agent_id).first()
+                if not agent or agent.status == "terminated":
+                    restartable.append(t)
+
+        to_restart = [(t.id, t.phase_id) for t in restartable]
+        for t in restartable:
+            t.status = "pending"
+            t.failure_reason = None
+            t.assigned_agent_id = None
+
+        db.commit()
+
+    restarted = 0
+    for task_id, phase_id in to_restart:
+        try:
+            agent_data = create_agent_for_task_direct(task_id, workflow_id, phase_id)
+            if not agent_data:
+                logger.warning(f"[RESUME] Failed to create agent for task {task_id[:8]}")
+                continue
+            agent_id = agent_data.get("agent_id", "unknown")
+            with get_db() as db:
+                task = db.query(Task).filter_by(id=task_id).first()
+                if task:
+                    task.assigned_agent_id = agent_id
+                    task.status = "in_progress"
+                    task.started_at = datetime.utcnow()
+                    db.commit()
+            logger.info(f"[RESUME] Restarted task {task_id[:8]} with agent {agent_id[:8]}")
+            restarted += 1
+        except Exception as e:
+            logger.warning(f"[RESUME] Failed to restart task {task_id[:8]}: {e}")
+    return restarted
+
+
 def run_single_workflow(
     sdk,
     workflow_id: str,
@@ -3188,6 +3296,7 @@ def run_single_workflow(
     design_id: Optional[str] = None,
     timeout_seconds: int = None,
     pause_existing: bool = True,
+    existing_workflow_id: Optional[str] = None,
 ) -> str:
     """Run a single workflow execution.
 
@@ -3198,6 +3307,12 @@ def run_single_workflow(
         pause_existing: If False, skip pausing currently-active workflows. Set to
             False when running feature pipelines in parallel so threads don't
             clobber each other's workflows.
+        existing_workflow_id: Resume this already-created workflow instead of
+            launching a new one via sdk.start_workflow. Set when a design's
+            feature pipeline was stopped mid-flight (service stop/pause) and
+            is being resumed on a later run rather than started fresh --
+            skips re-launching, resets any stuck tasks, and jumps straight
+            into the monitor loop below.
     """
     # FIX: Get timeout from config if not specified
     if timeout_seconds is None:
@@ -3317,14 +3432,22 @@ def run_single_workflow(
         design_worktree_path = project_path
 
     try:
-        exec_id = sdk.start_workflow(
-            definition_id=workflow_id,
-            description=description,
-            working_directory=design_worktree_path or project_path,
-            launch_params=launch_params or {},
-            design_id=design_id,
-        )
-        logger.info(f"Workflow launched: {exec_id}")
+        if existing_workflow_id:
+            exec_id = existing_workflow_id
+            logger.info(f"Resuming existing workflow: {exec_id}")
+            restarted = _resume_stuck_workflow_tasks(exec_id, logger)
+            logger.info(
+                f"Resume: reset {restarted} stuck task(s) for workflow {exec_id[:8]}"
+            )
+        else:
+            exec_id = sdk.start_workflow(
+                definition_id=workflow_id,
+                description=description,
+                working_directory=design_worktree_path or project_path,
+                launch_params=launch_params or {},
+                design_id=design_id,
+            )
+            logger.info(f"Workflow launched: {exec_id}")
         if state:
             state.current_workflow_id = exec_id
             # Store branch name for final merge
@@ -4007,9 +4130,10 @@ def _run_one_feature(
     logger.info(f"Starting feature pipeline: {feature_name} ({feature_key})")
 
     # Find feature record in DB
-    from src.core.database import Feature, get_db
+    from src.core.database import Feature, Workflow, get_db
 
     feature_id = None
+    existing_workflow_id = None
     with get_db() as db:
         feat_record = (
             db.query(Feature)
@@ -4021,9 +4145,29 @@ def _run_one_feature(
         )
         if feat_record:
             feature_id = feat_record.id
+
+            # Resume support: a design that was Phase-0'd, then had this
+            # feature's pipeline stopped mid-flight (service stop/pause),
+            # lands back here on a later "play" with feat_record.status
+            # still "active"/"failed" and workflow_id already pointing at
+            # the workflow that was running. Without this check, a resumed
+            # design's feature loop would always start a brand new workflow
+            # from scratch for every feature, discarding whatever phases had
+            # already completed.
+            if feat_record.workflow_id:
+                wf = db.query(Workflow).filter_by(id=feat_record.workflow_id).first()
+                if wf and wf.status == "completed":
+                    logger.info(
+                        f"Feature {feature_key} already completed (workflow "
+                        f"{wf.id[:8]}) — skipping"
+                    )
+                    return "completed"
+                if wf:
+                    existing_workflow_id = wf.id
+
             # Update status to active
             feat_record.status = "active"
-            feat_record.started_at = datetime.utcnow()
+            feat_record.started_at = feat_record.started_at or datetime.utcnow()
             db.commit()
 
     if not feature_id:
@@ -4092,6 +4236,7 @@ def _run_one_feature(
             max_iterations=max_iterations,
             design_id=design_entry.db_id,
             pause_existing=False,  # features run in parallel; don't clobber each other
+            existing_workflow_id=existing_workflow_id,
         )
 
         # Link workflow to feature in DB
