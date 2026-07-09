@@ -32,6 +32,18 @@ def generate_pi_agent(phase_cfg: dict, default_model: str) -> str:
         "mcp:hephaestus/update_task_status",
         "mcp:hephaestus/create_task",
         "mcp:hephaestus/get_task_status",
+        # Ticket tools: only development/qa_validation/security_review's
+        # additional_notes actually instruct agents to use these (create+file
+        # for QA/security_review, check+resolve for development), but the
+        # tools: allowlist here is shared across every generated agent file --
+        # granting access to all phases is simpler than threading a per-phase
+        # tool list through this generator, and unused tool access is harmless
+        # (a phase whose prompt never mentions tickets just never calls them).
+        "mcp:hephaestus/create_ticket",
+        "mcp:hephaestus/get_tickets",
+        "mcp:hephaestus/search_tickets",
+        "mcp:hephaestus/resolve_ticket",
+        "mcp:hephaestus/change_ticket_status",
     ]
 
     tools_str = "read, write, edit, bash, grep, find, ls, " + ", ".join(mcp_tools)
@@ -46,6 +58,12 @@ def generate_pi_agent(phase_cfg: dict, default_model: str) -> str:
     identity = f"""You are the Hephaestus {role_title} agent (Phase {phase_num} of 10).
 
 {description}
+
+FILE PLACEMENT: deliverables go in the project's normal source tree. Any
+scratch/exploratory output that isn't part of the deliverable goes under
+.hephaestus/scratch/ — never the project root. Stuck on something unrelated
+to your task? Don't write reports about it — work around it or fail the
+task with a reason.
 
 When your work is complete, call:
   mcp__hephaestus__update_task_status(task_id=<id>, status="done", summary="...")

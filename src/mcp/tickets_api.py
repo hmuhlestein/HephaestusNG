@@ -472,17 +472,20 @@ async def create_ticket_endpoint(
         raise
     except ValueError as e:
         logger.warning(f"[TICKET_CREATE] ⚠️ ValueError (non-fatal): {e}")
-        # Return a warning response instead of crashing the agent
+        # Return a warning response instead of crashing the agent. This was
+        # previously constructing CreateTicketResponse with fields that
+        # don't exist on that model at all (workflow_id, agent_id, title,
+        # ticket_type, priority, description, created_at) while omitting
+        # the three actually-required ones (success, message,
+        # embedding_created) -- every ValueError path (missing board
+        # config, invalid ticket_type, etc.) crashed with a pydantic
+        # ValidationError instead of the intended graceful response.
         return CreateTicketResponse(
+            success=False,
             ticket_id="",
-            workflow_id=workflow_id if "workflow_id" in dir() else "",
-            agent_id=agent_id,
-            title=request.title,
-            ticket_type=request.ticket_type,
-            priority=request.priority,
             status="skipped",
-            description=f"Ticket creation skipped: {e}",
-            created_at="",
+            message=f"Ticket creation skipped: {e}",
+            embedding_created=False,
         )
     except Exception as e:
         logger.error(f"[TICKET_CREATE] ❌ Unexpected error: {type(e).__name__}: {e}")
@@ -921,6 +924,7 @@ async def search_tickets_endpoint(
     except Exception as e:
         logger.error(f"Ticket search failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+@router.get("", response_model=GetTicketsResponse, include_in_schema=False)
 @router.get("/", response_model=GetTicketsResponse)
 async def get_tickets_endpoint(
     workflow_id: Optional[str] = None,  # Optional - can filter by project instead

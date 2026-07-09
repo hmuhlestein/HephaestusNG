@@ -16,6 +16,7 @@ done_definitions:
   - "Security-related code paths traced end-to-end"
   - "OWASP Top 10 considerations addressed"
   - "Critical and high vulnerabilities FIXED in the code"
+  - "Tickets created for unresolved medium/low vulnerabilities"
   - "security_report.md created with findings and fixes applied"
   - "Memory saved with security findings"
   - "Task marked as done"
@@ -227,9 +228,50 @@ additional_notes: |
   - Secrets in code: Move to environment variables
   
   ═══════════════════════════════════════════════════════════════════════
-  STEP 9: SAVE TO MEMORY
+  STEP 9: CREATE TICKETS FOR UNFIXED VULNERABILITIES
   ═══════════════════════════════════════════════════════════════════════
-  
+
+  For EVERY medium or low vulnerability you did NOT fix (documented in Step 7's
+  "Medium Vulnerabilities" / "Low Vulnerabilities" sections), file a ticket so it
+  doesn't just sit in a report nobody revisits. Search for an existing open ticket
+  (hephaestus_search_tickets) on the same issue first (avoid duplicates).
+
+  ```
+  hephaestus_create_ticket(
+    agent_id="<your agent id>",
+    workflow_id="<your workflow id>",
+    task_id="<your task id>",
+    phase_id="<your phase id>",
+    title="[BUG] <short descriptive title>",
+    description='''
+  ## Issue Description
+  <What is the problem?>
+
+  ## Impact
+  <What could an attacker/user do?>
+
+  ## File(s)
+  <path:line references>
+
+  ## Severity
+  <Medium/Low>
+
+  ## Suggested Fix
+  <If known, suggest a fix>
+  ''',
+    ticket_type="bug",
+    priority="<medium/low>",
+    tags=["security-finding", "security_review"]
+  )
+  ```
+
+  List created tickets in security_report.md under a "## Tickets Created" section
+  (ticket ID, title, priority) so the report and the ticket board stay consistent.
+
+  ═══════════════════════════════════════════════════════════════════════
+  STEP 10: SAVE TO MEMORY
+  ═══════════════════════════════════════════════════════════════════════
+
   Save security findings to memory:
   - Common vulnerability patterns found
   - Security best practices to maintain

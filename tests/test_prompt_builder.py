@@ -10,6 +10,8 @@ tried to create a subtask following these instructions verbatim failed
 with a validation error.
 """
 
+import pytest
+
 from src.agents.prompt_builder import AgentPromptBuilder
 from src.phases.models import PhaseContext
 from src.sdk.models import Phase as SdkPhase
@@ -23,6 +25,33 @@ class _FakeTask:
         self.raw_description = "do the thing"
         self.enriched_description = None
         self.done_definition = "the thing is done"
+
+
+class TestFilePlacementGuardrail:
+    """Regression: a FILE PLACEMENT instruction was first added to
+    base_system_prompt/feature_architect_system_prompt in system_prompts.yaml
+    -- but those templates are only used by the internal task-enrichment LLM
+    call (src/interfaces/llm_interface.py), never by the actual worktree
+    agent (built by AgentPromptBuilder.format_initial_message from
+    phase_agent_instructions/non_phase_agent_instructions instead). The
+    guardrail never reached a real agent. Moved to the templates that
+    actually do."""
+
+    def test_phase_agent_prompt_includes_file_placement(self):
+        builder = AgentPromptBuilder(phase_manager=None)
+        message = builder.format_initial_message(
+            task=_FakeTask(), agent_id="agent-abc"
+        )
+        assert "FILE PLACEMENT" in message
+        assert ".hephaestus/scratch/" in message
+
+    def test_non_phase_agent_prompt_includes_file_placement(self):
+        task = _FakeTask()
+        task.phase_id = None
+        builder = AgentPromptBuilder(phase_manager=None)
+        message = builder.format_initial_message(task=task, agent_id="agent-abc")
+        assert "FILE PLACEMENT" in message
+        assert ".hephaestus/scratch/" in message
 
 
 class TestCreateTaskToolSignature:
@@ -187,3 +216,137 @@ class TestTicketTrackingNote:
             task=_FakeTask(), agent_id="agent-abc"
         )
         assert "Ticket tracking is ON" not in message
+
+
+@pytest.fixture
+def ticket_db(tmp_path, monkeypatch):
+    from src.core.database import DatabaseManager
+
+    db_path = tmp_path / "test.db"
+    monkeypatch.setenv("HEPHAESTUS_TEST_DB", str(db_path))
+    db = DatabaseManager(str(db_path))
+    db.create_tables()
+    return db
+
+
+def _seed_dev_phase_and_ticket(db, workflow_id, phase_id, is_resolved=False, ticket_type="bug"):
+    from src.core.database import Phase, Ticket, Workflow
+
+    with db.session_scope() as session:
+        session.add(
+            Workflow(id=workflow_id, name="t", phases_folder_path="/tmp", status="active")
+        )
+        session.add(
+            Phase(
+                id=phase_id,
+                workflow_id=workflow_id,
+                order=1,
+                name="development",
+                description="d",
+                done_definitions=["done"],
+            )
+        )
+        session.add(
+            Ticket(
+                id="ticket-abc12345",
+                workflow_id=workflow_id,
+                created_by_agent_id="agent-qa",
+                title="Auth bypass on /admin",
+                description="Missing auth check lets any user hit /admin routes.",
+                ticket_type=ticket_type,
+                priority="high",
+                status="open",
+                is_resolved=is_resolved,
+            )
+        )
+
+
+class TestOpenTicketsInjection:
+    """development.yaml's own instructions tell agents to check for open bug
+    tickets, but a pull-based instruction is compliance-dependent -- this
+    proactively injects them into the prompt instead, only on a goto
+    re-entry (task.action == "goto"), matching where
+    verify_no_open_tickets enforces resolution at task-completion time."""
+
+    def test_injects_open_tickets_on_goto(self, ticket_db):
+        _seed_dev_phase_and_ticket(ticket_db, "wf-456", "phase-789")
+
+        task = _FakeTask()
+        task.action = "goto"
+        builder = AgentPromptBuilder(phase_manager=None)
+        message = builder.format_initial_message(task=task, agent_id="agent-abc")
+
+        assert "OPEN BUG TICKETS" in message
+        assert "ticket-abc12345" in message
+        assert "Auth bypass on /admin" in message
+        assert "hephaestus_resolve_ticket" in message
+
+    def test_no_injection_on_first_pass_continue(self, ticket_db):
+        """action == 'continue' (first-time build from architecture_design)
+        must not show tickets even if some exist for the workflow."""
+        _seed_dev_phase_and_ticket(ticket_db, "wf-456", "phase-789")
+
+        task = _FakeTask()
+        task.action = "continue"
+        builder = AgentPromptBuilder(phase_manager=None)
+        message = builder.format_initial_message(task=task, agent_id="agent-abc")
+
+        assert "OPEN BUG TICKETS" not in message
+
+    def test_no_injection_when_tickets_resolved(self, ticket_db):
+        _seed_dev_phase_and_ticket(ticket_db, "wf-456", "phase-789", is_resolved=True)
+
+        task = _FakeTask()
+        task.action = "goto"
+        builder = AgentPromptBuilder(phase_manager=None)
+        message = builder.format_initial_message(task=task, agent_id="agent-abc")
+
+        assert "OPEN BUG TICKETS" not in message
+
+    def test_no_injection_for_non_bug_tickets(self, ticket_db):
+        _seed_dev_phase_and_ticket(ticket_db, "wf-456", "phase-789", ticket_type="feature")
+
+        task = _FakeTask()
+        task.action = "goto"
+        builder = AgentPromptBuilder(phase_manager=None)
+        message = builder.format_initial_message(task=task, agent_id="agent-abc")
+
+        assert "OPEN BUG TICKETS" not in message
+
+    def test_no_injection_outside_development_phase(self, ticket_db):
+        from src.core.database import Phase, Ticket, Workflow
+
+        with ticket_db.session_scope() as session:
+            session.add(
+                Workflow(id="wf-456", name="t", phases_folder_path="/tmp", status="active")
+            )
+            session.add(
+                Phase(
+                    id="phase-789",
+                    workflow_id="wf-456",
+                    order=1,
+                    name="qa_validation",
+                    description="d",
+                    done_definitions=["done"],
+                )
+            )
+            session.add(
+                Ticket(
+                    id="ticket-abc12345",
+                    workflow_id="wf-456",
+                    created_by_agent_id="agent-qa",
+                    title="Auth bypass",
+                    description="d",
+                    ticket_type="bug",
+                    priority="high",
+                    status="open",
+                    is_resolved=False,
+                )
+            )
+
+        task = _FakeTask()
+        task.action = "goto"
+        builder = AgentPromptBuilder(phase_manager=None)
+        message = builder.format_initial_message(task=task, agent_id="agent-abc")
+
+        assert "OPEN BUG TICKETS" not in message

@@ -212,7 +212,7 @@ additional_notes: |
   TICKET TEMPLATE (copy this for each issue):
   
   ```
-  create_ticket(
+  hephaestus_create_ticket(
     agent_id="<your agent id>",
     workflow_id="<your workflow id>",
     task_id="<your task id>",
@@ -246,7 +246,7 @@ additional_notes: |
   ''',
     ticket_type="bug",
     priority="<critical/high/medium/low>",
-    tags=["qa-finding", "phase-7", "<feature-name>"]
+    tags=["qa-finding", "qa_validation", "<feature-name>"]
   )
   ```
   
