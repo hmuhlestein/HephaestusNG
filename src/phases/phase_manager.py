@@ -1511,8 +1511,7 @@ class PhaseManager:
         Returns:
             workflow_id of the new execution
         """
-        session = self.db_manager.get_session()
-        try:
+        with self.db_manager.session_scope() as session:
             # Get the definition
             db_definition = (
                 session.query(DBWorkflowDefinition).filter_by(id=definition_id).first()
@@ -1714,8 +1713,6 @@ class PhaseManager:
                         f"Prepared Phase 1 task info for workflow {workflow_id}"
                     )
 
-            session.commit()
-
             # Track active execution
             self.active_executions[workflow_id] = definition_id
 
@@ -1733,13 +1730,6 @@ class PhaseManager:
 
             # Return both workflow_id and initial task info
             return workflow_id, initial_task_info
-
-        except Exception as e:
-            logger.error(f"Failed to start workflow execution: {e}")
-            session.rollback()
-            raise
-        finally:
-            session.close()
 
     def get_workflow(self, workflow_id: str) -> Optional[Workflow]:
         """Get a specific workflow execution by ID.
