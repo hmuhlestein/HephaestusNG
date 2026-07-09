@@ -310,6 +310,7 @@ class PipelineStatus(BaseModel):
     total_elapsed: int = 0
     queue_depth: int = 0
     last_event: Optional[Dict[str, Any]] = None
+    last_error: Optional[str] = None
     active_agents: int = 0
     # Which project the (globally single) AutopilotService is actually
     # running, if any -- lets the UI say "X is running" instead of a vague
@@ -500,6 +501,17 @@ async def get_pipeline_status(
             running_project_name = Path(running_project_path).name
 
     # Merge service status with file-based state
+    # Derive error/reason for why the pipeline stopped
+    last_error = None
+    if not running:
+        service_error = service_status.get("error")
+        if service_error:
+            last_error = service_error
+        elif last_event and last_event.get("type") == "error":
+            last_error = last_event.get("message", "Unknown error")
+        elif designs_failed > 0:
+            last_error = f"{designs_failed} design(s) failed"
+    
     result = PipelineStatus(
         running=running,
         current_design=service_status.get("current_design")
@@ -515,6 +527,7 @@ async def get_pipeline_status(
         or state.get("total_elapsed", 0),
         queue_depth=queue_depth,
         last_event=last_event,
+        last_error=last_error,
         active_agents=active_agents,
         running_project_path=running_project_path,
         running_project_name=running_project_name,
