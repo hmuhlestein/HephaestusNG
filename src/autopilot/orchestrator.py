@@ -1503,7 +1503,7 @@ def pick_next_design(
     """
     # Try DB-based queue first
     try:
-        from src.core.database import AutopilotDesign, AutopilotProject, Feature, get_db
+        from src.core.database import AutopilotDesign, AutopilotProject, Feature, Workflow, get_db
 
         with get_db() as db:
             # Find active project
@@ -1636,41 +1636,41 @@ def pick_next_design(
                 if design is None:
                     logger.info("pick_next_design: no designs to process")
 
-                if design:
-                    # Mark as processing
-                    design.status = "processing"
-                    db.commit()
+            if design:
+                # Mark as processing
+                design.status = "processing"
+                db.commit()
 
-                    # Construct DesignEntry from DB record
-                    # Try file_path first, fall back to filename-based path
-                    design_path = None
-                    if design.file_path:
-                        # Use file_path if available (absolute path)
-                        design_path = Path(design.file_path)
-                        if not design_path.exists():
-                            logger.warning(f"file_path does not exist: {design_path}")
-                            design_path = None
+                # Construct DesignEntry from DB record
+                # Try file_path first, fall back to filename-based path
+                design_path = None
+                if design.file_path:
+                    # Use file_path if available (absolute path)
+                    design_path = Path(design.file_path)
+                    if not design_path.exists():
+                        logger.warning(f"file_path does not exist: {design_path}")
+                        design_path = None
 
-                    if design_path is None:
-                        # Fall back to filename-based path
-                        design_path = (
-                            Path(project.base_dir) / DESIGN_CONTEXT_SUBDIR / design.filename
-                        )
+                if design_path is None:
+                    # Fall back to filename-based path
+                    design_path = (
+                        Path(project.base_dir) / DESIGN_CONTEXT_SUBDIR / design.filename
+                    )
 
-                    if design_path.exists():
-                        entry = DesignEntry(
-                            path=design_path,
-                            name=design.name,
-                            content_hash=design.content_hash or file_hash(design_path),
-                            db_id=design.id,
-                            file_path=str(design_path),
-                        )
-                        logger.info(
-                            f"Selected from DB: {design.name} (ordinal={design.ordinal})"
-                        )
-                        return entry
-                    else:
-                        logger.warning(f"Design file not found: {design_path}")
+                if design_path.exists():
+                    entry = DesignEntry(
+                        path=design_path,
+                        name=design.name,
+                        content_hash=design.content_hash or file_hash(design_path),
+                        db_id=design.id,
+                        file_path=str(design_path),
+                    )
+                    logger.info(
+                        f"Selected from DB: {design.name} (ordinal={design.ordinal})"
+                    )
+                    return entry
+                else:
+                    logger.warning(f"Design file not found: {design_path}")
     except Exception as e:
         logger.warning(f"DB queue read failed, falling back to file scan: {e}")
 
