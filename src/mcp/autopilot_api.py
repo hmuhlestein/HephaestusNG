@@ -908,6 +908,9 @@ async def rerun_design(request: dict):
                 )
                 # Reset design status so orchestrator picks it up fresh
                 design.status = "pending"
+                # Clear retry counter so fresh retry starts at 0
+                from src.autopilot.orchestrator import _delete_project_context
+                _delete_project_context(db, f"autopilot_retry_{design.id}")
 
             db.commit()
             logger.info(

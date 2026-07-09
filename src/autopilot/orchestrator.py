@@ -92,6 +92,7 @@ PARENT_PEEK_INTERVAL = int(
 # FIX: Extracted to config (hephaestus_config.yaml -> autopilot section)
 MAX_PHASE0_TIME = 3600  # 1 hour timeout for Phase 0 (deprecated: use config)
 MAX_PARALLEL_FEATURES = 4  # max concurrent feature pipelines
+MAX_DESIGN_RETRIES = 3  # max times a failed design is auto-retried
 
 # Module-level orchestrator agent ID (set during registration)
 _orchestrator_agent_id: Optional[str] = None
@@ -1546,12 +1547,55 @@ def pick_next_design(
                             .count()
                         )
                         if incomplete > 0:
+                            # Check if any associated workflow has failed —
+                            # if so, reset the design to pending for retry
+                            # instead of resuming a doomed run.
+                            failed_wf = (
+                                db.query(Workflow)
+                                .filter(
+                                    Workflow.design_id == candidate.id,
+                                    Workflow.status == "failed",
+                                )
+                                .first()
+                            )
+                            if failed_wf:
+                                # Retry limit: don't retry forever.
+                                retry_key = f"autopilot_retry_{candidate.id}"
+                                retry_count = _get_project_context(db, retry_key) or 0
+                                if retry_count >= MAX_DESIGN_RETRIES:
+                                    logger.info(
+                                        f"Design {candidate.name} has failed "
+                                        f"workflow {failed_wf.id[:8]} and "
+                                        f"exceeded {MAX_DESIGN_RETRIES} retries "
+                                        f"({retry_count}/{MAX_DESIGN_RETRIES}) — marking failed"
+                                    )
+                                    candidate.status = "failed"
+                                    db.commit()
+                                    continue
+                                logger.info(
+                                    f"Design {candidate.name} has failed "
+                                    f"workflow {failed_wf.id[:8]} — resetting "
+                                    f"to pending for retry ({retry_count + 1}/{MAX_DESIGN_RETRIES})"
+                                )
+                                _set_project_context(db, retry_key, retry_count + 1)
+                                candidate.status = "pending"
+                                db.commit()
+                                continue
                             design = candidate
                             logger.info(
                                 f"Resuming active design {design.name} "
                                 f"({incomplete} feature(s) not yet complete)"
                             )
                             break
+                        else:
+                            # All features completed/skipped — mark design done
+                            # and continue looking for the next one.
+                            candidate.status = "completed"
+                            db.commit()
+                            logger.info(
+                                f"Design {candidate.name} has all features "
+                                f"completed/skipped — marking done"
+                            )
 
                 if design:
                     # Mark as processing
@@ -5737,6 +5781,11 @@ def run_continuous_pipeline(args) -> None:
                                 )
                                 if status == DesignStatus.COMPLETED:
                                     _des.completed_at = datetime.utcnow()
+                                    # Clear retry counter on success
+                                    _delete_project_context(
+                                        _db,
+                                        f"autopilot_retry_{_des.id}",
+                                    )
                                 _db.commit()
                 except Exception as _db_err:
                     logger.warning(f"Failed to update DB design status: {_db_err}")
