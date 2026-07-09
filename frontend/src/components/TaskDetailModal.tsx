@@ -315,7 +315,8 @@ ${taskDetails.child_tasks.map((t: any) => `- ${t.description} (${t.status})`).jo
                     Task Details
                   </h3>
                   <p className="text-sm text-gray-600 dark:text-gray-400 font-mono">
-                    {taskDetails?.id || taskId}
+                    {taskDetails?.user_prompt?.slice(0, 80) || taskDetails?.id || taskId}
+                    {taskDetails?.user_prompt && taskDetails.user_prompt.length > 80 ? '...' : ''}
                   </p>
                 </div>
 
