@@ -1,107 +1,141 @@
-# Repository Guidelines
+# CLAUDE.md — HephaestusNG
 
-## Rules for AI Assistants
-- **Do NOT commit or push code without explicit user approval.** Always ask before running `git commit` or `git push`.
+## Non-negotiables
 
-## Project Structure & Module Organization
-- `src/` holds the orchestration stack: `agents/` (lifecycle), `memory/` (vector store + RAG), `mcp/` (FastAPI MCP server), `monitoring/` (Guardian & Conductor loops), and shared utilities in `core/`.
-- `frontend/` is the Vite + React dashboard; run UI tooling from that directory.
-- `tests/` contains integration suites and `run_all_tests.py`; `tests/mcp_integration/` targets protocol flows with local fixtures.
-- `scripts/` provides setup helpers; architecture details live in `docs/` and `design_docs/`; configuration files sit in `config/`.
+- No flattery, no filler. Start with the answer or the action.
+- Disagree when you disagree. If the user's premise is wrong, say so before doing the work.
+- Never fabricate file paths, commit hashes, API names, test results, or library functions.
+- Stop when confused. If the task has two plausible interpretations, ask.
+- Touch only what you must. Every changed line must trace directly to the user's request.
+- **Never commit or push changes unless the user explicitly asks you to.**
 
-## Build, Test, and Development Commands
+## Before writing code
 
-### Install
+- State your plan in one or two sentences before editing.
+- Read the files you will touch. Read the files that call the files you will touch.
+- Match existing patterns in the codebase.
+- Surface assumptions out loud. Do not bury assumptions inside the implementation.
+
+## Writing code
+
+- No features beyond what was asked.
+- No abstractions for single-use code.
+- No error handling for impossible scenarios.
+- If the solution runs 200 lines and could be 50, rewrite it before showing it.
+- Bias toward deleting code over adding code.
+
+## Surgical changes
+
+- Do not "improve" adjacent code, comments, formatting, or imports that are not part of the task.
+- Do not refactor code that works just because you are in the file.
+- Do clean up orphans created by your own changes (unused imports, variables, functions).
+- Match the project's existing style exactly.
+
+## Communication style
+
+- Direct, not diplomatic. "This won't scale because X" beats "That's an interesting approach, but have you considered...".
+- Concise by default. Two or three short paragraphs unless the user asks for depth.
+- No excessive bullet points, no unprompted headers, no emoji.
+
+---
+
+## Stack
+
+- **Backend**: Python 3.12, FastAPI, Uvicorn, SQLite (SQLAlchemy), Pydantic
+- **Frontend**: React 18, TypeScript, Tailwind CSS, Vite
+- **Agents**: tmux sessions with CLI agents (pi, Claude Code, Codex)
+- **LLM**: OpenRouter (default), OpenAI, Anthropic
+- **Vector Store**: turbovec (default) or Qdrant
+- **Config**: YAML (hephaestus_config.yaml, config/workflows/, config/prompts/)
+
+## Commands
+
 ```bash
-# Remote install (no repo needed)
-curl -sSL https://raw.githubusercontent.com/hmuhlestein/HephaestusNG/main/scripts/install.sh | bash
+# Service management
+heph start / stop / restart / status / init
 
-# Local install (from cloned repo)
-./scripts/install.sh
+# Tests
+python tests/run_all_tests.py          # all tests
+python tests/run_all_tests.py --quick  # smoke pass
+pytest tests/test_foo.py               # single file
+pytest --cov=src                       # coverage
 
-# Add heph to PATH
-export PATH="$HOME/.hephaestus/.venv/bin:$PATH"
+# Frontend
+cd frontend && npm run dev             # dev server
+cd frontend && npm run build           # production build
+cd frontend && npx tsc --noEmit        # type check
+
+# Lint
+black --line-length 88 src/
+flake8 src/
+mypy src/
+
+# Autopilot
+heph autopilot start --project-path ~/my-project
+heph autopilot stop / status
+heph autopilot queue --project-path ~/my-project
+
+# Knowledge base
+heph memory search "query"
+heph memory save "content" --type discovery
 ```
 
-### Service Management (heph CLI)
-```bash
-heph start                       # Start backend, monitor, frontend, Qdrant
-heph stop                        # Stop all services
-heph restart                     # Restart all services
-heph status                      # Health check
-heph init                        # Initialize database and Qdrant
+## Project Layout
+
+```
+src/
+  agents/       Agent lifecycle, tmux management, messaging
+  autopilot/    Pipeline orchestrator, phase management
+  core/         Database, config, constants, utilities
+  interfaces/   LLM providers, CLI agent abstractions
+  mcp/          FastAPI server, API routes
+  monitoring/   Guardian, conductor, orphan reaper
+  phases/       Phase manager, evaluation handlers
+  prompts/      Prompt loader, YAML templates
+  sdk/          Hephaestus SDK client
+  services/     Agent dispatch, task blocking, enrichment
+  workflow/     Workflow registry, termination handler
+frontend/       React dashboard
+config/         YAML config, workflows, prompts
+docs/           Architecture docs, design docs
+tests/          Unit and integration tests
+scripts/        Setup helpers
 ```
 
-### Workflow & Agents
-```bash
-heph workflow list                # List workflow definitions
-heph workflow launch <id> -d "..." # Launch a workflow
-heph agent list                  # List active agents
-heph task list --status pending  # List tasks by status
-```
+## Conventions
 
-### Autopilot Pipeline
-```bash
-heph autopilot start --project-path ~/my-project   # Start pipeline
-heph autopilot stop                                # Stop pipeline
-heph autopilot status                              # Pipeline status
-heph autopilot queue --project-path ~/my-project   # View design queue
-heph autopilot add design.md --project-path ~/my-project  # Add to queue
-```
+- **Naming**: snake_case (Python), PascalCase (React components), camelCase (hooks)
+- **Logging**: `logger = logging.getLogger(__name__)` at module level. Never create mock loggers. No logging in data return paths.
+- **Database**: SQLAlchemy with StaticPool, expire_on_commit=False, use session_scope()
+- **Imports**: Absolute from src root (`from src.core.database import ...`)
+- **Commits**: `feat:`, `fix:`, `chore:` prefixes, <72 char subjects
+- **Frontend**: Functional components, Tailwind classes, `npm run type-check` before review
 
-### Knowledge Base
-```bash
-heph memory search "query"       # Search vector DB
-heph memory save "content" --type discovery  # Save to vector DB
-```
+## Vector Store
 
-### Legacy Commands (direct)
-```bash
-poetry install                   # or pip install -r requirements.txt
-python scripts/init_db.py        # Initialize SQLite tables
-python scripts/init_qdrant.py    # Initialize Qdrant collections
-python run_server.py             # Start MCP API on port 8300
-python run_monitor.py            # Start self-healing monitor
-cd frontend && npm install && npm run dev  # Start UI dashboard
-```
-
-### Frontend
-```bash
-cd frontend && npm install && npm run dev   # Dev server
-cd frontend && npm run build                # Production build
-cd frontend && npm run type-check           # TypeScript check
-```
-
-## Vector Store Backends
-- **Default: turbovec** (local, in-process, zero Docker). Uses `data/turbovec/` for storage.
-- **Fallback: Qdrant** (requires Docker). Set `VECTOR_STORE_BACKEND=qdrant` to use.
+- **Default: turbovec** (local, in-process, zero Docker). Uses `data/turbovec/`.
+- **Fallback: Qdrant** (requires Docker). Set `VECTOR_STORE_BACKEND=qdrant`.
 - **Embeddings: fastembed** (local ONNX, 384-dim). Set `EMBEDDING_BACKEND=openai` for OpenAI API.
-- Configure via env vars: `VECTOR_STORE_BACKEND`, `EMBEDDING_BACKEND`, `TURBOVEC_DATA_DIR`, `FASTEMBED_MODEL`.
+- Env vars: `VECTOR_STORE_BACKEND`, `EMBEDDING_BACKEND`, `TURBOVEC_DATA_DIR`, `FASTEMBED_MODEL`.
 
-## Coding Style & Naming Conventions
-- Format Python with Black (line length 88), lint via `flake8`, and type-check with `mypy`; use snake_case modules/functions, PascalCase classes, verb-first async names, and explicit type hints.
-- Frontend code relies on functional components, camelCase hooks/utilities, Tailwind classes, and `npm run type-check` before review.
+## Critical Invariants
 
-## Logging Best Practices
-- **Use module-level loggers**: Always use `logger = logging.getLogger(__name__)` at module level. Never create mock/fake logger classes.
-- **No redundant logging**: Don't wrap existing loggers or create logger adapters unless absolutely necessary. Pass the module logger to functions that need it.
-- **No logging in data return paths**: Don't log messages that should be returned as API response data. Use the logger for operational/debug logs, not for returning results to callers.
-- **Functions that need logging should accept a logger parameter**: If a function needs to log, add `logger` as a parameter rather than creating a new logger inside the function.
+- **Agent termination**: Every path that sets `status="terminated"` MUST also set `current_task_id=None` and `terminated_at=datetime.utcnow()`
+- **No nested worktrees**: If `project_path` contains `.worktrees/`, use it directly
+- **Design storage**: `.hephaestus/designs/` (not git-tracked)
+- **No hardcoded timeouts**: Use `hephaestus_config.yaml`
+- **Transcript logs**: `.hephaestus/tmux/*.transcript.log` for full agent output history
 
-## Documentation-First Workflow
-- Consult the relevant entries in `docs/` or `design_docs/` before coding and mirror established patterns.
-- Update or add documentation when behavior changes, keeping `prompts/` and `templates/` aligned with code updates.
+## Security
 
-## Testing Guidelines
-- Default to `python tests/run_all_tests.py`; use `--quick` for a smoke pass or run suites directly (e.g., `python tests/test_vector_store.py`). `pytest` and `pytest --cov=src` remain available for targeted coverage.
-- Tests assume live Qdrant and valid API keys; note prerequisites in docstrings, guard optional integrations with `pytest.importorskip`, and clean up agent data deterministically.
+- Store secrets in `.env`; never commit credentials
+- Use `hephaestus_config.yaml` for config overrides
+- For local-only: `VECTOR_STORE_BACKEND=turbovec` and `EMBEDDING_BACKEND=fastembed` (no Docker, no API keys)
 
-## Commit & Pull Request Guidelines
-- Match the repo history with `feat:`, `fix:`, `chore:` prefixes and <72 character subjects.
-- PRs should state scope, configuration or credential assumptions, and linked issues/design docs; attach UI screenshots and paste key command outputs when relevant.
-- Run backend suites plus `npm run type-check` before requesting review, calling out any skipped checks with rationale.
+## Forbidden
 
-## Security & Configuration Tips
-- Store secrets in `.env`; use `hephaestus_config.yaml` or `config/agent_config.yaml` for overrides and never commit credentials.
-- Reset SQLite/Qdrant state through `scripts/` helpers to prevent orphaned agent records.
-- For local-only deployments, use `VECTOR_STORE_BACKEND=turbovec` and `EMBEDDING_BACKEND=fastembed` (no Docker, no API keys needed).
+- Do not commit .env or API keys
+- Do not create nested worktrees inside existing worktrees
+- Do not set agent.current_task_id without clearing it on termination
+- Do not store design files in git-tracked directories
+- Do not use synchronous blocking calls in async endpoints without thread pool
