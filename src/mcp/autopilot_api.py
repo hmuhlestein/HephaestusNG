@@ -3304,8 +3304,10 @@ async def start_pipeline(
     if service.running:
         # Check for zombie state: service says running but no active agents/workflows.
         # This happens when the pipeline task gets stuck. Auto-stop and restart.
+        # BUT: if the queue is legitimately empty (all designs done), the pipeline
+        # is correctly idle — not a zombie.
         try:
-            from src.core.database import Agent, Workflow, get_db
+            from src.core.database import Agent, AutopilotDesign, Workflow, get_db
 
             with get_db() as db:
                 active_agents = db.query(Agent).filter(
@@ -3314,10 +3316,23 @@ async def start_pipeline(
                 active_wfs = db.query(Workflow).filter(
                     Workflow.status == "active"
                 ).count()
-            if active_agents == 0 and active_wfs == 0:
+
+                # Only zombie-detect if there are pending designs that
+                # should be getting processed. Empty queue = legitimate idle.
+                pending_designs = db.query(AutopilotDesign).filter(
+                    AutopilotDesign.status.in_(["pending", "active"])
+                ).count()
+
+            if active_agents == 0 and active_wfs == 0 and pending_designs > 0:
                 logger.warning(
-                    "[START] Zombie pipeline detected (running=True but no "
-                    "active agents/workflows) — auto-stopping"
+                    f"[START] Zombie pipeline detected (running=True but {pending_designs} "
+                    f"pending/active designs and no agents/workflows) — auto-stopping"
+                )
+                await service.stop()
+            elif active_agents == 0 and active_wfs == 0 and pending_designs == 0:
+                logger.info(
+                    f"[START] Pipeline is running but all designs are done — "
+                    f"stopping cleanly and restarting"
                 )
                 await service.stop()
             else:
