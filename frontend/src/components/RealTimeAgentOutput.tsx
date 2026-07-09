@@ -233,11 +233,11 @@ const RealTimeAgentOutput: React.FC<RealTimeAgentOutputProps> = ({
     const lines = processedOutput.split('\n');
     const filtered = lines.filter(line => {
       // Strip ALL ANSI codes for pattern matching
-      const stripped = line.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '').replace(/\x1b\][^\x07]*\x07/g, '').trim();
+      const stripped = line.replace(/\x1b\[[?]?[0-9;]*[a-zA-Z]/g, '').replace(/\x1b\][^\x07]*\x07/g, '').trim();
       // Filter out horizontal separator lines (────────────────────...)
       if (/^[─━═▬▪▫\-=\s]{20,}$/.test(stripped)) return false;
-      // Filter out spinner-only lines
-      if (/^[\s]*[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏Working\.\s]+$/.test(stripped)) return false;
+      // Filter out spinner-only lines: "⠋ Working..." or just "Working..."
+      if (/^(?:[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s*)?Working\.{0,3}$/.test(stripped)) return false;
       // Filter out TUI chrome: "... (N earlier lines, ctrl+o to expand)"
       if (/^\.\.\. \(\d+ earlier lines/.test(stripped)) return false;
       // Filter out TUI chrome fragments
@@ -443,7 +443,6 @@ const RealTimeAgentOutput: React.FC<RealTimeAgentOutputProps> = ({
               onMouseUp={handleMouseUp}
               className="absolute inset-0 p-6 overflow-auto font-mono text-xs bg-[#1e1e1e] text-[#d4d4d4] whitespace-pre-wrap break-all selection:bg-blue-500 selection:text-white ansi-output"
               style={{
-                lineHeight: '1.4',
                 fontFamily: 'Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace'
               }}
               dangerouslySetInnerHTML={{ __html: htmlOutput || (output ? 'No matching lines found' : 'No output available yet...') }}
