@@ -60,7 +60,46 @@ additional_notes: |
   ```
 
   ═══════════════════════════════════════════════════════════════════════
-  STEP 2: READ KEY ARTIFACTS (SKIM — DON'T DEEP-DIVE)
+  STEP 2: DELETE SCRATCH AND UNNECESSARY FILES (MANDATORY SECOND STEP)
+  ═══════════════════════════════════════════════════════════════════════
+
+  After organizing stray files, identify and DELETE scratch/unnecessary files
+  that other agents left behind. These clutter the project root and confuse
+  reviewers. Common patterns to look for and delete:
+
+  ```bash
+  PROJECT="<paste Project Path from your task description>"
+  DOCS="<paste Docs Path from your task description>"
+
+  # Scratch/temp files from agents
+  find "$PROJECT" -maxdepth 2 -type f \
+    -name "*_draft*" -o -name "*_temp*" -o -name "*_scratch*" -o \
+    -name "*TODO.txt" -o -name "*notes.txt" -o -name "*debug*" -o \
+    -name "*.tmp" -o -name "*.bak" -o -name "*.swp" -o \
+    -name "pytest_*" -o -name "test_output*" -o -name "coverage*" -o \
+    -name "*.pyc" -o -name "__pycache__"
+  # Delete them (ask user confirmation for ambiguous cases)
+
+  # Old/redundant docs in root (README.md variants, CONTRIBUTING copies)
+  find "$PROJECT" -maxdepth 1 -type f -name "*.md" ! -name "README.md" \
+    ! -name "AGENTS.md" ! -name "CHANGELOG.md" ! -name "TESTING.md" \
+    ! -name "LICENSE*"
+  # These should already be in Docs Path from step 1; delete if orphaned
+
+  # Empty directories left by agents
+  find "$PROJECT" -type d -empty -delete 2>/dev/null
+
+  # Duplicate files (same content, different names)
+  find "$PROJECT" -type f -name "*.md" | xargs md5sum 2>/dev/null | \
+    sort | uniq -d -w 32
+  # Delete duplicates, keeping the more descriptive filename
+  ```
+
+  Report what you deleted in the doc_review_report.md. If a file seems
+  potentially important but suspicious, note it rather than deleting.
+
+  ═══════════════════════════════════════════════════════════════════════
+  STEP 3: READ KEY ARTIFACTS (SKIM — DON'T DEEP-DIVE)
   ═══════════════════════════════════════════════════════════════════════
 
   Read the following to gather context for the HTML report and spot critical errors:
@@ -79,7 +118,7 @@ additional_notes: |
   Fix anything critical directly. Skip minor style or formatting issues.
 
   ═══════════════════════════════════════════════════════════════════════
-  STEP 3: WRITE HTML FEATURE REPORT (MANDATORY — PRIMARY DELIVERABLE)
+  STEP 4: WRITE HTML FEATURE REPORT (MANDATORY — PRIMARY DELIVERABLE)
   ═══════════════════════════════════════════════════════════════════════
 
   Write `<Docs Path>/feature_report.html` — a polished, human-readable HTML
@@ -99,7 +138,7 @@ additional_notes: |
   Save to: `<Docs Path>/feature_report.html`
 
   ═══════════════════════════════════════════════════════════════════════
-  STEP 4: WRITE BRIEF DOC REVIEW REPORT
+  STEP 5: WRITE BRIEF DOC REVIEW REPORT
   ═══════════════════════════════════════════════════════════════════════
 
   Write `<Docs Path>/doc_review_report.md` with:
@@ -113,6 +152,9 @@ additional_notes: |
 
   ## Issues Fixed
   - [Each fix in one line]
+
+  ## Scratch Files Deleted
+  - [Files removed in step 2, with brief reason]
 
   ## No Action Needed
   - [Anything you checked and found correct]
