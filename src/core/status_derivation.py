@@ -161,6 +161,10 @@ def derive_design_status(db: Session, design_id: str, write_back: bool = True) -
     # Derive from feature statuses
     feature_statuses = {derive_feature_status(db, f.id, write_back=False) for f in features}
     
+    # Consider skipped features as "done" for status derivation
+    # (they were intentionally excluded, not left incomplete)
+    non_skipped_statuses = feature_statuses - {FeatureStatus.SKIPPED}
+    
     if feature_statuses == {FeatureStatus.COMPLETED}:
         derived = FeatureStatus.COMPLETED
     elif feature_statuses == {FeatureStatus.VALIDATED}:
@@ -170,6 +174,13 @@ def derive_design_status(db: Session, design_id: str, write_back: bool = True) -
         # renders nothing) — every feature individually validated rolls up
         # to a completed design.
         derived = FeatureStatus.COMPLETED
+    elif non_skipped_statuses == {FeatureStatus.COMPLETED}:
+        # All non-skipped features are completed — design is done
+        derived = FeatureStatus.COMPLETED
+        logger.debug(
+            f"Design {design_id[:8]}: all non-skipped features completed "
+            f"({len(features)} total, {len(feature_statuses - {FeatureStatus.COMPLETED, FeatureStatus.SKIPPED})} skipped)"
+        )
     elif FeatureStatus.ACTIVE in feature_statuses:
         derived = FeatureStatus.ACTIVE
     elif FeatureStatus.FAILED in feature_statuses:
