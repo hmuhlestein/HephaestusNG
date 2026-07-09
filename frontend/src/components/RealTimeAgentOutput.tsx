@@ -439,7 +439,7 @@ const RealTimeAgentOutput: React.FC<RealTimeAgentOutputProps> = ({
               onScroll={handleScroll}
               onMouseDown={handleMouseDown}
               onMouseUp={handleMouseUp}
-              className="absolute inset-0 p-6 overflow-auto font-mono text-xs bg-[#1e1e1e] text-[#d4d4d4] whitespace-pre-wrap break-all selection:bg-blue-500 selection:text-white leading-[1.4] ansi-output"
+              className="absolute inset-0 p-6 overflow-auto font-mono text-xs bg-[#1e1e1e] text-[#d4d4d4] whitespace-pre-wrap break-all selection:bg-blue-500 selection:text-white ansi-output"
               style={{
                 lineHeight: '1.4',
                 fontFamily: 'Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace'
@@ -557,10 +557,12 @@ const RealTimeAgentOutput: React.FC<RealTimeAgentOutputProps> = ({
       </motion.div>
 
       <style>{`
-        .ansi-output span[style*="background-color"] {
-          display: inline;
+        .ansi-output {
+          line-height: 1.2 !important;
+          padding: 0 !important;
+          margin: 0 !important;
         }
-        .ansi-output br + br {
+        .ansi-output br {
           display: none;
         }
       `}</style>
