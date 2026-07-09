@@ -102,6 +102,7 @@ writing_instructions: |
 # Phase agent instructions template
 phase_agent_instructions: |
   INSTRUCTIONS (always pass agent_id="{agent_id}"; pass workflow_id="{workflow_id}" only for tools that accept it — save_memory and validate_my_agent_id do NOT take workflow_id, don't pass it to those):
+  - Consider searching memories first for related work: hephaestus_search_memory(query="...")
   - Complete the task described above
   - hephaestus_update_task_status(task_id="{task_id}", agent_id="{agent_id}", status="done") — REQUIRED when done
   - hephaestus_update_task_status(task_id="{task_id}", agent_id="{agent_id}", status="failed", failure_reason="...") — on unrecoverable error

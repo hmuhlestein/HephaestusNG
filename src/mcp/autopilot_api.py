@@ -397,12 +397,13 @@ async def get_pipeline_status(
 
         # Fall back to persistent state if run-specific state is empty
         if not state:
-            persistent_state_file = Path(AUTOPILOT_STATE_DIR) / "pipeline_state.json"
-            if persistent_state_file.exists():
-                try:
-                    state = json.loads(persistent_state_file.read_text())
-                except Exception:
-                    state = {}
+            try:
+                from src.autopilot.orchestrator import PersistentPipelineState
+
+                state_obj, _processed = PersistentPipelineState().load()
+                state = state_obj.to_dict()
+            except Exception:
+                state = {}
 
         # No run dir AND no persistent state file: state was never assigned
         # above and stays None, crashing every state.get(...) call below.
@@ -938,12 +939,9 @@ async def rerun_design(request: dict):
 
     # Step 5: Clear pipeline state so orchestrator starts fresh
     try:
-        pipeline_state_file = Path(AUTOPILOT_STATE_DIR) / "pipeline_state.json"
-        if pipeline_state_file.exists():
-            pipeline_state_file.unlink()
-        processed_file = Path(AUTOPILOT_STATE_DIR) / "processed_designs.json"
-        if processed_file.exists():
-            processed_file.unlink()
+        from src.autopilot.orchestrator import PersistentPipelineState
+
+        PersistentPipelineState().clear()
     except Exception as e:
         logger.error(f"Error clearing pipeline state: {e}")
 
@@ -2221,24 +2219,22 @@ async def remove_project_design(project_id: str, filename: str):
 
     _invalidate("queue", "status", f"project_designs:{project_id}")
 
-    # Also remove from processed_designs.json so re-adding triggers reprocessing
+    # Also remove from the persisted processed-designs set so re-adding
+    # triggers reprocessing
     try:
         import hashlib
-        processed_file = Path(AUTOPILOT_STATE_DIR) / "processed_designs.json"
-        if processed_file.exists():
-            with open(processed_file) as f:
-                hashes = json.load(f)
-            # Compute hash of the design file to remove it
-            if filepath.exists():
-                content = filepath.read_bytes()
-            else:
-                # File already deleted, try to compute from remaining data
-                content = filename.encode()
-            h = hashlib.sha256(content).hexdigest()[:16]
-            if h in hashes:
-                hashes.remove(h)
-                with open(processed_file, "w") as f:
-                    json.dump(hashes, f)
+
+        from src.autopilot.orchestrator import PersistentPipelineState
+
+        # Compute hash of the design file to remove it
+        if filepath.exists():
+            content = filepath.read_bytes()
+        else:
+            # File already deleted, try to compute from remaining data
+            content = filename.encode()
+        h = hashlib.sha256(content).hexdigest()[:16]
+
+        PersistentPipelineState().remove_processed_hash(h)
     except Exception:
         pass  # Non-critical
 

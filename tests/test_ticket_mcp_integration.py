@@ -22,20 +22,26 @@ from src.services.ticket_service import TicketService
 
 
 @pytest.fixture
-def db_manager(tmp_path):
-    """Create a test database."""
-    db_path = str(tmp_path / "test_ticket_mcp.db")
+def db_manager(tmp_path, monkeypatch):
+    """Create a test database.
 
-    # Set environment variable so services use the test database
-    os.environ["HEPHAESTUS_TEST_DB"] = db_path
+    Uses monkeypatch.setenv (not a raw os.environ assignment) so the
+    variable is automatically restored to conftest.py's ":memory:" default
+    when this fixture tears down. A bare `del os.environ[...]` leaves the
+    variable ABSENT rather than restored -- get_db()'s fallback
+    (`os.environ.get("HEPHAESTUS_TEST_DB", "hephaestus.db")`) then resolves
+    to the literal relative default for every test that runs afterward
+    without its own override, silently writing test data into the real
+    production database. Observed live: a stray AutopilotProject row named
+    after a bare pytest tmp_path directory showed up in the real
+    hephaestus.db's project dropdown, traced back to this exact pattern.
+    """
+    db_path = str(tmp_path / "test_ticket_mcp.db")
+    monkeypatch.setenv("HEPHAESTUS_TEST_DB", db_path)
 
     manager = DatabaseManager(db_path)
     manager.create_tables()
     yield manager
-
-    # Cleanup
-    if "HEPHAESTUS_TEST_DB" in os.environ:
-        del os.environ["HEPHAESTUS_TEST_DB"]
 
 
 @pytest.fixture

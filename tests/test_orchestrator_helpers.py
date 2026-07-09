@@ -84,70 +84,173 @@ class TestPipelineState:
 
 
 class TestPersistentPipelineState:
-    def test_save_load_clear(self, tmp_path):
+    """PersistentPipelineState is backed by ProjectContext (a generic
+    key-value table) instead of JSON files under AUTOPILOT_STATE_DIR --
+    files were a second, non-transactional source of truth that could
+    drift from the DB's actual workflow state (see incident: tasks/agents/
+    workflows got wiped in one DB transaction, but these files didn't move,
+    and kept pointing at a dead workflow_id)."""
+
+    def test_save_load_clear(self, orch_db_env):
         from src.autopilot.orchestrator import PersistentPipelineState, PipelineState
 
-        with patch("src.autopilot.orchestrator.AUTOPILOT_STATE_DIR", str(tmp_path)):
-            pps = PersistentPipelineState()
-            state = PipelineState(designs_processed=3, run_id="run-456")
-            pps.save(state, {"hash1", "hash2"})
+        pps = PersistentPipelineState()
+        state = PipelineState(designs_processed=3, run_id="run-456")
+        pps.save(state, {"hash1", "hash2"})
 
-            loaded_state, hashes = pps.load()
-            assert loaded_state.designs_processed == 3
-            assert loaded_state.run_id == "run-456"
-            assert "hash1" in hashes
-            assert "hash2" in hashes
+        loaded_state, hashes = pps.load()
+        assert loaded_state.designs_processed == 3
+        assert loaded_state.run_id == "run-456"
+        assert "hash1" in hashes
+        assert "hash2" in hashes
 
-            pps.clear()
-            assert not pps.state_file.exists()
-            assert not pps.processed_file.exists()
+        pps.clear()
+        cleared_state, cleared_hashes = pps.load()
+        assert cleared_state.designs_processed == 0
+        assert cleared_hashes == set()
 
-    def test_load_empty(self, tmp_path):
+    def test_load_empty(self, orch_db_env):
         from src.autopilot.orchestrator import PersistentPipelineState, PipelineState
 
-        with patch("src.autopilot.orchestrator.AUTOPILOT_STATE_DIR", str(tmp_path)):
-            pps = PersistentPipelineState()
-            state, hashes = pps.load()
-            assert isinstance(state, PipelineState)
-            assert hashes == set()
+        pps = PersistentPipelineState()
+        state, hashes = pps.load()
+        assert isinstance(state, PipelineState)
+        assert hashes == set()
 
-    def test_has_incomplete_work_no_file(self, tmp_path):
+    def test_has_incomplete_work_no_file(self, orch_db_env):
         from src.autopilot.orchestrator import PersistentPipelineState
 
-        with patch("src.autopilot.orchestrator.AUTOPILOT_STATE_DIR", str(tmp_path)):
-            pps = PersistentPipelineState()
-            assert pps.has_incomplete_work() is False
+        pps = PersistentPipelineState()
+        assert pps.has_incomplete_work() is False
 
-    def test_has_incomplete_work_no_design(self, tmp_path):
+    def test_has_incomplete_work_no_design(self, orch_db_env):
+        from src.autopilot.orchestrator import PersistentPipelineState, PipelineState
+
+        pps = PersistentPipelineState()
+        pps.save(PipelineState(current_design=None), set())
+        assert pps.has_incomplete_work() is False
+
+    def test_has_incomplete_work_with_design(self, orch_db_env):
+        from src.autopilot.orchestrator import PersistentPipelineState, PipelineState
+
+        pps = PersistentPipelineState()
+        pps.save(PipelineState(current_design="test.md"), set())
+        assert pps.has_incomplete_work() is True
+
+    def test_get_last_run_id(self, orch_db_env):
+        from src.autopilot.orchestrator import PersistentPipelineState, PipelineState
+
+        pps = PersistentPipelineState()
+        pps.save(PipelineState(run_id="run-789"), set())
+        assert pps.get_last_run_id() == "run-789"
+
+    def test_get_last_run_id_no_file(self, orch_db_env):
         from src.autopilot.orchestrator import PersistentPipelineState
 
-        with patch("src.autopilot.orchestrator.AUTOPILOT_STATE_DIR", str(tmp_path)):
-            pps = PersistentPipelineState()
-            pps.state_file.write_text(json.dumps({"current_design": None}))
-            assert pps.has_incomplete_work() is False
+        pps = PersistentPipelineState()
+        assert pps.get_last_run_id() is None
 
-    def test_has_incomplete_work_with_design(self, tmp_path):
+    def test_has_incomplete_work_tolerates_null_queue_status(self, orch_db_env):
+        """Regression: `.get('queue_status', {})` only applies its default
+        when the key is ABSENT, not when the stored value is explicitly
+        null. Without the `or {}` guard, a stored `queue_status: null`
+        makes the next `.get('status')` call raise AttributeError on None
+        instead of being treated as 'no incomplete work'."""
+        from src.autopilot.orchestrator import PersistentPipelineState, _set_project_context
+        from src.core.database import get_db
+
+        pps = PersistentPipelineState()
+        with get_db() as db:
+            _set_project_context(
+                db, pps.STATE_KEY, {"current_design": None, "queue_status": None}
+            )
+
+        assert pps.has_incomplete_work() is False
+
+    def test_save_survives_first_write_error_and_still_saves_state(self, orch_db_env):
+        """save() now does two separate transactions (processed_designs,
+        then state) instead of one shared transaction, specifically so a
+        failure in one doesn't silently also lose the other -- verify state
+        still saves even if the processed-designs write is broken."""
+        from unittest.mock import patch
+
+        from src.autopilot.orchestrator import PersistentPipelineState, PipelineState
+
+        pps = PersistentPipelineState()
+        with patch(
+            "src.autopilot.orchestrator._set_project_context",
+            side_effect=[RuntimeError("boom"), None],
+        ) as mock_set:
+            pps.save(PipelineState(run_id="run-999"), {"h1"})
+            assert mock_set.call_count == 2
+
+    def test_remove_processed_hash_does_not_touch_state(self, orch_db_env):
+        """Regression: a caller that only wants to un-mark one processed
+        design (e.g. re-adding a deleted design) must not go through
+        load()+save() -- that round trip re-persists the ENTIRE pipeline
+        state read at load()-time, silently clobbering any newer state a
+        concurrently-running pipeline had already written in between."""
+        from src.autopilot.orchestrator import PersistentPipelineState, PipelineState
+
+        pps = PersistentPipelineState()
+        pps.save(PipelineState(designs_processed=5, run_id="run-1"), {"h1", "h2"})
+
+        pps.remove_processed_hash("h1")
+
+        state, hashes = pps.load()
+        assert hashes == {"h2"}
+        # State untouched by the hash removal.
+        assert state.designs_processed == 5
+        assert state.run_id == "run-1"
+
+    def test_remove_processed_hash_missing_is_safe(self, orch_db_env):
         from src.autopilot.orchestrator import PersistentPipelineState
 
-        with patch("src.autopilot.orchestrator.AUTOPILOT_STATE_DIR", str(tmp_path)):
-            pps = PersistentPipelineState()
-            pps.state_file.write_text(json.dumps({"current_design": "test.md"}))
-            assert pps.has_incomplete_work() is True
+        pps = PersistentPipelineState()
+        pps.remove_processed_hash("does-not-exist")  # should not raise
+        _, hashes = pps.load()
+        assert hashes == set()
 
-    def test_get_last_run_id(self, tmp_path):
-        from src.autopilot.orchestrator import PersistentPipelineState
 
-        with patch("src.autopilot.orchestrator.AUTOPILOT_STATE_DIR", str(tmp_path)):
-            pps = PersistentPipelineState()
-            pps.state_file.write_text(json.dumps({"run_id": "run-789"}))
-            assert pps.get_last_run_id() == "run-789"
+class TestSetProjectContextUpsert:
+    """_set_project_context uses an atomic INSERT ... ON CONFLICT DO UPDATE
+    instead of a read-then-write (SELECT then add-or-update), which had a
+    real TOCTOU window: two callers writing the same key for the first time
+    could both see no existing row and both attempt to insert, raising
+    IntegrityError on ProjectContext.key's unique constraint."""
 
-    def test_get_last_run_id_no_file(self, tmp_path):
-        from src.autopilot.orchestrator import PersistentPipelineState
+    def test_set_then_set_again_updates_in_place(self, orch_db_env):
+        from src.autopilot.orchestrator import _get_project_context, _set_project_context
+        from src.core.database import ProjectContext, get_db
 
-        with patch("src.autopilot.orchestrator.AUTOPILOT_STATE_DIR", str(tmp_path)):
-            pps = PersistentPipelineState()
-            assert pps.get_last_run_id() is None
+        with get_db() as db:
+            _set_project_context(db, "some-key", {"a": 1})
+        with get_db() as db:
+            _set_project_context(db, "some-key", {"a": 2})
+        with get_db() as db:
+            assert _get_project_context(db, "some-key") == {"a": 2}
+
+        with get_db() as db:
+            assert db.query(ProjectContext).filter_by(key="some-key").count() == 1
+
+    def test_concurrent_first_write_to_same_key_does_not_raise(self, orch_db_env):
+        """Simulates two callers racing to create the same key for the
+        first time -- both see no existing row (this test skips straight to
+        calling _set_project_context twice with no row in between, since
+        the atomic upsert makes true thread-interleaving unnecessary to
+        prove: an INSERT ... ON CONFLICT DO UPDATE statement can't raise
+        IntegrityError on its own conflict target no matter how many times
+        it's called)."""
+        from src.autopilot.orchestrator import _get_project_context, _set_project_context
+        from src.core.database import get_db
+
+        with get_db() as db:
+            _set_project_context(db, "race-key", "first")
+        with get_db() as db:
+            _set_project_context(db, "race-key", "second")  # must not raise
+
+        with get_db() as db:
+            assert _get_project_context(db, "race-key") == "second"
 
 
 class TestDetectHardError:

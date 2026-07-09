@@ -441,6 +441,43 @@ class TestCaseInProgressComplete:
         assert result is None
         mock_fire.assert_not_called()
 
+    @patch("src.autopilot.orchestrator._fire_phase_transition")
+    def test_orphaned_diagnostic_task_does_not_block_completion(
+        self, mock_fire, db_manager, sample_workflow
+    ):
+        """Regression: an orphaned DIAGNOSTIC task (created by the monitor
+        when it thought the workflow was stuck, then reset to "pending"
+        after its agent was terminated without closing it) must not count
+        as real incomplete work. _check_workflow_stuck_state already
+        excludes DIAGNOSTIC: prefixed tasks from its own completion check
+        for exactly this reason -- this case hadn't adopted the same
+        convention, so a leftover diagnostic task permanently blocked the
+        phase from ever being recognized as complete, even with its real
+        task already done."""
+        from src.autopilot.orchestrator import _case_in_progress_complete, _get_phase_statuses
+
+        self._seed_done_task(db_manager)
+        with db_manager.session_scope() as session:
+            session.add(
+                Task(
+                    id="diagnostic-task-1",
+                    workflow_id="wf-1",
+                    phase_id="phase-1",
+                    raw_description="DIAGNOSTIC: Analyze why workflow has stalled",
+                    done_definition="d",
+                    status="pending",
+                )
+            )
+        mock_fire.return_value = True
+
+        with db_manager.session_scope() as session:
+            phase_statuses = _get_phase_statuses(session, "wf-1")
+            in_progress = [p for p in phase_statuses if p["status"] == "in_progress"]
+            result = _case_in_progress_complete(session, "wf-1", in_progress, MagicMock())
+
+        assert result is True
+        mock_fire.assert_called_once()
+
 
 class TestCaseCompletedWithSuccessor:
     """Regression: this case only ever fires when last_completed's

@@ -10,13 +10,12 @@ This fixes:
 """
 
 import asyncio
-import json
 import logging
 import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from src.core.constants import AUTOPILOT_STATE_DIR, DESIGN_CONTEXT_SUBDIR, DESIGN_SUBDIR
+from src.core.constants import DESIGN_CONTEXT_SUBDIR, DESIGN_SUBDIR
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +24,10 @@ logger = logging.getLogger(__name__)
 # restart/crash (this class lives entirely in-process, see module docstring),
 # and nothing ever notices except the separate diagnostic monitor process,
 # which only patches over the gap much later and much more crudely.
-_RUNNING_STATE_PATH = Path(AUTOPILOT_STATE_DIR) / "running_pipeline.json"
+# See src.autopilot.orchestrator._RUNNING_STATE_KEY -- backed by the
+# ProjectContext table (a generic key-value store) instead of a JSON file,
+# so a DB-level reset of workflow state can't leave this pointing at a
+# workflow that no longer exists.
 
 
 class AutopilotService:
@@ -163,16 +165,22 @@ class AutopilotService:
     def _persist_running_state(self) -> None:
         """Write current run params so a restart can resume this pipeline."""
         try:
-            _RUNNING_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-            _RUNNING_STATE_PATH.write_text(
-                json.dumps(
+            from src.autopilot.orchestrator import (
+                _RUNNING_STATE_KEY,
+                _set_project_context,
+            )
+            from src.core.database import get_db
+
+            with get_db() as db:
+                _set_project_context(
+                    db,
+                    _RUNNING_STATE_KEY,
                     {
                         "project_path": self._project_path,
                         "design_queue": self._design_queue,
                         "max_iterations": self._max_iterations,
-                    }
+                    },
                 )
-            )
         except Exception as e:
             logger.warning(f"Failed to persist autopilot running state: {e}")
 
@@ -180,7 +188,14 @@ class AutopilotService:
     def clear_persisted_state() -> None:
         """Remove the persisted run state (deliberate stop — don't auto-resume)."""
         try:
-            _RUNNING_STATE_PATH.unlink(missing_ok=True)
+            from src.autopilot.orchestrator import (
+                _RUNNING_STATE_KEY,
+                _delete_project_context,
+            )
+            from src.core.database import get_db
+
+            with get_db() as db:
+                _delete_project_context(db, _RUNNING_STATE_KEY)
         except Exception as e:
             logger.warning(f"Failed to clear persisted autopilot state: {e}")
 
@@ -188,8 +203,14 @@ class AutopilotService:
     def load_persisted_state() -> Optional[Dict[str, Any]]:
         """Read persisted run params, if any (used to auto-resume on startup)."""
         try:
-            if _RUNNING_STATE_PATH.exists():
-                return json.loads(_RUNNING_STATE_PATH.read_text())
+            from src.autopilot.orchestrator import (
+                _RUNNING_STATE_KEY,
+                _get_project_context,
+            )
+            from src.core.database import get_db
+
+            with get_db() as db:
+                return _get_project_context(db, _RUNNING_STATE_KEY)
         except Exception as e:
             logger.warning(f"Failed to read persisted autopilot state: {e}")
         return None

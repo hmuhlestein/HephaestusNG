@@ -16,16 +16,16 @@ class TestAutopilotService:
 
     @pytest.fixture(autouse=True)
     def _isolate_state_file(self, tmp_path, monkeypatch):
-        # start()/stop() persist run params to disk on every real call (see
-        # TestRunningStatePersistence below) — without this, tests here that
-        # call the unmocked start()/stop() write a live project_path straight
-        # into the real ~/.hephaestus/autopilot/running_pipeline.json, which
-        # the backend auto-resumes on its next startup_event.
-        import src.autopilot.service as service_module
+        # start()/stop() persist run params to the DB (ProjectContext table)
+        # on every real call (see TestRunningStatePersistence below) —
+        # without this, tests here that call the unmocked start()/stop()
+        # write a live project_path straight into the real hephaestus.db,
+        # which the backend auto-resumes on its next startup_event.
+        from src.core.database import DatabaseManager
 
-        monkeypatch.setattr(
-            service_module, "_RUNNING_STATE_PATH", tmp_path / "running_pipeline.json"
-        )
+        db_path = tmp_path / "test.db"
+        DatabaseManager(str(db_path)).create_tables()
+        monkeypatch.setenv("HEPHAESTUS_TEST_DB", str(db_path))
 
     def test_initial_state(self, service):
         assert service.running is False
@@ -336,13 +336,13 @@ class TestRunningStatePersistence:
 
     @pytest.fixture(autouse=True)
     def _isolate_state_file(self, tmp_path, monkeypatch):
-        # Redirect the module-level state path so tests never touch the
-        # real ~/.hephaestus/autopilot/running_pipeline.json
-        import src.autopilot.service as service_module
+        # Redirect the persisted-state DB so tests never touch the real
+        # hephaestus.db's ProjectContext rows.
+        from src.core.database import DatabaseManager
 
-        monkeypatch.setattr(
-            service_module, "_RUNNING_STATE_PATH", tmp_path / "running_pipeline.json"
-        )
+        db_path = tmp_path / "test.db"
+        DatabaseManager(str(db_path)).create_tables()
+        monkeypatch.setenv("HEPHAESTUS_TEST_DB", str(db_path))
 
     @pytest.mark.asyncio
     async def test_start_persists_state(self, service, tmp_path):

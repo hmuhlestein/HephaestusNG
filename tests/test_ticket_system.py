@@ -22,20 +22,21 @@ from src.services.ticket_service import TicketService
 
 
 @pytest.fixture
-def db_manager(tmp_path):
-    """Create a test database."""
-    db_path = str(tmp_path / "test_ticket_system.db")
+def db_manager(tmp_path, monkeypatch):
+    """Create a test database.
 
-    # Set environment variable so services use the test database
-    os.environ["HEPHAESTUS_TEST_DB"] = db_path
+    Uses monkeypatch.setenv (not a raw os.environ assignment) so the
+    variable is automatically restored to conftest.py's ":memory:" default
+    when this fixture tears down -- see test_ticket_mcp_integration.py's
+    db_manager fixture for the full explanation of why a bare
+    `del os.environ[...]` is unsafe here.
+    """
+    db_path = str(tmp_path / "test_ticket_system.db")
+    monkeypatch.setenv("HEPHAESTUS_TEST_DB", db_path)
 
     manager = DatabaseManager(db_path)
     manager.create_tables()
     yield manager
-
-    # Cleanup
-    if "HEPHAESTUS_TEST_DB" in os.environ:
-        del os.environ["HEPHAESTUS_TEST_DB"]
 
 
 @pytest.fixture
