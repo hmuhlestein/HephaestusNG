@@ -361,6 +361,77 @@ class TestMultiProviderLLM:
             mock_client.analyze_agent_state.assert_called_once()
 
     @pytest.mark.asyncio
+    async def test_generate_agent_prompt_forwards_phase_name(self, mock_client, tmp_path):
+        """Regression: MultiProviderLLM.generate_agent_prompt's signature had
+        drifted from its caller (agents/manager.py always passes
+        phase_name=...) -- it didn't accept the kwarg at all, so every
+        single agent-creation call crashed with "unexpected keyword
+        argument 'phase_name'". Observed live: this silently broke agent
+        creation for every phase, with tasks just sitting pending/failed
+        and no agent ever spawned.
+
+        Uses Mock(spec=LangChainLLMClient) with generate_agent_prompt set
+        as a plain AsyncMock (see mock_client fixture) -- spec alone
+        doesn't validate call *signatures*, only attribute presence, which
+        is exactly why the original bug wasn't caught by existing tests
+        that only asserted the mock was called, not that a real call with
+        phase_name= wouldn't raise.
+        """
+        config_file = tmp_path / "test.yaml"
+        config_file.write_text("llm: {}")
+
+        with patch(
+            "src.interfaces.multi_provider_llm.LangChainLLMClient",
+            return_value=mock_client,
+        ):
+            llm = MultiProviderLLM(str(config_file))
+
+            # Must not raise TypeError: unexpected keyword argument 'phase_name'
+            result = await llm.generate_agent_prompt(
+                task={"id": "task-1", "agent_id": "agent-1"},
+                memories=[],
+                project_context="ctx",
+                phase_name="development",
+            )
+
+            assert result == "Agent prompt"
+            mock_client.generate_agent_prompt.assert_called_once_with(
+                task={"id": "task-1", "agent_id": "agent-1"},
+                memories=[],
+                project_context="ctx",
+                phase_name="development",
+            )
+
+    @pytest.mark.asyncio
+    async def test_generate_agent_prompt_real_client_accepts_phase_name(self, tmp_path):
+        """Same regression, exercised against the REAL LangChainLLMClient
+        (not a mock) -- a mock with spec= wouldn't have caught the original
+        signature mismatch, but calling the actual implementation would
+        have raised it immediately."""
+        from src.interfaces.langchain_llm_client import LangChainLLMClient
+
+        config_file = tmp_path / "test.yaml"
+        config_file.write_text("llm: {}")
+
+        with patch(
+            "src.interfaces.multi_provider_llm.LangChainLLMClient",
+            LangChainLLMClient,
+        ):
+            llm = MultiProviderLLM(str(config_file))
+
+            # Must not raise -- this is the exact call shape
+            # agents/manager.py makes.
+            result = await llm.generate_agent_prompt(
+                task={"id": "task-1", "agent_id": "agent-1"},
+                memories=[],
+                project_context="ctx",
+                phase_name="Feature Architect",
+            )
+
+            assert isinstance(result, str)
+            assert result
+
+    @pytest.mark.asyncio
     async def test_analyze_trajectory(self, mock_client, tmp_path):
         """Test trajectory analysis."""
         config_file = tmp_path / "test.yaml"

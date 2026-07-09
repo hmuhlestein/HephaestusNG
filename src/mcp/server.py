@@ -823,6 +823,7 @@ async def _resume_interrupted_workflows(
             for wf in active:
                 if wf.status in ("paused", "failed"):
                     wf.status = "active"
+                    wf.paused_by = None
             session.commit()
 
         resumed = 0
@@ -6130,6 +6131,14 @@ async def stop_workflow(workflow_id: str, request: Request):
                 terminated_count += 1
 
         workflow.status = "paused"
+        # Marks this as a deliberate user pause so the background sweep's
+        # _try_auto_resume_paused_workflow (orchestrator.py) leaves it alone
+        # instead of silently reactivating it the moment it next sees a done
+        # task sitting in an in-progress phase -- a state pausing itself
+        # commonly produces. Without this, a user pause could get reverted
+        # within one sweep tick (~20s), repeatedly, until whatever made the
+        # phase look "stalled" happened to resolve on its own.
+        workflow.paused_by = "user"
         session.commit()
 
         return {
@@ -6157,6 +6166,7 @@ async def resume_workflow(workflow_id: str, request: Request):
             return {"status": workflow.status, "message": "Not paused"}
 
         workflow.status = "active"
+        workflow.paused_by = None
         session.commit()
         return {"status": "active", "workflow_id": workflow_id}
     finally:

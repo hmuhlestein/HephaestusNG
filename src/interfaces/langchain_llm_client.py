@@ -596,6 +596,7 @@ class LangChainLLMClient:
         task: Dict[str, Any],
         memories: List[Dict[str, Any]],
         project_context: str,
+        phase_name: str = None,
     ) -> str:
         """Generate specialized system prompt for an agent.
 
@@ -603,10 +604,29 @@ class LangChainLLMClient:
             task: Task information
             memories: Relevant memories from RAG
             project_context: Current project context
+            phase_name: Phase name (e.g. "Feature Architect") -- selects a
+                specialized prompt template. This signature had drifted
+                from its caller (agents/manager.py always passes
+                phase_name), causing every agent-creation call routed
+                through this client to fail with "unexpected keyword
+                argument 'phase_name'".
 
         Returns:
             System prompt for the agent
         """
+        if phase_name == "Feature Architect":
+            from src.prompts.loader import get_feature_architect_system_prompt
+
+            memory_context = "\n".join(
+                [f"- {mem.get('content', '')[:200]}" for mem in memories[:10]]
+            )
+            return get_feature_architect_system_prompt(
+                agent_id=task.get("agent_id", "unknown"),
+                task_id=task.get("id", "unknown"),
+                memory_context=memory_context,
+                project_context=project_context,
+            )
+
         model = self._get_model_for_component(ComponentType.AGENT_PROMPTS)
         if not model:
             return self._default_agent_prompt(task, memories, project_context)

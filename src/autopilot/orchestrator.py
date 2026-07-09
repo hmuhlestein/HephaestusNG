@@ -2784,7 +2784,21 @@ def _advance_phases(workflow_id: str, logger: OrchestratorLogger) -> bool:
 
 
 def _try_auto_resume_paused_workflow(db, workflow_id: str, wf, logger: OrchestratorLogger) -> None:
-    """Auto-resume paused workflow if it has a done task in the stalled phase."""
+    """Auto-resume paused workflow if it has a done task in the stalled phase.
+
+    Skips workflows the user explicitly paused (wf.paused_by == "user", set
+    by the /workflow-executions/{id}/stop endpoint). Without this check, a
+    deliberate pause could get silently reverted within one sweep tick
+    (~20s) whenever the paused workflow's in-progress phase happens to have
+    a done task sitting in it -- a state pausing itself commonly produces
+    (the running task finishes right after being told to stop). Observed
+    live: a user's pause click appeared to do nothing for a long time,
+    because this function kept flipping the workflow back to "active"
+    every cycle until whatever made the phase look stalled resolved on its
+    own.
+    """
+    if wf.paused_by == "user":
+        return
     phases = (
         db.query(Phase)
         .filter_by(workflow_id=workflow_id)
@@ -3104,6 +3118,7 @@ def _maybe_retry_failed_tasks(db, phase, logger: OrchestratorLogger) -> Optional
             .filter(Task.phase_id == phase.id, Task.status == "failed")
             .all()
         )
+        reset_task_ids = []
         for task in failed_tasks:
             if task.failure_reason:
                 base = task.enriched_description or task.raw_description or ""
@@ -3114,7 +3129,46 @@ def _maybe_retry_failed_tasks(db, phase, logger: OrchestratorLogger) -> Optional
                 )
             task.status = "pending"
             task.failure_reason = None
+            reset_task_ids.append(task.id)
         db.commit()
+
+        # Resetting status to "pending" alone doesn't get an agent -- nothing
+        # else in _advance_phases picks up a task that already exists (all
+        # four cases key off task COUNT or "all done", not "pending task with
+        # no agent"), and this reset bypasses the queue (no enqueue_task
+        # call), so a task retried this way was previously an unrecoverable
+        # dead end: reset to pending and never touched again by any live
+        # code path. Observed live: a Feature Architect task sat "pending"
+        # indefinitely after its one real attempt failed (an unrelated
+        # generate_agent_prompt signature bug), because this reset was the
+        # only thing that ever ran for it. Dispatch a fresh agent directly,
+        # mirroring _create_phase_task's own create-then-update pattern.
+        for task_id in reset_task_ids:
+            agent_data = create_agent_for_task_direct(task_id, phase.workflow_id, phase.id)
+            with get_db() as retry_db:
+                retry_task = retry_db.query(Task).filter_by(id=task_id).first()
+                if not retry_task:
+                    continue
+                if not agent_data:
+                    # Back to "failed" (not left "pending") so the next poll's
+                    # _maybe_retry_failed_tasks (which only triggers on
+                    # status="failed") gets another chance at this -- leaving
+                    # it "pending" here would recreate the exact dead end this
+                    # fix closes: no case in _advance_phases dispatches an
+                    # agent for an already-existing pending task.
+                    retry_task.status = "failed"
+                    retry_task.failure_reason = "Retry agent creation failed"
+                    retry_db.commit()
+                    logger.warning(
+                        f"[PHASE-ADVANCE] Retry agent creation failed for task "
+                        f"{task_id[:8]} in {phase.name} -- marked failed for "
+                        "another retry pass"
+                    )
+                    continue
+                retry_task.assigned_agent_id = agent_data.get("agent_id", "unknown")
+                retry_task.status = "in_progress"
+                retry_task.started_at = datetime.utcnow()
+                retry_db.commit()
         return True
     return None
 
@@ -3361,24 +3415,31 @@ def _create_phase_task(
 
             # Update phase execution to in_progress
             execution = db.query(PhaseExecution).filter_by(phase_id=phase_id).first()
-            if execution and execution.status in ("pending", "completed"):
-                execution.status = "in_progress"
-                from datetime import datetime
-                execution.started_at = datetime.utcnow()
-                # This is the reactivation point for a GOTO target: unlike
-                # _start_next_phase/_handle_evaluation_retry/_handle_evaluation_arbitrate
-                # (which each reset this claim when they reopen a phase),
-                # _handle_evaluation_goto itself never touches the target
-                # phase's PhaseExecution at all -- this is the only place
-                # that actually flips it back to in_progress. Without this
-                # reset, a phase visited earlier in the pipeline (its claim
-                # already consumed from that prior cycle) would come back
-                # in_progress with a stale non-null task_creation_claimed_at,
-                # permanently blocking _case_in_progress_complete's claim
-                # once this new cycle's task finished -- the transition
-                # would never fire again. Observed live: the task finished
-                # successfully, but the phase stayed in_progress forever,
-                # eventually triggering the monitor's stall-detector.
+            if execution:
+                if execution.status in ("pending", "completed"):
+                    execution.status = "in_progress"
+                    from datetime import datetime
+                    execution.started_at = datetime.utcnow()
+                # Always release the claim once the task it was guarding
+                # actually exists, regardless of the entry status. The
+                # status-gated version of this reset only fired for the
+                # pending/completed -> in_progress transition (e.g. a GOTO
+                # reactivation), but _case_in_progress_no_tasks calls
+                # _create_phase_task for phases a DIFFERENT path already
+                # flipped to "in_progress" before a task existed (e.g. the
+                # synchronous /start_workflow_execution step) -- for those,
+                # entry status is already "in_progress", the old condition
+                # never matched, and the claim taken to create this task
+                # was never released. Since the claim field is reused by
+                # _case_in_progress_complete to guard this same phase's
+                # own later completion-transition evaluation, a claim left
+                # over from task creation permanently blocked that
+                # evaluation forever ("transition already being evaluated
+                # by another caller — skipping", repeating every sweep
+                # tick with no other caller actually holding it). Observed
+                # live: a Feature Architect task finished successfully but
+                # its phase never advanced, sitting in_progress
+                # indefinitely.
                 execution.task_creation_claimed_at = None
 
             db.commit()
