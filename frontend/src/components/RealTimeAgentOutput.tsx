@@ -210,9 +210,27 @@ const RealTimeAgentOutput: React.FC<RealTimeAgentOutputProps> = ({
     }
   };
 
-  // Filter output based on search and remove separator lines
+  // Collapse carriage returns (\r) first, then filter
+  const processedOutput = useMemo(() => {
+    if (!output) return '';
+    const lines = output.split('\n');
+    const collapsed: string[] = [];
+    for (const line of lines) {
+      if (line.includes('\r')) {
+        // Keep only the last segment after the last \r
+        const last = line.split('\r').pop() || '';
+        collapsed.push(last);
+      } else {
+        collapsed.push(line);
+      }
+    }
+    return collapsed.join('\n');
+  }, [output]);
+
+  // Filter output based on search and remove separator/spinner lines
   const filteredOutput = useMemo(() => {
-    const lines = (output || '').split('\n');
+    if (!processedOutput) return '';
+    const lines = processedOutput.split('\n');
     const filtered = lines.filter(line => {
       // Strip ALL ANSI codes for pattern matching
       const stripped = line.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '').replace(/\x1b\][^\x07]*\x07/g, '').trim();
@@ -226,36 +244,18 @@ const RealTimeAgentOutput: React.FC<RealTimeAgentOutputProps> = ({
       return true;
     });
     return filtered.join('\n');
-  }, [output, searchTerm]);
-
-  // Collapse carriage returns (\r) before converting to HTML.
-  // TUI spinners redraw lines using \r — keep only the final state.
-  const collapsedOutput = useMemo(() => {
-    if (!filteredOutput) return '';
-    const lines = filteredOutput.split('\n');
-    const collapsed: string[] = [];
-    for (const line of lines) {
-      if (line.includes('\r')) {
-        // Keep only the last segment after the last \r
-        const last = line.split('\r').pop() || '';
-        collapsed.push(last);
-      } else {
-        collapsed.push(line);
-      }
-    }
-    return collapsed.join('\n');
-  }, [filteredOutput]);
+  }, [processedOutput, searchTerm]);
 
   // Convert ANSI codes to HTML
   const htmlOutput = useMemo(() => {
-    const text = collapsedOutput || '';
+    const text = filteredOutput || '';
     if (!text) return '';
     try {
       return ansiConverter.toHtml(text);
     } catch {
       return text;
     }
-  }, [collapsedOutput, ansiConverter]);
+  }, [filteredOutput, ansiConverter]);
 
   // Keyboard shortcuts
   useEffect(() => {
