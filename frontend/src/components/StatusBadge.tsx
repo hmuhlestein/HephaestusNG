@@ -94,7 +94,7 @@ const StatusBadge: React.FC<StatusBadgeProps> = ({ status, size = 'md' }) => {
         sizeClasses[size]
       )}
     >
-      {status === 'terminated' ? 'done' : status.replace(/_/g, ' ')}
+      {status.replace(/_/g, ' ')}
     </span>
   );
 };
