@@ -277,13 +277,13 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
           <RefreshCw className={`w-4 h-4 mr-1 ${reloadMutation.isPending ? 'animate-spin' : ''}`} />
           Reload
         </Button>
-        <Button onClick={onAddDesign} className="bg-violet-600 hover:bg-violet-700 text-white">
-          <Plus className="w-4 h-4 mr-1" />
-          Add Design
-        </Button>
-        <Button onClick={onLoadDesign} variant="outline" className="text-violet-600 border-violet-200 hover:bg-violet-50">
+        <Button onClick={onLoadDesign} className="bg-violet-600 hover:bg-violet-700 text-white">
           <Upload className="w-4 h-4 mr-1" />
           Load Design
+        </Button>
+        <Button onClick={onAddDesign} variant="outline" className="text-violet-600 border-violet-200 hover:bg-violet-50">
+          <Plus className="w-4 h-4 mr-1" />
+          Add Design
         </Button>
       </div>
       <p className="text-xs text-gray-400">
@@ -349,13 +349,13 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
           <p className="text-sm text-gray-400 mb-4">
             Drop design documents into the queue to start processing
           </p>
+          <Button onClick={onLoadDesign} className="bg-violet-600 hover:bg-violet-700 text-white">
+            <Upload className="w-4 h-4 mr-1" />
+            Load Design
+          </Button>
           <Button onClick={onAddDesign} variant="outline" className="text-violet-600 border-violet-200 hover:bg-violet-50">
             <Plus className="w-4 h-4 mr-1" />
             Add Design
-          </Button>
-          <Button onClick={onLoadDesign} variant="outline" className="text-violet-600 border-violet-200 hover:bg-violet-50">
-            <Upload className="w-4 h-4 mr-1" />
-            Load Design
           </Button>
         </div>
       )}
