@@ -516,6 +516,7 @@ class ServerState:
         self.active_websockets: List[WebSocket] = []
         self.sse_queues: List[asyncio.Queue] = []
         self.background_queue_processor_task: Optional[asyncio.Task] = None
+        self.phase_advancement_sweep_task: Optional[asyncio.Task] = None
         self.shutdown_event: asyncio.Event = asyncio.Event()
 
     async def initialize(self):
@@ -935,6 +936,19 @@ async def _resume_interrupted_workflows(
 async def startup_event():
     """Initialize server on startup."""
     logger.info("Starting Hephaestus MCP Server...")
+
+    # Several handlers (e.g. autopilot_api.py's repair endpoint) write files
+    # under AUTOPILOT_STATE_DIR without their own mkdir guard, previously
+    # relying on PersistentPipelineState's constructor having created it as
+    # a side effect on first use -- fragile even then, since it depended on
+    # a pipeline having started first. Guarantee it exists unconditionally,
+    # once, here.
+    from pathlib import Path
+
+    from src.core.constants import AUTOPILOT_STATE_DIR
+
+    Path(AUTOPILOT_STATE_DIR).mkdir(parents=True, exist_ok=True)
+
     await server_state.initialize()
 
     # Add frontend API routes
@@ -1155,6 +1169,15 @@ async def startup_event():
     )
     logger.info("Background queue processor task created")
 
+    # Start background phase advancement sweep — the generic, restart-safe
+    # replacement for relying on a specific run's own polling loop (see its
+    # docstring for why that's necessary).
+    logger.info("Starting background phase advancement sweep...")
+    server_state.phase_advancement_sweep_task = asyncio.create_task(
+        background_phase_advancement_sweep()
+    )
+    logger.info("Background phase advancement sweep task created")
+
     # Resume any workflows that were mid-flight when the server last stopped
     # (crash / laptop sleep / manual restart) so real work isn't stranded.
     try:
@@ -1210,6 +1233,21 @@ async def shutdown_event():
                 "Background queue processor did not stop gracefully, cancelling..."
             )
             server_state.background_queue_processor_task.cancel()
+
+    # Stop background phase advancement sweep (shares the same shutdown_event,
+    # already set above)
+    logger.info("Stopping background phase advancement sweep...")
+    if server_state.phase_advancement_sweep_task:
+        try:
+            await asyncio.wait_for(
+                server_state.phase_advancement_sweep_task, timeout=5.0
+            )
+            logger.info("Background phase advancement sweep stopped")
+        except asyncio.TimeoutError:
+            logger.warning(
+                "Background phase advancement sweep did not stop gracefully, cancelling..."
+            )
+            server_state.phase_advancement_sweep_task.cancel()
 
     # Close all WebSocket connections
     for ws in server_state.active_websockets:
@@ -1544,6 +1582,98 @@ async def background_queue_processor():
             pass
 
     logger.info("Background queue processor stopped")
+
+
+async def background_phase_advancement_sweep():
+    """Background task that re-drives phase advancement for every active
+    workflow, independent of any specific run's own polling loop.
+
+    _advance_phases (src/autopilot/orchestrator.py) is the single source of
+    truth for firing phase transitions, but historically it was only ever
+    called from inside run_single_workflow's own monitor loop -- a loop
+    that lives and dies with that specific async call. A backend restart
+    kills it, and nothing re-created it for an already-launched workflow:
+    the startup resume path (_resume_interrupted_workflows) only restarts
+    orphaned AGENTS, on a stale assumption ("a 'done' task advances via the
+    monitor's phase-completion check") that no longer holds -- that
+    responsibility moved into the orchestrator's per-workflow loop without
+    the resume path being updated to compensate.
+
+    Observed live: a workflow's task finished successfully hours before
+    this fix, but its phase never advanced past it, because nothing was
+    polling _advance_phases for that workflow anymore after a backend
+    restart -- it sat "in_progress" indefinitely until manually kicked.
+
+    This sweep is a generic, restart-safe safety net: every workflow with
+    status active/paused gets _advance_phases called for it here, on a
+    fixed interval, regardless of how it was launched or whether some
+    other loop is also driving it. _advance_phases's own claim guards
+    (_claim_phase_task_creation) make concurrent calls from multiple
+    sources safe by construction -- this doesn't race with
+    run_single_workflow's own loop when both are active for the same
+    workflow, it just means the workflow is never orphaned from
+    advancement again.
+
+    The per-tick work is synchronous, blocking DB I/O (_advance_phases
+    itself, and everything it calls, uses plain SQLAlchemy sessions, not
+    async ones) -- run via run_in_executor rather than inline, the same way
+    AutopilotService._run_pipeline offloads its own synchronous pipeline
+    loop. Calling N sequential blocking DB round-trips directly inside this
+    coroutine would stall the whole event loop -- every HTTP request,
+    WebSocket push, and SSE stream this same process is serving -- for the
+    sweep's full duration, every tick, growing with active-workflow count.
+    """
+    from pathlib import Path
+
+    from src.autopilot.orchestrator import OrchestratorLogger
+    from src.core.constants import AUTOPILOT_STATE_DIR
+
+    logger.info("Background phase advancement sweep started")
+    sweep_logger = OrchestratorLogger(
+        Path(AUTOPILOT_STATE_DIR) / "phase-advancement-sweep"
+    )
+    loop = asyncio.get_event_loop()
+
+    while not server_state.shutdown_event.is_set():
+        try:
+            await loop.run_in_executor(
+                None, _run_phase_advancement_sweep_once, sweep_logger
+            )
+        except Exception as e:
+            logger.error(f"[PHASE-SWEEP] Error in phase advancement sweep: {e}")
+
+        try:
+            await asyncio.wait_for(server_state.shutdown_event.wait(), timeout=20.0)
+            break
+        except asyncio.TimeoutError:
+            pass
+
+    logger.info("Background phase advancement sweep stopped")
+
+
+def _run_phase_advancement_sweep_once(sweep_logger) -> None:
+    """Synchronous body of one background_phase_advancement_sweep tick --
+    see that function's docstring for why this runs in a thread executor
+    rather than inline on the event loop."""
+    from src.autopilot.orchestrator import _advance_phases
+    from src.core.database import Workflow
+
+    session = server_state.db_manager.get_session()
+    try:
+        active_workflow_ids = [
+            wf.id
+            for wf in session.query(Workflow)
+            .filter(Workflow.status.in_(["active", "paused"]))
+            .all()
+        ]
+    finally:
+        session.close()
+
+    for wf_id in active_workflow_ids:
+        try:
+            _advance_phases(wf_id, sweep_logger)
+        except Exception as e:
+            logger.error(f"[PHASE-SWEEP] Error advancing workflow {wf_id[:8]}: {e}")
 
 
 def _resolve_agent_current_phase(agent_id: str, workflow_id: str) -> Optional[str]:

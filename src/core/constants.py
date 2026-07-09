@@ -13,6 +13,15 @@ CONTEXT_DIR_NAME = ".hephaestus"
 # Worktrees subdirectory (lives inside each repo root)
 WORKTREES_SUBDIR = ".worktrees"
 
+# Marks a Task.raw_description as synthetic monitor-created diagnostic work
+# (see src.monitoring.monitor._create_diagnostic_agent) that must never count
+# toward phase/workflow completion checks -- an orphaned diagnostic task left
+# "pending" after its agent died would otherwise permanently block whichever
+# completion check didn't know to exclude it. Centralized here after this
+# exact convention was independently duplicated as a raw string literal in
+# three separate places (orchestrator.py, status_derivation.py).
+DIAGNOSTIC_TASK_PREFIX = "DIAGNOSTIC:"
+
 # Design document queue/inbox (relative to project root)
 DESIGN_SUBDIR = "docs/design"
 DESIGN_CONTEXT_SUBDIR = ".hephaestus/designs"

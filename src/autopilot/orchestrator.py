@@ -30,12 +30,19 @@ import git as _git
 import requests
 
 from src.autopilot.spec import GATED_PHASES, build_phase_output
-from src.core.constants import AUTOPILOT_STATE_DIR, CONTEXT_DIR_NAME, DESIGN_CONTEXT_SUBDIR, DESIGN_SUBDIR
+from src.core.constants import (
+    AUTOPILOT_STATE_DIR,
+    CONTEXT_DIR_NAME,
+    DESIGN_CONTEXT_SUBDIR,
+    DESIGN_SUBDIR,
+    DIAGNOSTIC_TASK_PREFIX,
+)
 from src.core.database import (
     Agent,
     DatabaseManager,
     Phase,
     PhaseExecution,
+    ProjectContext,
     Task,
     Workflow,
     get_db,
@@ -221,96 +228,173 @@ class PipelineState:
         return state
 
 
-class PersistentPipelineState:
-    """Manages pipeline state that survives restarts."""
+def _get_project_context(db, key: str):
+    """Read a ProjectContext value by key, or None if unset."""
+    row = db.query(ProjectContext).filter_by(key=key).first()
+    return row.value if row else None
 
-    def __init__(self):
-        self.state_dir = Path(AUTOPILOT_STATE_DIR)
-        self.state_dir.mkdir(parents=True, exist_ok=True)
-        self.state_file = self.state_dir / "pipeline_state.json"
-        self.processed_file = self.state_dir / "processed_designs.json"
+
+def _set_project_context(db, key: str, value) -> None:
+    """Upsert a ProjectContext value by key.
+
+    Uses SQLite's INSERT ... ON CONFLICT DO UPDATE (an atomic upsert)
+    instead of a read-then-write. A naive filter_by(key=key).first() /
+    add-or-update sequence has a real TOCTOU window: two callers writing
+    the same key for the first time can both see no existing row and both
+    attempt to insert, raising IntegrityError on ProjectContext.key's
+    unique constraint for whichever commits second.
+    """
+    from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+
+    now = datetime.utcnow()
+    stmt = sqlite_insert(ProjectContext).values(key=key, value=value, updated_at=now)
+    stmt = stmt.on_conflict_do_update(
+        index_elements=[ProjectContext.key],
+        set_={"value": value, "updated_at": now},
+    )
+    db.execute(stmt)
+
+
+def _delete_project_context(db, key: str) -> None:
+    """Remove a ProjectContext row by key, if present."""
+    db.query(ProjectContext).filter_by(key=key).delete()
+
+
+# ProjectContext key for AutopilotService's "was a pipeline running, with
+# what args" resume marker -- see src/autopilot/service.py's
+# _persist_running_state/load_persisted_state/clear_persisted_state.
+_RUNNING_STATE_KEY = "autopilot_running_pipeline"
+
+
+class PersistentPipelineState:
+    """Manages pipeline state that survives restarts.
+
+    Backed by ProjectContext (a generic key-value table that already existed
+    but had no callers) instead of JSON files under AUTOPILOT_STATE_DIR.
+    Files were a second, non-transactional source of truth: when the tasks/
+    agents/workflows tables got wiped in one DB transaction, these files
+    didn't move, and kept pointing at a dead workflow_id until manually
+    deleted as a separate step. Storing this in the same database means a
+    reset of workflow state naturally carries this along with it.
+    """
+
+    STATE_KEY = "autopilot_pipeline_state"
+    PROCESSED_KEY = "autopilot_processed_designs"
 
     def save(self, state: PipelineState, processed_hashes: Set[str]):
-        """Save pipeline state and processed designs to disk.
+        """Save pipeline state and processed designs to the DB.
 
-        Write order: processed_designs first, then state.
-        If crash occurs between them, design is safely skipped (in processed)
-        but state undercounts by 1 - safer than double-processing.
+        Write order: processed_designs first, in its OWN committed
+        transaction, then state in a second one — two separate get_db()
+        blocks, not one. This matters: a single shared transaction would be
+        atomic (both writes land or neither does), which sounds safer but
+        actually reintroduces the failure mode this ordering exists to
+        avoid. If the process dies before a single shared commit, NEITHER
+        write lands, so the design isn't marked processed and gets
+        reprocessed (double-processed) on restart. With two separate
+        transactions, a crash between them leaves processed_designs
+        durably committed (design safely skipped next time) while state
+        merely undercounts by 1 -- worse bookkeeping, not worse work.
         """
-        # Write processed_designs first (safer on crash)
-        with open(self.processed_file, "w") as f:
-            json.dump(list(processed_hashes), f)
+        try:
+            with get_db() as db:
+                _set_project_context(db, self.PROCESSED_KEY, list(processed_hashes))
+        except Exception as e:
+            logger.warning(f"Failed to save processed designs: {e}")
 
-        # Then write state
         state_data = state.to_dict()
         state_data["saved_at"] = datetime.now().isoformat()
-        with open(self.state_file, "w") as f:
-            json.dump(state_data, f, indent=2)
+        try:
+            with get_db() as db:
+                _set_project_context(db, self.STATE_KEY, state_data)
+        except Exception as e:
+            logger.warning(f"Failed to save pipeline state: {e}")
 
     def load(self) -> Tuple[PipelineState, Set[str]]:
-        """Load pipeline state and processed designs from disk."""
+        """Load pipeline state and processed designs from the DB."""
         state = PipelineState()
         processed_hashes: Set[str] = set()
 
-        if self.state_file.exists():
-            try:
-                with open(self.state_file) as f:
-                    state_data = json.load(f)
+        try:
+            with get_db() as db:
+                state_data = _get_project_context(db, self.STATE_KEY)
+            if state_data:
                 state = PipelineState.from_dict(state_data)
                 logger.info(
                     f"Loaded pipeline state: {state.designs_processed} designs processed"
                 )
-            except Exception as e:
-                logger.warning(f"Failed to load pipeline state: {e}")
+        except Exception as e:
+            logger.warning(f"Failed to load pipeline state: {e}")
 
-        if self.processed_file.exists():
-            try:
-                with open(self.processed_file) as f:
-                    processed_hashes = set(json.load(f))
+        try:
+            with get_db() as db:
+                processed_list = _get_project_context(db, self.PROCESSED_KEY)
+            if processed_list:
+                processed_hashes = set(processed_list)
                 logger.info(f"Loaded {len(processed_hashes)} processed designs")
-            except Exception as e:
-                logger.warning(f"Failed to load processed designs: {e}")
+        except Exception as e:
+            logger.warning(f"Failed to load processed designs: {e}")
 
         return state, processed_hashes
 
     def clear(self):
         """Clear persisted state (for fresh start)."""
-        if self.state_file.exists():
-            self.state_file.unlink()
-        if self.processed_file.exists():
-            self.processed_file.unlink()
+        with get_db() as db:
+            _delete_project_context(db, self.STATE_KEY)
+            _delete_project_context(db, self.PROCESSED_KEY)
 
     def has_incomplete_work(self) -> bool:
         """Check if there's incomplete work from a previous run."""
-        if not self.state_file.exists():
-            return False
-
         try:
-            with open(self.state_file) as f:
-                state_data = json.load(f)
+            with get_db() as db:
+                state_data = _get_project_context(db, self.STATE_KEY)
+            if not state_data:
+                return False
 
-            # Check if there was a design in progress
             current_design = state_data.get("current_design")
-            queue_status = state_data.get("queue_status", {})
-
+            # `.get("queue_status", {})` only applies its default when the
+            # key is ABSENT -- a stored value of `"queue_status": null`
+            # (explicit None) returns None here, not {}, and would raise
+            # AttributeError on the next .get() call below without the
+            # `or {}` guard.
+            queue_status = state_data.get("queue_status") or {}
             return (
                 current_design is not None or queue_status.get("status") == "processing"
             )
         except Exception as e:
-            logger.warning(f"Failed to read state file for incomplete work check: {e}")
+            logger.warning(f"Failed to read state for incomplete work check: {e}")
             return False
 
     def get_last_run_id(self) -> Optional[str]:
         """Get the run ID from the last persisted state."""
-        if not self.state_file.exists():
-            return None
         try:
-            with open(self.state_file) as f:
-                state_data = json.load(f)
-            return state_data.get("run_id")
+            with get_db() as db:
+                state_data = _get_project_context(db, self.STATE_KEY)
+            return state_data.get("run_id") if state_data else None
         except Exception as e:
-            logger.warning(f"Failed to read state file for last run ID: {e}")
+            logger.warning(f"Failed to read state for last run ID: {e}")
             return None
+
+    def remove_processed_hash(self, design_hash: str) -> None:
+        """Remove a single hash from the processed-designs set, touching
+        ONLY that key -- not the pipeline state.
+
+        Callers that only need to un-mark one design (e.g. re-adding a
+        deleted design so it gets reprocessed) must not go through
+        load()+save(): save() rewrites STATE_KEY too, and a load()...save()
+        round trip captures a snapshot of pipeline state that a
+        concurrently-running pipeline (run_continuous_pipeline saves up to
+        6 times per loop iteration) could have already moved past by the
+        time this save() lands, silently reverting its progress.
+        """
+        try:
+            with get_db() as db:
+                processed_list = _get_project_context(db, self.PROCESSED_KEY) or []
+                if design_hash in processed_list:
+                    processed_list = [h for h in processed_list if h != design_hash]
+                    _set_project_context(db, self.PROCESSED_KEY, processed_list)
+        except Exception as e:
+            logger.warning(f"Failed to remove processed hash: {e}")
 
 
 class OrchestratorLogger:
@@ -747,7 +831,7 @@ def is_design_fully_complete(
     real_pending = [
         t
         for t in (pending + queued + in_progress + assigned)
-        if not (t.get("raw_description") or "").startswith("DIAGNOSTIC:")
+        if not (t.get("raw_description") or "").startswith(DIAGNOSTIC_TASK_PREFIX)
     ]
     if real_pending:
         task_ids = [t.get("id", "")[:8] for t in real_pending[:3]]
@@ -760,7 +844,7 @@ def is_design_fully_complete(
         t
         for t in failed
         if t.get("phase_id") not in done_phase_ids
-        and not (t.get("raw_description") or "").startswith("DIAGNOSTIC:")
+        and not (t.get("raw_description") or "").startswith(DIAGNOSTIC_TASK_PREFIX)
     ]
     if unresolved_failures:
         task_ids = [t.get("id", "")[:8] for t in unresolved_failures[:3]]
@@ -2916,12 +3000,25 @@ def _case_in_progress_complete(
     """
     for ps in in_progress:
         phase = ps["phase"]
-        # Check if all tasks are done
+        # Check if all tasks are done. DIAGNOSTIC tasks (created by the
+        # monitor itself when a workflow looks stuck -- see
+        # _create_diagnostic_agent) are deliberately excluded, matching the
+        # same convention _check_workflow_stuck_state already applies ("they
+        # should not block completion detection"). Without this, an
+        # orphaned diagnostic task left "pending" after its agent died
+        # (e.g. terminated by a restart before it could close its own task)
+        # counts as real incomplete work forever -- permanently blocking
+        # this phase from ever being recognized as complete, even though
+        # the actual phase task finished successfully. Observed live: a
+        # phase sat in_progress for 9+ hours with its real task done,
+        # solely because a leftover diagnostic task from an earlier,
+        # unrelated incident was still "pending" in the same phase.
         incomplete = (
             db.query(Task)
             .filter(
                 Task.phase_id == phase.id,
                 Task.status.in_(["pending", "assigned", "in_progress"]),
+                ~Task.raw_description.like(f"{DIAGNOSTIC_TASK_PREFIX}%"),
             )
             .count()
         )

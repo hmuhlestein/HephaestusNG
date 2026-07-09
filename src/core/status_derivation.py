@@ -17,6 +17,7 @@ import logging
 
 from sqlalchemy.orm import Session
 
+from src.core.constants import DIAGNOSTIC_TASK_PREFIX
 from src.core.database import (
     AutopilotDesign,
     Feature,
@@ -59,12 +60,11 @@ def derive_feature_status(db: Session, feature_id: str, write_back: bool = True)
         return FeatureStatus.SKIPPED
     
     # Get all non-diagnostic tasks for this feature's workflow
-    # Exclude DIAGNOSTIC: prefixed tasks created by monitor
     tasks = (
         db.query(Task)
         .filter(
             Task.workflow_id == feature.workflow_id,
-            ~Task.raw_description.like("DIAGNOSTIC:%")
+            ~Task.raw_description.like(f"{DIAGNOSTIC_TASK_PREFIX}%")
         )
         .all()
     )
