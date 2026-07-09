@@ -1796,13 +1796,8 @@ class AgentManager:
             text = re.sub(r'\x1b[^\x1b\x5b\x5d]', '', text)  # Any other bare ESC
             
             # Collapse carriage-return redraws: TUI spinners redraw the same
-            # line using \r. Each redraw becomes a separate line in the log.
-            # First normalize: treat \r without \n as line separators, then
-            # keep only the last state of each line.
-            # Replace any \r not followed by \n with \n (treat as line break)
-            text = re.sub(r'\r(?!\n)', '\n', text)
-            # Now collapse: for each line segment separated by \n, if there
-            # are multiple \r-separated parts, keep only the last one
+            # line using \r. Split on \n first, then for each line, if it
+            # contains \r, keep only the last segment (final state).
             collapsed = []
             for line in text.split("\n"):
                 if "\r" in line:
