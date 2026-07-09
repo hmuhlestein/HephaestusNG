@@ -416,6 +416,14 @@ class Workflow(Base):
     # now syncs orchestrator.total_gotos to/from this column around each call.
     total_gotos = Column(Integer, default=0, nullable=False)
 
+    # Who/what paused this workflow, distinguishing a deliberate user pause
+    # (via the stop endpoint) from a defensive system pause (e.g. hitting
+    # MAX_PHASE_ATTEMPTS). _try_auto_resume_paused_workflow reads this to
+    # avoid silently reactivating a workflow the user just paused -- see
+    # that function's docstring for the bug this prevents. NULL/"system" ->
+    # eligible for auto-resume; "user" -> left alone until manually resumed.
+    paused_by = Column(String, nullable=True)
+
     # Relationships
     definition = relationship("WorkflowDefinition", back_populates="executions")
     design = relationship(
@@ -1326,6 +1334,7 @@ class DatabaseManager:
         self._migrate_self_review_columns()
         self._migrate_phase_execution_task_claim_column()
         self._migrate_autopilot_designs_error_column()
+        self._migrate_workflow_paused_by_column()
 
     def _create_fts5_tables(self):
         """Create FTS5 virtual tables and triggers for ticket search."""
@@ -1824,6 +1833,24 @@ class DatabaseManager:
                 logger.info("Migrated autopilot_designs.error column")
         except Exception as e:
             logger.debug(f"autopilot_designs.error migration (may already exist): {e}")
+
+    def _migrate_workflow_paused_by_column(self):
+        """Add workflows.paused_by for existing databases.
+
+        Idempotent - safe to call on every startup.
+        """
+        try:
+            with self.engine.connect() as conn:
+                try:
+                    conn.execute(
+                        text("ALTER TABLE workflows ADD COLUMN paused_by VARCHAR")
+                    )
+                except Exception:
+                    pass  # Column already exists
+                conn.commit()
+                logger.info("Migrated workflows.paused_by column")
+        except Exception as e:
+            logger.debug(f"workflows.paused_by migration (may already exist): {e}")
 
     def get_session(self):
         """Get a database session."""

@@ -128,6 +128,7 @@ class MultiProviderLLM(LLMProviderInterface):
         task: Dict[str, Any],
         memories: List[Dict[str, Any]],
         project_context: str,
+        phase_name: str = None,
     ) -> str:
         """Generate specialized system prompt for an agent.
 
@@ -135,12 +136,25 @@ class MultiProviderLLM(LLMProviderInterface):
             task: Task information
             memories: Relevant memories from RAG
             project_context: Current project context
+            phase_name: Phase name (e.g. "Feature Architect") -- selects a
+                specialized prompt template downstream (see
+                get_feature_architect_system_prompt). This wrapper's
+                signature had drifted from both its caller
+                (agents/manager.py, which always passes phase_name) and
+                the underlying client it delegates to, causing every
+                single agent-creation call to fail with "unexpected
+                keyword argument 'phase_name'" -- observed live: this
+                broke agent creation entirely, with nothing surfacing the
+                failure beyond a task silently stuck pending/failed.
 
         Returns:
             System prompt for the agent
         """
         return await self.client.generate_agent_prompt(
-            task=task, memories=memories, project_context=project_context
+            task=task,
+            memories=memories,
+            project_context=project_context,
+            phase_name=phase_name,
         )
 
     async def analyze_agent_trajectory(

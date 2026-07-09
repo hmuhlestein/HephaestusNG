@@ -2743,6 +2743,7 @@ async def resume_feature(feature_id: str):
         # Resume workflow if paused or failed
         if wf.status in ("paused", "failed"):
             wf.status = "active"
+            wf.paused_by = None
 
         # Recover blocked/failed tasks, plus any task still marked
         # assigned/in_progress whose agent was terminated (errored/orphaned

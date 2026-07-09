@@ -175,6 +175,41 @@ class TestAdvancePhases:
             wf = session.query(Workflow).filter_by(id="wf-1").first()
             assert wf.status == "active"
 
+    def test_does_not_auto_resume_a_user_paused_workflow(self, db_manager, sample_workflow):
+        """Regression: a deliberate user pause (paused_by="user", set by the
+        /workflow-executions/{id}/stop endpoint) must not be silently
+        reverted just because its stalled phase happens to have a done
+        task -- that's a state pausing itself commonly produces (the
+        running task finishes right after being told to stop). Before this
+        check, the background sweep would flip the workflow back to
+        "active" on its very next tick (~20s later), fighting the user's
+        pause until whatever made the phase look stalled resolved on its
+        own."""
+        from src.autopilot.orchestrator import _advance_phases
+
+        with db_manager.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-1").first()
+            wf.status = "paused"
+            wf.paused_by = "user"
+
+            task = Task(
+                id="task-1",
+                workflow_id="wf-1",
+                phase_id="phase-1",
+                raw_description="Test task",
+                done_definition="Done when complete",
+                status="done",
+            )
+            session.add(task)
+
+        logger = MagicMock()
+        result = _advance_phases("wf-1", logger)
+        assert result is False
+
+        with db_manager.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-1").first()
+            assert wf.status == "paused"
+
 
 class TestCaseStartFirstPhase:
     """Tests for _case_start_first_phase function."""
@@ -281,9 +316,12 @@ class TestMaybeRetryFailedTasks:
     """Tests for _maybe_retry_failed_tasks function."""
     
     def test_retries_all_failed_tasks(self, db_manager, sample_workflow):
-        """Should reset all failed tasks to pending when all tasks failed."""
+        """Should reset failed tasks and dispatch a fresh agent for each,
+        landing on in_progress -- not just reset to pending and abandoned
+        (the old behavior was a dead end: nothing else ever picked a
+        pending-with-no-agent task back up)."""
         from src.autopilot.orchestrator import _maybe_retry_failed_tasks
-        
+
         with db_manager.session_scope() as session:
             # Add failed tasks
             for i in range(3):
@@ -297,18 +335,24 @@ class TestMaybeRetryFailedTasks:
                     failure_reason="Error",
                 )
                 session.add(task)
-            
+
             phase = session.query(Phase).filter_by(id="phase-1").first()
-        
+
         logger = MagicMock()
+        with patch(
+            "src.autopilot.orchestrator.create_agent_for_task_direct",
+            return_value={"agent_id": "new-agent-1"},
+        ):
+            with db_manager.session_scope() as session:
+                phase = session.query(Phase).filter_by(id="phase-1").first()
+                result = _maybe_retry_failed_tasks(session, phase, logger)
+                assert result is True
+
         with db_manager.session_scope() as session:
-            phase = session.query(Phase).filter_by(id="phase-1").first()
-            result = _maybe_retry_failed_tasks(session, phase, logger)
-            assert result is True
-            
-            # Verify tasks were reset
-            tasks = session.query(Task).filter_by(phase_id="phase-1", status="pending").all()
+            # Verify tasks were reset and re-dispatched, not left pending
+            tasks = session.query(Task).filter_by(phase_id="phase-1", status="in_progress").all()
             assert len(tasks) == 3
+            assert all(t.assigned_agent_id == "new-agent-1" for t in tasks)
 
     def test_folds_failure_reason_into_description_before_clearing(
         self, db_manager, sample_workflow
@@ -336,13 +380,18 @@ class TestMaybeRetryFailedTasks:
             )
 
         logger = MagicMock()
-        with db_manager.session_scope() as session:
-            phase = session.query(Phase).filter_by(id="phase-1").first()
-            result = _maybe_retry_failed_tasks(session, phase, logger)
-            assert result is True
+        with patch(
+            "src.autopilot.orchestrator.create_agent_for_task_direct",
+            return_value={"agent_id": "new-agent-1"},
+        ):
+            with db_manager.session_scope() as session:
+                phase = session.query(Phase).filter_by(id="phase-1").first()
+                result = _maybe_retry_failed_tasks(session, phase, logger)
+                assert result is True
 
+        with db_manager.session_scope() as session:
             task = session.query(Task).filter_by(id="task-fail-0").first()
-            assert task.status == "pending"
+            assert task.status == "in_progress"
             assert task.failure_reason is None
             assert "Execute phase X: do the thing" in task.enriched_description
             assert "Missing output artifact: docs/report.md" in task.enriched_description
@@ -366,13 +415,55 @@ class TestMaybeRetryFailedTasks:
             )
 
         logger = MagicMock()
-        with db_manager.session_scope() as session:
-            phase = session.query(Phase).filter_by(id="phase-1").first()
-            _maybe_retry_failed_tasks(session, phase, logger)
+        with patch(
+            "src.autopilot.orchestrator.create_agent_for_task_direct",
+            return_value={"agent_id": "new-agent-1"},
+        ):
+            with db_manager.session_scope() as session:
+                phase = session.query(Phase).filter_by(id="phase-1").first()
+                _maybe_retry_failed_tasks(session, phase, logger)
 
+        with db_manager.session_scope() as session:
             task = session.query(Task).filter_by(id="task-fail-0").first()
-            assert task.status == "pending"
+            assert task.status == "in_progress"
             assert task.enriched_description is None
+
+    def test_agent_dispatch_failure_lands_back_on_failed_not_stuck_pending(
+        self, db_manager, sample_workflow
+    ):
+        """If create_agent_for_task_direct fails, the task must land back on
+        "failed" (not "pending") -- _maybe_retry_failed_tasks only ever
+        triggers on status="failed", so leaving it "pending" here would
+        permanently strand the task: no other code path dispatches an
+        agent for an already-existing pending task."""
+        from src.autopilot.orchestrator import _maybe_retry_failed_tasks
+
+        with db_manager.session_scope() as session:
+            session.add(
+                Task(
+                    id="task-fail-0",
+                    workflow_id="wf-1",
+                    phase_id="phase-1",
+                    raw_description="Execute phase X",
+                    done_definition="Done",
+                    status="failed",
+                    failure_reason="Error",
+                )
+            )
+
+        logger = MagicMock()
+        with patch(
+            "src.autopilot.orchestrator.create_agent_for_task_direct",
+            return_value=None,
+        ):
+            with db_manager.session_scope() as session:
+                phase = session.query(Phase).filter_by(id="phase-1").first()
+                _maybe_retry_failed_tasks(session, phase, logger)
+
+        with db_manager.session_scope() as session:
+            task = session.query(Task).filter_by(id="task-fail-0").first()
+            assert task.status == "failed"
+            assert task.assigned_agent_id is None
 
 
 class TestCaseInProgressComplete:
@@ -661,6 +752,38 @@ class TestCreatePhaseTaskResetsClaim:
         _create_phase_task("wf-1", "phase-1", "requirements", "goto", MagicMock())
 
         with db_manager.session_scope() as session:
+            assert _claim_phase_task_creation(session, "phase-1") is True
+
+    @patch("src.autopilot.orchestrator.create_agent_for_task_direct")
+    def test_resets_claim_when_entry_status_already_in_progress(
+        self, mock_create_agent, db_manager, sample_workflow
+    ):
+        """Regression: the reset used to be gated on entry status being
+        "pending"/"completed", but _case_in_progress_no_tasks calls
+        _create_phase_task for phases a DIFFERENT path (e.g. the
+        synchronous /start_workflow_execution step) already flipped to
+        "in_progress" before any task existed. For those, entry status is
+        already "in_progress" so the old gate never matched, and the claim
+        taken to create this task was never released -- permanently
+        blocking this same phase's own later completion-transition check.
+        Observed live: a Feature Architect task finished successfully but
+        its phase sat in_progress forever, and a stall-detector kept
+        spawning fresh replacement agents for it."""
+        from src.autopilot.orchestrator import _claim_phase_task_creation, _create_phase_task
+
+        mock_create_agent.return_value = {"agent_id": "new-agent"}
+
+        with db_manager.session_scope() as session:
+            exec1 = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            exec1.status = "in_progress"
+            exec1.task_creation_claimed_at = datetime.utcnow()
+
+        result = _create_phase_task("wf-1", "phase-1", "requirements", "continue", MagicMock())
+
+        assert result is True
+        with db_manager.session_scope() as session:
+            execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            assert execution.task_creation_claimed_at is None
             assert _claim_phase_task_creation(session, "phase-1") is True
 
 
