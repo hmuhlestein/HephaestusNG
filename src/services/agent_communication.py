@@ -30,8 +30,7 @@ class AgentCommunicationService:
 
         A child is any agent working on a task created by the parent.
         """
-        session = self.db_manager.get_session()
-        try:
+        with self.db_manager.session_scope() as session:
             # Find tasks created by this agent
             parent_tasks = (
                 session.query(Task).filter_by(created_by_agent_id=parent_agent_id).all()
@@ -71,8 +70,6 @@ class AgentCommunicationService:
                 )
 
             return result
-        finally:
-            session.close()
 
     def get_child_logs(
         self, parent_agent_id: str, child_agent_id: str, lines: int = 50
@@ -93,33 +90,31 @@ class AgentCommunicationService:
             return None
 
         # Get child's tmux session output using agent manager
-        session = self.db_manager.get_session()
         try:
-            agent = session.query(Agent).filter_by(id=child_agent_id).first()
-            if not agent or not agent.tmux_session_name:
+            with self.db_manager.session_scope() as session:
+                agent = session.query(Agent).filter_by(id=child_agent_id).first()
+                if not agent or not agent.tmux_session_name:
+                    return None
+
+                import subprocess
+
+                cmd = [
+                    "tmux",
+                    "capture-pane",
+                    "-t",
+                    agent.tmux_session_name,
+                    "-p",
+                    "-S",
+                    "-2000",
+                ]
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+                if result.returncode == 0:
+                    output_lines = result.stdout.strip().split("\n")
+                    return "\n".join(output_lines[-lines:])
                 return None
-
-            import subprocess
-
-            cmd = [
-                "tmux",
-                "capture-pane",
-                "-t",
-                agent.tmux_session_name,
-                "-p",
-                "-S",
-                "-2000",
-            ]
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
-            if result.returncode == 0:
-                output_lines = result.stdout.strip().split("\n")
-                return "\n".join(output_lines[-lines:])
-            return None
         except Exception as e:
             logger.error(f"Failed to get child logs: {e}")
             return None
-        finally:
-            session.close()
 
     def send_message_to_child(
         self, parent_agent_id: str, child_agent_id: str, message: str
@@ -138,40 +133,38 @@ class AgentCommunicationService:
             return False
 
         # Get child's tmux session name from database
-        session = self.db_manager.get_session()
         try:
-            agent = session.query(Agent).filter_by(id=child_agent_id).first()
-            if not agent or not agent.tmux_session_name:
-                logger.error(f"Child agent {child_agent_id[:8]} has no tmux session")
-                return False
+            with self.db_manager.session_scope() as session:
+                agent = session.query(Agent).filter_by(id=child_agent_id).first()
+                if not agent or not agent.tmux_session_name:
+                    logger.error(f"Child agent {child_agent_id[:8]} has no tmux session")
+                    return False
 
-            # Send message via tmux using argument list (no shell=True)
-            import subprocess
+                # Send message via tmux using argument list (no shell=True)
+                import subprocess
 
-            # Split message into individual keystrokes to avoid injection
-            cmd = ["tmux", "send-keys", "-t", agent.tmux_session_name]
-            # Send each character separately to avoid shell interpretation
-            for char in message:
-                if char == "\n":
-                    cmd.extend(["Enter"])
+                # Split message into individual keystrokes to avoid injection
+                cmd = ["tmux", "send-keys", "-t", agent.tmux_session_name]
+                # Send each character separately to avoid shell interpretation
+                for char in message:
+                    if char == "\n":
+                        cmd.extend(["Enter"])
+                    else:
+                        cmd.append(char)
+                cmd.append("Enter")  # Final enter
+
+                result = subprocess.run(cmd, capture_output=True, timeout=5)
+                if result.returncode == 0:
+                    logger.info(
+                        f"Parent {parent_agent_id[:8]} messaged child {child_agent_id[:8]}"
+                    )
+                    return True
                 else:
-                    cmd.append(char)
-            cmd.append("Enter")  # Final enter
-
-            result = subprocess.run(cmd, capture_output=True, timeout=5)
-            if result.returncode == 0:
-                logger.info(
-                    f"Parent {parent_agent_id[:8]} messaged child {child_agent_id[:8]}"
-                )
-                return True
-            else:
-                logger.error(f"Failed to send message: {result.stderr}")
-                return False
+                    logger.error(f"Failed to send message: {result.stderr}")
+                    return False
         except Exception as e:
             logger.error(f"Failed to send message to child: {e}")
             return False
-        finally:
-            session.close()
 
     def nudge_child(
         self,
@@ -281,32 +274,28 @@ class AgentCommunicationService:
         Create a task that will spawn a child agent.
         Returns the task ID.
         """
-        session = self.db_manager.get_session()
         try:
-            import uuid
+            with self.db_manager.session_scope() as session:
+                import uuid
 
-            task_id = str(uuid.uuid4())
+                task_id = str(uuid.uuid4())
 
-            task = Task(
-                id=task_id,
-                raw_description=description,
-                enriched_description=description,
-                done_definition="Task completed - agent reports done",
-                status="pending",
-                priority=priority,
-                created_by_agent_id=parent_agent_id,
-                phase_id=phase_id,
-            )
-            session.add(task)
-            session.commit()
+                task = Task(
+                    id=task_id,
+                    raw_description=description,
+                    enriched_description=description,
+                    done_definition="Task completed - agent reports done",
+                    status="pending",
+                    priority=priority,
+                    created_by_agent_id=parent_agent_id,
+                    phase_id=phase_id,
+                )
+                session.add(task)
 
-            logger.info(
-                f"Parent {parent_agent_id[:8]} created child task {task_id[:8]}"
-            )
-            return task_id
+                logger.info(
+                    f"Parent {parent_agent_id[:8]} created child task {task_id[:8]}"
+                )
+                return task_id
         except Exception as e:
             logger.error(f"Failed to create child task: {e}")
-            session.rollback()
             return None
-        finally:
-            session.close()

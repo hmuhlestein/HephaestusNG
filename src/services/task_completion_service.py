@@ -498,24 +498,15 @@ class TaskCompletionService:
 
             from src.core.database import Task
 
-            session = server_state.db_manager.get_session()
-            try:
+            with server_state.db_manager.session_scope() as session:
                 task = session.query(Task).filter_by(id=task_id).first()
                 if task:
                     task.status = "validation_in_progress"
-                    session.commit()
                     logger.info(
                         f"Task {task_id} validation spawned successfully, validator: {validator_id}"
                     )
                 else:
                     logger.error(f"Task {task_id} not found during validation update")
-            except Exception:
-                # FIX #12: Rollback on commit failure to avoid leaking a
-                # dirty session back into the connection pool.
-                session.rollback()
-                raise
-            finally:
-                session.close()
 
             await server_state.broadcast_update(
                 {
@@ -530,25 +521,21 @@ class TaskCompletionService:
             logger.error(f"Failed to spawn validation for task {task_id}: {e}")
             from src.core.database import Task
 
-            session = server_state.db_manager.get_session()
             try:
-                task = session.query(Task).filter_by(id=task_id).first()
-                if task:
-                    task.status = "failed"
-                    task.failure_reason = f"Validation spawning failed: {str(e)}"
-                    session.commit()
+                with server_state.db_manager.session_scope() as session:
+                    task = session.query(Task).filter_by(id=task_id).first()
+                    if task:
+                        task.status = "failed"
+                        task.failure_reason = f"Validation spawning failed: {str(e)}"
 
-                await server_state.agent_manager.terminate_agent(agent_id)
+                    await server_state.agent_manager.terminate_agent(agent_id)
             except Exception as inner_e:
                 # FIX #17: Don't let task-update/termination errors propagate
-                # and lose the original validation failure context.
-                # FIX #12: Rollback on commit failure before closing session.
-                session.rollback()
+                # and lose the original validation failure context (session_scope
+                # already rolled back before re-raising here).
                 logger.error(
                     f"Failed to update task/terminate agent after validation failure: {inner_e}"
                 )
-            finally:
-                session.close()
 
             # FIX #11/#17: Defer queue processing to avoid nested I/O in except block.
             try:
