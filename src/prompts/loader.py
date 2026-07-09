@@ -102,6 +102,21 @@ def get_base_system_prompt(
     })
 
 
+def get_feature_architect_system_prompt(
+    agent_id: str,
+    task_id: str,
+    memory_context: str,
+    project_context: str,
+) -> str:
+    """Get the Feature Architect system prompt with variables interpolated."""
+    return get_prompt("feature_architect_system_prompt", {
+        "agent_id": agent_id,
+        "task_id": task_id,
+        "memory_context": memory_context,
+        "project_context": project_context,
+    })
+
+
 def get_phase_agent_instructions(
     agent_id: str,
     task_id: str,

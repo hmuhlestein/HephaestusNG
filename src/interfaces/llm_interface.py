@@ -83,6 +83,7 @@ class LLMProviderInterface(ABC):
         task: Dict[str, Any],
         memories: List[Dict[str, Any]],
         project_context: str,
+        phase_name: str = None,
     ) -> str:
         """Generate agent system prompt.
 
@@ -382,6 +383,7 @@ Return as JSON with keys: state, decision, message, reasoning, confidence"""
         task: Dict[str, Any],
         memories: List[Dict[str, Any]],
         project_context: str,
+        phase_name: str = None,
     ) -> str:
         """Generate agent system prompt.
 
@@ -390,9 +392,20 @@ Return as JSON with keys: state, decision, message, reasoning, confidence"""
         worktree path already interpolated.  Repeating them here wastes
         context tokens and creates two sources of truth.
         """
+        from src.prompts.loader import get_feature_architect_system_prompt
+
         memory_context = "\n".join(
             [f"- {mem.get('content', '')[:200]}" for mem in memories[:10]]
         )
+
+        # Use specialized prompt for Feature Architect
+        if phase_name == "Feature Architect":
+            return get_feature_architect_system_prompt(
+                agent_id=task.get("agent_id", "unknown"),
+                task_id=task.get("id", "unknown"),
+                memory_context=memory_context,
+                project_context=project_context,
+            )
 
         return get_base_system_prompt(
             agent_id=task.get("agent_id", "unknown"),
@@ -672,11 +685,23 @@ Make the description actionable and criteria verifiable."""
         task: Dict[str, Any],
         memories: List[Dict[str, Any]],
         project_context: str,
+        phase_name: str = None,
     ) -> str:
         """Generate agent system prompt."""
+        from src.prompts.loader import get_feature_architect_system_prompt
+
         memory_context = "\n".join(
             [f"- {mem.get('content', '')[:200]}" for mem in memories[:10]]
         )
+
+        # Use specialized prompt for Feature Architect
+        if phase_name == "Feature Architect":
+            return get_feature_architect_system_prompt(
+                agent_id=task.get("agent_id", "unknown"),
+                task_id=task.get("id", "unknown"),
+                memory_context=memory_context,
+                project_context=project_context,
+            )
 
         return get_base_system_prompt(
             agent_id=task.get("agent_id", "unknown"),
