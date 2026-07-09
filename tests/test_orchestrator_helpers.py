@@ -211,6 +211,29 @@ class TestPersistentPipelineState:
         _, hashes = pps.load()
         assert hashes == set()
 
+    def test_save_state_only_does_not_touch_processed_hashes(self, orch_db_env):
+        """Regression: run_single_workflow/run_continuous_pipeline call this
+        for an early mid-run checkpoint (current_design/current_workflow_id
+        become known well before run_single_design returns, but were
+        previously only ever persisted afterward -- see save_state_only's
+        docstring for the live symptom this caused: the status endpoint
+        showing the previous, already-finished run for a new run's entire
+        duration). It must only ever touch the state key, never
+        processed_hashes -- unlike save(), it's called an unknown number of
+        times per design run, and clobbering processed_hashes with a stale
+        in-memory set on one of those calls would un-mark already-completed
+        designs."""
+        from src.autopilot.orchestrator import PersistentPipelineState, PipelineState
+
+        pps = PersistentPipelineState()
+        pps.save(PipelineState(designs_processed=2, run_id="run-1"), {"h1", "h2"})
+
+        pps.save_state_only(PipelineState(current_workflow_id="wf-new", run_id="run-1"))
+
+        state, hashes = pps.load()
+        assert state.current_workflow_id == "wf-new"
+        assert hashes == {"h1", "h2"}
+
 
 class TestSetProjectContextUpsert:
     """_set_project_context uses an atomic INSERT ... ON CONFLICT DO UPDATE
