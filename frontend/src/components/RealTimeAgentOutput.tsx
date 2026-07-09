@@ -255,7 +255,7 @@ const RealTimeAgentOutput: React.FC<RealTimeAgentOutputProps> = ({
     } catch {
       return text;
     }
-  }, [filteredOutput, ansiConverter]);
+  }, [collapsedOutput, ansiConverter]);
 
   // Keyboard shortcuts
   useEffect(() => {
