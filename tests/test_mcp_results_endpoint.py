@@ -42,9 +42,11 @@ class TestReportResultsEndpoint:
 
     @patch("src.services.result_service.ResultService.create_result")
     @patch("src.mcp.server.server_state.broadcast_update")
+    @patch("src.mcp.memory_api.get_app_state")
     def test_report_results_success(
-        self, mock_broadcast, mock_create_result, client, valid_markdown_file
+        self, mock_get_state, mock_broadcast, mock_create_result, client, valid_markdown_file
     ):
+        mock_get_state.return_value = server_state
         """Test successful result reporting."""
         # Setup mock
         mock_create_result.return_value = {
@@ -248,9 +250,11 @@ class TestReportResultsEndpoint:
 
     @patch("src.services.result_service.ResultService.create_result")
     @patch("src.mcp.server.server_state.broadcast_update")
+    @patch("src.mcp.memory_api.get_app_state")
     def test_multiple_results_per_task(
-        self, mock_broadcast, mock_create_result, client, valid_markdown_file
+        self, mock_get_state, mock_broadcast, mock_create_result, client, valid_markdown_file
     ):
+        mock_get_state.return_value = server_state
         """Test submitting multiple results for the same task."""
         # Setup mock for first result
         mock_create_result.return_value = {

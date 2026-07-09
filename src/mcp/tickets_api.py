@@ -7,7 +7,7 @@ import logging
 import time
 from typing import Any, Dict, List, Optional, Union
 
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, Header, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from src.core.database import get_db
@@ -339,47 +339,6 @@ class LinkCommitResponse(BaseModel):
     success: bool
     ticket_id: str
     commit_sha: str
-    message: str
-
-
-class RequestTicketClarificationRequest(BaseModel):
-    """Request model for ticket clarification."""
-
-    ticket_id: str = Field(..., description="ID of the ticket needing clarification")
-    conflict_description: str = Field(
-        ..., min_length=20, description="Clear description of the conflict or issue"
-    )
-    context: str = Field(
-        default="", description="Additional context relevant to the clarification"
-    )
-    potential_solutions: List[str] = Field(
-        default_factory=list, description="List of potential solutions being considered"
-    )
-
-
-class RequestTicketClarificationResponse(BaseModel):
-    """Response model for ticket clarification."""
-
-    success: bool
-    ticket_id: str
-    clarification: str  # Markdown-formatted detailed response
-    comment_id: str  # ID of the comment where clarification was stored
-    message: str
-
-
-class ApproveTicketResponse(BaseModel):
-    """Response model for ticket approval."""
-
-    success: bool
-    ticket_id: str
-    message: str
-
-
-class RejectTicketResponse(BaseModel):
-    """Response model for ticket rejection."""
-
-    success: bool
-    ticket_id: str
     message: str
 
 
@@ -1072,4 +1031,302 @@ async def link_commit_endpoint(
         logger.error(f"Failed to link commit: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+
+# ── Approve / Reject / Commit Diff ─────────────────────────────────
+
+
+class ApproveTicketResponse(BaseModel):
+    """Response model for ticket approval."""
+
+    success: bool
+    ticket_id: str
+    message: str
+
+
+class RejectTicketResponse(BaseModel):
+    """Response model for ticket rejection."""
+
+    success: bool
+    ticket_id: str
+    message: str
+
+
+class FileDiff(BaseModel):
+    """File diff information for commit."""
+
+    path: str
+    status: str  # modified, added, deleted, renamed
+    insertions: int
+    deletions: int
+    diff: str  # Unified diff content
+    language: str  # For syntax highlighting
+    old_path: Optional[str] = None  # For renamed files
+
+
+class CommitDiffResponse(BaseModel):
+    """Response model for commit diff."""
+
+    success: bool
+    commit_sha: str
+    commit_message: str
+    author: str
+    commit_timestamp: str
+    files_changed: int
+    total_insertions: int
+    total_deletions: int
+    total_files: int
+    files: List[FileDiff]
+
+
+@router.post("/approve", response_model=ApproveTicketResponse)
+async def approve_ticket_endpoint(
+    request: Request,
+    agent_id: str = Header("ui-user", alias="X-Agent-ID"),
+):
+    """
+    Approve a pending ticket.
+
+    Body: {"ticket_id": "ticket-uuid"}
+    """
+    from src.core.app_context import get_app_state
+
+    logger.info(f"[APPROVE_TICKET] Agent {agent_id} approving ticket")
+
+    try:
+        data = await request.json()
+        ticket_id = data.get("ticket_id")
+
+        if not ticket_id:
+            raise HTTPException(status_code=400, detail="ticket_id required")
+
+        logger.info(f"[APPROVE_TICKET] Ticket ID: {ticket_id}")
+
+        result = await _get_ticket_service().approve_ticket(
+            ticket_id=ticket_id,
+            approved_by=agent_id,
+        )
+
+        # Broadcast approval
+        server_state = get_app_state()
+        await server_state.broadcast_update(
+            {
+                "type": "ticket_approved",
+                "ticket_id": ticket_id,
+                "approved_by": agent_id,
+                "pending_count": _get_ticket_service().get_pending_review_count(),
+            }
+        )
+
+        logger.info(f"[APPROVE_TICKET] Ticket {ticket_id} approved successfully")
+
+        return ApproveTicketResponse(**result)
+
+    except ValueError as e:
+        logger.error(f"[APPROVE_TICKET] Validation error: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"[APPROVE_TICKET] Unexpected error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/reject", response_model=RejectTicketResponse)
+async def reject_ticket_endpoint(
+    request: Request,
+    agent_id: str = Header("ui-user", alias="X-Agent-ID"),
+):
+    """
+    Reject a pending ticket.
+
+    Body: {"ticket_id": "ticket-uuid", "rejection_reason": "..."}
+    """
+    from src.core.app_context import get_app_state
+
+    logger.info(f"[REJECT_TICKET] Agent {agent_id} rejecting ticket")
+
+    try:
+        data = await request.json()
+        ticket_id = data.get("ticket_id")
+        rejection_reason = data.get("rejection_reason", "")
+
+        if not ticket_id:
+            raise HTTPException(status_code=400, detail="ticket_id required")
+
+        if not rejection_reason:
+            raise HTTPException(status_code=400, detail="rejection_reason required")
+
+        logger.info(
+            f"[REJECT_TICKET] Ticket ID: {ticket_id}, Reason: {rejection_reason}"
+        )
+
+        result = await _get_ticket_service().reject_ticket(
+            ticket_id=ticket_id,
+            rejected_by=agent_id,
+            rejection_reason=rejection_reason,
+        )
+
+        # Broadcast rejection
+        server_state = get_app_state()
+        await server_state.broadcast_update(
+            {
+                "type": "ticket_rejected",
+                "ticket_id": ticket_id,
+                "rejected_by": agent_id,
+                "rejection_reason": rejection_reason,
+                "pending_count": _get_ticket_service().get_pending_review_count(),
+            }
+        )
+
+        logger.info(f"[REJECT_TICKET] Ticket {ticket_id} rejected successfully")
+
+        return RejectTicketResponse(**result)
+
+    except ValueError as e:
+        logger.error(f"[REJECT_TICKET] Validation error: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"[REJECT_TICKET] Unexpected error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/commit-diff/{commit_sha}", response_model=CommitDiffResponse)
+async def get_commit_diff_endpoint(
+    commit_sha: str,
+    agent_id: str = Header(..., alias="X-Agent-ID"),
+):
+    """Get detailed git diff for a commit (for Git Diff Window in UI)."""
+    import os
+    import re
+    import subprocess
+
+    from src.core.simple_config import get_config
+
+    logger.info(f"Agent {agent_id} fetching commit diff for {commit_sha}")
+
+    try:
+        # Get the configured main repo path
+        config = get_config()
+        main_repo_path = str(config.main_repo_path)
+
+        # Helper function to detect language from file extension
+        def detect_language(file_path: str) -> str:
+            ext_map = {
+                ".py": "python",
+                ".js": "javascript",
+                ".ts": "typescript",
+                ".tsx": "tsx",
+                ".jsx": "jsx",
+                ".go": "go",
+                ".rs": "rust",
+                ".java": "java",
+                ".c": "c",
+                ".cpp": "cpp",
+                ".h": "c",
+                ".hpp": "cpp",
+                ".md": "markdown",
+                ".yaml": "yaml",
+                ".yml": "yaml",
+                ".json": "json",
+                ".sql": "sql",
+                ".sh": "bash",
+            }
+            ext = os.path.splitext(file_path)[1].lower()
+            return ext_map.get(ext, "text")
+
+        # Get commit metadata from the correct repository
+        cmd = ["git", "show", "--format=%H|%an|%at|%s", "-s", commit_sha]
+        result = subprocess.run(
+            cmd, cwd=main_repo_path, capture_output=True, text=True, check=True
+        )
+
+        if result.returncode != 0:
+            raise HTTPException(
+                status_code=404, detail=f"Commit not found: {commit_sha}"
+            )
+
+        parts = result.stdout.strip().split("|", 3)
+        commit_hash = parts[0] if len(parts) > 0 else commit_sha
+        author = parts[1] if len(parts) > 1 else "unknown"
+        timestamp_unix = int(parts[2]) if len(parts) > 2 else 0
+        message = parts[3] if len(parts) > 3 else "No message"
+
+        timestamp = (
+            datetime.fromtimestamp(timestamp_unix).isoformat()
+            if timestamp_unix > 0
+            else datetime.utcnow().isoformat()
+        )
+
+        # Get file stats from the correct repository
+        cmd = ["git", "diff", "--numstat", f"{commit_sha}^", commit_sha]
+        result = subprocess.run(
+            cmd, cwd=main_repo_path, capture_output=True, text=True, check=True
+        )
+
+        files_data = []
+        total_insertions = 0
+        total_deletions = 0
+
+        for line in result.stdout.strip().split("\n"):
+            if not line:
+                continue
+            parts = line.split("\t")
+            if len(parts) < 3:
+                continue
+
+            insertions = int(parts[0]) if parts[0].isdigit() else 0
+            deletions = int(parts[1]) if parts[1].isdigit() else 0
+            file_path = parts[2]
+
+            total_insertions += insertions
+            total_deletions += deletions
+
+            # Get unified diff for this file from the correct repository
+            cmd_diff = ["git", "diff", f"{commit_sha}^", commit_sha, "--", file_path]
+            diff_result = subprocess.run(
+                cmd_diff, cwd=main_repo_path, capture_output=True, text=True
+            )
+
+            # Determine file status
+            status = "modified"
+            old_path = None
+            if "new file mode" in diff_result.stdout:
+                status = "added"
+            elif "deleted file mode" in diff_result.stdout:
+                status = "deleted"
+            elif "rename from" in diff_result.stdout:
+                status = "renamed"
+                rename_match = re.search(r"rename from (.+)", diff_result.stdout)
+                if rename_match:
+                    old_path = rename_match.group(1)
+
+            files_data.append(
+                FileDiff(
+                    path=file_path,
+                    status=status,
+                    insertions=insertions,
+                    deletions=deletions,
+                    diff=diff_result.stdout,
+                    language=detect_language(file_path),
+                    old_path=old_path,
+                )
+            )
+
+        return CommitDiffResponse(
+            success=True,
+            commit_sha=commit_hash,
+            commit_message=message,
+            author=author,
+            commit_timestamp=timestamp,
+            files_changed=len(files_data),
+            total_insertions=total_insertions,
+            total_deletions=total_deletions,
+            total_files=len(files_data),
+            files=files_data,
+        )
+
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Git command failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get commit diff: {e}")
+    except Exception as e:
+        logger.error(f"Failed to get commit diff: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
