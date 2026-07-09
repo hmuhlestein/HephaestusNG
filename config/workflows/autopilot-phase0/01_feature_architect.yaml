@@ -59,7 +59,7 @@ description: |
         "id": "<short-slug>",
         "name": "<Human Name>",
         "scope": "<one paragraph describing what this feature does>",
-        "files": ["src/auth/", "tests/test_auth.py"],
+        "files": ["<owned source directory or module>/", "<owned test file(s)>"],
         "depends_on": [],
         "execution": "parallel"
       }
@@ -71,7 +71,9 @@ description: |
   - `id`: lowercase slug with hyphens (e.g., "user-auth", "api-gateway")
   - `name`: Human-readable name
   - `scope`: One paragraph summary of what this feature implements
-  - `files`: List of file paths this feature owns (directories end with /)
+  - `files`: List of file paths this feature owns (directories end with /). Use whatever
+    source layout this specific project actually uses (`src/`, `app/`, `lib/`, a flat
+    root, etc.) — determine it by exploring the codebase, don't assume `src/`.
   - `depends_on`: List of feature ids this depends on (empty array if none)
   - `execution`: "parallel" if it can run alongside other features, "sequential" if it must wait
 
