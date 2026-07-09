@@ -302,6 +302,30 @@ class PersistentPipelineState:
         except Exception as e:
             logger.warning(f"Failed to save processed designs: {e}")
 
+        self.save_state_only(state)
+
+    def save_state_only(self, state: PipelineState) -> None:
+        """Persist just the state half of save(), without touching
+        processed_hashes.
+
+        Used for an early, mid-run checkpoint right after
+        state.current_workflow_id becomes known (see run_single_workflow),
+        rather than only at the end of run_single_design. Without this, the
+        status endpoint's current_design/current_workflow_id -- read from
+        this same DB-persisted state, see get_autopilot_status -- stayed
+        stale for a design's *entire* run (which can take minutes to
+        hours): AutopilotService's own live current_design field is never
+        updated (this runs in a separate thread with no reference back to
+        it), so the status endpoint's fallback to this persisted state was
+        the only path, and it wasn't written early enough. Observed live: a
+        real agent was actively working (active_agents: 1) right after a
+        design was launched, but the dashboard's play button, current
+        design, and workflow id all still showed the previous, already-
+        completed run -- indistinguishable from clicking play and nothing
+        happening. Calling save(...) here instead (the full version) would
+        also be safe but wastefully re-writes the unchanged processed_hashes
+        set on every mid-run checkpoint.
+        """
         state_data = state.to_dict()
         state_data["saved_at"] = datetime.now().isoformat()
         try:
@@ -3912,6 +3936,13 @@ def run_single_workflow(
             # Store branch name for final merge
             state._design_branch = design_branch_name
             state._design_worktree = design_worktree_path
+            # Checkpoint now, not just after run_single_design returns --
+            # see PersistentPipelineState.save_state_only's docstring. The
+            # status endpoint's current_workflow_id reads only this
+            # persisted state (no live fallback), so without this it stays
+            # pointed at the previous, already-finished workflow for this
+            # run's entire duration.
+            PersistentPipelineState().save_state_only(state)
 
         # Patch pipeline_metrics.json with the workflow_id so the UI can link tasks to features
         if state and state.current_feature_folder:
@@ -5582,6 +5613,11 @@ def run_continuous_pipeline(args) -> None:
                     "processed": len(processed_hashes),
                 }
                 _update_orchestrator_status("working")
+                # Checkpoint immediately, not just after run_single_design
+                # returns (see save_state_only's docstring) -- a design's
+                # run can take minutes to hours, and the status endpoint's
+                # current_design reads this same persisted state.
+                persistent_state.save(state, processed_hashes)
 
                 try:
                     status, feature_report = run_single_design(
