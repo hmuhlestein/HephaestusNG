@@ -1988,17 +1988,49 @@ class MonitoringLoop:
     async def _create_diagnostic_agent(
         self, workflow_id: str, workflow_tasks: List, stuck_time: float
     ):
-        """Log a stalled workflow without creating extra tasks.
+        """Handle a stalled workflow by marking stuck tasks as failed.
 
-        Diagnostic tasks polluted the task list, got restarted on resume,
-        and wasted agents. Now we just log and let the pipeline's own
+        Instead of creating diagnostic tasks (which polluted the task list
+        and got restarted on resume), we mark in_progress/assigned tasks
+        with terminated agents as failed. This lets the pipeline's own
         retry logic handle recovery.
         """
-        logger.warning(
-            f"[DIAGNOSTIC MONITOR] Workflow {workflow_id[:8]} stuck for "
-            f"{stuck_time:.0f}s — no diagnostic task created, "
-            f"pipeline retry logic will handle recovery"
-        )
+        from src.core.database import Agent, Task
+
+        session = self.db_manager.get_session()
+        try:
+            stalled = 0
+            for task in workflow_tasks:
+                if task.status not in ("in_progress", "assigned"):
+                    continue
+                if not task.assigned_agent_id:
+                    continue
+                agent = session.query(Agent).filter_by(id=task.assigned_agent_id).first()
+                if agent and agent.status == "terminated":
+                    task.status = "failed"
+                    task.failure_reason = f"Agent terminated after {stuck_time:.0f}s stall"
+                    stalled += 1
+                    logger.warning(
+                        f"[STALL-HANDLER] Task {task.id[:8]} marked failed — "
+                        f"agent {agent.id[:8]} terminated, stuck {stuck_time:.0f}s"
+                    )
+
+            if stalled:
+                session.commit()
+                logger.warning(
+                    f"[STALL-HANDLER] Marked {stalled} stalled task(s) as failed "
+                    f"for workflow {workflow_id[:8]}"
+                )
+            else:
+                logger.info(
+                    f"[STALL-HANDLER] Workflow {workflow_id[:8]} stuck {stuck_time:.0f}s "
+                    f"but no tasks with terminated agents found — no action taken"
+                )
+        except Exception as e:
+            session.rollback()
+            logger.error(f"[STALL-HANDLER] Error: {e}")
+        finally:
+            session.close()
 
     async def _gather_diagnostic_context(
         self, workflow_id: str, workflow_tasks: List, stuck_time: float
