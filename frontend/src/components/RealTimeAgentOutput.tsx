@@ -237,7 +237,9 @@ const RealTimeAgentOutput: React.FC<RealTimeAgentOutputProps> = ({
       // Filter out horizontal separator lines (────────────────────...)
       if (/^[─━═▬▪▫\-=\s]{20,}$/.test(stripped)) return false;
       // Filter out spinner-only lines
-      if (/^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏Working\.\s]+$/.test(stripped)) return false;
+      if (/^[\s]*[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏Working\.\s]+$/.test(stripped)) return false;
+      // Filter out TUI chrome: "... (N earlier lines, ctrl+o to expand)"
+      if (/^\.\.\. \(\d+ earlier lines/.test(stripped)) return false;
       // Filter out TUI chrome fragments
       if (/^[AGBCD\s]+$/.test(stripped) && stripped.length < 10) return false;
       if (searchTerm && !line.toLowerCase().includes(searchTerm.toLowerCase())) return false;
