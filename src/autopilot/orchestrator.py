@@ -3875,13 +3875,6 @@ def _resume_stuck_workflow_tasks(workflow_id: str, logger: OrchestratorLogger) -
         )
         restartable = []
         for t in candidates:
-            # Skip diagnostic tasks — they're supplementary investigation
-            # tasks, not real work. Restarting them wastes an agent.
-            if t.raw_description and t.raw_description.startswith("DIAGNOSTIC:"):
-                logger.info(
-                    f"[RESUME] Skipping diagnostic task {t.id[:8]}"
-                )
-                continue
             if t.status in ("blocked", "failed"):
                 restartable.append(t)
             elif t.assigned_agent_id:
