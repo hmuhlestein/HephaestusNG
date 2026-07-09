@@ -467,43 +467,45 @@ ${taskDetails.child_tasks.map((t: any) => `- ${t.description} (${t.status})`).jo
                 </div>
 
                 {taskDetails.workflow_id && (
-                  <div className="flex items-center text-gray-600 dark:text-gray-400 col-span-4">
-                    <Workflow className="w-4 h-4 mr-2 text-blue-500" />
-                    <span className="text-xs">Workflow: </span>
-                    <button
-                      onClick={() => {
-                        selectExecution(taskDetails.workflow_id!);
-                        navigate('/workflows');
-                        onClose();
-                      }}
-                      className="ml-1 text-xs font-mono text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-1"
-                      title={`Go to workflow: ${taskDetails.workflow_id}`}
-                    >
-                      {taskDetails.workflow_id.slice(0, 12)}...
-                      <ExternalLink className="w-3 h-3" />
-                    </button>
-                    <button
-                      onClick={() => copyToClipboard(taskDetails.workflow_id!, 'workflow ID')}
-                      className="ml-2 text-gray-400 hover:text-gray-600"
-                      title="Copy workflow ID"
-                    >
-                      <Copy className="w-3 h-3" />
-                    </button>
-                  </div>
-                )}
-
-                {taskDetails.agent_info?.id && (
-                  <div className="flex items-center text-gray-600 dark:text-gray-400 col-span-4">
-                    <Bot className="w-4 h-4 mr-2 text-violet-500" />
-                    <span className="text-xs">Agent: </span>
-                    <button
-                      onClick={() => copyToClipboard(taskDetails.agent_info!.id, 'Agent ID')}
-                      className="ml-1 text-xs font-mono text-violet-600 dark:text-violet-400 hover:underline flex items-center gap-1"
-                      title="Copy Agent ID"
-                    >
-                      {taskDetails.agent_info!.id.slice(0, 12)}...
-                      <Copy className="w-3 h-3" />
-                    </button>
+                  <div className="flex items-center text-gray-600 dark:text-gray-400 col-span-4 gap-4">
+                    <div className="flex items-center">
+                      <Workflow className="w-4 h-4 mr-2 text-blue-500" />
+                      <span className="text-xs">Workflow: </span>
+                      <button
+                        onClick={() => {
+                          selectExecution(taskDetails.workflow_id!);
+                          navigate('/workflows');
+                          onClose();
+                        }}
+                        className="ml-1 text-xs font-mono text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-1"
+                        title={`Go to workflow: ${taskDetails.workflow_id}`}
+                      >
+                        {taskDetails.workflow_id.slice(0, 12)}...
+                        <ExternalLink className="w-3 h-3" />
+                      </button>
+                      <button
+                        onClick={() => copyToClipboard(taskDetails.workflow_id!, 'workflow ID')}
+                        className="ml-2 text-gray-400 hover:text-gray-600"
+                        title="Copy workflow ID"
+                      >
+                        <Copy className="w-3 h-3" />
+                      </button>
+                    </div>
+                    
+                    {taskDetails.agent_info?.id && (
+                      <div className="flex items-center">
+                        <Bot className="w-4 h-4 mr-2 text-violet-500" />
+                        <span className="text-xs">Agent: </span>
+                        <button
+                          onClick={() => copyToClipboard(taskDetails.agent_info!.id, 'Agent ID')}
+                          className="ml-1 text-xs font-mono text-violet-600 dark:text-violet-400 hover:underline flex items-center gap-1"
+                          title="Copy Agent ID"
+                        >
+                          {taskDetails.agent_info!.id.slice(0, 12)}...
+                          <Copy className="w-3 h-3" />
+                        </button>
+                      </div>
+                    )}
                   </div>
                 )}
 
