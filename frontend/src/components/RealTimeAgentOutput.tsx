@@ -60,6 +60,24 @@ const RealTimeAgentOutput: React.FC<RealTimeAgentOutputProps> = ({
     newline: true,
     escapeXML: true,
     stream: false,
+    colors: {
+      0: '#1e1e1e',   // Black matches background
+      1: '#cd3131',
+      2: '#0dbc79',
+      3: '#e5e510',
+      4: '#2472c8',
+      5: '#bc3fbc',
+      6: '#11a8cd',
+      7: '#e5e5e5',
+      8: '#666666',
+      9: '#f14c4c',
+      10: '#23d18b',
+      11: '#f5f543',
+      12: '#3b8eea',
+      13: '#d670d6',
+      14: '#29b8db',
+      15: '#ffffff',
+    },
   }), []);
 
   const {
@@ -421,7 +439,7 @@ const RealTimeAgentOutput: React.FC<RealTimeAgentOutputProps> = ({
               onScroll={handleScroll}
               onMouseDown={handleMouseDown}
               onMouseUp={handleMouseUp}
-              className="absolute inset-0 p-6 overflow-auto font-mono text-xs bg-gray-900 text-green-400 whitespace-pre-wrap break-all selection:bg-blue-500 selection:text-white"
+              className="absolute inset-0 p-6 overflow-auto font-mono text-xs bg-[#1e1e1e] text-[#d4d4d4] whitespace-pre-wrap break-all selection:bg-blue-500 selection:text-white leading-[1.4]"
               style={{
                 lineHeight: '1.4',
                 fontFamily: 'Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace'
