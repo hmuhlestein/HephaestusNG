@@ -2607,17 +2607,56 @@ async def get_project_design_status(project_id: str, filename: str):
                 "completed_at": None,
             })
 
+        # Collect workflow-level errors for failed workflows
+        workflow_errors = []
+        for wf in matching_workflows:
+            if wf.status == "failed":
+                wf_tasks = [t for t in all_tasks if t.get("workflow_id") == wf.id]
+                failed_tasks = [t for t in wf_tasks if t.get("status") == "failed"]
+                diag_failed = [
+                    t for t in failed_tasks
+                    if t.get("description", "").startswith("DIAGNOSTIC:")
+                ]
+                real_failed = [
+                    t for t in failed_tasks
+                    if not t.get("description", "").startswith("DIAGNOSTIC:")
+                ]
+                if real_failed:
+                    workflow_errors.append(
+                        f"Workflow {wf.id[:8]}: {len(real_failed)} task(s) failed"
+                    )
+                elif diag_failed:
+                    workflow_errors.append(
+                        f"Workflow {wf.id[:8]}: diagnostic task failed (all feature work completed)"
+                    )
+                else:
+                    workflow_errors.append(
+                        f"Workflow {wf.id[:8]}: marked failed"
+                    )
+
+        # Build warning message for completed designs with failed workflows
+        warning = None
+        if overall_status == "completed" and workflow_errors:
+            warning = (
+                f"Design completed but {len(workflow_errors)} workflow(s) had issues. "
+                + "; ".join(workflow_errors)
+            )
+
         return {
             "filename": filename,
             "name": design_name,
             "content": design_content,
             "status": overall_status,
-            "error": design_error if overall_status == "failed" else None,
+            "error": design_error,
+            "warning": warning,
             "workflows": [
                 {
                     "id": wf.id,
                     "status": wf.status,
                     "created_at": wf.created_at.isoformat() if wf.created_at else None,
+                    "error": next(
+                        (e for e in workflow_errors if wf.id[:8] in e), None
+                    ) if wf.status == "failed" else None,
                 }
                 for wf in matching_workflows
             ],
