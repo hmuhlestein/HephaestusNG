@@ -49,11 +49,6 @@ class AgentManager:
         self.config = get_config()
         self.tmux_server = libtmux.Server()
         
-        # Track agents that have had their initial transcript load done.
-        # First call reads full history from transcript log; subsequent calls
-        # use tmux capture-pane for clean live updates.
-        self._transcript_initial_load_done: set = set()
-
         # Branch manager for agent isolation
         self.branch_manager = WorktreeManager(db_manager)
 
@@ -1658,14 +1653,14 @@ class AgentManager:
                 logger.warning(f"Agent {agent_id} has no tmux session name")
                 return ""
 
-            # First call: load full history from transcript log
-            if agent_id not in self._transcript_initial_load_done:
-                transcript_output = self._read_transcript_log(agent, lines)
-                if transcript_output:
-                    self._transcript_initial_load_done.add(agent_id)
-                    return transcript_output
+            # Always read from transcript log (has ANSI colors from pipe-pane).
+            # capture-pane returns plain text (tmux renders to text), so we
+            # prefer the transcript which preserves the original ANSI codes.
+            transcript_output = self._read_transcript_log(agent, lines)
+            if transcript_output:
+                return transcript_output
 
-            # Subsequent calls: use tmux capture-pane (clean, limited by scrollback)
+            # Fallback: capture-pane if transcript is unavailable
             logger.debug(
                 f"Attempting to access tmux session: {agent.tmux_session_name}"
             )
@@ -1795,9 +1790,7 @@ class AgentManager:
             for line in text.split("\n"):
                 if "\r" in line:
                     line = line.rsplit("\r", 1)[-1]
-                line = line.rstrip()
-                if line:  # Skip empty lines from spinner noise
-                    collapsed.append(line)
+                collapsed.append(line.rstrip())
             text = "\n".join(collapsed)
             
             # Strip TUI chrome (prompts, spinners) that ANSI stripping doesn't catch

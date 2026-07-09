@@ -216,9 +216,9 @@ const RealTimeAgentOutput: React.FC<RealTimeAgentOutputProps> = ({
     for (const line of lines) {
       if (line.includes('\r')) {
         const last = line.split('\r').pop() || '';
-        if (last.trim()) collapsed.push(last);
+        collapsed.push(last);
       } else {
-        if (line.trim()) collapsed.push(line);
+        collapsed.push(line);
       }
     }
     return collapsed.join('\n');
