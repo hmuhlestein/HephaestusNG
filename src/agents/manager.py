@@ -297,6 +297,18 @@ class AgentManager:
                 self.branch_manager.switch_to_branch(branch_name)
 
             # 2. Generate system prompt
+            # Get phase name for specialized prompts
+            phase_name = None
+            if task.phase_id:
+                try:
+                    from src.core.database import Phase
+                    with self.db_manager.get_session() as _ps:
+                        _ph = _ps.query(Phase).filter_by(id=task.phase_id).first()
+                        if _ph:
+                            phase_name = _ph.name
+                except Exception:
+                    pass
+
             system_prompt = await self.llm_provider.generate_agent_prompt(
                 task={
                     "id": task.id,
@@ -307,6 +319,7 @@ class AgentManager:
                 },
                 memories=memories,
                 project_context=project_context,
+                phase_name=phase_name,
             )
 
             # 3. Prepare environment variables for GLM if needed
