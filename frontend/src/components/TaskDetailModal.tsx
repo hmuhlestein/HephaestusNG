@@ -467,6 +467,20 @@ ${taskDetails.child_tasks.map((t: any) => `- ${t.description} (${t.status})`).jo
                   Created: {formatDistanceToNow(new Date(taskDetails.created_at), { addSuffix: true })}
                 </div>
 
+                <div className="flex items-center text-gray-600 dark:text-gray-400 col-span-4 gap-4">
+                  <div className="flex items-center">
+                    <FileText className="w-4 h-4 mr-2 text-gray-500" />
+                    <span className="text-xs">Task: </span>
+                    <button
+                      onClick={() => copyToClipboard(taskDetails.id, 'Task ID')}
+                      className="ml-1 text-xs font-mono text-gray-600 dark:text-gray-400 hover:underline flex items-center gap-1"
+                      title="Copy Task ID"
+                    >
+                      {taskDetails.id.slice(0, 12)}...
+                      <Copy className="w-3 h-3" />
+                    </button>
+                  </div>
+
                 {taskDetails.workflow_id && (
                   <div className="flex items-center text-gray-600 dark:text-gray-400 col-span-4 gap-4">
                     <div className="flex items-center">
@@ -509,6 +523,7 @@ ${taskDetails.child_tasks.map((t: any) => `- ${t.description} (${t.status})`).jo
                     )}
                   </div>
                 )}
+                </div>
 
                 {taskDetails.estimated_complexity && (
                   <div className="text-gray-600 dark:text-gray-400">
