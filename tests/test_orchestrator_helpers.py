@@ -879,6 +879,30 @@ class TestResumeStuckWorkflowTasks:
             assert wf.status == "active"
 
     @patch("src.autopilot.orchestrator.create_agent_for_task_direct")
+    def test_skips_user_paused_workflow(self, mock_create_agent, orch_db_env, tmp_path):
+        """Regression: same class of bug _try_auto_resume_paused_workflow
+        was fixed for -- this fires whenever the design/feature queue loop
+        cycles back to a workflow it already has an id for, which can
+        include one the user deliberately paused. Must not silently
+        un-pause and restart work on it."""
+        from src.autopilot.orchestrator import OrchestratorLogger, _resume_stuck_workflow_tasks
+        from src.core.database import Workflow
+
+        self._make_workflow(orch_db_env, "wf-1", "paused")
+        with orch_db_env.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-1").first()
+            wf.paused_by = "user"
+        self._make_task(orch_db_env, "task-failed", "wf-1", "failed")
+
+        restarted = _resume_stuck_workflow_tasks("wf-1", OrchestratorLogger(tmp_path))
+
+        assert restarted == 0
+        mock_create_agent.assert_not_called()
+        with orch_db_env.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-1").first()
+            assert wf.status == "paused"
+
+    @patch("src.autopilot.orchestrator.create_agent_for_task_direct")
     def test_restarts_failed_and_blocked_tasks(self, mock_create_agent, orch_db_env, tmp_path):
         from src.autopilot.orchestrator import OrchestratorLogger, _resume_stuck_workflow_tasks
         from src.core.database import Task
@@ -1063,6 +1087,32 @@ class TestCreateCorrectiveTask:
 
         assert result is None
         mock_create_agent.assert_not_called()
+
+    @patch("src.autopilot.orchestrator.create_agent_for_task_direct")
+    def test_skips_user_paused_workflow(self, mock_create_agent, orch_db_env, tmp_path):
+        """Regression: same class of bug _try_auto_resume_paused_workflow
+        was fixed for, but worse here -- unguarded, this would both
+        reactivate the workflow AND immediately spawn a live agent against
+        it, silently resuming real work on something the user explicitly
+        paused."""
+        from src.autopilot.orchestrator import OrchestratorLogger, _create_corrective_task
+        from src.core.database import Workflow
+
+        self._seed_workflow_and_phase(orch_db_env, wf_status="paused")
+        with orch_db_env.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-1").first()
+            wf.paused_by = "user"
+
+        result = _create_corrective_task(
+            "wf-1", "phase-1", "Feature Architect", "got 6, expected 1-5",
+            OrchestratorLogger(tmp_path),
+        )
+
+        assert result is None
+        mock_create_agent.assert_not_called()
+        with orch_db_env.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-1").first()
+            assert wf.status == "paused"
 
     @patch("src.autopilot.orchestrator.create_agent_for_task_direct", return_value=None)
     def test_agent_creation_failure_marks_task_failed(self, mock_create_agent, orch_db_env, tmp_path):

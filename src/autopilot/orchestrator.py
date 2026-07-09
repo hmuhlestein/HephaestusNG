@@ -3506,6 +3506,18 @@ def _create_corrective_task(
         if not wf:
             logger.warning(f"[CORRECTIVE-TASK] Workflow {workflow_id[:8]} not found")
             return None
+        if wf.paused_by == "user":
+            # Same class of bug _try_auto_resume_paused_workflow was fixed
+            # for: don't override a deliberate pause. Unlike that function
+            # (which just skips and leaves the workflow alone), this one
+            # would otherwise both reactivate the workflow AND immediately
+            # spawn a live agent against it -- silently resuming real work
+            # on something the user explicitly stopped.
+            logger.info(
+                f"[CORRECTIVE-TASK] Workflow {workflow_id[:8]} is user-paused — "
+                "skipping corrective task"
+            )
+            return None
         if wf.status != "active":
             wf.status = "active"
 
@@ -3670,6 +3682,16 @@ def _resume_stuck_workflow_tasks(workflow_id: str, logger: OrchestratorLogger) -
     with get_db() as db:
         wf = db.query(Workflow).filter_by(id=workflow_id).first()
         if not wf:
+            return 0
+        if wf.status == "paused" and wf.paused_by == "user":
+            # Same class of bug _try_auto_resume_paused_workflow was fixed
+            # for: this runs whenever the design/feature queue loop cycles
+            # back to a workflow it already has an id for, which can
+            # include one the user deliberately paused -- don't silently
+            # un-pause and restart work on it.
+            logger.info(
+                f"[RESUME-STUCK] Workflow {workflow_id[:8]} is user-paused — skipping"
+            )
             return 0
         if wf.status in ("paused", "failed"):
             wf.status = "active"
