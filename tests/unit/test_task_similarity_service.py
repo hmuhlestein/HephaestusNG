@@ -27,6 +27,11 @@ class TestTaskSimilarityService:
         db_manager = Mock(spec=DatabaseManager)
         session = Mock()
         db_manager.get_session.return_value = session
+        # session_scope() is a @contextmanager method -- mock it as one so
+        # `with self.db_manager.session_scope() as session:` yields the
+        # same session mock the tests configure query expectations on.
+        db_manager.session_scope.return_value.__enter__ = Mock(return_value=session)
+        db_manager.session_scope.return_value.__exit__ = Mock(return_value=False)
         return db_manager, session
 
     @pytest.fixture
@@ -307,7 +312,6 @@ class TestTaskSimilarityService:
 
         # Verify embedding was set and committed
         assert task.embedding == embedding
-        session.commit.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_store_embedding_with_related(
@@ -328,7 +332,6 @@ class TestTaskSimilarityService:
 
         assert task.embedding == embedding
         assert task.related_task_ids == related_ids
-        session.commit.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_store_embedding_with_duplicate_info(
@@ -349,7 +352,6 @@ class TestTaskSimilarityService:
 
         assert task.duplicate_of_task_id == "task-original"
         assert task.similarity_score == 0.95
-        session.commit.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_handle_null_embeddings(

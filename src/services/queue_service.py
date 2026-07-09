@@ -33,8 +33,7 @@ class QueueService:
         Returns:
             Number of active agents
         """
-        session = self.db_manager.get_session()
-        try:
+        with self.db_manager.session_scope() as session:
             count = (
                 session.query(Agent)
                 .filter(Agent.status.in_(["working", "starting", "idle"]))
@@ -42,8 +41,6 @@ class QueueService:
             )
             logger.debug(f"Active agent count: {count}")
             return count
-        finally:
-            session.close()
 
     def should_queue_task(self) -> bool:
         """Check if we should queue the next task instead of creating an agent.
@@ -64,8 +61,7 @@ class QueueService:
         Args:
             task_id: ID of the task to enqueue
         """
-        session = self.db_manager.get_session()
-        try:
+        with self.db_manager.session_scope() as session:
             task = session.query(Task).filter_by(id=task_id).first()
             if not task:
                 logger.error(f"Task {task_id} not found for enqueueing")
@@ -90,6 +86,11 @@ class QueueService:
                     # Store blocking reason in completion_notes
                     task.completion_notes = f"Blocked: {reason}"
 
+                    # Explicit commit (not just relying on session_scope's
+                    # exit-commit): _recalculate_queue_positions below opens
+                    # its OWN session, and this shared connection needs this
+                    # write durably committed before that second session
+                    # queries the same rows.
                     session.commit()
 
                     logger.info(
@@ -108,22 +109,12 @@ class QueueService:
             self._recalculate_queue_positions()
 
             # Get updated position
-            session_refresh = self.db_manager.get_session()
-            try:
+            with self.db_manager.session_scope() as session_refresh:
                 task_refreshed = (
                     session_refresh.query(Task).filter_by(id=task_id).first()
                 )
                 position = task_refreshed.queue_position if task_refreshed else None
                 logger.info(f"Task {task_id} queued at position {position}")
-            finally:
-                session_refresh.close()
-
-        except Exception as e:
-            logger.error(f"Failed to enqueue task {task_id}: {e}")
-            session.rollback()
-            raise
-        finally:
-            session.close()
 
     def _calculate_queue_position(self, session, new_task: Task) -> int:
         """Calculate position in queue based on priority.
@@ -208,8 +199,7 @@ class QueueService:
         Returns:
             Next task to process, or None if queue is empty
         """
-        session = self.db_manager.get_session()
-        try:
+        with self.db_manager.session_scope() as session:
             # Custom ordering using CASE for priority
             from sqlalchemy import case
 
@@ -260,8 +250,6 @@ class QueueService:
 
             logger.debug("No queued tasks found")
             return None
-        finally:
-            session.close()
 
     def dequeue_task(self, task_id: str) -> None:
         """Remove a task from the queue (mark as assigned).
@@ -269,8 +257,7 @@ class QueueService:
         Args:
             task_id: ID of the task to dequeue
         """
-        session = self.db_manager.get_session()
-        try:
+        with self.db_manager.session_scope() as session:
             task = session.query(Task).filter_by(id=task_id).first()
             if not task:
                 logger.error(f"Task {task_id} not found for dequeueing")
@@ -283,53 +270,45 @@ class QueueService:
             task.status = "assigned"
             task.queue_position = None  # Clear queue position
 
+            # Explicit commit before _recalculate_queue_positions, which
+            # opens its own session against this same shared connection.
             session.commit()
 
             # Update queue positions for remaining tasks
             self._recalculate_queue_positions()
 
             logger.info(f"Task {task_id} dequeued and marked as assigned")
-        except Exception as e:
-            logger.error(f"Failed to dequeue task {task_id}: {e}")
-            session.rollback()
-            raise
-        finally:
-            session.close()
 
     def _recalculate_queue_positions(self) -> None:
         """Recalculate queue positions for all queued tasks."""
-        session = self.db_manager.get_session()
         try:
-            from sqlalchemy import case
+            with self.db_manager.session_scope() as session:
+                from sqlalchemy import case
 
-            priority_order = case(
-                (Task.priority == "high", 3),
-                (Task.priority == "medium", 2),
-                (Task.priority == "low", 1),
-                else_=2,
-            )
-
-            queued_tasks = (
-                session.query(Task)
-                .filter(Task.status == "queued")
-                .order_by(
-                    Task.priority_boosted.desc(),
-                    priority_order.desc(),
-                    Task.queued_at.asc(),
+                priority_order = case(
+                    (Task.priority == "high", 3),
+                    (Task.priority == "medium", 2),
+                    (Task.priority == "low", 1),
+                    else_=2,
                 )
-                .all()
-            )
 
-            for position, task in enumerate(queued_tasks, start=1):
-                task.queue_position = position
+                queued_tasks = (
+                    session.query(Task)
+                    .filter(Task.status == "queued")
+                    .order_by(
+                        Task.priority_boosted.desc(),
+                        priority_order.desc(),
+                        Task.queued_at.asc(),
+                    )
+                    .all()
+                )
 
-            session.commit()
-            logger.debug(f"Recalculated positions for {len(queued_tasks)} queued tasks")
+                for position, task in enumerate(queued_tasks, start=1):
+                    task.queue_position = position
+
+                logger.debug(f"Recalculated positions for {len(queued_tasks)} queued tasks")
         except Exception as e:
             logger.error(f"Failed to recalculate queue positions: {e}")
-            session.rollback()
-        finally:
-            session.close()
 
     def get_queue_status(self) -> Dict[str, Any]:
         """Get current queue status information.
@@ -337,8 +316,7 @@ class QueueService:
         Returns:
             Dictionary with queue status information
         """
-        session = self.db_manager.get_session()
-        try:
+        with self.db_manager.session_scope() as session:
             active_agents = self.get_active_agent_count()
 
             queued_tasks = (
@@ -371,8 +349,6 @@ class QueueService:
                 "slots_available": slots_available,
                 "at_capacity": active_agents >= self.max_concurrent_agents,
             }
-        finally:
-            session.close()
 
     def boost_task_priority(self, task_id: str) -> bool:
         """Boost a task's priority to bypass the queue.
@@ -383,35 +359,34 @@ class QueueService:
         Returns:
             True if successful, False otherwise
         """
-        session = self.db_manager.get_session()
         try:
-            task = session.query(Task).filter_by(id=task_id).first()
-            if not task:
-                logger.error(f"Task {task_id} not found for priority boost")
-                return False
+            with self.db_manager.session_scope() as session:
+                task = session.query(Task).filter_by(id=task_id).first()
+                if not task:
+                    logger.error(f"Task {task_id} not found for priority boost")
+                    return False
 
-            if task.status != "queued":
-                logger.warning(
-                    f"Cannot boost task {task_id} - not queued (status={task.status})"
-                )
-                return False
+                if task.status != "queued":
+                    logger.warning(
+                        f"Cannot boost task {task_id} - not queued (status={task.status})"
+                    )
+                    return False
 
-            task.priority_boosted = True
-            task.queue_position = 1  # Move to front
+                task.priority_boosted = True
+                task.queue_position = 1  # Move to front
 
-            session.commit()
+                # Explicit commit before _recalculate_queue_positions, which
+                # opens its own session against this same shared connection.
+                session.commit()
 
-            # Recalculate other queue positions
-            self._recalculate_queue_positions()
+                # Recalculate other queue positions
+                self._recalculate_queue_positions()
 
-            logger.info(f"Task {task_id} priority boosted")
-            return True
+                logger.info(f"Task {task_id} priority boosted")
+                return True
         except Exception as e:
             logger.error(f"Failed to boost task {task_id} priority: {e}")
-            session.rollback()
             return False
-        finally:
-            session.close()
 
     def get_queued_tasks(self) -> List[Task]:
         """Get all queued tasks ordered by priority.
@@ -419,8 +394,7 @@ class QueueService:
         Returns:
             List of queued tasks
         """
-        session = self.db_manager.get_session()
-        try:
+        with self.db_manager.session_scope() as session:
             from sqlalchemy import case
 
             priority_order = case(
@@ -442,5 +416,3 @@ class QueueService:
             )
 
             return tasks
-        finally:
-            session.close()

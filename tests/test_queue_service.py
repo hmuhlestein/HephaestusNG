@@ -1,6 +1,7 @@
 """Unit tests for QueueService."""
 
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 
 import pytest
@@ -16,7 +17,11 @@ def db_manager():
     """Create a test database manager with in-memory SQLite."""
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine)
-    Session = sessionmaker(bind=engine)
+    # expire_on_commit=False matches the real DatabaseManager (core/database.py) --
+    # without it, session_scope()'s commit expires every loaded object's
+    # attributes, and reading them after the session closes raises
+    # DetachedInstanceError.
+    Session = sessionmaker(bind=engine, expire_on_commit=False)
 
     class TestDatabaseManager:
         def __init__(self):
@@ -28,6 +33,18 @@ def db_manager():
 
         def create_tables(self):
             Base.metadata.create_all(self.engine)
+
+        @contextmanager
+        def session_scope(self):
+            session = self.Session()
+            try:
+                yield session
+                session.commit()
+            except Exception:
+                session.rollback()
+                raise
+            finally:
+                session.close()
 
     return TestDatabaseManager()
 

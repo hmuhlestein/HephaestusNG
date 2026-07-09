@@ -100,11 +100,8 @@ class AgentDispatchService:
 
         server_state = get_app_state()
 
-        session = server_state.db_manager.get_session()
-        try:
+        with server_state.db_manager.session_scope() as session:
             cli_config = AgentDispatchService.get_phase_cli_config(session, phase_id)
-        finally:
-            session.close()
 
         # Phase working_directory is a fallback if caller didn't provide one
         effective_working_directory = (

@@ -87,9 +87,7 @@ class ResultValidatorService:
         Raises:
             ValueError: If result or workflow not found
         """
-        session = self.db_manager.get_session()
-
-        try:
+        with self.db_manager.session_scope() as session:
             # Get the result and workflow
             result = session.query(WorkflowResult).filter_by(id=result_id).first()
             if not result:
@@ -149,6 +147,11 @@ class ResultValidatorService:
                 tmux_session_name=f"agent_{validator_agent_id}",
             )
             session.add(validator_agent)
+            # Explicit commit: the tmux session spawned below is a genuinely
+            # separate process that reaches the backend over its own
+            # HTTP/MCP connection, not this session -- it must see these
+            # rows as committed the moment it starts, not whenever this
+            # session_scope block happens to exit.
             session.commit()
 
             # Get working directory (read-only access to workflow)
@@ -171,13 +174,6 @@ class ResultValidatorService:
                 f"Spawned result validator agent {validator_agent_id} for result {result_id}"
             )
             return validator_agent_id
-
-        except Exception as e:
-            logger.error(f"Failed to spawn result validator: {e}")
-            session.rollback()
-            raise
-        finally:
-            session.close()
 
     def process_validation_outcome(
         self,
@@ -203,9 +199,7 @@ class ResultValidatorService:
         Raises:
             ValueError: If result not found
         """
-        session = self.db_manager.get_session()
-
-        try:
+        with self.db_manager.session_scope() as session:
             result = session.query(WorkflowResult).filter_by(id=result_id).first()
             if not result:
                 raise ValueError(f"Result not found: {result_id}")
@@ -249,9 +243,6 @@ class ResultValidatorService:
                 "workflow_id": result.workflow_id,
             }
 
-        finally:
-            session.close()
-
     def get_validation_status(self, result_id: str) -> Dict[str, Any]:
         """
         Get the current validation status of a result.
@@ -262,9 +253,7 @@ class ResultValidatorService:
         Returns:
             Dictionary with validation status information
         """
-        session = self.db_manager.get_session()
-
-        try:
+        with self.db_manager.session_scope() as session:
             result = session.query(WorkflowResult).filter_by(id=result_id).first()
             if not result:
                 return {"error": "Result not found"}
@@ -279,6 +268,3 @@ class ResultValidatorService:
                 else None,
                 "validated_by_agent_id": result.validated_by_agent_id,
             }
-
-        finally:
-            session.close()
