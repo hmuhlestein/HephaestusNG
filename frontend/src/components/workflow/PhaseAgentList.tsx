@@ -1,19 +1,13 @@
 import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
 import { Terminal, Clock, AlertTriangle } from 'lucide-react';
+
+import StatusBadge from '../StatusBadge';
 
 interface PhaseAgentListProps {
   agents: any[];
   onTerminateAgent: (agentId: string) => void;
   onViewAgent?: (agentId: string) => void;
 }
-
-const statusColor: Record<string, string> = {
-  working: 'bg-green-100 text-green-700',
-  idle: 'bg-gray-100 text-gray-600',
-  stuck: 'bg-yellow-100 text-yellow-700',
-  terminated: 'bg-red-100 text-red-700',
-};
 
 export default function PhaseAgentList({ agents, onTerminateAgent, onViewAgent }: PhaseAgentListProps) {
   if (!agents || agents.length === 0) {
@@ -35,9 +29,7 @@ export default function PhaseAgentList({ agents, onTerminateAgent, onViewAgent }
           <div className="flex items-start justify-between gap-2">
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2 mb-1">
-                <Badge variant="outline" className={`text-[10px] ${statusColor[agent.status] || statusColor.idle}`}>
-                  {agent.status}
-                </Badge>
+                <StatusBadge status={agent.status} size="sm" />
                 <span className="text-xs text-gray-500">
                   <Terminal className="w-3 h-3 inline mr-1" />
                   {agent.cli_type}

@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Bot, ExternalLink, Clock } from 'lucide-react';
 import { apiService } from '@/services/api';
 import { Agent } from '@/types';
+import StatusBadge from './StatusBadge';
 
 interface ClickableAgentCardProps {
   agentId: string;
@@ -45,21 +46,6 @@ const ClickableAgentCard: React.FC<ClickableAgentCardProps> = ({
       mounted = false;
     };
   }, [agentId]);
-
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'working':
-        return 'text-green-600 bg-green-100';
-      case 'idle':
-        return 'text-gray-600 bg-gray-100';
-      case 'stuck':
-        return 'text-red-600 bg-red-100';
-      case 'terminated':
-        return 'text-gray-500 bg-gray-200';
-      default:
-        return 'text-gray-600 bg-gray-100';
-    }
-  };
 
   if (loading) {
     return (
@@ -113,9 +99,7 @@ const ClickableAgentCard: React.FC<ClickableAgentCardProps> = ({
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 mb-1">
             <p className="font-mono text-xs text-gray-500">{agentId.substring(0, 12)}</p>
-            <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${getStatusColor(agent.status)}`}>
-              {agent.status}
-            </span>
+            <StatusBadge status={agent.status} size="sm" />
           </div>
 
           {showTaskInfo && agent.current_task && (
@@ -124,17 +108,7 @@ const ClickableAgentCard: React.FC<ClickableAgentCardProps> = ({
                 {agent.current_task.description}
               </p>
               <div className="flex items-center gap-2 mt-1">
-                <span className={`text-xs px-2 py-0.5 rounded ${
-                  agent.current_task.status === 'done'
-                    ? 'bg-green-100 text-green-700'
-                    : agent.current_task.status === 'failed'
-                    ? 'bg-red-100 text-red-700'
-                    : agent.current_task.status === 'in_progress'
-                    ? 'bg-blue-100 text-blue-700'
-                    : 'bg-gray-100 text-gray-700'
-                }`}>
-                  {agent.current_task.status}
-                </span>
+                <StatusBadge status={agent.current_task.status} size="sm" />
                 {agent.current_task.phase_info && (
                   <span className="text-xs text-gray-600">
                     Phase {agent.current_task.phase_info.order}: {agent.current_task.phase_info.name}

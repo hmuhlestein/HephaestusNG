@@ -17,6 +17,8 @@ import { formatDistanceToNow } from 'date-fns';
 import ClickableTaskCard from '@/components/ClickableTaskCard';
 import TaskDetailModal from '@/components/TaskDetailModal';
 
+import StatusBadge from './StatusBadge';
+
 interface ObservabilitySidebarProps {
   agents: Agent[];
   visibleAgents: Set<string>;
@@ -108,7 +110,6 @@ const ObservabilitySidebar: React.FC<ObservabilitySidebarProps> = ({
 
   const AgentItem: React.FC<{ agent: Agent }> = ({ agent }) => {
     const isVisible = visibleAgents.has(agent.id);
-    const statusConfig = getStatusConfig(agent.status);
 
     return (
       <motion.div
@@ -142,9 +143,7 @@ const ObservabilitySidebar: React.FC<ObservabilitySidebarProps> = ({
                 <span className="text-sm font-medium text-gray-800 truncate">
                   {agent.id.substring(0, 8)}
                 </span>
-                <span className={`px-1.5 py-0.5 rounded text-xs font-medium flex-shrink-0 ${statusConfig.color}`}>
-                  {agent.status}
-                </span>
+                <StatusBadge status={agent.status} size="sm" />
               </div>
 
               {agent.current_task_id && (
