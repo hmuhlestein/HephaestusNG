@@ -24,6 +24,8 @@ interface OutputData {
   lastUpdateTime: Date | null;
 }
 
+import StatusBadge from './StatusBadge';
+
 interface ObservabilityPanelProps {
   agent: Agent;
   output?: OutputData;
@@ -109,17 +111,6 @@ const ObservabilityPanel: React.FC<ObservabilityPanelProps> = ({
     return 'bg-gray-400';
   };
 
-  // Get agent status color
-  const getAgentStatusColor = () => {
-    switch (agent.status) {
-      case 'working': return 'text-green-600 bg-green-50';
-      case 'idle': return 'text-gray-600 bg-gray-50';
-      case 'stuck': return 'text-red-600 bg-red-50';
-      case 'terminated': return 'text-gray-500 bg-gray-100';
-      default: return 'text-gray-600 bg-gray-50';
-    }
-  };
-
   // Calculate line count
   const lineCount = filteredOutput ? filteredOutput.split('\n').length : 0;
 
@@ -141,9 +132,7 @@ const ObservabilityPanel: React.FC<ObservabilityPanelProps> = ({
                 {agent.current_task?.phase_info?.name || agent.agent_type || 'Agent'} {agent.id.substring(0, 8)}
               </h3>
             </div>
-            <span className={`px-2 py-0.5 rounded text-xs font-medium ${getAgentStatusColor()}`}>
-              {agent.status.toUpperCase()}
-            </span>
+            <StatusBadge status={agent.status} size="sm" />
             {agent.current_task_id && (
               <div className="flex items-center text-xs text-gray-400">
                 <FileText className="w-3 h-3 mr-1" />
@@ -246,9 +235,7 @@ const ObservabilityPanel: React.FC<ObservabilityPanelProps> = ({
           <span className="text-sm font-medium text-gray-800 truncate">
             {agent.current_task?.phase_info?.name || agent.agent_type || 'Agent'} {agent.id.substring(0, 8)}
           </span>
-          <span className={`px-1.5 py-0.5 rounded text-xs font-medium flex-shrink-0 ${getAgentStatusColor()}`}>
-            {agent.status}
-          </span>
+          <StatusBadge status={agent.status} size="sm" />
         </div>
 
         <div className="flex items-center space-x-1">

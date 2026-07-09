@@ -6,9 +6,53 @@ interface StatusBadgeProps {
   size?: 'sm' | 'md' | 'lg';
 }
 
+// Normalized display labels for all status values
+const STATUS_LABELS: Record<string, string> = {
+  // Task statuses
+  pending: 'Pending',
+  queued: 'Queued',
+  assigned: 'Assigned',
+  in_progress: 'In Progress',
+  under_review: 'Under Review',
+  validation_in_progress: 'Validating',
+  needs_work: 'Needs Work',
+  done: 'Done',
+  failed: 'Failed',
+  blocked: 'Blocked',
+  duplicated: 'Duplicate',
+
+  // Workflow/design statuses
+  active: 'Active',
+  completed: 'Completed',
+  paused: 'Paused',
+  cancelled: 'Cancelled',
+  skipped: 'Skipped',
+
+  // Agent statuses
+  working: 'Working',
+  idle: 'Idle',
+  terminated: 'Terminated',
+  starting: 'Starting',
+  stuck: 'Stuck',
+
+  // Other
+  healthy: 'Healthy',
+  validated: 'Validated',
+  verified: 'Verified',
+  unverified: 'Unverified',
+  error: 'Error',
+  rejected: 'Rejected',
+  disputed: 'Disputed',
+  pending_validation: 'Pending Validation',
+  warning: 'Warning',
+  attention: 'Attention',
+};
+
 const StatusBadge: React.FC<StatusBadgeProps> = ({ status, size = 'md' }) => {
+  const normalized = status.toLowerCase();
+  const label = STATUS_LABELS[normalized] || status.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+
   const getStatusColor = () => {
-    const normalized = status.toLowerCase();
 
     if (
       [
@@ -94,7 +138,7 @@ const StatusBadge: React.FC<StatusBadgeProps> = ({ status, size = 'md' }) => {
         sizeClasses[size]
       )}
     >
-      {status.replace(/_/g, ' ')}
+      {label}
     </span>
   );
 };
