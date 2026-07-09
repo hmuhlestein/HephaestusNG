@@ -2505,6 +2505,21 @@ async def update_task_status(
                     termination_scheduled=False,
                 )
 
+        # 3b-1. Open-ticket hard floor — reject done on the development phase
+        # while unresolved bug tickets (QA/security findings) remain. Same
+        # class of check as 3b above: a prompt instruction alone is
+        # compliance-dependent, this makes "fixed and resolved" enforced.
+        if request.status == "done" and task.phase_id:
+            rejection = TaskCompletionService.verify_no_open_tickets(session, task, phase=phase)
+            if rejection:
+                task.failure_reason = rejection.get("message", "Open tickets remain unresolved")
+                session.commit()
+                return UpdateTaskStatusResponse(
+                    success=False,
+                    message=rejection.get("message", "Open tickets remain unresolved"),
+                    termination_scheduled=False,
+                )
+
         # 3b-2. Auto-create tickets from forensics_analysis's own report —
         # "Tickets created for actionable findings" is mandated but easily
         # skipped once the agent's analysis work is done (observed live: a

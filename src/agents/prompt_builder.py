@@ -203,6 +203,57 @@ COMPLETION CRITERIA:
 
         is_phase_agent = hasattr(task, "phase_id") and task.phase_id
 
+        # Proactively inject open bug tickets into the development agent's
+        # prompt, rather than only telling it to go call hephaestus_get_tickets
+        # itself -- a pull-based instruction is compliance-dependent (the
+        # agent has to remember to look), the same class of risk closed for
+        # output artifacts by verify_output_artifact. Scoped to the
+        # development phase, which is where verify_no_open_tickets enforces
+        # this at task-completion time (task_completion_service.py) --
+        # QA/security_review create these tickets and must not see them here.
+        #
+        # Only on a goto re-entry (task.action == "goto"): a first-time
+        # development pass (action="continue" from architecture_design) has
+        # no tickets of its own yet, and showing unrelated/stale tickets from
+        # elsewhere would just be noise on a fresh build.
+        open_tickets_section = ""
+        if is_phase_agent and task.workflow_id and getattr(task, "action", None) == "goto":
+            try:
+                from src.core.database import Phase, Ticket, get_db
+
+                with get_db() as db:
+                    phase = db.query(Phase).filter_by(id=task.phase_id).first()
+                    if phase and phase.name == "development":
+                        open_tickets = (
+                            db.query(Ticket)
+                            .filter(
+                                Ticket.workflow_id == task.workflow_id,
+                                Ticket.ticket_type == "bug",
+                                Ticket.is_resolved.is_(False),
+                            )
+                            .all()
+                        )
+                        if open_tickets:
+                            lines = [
+                                f"- {t.id}: {t.title} (priority={t.priority})\n"
+                                f"  {(t.description or '')[:300]}"
+                                for t in open_tickets
+                            ]
+                            open_tickets_section = (
+                                "\n\n⚠️ OPEN BUG TICKETS FOR THIS WORKFLOW — fix and "
+                                "resolve before marking done:\n"
+                                + "\n".join(lines)
+                                + "\n\nFor each: fix the underlying issue, then call "
+                                'hephaestus_resolve_ticket(ticket_id="...", '
+                                'resolution_comment="...", commit_sha="<sha>") to mark '
+                                "it resolved. update_task_status(done) will be "
+                                "REJECTED while any remain unresolved."
+                            )
+            except Exception as e:
+                logger.warning(f"Could not check open tickets: {e}")
+
+        base_message += open_tickets_section
+
         if is_phase_agent:
             # Compact instructions for workflow phase agents — keep context window lean
             base_message += "\n" + get_phase_agent_instructions(

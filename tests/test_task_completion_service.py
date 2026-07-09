@@ -268,6 +268,78 @@ Some conclusion text that must NOT be parsed as a recommendation.
 """
 
 
+def _seed_ticket(db, workflow_id, ticket_type="bug", is_resolved=False, title="t"):
+    from src.core.database import Ticket
+
+    session = db.get_session()
+    ticket_id = f"ticket-{uuid.uuid4().hex[:8]}"
+    session.add(
+        Ticket(
+            id=ticket_id,
+            workflow_id=workflow_id,
+            created_by_agent_id="agent-1",
+            title=title,
+            description="d",
+            ticket_type=ticket_type,
+            priority="high",
+            status="open",
+            is_resolved=is_resolved,
+        )
+    )
+    session.commit()
+    session.close()
+    return ticket_id
+
+
+class TestVerifyNoOpenTickets:
+    """development.yaml's prompt tells agents to check for and fix open bug
+    tickets (QA/security findings) before marking done -- this hard floor
+    makes that enforced rather than compliance-dependent, mirroring
+    verify_output_artifact's pattern."""
+
+    def test_rejects_when_open_bug_ticket_exists(self, db, tmp_path):
+        session, task = _seed(db, tmp_path, "development")
+        _seed_ticket(db, task.workflow_id, is_resolved=False)
+
+        rejection = TaskCompletionService.verify_no_open_tickets(session, task)
+
+        assert rejection is not None
+        assert rejection["status"] == "failed"
+        assert task.status == "failed"
+        assert "open bug ticket" in task.failure_reason.lower()
+
+    def test_allows_when_no_open_tickets(self, db, tmp_path):
+        session, task = _seed(db, tmp_path, "development")
+
+        assert TaskCompletionService.verify_no_open_tickets(session, task) is None
+
+    def test_allows_when_all_tickets_resolved(self, db, tmp_path):
+        session, task = _seed(db, tmp_path, "development")
+        _seed_ticket(db, task.workflow_id, is_resolved=True)
+
+        assert TaskCompletionService.verify_no_open_tickets(session, task) is None
+
+    def test_ignores_non_bug_tickets(self, db, tmp_path):
+        session, task = _seed(db, tmp_path, "development")
+        _seed_ticket(db, task.workflow_id, ticket_type="feature", is_resolved=False)
+
+        assert TaskCompletionService.verify_no_open_tickets(session, task) is None
+
+    def test_does_not_apply_outside_development_phase(self, db, tmp_path):
+        """QA/security_review create these tickets in the first place --
+        must not be blocked by their own findings."""
+        session, task = _seed(db, tmp_path, "qa_validation")
+        _seed_ticket(db, task.workflow_id, is_resolved=False)
+
+        assert TaskCompletionService.verify_no_open_tickets(session, task) is None
+
+    def test_no_workflow_id_returns_none(self, db, tmp_path):
+        session, task = _seed(db, tmp_path, "development")
+        task.workflow_id = None
+
+        assert TaskCompletionService.verify_no_open_tickets(session, task) is None
+
+
 class TestParseForensicsRecommendations:
     """Regression coverage for a real gap found via smoke testing: an agent
     wrote a genuinely thorough forensics_report.md with 7 concrete

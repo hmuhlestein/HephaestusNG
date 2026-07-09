@@ -9,6 +9,7 @@ description: |
   Reads architecture.md from Phase 2, implements each component following
   the task breakdown, writes tests, and creates working software.
 done_definitions:
+  - "Checked for open bug tickets (QA/security findings); any found are fixed and resolved"
   - "Architecture document reviewed and understood"
   - "All infrastructure components implemented and verified"
   - "All foundation components implemented and tested"
@@ -121,7 +122,27 @@ additional_notes: |
   - Commit format (feat:, fix:, chore: prefixes)
   
   ═══════════════════════════════════════════════════════════════════════
-  STEP 2: BREAK LARGE WORK INTO SUBTASKS AND SMALL EDITS
+  STEP 2: CHECK FOR OPEN BUG TICKETS (this phase may be a re-entry)
+  ═══════════════════════════════════════════════════════════════════════
+
+  This phase can be re-entered after QA validation or security review found
+  problems and filed tickets for them (tagged "qa-finding" or similar,
+  ticket_type="bug"). Check before assuming this is a first-time build:
+
+    hephaestus_get_tickets(workflow_id="<your workflow id>", status="open", ticket_type="bug")
+
+  If open bug tickets exist: fixing them is your priority for this pass —
+  read each one, fix the underlying issue, then change its status to
+  resolved (hephaestus_change_ticket_status or hephaestus_resolve_ticket) referencing the commit
+  that fixed it. Do this INSTEAD OF re-implementing components from
+  scratch; only fall through to normal implementation for genuinely new
+  work not covered by an open ticket.
+
+  If no open bug tickets exist, proceed normally (first build, or a clean
+  QA pass with nothing to fix).
+
+  ═══════════════════════════════════════════════════════════════════════
+  STEP 3: BREAK LARGE WORK INTO SUBTASKS AND SMALL EDITS
   ═══════════════════════════════════════════════════════════════════════
 
   SUBTASKS FIRST: If the implementation spans multiple files or >3
@@ -134,7 +155,7 @@ additional_notes: |
   logical unit. Small commits = recoverable progress on session restart.
 
   ═══════════════════════════════════════════════════════════════════════
-  STEP 3: IMPLEMENT YOUR COMPONENT
+  STEP 4: IMPLEMENT YOUR COMPONENT
   ═══════════════════════════════════════════════════════════════════════
 
   For your assigned component:
@@ -164,7 +185,7 @@ additional_notes: |
      - Verify component works as specified
   
   ═══════════════════════════════════════════════════════════════════════
-  STEP 4: CREATE PHASE 4 REVIEW TASKS
+  STEP 5: CREATE PHASE 4 REVIEW TASKS
   ═══════════════════════════════════════════════════════════════════════
   
   After implementing, create tasks for Phase 4 (Adversarial Review):
@@ -173,7 +194,7 @@ additional_notes: |
   - Note any areas of concern
   
   ═══════════════════════════════════════════════════════════════════════
-  STEP 5: SAVE TO MEMORY
+  STEP 6: SAVE TO MEMORY
   ═══════════════════════════════════════════════════════════════════════
   
   Save implementation notes to memory:

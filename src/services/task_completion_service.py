@@ -183,6 +183,64 @@ class TaskCompletionService:
         }
 
     @staticmethod
+    def verify_no_open_tickets(session, task, phase=None) -> Optional[Dict[str, Any]]:
+        """Open-ticket hard floor for the development phase: reject 'done'
+        while unresolved bug tickets exist for this workflow.
+
+        development.yaml's own prompt already tells the agent to check for
+        and fix open bug tickets (QA/security findings) before considering
+        its work complete -- this is the same class of enforcement as
+        verify_output_artifact: a prompt instruction alone is
+        compliance-dependent, so a hard floor here means "fixed and marked
+        resolved" is actually required, not just requested.
+
+        Only applies to the development phase -- QA/security_review are the
+        phases that CREATE these tickets in the first place and must not be
+        blocked by their own findings.
+        """
+        from src.core.database import Phase, Ticket
+
+        if phase is None:
+            phase = session.query(Phase).filter_by(id=task.phase_id).first()
+        if not phase or phase.name != "development":
+            return None
+        if not task.workflow_id:
+            return None
+
+        open_tickets = (
+            session.query(Ticket)
+            .filter(
+                Ticket.workflow_id == task.workflow_id,
+                Ticket.ticket_type == "bug",
+                Ticket.is_resolved.is_(False),
+            )
+            .all()
+        )
+        if not open_tickets:
+            return None
+
+        titles = [f"{t.id[:8]}: {t.title}" for t in open_tickets[:5]]
+        logger.warning(
+            f"Agent claimed done on development but {len(open_tickets)} bug "
+            f"ticket(s) remain unresolved — rejecting"
+        )
+        task.status = "failed"
+        task.failure_reason = (
+            f"{len(open_tickets)} open bug ticket(s) not yet resolved: "
+            + "; ".join(titles)
+        )
+        session.commit()
+        return {
+            "status": "failed",
+            "message": (
+                f"Cannot mark done: {len(open_tickets)} open bug ticket(s) still "
+                f"unresolved — {'; '.join(titles)}. Fix the underlying issue for "
+                "each, then call change_ticket_status/resolve_ticket before "
+                "retrying update_task_status(done)."
+            ),
+        }
+
+    @staticmethod
     def _parse_forensics_recommendations(report_text: str) -> list:
         """Extract actionable recommendations from a forensics_report.md.
 

@@ -12,15 +12,6 @@ base_system_prompt: |
   - If you need a clean directory, create it fresh — don't delete the old one.
   - Destructive commands will be BLOCKED and your task will be FAILED.
 
-  📁 FILE PLACEMENT:
-  - Deliverable code/tests/docs go in the project's normal source tree, per its
-    existing conventions and your task's defined outputs.
-  - Scratch notes, ad-hoc scripts, and exploratory output that aren't part of the
-    deliverable go under `.hephaestus/scratch/` — never the project root.
-  - Stuck on something unrelated to your task (a tool/MCP error, an unrelated
-    dependency)? Don't write reports about it — work around it, or
-    update_task_status(status="failed", failure_reason="...").
-
   ⚠️  WRITING: Write files in CHUNKS (multiple write/edit calls). NEVER one giant block.
      Files >200 lines: 2-3 chunks. >500 lines: 4-5 chunks. Verify each chunk before continuing.
 
@@ -63,10 +54,6 @@ feature_architect_system_prompt: |
   - NEVER delete directories or files outside your immediate worktree.
   - If you need a clean directory, create it fresh — don't delete the old one.
   - Destructive commands will be BLOCKED and your task will be FAILED.
-
-  📁 FILE PLACEMENT: features.json and scope.md go under `.hephaestus/features/` as
-  specified below. Scratch notes from exploring the codebase go under
-  `.hephaestus/scratch/` — never the project root.
 
   ═══ PRE-LOADED CONTEXT ═══
   Top 10 relevant memories (use vector search for more):
@@ -128,6 +115,10 @@ phase_agent_instructions: |
     automatically, with the correct phase name and required output, once you mark this task done.
     Manually guessing a future phase number here has caused tasks to be created under the wrong
     phase (e.g. full implementation work filed under an architecture-design phase) — never do this.{ticket_note}
+  - FILE PLACEMENT: deliverables go in the project's normal source tree per your task's
+    outputs. Scratch/exploratory output that isn't part of the deliverable goes under
+    `.hephaestus/scratch/` — never the project root. Stuck on something unrelated to your
+    task? Don't write reports about it — work around it or fail the task with a reason.
   {phase_context_section}
   Begin now.
 
@@ -143,6 +134,10 @@ non_phase_agent_instructions: |
   6. Search before reinventing: hephaestus_search_memory(query="...")
   7. Create sub-tasks: hephaestus_create_task(task_description="...", done_definition="...")
   8. Agent comms: hephaestus_broadcast_message (all agents) | hephaestus_send_message (specific agent)
+  9. FILE PLACEMENT: deliverables go in the project's normal source tree. Scratch/exploratory
+     output that isn't part of the deliverable goes under `.hephaestus/scratch/` — never the
+     project root. Stuck on something unrelated to your task? Don't write reports about it —
+     work around it or fail the task with a reason.
   {phase_context_section}
   Begin now.
 
