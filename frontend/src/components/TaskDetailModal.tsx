@@ -374,11 +374,11 @@ ${taskDetails.child_tasks.map((t: any) => `- ${t.description} (${t.status})`).jo
                 {(taskDetails?.status === 'done' || taskDetails?.status === 'failed') && (
                   <button
                     onClick={handleRestartTask}
-                    className="flex items-center px-3 py-2 bg-purple-500 text-white rounded-lg hover:bg-purple-600 transition-colors text-sm"
+                    className="flex items-center px-2 py-1 bg-purple-100 text-purple-700 rounded hover:bg-purple-200 transition-colors text-xs font-medium"
                     title="Restart this task from scratch"
                   >
-                    <RotateCcw className="w-4 h-4 mr-1" />
-                    Restart Task
+                    <RotateCcw className="w-3 h-3 mr-1" />
+                    Restart
                   </button>
                 )}
 
@@ -386,21 +386,21 @@ ${taskDetails.child_tasks.map((t: any) => `- ${t.description} (${t.status})`).jo
                   <>
                     <button
                       onClick={() => setShowAgentOutput(true)}
-                      className="flex items-center px-3 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors text-sm"
+                      className="flex items-center px-2 py-1 bg-blue-100 text-blue-700 rounded hover:bg-blue-200 transition-colors text-xs font-medium"
                       title="View live agent output"
                     >
-                      <Eye className="w-4 h-4 mr-1" />
-                      Live Output
+                      <Eye className="w-3 h-3 mr-1" />
+                      Output
                     </button>
 
                     {taskDetails.agent_info.status !== 'terminated' && (
                       <button
                         onClick={handleTerminateAgent}
-                        className="flex items-center px-3 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors text-sm"
+                        className="flex items-center px-2 py-1 bg-red-100 text-red-700 rounded hover:bg-red-200 transition-colors text-xs font-medium"
                         title="Terminate this agent"
                       >
-                        <XCircle className="w-4 h-4 mr-1" />
-                        Terminate Agent
+                        <XCircle className="w-3 h-3 mr-1" />
+                        Terminate
                       </button>
                     )}
                   </>
