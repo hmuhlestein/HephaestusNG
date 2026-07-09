@@ -165,6 +165,13 @@ def derive_design_status(db: Session, design_id: str, write_back: bool = True) -
     # (they were intentionally excluded, not left incomplete)
     non_skipped_statuses = feature_statuses - {FeatureStatus.SKIPPED}
     
+    # Check if any workflow for this design has failed
+    from src.core.database import Workflow
+    has_failed_wf = db.query(Workflow).filter(
+        Workflow.design_id == design_id,
+        Workflow.status == "failed",
+    ).first() is not None
+    
     if feature_statuses == {FeatureStatus.COMPLETED}:
         derived = FeatureStatus.COMPLETED
     elif feature_statuses == {FeatureStatus.VALIDATED}:
@@ -174,13 +181,18 @@ def derive_design_status(db: Session, design_id: str, write_back: bool = True) -
         # renders nothing) — every feature individually validated rolls up
         # to a completed design.
         derived = FeatureStatus.COMPLETED
-    elif non_skipped_statuses == {FeatureStatus.COMPLETED}:
-        # All non-skipped features are completed — design is done
-        derived = FeatureStatus.COMPLETED
-        logger.debug(
-            f"Design {design_id[:8]}: all non-skipped features completed "
-            f"({len(features)} total, {len(feature_statuses - {FeatureStatus.COMPLETED, FeatureStatus.SKIPPED})} skipped)"
+    elif non_skipped_statuses == {FeatureStatus.COMPLETED} and has_failed_wf:
+        # All non-skipped features are completed BUT a workflow failed
+        # (e.g. diagnostic task failed). Keep design active so retry
+        # logic in pick_next_design can handle it.
+        derived = FeatureStatus.ACTIVE
+        logger.info(
+            f"Design {design_id[:8]}: features done but has failed workflow — "
+            f"keeping active for retry"
         )
+    elif non_skipped_statuses == {FeatureStatus.COMPLETED}:
+        # All non-skipped features are completed, no failed workflows
+        derived = FeatureStatus.COMPLETED
     elif FeatureStatus.ACTIVE in feature_statuses:
         derived = FeatureStatus.ACTIVE
     elif FeatureStatus.FAILED in feature_statuses:
