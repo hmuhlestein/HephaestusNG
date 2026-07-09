@@ -943,25 +943,28 @@ def is_design_fully_complete(
     return True, "All phases done, branches merged"
 
 
-def attempt_recovery(workflow_id: str, logger: OrchestratorLogger) -> Tuple[bool, str]:
-    """Attempt to recover issues found by is_design_fully_complete.
+def _retry_failed_tasks(workflow_id: str, logger: OrchestratorLogger) -> List[str]:
+    """Retry every failed task in a workflow directly, up to 2 attempts each.
 
-    Actions:
-    1. Retry failed tasks by creating new agents
-    2. Merge unmerged agent branches to main
-    3. Terminate stale agents
+    Extracted from attempt_recovery so this piece alone -- the only part
+    that's safe to run unconditionally on every background sweep tick for
+    every active workflow -- can be called on its own. attempt_recovery's
+    OTHER actions (git reset --hard / clean -fd on any dirty repo, and
+    terminating every currently-working agent) are appropriate as a rare,
+    capped, last-resort action (see its caller: only after
+    is_design_fully_complete fails, capped at 5 attempts, only for the one
+    workflow a fresh pipeline run happens to resume) but would be
+    destructive run every ~20s across every active workflow -- it would
+    kill agents mid-task and blow away uncommitted work constantly.
 
-    Returns:
-        (success, message) tuple
+    Returns the list of "retried task X" messages for callers that want to
+    fold this into their own recovered-actions summary (attempt_recovery).
     """
     recovered = []
-
-    # 1. Retry failed tasks
     failed = get_tasks(status="failed", workflow_id=workflow_id)
     for task in failed:
         task_id = task.get("id")
         phase_id = task.get("phase_id")
-        task.get("enriched_description") or task.get("raw_description") or ""
 
         # Only retry if not retried too many times
         retry_count = task.get("retry_count", 0)
@@ -988,7 +991,42 @@ def attempt_recovery(workflow_id: str, logger: OrchestratorLogger) -> Tuple[bool
             logger.info(f"  Created agent {agent_id[:8]} for retried task")
             recovered.append(f"retried task {task_id[:8]}")
         except Exception as e:
+            # Back to "failed" (not left "pending") so a later retry pass
+            # -- this function, or _maybe_retry_failed_tasks -- gets
+            # another chance up to the retry_count cap above. Leaving it
+            # "pending" here would strand it: nothing dispatches an agent
+            # for an already-existing pending task with no agent.
             logger.error(f"  Failed to retry task {task_id[:8]}: {e}")
+            try:
+                from src.core.database import Task as _Task
+                from src.core.database import get_db as _get_db3
+
+                with _get_db3() as _db3:
+                    _t = _db3.query(_Task).filter_by(id=task_id).first()
+                    if _t and _t.status == "pending":
+                        _t.status = "failed"
+                        _t.failure_reason = f"Retry agent creation failed: {e}"
+                        _db3.commit()
+            except Exception as e2:
+                logger.error(f"  Failed to revert task {task_id[:8]} to failed: {e2}")
+    return recovered
+
+
+def attempt_recovery(workflow_id: str, logger: OrchestratorLogger) -> Tuple[bool, str]:
+    """Attempt to recover issues found by is_design_fully_complete.
+
+    Actions:
+    1. Retry failed tasks by creating new agents
+    2. Merge unmerged agent branches to main
+    3. Terminate stale agents
+
+    Returns:
+        (success, message) tuple
+    """
+    recovered = []
+
+    # 1. Retry failed tasks
+    recovered.extend(_retry_failed_tasks(workflow_id, logger))
 
     # 1b. Clean stale "assigned" tasks whose agent is terminated
     try:

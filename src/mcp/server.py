@@ -1656,21 +1656,44 @@ def _run_phase_advancement_sweep_once(sweep_logger) -> None:
     """Synchronous body of one background_phase_advancement_sweep tick --
     see that function's docstring for why this runs in a thread executor
     rather than inline on the event loop."""
-    from src.autopilot.orchestrator import _advance_phases
+    from src.autopilot.orchestrator import (
+        _advance_phases,
+        _clean_stale_assigned_tasks,
+        _retry_failed_tasks,
+    )
     from src.core.database import Workflow
 
     session = server_state.db_manager.get_session()
     try:
-        active_workflow_ids = [
-            wf.id
-            for wf in session.query(Workflow)
+        workflows = (
+            session.query(Workflow.id, Workflow.status)
             .filter(Workflow.status.in_(["active", "paused"]))
             .all()
-        ]
+        )
     finally:
         session.close()
 
-    for wf_id in active_workflow_ids:
+    for wf_id, wf_status in workflows:
+        # Self-healing (dead-agent cleanup + failed-task retry) only while
+        # the workflow is actually active, never paused -- these two used
+        # to run only once, at pipeline-startup, for whichever single
+        # workflow happened to be the last-tracked current_workflow_id (see
+        # attempt_recovery's caller in run_continuous_pipeline). Any other
+        # in-flight workflow (parallel feature runs, or one resumed outside
+        # that one startup check) never got either: a task whose agent died
+        # mid-work just sat "assigned"/"in_progress" forever, since nothing
+        # else ever notices the agent is dead. Running both here makes it
+        # universal instead of tied to one specific caller.
+        if wf_status == "active":
+            try:
+                _clean_stale_assigned_tasks(wf_id, sweep_logger)
+            except Exception as e:
+                logger.error(f"[PHASE-SWEEP] Stale-task cleanup error for {wf_id[:8]}: {e}")
+            try:
+                _retry_failed_tasks(wf_id, sweep_logger)
+            except Exception as e:
+                logger.error(f"[PHASE-SWEEP] Failed-task retry error for {wf_id[:8]}: {e}")
+
         try:
             _advance_phases(wf_id, sweep_logger)
         except Exception as e:

@@ -811,6 +811,98 @@ class TestCleanStaleAssignedTasks:
             assert "terminated unexpectedly" in task.failure_reason
 
 
+class TestRetryFailedTasks:
+    """Regression: the only thing that ever retried an individual failed
+    task (not requiring every task in the phase to be failed) was
+    attempt_recovery, called exactly once -- at pipeline startup, for
+    whichever single workflow happened to be the last-tracked
+    current_workflow_id. A failed task in any other active workflow (a
+    parallel feature run, or one resumed outside that startup check) just
+    sat "failed" forever with nothing to retry it, even while the system
+    was fully unpaused. Extracted so the background sweep can call this
+    piece alone on every tick for every active workflow, without also
+    running attempt_recovery's other, destructive actions (git reset
+    --hard on any dirty repo, killing every currently-working agent)."""
+
+    def _make_workflow_and_failed_task(
+        self, db, retry_count=0, phase_id=None, task_id="task-1"
+    ):
+        from src.core.database import Task, Workflow
+
+        with db.session_scope() as session:
+            if not session.query(Workflow).filter_by(id="wf-1").first():
+                session.add(
+                    Workflow(id="wf-1", name="t", phases_folder_path="/tmp", status="active")
+                )
+            session.add(
+                Task(
+                    id=task_id,
+                    workflow_id="wf-1",
+                    phase_id=phase_id,
+                    raw_description="r",
+                    done_definition="d",
+                    status="failed",
+                    failure_reason="boom",
+                    retry_count=retry_count,
+                )
+            )
+
+    @patch("src.autopilot.orchestrator.create_agent_for_task_direct")
+    def test_retries_failed_task_and_dispatches_agent(
+        self, mock_create_agent, orch_db_env, tmp_path
+    ):
+        from src.autopilot.orchestrator import OrchestratorLogger, _retry_failed_tasks
+        from src.core.database import Task
+
+        self._make_workflow_and_failed_task(orch_db_env)
+        mock_create_agent.return_value = {"agent_id": "new-agent"}
+
+        recovered = _retry_failed_tasks("wf-1", OrchestratorLogger(tmp_path))
+
+        assert recovered == ["retried task task-1"]
+        with orch_db_env.session_scope() as session:
+            task = session.query(Task).filter_by(id="task-1").first()
+            assert task.status == "pending"
+            assert task.retry_count == 1
+
+    @patch("src.autopilot.orchestrator.create_agent_for_task_direct")
+    def test_skips_task_at_retry_cap(self, mock_create_agent, orch_db_env, tmp_path):
+        from src.autopilot.orchestrator import OrchestratorLogger, _retry_failed_tasks
+        from src.core.database import Task
+
+        self._make_workflow_and_failed_task(orch_db_env, retry_count=2)
+
+        recovered = _retry_failed_tasks("wf-1", OrchestratorLogger(tmp_path))
+
+        assert recovered == []
+        mock_create_agent.assert_not_called()
+        with orch_db_env.session_scope() as session:
+            task = session.query(Task).filter_by(id="task-1").first()
+            assert task.status == "failed"
+            assert task.retry_count == 2
+
+    @patch("src.autopilot.orchestrator.create_agent_for_task_direct", return_value=None)
+    def test_agent_dispatch_failure_lands_back_on_failed_not_stuck_pending(
+        self, mock_create_agent, orch_db_env, tmp_path
+    ):
+        """Same dead-end this exact fix closed for _maybe_retry_failed_tasks:
+        leaving the task "pending" on a dispatch failure would strand it --
+        nothing dispatches an agent for an already-existing pending task
+        with no agent."""
+        from src.autopilot.orchestrator import OrchestratorLogger, _retry_failed_tasks
+        from src.core.database import Task
+
+        self._make_workflow_and_failed_task(orch_db_env)
+
+        recovered = _retry_failed_tasks("wf-1", OrchestratorLogger(tmp_path))
+
+        assert recovered == []
+        with orch_db_env.session_scope() as session:
+            task = session.query(Task).filter_by(id="task-1").first()
+            assert task.status == "failed"
+            assert task.retry_count == 1
+
+
 class TestFailWorkflowDirect:
     """Regression: the backend-startup stale-workflow cleanup used
     complete_workflow_direct unconditionally for any workflow still "active"

@@ -97,3 +97,56 @@ class TestBackgroundPhaseAdvancementSweep:
         await server.background_phase_advancement_sweep()
 
         assert "wf-fine" in advanced_ids
+
+
+class TestSweepSelfHealing:
+    """Regression: dead-agent cleanup (_clean_stale_assigned_tasks) and
+    failed-task retry (_retry_failed_tasks) used to run only once, at
+    pipeline-startup, for whichever single workflow happened to be the
+    last-tracked current_workflow_id (attempt_recovery's only caller, in
+    run_continuous_pipeline). Any other in-flight workflow -- parallel
+    feature runs, or one resumed outside that one startup check -- never
+    got either: a task whose agent died mid-work just sat "assigned"/
+    "in_progress" forever. Wiring both into the generic per-tick sweep
+    makes self-healing universal instead of tied to one specific caller."""
+
+    @pytest.mark.asyncio
+    async def test_runs_self_healing_for_active_workflows_only(
+        self, db_manager, monkeypatch
+    ):
+        from src.mcp import server
+
+        _make_workflow(db_manager, "wf-active", "active")
+        _make_workflow(db_manager, "wf-paused", "paused")
+
+        monkeypatch.setattr(server.server_state, "db_manager", db_manager)
+        server.server_state.shutdown_event = asyncio.Event()
+
+        cleaned_ids = []
+        retried_ids = []
+
+        def fake_advance_phases(wf_id, logger):
+            if wf_id == "wf-paused":
+                server.server_state.shutdown_event.set()
+
+        def fake_clean(wf_id, logger):
+            cleaned_ids.append(wf_id)
+
+        def fake_retry(wf_id, logger):
+            retried_ids.append(wf_id)
+            return []
+
+        monkeypatch.setattr(
+            "src.autopilot.orchestrator._advance_phases", fake_advance_phases
+        )
+        monkeypatch.setattr(
+            "src.autopilot.orchestrator._clean_stale_assigned_tasks", fake_clean
+        )
+        monkeypatch.setattr(
+            "src.autopilot.orchestrator._retry_failed_tasks", fake_retry
+        )
+
+        await server.background_phase_advancement_sweep()
+
+        assert cleaned_ids == ["wf-active"]
+        assert retried_ids == ["wf-active"]
