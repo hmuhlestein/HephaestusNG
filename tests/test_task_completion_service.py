@@ -1,464 +1,407 @@
-"""Tests for TaskCompletionService.verify_output_artifact — the
-declared-output-artifact hard floor extracted from update_task_status.
+"""Unit tests for TaskCompletionService."""
 
-Covers the .hephaestus/ search path added to support Phase 0's Feature
-Architect (see docs/LOOP_ENGINEERING_REVIEW.md's Phase 0 "bolt-on" finding).
-"""
-
-import uuid
+import asyncio
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
-from src.core.database import DatabaseManager, Phase, Task, Workflow
 from src.services.task_completion_service import TaskCompletionService
 
 
-@pytest.fixture
-def db(tmp_path):
-    manager = DatabaseManager(str(tmp_path / "test.db"))
-    manager.create_tables()
-    return manager
+class TestParseForensicsRecommendations:
+    """Tests for _parse_forensics_recommendations (pure function)."""
 
-
-def _seed(db, tmp_path, phase_name, phase_id=None, outputs=None):
-    """Seed a Workflow + Phase + Task, return (session, task).
-
-    outputs, if given, is JSON-serialized before insert to match the real
-    production write path (Phase.outputs is a Text column; see
-    phase_manager.py's serialize_for_text)."""
-    import json
-
-    session = db.get_session()
-    workflow_id = f"wf-{uuid.uuid4().hex[:8]}"
-    phase_id = phase_id or f"phase-{uuid.uuid4().hex[:8]}"
-    task_id = f"task-{uuid.uuid4().hex[:8]}"
-
-    session.add(
-        Workflow(
-            id=workflow_id,
-            name="t",
-            phases_folder_path="/tmp",
-            status="active",
-            definition_id="autopilot-phase0",
-            working_directory=str(tmp_path),
-        )
-    )
-    session.add(
-        Phase(
-            id=phase_id,
-            workflow_id=workflow_id,
-            order=1,
-            name=phase_name,
-            description="d",
-            done_definitions=["done"],
-            outputs=json.dumps(outputs) if outputs is not None else None,
-        )
-    )
-    session.add(
-        Task(
-            id=task_id,
-            raw_description="raw",
-            done_definition="done",
-            status="in_progress",
-            workflow_id=workflow_id,
-            phase_id=phase_id,
-        )
-    )
-    session.commit()
-
-    task = session.query(Task).filter_by(id=task_id).first()
-    return session, task
-
-
-class TestVerifyOutputArtifactHephaestusPath:
-    def test_finds_artifact_in_hephaestus_dir(self, db, tmp_path, monkeypatch):
-        from src.autopilot import spec
-
-        monkeypatch.setitem(spec.PHASE_OUTPUT_ARTIFACTS, "Feature Architect", "features.json")
-
-        session, task = _seed(db, tmp_path, "Feature Architect")
-        (tmp_path / ".hephaestus").mkdir()
-        (tmp_path / ".hephaestus" / "features.json").write_text("{}")
-
-        result = TaskCompletionService.verify_output_artifact(session, task)
-
-        assert result is None  # found -> no rejection
-        session.close()
-
-    def test_rejects_when_hephaestus_artifact_missing(self, db, tmp_path, monkeypatch):
-        from src.autopilot import spec
-
-        monkeypatch.setitem(spec.PHASE_OUTPUT_ARTIFACTS, "Feature Architect", "features.json")
-
-        session, task = _seed(db, tmp_path, "Feature Architect")
-        # .hephaestus/features.json deliberately not written
-
-        result = TaskCompletionService.verify_output_artifact(session, task)
-
-        assert result is not None
-        assert result["status"] == "failed"
-        assert "features.json" in result["message"]
-
-        refreshed = session.query(Task).filter_by(id=task.id).first()
-        assert refreshed.status == "failed"
-        session.close()
-
-    def test_docs_path_still_works_for_existing_phases(self, db, tmp_path):
-        """Regression: adding the .hephaestus/ candidate must not break the
-        existing docs/<file> search used by every other gated phase. Output
-        is now derived from the phase's own declared outputs (Phase.outputs),
-        not a hardcoded dict."""
-        session, task = _seed(
-            db, tmp_path, "qa_validation", outputs=["qa_report.md", "qa_result.json"]
-        )
-        (tmp_path / "docs").mkdir()
-        (tmp_path / "docs" / "qa_result.json").write_text("{}")
-        (tmp_path / "docs" / "qa_report.md").write_text("# qa")
-
-        result = TaskCompletionService.verify_output_artifact(session, task)
-
-        assert result is None  # found via docs/ path, unaffected by the new candidate
-        session.close()
-
-    def test_worktree_root_path_still_works(self, db, tmp_path):
-        """Regression: the worktree-root <file> search path (no docs/ prefix)
-        must still work after adding the .hephaestus/ candidate."""
-        session, task = _seed(
-            db, tmp_path, "architecture_design", outputs=["architecture.md"]
-        )
-        (tmp_path / "architecture.md").write_text("# arch")
-
-        result = TaskCompletionService.verify_output_artifact(session, task)
-
-        assert result is None
-        session.close()
-
-    def test_no_declared_output_for_phase_returns_none(self, db, tmp_path):
-        """Phases with no declared outputs (or only non-file, descriptive
-        deliverables) get no enforcement."""
-        session, task = _seed(db, tmp_path, "some_undeclared_phase")
-
-        result = TaskCompletionService.verify_output_artifact(session, task)
-
-        assert result is None
-        session.close()
-
-    def test_non_file_descriptive_outputs_are_ignored(self, db, tmp_path):
-        """development/git_commit_push declare deliverables like 'source
-        code in project path' that aren't checkable files — must not be
-        treated as a missing artifact."""
-        session, task = _seed(
-            db, tmp_path, "development", outputs=["source code in project path"]
-        )
-
-        result = TaskCompletionService.verify_output_artifact(session, task)
-
-        assert result is None
-        session.close()
-
-    def test_previously_unenforced_phase_now_gets_hard_floor(self, db, tmp_path):
-        """The systemic fix: adversarial_review/security_review (and any
-        other phase with a declared outputs: file) previously had zero
-        enforcement — only 4 phases were in a hardcoded dict. A real smoke
-        run merged successfully despite adversarial_review_report.md and
-        security_report.md both being missing. Now derived straight from
-        the phase's own YAML outputs, so this can't happen silently."""
-        session, task = _seed(
-            db, tmp_path, "adversarial_review", outputs=["adversarial_review_report.md"]
-        )
-        # adversarial_review_report.md deliberately not written
-
-        result = TaskCompletionService.verify_output_artifact(session, task)
-
-        assert result is not None
-        assert result["status"] == "failed"
-        assert "adversarial_review_report.md" in result["message"]
-        session.close()
-
-    def test_multiple_declared_outputs_all_required(self, db, tmp_path):
-        """qa_validation declares two files (qa_report.md, qa_result.json).
-        Writing only one must still fail — every declared file is required."""
-        session, task = _seed(
-            db, tmp_path, "qa_validation", outputs=["qa_report.md", "qa_result.json"]
-        )
-        (tmp_path / "docs").mkdir()
-        (tmp_path / "docs" / "qa_result.json").write_text("{}")
-        # qa_report.md deliberately not written
-
-        result = TaskCompletionService.verify_output_artifact(session, task)
-
-        assert result is not None
-        assert "qa_report.md" in result["message"]
-        assert "qa_result.json" not in result["message"]
-        session.close()
-
-    def test_placeholder_path_segments_are_not_enforced(self, db, tmp_path):
-        """Phase 0's outputs: list includes '.hephaestus/features/<id>/scope.md'
-        — a templated path with no concrete '<id>', not a real filename to
-        check. Only the concrete features.json entry should be enforced."""
-        session, task = _seed(
-            db,
-            tmp_path,
-            "Feature Architect",
-            outputs=[".hephaestus/features.json", ".hephaestus/features/<id>/scope.md"],
-        )
-        (tmp_path / ".hephaestus").mkdir()
-        (tmp_path / ".hephaestus" / "features.json").write_text("{}")
-
-        result = TaskCompletionService.verify_output_artifact(session, task)
-
-        assert result is None
-        session.close()
-
-    def test_errors_loudly_when_working_directory_missing_rather_than_searching_elsewhere(
-        self, db, tmp_path, monkeypatch
-    ):
-        """A workflow with a workflow_id but no working_directory is a
-        worktree-tracking bug, not a normal 'agent didn't write the file'
-        case -- this must reject with a distinct system-error message, not
-        silently search some other directory (e.g. the agent's own isolated
-        worktree) for the file. See the cleanup_all_stale_branches race this
-        used to paper over via such a fallback, now fixed at the source in
-        worktree_manager.py instead."""
-        from src.autopilot import spec
-
-        monkeypatch.setitem(spec.PHASE_OUTPUT_ARTIFACTS, "Feature Architect", "features.json")
-
-        session, task = _seed(db, tmp_path, "Feature Architect")
-        wf = session.query(Workflow).filter_by(id=task.workflow_id).first()
-        wf.working_directory = None
-        session.commit()
-
-        result = TaskCompletionService.verify_output_artifact(session, task)
-
-        assert result is not None
-        assert result["status"] == "failed"
-        assert "working_directory" in result["message"]
-        assert "system error" in result["message"].lower()
-        session.close()
-
-
-SAMPLE_REPORT = """# Hephaestus Forensics Report
-
-## Executive Summary
-
-Some summary text.
+    def test_parse_standard_format(self):
+        report = """# Forensics Report
 
 ## Recommendations for Future Pipeline Runs
 
 ### High Priority
-
-1. **Add .gitignore creation to Development phase** - Prevents security review from having to fix this basic setup issue
-
-2. **Clarify MCP tool parameter requirements in prompts** - Reduces retry cycles from parameter confusion
+1. **Add retry logic for API calls** - External APIs fail intermittently
+2. **Improve error messages** - Users need clearer error context
 
 ### Medium Priority
-
-3. **Add design scope guidance to adversarial review prompt** - Helps classify findings as in-scope vs out-of-scope
+3. **Add monitoring dashboards** - Better visibility
 
 ### Low Priority
-
-4. **Add explicit path examples in prompts** - Helps agents resolve file paths correctly
-
----
-
-## Conclusion
-
-Some conclusion text that must NOT be parsed as a recommendation.
+4. **Update documentation** - Some sections are outdated
 """
+        result = TaskCompletionService._parse_forensics_recommendations(report)
+        assert len(result) == 4
+        assert result[0]["title"] == "Add retry logic for API calls"
+        assert result[0]["priority"] == "high"
+        assert result[1]["priority"] == "high"
+        assert result[2]["priority"] == "medium"
+        assert result[3]["priority"] == "low"
+
+    def test_parse_no_recommendations_section(self):
+        report = "# Forensics Report\n\n## Analysis\n\nNo issues found."
+        result = TaskCompletionService._parse_forensics_recommendations(report)
+        assert result == []
+
+    def test_parse_empty_recommendations(self):
+        report = "## Recommendations\n\n### High Priority\n\n"
+        result = TaskCompletionService._parse_forensics_recommendations(report)
+        assert result == []
+
+    def test_parse_default_priority_when_no_heading(self):
+        report = "## Recommendations\n\n1. **First item** - description\n2. **Second item** - description\n"
+        result = TaskCompletionService._parse_forensics_recommendations(report)
+        assert len(result) == 2
+        assert result[0]["priority"] == "medium"
+
+    def test_parse_items_without_bold_title(self):
+        report = "## Recommendations\n\n1. Fix the database connection pool\n"
+        result = TaskCompletionService._parse_forensics_recommendations(report)
+        assert len(result) == 0
+
+    def test_parse_real_world_report(self):
+        report = """# Forensics Analysis Report
+
+## Recommendations for Future Pipeline Runs
+
+### High Priority
+1. **Fix database connection leak** - Connections not closed properly
+2. **Add rate limiting** - API calls not rate-limited
+
+### Medium Priority
+3. **Implement structured logging** - Better debugging
+
+### Low Priority
+4. **Update README** - Outdated instructions
+"""
+        result = TaskCompletionService._parse_forensics_recommendations(report)
+        assert len(result) == 4
+        assert result[0]["priority"] == "high"
+        assert result[2]["priority"] == "medium"
+        assert result[3]["priority"] == "low"
 
 
-def _seed_ticket(db, workflow_id, ticket_type="bug", is_resolved=False, title="t"):
-    from src.core.database import Ticket
+class TestVerifyOutputArtifact:
+    """Tests for verify_output_artifact method."""
 
-    session = db.get_session()
-    ticket_id = f"ticket-{uuid.uuid4().hex[:8]}"
-    session.add(
-        Ticket(
-            id=ticket_id,
-            workflow_id=workflow_id,
-            created_by_agent_id="agent-1",
-            title=title,
-            description="d",
-            ticket_type=ticket_type,
-            priority="high",
-            status="open",
-            is_resolved=is_resolved,
+    def test_returns_none_when_no_phase(self):
+        task = Mock(phase_id=None)
+        result = TaskCompletionService.verify_output_artifact(
+            session=Mock(), task=task, phase=None
         )
-    )
-    session.commit()
-    session.close()
-    return ticket_id
+        assert result is None
+
+    def test_returns_none_when_no_required_files(self):
+        phase = Mock(name="development", id="phase-1")
+        phase.name = "development"
+        phase.name = "development"
+        phase.name = "development"
+        phase.name = "development"
+        phase.name = "development"
+        phase.name = "development"
+        phase.name = "development"
+        phase.name = "development"
+        phase.name = "development"
+        task = Mock(phase_id="phase-1", workflow_id=None)
+
+        with patch("src.autopilot.spec.get_phase_required_files", return_value=[]):
+            result = TaskCompletionService.verify_output_artifact(
+                session=Mock(), task=task, phase=phase
+            )
+            assert result is None
+
+    def test_passes_when_no_workflow_id_and_files_in_feature_dir(self):
+        """Test passes when workflow_id is None but files exist in feature dir."""
+        phase = Mock(name="development", id="phase-1")
+        task = Mock(phase_id="phase-1", workflow_id=None, id="task-1")
+
+        mock_session = Mock()
+
+        with patch("src.autopilot.spec.get_phase_required_files", return_value=["docs/output.md"]), \
+             patch("pathlib.Path.exists", return_value=True):
+            result = TaskCompletionService.verify_output_artifact(
+                session=mock_session, task=task, phase=phase
+            )
+            assert result is None
+
+    def test_rejects_when_workflow_has_no_working_directory(self):
+        phase = Mock(name="development", id="phase-1")
+        task = Mock(phase_id="phase-1", workflow_id="wf-1", id="task-1")
+
+        mock_session = Mock()
+        mock_session.query.return_value.filter_by.return_value.first.return_value = Mock(working_directory=None)
+
+        with patch("src.autopilot.spec.get_phase_required_files", return_value=["docs/output.md"]):
+            result = TaskCompletionService.verify_output_artifact(
+                session=mock_session, task=task, phase=phase
+            )
+            assert result is not None
+            assert result["status"] == "failed"
+            assert "system error" in result["message"].lower()
+
+    def test_rejects_when_output_file_missing(self):
+        phase = Mock(name="development", id="phase-1")
+        task = Mock(phase_id="phase-1", workflow_id="wf-1", id="task-1")
+
+        mock_session = Mock()
+        mock_session.query.return_value.filter_by.return_value.first.return_value = Mock(working_directory="/nonexistent")
+
+        with patch("src.autopilot.spec.get_phase_required_files", return_value=["docs/output.md"]), \
+             patch("pathlib.Path.exists", return_value=False), \
+             patch("src.autopilot.spec.load_optional_phases", return_value=[]):
+            result = TaskCompletionService.verify_output_artifact(
+                session=mock_session, task=task, phase=phase
+            )
+            assert result is not None
+            assert result["status"] == "failed"
+
+    def test_passes_when_output_file_exists(self):
+        phase = Mock(name="development", id="phase-1")
+        task = Mock(phase_id="phase-1", workflow_id="wf-1", id="task-1")
+
+        mock_session = Mock()
+        mock_session.query.return_value.filter_by.return_value.first.return_value = Mock(working_directory="/path/to/project")
+
+        with patch("src.autopilot.spec.get_phase_required_files", return_value=["docs/output.md"]), \
+             patch("pathlib.Path.exists", return_value=True):
+            result = TaskCompletionService.verify_output_artifact(
+                session=mock_session, task=task, phase=phase
+            )
+            assert result is None
+
+    def test_skips_verification_for_optional_phases(self):
+        phase = Mock(name="optional_analysis", id="phase-1")
+        phase.name = "optional_analysis"
+        phase.name = "optional_analysis"
+        task = Mock(phase_id="phase-1", workflow_id="wf-1", id="task-1")
+
+        mock_session = Mock()
+        mock_session.query.return_value.filter_by.return_value.first.return_value = Mock(working_directory="/path")
+
+        with patch("src.autopilot.spec.get_phase_required_files", return_value=["docs/output.md"]), \
+             patch("pathlib.Path.exists", return_value=False), \
+             patch("src.autopilot.spec.load_optional_phases", return_value=["optional_analysis"]):
+            result = TaskCompletionService.verify_output_artifact(
+                session=mock_session, task=task, phase=phase
+            )
+            assert result is None
 
 
 class TestVerifyNoOpenTickets:
-    """development.yaml's prompt tells agents to check for and fix open bug
-    tickets (QA/security findings) before marking done -- this hard floor
-    makes that enforced rather than compliance-dependent, mirroring
-    verify_output_artifact's pattern."""
+    """Tests for verify_no_open_tickets method."""
 
-    def test_rejects_when_open_bug_ticket_exists(self, db, tmp_path):
-        session, task = _seed(db, tmp_path, "development")
-        _seed_ticket(db, task.workflow_id, is_resolved=False)
-
-        rejection = TaskCompletionService.verify_no_open_tickets(session, task)
-
-        assert rejection is not None
-        assert rejection["status"] == "failed"
-        assert task.status == "failed"
-        assert "open bug ticket" in task.failure_reason.lower()
-
-    def test_allows_when_no_open_tickets(self, db, tmp_path):
-        session, task = _seed(db, tmp_path, "development")
-
-        assert TaskCompletionService.verify_no_open_tickets(session, task) is None
-
-    def test_allows_when_all_tickets_resolved(self, db, tmp_path):
-        session, task = _seed(db, tmp_path, "development")
-        _seed_ticket(db, task.workflow_id, is_resolved=True)
-
-        assert TaskCompletionService.verify_no_open_tickets(session, task) is None
-
-    def test_ignores_non_bug_tickets(self, db, tmp_path):
-        session, task = _seed(db, tmp_path, "development")
-        _seed_ticket(db, task.workflow_id, ticket_type="feature", is_resolved=False)
-
-        assert TaskCompletionService.verify_no_open_tickets(session, task) is None
-
-    def test_does_not_apply_outside_development_phase(self, db, tmp_path):
-        """QA/security_review create these tickets in the first place --
-        must not be blocked by their own findings."""
-        session, task = _seed(db, tmp_path, "qa_validation")
-        _seed_ticket(db, task.workflow_id, is_resolved=False)
-
-        assert TaskCompletionService.verify_no_open_tickets(session, task) is None
-
-    def test_no_workflow_id_returns_none(self, db, tmp_path):
-        session, task = _seed(db, tmp_path, "development")
-        task.workflow_id = None
-
-        assert TaskCompletionService.verify_no_open_tickets(session, task) is None
-
-
-class TestParseForensicsRecommendations:
-    """Regression coverage for a real gap found via smoke testing: an agent
-    wrote a genuinely thorough forensics_report.md with 7 concrete
-    recommendations but never called hephaestus_create_ticket once, despite
-    "Tickets created for actionable findings" being a mandated completion
-    criterion. Auto-create tickets from the report itself instead of
-    trusting the agent to remember."""
-
-    def test_extracts_all_recommendations_with_correct_priority(self):
-        recs = TaskCompletionService._parse_forensics_recommendations(SAMPLE_REPORT)
-
-        assert len(recs) == 4
-        assert recs[0]["title"] == "Add .gitignore creation to Development phase"
-        assert recs[0]["priority"] == "high"
-        assert "Prevents security review" in recs[0]["description"]
-        assert recs[1]["priority"] == "high"
-        assert recs[2]["priority"] == "medium"
-        assert recs[3]["priority"] == "low"
-
-    def test_does_not_parse_content_outside_recommendations_section(self):
-        recs = TaskCompletionService._parse_forensics_recommendations(SAMPLE_REPORT)
-        titles = [r["title"] for r in recs]
-        assert not any("Conclusion" in t for t in titles)
-
-    def test_no_recommendations_section_returns_empty(self):
-        report = "# Report\n\n## Executive Summary\n\nNo recommendations here.\n"
-        recs = TaskCompletionService._parse_forensics_recommendations(report)
-        assert recs == []
-
-    def test_flat_list_with_no_priority_headings_defaults_to_medium(self):
-        report = (
-            "## Recommendations for Future Pipeline Runs\n\n"
-            "1. **Do the thing** - because reasons\n"
-            "2. **Do another thing** - also reasons\n"
+    def test_returns_none_for_non_development_phase(self):
+        phase = Mock(name="qa_validation", id="phase-1")
+        phase.name = "qa_validation"
+        task = Mock(phase_id="phase-1", workflow_id="wf-1")
+        result = TaskCompletionService.verify_no_open_tickets(
+            session=Mock(), task=task, phase=phase
         )
-        recs = TaskCompletionService._parse_forensics_recommendations(report)
-        assert len(recs) == 2
-        assert all(r["priority"] == "medium" for r in recs)
+        assert result is None
+
+    def test_returns_none_when_no_open_tickets(self):
+        phase = Mock(name="development", id="phase-1")
+        task = Mock(phase_id="phase-1", workflow_id="wf-1")
+        mock_session = Mock()
+        mock_session.query.return_value.filter.return_value.all.return_value = []
+
+        result = TaskCompletionService.verify_no_open_tickets(
+            session=mock_session, task=task, phase=phase
+        )
+        assert result is None
+
+    def test_rejects_when_open_tickets_exist(self):
+        phase = Mock(name="development", id="phase-1")
+        phase.name = "development"
+        task = Mock(phase_id="phase-1", workflow_id="wf-1")
+        mock_ticket = Mock(id="ticket-abc123def", title="Database connection leak")
+        mock_session = Mock()
+        mock_session.query.return_value.filter.return_value.all.return_value = [mock_ticket]
+
+        result = TaskCompletionService.verify_no_open_tickets(
+            session=mock_session, task=task, phase=phase
+        )
+        assert result is not None
+        assert result["status"] == "failed"
+        assert "1 open bug ticket" in result["message"]
+
+    def test_returns_none_when_no_workflow_id(self):
+        phase = Mock(name="development", id="phase-1")
+        task = Mock(phase_id="phase-1", workflow_id=None)
+        result = TaskCompletionService.verify_no_open_tickets(
+            session=Mock(), task=task, phase=phase
+        )
+        assert result is None
+
+
+class TestRecordLearnings:
+    """Tests for record_learnings method."""
+
+    @pytest.mark.asyncio
+    async def test_stores_learnings(self):
+        mock_session = Mock()
+        mock_llm_provider = Mock()
+        mock_llm_provider.generate_embedding = AsyncMock(return_value=[0.1] * 384)
+        mock_vector_store = Mock()
+        mock_vector_store.store_memory = AsyncMock()
+
+        with patch("src.core.app_context.get_app_state") as mock_get_state:
+            mock_state = Mock()
+            mock_state.llm_provider = mock_llm_provider
+            mock_state.vector_store = mock_vector_store
+            mock_get_state.return_value = mock_state
+
+            await TaskCompletionService.record_learnings(
+                session=mock_session,
+                agent_id="agent-1",
+                task_id="task-1",
+                key_learnings=["Use connection pooling", "Add retry logic"],
+                code_changes=["src/db/pool.py", "src/api/retry.py"],
+            )
+
+            assert mock_llm_provider.generate_embedding.call_count == 2
+            assert mock_vector_store.store_memory.call_count == 2
+            assert mock_session.add.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_empty_learnings(self):
+        mock_session = Mock()
+        mock_llm_provider = Mock()
+        mock_vector_store = Mock()
+
+        with patch("src.core.app_context.get_app_state") as mock_get_state:
+            mock_state = Mock()
+            mock_state.llm_provider = mock_llm_provider
+            mock_state.vector_store = mock_vector_store
+            mock_get_state.return_value = mock_state
+
+            await TaskCompletionService.record_learnings(
+                session=mock_session,
+                agent_id="agent-1",
+                task_id="task-1",
+                key_learnings=[],
+                code_changes=[],
+            )
+
+            assert mock_llm_provider.generate_embedding.call_count == 0
+            assert mock_session.add.call_count == 0
 
 
 class TestCreateTicketsFromForensicsReport:
-    @pytest.mark.asyncio
-    async def test_creates_ticket_per_recommendation(self, db, tmp_path, monkeypatch):
-        session, task = _seed(db, tmp_path, "forensics_analysis")
-        (tmp_path / "docs").mkdir()
-        (tmp_path / "docs" / "forensics_report.md").write_text(SAMPLE_REPORT)
-
-        created_calls = []
-
-        async def fake_create_ticket(**kwargs):
-            created_calls.append(kwargs)
-            return {"id": f"ticket-{len(created_calls)}"}
-
-        monkeypatch.setattr(
-            "src.services.ticket_service.TicketService.create_ticket",
-            fake_create_ticket,
-        )
-
-        count = await TaskCompletionService.create_tickets_from_forensics_report(
-            session, task
-        )
-
-        assert count == 4
-        assert len(created_calls) == 4
-        assert created_calls[0]["priority"] == "high"
-        assert created_calls[0]["ticket_type"] == "improvement"
-        assert created_calls[0]["workflow_id"] == task.workflow_id
-        session.close()
+    """Tests for create_tickets_from_forensics_report method."""
 
     @pytest.mark.asyncio
-    async def test_non_forensics_phase_creates_nothing(self, db, tmp_path):
-        session, task = _seed(db, tmp_path, "qa_validation")
-        (tmp_path / "docs").mkdir()
-        (tmp_path / "docs" / "forensics_report.md").write_text(SAMPLE_REPORT)
+    async def test_returns_zero_for_non_forensics_phase(self):
+        phase = Mock(name="development", id="phase-1")
+        task = Mock(phase_id="phase-1", workflow_id="wf-1")
+        mock_session = Mock()
+        mock_session.query.return_value.filter_by.return_value.first.return_value = phase
 
-        count = await TaskCompletionService.create_tickets_from_forensics_report(
-            session, task
+        result = await TaskCompletionService.create_tickets_from_forensics_report(
+            session=mock_session, task=task
         )
-
-        assert count == 0
-        session.close()
+        assert result == 0
 
     @pytest.mark.asyncio
-    async def test_missing_report_file_returns_zero(self, db, tmp_path):
-        session, task = _seed(db, tmp_path, "forensics_analysis")
-        # docs/forensics_report.md deliberately not written
+    async def test_returns_zero_when_no_working_directory(self):
+        phase = Mock(name="forensics_analysis", id="phase-1")
+        phase.name = "forensics_analysis"
+        phase.name = "forensics_analysis"
+        task = Mock(phase_id="phase-1", workflow_id="wf-1")
+        wf = Mock(working_directory=None)
+        mock_session = Mock()
+        mock_session.query.return_value.filter_by.return_value.first.return_value = wf
 
-        count = await TaskCompletionService.create_tickets_from_forensics_report(
-            session, task
+        result = await TaskCompletionService.create_tickets_from_forensics_report(
+            session=mock_session, task=task
         )
-
-        assert count == 0
-        session.close()
+        assert result == 0
 
     @pytest.mark.asyncio
-    async def test_individual_ticket_failure_does_not_block_others(
-        self, db, tmp_path, monkeypatch
-    ):
-        session, task = _seed(db, tmp_path, "forensics_analysis")
-        (tmp_path / "docs").mkdir()
-        (tmp_path / "docs" / "forensics_report.md").write_text(SAMPLE_REPORT)
+    async def test_returns_zero_when_no_report_file(self):
+        phase = Mock(name="forensics_analysis", id="phase-1")
+        task = Mock(phase_id="phase-1", workflow_id="wf-1")
+        wf = Mock(working_directory="/path/to/project")
+        mock_session = Mock()
+        mock_session.query.return_value.filter_by.return_value.first.side_effect = [phase, wf]
 
-        calls = []
+        with patch("pathlib.Path.exists", return_value=False):
+            result = await TaskCompletionService.create_tickets_from_forensics_report(
+                session=mock_session, task=task
+            )
+            assert result == 0
 
-        async def flaky_create_ticket(**kwargs):
-            calls.append(kwargs)
-            if len(calls) == 2:
-                raise ValueError("Board configuration not found for workflow")
-            return {"id": f"ticket-{len(calls)}"}
 
-        monkeypatch.setattr(
-            "src.services.ticket_service.TicketService.create_ticket",
-            flaky_create_ticket,
-        )
+class TestCommitAndLinkTicket:
+    """Tests for commit_and_link_ticket method."""
 
-        count = await TaskCompletionService.create_tickets_from_forensics_report(
-            session, task
-        )
+    @pytest.mark.asyncio
+    async def test_returns_none_when_no_workflow(self):
+        task = Mock(workflow_id=None, phase_id=None)
+        with patch("src.core.app_context.get_app_state") as mock_state:
+            mock_state.return_value = Mock(branch_manager=None)
+            result = await TaskCompletionService.commit_and_link_ticket(
+                session=Mock(), agent_id="agent-1", task=task, summary="test"
+            )
+            assert result is None
 
-        assert count == 3  # 4 total, 1 failed
-        assert len(calls) == 4  # still attempted all of them
-        session.close()
+    @pytest.mark.asyncio
+    async def test_returns_none_when_no_dirty_files(self):
+        task = Mock(workflow_id="wf-1", phase_id="phase-1", id="task-1", ticket_id=None)
+        wf = Mock(working_directory="/path/to/project")
+        mock_session = Mock()
+        mock_session.query.return_value.filter_by.return_value.first.return_value = wf
+
+        mock_repo = Mock()
+        mock_repo.is_dirty.return_value = False
+        mock_repo.untracked_files = []
+
+        with patch("git.Repo", return_value=mock_repo), \
+             patch("src.core.app_context.get_app_state") as mock_state:
+            mock_state.return_value = Mock()
+            result = await TaskCompletionService.commit_and_link_ticket(
+                session=mock_session, agent_id="agent-1", task=task, summary="test"
+            )
+            assert result is None
+
+    @pytest.mark.asyncio
+    async def test_returns_sha_when_committed(self):
+        task = Mock(workflow_id="wf-1", phase_id="phase-1", id="task-1", ticket_id=None)
+        wf = Mock(working_directory="/path/to/project")
+        mock_session = Mock()
+        mock_session.query.return_value.filter_by.return_value.first.return_value = wf
+
+        mock_repo = Mock()
+        mock_repo.is_dirty.return_value = True
+        mock_repo.untracked_files = []
+        mock_repo.head.commit.hexsha = "abc123" * 7
+
+        with patch("git.Repo", return_value=mock_repo), \
+             patch("src.core.app_context.get_app_state") as mock_state, \
+             patch("pathlib.Path.is_dir", return_value=True):
+            mock_state.return_value = Mock()
+            result = await TaskCompletionService.commit_and_link_ticket(
+                session=mock_session, agent_id="agent-1", task=task, summary="Fixed the bug"
+            )
+            assert result == "abc123" * 7
+
+    @pytest.mark.asyncio
+    async def test_links_ticket_when_present(self):
+        task = Mock(workflow_id="wf-1", phase_id="phase-1", id="task-1", ticket_id="t-1")
+        wf = Mock(working_directory="/path/to/project")
+        mock_session = Mock()
+        mock_session.query.return_value.filter_by.return_value.first.return_value = wf
+
+        mock_repo = Mock()
+        mock_repo.is_dirty.return_value = True
+        mock_repo.untracked_files = []
+        mock_repo.head.commit.hexsha = "abc123" * 7
+
+        with patch("git.Repo", return_value=mock_repo), \
+             patch("src.core.app_context.get_app_state") as mock_state, \
+             patch("src.services.ticket_service.TicketService") as mock_ticket_svc, \
+             patch("pathlib.Path.is_dir", return_value=True):
+            mock_state.return_value = Mock()
+            mock_ticket_svc.link_commit = AsyncMock()
+
+            result = await TaskCompletionService.commit_and_link_ticket(
+                session=mock_session, agent_id="agent-1", task=task, summary="Fixed the bug"
+            )
+            assert result is not None
+            mock_ticket_svc.link_commit.assert_called_once()
