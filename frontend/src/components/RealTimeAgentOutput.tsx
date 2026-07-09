@@ -196,12 +196,14 @@ const RealTimeAgentOutput: React.FC<RealTimeAgentOutputProps> = ({
   const filteredOutput = useMemo(() => {
     const lines = (output || '').split('\n');
     const filtered = lines.filter(line => {
-      // Strip ANSI codes for pattern matching
-      const stripped = line.replace(/\x1b\[[0-9;]*m/g, '').trim();
+      // Strip ALL ANSI codes for pattern matching
+      const stripped = line.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '').replace(/\x1b\][^\x07]*\x07/g, '').trim();
       // Filter out horizontal separator lines (────────────────────...)
-      if (/^[─━═▬▪▫\-=]{20,}$/.test(stripped)) return false;
+      if (/^[─━═▬▪▫\-=\s]{20,}$/.test(stripped)) return false;
       // Filter out spinner-only lines
-      if (/^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏\s]+$/.test(stripped)) return false;
+      if (/^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏Working\.\s]+$/.test(stripped)) return false;
+      // Filter out TUI chrome fragments
+      if (/^[AGBCD\s]+$/.test(stripped) && stripped.length < 10) return false;
       if (searchTerm && !line.toLowerCase().includes(searchTerm.toLowerCase())) return false;
       return true;
     });

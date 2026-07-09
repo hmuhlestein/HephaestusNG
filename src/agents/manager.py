@@ -769,14 +769,12 @@ class AgentManager:
             # strip \r to prevent spinner bloat.
             # Strip terminal control sequences but keep ANSI color codes.
             # Keep: SGR color sequences (\x1b[...m)
-            # Strip: all other CSI, OSC, DEC sequences
+            # Strip: everything else aggressively
             _ansi_strip = (
-                r"s/\x1b\][^\x07]*\x07//g; "  # OSC with BEL terminator
-                r"s/\x1b\][^\x1b]*\x1b\\\\//g; "  # OSC with ST terminator
-                r"s/\x1b\[[0-9;]*[ABCDEFGHJKSTfsu]//g; "  # CSI (except m=color)
-                r"s/\x1b\[[?][0-9;]*[hln]//g; "  # DEC private modes
-                r"s/\x1b\([AB012]//g; "  # Charset selection
-                r"s/\x1b[\\[\\]()#<>=]//g; "  # Other ESC sequences
+                r"s/\x1b\][^\x07]*\x07//g; "  # OSC with BEL
+                r"s/\x1b\][^\x1b]*\x1b\\\\//g; "  # OSC with ST
+                r"s/\x1b\[[?]?[0-9;]*[^0-9;m]//g; "  # All CSI/DEC except m (color)
+                r"s/\x1b[^\x1b\x5b\x5d]//g; "  # Any other bare ESC sequences
                 r"s/\r//g"
             )
             pipe_cmd = f"perl -pe {shlex.quote(_ansi_strip)} >> {shlex.quote(str(transcript_path))}"
@@ -1791,13 +1789,11 @@ class AgentManager:
             
             # Strip terminal control sequences that pipe-pane might have missed
             # Keep: SGR color sequences (\x1b[...m)
-            # Strip: all other CSI, OSC, DEC sequences
+            # Strip: everything else aggressively
             text = re.sub(r'\x1b\][^\x07]*\x07', '', text)  # OSC with BEL
             text = re.sub(r'\x1b\][^\x1b]*\x1b\\\\', '', text)  # OSC with ST
-            text = re.sub(r'\x1b\[[?][0-9;]*[hln]', '', text)  # DEC private modes
-            text = re.sub(r'\x1b\[[0-9;]*[ABCDEFGHJKSTfsu]', '', text)  # CSI (except m=color)
-            text = re.sub(r'\x1b\([AB012]', '', text)  # Charset selection
-            text = re.sub(r'\x1b[\\[\\]()#<>=]', '', text)  # Other ESC sequences
+            text = re.sub(r'\x1b\[[?]?[0-9;]*[^0-9;m]', '', text)  # All CSI/DEC except m
+            text = re.sub(r'\x1b[^\x1b\x5b\x5d]', '', text)  # Any other bare ESC
             
             # Collapse carriage-return redraws: TUI spinners redraw the same
             # line using \r. Each redraw becomes a separate line in the log.
