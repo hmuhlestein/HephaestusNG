@@ -1508,126 +1508,133 @@ def pick_next_design(
         with get_db() as db:
             # Find active project
             project = db.query(AutopilotProject).filter_by(is_active=True).first()
-            if project:
-                # Get next pending design ordered by ordinal
-                design = (
-                    db.query(AutopilotDesign)
-                    .filter_by(project_id=project.id, status="pending")
-                    .order_by(AutopilotDesign.ordinal, AutopilotDesign.filename)
-                    .first()
-                )
+            if not project:
+                logger.info("pick_next_design: no active project found")
+                return None
+            
+            logger.info(
+                f"pick_next_design: searching project '{project.name}' ({project.id[:8]})"
+            )
+            
+            # Get next pending design ordered by ordinal
+            design = (
+                db.query(AutopilotDesign)
+                .filter_by(project_id=project.id, status="pending")
+                .order_by(AutopilotDesign.ordinal, AutopilotDesign.filename)
+                .first()
+            )
 
-                if design is None:
-                    # Resume support: a design that already finished Phase 0
-                    # (status moved to "active") but was stopped mid-feature-
-                    # pipeline is invisible to the "pending" query above --
-                    # its content hash is also already in processed_hashes,
-                    # so the file-scan fallback below would skip it too.
-                    # Without this, clicking play again after a stop finds
-                    # "queue empty" and does nothing, even though the design
-                    # has features still stuck mid-flight. run_phase0's own
-                    # tier-1 check (existing Feature rows) already makes
-                    # re-selecting this design cheap -- it skips straight to
-                    # run_feature_pipelines, which now knows how to resume
-                    # (rather than restart) each feature via its
-                    # existing_workflow_id.
-                    active_designs = (
-                        db.query(AutopilotDesign)
-                        .filter_by(project_id=project.id, status="active")
-                        .order_by(AutopilotDesign.ordinal, AutopilotDesign.filename)
-                        .all()
-                    )
-                    for candidate in active_designs:
-                        incomplete = (
-                            db.query(Feature)
-                            .filter(
-                                Feature.design_id == candidate.id,
-                                Feature.status.notin_(["completed", "skipped"]),
-                            )
-                            .count()
+            if design:
+                logger.info(
+                    f"pick_next_design: found pending design '{design.name}' ({design.id[:8]})"
+                )
+            
+            if design is None:
+                # Resume support: a design that already finished Phase 0
+                # (status moved to "active") but was stopped mid-feature-
+                # pipeline is invisible to the "pending" query above.
+                active_designs = (
+                    db.query(AutopilotDesign)
+                    .filter_by(project_id=project.id, status="active")
+                    .order_by(AutopilotDesign.ordinal, AutopilotDesign.filename)
+                    .all()
+                )
+                logger.info(
+                    f"pick_next_design: no pending designs, found "
+                    f"{len(active_designs)} active design(s)"
+                )
+                for candidate in active_designs:
+                    incomplete = (
+                        db.query(Feature)
+                        .filter(
+                            Feature.design_id == candidate.id,
+                            Feature.status.notin_(["completed", "skipped"]),
                         )
-                        if incomplete > 0:
-                            # Check if any associated workflow has failed —
-                            # if so, reset the design to pending for retry
-                            # instead of resuming a doomed run.
-                            failed_wf = (
-                                db.query(Workflow)
-                                .filter(
-                                    Workflow.design_id == candidate.id,
-                                    Workflow.status == "failed",
-                                )
-                                .first()
-                            )
-                            if failed_wf:
-                                # Retry limit: don't retry forever.
-                                retry_key = f"autopilot_retry_{candidate.id}"
-                                retry_count = _get_project_context(db, retry_key) or 0
-                                if retry_count >= MAX_DESIGN_RETRIES:
-                                    logger.info(
-                                        f"Design {candidate.name} has failed "
-                                        f"workflow {failed_wf.id[:8]} and "
-                                        f"exceeded {MAX_DESIGN_RETRIES} retries "
-                                        f"({retry_count}/{MAX_DESIGN_RETRIES}) — marking failed"
-                                    )
-                                    candidate.status = "failed"
-                                    db.commit()
-                                    continue
+                        .count()
+                    )
+                    
+                    # Check if any associated workflow has failed
+                    failed_wf = (
+                        db.query(Workflow)
+                        .filter(
+                            Workflow.design_id == candidate.id,
+                            Workflow.status == "failed",
+                        )
+                        .first()
+                    )
+                    
+                    logger.info(
+                        f"  Active design '{candidate.name}' ({candidate.id[:8]}): "
+                        f"incomplete={incomplete}, failed_wf={failed_wf.id[:8] if failed_wf else 'None'}, "
+                        f"status={candidate.status}"
+                    )
+                    
+                    if incomplete > 0:
+                        if failed_wf:
+                            # Failed workflow with incomplete features — retry
+                            retry_key = f"autopilot_retry_{candidate.id}"
+                            retry_count = _get_project_context(db, retry_key) or 0
+                            if retry_count >= MAX_DESIGN_RETRIES:
                                 logger.info(
                                     f"Design {candidate.name} has failed "
-                                    f"workflow {failed_wf.id[:8]} — resetting "
-                                    f"to pending for retry ({retry_count + 1}/{MAX_DESIGN_RETRIES})"
+                                    f"workflow {failed_wf.id[:8]} and "
+                                    f"exceeded {MAX_DESIGN_RETRIES} retries "
+                                    f"({retry_count}/{MAX_DESIGN_RETRIES}) — marking failed"
                                 )
-                                _set_project_context(db, retry_key, retry_count + 1)
-                                candidate.status = "pending"
+                                candidate.status = "failed"
                                 db.commit()
                                 continue
-                            design = candidate
                             logger.info(
-                                f"Resuming active design {design.name} "
-                                f"({incomplete} feature(s) not yet complete)"
+                                f"Design {candidate.name} has failed "
+                                f"workflow {failed_wf.id[:8]} — resetting "
+                                f"to pending for retry ({retry_count + 1}/{MAX_DESIGN_RETRIES})"
                             )
-                            break
-                        else:
-                            # All features completed/skipped — but check
-                            # if any workflow failed (e.g. diagnostic task).
-                            # If so, retry instead of marking done.
-                            failed_wf = (
-                                db.query(Workflow)
-                                .filter(
-                                    Workflow.design_id == candidate.id,
-                                    Workflow.status == "failed",
-                                )
-                                .first()
-                            )
-                            if failed_wf:
-                                retry_key = f"autopilot_retry_{candidate.id}"
-                                retry_count = _get_project_context(db, retry_key) or 0
-                                if retry_count >= MAX_DESIGN_RETRIES:
-                                    logger.info(
-                                        f"Design {candidate.name} has all features done "
-                                        f"but failed workflow {failed_wf.id[:8]} and "
-                                        f"exceeded {MAX_DESIGN_RETRIES} retries "
-                                        f"({retry_count}/{MAX_DESIGN_RETRIES}) — marking done"
-                                    )
-                                    candidate.status = "completed"
-                                    db.commit()
-                                    continue
+                            _set_project_context(db, retry_key, retry_count + 1)
+                            candidate.status = "pending"
+                            db.commit()
+                            continue
+                        design = candidate
+                        logger.info(
+                            f"Resuming active design {design.name} "
+                            f"({incomplete} feature(s) not yet complete)"
+                        )
+                        break
+                    else:
+                        # All features completed/skipped — but check
+                        # if any workflow failed (e.g. diagnostic task).
+                        # If so, retry instead of marking done.
+                        if failed_wf:
+                            retry_key = f"autopilot_retry_{candidate.id}"
+                            retry_count = _get_project_context(db, retry_key) or 0
+                            if retry_count >= MAX_DESIGN_RETRIES:
                                 logger.info(
                                     f"Design {candidate.name} has all features done "
-                                    f"but failed workflow {failed_wf.id[:8]} — "
-                                    f"retrying ({retry_count + 1}/{MAX_DESIGN_RETRIES})"
+                                    f"but failed workflow {failed_wf.id[:8]} and "
+                                    f"exceeded {MAX_DESIGN_RETRIES} retries "
+                                    f"({retry_count}/{MAX_DESIGN_RETRIES}) — marking done"
                                 )
-                                _set_project_context(db, retry_key, retry_count + 1)
-                                candidate.status = "pending"
+                                candidate.status = "completed"
                                 db.commit()
                                 continue
-                            # All features done, no failed workflows — mark done.
-                            candidate.status = "completed"
-                            db.commit()
                             logger.info(
-                                f"Design {candidate.name} has all features "
-                                f"completed/skipped — marking done"
+                                f"Design {candidate.name} has all features done "
+                                f"but failed workflow {failed_wf.id[:8]} — "
+                                f"retrying ({retry_count + 1}/{MAX_DESIGN_RETRIES})"
                             )
+                            _set_project_context(db, retry_key, retry_count + 1)
+                            candidate.status = "pending"
+                            db.commit()
+                            continue
+                        # All features done, no failed workflows — mark done.
+                        candidate.status = "completed"
+                        db.commit()
+                        logger.info(
+                            f"Design {candidate.name} has all features "
+                            f"completed/skipped — marking done"
+                        )
+                
+                if design is None:
+                    logger.info("pick_next_design: no designs to process")
 
                 if design:
                     # Mark as processing
