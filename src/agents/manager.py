@@ -772,8 +772,9 @@ class AgentManager:
             # Strip: everything else aggressively
             _ansi_strip = (
                 r"s/\x1b\][^\x07]*\x07//g; "  # OSC with BEL
-                r"s/\x1b\][^\x1b]*\x1b\\\\//g; "  # OSC with ST
+                r"s/\x1b\][^\x1b]*\x1b\\//g; "  # OSC with ST (single backslash)
                 r"s/\x1b\[[?]?[0-9;]*[^0-9;m]//g; "  # All CSI/DEC except m (color)
+                r"s/\x1b[()][A-Za-z0-9]//g; "  # Charset selection
                 r"s/\x1b[^\x1b\x5b\x5d]//g; "  # Any other bare ESC sequences
                 r"s/\r//g"
             )
@@ -1791,8 +1792,9 @@ class AgentManager:
             # Keep: SGR color sequences (\x1b[...m)
             # Strip: everything else aggressively
             text = re.sub(r'\x1b\][^\x07]*\x07', '', text)  # OSC with BEL
-            text = re.sub(r'\x1b\][^\x1b]*\x1b\\\\', '', text)  # OSC with ST
+            text = re.sub(r'\x1b\][^\x1b]*\x1b\\', '', text)  # OSC with ST (single backslash)
             text = re.sub(r'\x1b\[[?]?[0-9;]*[^0-9;m]', '', text)  # All CSI/DEC except m
+            text = re.sub(r'\x1b[()][A-Za-z0-9]', '', text)  # Charset selection
             text = re.sub(r'\x1b[^\x1b\x5b\x5d]', '', text)  # Any other bare ESC
             
             # Collapse carriage-return redraws: TUI spinners redraw the same

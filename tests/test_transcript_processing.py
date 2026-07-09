@@ -39,7 +39,7 @@ class TestAnsiStripping:
 
         # Same logic as _read_transcript_log
         text = re.sub(r'\x1b\][^\x07]*\x07', '', text)  # OSC with BEL
-        text = re.sub(r'\x1b\][^\x1b]*\x1b\\\\', '', text)  # OSC with ST
+        text = re.sub(r'\x1b\][^\x1b]*\x1b\\', '', text)  # OSC with ST (single backslash)
         text = re.sub(r'\x1b\[[?]?[0-9;]*[^0-9;m]', '', text)  # All CSI/DEC except m
         text = re.sub(r'\x1b[()][A-Za-z0-9]', '', text)  # Charset selection
         text = re.sub(r'\x1b[^\x1b\x5b\x5d]', '', text)  # Any other bare ESC
@@ -193,13 +193,14 @@ class TestSeparatorFiltering:
         lines = content.split('\n')
         filtered = []
         for line in lines:
-            # Strip ANSI codes for pattern matching
-            stripped = re.sub(r'\x1b\[[0-9;]*[a-zA-Z]', '', line).strip()
+            # Strip ANSI codes for pattern matching (including DEC private modes)
+            stripped = re.sub(r'\x1b\[[?]?[0-9;]*[a-zA-Z]', '', line)
+            stripped = re.sub(r'\x1b\][^\x07]*\x07', '', stripped).strip()
             # Filter separators
             if re.match(r'^[─━═▬▪▫\-=\s]{20,}$', stripped):
                 continue
-            # Filter spinner-only lines
-            if re.match(r'^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏Working\.\s]+$', stripped):
+            # Filter spinner-only lines: "⠋ Working..." or just "Working..."
+            if re.match(r'^(?:[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s*)?Working\.{0,3}$', stripped):
                 continue
             filtered.append(line)
         return '\n'.join(filtered)
@@ -252,10 +253,11 @@ class TestEndToEnd:
 
         text = content
 
-        # Strip ANSI
+        # Strip ANSI (same as _read_transcript_log)
         text = re.sub(r'\x1b\][^\x07]*\x07', '', text)
-        text = re.sub(r'\x1b\][^\x1b]*\x1b\\\\', '', text)
+        text = re.sub(r'\x1b\][^\x1b]*\x1b\\', '', text)
         text = re.sub(r'\x1b\[[?]?[0-9;]*[^0-9;m]', '', text)
+        text = re.sub(r'\x1b[()][A-Za-z0-9]', '', text)
         text = re.sub(r'\x1b[^\x1b\x5b\x5d]', '', text)
 
         # Collapse \r
@@ -266,13 +268,14 @@ class TestEndToEnd:
             collapsed.append(line.rstrip())
         text = "\n".join(collapsed)
 
-        # Filter separators and spinners
+        # Filter separators and spinners (same as frontend)
         filtered = []
         for line in text.split("\n"):
-            stripped = re.sub(r'\x1b\[[0-9;]*[a-zA-Z]', '', line).strip()
+            stripped = re.sub(r'\x1b\[[?]?[0-9;]*[a-zA-Z]', '', line)
+            stripped = re.sub(r'\x1b\][^\x07]*\x07', '', stripped).strip()
             if re.match(r'^[─━═▬▪▫\-=\s]{20,}$', stripped):
                 continue
-            if re.match(r'^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏Working\.\s]+$', stripped):
+            if re.match(r'^(?:[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s*)?Working\.{0,3}$', stripped):
                 continue
             filtered.append(line)
         text = "\n".join(filtered)
