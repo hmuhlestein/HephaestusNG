@@ -1,6 +1,6 @@
 import React from 'react';
 import { motion } from 'framer-motion';
-import { CheckCircle2, XCircle, Clock, Play, Pause, Activity, Users } from 'lucide-react';
+import { CheckCircle2, XCircle, Clock, Play, Pause, Activity, Users, AlertTriangle } from 'lucide-react';
 import { formatTime } from '@/pages/Autopilot';
 
 interface PipelineStatusCardProps {
@@ -82,6 +82,13 @@ const PipelineStatusCard: React.FC<PipelineStatusCardProps> = ({ status, project
                 <p className="text-white/60 text-sm mt-1">
                   {running ? 'Waiting for designs...' : 'Add a design to the queue to start'}
                 </p>
+              )}
+              {/* Error/reason when pipeline stopped */}
+              {!running && status?.last_error && (
+                <div className="flex items-center gap-1.5 mt-1.5">
+                  <AlertTriangle className="w-3.5 h-3.5 text-amber-300" />
+                  <p className="text-amber-200 text-xs">{status.last_error}</p>
+                </div>
               )}
             </div>
           </div>
