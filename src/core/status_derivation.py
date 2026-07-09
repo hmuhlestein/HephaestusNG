@@ -151,6 +151,13 @@ def derive_design_status(db: Session, design_id: str, write_back: bool = True) -
         if has_active_wfs:
             return WorkflowStatus.PAUSED
     
+    # Respect pending status — it's an explicit orchestrator state
+    # (waiting for first run or queued for retry). Don't override it
+    # with derived status, or the retry logic in pick_next_design
+    # will fight an infinite loop with status derivation.
+    if design.status == FeatureStatus.PENDING:
+        return FeatureStatus.PENDING
+    
     # Get features for this design
     features = db.query(Feature).filter_by(design_id=design_id).all()
     
