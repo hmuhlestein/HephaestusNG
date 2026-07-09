@@ -768,15 +768,15 @@ class AgentManager:
             # so the frontend can render colors via ansi-to-html. Only
             # strip \r to prevent spinner bloat.
             # Strip terminal control sequences but keep ANSI color codes.
-            # OSC sequences: ]8;; (hyperlinks), ]133; (shell integration), ]0; (title)
-            # DEC private modes: ?2026h, ?25l, etc.
-            # CSI sequences that aren't color: cursor movement, erase, etc.
+            # Keep: SGR color sequences (\x1b[...m)
+            # Strip: all other CSI, OSC, DEC sequences
             _ansi_strip = (
-                r"s/\x1b\][^\x07]*\x07//g; "  # OSC sequences with BEL terminator
-                r"s/\x1b\][^\x1b]*\x1b\\\\//g; "  # OSC sequences with ST terminator
-                r"s/\x1b\[[0-9;]*[HJKsu]//g; "  # CSI: cursor move, erase
+                r"s/\x1b\][^\x07]*\x07//g; "  # OSC with BEL terminator
+                r"s/\x1b\][^\x1b]*\x1b\\\\//g; "  # OSC with ST terminator
+                r"s/\x1b\[[0-9;]*[ABCDEFGHJKSTfsu]//g; "  # CSI (except m=color)
                 r"s/\x1b\[[?][0-9;]*[hln]//g; "  # DEC private modes
                 r"s/\x1b\([AB012]//g; "  # Charset selection
+                r"s/\x1b[\\[\\]()#<>=]//g; "  # Other ESC sequences
                 r"s/\r//g"
             )
             pipe_cmd = f"perl -pe {shlex.quote(_ansi_strip)} >> {shlex.quote(str(transcript_path))}"
@@ -1790,13 +1790,14 @@ class AgentManager:
                     text = "".join(all_lines).rstrip()
             
             # Strip terminal control sequences that pipe-pane might have missed
-            # OSC: ]8;; (hyperlinks), ]133; (shell integration), ]0; (title)
-            # DEC: ?2026h, ?25l, etc.
+            # Keep: SGR color sequences (\x1b[...m)
+            # Strip: all other CSI, OSC, DEC sequences
             text = re.sub(r'\x1b\][^\x07]*\x07', '', text)  # OSC with BEL
             text = re.sub(r'\x1b\][^\x1b]*\x1b\\\\', '', text)  # OSC with ST
             text = re.sub(r'\x1b\[[?][0-9;]*[hln]', '', text)  # DEC private modes
-            text = re.sub(r'\x1b\[[0-9;]*[HJKsu]', '', text)  # CSI cursor/erase
+            text = re.sub(r'\x1b\[[0-9;]*[ABCDEFGHJKSTfsu]', '', text)  # CSI (except m=color)
             text = re.sub(r'\x1b\([AB012]', '', text)  # Charset selection
+            text = re.sub(r'\x1b[\\[\\]()#<>=]', '', text)  # Other ESC sequences
             
             # Collapse carriage-return redraws: TUI spinners redraw the same
             # line using \r. Each redraw becomes a separate line in the log.
