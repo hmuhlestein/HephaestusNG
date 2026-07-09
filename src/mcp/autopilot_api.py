@@ -18,7 +18,12 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel
 
-from src.core.constants import AUTOPILOT_STATE_DIR, CONTEXT_DIR_NAME, DESIGN_CONTEXT_SUBDIR, DESIGN_SUBDIR
+from src.core.constants import (
+    AUTOPILOT_STATE_DIR,
+    CONTEXT_DIR_NAME,
+    DESIGN_CONTEXT_SUBDIR,
+    DESIGN_SUBDIR,
+)
 
 logger = logging.getLogger(__name__)
 

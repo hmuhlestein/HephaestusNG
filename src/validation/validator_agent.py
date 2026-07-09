@@ -95,8 +95,7 @@ async def spawn_validator_agent(
     """
     logger.info(f"Spawning {validation_type} validator agent for {target_id}")
 
-    session = db_manager.get_session()
-    try:
+    with db_manager.session_scope() as session:
         # Create validator agent ID first (needed for prompt)
         validator_agent_id = f"{validation_type}-validator-{uuid.uuid4().hex[:8]}"
 
@@ -229,13 +228,6 @@ async def spawn_validator_agent(
             f"Spawned {validation_type} validator agent {validator_agent_id} for {target_id}"
         )
         return validator_agent_id
-
-    except Exception as e:
-        logger.error(f"Failed to spawn {validation_type} validator agent: {e}")
-        session.rollback()
-        raise
-    finally:
-        session.close()
 
 
 async def spawn_validator_tmux_session(

@@ -4525,8 +4525,7 @@ async def list_agents(
     _require_localhost(request)
     from src.core.database import Workflow
 
-    session = server_state.db_manager.get_session()
-    try:
+    with server_state.db_manager.session_scope() as session:
         query = session.query(Agent)
         if status == "active":
             query = query.filter(Agent.status.notin_(["terminated", "idle"]))
@@ -4713,8 +4712,6 @@ async def list_agents(
             "per_page": per_page,
             "pages": (total + per_page - 1) // per_page,
         }
-    finally:
-        session.close()
 
 
 @app.post("/api/agents/{agent_id}/message")

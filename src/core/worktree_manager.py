@@ -924,12 +924,11 @@ class WorktreeManager:
         2. Merge active branches into main (newest-file-wins on conflict).
         3. Delete branches (force-delete unmergeable ones).
         """
-        session = self.db_manager.get_session()
-        cleaned: List[str] = []
-        merged: List[str] = []
-        failed: List[str] = []
-        worktrees_cleaned = 0
-        try:
+        with self.db_manager.session_scope() as session:
+            cleaned: List[str] = []
+            merged: List[str] = []
+            failed: List[str] = []
+            worktrees_cleaned = 0
             target_branch = self.config.base_branch
             if self.main_repo.active_branch.name != target_branch:
                 try:
@@ -1092,7 +1091,6 @@ class WorktreeManager:
             for branch_name in untracked_branches:
                 _merge_and_delete(branch_name, None)
 
-            session.commit()
             return {
                 "cleaned": len(cleaned),
                 "merged": len(merged),
@@ -1100,8 +1098,6 @@ class WorktreeManager:
                 "worktrees_cleaned": worktrees_cleaned,
                 "branches": cleaned,
             }
-        finally:
-            session.close()
 
 
 # Backward-compatible alias for call sites that still import WorktreeManager.
