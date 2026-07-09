@@ -767,7 +767,18 @@ class AgentManager:
             # (which tmux itself renders to plain text). Keep ANSI codes
             # so the frontend can render colors via ansi-to-html. Only
             # strip \r to prevent spinner bloat.
-            _ansi_strip = r"s/\r//g"
+            # Strip terminal control sequences but keep ANSI color codes.
+            # OSC sequences: ]8;; (hyperlinks), ]133; (shell integration), ]0; (title)
+            # DEC private modes: ?2026h, ?25l, etc.
+            # CSI sequences that aren't color: cursor movement, erase, etc.
+            _ansi_strip = (
+                r"s/\x1b\][^\x07]*\x07//g; "  # OSC sequences with BEL terminator
+                r"s/\x1b\][^\x1b]*\x1b\\\\//g; "  # OSC sequences with ST terminator
+                r"s/\x1b\[[0-9;]*[HJKsu]//g; "  # CSI: cursor move, erase
+                r"s/\x1b\[[?][0-9;]*[hln]//g; "  # DEC private modes
+                r"s/\x1b\([AB012]//g; "  # Charset selection
+                r"s/\r//g"
+            )
             pipe_cmd = f"perl -pe {shlex.quote(_ansi_strip)} >> {shlex.quote(str(transcript_path))}"
             session.attached_window.attached_pane.cmd("pipe-pane", "-o", pipe_cmd)
         except Exception as e:
@@ -1712,6 +1723,7 @@ class AgentManager:
         Returns the last `lines` lines from the transcript, or empty string
         if no transcript is available.
         """
+        import re
         try:
             # Get the working directory from the agent's task workflow
             working_dir = None
@@ -1777,11 +1789,19 @@ class AgentManager:
                     # Terminated agents: return ALL lines
                     text = "".join(all_lines).rstrip()
             
+            # Strip terminal control sequences that pipe-pane might have missed
+            # OSC: ]8;; (hyperlinks), ]133; (shell integration), ]0; (title)
+            # DEC: ?2026h, ?25l, etc.
+            text = re.sub(r'\x1b\][^\x07]*\x07', '', text)  # OSC with BEL
+            text = re.sub(r'\x1b\][^\x1b]*\x1b\\\\', '', text)  # OSC with ST
+            text = re.sub(r'\x1b\[[?][0-9;]*[hln]', '', text)  # DEC private modes
+            text = re.sub(r'\x1b\[[0-9;]*[HJKsu]', '', text)  # CSI cursor/erase
+            text = re.sub(r'\x1b\([AB012]', '', text)  # Charset selection
+            
             # Collapse carriage-return redraws: TUI spinners redraw the same
             # line using \r. Each redraw becomes a separate line in the log.
             # First normalize: treat \r without \n as line separators, then
             # keep only the last state of each line.
-            import re
             # Replace any \r not followed by \n with \n (treat as line break)
             text = re.sub(r'\r(?!\n)', '\n', text)
             # Now collapse: for each line segment separated by \n, if there
