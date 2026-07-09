@@ -58,7 +58,20 @@ def derive_feature_status(db: Session, feature_id: str, write_back: bool = True)
     # Respect skipped status
     if feature.status == FeatureStatus.SKIPPED:
         return FeatureStatus.SKIPPED
-    
+
+    # A feature with no workflow yet has, by definition, no tasks of its own
+    # -- must return early instead of falling through to the query below.
+    # Task.workflow_id == feature.workflow_id becomes Task.workflow_id IS
+    # NULL when feature.workflow_id is None, which matches every OTHER
+    # task in the system with a null workflow_id (e.g. stray SDK/API test
+    # tasks created without one) rather than "no tasks for this feature".
+    # Observed live: 4 leftover test tasks with workflow_id IS NULL and
+    # status="failed" made every not-yet-started feature (workflow_id still
+    # None) derive -- and self-heal write back -- status "failed" before
+    # any of them had ever actually run.
+    if not feature.workflow_id:
+        return feature.status
+
     # Get all non-diagnostic tasks for this feature's workflow
     tasks = (
         db.query(Task)
