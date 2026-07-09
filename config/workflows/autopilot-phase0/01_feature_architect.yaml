@@ -36,7 +36,18 @@ description: |
   - Technology requirements
   - Any dependencies or constraints
 
-  ### Step 2: Decompose into Features
+  ### Step 2: Explore the Existing Codebase
+  Before decomposing, look at what's actually there:
+  - List the directory structure (ls, find) and read key entry points (package.json,
+    requirements.txt, main entry files, config)
+  - Identify what's already implemented vs. what the design still requires
+  - Note existing patterns, frameworks, and conventions the features should follow
+
+  This determines each feature's real scope: existing functionality should be marked
+  already-done rather than re-planned as new work, and file ownership should map onto
+  the project's actual layout, not an assumed one.
+
+  ### Step 3: Decompose into Features
   Break the design into discrete features — aim for around 5 as a rough target, but let the
   design's actual structure decide the count. For simple designs, a single feature is fine. For
   complex designs, use as many features as the natural functional boundaries call for; don't
@@ -48,7 +59,7 @@ description: |
   - Have minimal dependencies on other features
   - Be independently testable
 
-  ### Step 3: Create features.json
+  ### Step 4: Create features.json
   Write `.hephaestus/features.json` with this schema:
 
   ```json
@@ -77,7 +88,7 @@ description: |
   - `depends_on`: List of feature ids this depends on (empty array if none)
   - `execution`: "parallel" if it can run alongside other features, "sequential" if it must wait
 
-  ### Step 4: Create Scope Documents
+  ### Step 5: Create Scope Documents
   For EACH feature, create `.hephaestus/features/<id>/scope.md` with:
 
   ```markdown
@@ -99,7 +110,7 @@ description: |
   <list of 3-5 acceptance criteria for this feature>
   ```
 
-  ### Step 5: Validate Your Output
+  ### Step 6: Validate Your Output
   Before marking done, verify:
   1. features.json is valid JSON
   2. All feature ids are unique
@@ -107,7 +118,7 @@ description: |
   4. No file paths overlap between features
   5. Each feature has a scope.md file
 
-  ### Step 6: Mark Done
+  ### Step 7: Mark Done
   Mark your task as done with a summary of the features created.
 
   ## Example
