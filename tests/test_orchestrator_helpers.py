@@ -851,6 +851,17 @@ class TestRetryFailedTasks:
     def test_retries_failed_task_and_dispatches_agent(
         self, mock_create_agent, orch_db_env, tmp_path
     ):
+        """Regression: create_agent_for_task_direct does NOT update the
+        task row itself (same contract _create_phase_task's callers rely
+        on) -- a version of this that only reset status to "pending" and
+        never wrote back assigned_agent_id/status="in_progress" left a
+        successfully retried task "pending", pointing at the OLD dead
+        agent from the failed attempt, completely disconnected from the
+        real, live agent actually now working on it. Observed live: two
+        fresh agents got created and started working while the task
+        itself sat "pending" forever, invisible to every other self-heal
+        check (all of which key off the task's own status/assigned_agent_id,
+        not the agent's)."""
         from src.autopilot.orchestrator import OrchestratorLogger, _retry_failed_tasks
         from src.core.database import Task
 
@@ -862,7 +873,8 @@ class TestRetryFailedTasks:
         assert recovered == ["retried task task-1"]
         with orch_db_env.session_scope() as session:
             task = session.query(Task).filter_by(id="task-1").first()
-            assert task.status == "pending"
+            assert task.status == "in_progress"
+            assert task.assigned_agent_id == "new-agent"
             assert task.retry_count == 1
 
     @patch("src.autopilot.orchestrator.create_agent_for_task_direct")

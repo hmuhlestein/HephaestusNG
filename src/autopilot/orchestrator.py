@@ -990,6 +990,33 @@ def _retry_failed_tasks(workflow_id: str, logger: OrchestratorLogger) -> List[st
             agent_id = agent_data.get("agent_id", "unknown")
             logger.info(f"  Created agent {agent_id[:8]} for retried task")
             recovered.append(f"retried task {task_id[:8]}")
+            # create_agent_for_task_direct does NOT update the task row
+            # itself (same contract _create_phase_task's callers already
+            # rely on -- it just creates the agent and returns its id).
+            # Without this, a successful retry left the task "pending"
+            # with assigned_agent_id still pointing at the OLD, now-dead
+            # agent from the failed attempt, completely disconnected from
+            # the real, live agent now actually working on it -- neither
+            # _clean_stale_assigned_tasks (only watches "assigned"/
+            # "in_progress") nor anything else could ever find it again,
+            # and the task looked permanently stuck even while an agent
+            # was actively burning tokens on it in the background. A
+            # separate try -- the agent is already live at this point, so
+            # a failure here must not be reported as a failed retry (the
+            # outer except below assumes agent creation itself failed).
+            try:
+                with get_db() as _db4:
+                    _t2 = _db4.query(Task).filter_by(id=task_id).first()
+                    if _t2:
+                        _t2.assigned_agent_id = agent_id
+                        _t2.status = "in_progress"
+                        _t2.started_at = datetime.utcnow()
+                        _db4.commit()
+            except Exception as e3:
+                logger.error(
+                    f"  Agent {agent_id[:8]} created for task {task_id[:8]} but "
+                    f"failed to link it to the task row: {e3}"
+                )
         except Exception as e:
             # Back to "failed" (not left "pending") so a later retry pass
             # -- this function, or _maybe_retry_failed_tasks -- gets
@@ -998,11 +1025,8 @@ def _retry_failed_tasks(workflow_id: str, logger: OrchestratorLogger) -> List[st
             # for an already-existing pending task with no agent.
             logger.error(f"  Failed to retry task {task_id[:8]}: {e}")
             try:
-                from src.core.database import Task as _Task
-                from src.core.database import get_db as _get_db3
-
-                with _get_db3() as _db3:
-                    _t = _db3.query(_Task).filter_by(id=task_id).first()
+                with get_db() as _db3:
+                    _t = _db3.query(Task).filter_by(id=task_id).first()
                     if _t and _t.status == "pending":
                         _t.status = "failed"
                         _t.failure_reason = f"Retry agent creation failed: {e}"
