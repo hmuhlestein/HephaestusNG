@@ -1638,7 +1638,7 @@ class AgentManager:
                     session.query(AgentLog)
                     .filter_by(agent_id=agent_id)
                     .order_by(AgentLog.timestamp.desc())
-                    .limit(10)
+                    .limit(100)
                     .all()
                 )
                 if recent_logs:
@@ -1650,10 +1650,10 @@ class AgentManager:
                                 "trajectory_summary", ""
                             )
                             if summary:
-                                msg = f"{msg}: {summary[:100]}"
+                                msg = f"{msg}: {summary[:200]}"
                         if msg:
                             log_lines.append(f"[{log.log_type}] {msg}")
-                    return "Agent terminated. Last logs:\n" + "\n".join(log_lines[-10:])
+                    return "\n".join(log_lines)
                 return "Agent terminated - no output was captured"
 
             # For live agents, do a one-time load from transcript log for full
