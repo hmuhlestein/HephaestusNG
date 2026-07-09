@@ -208,12 +208,20 @@ const RealTimeAgentOutput: React.FC<RealTimeAgentOutputProps> = ({
   // TUI spinners redraw lines using \r — keep only the final state.
   const collapsedOutput = useMemo(() => {
     if (!filteredOutput) return '';
-    return filteredOutput.split('\n').map(line => {
+    // First normalize: replace standalone \r with \n
+    const normalized = filteredOutput.replace(/\r(?!\n)/g, '\n');
+    // Then collapse: for each line, if it has \r-separated parts, keep last
+    const lines = normalized.split('\n');
+    const collapsed: string[] = [];
+    for (const line of lines) {
       if (line.includes('\r')) {
-        return line.split('\r').pop() || '';
+        const last = line.split('\r').pop() || '';
+        if (last.trim()) collapsed.push(last);
+      } else {
+        if (line.trim()) collapsed.push(line);
       }
-      return line;
-    }).join('\n');
+    }
+    return collapsed.join('\n');
   }, [filteredOutput]);
 
   // Convert ANSI codes to HTML

@@ -1792,13 +1792,20 @@ class AgentManager:
             
             # Collapse carriage-return redraws: TUI spinners redraw the same
             # line using \r. Each redraw becomes a separate line in the log.
-            # Keep only the last state of each line.
+            # First normalize: treat \r without \n as line separators, then
+            # keep only the last state of each line.
+            import re
+            # Replace any \r not followed by \n with \n (treat as line break)
+            text = re.sub(r'\r(?!\n)', '\n', text)
+            # Now collapse: for each line segment separated by \n, if there
+            # are multiple \r-separated parts, keep only the last one
             collapsed = []
             for line in text.split("\n"):
                 if "\r" in line:
-                    # Take the last segment after the last \r
                     line = line.rsplit("\r", 1)[-1]
-                collapsed.append(line)
+                line = line.rstrip()
+                if line:  # Skip empty lines from spinner noise
+                    collapsed.append(line)
             text = "\n".join(collapsed)
             
             # Strip TUI chrome (prompts, spinners) that ANSI stripping doesn't catch
