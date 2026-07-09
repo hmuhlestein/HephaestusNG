@@ -262,6 +262,53 @@ class TestDeriveFeatureStatus:
             feature = session.query(Feature).filter_by(id="feat-1").first()
             assert feature.status == "completed"
 
+    def test_pending_feature_with_no_workflow_ignores_unrelated_null_workflow_tasks(
+        self, db_manager
+    ):
+        """Regression: Task.workflow_id == feature.workflow_id becomes
+        Task.workflow_id IS NULL when a feature hasn't had its own
+        workflow launched yet (workflow_id is None) -- that matches every
+        OTHER task in the system with a null workflow_id, not "no tasks
+        for this feature". Observed live: leftover SDK/API test tasks
+        created without a workflow_id, all status="failed", made every
+        not-yet-started feature derive (and self-heal write back) status
+        "failed" before it had ever actually run -- a freshly decomposed
+        design's features all showed "failed" immediately, with no
+        workflow, no error, no started_at."""
+        with db_manager.session_scope() as session:
+            _create_design(session)
+
+            feature = Feature(
+                id="feat-1",
+                design_id="design-1",
+                feature_key="test-feature",
+                name="Test Feature",
+                scope="Test scope",
+                workflow_id=None,
+                status="pending",
+            )
+            session.add(feature)
+
+            # Unrelated stray task with no workflow_id -- must not be
+            # attributed to this feature.
+            session.add(
+                Task(
+                    id="stray-task",
+                    workflow_id=None,
+                    raw_description="Test task without a workflow",
+                    done_definition="Done",
+                    status="failed",
+                )
+            )
+
+        with db_manager.session_scope() as session:
+            result = derive_feature_status(session, "feat-1", write_back=True)
+
+        assert result == "pending"
+        with db_manager.session_scope() as session:
+            feature = session.query(Feature).filter_by(id="feat-1").first()
+            assert feature.status == "pending"
+
 
 class TestDeriveWorkflowStatus:
     """Tests for derive_workflow_status function."""
