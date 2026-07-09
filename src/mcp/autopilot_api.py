@@ -355,18 +355,36 @@ async def get_pipeline_status(
     run_dir = _get_latest_run_dir()
     running = service_status.get("running", False)
 
-    # When project_id is provided, check if THIS project has active workflows
-    # (the service.running flag is global, not per-project)
+    # When project_id is provided, check if THIS project has active
+    # workflows OR active agents (the service.running flag is global,
+    # not per-project).
     if project_id:
         try:
-            from src.core.database import Workflow, get_db
+            from src.core.database import Agent, Task, Workflow, get_db
             with get_db() as db:
                 has_active = db.query(Workflow).filter(
                     Workflow.project_id == project_id,
                     Workflow.status.in_(["active", "running"])
                 ).first()
-                # Override running flag for this specific project
-                running = has_active is not None
+                if has_active:
+                    running = True
+                else:
+                    # Also check: are any agents working on tasks in this
+                    # project's workflows? A workflow can be "failed" while
+                    # an agent is still actively working on it.
+                    project_wf_ids = [
+                        w.id for w in db.query(Workflow)
+                        .filter(Workflow.project_id == project_id)
+                        .all()
+                    ]
+                    if project_wf_ids:
+                        active_agent = db.query(Agent).join(
+                            Task, Agent.current_task_id == Task.id
+                        ).filter(
+                            Task.workflow_id.in_(project_wf_ids),
+                            Agent.status.in_(["working", "starting", "idle"])
+                        ).first()
+                        running = active_agent is not None
         except Exception:
             pass
     elif not running:
