@@ -1,1 +1,9 @@
-{}
+{
+  "name": "hephaestus-ng",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Multi-agent autopilot pipeline",
+  "dependencies": {
+    "tokenjuice": "^0.8.1"
+  }
+}
