@@ -1814,6 +1814,8 @@ class AgentManager:
             mcp_status_re = re.compile(r'^\s*MCP:\s*\d+/\d+\s*servers')
             prompt_only_re = re.compile(r'^\s*\$\s*$|^\s*%\s*$|^\s*:\s*$')
             elapsed_re = re.compile(r'^\s*Elapsed \d+\.\d+s\s*$')
+            # Filter progress dots (npm install, etc.)
+            dots_only_re = re.compile(r'^\.{1,20}\s*$')
             orphan_ansi_re = re.compile(r';\d+(?:;\d+)*m')
             filtered_lines = []
             for line in text.split('\n'):
@@ -1828,6 +1830,8 @@ class AgentManager:
                 if mcp_status_re.match(clean) or prompt_only_re.match(clean):
                     continue
                 if elapsed_re.match(clean):
+                    continue
+                if dots_only_re.match(clean):
                     continue
                 if not clean and not stripped:
                     continue
