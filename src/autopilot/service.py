@@ -138,6 +138,30 @@ class AutopilotService:
                     proj.is_active = True
                     db.commit()
                     logger.info(f"Activated project '{proj.name}' for pipeline")
+
+                # Clear the deliberate-pause marker /autopilot/stop sets
+                # (Workflow.paused_by="user") for this project's workflows --
+                # otherwise every self-heal/retry path that correctly skips
+                # user-paused workflows (see _try_auto_resume_paused_workflow)
+                # would also skip them here, leaving a workflow permanently
+                # stuck even after the user explicitly hits play again.
+                # Mirrors resume_feature's exact resume behavior, one level
+                # up at the whole-pipeline "start" action.
+                from src.core.database import Workflow
+
+                resumed = (
+                    db.query(Workflow)
+                    .filter(
+                        Workflow.project_id == proj.id,
+                        Workflow.paused_by == "user",
+                    )
+                    .update({Workflow.status: "active", Workflow.paused_by: None})
+                )
+                if resumed:
+                    db.commit()
+                    logger.info(
+                        f"Resumed {resumed} user-paused workflow(s) for '{proj.name}'"
+                    )
         except Exception as e:
             logger.warning(f"Could not activate project: {e}")
 

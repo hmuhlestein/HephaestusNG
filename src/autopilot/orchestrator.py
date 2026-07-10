@@ -3505,10 +3505,30 @@ def _create_phase_task(
                 .first()
             )
             if existing:
-                logger.info(
-                    f"[PHASE-TASK] {phase_name} already has active task {existing.id[:8]}, skipping"
-                )
-                return False
+                # A "pending" task with no assigned_agent_id was never
+                # actually dispatched (or its agent was terminated after the
+                # fact, e.g. manual cleanup of a stuck agent) -- it isn't
+                # blocking anything, it's just an orphan. Treating it the
+                # same as a genuinely active task here means nothing ever
+                # replaces it (observed live: an architectural_review task
+                # sat "pending" with no agent for hours -- every self-heal
+                # pass saw it and silently skipped, since its status string
+                # alone made it look active). Clear it and fall through to
+                # create a fresh task instead of returning early.
+                if existing.status == "pending" and not existing.assigned_agent_id:
+                    logger.info(
+                        f"[PHASE-TASK] {phase_name} has an orphaned pending task "
+                        f"{existing.id[:8]} (never dispatched) -- marking failed "
+                        "and creating a fresh one"
+                    )
+                    existing.status = "failed"
+                    existing.failure_reason = "Orphaned: never dispatched to an agent"
+                    db.commit()
+                else:
+                    logger.info(
+                        f"[PHASE-TASK] {phase_name} already has active task {existing.id[:8]}, skipping"
+                    )
+                    return False
 
             # Check for active agent on this phase
             active_agent = (

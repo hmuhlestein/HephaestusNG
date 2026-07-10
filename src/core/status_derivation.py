@@ -90,18 +90,20 @@ def derive_feature_status(db: Session, feature_id: str, write_back: bool = True)
     task_statuses = {t.status for t in tasks}
 
     # "All existing tasks are done" isn't the same as "the feature is done"
-    # -- a workflow that got marked failed (e.g. abandoned before later
-    # phases ever got a task) can still have every task it DID create sitting
+    # -- a workflow that got marked failed, or paused mid-pipeline (e.g. a
+    # scope_review<->product_requirements goto loop that never reached
+    # architecture_design), can still have every task it DID create sitting
     # at "done". Checking only task_statuses == {DONE} ignores that entirely
-    # (observed live: a feature whose workflow failed after only its first
-    # of twelve phases ran derived "completed", purely because that one
-    # task happened to succeed). Mirrors derive_design_status's existing
-    # has_failed_wf check one level up.
+    # (observed live: a feature whose workflow paused after only 2 of 12
+    # phases ran derived "completed", purely because those phases' tasks
+    # happened to succeed -- which then made the feature pipeline treat it
+    # as finished and never resume it). Mirrors derive_design_status's
+    # existing has_failed_wf check one level up.
     from src.core.database import Workflow
     wf = db.query(Workflow).filter_by(id=feature.workflow_id).first()
-    workflow_failed = bool(wf and wf.status == "failed")
+    workflow_blocks_completion = bool(wf and wf.status in ("failed", "paused"))
 
-    if task_statuses == {TaskStatus.DONE} and workflow_failed:
+    if task_statuses == {TaskStatus.DONE} and workflow_blocks_completion:
         # Keep active so retry/resume logic can pick it back up, instead of
         # the UI showing a falsely "done" feature.
         derived = FeatureStatus.ACTIVE
