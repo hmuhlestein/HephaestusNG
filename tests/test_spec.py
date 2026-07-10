@@ -11,6 +11,8 @@ from src.autopilot.spec import (
     build_phase_output,
     load_spec,
     read_result,
+    score_adversarial_review,
+    score_architectural_review,
     score_product_validation,
     score_qa,
 )
@@ -346,11 +348,93 @@ class TestBuildPhaseOutput:
         result = build_phase_output("development", tmp_path, spec={"custom": True})
         assert result == {}
 
+    def test_adversarial_review_no_result(self, tmp_path):
+        result = build_phase_output("adversarial_review", tmp_path)
+        assert result["score"] == 0.4  # no result → conservative fallback
+
+    def test_adversarial_review_with_blockers(self, tmp_path):
+        docs = tmp_path / "docs"
+        docs.mkdir()
+        (docs / "adversarial_review_result.json").write_text(
+            json.dumps({"blocker_count": 6, "warning_count": 6, "nit_count": 5})
+        )
+        result = build_phase_output("adversarial_review", tmp_path)
+        assert result["score"] < 0.6
+
+    def test_architectural_review_with_blockers(self, tmp_path):
+        docs = tmp_path / "docs"
+        docs.mkdir()
+        (docs / "architectural_review_result.json").write_text(
+            json.dumps({"blocker_count": 2, "fix_count": 0, "defer_count": 0})
+        )
+        result = build_phase_output("architectural_review", tmp_path)
+        assert result["score"] < 0.6
+
+
+class TestScoreAdversarialReview:
+    def test_none_result(self):
+        score, meta = score_adversarial_review(None)
+        assert score == 0.4
+        assert meta["result_missing"] is True
+
+    def test_blocker_routes_to_development(self):
+        score, meta = score_adversarial_review(
+            {"blocker_count": 6, "warning_count": 6, "nit_count": 5}
+        )
+        assert score < 0.6
+        assert meta["band"] == "development"
+        assert meta["blocker_count"] == 6
+
+    def test_warnings_only_still_passes(self):
+        score, meta = score_adversarial_review(
+            {"blocker_count": 0, "warning_count": 3, "nit_count": 0}
+        )
+        assert score >= 0.6
+        assert meta["band"] == "pass"
+
+    def test_clean(self):
+        score, meta = score_adversarial_review(
+            {"blocker_count": 0, "warning_count": 0, "nit_count": 0}
+        )
+        assert score >= 0.6
+        assert meta["band"] == "pass"
+
+
+class TestScoreArchitecturalReview:
+    def test_none_result(self):
+        score, meta = score_architectural_review(None)
+        assert score == 0.4
+        assert meta["result_missing"] is True
+
+    def test_blocker_routes_to_development(self):
+        score, meta = score_architectural_review(
+            {"blocker_count": 2, "fix_count": 1, "defer_count": 0}
+        )
+        assert score < 0.6
+        assert meta["band"] == "development"
+        assert meta["blocker_count"] == 2
+
+    def test_fix_only_still_passes(self):
+        score, meta = score_architectural_review(
+            {"blocker_count": 0, "fix_count": 2, "defer_count": 0}
+        )
+        assert score >= 0.6
+        assert meta["band"] == "pass"
+
+    def test_clean(self):
+        score, meta = score_architectural_review(
+            {"blocker_count": 0, "fix_count": 0, "defer_count": 0}
+        )
+        assert score >= 0.6
+        assert meta["band"] == "pass"
+
 
 class TestConstants:
     def test_gated_phases(self):
         assert "qa_validation" in GATED_PHASES
         assert "product_validation" in GATED_PHASES
+        assert "architectural_review" in GATED_PHASES
+        assert "adversarial_review" in GATED_PHASES
         assert "development" not in GATED_PHASES
 
     def test_phase_artifacts(self):
