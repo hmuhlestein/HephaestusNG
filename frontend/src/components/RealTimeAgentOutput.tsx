@@ -237,9 +237,11 @@ const RealTimeAgentOutput: React.FC<RealTimeAgentOutputProps> = ({
       // Filter out horizontal separator lines (────────────────────...)
       if (/^[─━═▬▪▫\-=\s]{20,}$/.test(stripped)) return false;
       // Filter out spinner-only lines: "⠋ Working..." or just "Working..."
-      if (/^(?:[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s*)?Working\.{0,3}$/.test(stripped)) return false;
+      if (/^(?:[\s⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]*\s*)?Working\.{0,3}\s*$/.test(stripped)) return false;
       // Filter out "Thinking..." lines
-      if (/^Thinking\.{0,3}$/.test(stripped)) return false;
+      if (/^Thinking\.{0,3}\s*$/.test(stripped)) return false;
+      // Filter out lines that are just a spinner + Working (broader catch)
+      if (/^[\s⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏Working\.]+$/.test(stripped) && stripped.includes('Working')) return false;
       // Filter out TUI chrome: "... (N earlier lines, ctrl+o to expand)"
       if (/^\.\.\. \(\d+ earlier lines/.test(stripped)) return false;
       // Filter out TUI chrome fragments
