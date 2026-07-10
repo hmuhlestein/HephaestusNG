@@ -1852,7 +1852,17 @@ class AgentManager:
                 deduped.append(filtered_lines[i])
                 i += 1
             
-            text = '\n'.join(deduped)
+            # Collapse consecutive empty lines into at most one
+            final_lines = []
+            prev_empty = False
+            for line in deduped:
+                is_empty = not line.strip()
+                if is_empty and prev_empty:
+                    continue  # Skip consecutive empty lines
+                final_lines.append(line)
+                prev_empty = is_empty
+            
+            text = '\n'.join(final_lines)
             
             return text
                     
