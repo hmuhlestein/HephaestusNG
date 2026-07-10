@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   X, FileText, GitBranch, Clock, CheckCircle2, XCircle, AlertTriangle,
-  Loader2, RotateCcw, ChevronDown, ChevronRight, ExternalLink, Play, Pause, Square
+  Loader2, RotateCcw, ExternalLink, Play, Pause, Square
 } from 'lucide-react';
 import { MarkdownRenderer } from '@/utils/markdown';
 import { apiService, api } from '@/services/api';
@@ -26,9 +26,11 @@ const STATUS_CONFIG: Record<string, { color: string; icon: React.ReactNode; labe
   paused: { color: 'bg-yellow-100 text-yellow-700', icon: <AlertTriangle className="w-3.5 h-3.5" />, label: 'Paused' },
 };
 
+type DetailTab = 'overview' | 'docs';
+
 const DesignDetailModal: React.FC<DesignDetailModalProps> = ({ projectId, filename, onClose, onRerun }) => {
   const queryClient = useQueryClient();
-  const [showContent, setShowContent] = useState(false);
+  const [activeTab, setActiveTab] = useState<DetailTab>('overview');
 
   const { data: status, isLoading } = useQuery({
     queryKey: ['design-status', projectId, filename],
@@ -154,8 +156,28 @@ const DesignDetailModal: React.FC<DesignDetailModalProps> = ({ projectId, filena
             </div>
           </div>
 
+          {/* Tab Nav */}
+          <div className="px-6 border-b flex gap-1">
+            {([
+              { id: 'overview', label: 'Overview' },
+              { id: 'docs', label: 'Docs' },
+            ] as { id: DetailTab; label: string }[]).map(({ id, label }) => (
+              <button
+                key={id}
+                onClick={() => setActiveTab(id)}
+                className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${
+                  activeTab === id
+                    ? 'border-violet-500 text-violet-600'
+                    : 'border-transparent text-gray-500 hover:text-gray-700'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+
           {/* Content */}
-          <div className="overflow-y-auto max-h-[calc(85vh-140px)]">
+          <div className="overflow-y-auto max-h-[calc(85vh-180px)]">
             {isLoading ? (
               <div className="flex items-center justify-center h-40">
                 <Loader2 className="w-6 h-6 animate-spin text-violet-500" />
@@ -165,7 +187,7 @@ const DesignDetailModal: React.FC<DesignDetailModalProps> = ({ projectId, filena
                 <XCircle className="w-8 h-8 mb-2" />
                 <p className="text-sm">Failed to load design status</p>
               </div>
-            ) : (
+            ) : activeTab === 'overview' ? (
               <div className="p-6 space-y-6">
                 {/* Warning — completed but with issues */}
                 {status?.warning && (
@@ -254,22 +276,16 @@ const DesignDetailModal: React.FC<DesignDetailModalProps> = ({ projectId, filena
                     </div>
                   </div>
                 )}
-
-                {/* Design Content (collapsible) */}
-                {status?.content && (
-                  <div>
-                    <button
-                      onClick={() => setShowContent(!showContent)}
-                      className="flex items-center gap-2 text-sm font-semibold text-gray-700 hover:text-violet-600 transition-colors"
-                    >
-                      {showContent ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
-                      Design Document
-                    </button>
-                    {showContent && (
-                      <div className="mt-2 p-4 bg-gray-50 rounded-lg max-h-96 overflow-y-auto prose prose-sm prose-violet max-w-none">
-                        <MarkdownRenderer content={status.content} />
-                      </div>
-                    )}
+              </div>
+            ) : (
+              <div className="p-6">
+                {status?.content ? (
+                  <div className="prose prose-sm prose-violet max-w-none bg-gray-50 rounded-xl p-4 border">
+                    <MarkdownRenderer content={status.content} />
+                  </div>
+                ) : (
+                  <div className="flex items-center justify-center h-40 text-gray-400 text-sm">
+                    No design document content available
                   </div>
                 )}
               </div>
