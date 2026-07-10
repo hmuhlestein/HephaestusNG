@@ -57,7 +57,7 @@ const RealTimeAgentOutput: React.FC<RealTimeAgentOutputProps> = ({
   const ansiConverter = useMemo(() => new AnsiToHtml({
     fg: '#d4d4d4',
     bg: '#1e1e1e',
-    newline: false,
+    newline: true,
     escapeXML: true,
     stream: false,
     colors: {
@@ -562,10 +562,6 @@ const RealTimeAgentOutput: React.FC<RealTimeAgentOutputProps> = ({
           line-height: 1.0 !important;
           padding: 0 !important;
           margin: 0 !important;
-          min-height: 100%;
-        }
-        .ansi-output br {
-          display: none;
         }
       `}</style>
     </AnimatePresence>
