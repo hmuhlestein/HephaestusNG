@@ -731,6 +731,10 @@ class PhaseManager:
             "target_phase": phase.name,
             "target_phase_id": phase.id,
             "should_continue": True,
+            # Same reason as _handle_evaluation_goto's "reason"/"metadata" --
+            # threaded through to the retried task's description.
+            "reason": evaluation.reason,
+            "metadata": evaluation.metadata,
         }
 
     def _handle_evaluation_goto(
@@ -771,6 +775,15 @@ class PhaseManager:
                 "target_phase": target_phase.name,
                 "target_phase_id": target_phase.id,
                 "should_continue": True,
+                # Threaded through to the new task's description by
+                # _create_phase_task -- without this, a goto triggered by a
+                # gated phase finding real issues (e.g. adversarial_review's
+                # BLOCKER count) produced a task indistinguishable from a
+                # fresh "implement per architecture" task, with zero
+                # reference to what was actually flagged. The agent had to
+                # independently rediscover the problem instead of being told.
+                "reason": evaluation.reason,
+                "metadata": evaluation.metadata,
             }
         else:
             logger.warning(f"Target phase not found: {evaluation.target_phase}")

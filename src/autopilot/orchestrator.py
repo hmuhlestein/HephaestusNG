@@ -3439,8 +3439,26 @@ def _fire_phase_transition(
             # Workflow complete or no next phase
             return True
 
+        # For goto/retry, prefer the gate's own specific finding (e.g.
+        # "6 BLOCKER(s) found — returning to development" from
+        # score_adversarial_review) over the static workflow.yaml condition
+        # reason ("Runtime failure modes found, returning to development to
+        # fix") -- the gate's reason has real counts, the static one is
+        # boilerplate repeated for every gate on that phase regardless of
+        # what actually triggered it.
+        feedback = None
+        if action in ("goto", "retry"):
+            metadata = result.get("metadata") or {}
+            feedback = (
+                metadata.get("spec_gate", {}).get("reason")
+                or result.get("reason")
+                or None
+            )
+
         # Create task and agent for the next phase
-        return _create_phase_task(workflow_id, target_phase_id, target_phase_name, action, logger)
+        return _create_phase_task(
+            workflow_id, target_phase_id, target_phase_name, action, logger, feedback=feedback
+        )
 
     except Exception as e:
         logger.warning(f"[PHASE-ADVANCE] Transition error: {e}")
@@ -3499,6 +3517,7 @@ def _create_phase_task(
     phase_name: str,
     action: str,
     logger: OrchestratorLogger,
+    feedback: Optional[str] = None,
 ) -> bool:
     """Create a task and agent for a phase via API."""
     try:
@@ -3620,10 +3639,19 @@ def _create_phase_task(
 
             # Create task
             task_id = str(uuid.uuid4())
+            base_description = f"Execute {phase.name}: {phase.description}"
+            description = (
+                f"{base_description}\n\n"
+                f"WHY YOU'RE HERE: {feedback}\n"
+                "Address this specifically -- this is not a fresh implementation "
+                "pass, it's a return from review with a concrete issue to fix."
+                if feedback
+                else base_description
+            )
             task = Task(
                 id=task_id,
-                raw_description=f"Execute {phase.name}: {phase.description}",
-                enriched_description=f"Execute {phase.name}: {phase.description}",
+                raw_description=description,
+                enriched_description=description,
                 done_definition=(
                     " AND ".join(phase.done_definitions)
                     if phase.done_definitions
