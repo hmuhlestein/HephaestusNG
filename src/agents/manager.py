@@ -1818,6 +1818,12 @@ class AgentManager:
             thinking_re = re.compile(r'^\s*Thinking\.{0,3}\s*$')
             # Filter TUI chrome: "... (N more/earlier lines, ...)"
             tui_chrome_re = re.compile(r'^\s*\.\.\. \(\d+ (?:more|earlier) lines')
+            # Filter status bar lines: "↑...↓...R...CH...$..."
+            status_bar_re = re.compile(r'^\s*↑\d+.*↓\d+.*R\d+.*CH\d+.*\$\d+')
+            # Filter MCP status lines
+            mcp_status_re = re.compile(r'^\s*MCP:\s*\d+/\d+\s*servers')
+            # Filter empty prompt lines (just a $ or %)
+            prompt_only_re = re.compile(r'^\s*\$\s*$|^\s*%\s*$')
             filtered_lines = []
             for line in text.split('\n'):
                 stripped = line.strip()
@@ -1826,7 +1832,12 @@ class AgentManager:
                 clean = re.sub(r'\x1b\][^\x07]*\x07', '', clean).strip()
                 if spinner_re.match(clean) or thinking_re.match(clean):
                     continue
-                if tui_chrome_re.match(clean):
+                if tui_chrome_re.match(clean) or status_bar_re.match(clean):
+                    continue
+                if mcp_status_re.match(clean) or prompt_only_re.match(clean):
+                    continue
+                # Filter lines that are just ANSI reset codes (empty after stripping)
+                if not clean and not stripped:
                     continue
                 filtered_lines.append(line)
             
