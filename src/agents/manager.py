@@ -1815,7 +1815,7 @@ class AgentManager:
                     capture_output=True,
                     text=True,
                     timeout=5,
-                    cwd=str(Path(__file__).parent.parent.parent),
+                    cwd=str(Path(__file__).parent.parent.parent / "frontend"),
                 )
                 if result.returncode == 0 and result.stdout.strip():
                     text = result.stdout
