@@ -458,9 +458,29 @@ class TestEdgeCases:
 
 
 class TestPickNextDesign:
-    """Tests for pick_next_design function."""
+    """Tests for pick_next_design function.
 
-    def test_picks_first_design(self, tmp_path):
+    Regression: pick_next_design's DB-first path calls the module-level
+    get_db(), whose default (no HEPHAESTUS_TEST_DB override) is the
+    *relative* path "hephaestus.db" -- which resolves against the real repo
+    root's live production database whenever pytest runs from there, not an
+    isolated fixture. Without the isolation fixture below, these tests only
+    passed by accident: hitting a DB exception (falls through to the file-
+    scan path the assertions actually depend on) when no override happened
+    to be set, but silently reading -- and in pick_next_design's later
+    branches, potentially *writing* (design.status = "processing", etc.) --
+    real production rows whenever a real AutopilotProject/AutopilotDesign
+    happened to match. `isolated_test_db` forces get_db() at a guaranteed-
+    empty tmp_path DB every time, making the file-scan fallback deterministic
+    instead of dependent on ambient state left by other tests or, worse, the
+    live pipeline running in the same repo directory.
+    """
+
+    @pytest.fixture
+    def isolated_test_db(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("HEPHAESTUS_TEST_DB", str(tmp_path / "isolated_pick_next.db"))
+
+    def test_picks_first_design(self, tmp_path, isolated_test_db):
         """Should pick the first design in queue."""
         # Create design files
         (tmp_path / "001_design_a.md").write_text("# Design A")
@@ -470,7 +490,7 @@ class TestPickNextDesign:
         assert designs is not None
         assert "design a" in designs.name.lower() or "001" in designs.name
 
-    def test_skips_processed_designs(self, tmp_path):
+    def test_skips_processed_designs(self, tmp_path, isolated_test_db):
         """Should skip designs that have been processed."""
         (tmp_path / "001_design_a.md").write_text("# Design A")
         (tmp_path / "002_design_b.md").write_text("# Design B")
@@ -484,7 +504,7 @@ class TestPickNextDesign:
         assert designs is not None
         assert "design b" in designs.name.lower() or "002" in designs.name
 
-    def test_returns_none_when_empty(self, tmp_path):
+    def test_returns_none_when_empty(self, tmp_path, isolated_test_db):
         """Should return None when queue is empty."""
         designs = pick_next_design(tmp_path, set(), MockLogger())
         assert designs is None

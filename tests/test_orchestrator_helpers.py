@@ -438,14 +438,31 @@ class TestScanDesignQueue:
 
 
 class TestPickNextDesign:
-    def test_returns_none_empty(self, tmp_path):
+    """Regression: pick_next_design's DB-first path uses get_db(), whose
+    default (no HEPHAESTUS_TEST_DB) is the *relative* path "hephaestus.db"
+    -- the real repo-root production database when pytest runs from there,
+    not an isolated fixture. These tests only passed by accident: relying
+    on a DB exception (no tables yet) to fall through to the file-scan path
+    the assertions actually depend on. orch_db_env (used elsewhere in this
+    file) doesn't fit here -- it calls create_tables(), which makes
+    pick_next_design cleanly find "no active project" and hard-return None
+    without ever reaching the file-scan fallback, breaking test_picks_first's
+    own expectation. This fixture points at a guaranteed-uninitialized
+    tmp_path DB instead, so the exception path fires deterministically.
+    """
+
+    @pytest.fixture
+    def isolated_test_db(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("HEPHAESTUS_TEST_DB", str(tmp_path / "isolated_pick_next.db"))
+
+    def test_returns_none_empty(self, tmp_path, isolated_test_db):
         from src.autopilot.orchestrator import OrchestratorLogger, pick_next_design
 
         logger = OrchestratorLogger(tmp_path)
         result = pick_next_design(tmp_path, set(), logger)
         assert result is None
 
-    def test_picks_first(self, tmp_path):
+    def test_picks_first(self, tmp_path, isolated_test_db):
         from src.autopilot.orchestrator import OrchestratorLogger, pick_next_design
 
         logger = OrchestratorLogger(tmp_path)
