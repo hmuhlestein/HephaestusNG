@@ -99,15 +99,22 @@ class TestResolveExecutionOrder:
         assert len(result) == 0
 
     def test_mixed_parallel_sequential(self, mock_logger):
-        """Test mix of parallel and sequential features."""
+        """Test mix of parallel and sequential features.
+
+        Ordering within a dependency layer follows the architect's original
+        features.json order -- a "sequential" feature gets its own group in
+        place rather than every "parallel" feature in the layer running
+        first regardless of list position. Here b (sequential) sits between
+        a and c (both parallel), so it splits them into separate groups:
+        [a], [b], [c] -- not [a, c] batched together with [b] pushed last.
+        """
         features = [
             {"id": "a", "name": "A", "depends_on": [], "execution": "parallel"},
             {"id": "b", "name": "B", "depends_on": [], "execution": "sequential"},
             {"id": "c", "name": "C", "depends_on": [], "execution": "parallel"},
         ]
         result = _resolve_execution_order(features, mock_logger)
-        # Parallel features (a, c) in one group, sequential (b) in its own
-        assert len(result) == 2
-        parallel_ids = {f["id"] for f in result[0]}
-        assert parallel_ids == {"a", "c"}
+        assert len(result) == 3
+        assert result[0][0]["id"] == "a"
         assert result[1][0]["id"] == "b"
+        assert result[2][0]["id"] == "c"

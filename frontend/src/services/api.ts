@@ -692,6 +692,19 @@ export const apiService = {
     return data;
   },
 
+  // Feature Model (DB Feature rows) docs -- distinct from the legacy
+  // FEATURES_DIR-scanned endpoints above. Reads generated docs from the
+  // feature's own workflow working_directory.
+  getFeatureRecordDocs: async (featureId: string): Promise<{ docs: Array<{ name: string; size_bytes: number; modified: string; type: string }> }> => {
+    const { data } = await api.get(`/autopilot/feature-records/${encodeURIComponent(featureId)}/docs`);
+    return data;
+  },
+
+  getFeatureRecordDoc: async (featureId: string, docName: string): Promise<{ name: string; content: string }> => {
+    const { data } = await api.get(`/autopilot/feature-records/${encodeURIComponent(featureId)}/docs/${encodeURIComponent(docName)}`);
+    return data;
+  },
+
   getAutopilotMessages: async (limit: number = 50): Promise<any[]> => {
     const { data } = await api.get(`/autopilot/messages?limit=${limit}`);
     return data;
