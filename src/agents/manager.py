@@ -1816,6 +1816,8 @@ class AgentManager:
             # Filter out spinner-only lines and "Thinking..." lines
             spinner_re = re.compile(r'^\s*(?:[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]*\s*)?Working\.{0,3}\s*$')
             thinking_re = re.compile(r'^\s*Thinking\.{0,3}\s*$')
+            # Filter TUI chrome: "... (N more/earlier lines, ...)"
+            tui_chrome_re = re.compile(r'^\s*\.\.\. \(\d+ (?:more|earlier) lines')
             filtered_lines = []
             for line in text.split('\n'):
                 stripped = line.strip()
@@ -1824,20 +1826,22 @@ class AgentManager:
                 clean = re.sub(r'\x1b\][^\x07]*\x07', '', clean).strip()
                 if spinner_re.match(clean) or thinking_re.match(clean):
                     continue
+                if tui_chrome_re.match(clean):
+                    continue
                 filtered_lines.append(line)
             
-            # Deduplicate: remove lines that are prefixes of the next line
+            # Deduplicate: remove lines that are strict prefixes of the next line
             # (catches partial \r redraws when transcript has no \r chars)
+            # Only apply when lines are short (< 80 chars) to avoid false positives
             deduped = []
             i = 0
             while i < len(filtered_lines):
                 current = filtered_lines[i].strip()
-                # Strip ANSI for comparison
                 current_clean = re.sub(r'\x1b\[[?]?[0-9;]*[a-zA-Z]', '', current)
                 current_clean = re.sub(r'\x1b\][^\x07]*\x07', '', current_clean).strip()
                 
-                # Check if next line starts with this line (partial redraw)
-                if i + 1 < len(filtered_lines) and current_clean:
+                # Only deduplicate short lines that look like partial redraws
+                if len(current_clean) < 200 and i + 1 < len(filtered_lines):
                     next_line = filtered_lines[i + 1].strip()
                     next_clean = re.sub(r'\x1b\[[?]?[0-9;]*[a-zA-Z]', '', next_line)
                     next_clean = re.sub(r'\x1b\][^\x07]*\x07', '', next_clean).strip()
