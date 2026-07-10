@@ -712,6 +712,7 @@ async def requeue_design(request: dict):
                             for agent in agents:
                                 agent.status = "terminated"
                                 agent.current_task_id = None  # Clear stale reference
+                                agent.terminated_at = datetime.utcnow()
 
                         # Pause the workflow
                         wf.status = "paused"
@@ -824,6 +825,7 @@ async def rerun_design(request: dict):
             for agent in active_agents:
                 agent.status = "terminated"
                 agent.current_task_id = None  # Clear stale reference
+                agent.terminated_at = datetime.utcnow()
 
             # Mark all active workflows as paused (not active/running)
             active_workflows = (
@@ -2790,9 +2792,15 @@ async def pause_feature(feature_id: str):
                 if agent and agent.status in ("working", "starting", "idle"):
                     agent.status = "terminated"
                     agent.current_task_id = None  # Clear stale reference
+                    agent.terminated_at = datetime.utcnow()
             task.status = "blocked"
 
         wf.status = "paused"
+        # Same marker /autopilot/stop sets -- without it, the self-heal
+        # sweep's _try_auto_resume_paused_workflow silently un-pauses this
+        # feature again within one sweep tick (~20-30s), the same bug the
+        # pipeline-level pause button had.
+        wf.paused_by = "user"
         feature.status = "paused"
         db.commit()
         return {
@@ -3631,12 +3639,21 @@ async def stop_pipeline(clear_state: bool = False, project_id: Optional[str] = N
                         try:
                             agent.status = "terminated"
                             agent.current_task_id = None  # Clear stale reference
+                            agent.terminated_at = datetime.utcnow()
                             terminated_count += 1
                         except Exception:
                             pass
 
+                # paused_by="user" is what every self-heal/retry path (e.g.
+                # _create_corrective_task, the stuck-workflow restart in
+                # attempt_recovery) actually checks before auto-resuming a
+                # paused workflow -- setting only status="paused" here left
+                # it invisible to those checks, so the very next phase-
+                # advancement sweep would recreate a task/agent and silently
+                # un-pause the pipeline within seconds of the user clicking
+                # pause.
                 db.query(Workflow).filter(Workflow.id.in_(autopilot_wf_ids)).update(
-                    {Workflow.status: "paused"}
+                    {Workflow.status: "paused", Workflow.paused_by: "user"}
                 )
                 db.commit()
     except Exception as e:
