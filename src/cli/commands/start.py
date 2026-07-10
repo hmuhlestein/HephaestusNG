@@ -25,15 +25,26 @@ logger = logging.getLogger(__name__)
 class ProcessWatchdog:
     """Monitors detached processes and restarts them if they die unexpectedly."""
 
-    def __init__(self, check_interval: int = 30, max_restarts: int = 3, restart_window: int = 300):
+    def __init__(
+        self,
+        check_interval: int = 30,
+        max_restarts: int = 3,
+        restart_window: int = 300,
+        unresponsive_threshold: int = 3,
+    ):
         self.check_interval = check_interval
         self.max_restarts = max_restarts
         self.restart_window = restart_window
+        # Consecutive failed /health checks before treating the backend as
+        # hung rather than just slow -- at the default 30s check_interval,
+        # 3 gives ~90s of grace before acting.
+        self.unresponsive_threshold = unresponsive_threshold
         self.running = False
         self.thread: Optional[threading.Thread] = None
         self.restart_counts: dict[str, int] = {}
         self.last_restarts: dict[str, float] = {}
         self._restart_callbacks: dict[str, callable] = {}
+        self._backend_health_failures = 0
 
     def register_service(self, name: str, restart_callback: callable) -> None:
         """Register a service with its restart callback."""
@@ -173,6 +184,66 @@ class ProcessWatchdog:
             return
 
         self._kill_duplicates("monitor", pids, "running")
+
+    def check_backend_health(self, port: int) -> None:
+        """Detect a backend that's alive but not answering -- a hang plain
+        PID-liveness (_check_services) can't see at all, since the process
+        never exits.
+
+        Observed live: `heph status` reported "unreachable" while the
+        backend's own PID was still running and its background pipeline
+        thread was still actively executing (py-spy dump showed
+        run_continuous_pipeline mid-stride in its own ThreadPoolExecutor
+        thread) -- consistent with the async event loop stalling on
+        something like DB connection pool starvation while a long-running
+        background thread holds connections, not a crash. A watchdog that
+        only checks "is the PID alive" waits forever for a process that will
+        never die on its own.
+        """
+        pid = read_pid("backend")
+        if not pid or not is_process_running(pid):
+            return  # _check_services' own PID-liveness check already covers this
+
+        try:
+            import httpx
+
+            resp = httpx.get(f"http://127.0.0.1:{port}/health", timeout=5)
+            healthy = resp.status_code == 200 and resp.json().get("status") == "healthy"
+        except Exception:
+            healthy = False
+
+        if healthy:
+            self._backend_health_failures = 0
+            return
+
+        self._backend_health_failures += 1
+        logger.warning(
+            f"Backend health check failed ({self._backend_health_failures}/"
+            f"{self.unresponsive_threshold}) -- PID {pid} alive but not "
+            "answering /health"
+        )
+        if self._backend_health_failures < self.unresponsive_threshold:
+            return
+
+        logger.warning(
+            f"Backend unresponsive for {self._backend_health_failures} "
+            f"consecutive checks (~{self._backend_health_failures * self.check_interval}s) "
+            "-- killing and restarting"
+        )
+        self._backend_health_failures = 0
+        # SIGKILL, not SIGTERM: a process this unresponsive is unlikely to
+        # honor a graceful shutdown signal either, and waiting to find out
+        # just delays recovery further.
+        import signal
+
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except OSError as e:
+            logger.debug(f"Could not kill unresponsive backend {pid}: {e}")
+
+        callback = self._restart_callbacks.get("backend")
+        if callback:
+            self._maybe_restart("backend", callback)
 
     def _maybe_restart(self, name: str, callback: callable) -> None:
         """Restart a service if restart limits allow it."""
