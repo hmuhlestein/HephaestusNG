@@ -1806,7 +1806,35 @@ class AgentManager:
                 collapsed.append(line.rstrip())
             text = "\n".join(collapsed)
             
-            # Use tokenjuice for output compaction (spinners, duplicates, TUI chrome)
+            # Filter TUI chrome (status bars, spinners, elapsed timers, etc.)
+            spinner_re = re.compile(r'^\s*(?:[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]*\s*)?Working\.{0,3}\s*$')
+            thinking_re = re.compile(r'^\s*Thinking\.{0,3}\s*$')
+            tui_chrome_re = re.compile(r'^\s*\.\.\. \(\d+ (?:more|earlier) lines')
+            status_bar_re = re.compile(r'^\s*↑\d+.*↓\d+.*R\d+.*CH\d+.*\$\d+')
+            mcp_status_re = re.compile(r'^\s*MCP:\s*\d+/\d+\s*servers')
+            prompt_only_re = re.compile(r'^\s*\$\s*$|^\s*%\s*$|^\s*:\s*$')
+            elapsed_re = re.compile(r'^\s*Elapsed \d+\.\d+s\s*$')
+            orphan_ansi_re = re.compile(r';\d+(?:;\d+)*m')
+            filtered_lines = []
+            for line in text.split('\n'):
+                stripped = line.strip()
+                clean = re.sub(r'\x1b\[[?]?[0-9;]*[a-zA-Z]', '', stripped)
+                clean = re.sub(r'\x1b\][^\x07]*\x07', '', clean).strip()
+                clean = orphan_ansi_re.sub('', clean).strip()
+                if spinner_re.match(clean) or thinking_re.match(clean):
+                    continue
+                if tui_chrome_re.match(clean) or status_bar_re.match(clean):
+                    continue
+                if mcp_status_re.match(clean) or prompt_only_re.match(clean):
+                    continue
+                if elapsed_re.match(clean):
+                    continue
+                if not clean and not stripped:
+                    continue
+                filtered_lines.append(line)
+            text = '\n'.join(filtered_lines)
+            
+            # Use tokenjuice for output compaction (dedup command output, etc.)
             try:
                 import subprocess
                 result = subprocess.run(
@@ -1819,9 +1847,8 @@ class AgentManager:
                 )
                 if result.returncode == 0 and result.stdout.strip():
                     text = result.stdout
-                # else: fall through with the pre-processed text
             except Exception:
-                pass  # tokenjuice not available, use pre-processed text
+                pass  # tokenjuice not available, use filtered text
             
             return text
                     
