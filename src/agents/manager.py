@@ -1806,6 +1806,20 @@ class AgentManager:
                 collapsed.append(line.rstrip())
             text = "\n".join(collapsed)
             
+            # Use tokenjuice-py for output compaction
+            try:
+                from tokenjuice import reduce_execution, ToolExecutionInput
+                inp = ToolExecutionInput(
+                    toolName='transcript',
+                    command='agent output',
+                    combinedText=text,
+                    exitCode=0
+                )
+                result = reduce_execution(inp)
+                text = result.inlineText
+            except Exception:
+                pass  # tokenjuice not available
+            
             # Filter TUI chrome (status bars, spinners, elapsed timers, etc.)
             spinner_re = re.compile(r'^\s*(?:[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]*\s*)?Working\.{0,3}\s*$')
             thinking_re = re.compile(r'^\s*Thinking\.{0,3}\s*$')
