@@ -399,6 +399,22 @@ class TestScoreAdversarialReview:
         assert score >= 0.6
         assert meta["band"] == "pass"
 
+    def test_blocker_with_report_text_quotes_full_report(self):
+        report = "# Adversarial Review Report\n\n### [BLOCKER] Connection leak\n- File: src/foo.py:42"
+        score, meta = score_adversarial_review(
+            {"blocker_count": 1, "warning_count": 0, "nit_count": 0},
+            report_text=report,
+        )
+        assert score < 0.6
+        assert report in meta["reason"]
+
+    def test_blocker_without_report_text_falls_back_to_count(self):
+        score, meta = score_adversarial_review(
+            {"blocker_count": 1, "warning_count": 0, "nit_count": 0}
+        )
+        assert score < 0.6
+        assert "1 BLOCKER" in meta["reason"]
+
 
 class TestScoreArchitecturalReview:
     def test_none_result(self):
@@ -427,6 +443,15 @@ class TestScoreArchitecturalReview:
         )
         assert score >= 0.6
         assert meta["band"] == "pass"
+
+    def test_blocker_with_report_text_quotes_full_report(self):
+        report = "# Architectural Review Report\n\n### [BLOCKER] Interface contract violated"
+        score, meta = score_architectural_review(
+            {"blocker_count": 1, "fix_count": 0, "defer_count": 0},
+            report_text=report,
+        )
+        assert score < 0.6
+        assert report in meta["reason"]
 
 
 class TestConstants:
