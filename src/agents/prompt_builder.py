@@ -11,6 +11,7 @@ building the message itself.
 
 import logging
 
+from src.autopilot.phases import SESSION_ROLES
 from src.core.database import Task
 from src.prompts.loader import (
     get_non_phase_agent_instructions,
@@ -104,6 +105,7 @@ class AgentPromptBuilder:
 
         # Add phase information if available
         phase_context_section = ""
+        resumed_session_warning = ""
         if hasattr(task, "phase_id") and task.phase_id:
             base_message += f"\nPhase ID: {task.phase_id}"
 
@@ -146,6 +148,28 @@ class AgentPromptBuilder:
                         logger.info(
                             f"Phase context section preview: {phase_context_section[:200]}..."
                         )
+
+                        # Phases that share a session_role (e.g. architecture_design
+                        # and architectural_review both map to "architect") resume
+                        # the SAME pi session/conversation, on purpose, so the agent
+                        # keeps its prior design context. But that means the agent's
+                        # conversation history is full of an EARLIER, already-done
+                        # task -- observed live: an agent resuming a shared session
+                        # kept re-confirming and re-reporting on its old task instead
+                        # of ever touching the new one, despite the new task_id being
+                        # stated clearly above. Call this out explicitly rather than
+                        # trusting the agent to infer it from a fresh task_id alone.
+                        role = SESSION_ROLES.get(phase_ctx.phase.name)
+                        if role and list(SESSION_ROLES.values()).count(role) > 1:
+                            resumed_session_warning = f"""
+
+⚠️  RESUMED SESSION — READ BEFORE DOING ANYTHING ELSE ⚠️
+This session was previously used for an earlier phase on this same design
+(shared "{role}" role, so you keep your prior context). That earlier task is
+ALREADY COMPLETE. Do NOT call hephaestus_update_task_status, hephaestus_save_memory,
+or any other tool referencing a task ID from your earlier conversation history.
+Your ONLY current task is Task ID: {task.id} (stated above) — if you find
+yourself about to act on a different task ID from memory, stop and re-read this."""
                     else:
                         logger.warning(
                             f"Phase context is None for phase_id: {task.phase_id}"
@@ -171,6 +195,8 @@ class AgentPromptBuilder:
             logger.info(
                 f"Task {task.id} has no phase_id: {getattr(task, 'phase_id', 'NO ATTRIBUTE')}"
             )
+
+        base_message += resumed_session_warning
 
         base_message += f"""
 
