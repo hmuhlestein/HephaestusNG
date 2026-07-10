@@ -21,7 +21,7 @@ import sys
 import threading
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -656,6 +656,16 @@ def create_agent_for_task_direct(
                     use_existing_worktree=True,
                 )
             )
+            # create_agent_for_task mutates task.assigned_agent_id/status on
+            # THIS object, but commits its own separate session (which owns
+            # the new Agent row) -- not this one. Without committing here
+            # too, closing this session below silently discards those
+            # mutations: the Agent row persists as "working" with
+            # current_task_id set, while the Task row is left exactly as it
+            # was (pending, no agent) forever. This was the actual root
+            # cause behind tasks staying stuck at "pending" indefinitely
+            # despite a real, live, working agent already assigned to them.
+            session.commit()
             return {"agent_id": agent.id, "status": "created"}
         finally:
             session.close()
@@ -3185,6 +3195,43 @@ def _case_in_progress_complete(
         # phase sat in_progress for 9+ hours with its real task done,
         # solely because a leftover diagnostic task from an earlier,
         # unrelated incident was still "pending" in the same phase.
+        # Orphaned-pending staleness check: a task sitting at status="pending"
+        # with no assigned_agent_id for more than a minute has no legitimate
+        # in-flight explanation -- dispatch normally happens synchronously
+        # right after a task is created (see _create_phase_task,
+        # restart_task_endpoint). Without this, such a task counts toward
+        # "incomplete" below forever, which short-circuits this whole
+        # function (`continue`) before ever reaching _maybe_retry_failed_tasks
+        # -- so a task orphaned this way (e.g. the backend killed mid-dispatch)
+        # was invisible to every self-heal path, not just this one, since
+        # _create_phase_task's own orphaned-task recovery only fires when a
+        # phase needs its *first* task created, never for an already
+        # in_progress phase re-checking a stale existing one. Marking it
+        # failed here lets it both drop out of the incomplete count and
+        # become eligible for the all-failed retry path right below.
+        orphan_cutoff = datetime.utcnow() - timedelta(minutes=1)
+        orphaned_pending = (
+            db.query(Task)
+            .filter(
+                Task.phase_id == phase.id,
+                Task.status == "pending",
+                Task.assigned_agent_id.is_(None),
+                Task.created_at < orphan_cutoff,
+                ~Task.raw_description.like(f"{DIAGNOSTIC_TASK_PREFIX}%"),
+            )
+            .all()
+        )
+        for orphan in orphaned_pending:
+            logger.info(
+                f"[PHASE-ADVANCE] {phase.name} has an orphaned pending task "
+                f"{orphan.id[:8]} (never dispatched, stale >1min) -- marking "
+                "failed so it becomes eligible for retry"
+            )
+            orphan.status = "failed"
+            orphan.failure_reason = "Orphaned: never dispatched to an agent"
+        if orphaned_pending:
+            db.commit()
+
         incomplete = (
             db.query(Task)
             .filter(
