@@ -365,6 +365,21 @@ const Agents: React.FC = () => {
     }
   }, [data]);
 
+  // Keep the open RealTimeAgentOutput modal's agent in sync with the live
+  // list -- it's a separate state copy taken at click-time, so without this
+  // it keeps showing whatever status the agent had when the modal opened
+  // (e.g. "Working") even after the agents list itself (polled every 5s,
+  // or pushed via the agent_status_changed WebSocket handler above) shows
+  // it terminated. Observed live: modal still said "Working" well after
+  // the agent had actually finished and been cleaned up.
+  useEffect(() => {
+    setSelectedAgent(prev => {
+      if (!prev) return prev;
+      const updated = agents.find(a => a.id === prev.id);
+      return updated || prev;
+    });
+  }, [agents]);
+
   // Subscribe to WebSocket updates
   useEffect(() => {
     const unsubscribeCreated = subscribe('agent_created', () => {
