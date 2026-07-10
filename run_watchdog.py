@@ -71,6 +71,7 @@ def main():
         while watchdog.running:
             time.sleep(watchdog.check_interval)
             watchdog._check_services()
+            watchdog.check_backend_health(args.port)
             watchdog.check_duplicate_port_listeners(args.port)
             watchdog.check_duplicate_monitor_processes()
     except KeyboardInterrupt:

@@ -712,6 +712,7 @@ async def requeue_design(request: dict):
                             for agent in agents:
                                 agent.status = "terminated"
                                 agent.current_task_id = None  # Clear stale reference
+                                agent.terminated_at = datetime.utcnow()
 
                         # Pause the workflow
                         wf.status = "paused"
@@ -824,6 +825,7 @@ async def rerun_design(request: dict):
             for agent in active_agents:
                 agent.status = "terminated"
                 agent.current_task_id = None  # Clear stale reference
+                agent.terminated_at = datetime.utcnow()
 
             # Mark all active workflows as paused (not active/running)
             active_workflows = (
@@ -2575,6 +2577,7 @@ async def get_project_design_status(project_id: str, filename: str):
                 "status": feat_status,
                 "scope": feat.scope or "",
                 "tasks": feat_tasks,
+                "depends_on": feat.depends_on or [],
                 "created_at": feat.created_at.isoformat() if feat.created_at else None,
                 "completed_at": feat.completed_at.isoformat() if feat.completed_at else None,
             })
@@ -2789,9 +2792,15 @@ async def pause_feature(feature_id: str):
                 if agent and agent.status in ("working", "starting", "idle"):
                     agent.status = "terminated"
                     agent.current_task_id = None  # Clear stale reference
+                    agent.terminated_at = datetime.utcnow()
             task.status = "blocked"
 
         wf.status = "paused"
+        # Same marker /autopilot/stop sets -- without it, the self-heal
+        # sweep's _try_auto_resume_paused_workflow silently un-pauses this
+        # feature again within one sweep tick (~20-30s), the same bug the
+        # pipeline-level pause button had.
+        wf.paused_by = "user"
         feature.status = "paused"
         db.commit()
         return {
@@ -3004,6 +3013,136 @@ async def get_feature_detail(feature_id: str):
         docs=docs,
     )
     return _store(cache_key, result)
+
+
+def _resolve_feature_docs_base(wf) -> Optional[str]:
+    """Best-known directory to look for a feature's generated docs in.
+
+    working_directory is cleared once a feature's worktree is cleaned up
+    after a successful merge (see _cleanup_worktree in orchestrator.py) --
+    that's correct, the worktree is genuinely gone, but it means a
+    *completed* feature's docs are no longer reachable there. They were
+    merged into the project's main repo, so fall back to launch_params'
+    project_path (observed live: core-infrastructure showed an empty Docs
+    tab despite being done, purely because this fallback was missing).
+    """
+    if wf.working_directory:
+        return wf.working_directory
+    launch_params = wf.launch_params or {}
+    if isinstance(launch_params, dict):
+        return launch_params.get("project_path")
+    return None
+
+
+@router.get("/feature-records/{feature_id}/docs")
+async def list_feature_record_docs(feature_id: str):
+    """List generated docs for a Feature Model row (Feature DB table).
+
+    Distinct from /features/{feature_id}/docs above -- that endpoint reads
+    from FEATURES_DIR (a scanned-directory feature id, legacy single-feature
+    pipeline). This one reads from a Feature row's own workflow's
+    working_directory/docs -- the storage location every current multi-
+    feature design pipeline actually writes to (architecture.md,
+    qa_result.json, etc., same files task_completion_service verifies).
+    """
+    from src.core.database import AutopilotDesign, Feature, Workflow, get_db
+
+    with get_db() as db:
+        feat = db.query(Feature).filter_by(id=feature_id).first()
+        if not feat:
+            raise HTTPException(404, f"Feature '{feature_id}' not found")
+
+        docs: List[Dict[str, Any]] = []
+
+        # The Feature Architect (Phase 0) writes one scope.md per feature
+        # under the design's own storage folder, before the feature's own
+        # workflow/worktree even exists -- distinct from (and predates) the
+        # docs the feature's own pipeline phases write later. Surfaced here
+        # as "architect-scope.md" so it's not confused with -- or clobbered
+        # by -- a same-named file the feature's own phases might produce.
+        design = db.query(AutopilotDesign).filter_by(id=feat.design_id).first() if feat.design_id else None
+        if design and design.designs_folder:
+            scope_path = Path(design.designs_folder) / "features" / feat.feature_key / "scope.md"
+            if scope_path.is_file():
+                stat = scope_path.stat()
+                docs.append(
+                    {
+                        "name": "architect-scope.md",
+                        "size_bytes": stat.st_size,
+                        "modified": datetime.fromtimestamp(
+                            stat.st_mtime, tz=timezone.utc
+                        ).isoformat(),
+                        "type": "markdown",
+                    }
+                )
+
+        if not feat.workflow_id:
+            return {"docs": docs}
+        wf = db.query(Workflow).filter_by(id=feat.workflow_id).first()
+        if not wf:
+            return {"docs": docs}
+        base_dir = _resolve_feature_docs_base(wf)
+        if not base_dir:
+            return {"docs": docs}
+        docs_dir = Path(base_dir) / "docs"
+
+    if not docs_dir.exists():
+        return {"docs": docs}
+
+    for f in sorted(docs_dir.iterdir()):
+        if f.is_file():
+            stat = f.stat()
+            docs.append(
+                {
+                    "name": f.name,
+                    "size_bytes": stat.st_size,
+                    "modified": datetime.fromtimestamp(
+                        stat.st_mtime, tz=timezone.utc
+                    ).isoformat(),
+                    "type": "markdown"
+                    if f.suffix == ".md"
+                    else "json"
+                    if f.suffix == ".json"
+                    else "text"
+                    if f.suffix == ".txt"
+                    else "other",
+                }
+            )
+    return {"docs": docs}
+
+
+@router.get("/feature-records/{feature_id}/docs/{doc_name}")
+async def get_feature_record_doc(feature_id: str, doc_name: str):
+    """Read one generated doc's content for a Feature Model row."""
+    from src.core.database import AutopilotDesign, Feature, Workflow, get_db
+
+    with get_db() as db:
+        feat = db.query(Feature).filter_by(id=feature_id).first()
+        if not feat:
+            raise HTTPException(404, f"Feature '{feature_id}' not found")
+
+        if doc_name == "architect-scope.md":
+            design = db.query(AutopilotDesign).filter_by(id=feat.design_id).first() if feat.design_id else None
+            if not design or not design.designs_folder:
+                raise HTTPException(404, "Document 'architect-scope.md' not found")
+            scope_dir = str(Path(design.designs_folder) / "features" / feat.feature_key)
+            doc_path = _safe_path(scope_dir, "scope.md")
+            if not doc_path.exists():
+                raise HTTPException(404, "Document 'architect-scope.md' not found")
+            return {"name": doc_name, "content": doc_path.read_text(errors="replace")}
+
+        if not feat.workflow_id:
+            raise HTTPException(404, f"Document '{doc_name}' not found")
+        wf = db.query(Workflow).filter_by(id=feat.workflow_id).first()
+        base_dir = _resolve_feature_docs_base(wf) if wf else None
+        if not base_dir:
+            raise HTTPException(404, "Feature's workflow has no known working directory")
+        docs_dir = str(Path(base_dir) / "docs")
+
+    doc_path = _safe_path(docs_dir, doc_name)
+    if not doc_path.exists():
+        raise HTTPException(404, f"Document '{doc_name}' not found")
+    return {"name": doc_name, "content": doc_path.read_text(errors="replace")}
 
 
 @router.get("/features/{feature_id}/report")
@@ -3500,12 +3639,21 @@ async def stop_pipeline(clear_state: bool = False, project_id: Optional[str] = N
                         try:
                             agent.status = "terminated"
                             agent.current_task_id = None  # Clear stale reference
+                            agent.terminated_at = datetime.utcnow()
                             terminated_count += 1
                         except Exception:
                             pass
 
+                # paused_by="user" is what every self-heal/retry path (e.g.
+                # _create_corrective_task, the stuck-workflow restart in
+                # attempt_recovery) actually checks before auto-resuming a
+                # paused workflow -- setting only status="paused" here left
+                # it invisible to those checks, so the very next phase-
+                # advancement sweep would recreate a task/agent and silently
+                # un-pause the pipeline within seconds of the user clicking
+                # pause.
                 db.query(Workflow).filter(Workflow.id.in_(autopilot_wf_ids)).update(
-                    {Workflow.status: "paused"}
+                    {Workflow.status: "paused", Workflow.paused_by: "user"}
                 )
                 db.commit()
     except Exception as e:

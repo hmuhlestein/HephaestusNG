@@ -40,7 +40,6 @@ const RealTimeAgentOutput: React.FC<RealTimeAgentOutputProps> = ({
   const [searchTerm, setSearchTerm] = useState('');
   const [isPaused, setIsPaused] = useState(false);
   const [autoScroll, setAutoScroll] = useState(true);
-  const [isSelecting, setIsSelecting] = useState(false);
 
   // Message input state
   const [messageText, setMessageText] = useState('');
@@ -105,45 +104,30 @@ const RealTimeAgentOutput: React.FC<RealTimeAgentOutputProps> = ({
     }
   }, [output, autoScroll, lastUpdateTime]);
 
-  // Listen for selectionchange to detect when selection is cleared
-  useEffect(() => {
-    const handleSelectionChange = () => {
-      const sel = window.getSelection();
-      if (isSelecting && (!sel || sel.toString().length === 0)) {
-        setIsSelecting(false);
-        setPauseUpdates(false);
-      }
-    };
-    document.addEventListener('selectionchange', handleSelectionChange);
-    return () => document.removeEventListener('selectionchange', handleSelectionChange);
-  }, [isSelecting, setPauseUpdates]);
-
   // Handle scroll events to determine if user is at bottom
   const handleScroll = useCallback(() => {
-    if (outputRef.current && !isSelecting) {
+    if (outputRef.current) {
       const element = outputRef.current;
       const isNearBottom = element.scrollTop + element.clientHeight >= element.scrollHeight - 50;
       setAutoScroll(isNearBottom);
       lastScrollPosition.current = element.scrollTop;
     }
-  }, [isSelecting]);
+  }, []);
 
-  // Handle text selection to pause auto-scroll
+  // Handle text selection to pause updates
   const handleMouseDown = useCallback(() => {
-    setIsSelecting(true);
     setPauseUpdates(true);
   }, [setPauseUpdates]);
 
   const handleMouseUp = useCallback(() => {
-    // Small delay to allow selection to complete before clearing flag
-    setTimeout(() => {
-      const sel = window.getSelection();
-      // Only clear selecting state if no text is actually selected
-      if (!sel || sel.toString().length === 0) {
-        setIsSelecting(false);
-        setPauseUpdates(false);
-      }
-    }, 200);
+    // Check if text is actually selected - if so, keep paused
+    const sel = window.getSelection();
+    if (sel && sel.toString().length > 0) {
+      // Text is selected, stay paused
+      return;
+    }
+    // No text selected, resume updates
+    setPauseUpdates(false);
   }, [setPauseUpdates]);
 
   // Copy to clipboard functionality
@@ -237,9 +221,11 @@ const RealTimeAgentOutput: React.FC<RealTimeAgentOutputProps> = ({
       // Filter out horizontal separator lines (────────────────────...)
       if (/^[─━═▬▪▫\-=\s]{20,}$/.test(stripped)) return false;
       // Filter out spinner-only lines: "⠋ Working..." or just "Working..."
-      if (/^(?:[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s*)?Working\.{0,3}$/.test(stripped)) return false;
+      if (/^(?:[\s⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]*\s*)?Working\.{0,3}\s*$/.test(stripped)) return false;
       // Filter out "Thinking..." lines
-      if (/^Thinking\.{0,3}$/.test(stripped)) return false;
+      if (/^Thinking\.{0,3}\s*$/.test(stripped)) return false;
+      // Filter out lines that are just a spinner + Working (broader catch)
+      if (/^[\s⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏Working\.]+$/.test(stripped) && stripped.includes('Working')) return false;
       // Filter out TUI chrome: "... (N earlier lines, ctrl+o to expand)"
       if (/^\.\.\. \(\d+ earlier lines/.test(stripped)) return false;
       // Filter out TUI chrome fragments
@@ -443,7 +429,7 @@ const RealTimeAgentOutput: React.FC<RealTimeAgentOutputProps> = ({
               onScroll={handleScroll}
               onMouseDown={handleMouseDown}
               onMouseUp={handleMouseUp}
-              className="absolute inset-0 p-6 overflow-auto font-mono text-xs bg-[#1e1e1e] text-[#d4d4d4] whitespace-pre-wrap break-all selection:bg-blue-500 selection:text-white ansi-output"
+              className="absolute inset-0 p-6 overflow-auto text-sm bg-[#1e1e1e] text-[#d4d4d4] whitespace-pre-wrap break-all selection:bg-blue-500 selection:text-white ansi-output"
               style={{
                 fontFamily: 'Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace'
               }}
@@ -561,7 +547,7 @@ const RealTimeAgentOutput: React.FC<RealTimeAgentOutputProps> = ({
 
       <style>{`
         .ansi-output {
-          line-height: 1.0 !important;
+          line-height: 1.2 !important;
           padding: 0 !important;
           margin: 0 !important;
         }

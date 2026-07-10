@@ -21,10 +21,12 @@ done_definitions:
   - "All BLOCKER and FIX findings documented with file:line and recommended fix"
   - "DEFER issues documented"
   - "architectural_review_report.md created with BLOCKER/FIX/DEFER findings"
+  - "architectural_review_result.json written with blocker_count/fix_count/defer_count"
   - "Memory saved with review findings"
   - "Task marked as done"
 outputs:
   - "architectural_review_report.md"
+  - "architectural_review_result.json"
 next_steps:
   - "Phase 6 adversarial review reads architectural_review_report.md"
   - "Phase 7 doc review reads architectural_review_report.md"
@@ -200,7 +202,25 @@ additional_notes: |
   - Architecture compliance patterns
   - Design invariant violations
   - Common deviation patterns to watch for
-  
+
+  ═══════════════════════════════════════════════════════════════════════
+  STEP 6: WRITE architectural_review_result.json (NOT OPTIONAL)
+  ═══════════════════════════════════════════════════════════════════════
+
+  The report above is for the developer to read. This file is for the
+  pipeline itself — without it, the pipeline cannot tell whether you found
+  BLOCKERs and will silently continue to the next phase regardless of what
+  you found. Write it to the same Docs Path as the report:
+
+  {
+    "blocker_count": <int>,
+    "fix_count": <int>,
+    "defer_count": <int>,
+    "overall": "PASS" | "NEEDS_WORK" | "FAIL"
+  }
+
+  Counts must match the report's own Summary section exactly.
+
   ═══════════════════════════════════════════════════════════════════════
   CLASSIFICATION CRITERIA
   ═══════════════════════════════════════════════════════════════════════

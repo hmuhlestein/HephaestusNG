@@ -16,9 +16,11 @@ done_definitions:
   - "Cascade and ordering invariants verified (no time-of-check/time-of-use gaps)"
   - "adversarial_review_report.md written with BLOCKER/WARNING/NIT findings"
   - "Each BLOCKER includes exact failure sequence and specific recommended fix"
+  - "adversarial_review_result.json written with blocker_count/warning_count/nit_count"
   - "Task marked as done"
 outputs:
   - "adversarial_review_report.md"
+  - "adversarial_review_result.json"
 next_steps:
   - "Phase 7 doc review reads adversarial_review_report.md"
   - "Phase 8 security review reads adversarial_review_report.md for security concerns"
@@ -183,6 +185,24 @@ additional_notes: |
 
   ## Gaps in Test Coverage
   [Failure modes with no test — state the scenario and the missing assertion]
+
+  ═══════════════════════════════════════════════════════════════════════
+  STEP 5: WRITE adversarial_review_result.json (NOT OPTIONAL)
+  ═══════════════════════════════════════════════════════════════════════
+
+  The report above is for the developer to read. This file is for the
+  pipeline itself — without it, the pipeline cannot tell whether you found
+  BLOCKERs and will silently continue to the next phase regardless of what
+  you found. Write it to the same Docs Path as the report:
+
+  {
+    "blocker_count": <int>,
+    "warning_count": <int>,
+    "nit_count": <int>,
+    "overall": "PASS" | "NEEDS_WORK" | "FAIL"
+  }
+
+  Counts must match the report's own Summary section exactly.
 
   ═══════════════════════════════════════════════════════════════════════
   CLASSIFICATION CRITERIA

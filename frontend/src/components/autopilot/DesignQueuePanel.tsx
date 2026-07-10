@@ -29,6 +29,7 @@ import { formatDistanceToNow } from 'date-fns';
 import toast from 'react-hot-toast';
 import DesignDetailModal from './DesignDetailModal';
 import TaskDetailModal from '../TaskDetailModal';
+import FeatureRecordDetailModal from './FeatureRecordDetailModal';
 
 interface DesignQueuePanelProps {
   projectId: string | null;
@@ -43,6 +44,7 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
   const [localOrder, setLocalOrder] = useState<any[] | null>(null);
   const [detailFile, setDetailFile] = useState<string | null>(null);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const [selectedFeature, setSelectedFeature] = useState<any | null>(null);
 
   // Fetch status for all designs to show badges (M-5 fix: migrated to React Query)
   const { data: designs, isLoading } = useQuery({
@@ -315,6 +317,7 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
                   projectId={projectId}
                   onDetail={handleDetail}
                   onTaskClick={setSelectedTaskId}
+                  onSelectFeature={setSelectedFeature}
                   onAction={(action) => {
                     if (action === 'rerun') {
                       // /autopilot/queue/rerun stops the orchestrator and
@@ -381,6 +384,12 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
       <TaskDetailModal
         taskId={selectedTaskId}
         onClose={() => setSelectedTaskId(null)}
+      />
+
+      {/* Feature Record Detail Modal */}
+      <FeatureRecordDetailModal
+        feature={selectedFeature}
+        onClose={() => setSelectedFeature(null)}
       />
     </div>
   );
@@ -494,6 +503,7 @@ interface SortableDesignItemProps {
   onRemove: (filename: string) => void;
   onDetail: (filename: string) => void;
   onTaskClick: (taskId: string) => void;
+  onSelectFeature: (feature: any) => void;
   onAction?: (action: 'pause' | 'stop' | 'resume' | 'rerun') => void;
   actionPending?: { pause?: boolean; stop?: boolean; resume?: boolean; rerun?: boolean };
   status?: string;
@@ -502,7 +512,7 @@ interface SortableDesignItemProps {
   projectId: string | null;
 }
 
-const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, isActive, onRemove, onDetail, onTaskClick, onAction, actionPending, status, error, projectId }) => {
+const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, isActive, onRemove, onDetail, onTaskClick, onSelectFeature, onAction, actionPending, status, error, projectId }) => {
   const [expanded, setExpanded] = useState(() => {
     // Restore expanded state from localStorage
     const saved = localStorage.getItem('autopilot-expanded-designs');
@@ -616,7 +626,12 @@ const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, is
           </div>
 
           <div className="flex-1 min-w-0">
-            <h4 className="text-sm font-semibold text-gray-800 truncate">{item.name}</h4>
+            <h4
+              className="text-sm font-semibold text-gray-800 truncate hover:text-violet-600 hover:underline w-fit"
+              onClick={(e) => { e.stopPropagation(); onDetail(item.filename); }}
+            >
+              {item.name}
+            </h4>
             <div className="flex items-center gap-3 mt-1">
               <span className="text-xs text-gray-500 font-mono">{item.filename}</span>
               <span className="text-xs text-gray-400">{formatBytes(item.size_bytes)}</span>
@@ -687,6 +702,7 @@ const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, is
                       key={feature.id}
                       feature={feature}
                       onTaskClick={onTaskClick}
+                      onSelectFeature={onSelectFeature}
                       projectId={projectId ?? undefined}
                       onFeatureUpdate={() => refetchFeatures()}
                     />
@@ -718,7 +734,7 @@ const FEATURE_STATUS_CONFIG: Record<string, { color: string; icon: React.ReactNo
   skipped: { color: 'bg-gray-100 text-gray-500', icon: <Clock className="w-3 h-3" />, label: 'Skipped' },
 };
 
-const FeatureStatusBadge: React.FC<{ status: string }> = ({ status }) => {
+export const FeatureStatusBadge: React.FC<{ status: string }> = ({ status }) => {
   const config = FEATURE_STATUS_CONFIG[status];
   if (!config) return null;
   return (
@@ -732,9 +748,10 @@ const FeatureStatusBadge: React.FC<{ status: string }> = ({ status }) => {
 const FeatureRow: React.FC<{
   feature: any;
   onTaskClick: (taskId: string) => void;
+  onSelectFeature: (feature: any) => void;
   projectId?: string;
   onFeatureUpdate?: () => void;
-}> = ({ feature, onTaskClick, onFeatureUpdate }) => {
+}> = ({ feature, onTaskClick, onSelectFeature, onFeatureUpdate }) => {
   const [expanded, setExpanded] = useState(() => {
     // Restore expanded state from localStorage
     const saved = localStorage.getItem('autopilot-expanded-features');
@@ -814,8 +831,18 @@ const FeatureRow: React.FC<{
             <Layers className="w-3.5 h-3.5 text-violet-600" />
           </div>
           <div className="flex-1 min-w-0">
-            <p className="text-sm font-medium text-gray-700 truncate">{feature.name}</p>
+            <p
+              className="text-sm font-medium text-gray-700 truncate hover:text-violet-600 hover:underline w-fit"
+              onClick={(e) => { e.stopPropagation(); onSelectFeature(feature); }}
+            >
+              {feature.name}
+            </p>
             <p className="text-xs text-gray-400 truncate">{feature.feature_key}</p>
+            {feature.depends_on?.length > 0 && (
+              <p className="text-xs font-mono text-gray-400 truncate">
+                depends on: {feature.depends_on.join(', ')}
+              </p>
+            )}
           </div>
         </div>
         <div className="flex items-center gap-2">
@@ -840,6 +867,13 @@ const FeatureRow: React.FC<{
             onRerun={() => runFeatureAction('rerun')}
             pending={actionPending}
           />
+          <button
+            onClick={(e) => { e.stopPropagation(); onSelectFeature(feature); }}
+            className="p-1.5 rounded-lg hover:bg-violet-50 transition-colors text-gray-400 hover:text-violet-600"
+            title="View feature details"
+          >
+            <FileText className="w-3.5 h-3.5" />
+          </button>
         </div>
       </div>
 

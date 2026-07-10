@@ -350,3 +350,60 @@ class TestOpenTicketsInjection:
         message = builder.format_initial_message(task=task, agent_id="agent-abc")
 
         assert "OPEN BUG TICKETS" not in message
+
+
+class _FakePhaseManagerForPhaseName:
+    """Like _FakePhaseManagerWithContext, but lets the test pick the phase
+    name so it can land on a real shared or unique session_role."""
+
+    def __init__(self, phase_name: str):
+        self.workflow_id = "wf-456"
+        self._phase_name = phase_name
+
+    def get_phase_context(self, phase_id):
+        sdk_phase = SdkPhase(
+            id=1,
+            name=self._phase_name,
+            description="Do the thing",
+            done_definitions=["done"],
+            working_directory=".",
+        )
+        return PhaseContext(
+            phase_id=phase_id,
+            workflow_id=self.workflow_id,
+            phase=sdk_phase,
+            all_phases=[sdk_phase],
+            current_status="in_progress",
+        )
+
+
+class TestResumedSessionWarning:
+    """Regression: architecture_design and architectural_review (and other
+    phase pairs) intentionally share a session_role in workflow.yaml so the
+    same agent/session resumes with full prior context. Observed live: an
+    agent resuming that shared session kept re-confirming and re-reporting
+    on its OLD, already-done task instead of ever touching its actual new
+    one, despite the new task_id being stated clearly elsewhere in the
+    prompt. The prompt must call this out explicitly rather than trusting
+    the agent to infer a hard task boundary from a fresh ID alone.
+    """
+
+    def test_warns_when_phase_shares_a_session_role(self):
+        builder = AgentPromptBuilder(
+            phase_manager=_FakePhaseManagerForPhaseName("architectural_review")
+        )
+        message = builder.format_initial_message(
+            task=_FakeTask(), agent_id="agent-abc"
+        )
+        assert "RESUMED SESSION" in message
+        assert "ALREADY COMPLETE" in message
+        assert "task-123" in message  # the new task_id, stated as the only current one
+
+    def test_no_warning_for_a_phase_with_a_unique_role(self):
+        builder = AgentPromptBuilder(
+            phase_manager=_FakePhaseManagerForPhaseName("development")
+        )
+        message = builder.format_initial_message(
+            task=_FakeTask(), agent_id="agent-abc"
+        )
+        assert "RESUMED SESSION" not in message

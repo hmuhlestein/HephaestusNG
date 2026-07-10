@@ -79,7 +79,9 @@ lib/
 agents/pi/
 
 .playwright-mcp/
+node_modules/
 frontend/node_modules/
+.kilo/
 # Tmux
 .tmux/
 

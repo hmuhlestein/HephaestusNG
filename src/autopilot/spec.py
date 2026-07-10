@@ -35,7 +35,23 @@ DEFAULT_SPEC: Dict[str, Any] = {
 }
 
 # Phases gated by the hybrid spec (engine evaluation point keys).
-GATED_PHASES = ("scope_review", "qa_validation", "product_validation")
+#
+# architectural_review/adversarial_review added after discovering their
+# workflow.yaml evaluation_points (score<0.3 -> goto architecture_design,
+# score<0.6 -> goto development) had never actually fired: build_phase_output
+# returned {} for any phase not in this tuple, so the heuristic evaluator's
+# json.dumps({}) scan found zero keywords and fell through to its baseline
+# 0.75 ("pass") every time -- regardless of how many BLOCKERs a review found.
+# Observed live: an adversarial review reporting 6 BLOCKERs still completed
+# with action="continue", because the score that would have triggered the
+# goto-back-to-development condition was never computed from real content.
+GATED_PHASES = (
+    "scope_review",
+    "architectural_review",
+    "adversarial_review",
+    "qa_validation",
+    "product_validation",
+)
 
 # Single-file overrides per phase, keyed by phase name — used when a phase's
 # real output lives somewhere its own declared `outputs:` list doesn't
@@ -602,6 +618,93 @@ def score_product_validation(
     return _DEV, {**meta, "band": "development", "reason": "unrecognized verdict"}
 
 
+def score_adversarial_review(
+    result: Optional[Dict[str, Any]],
+) -> Tuple[float, Dict[str, Any]]:
+    """Score an adversarial_review_result.json by BLOCKER/WARNING/NIT counts.
+
+    adversarial_review.yaml's report classifies findings as BLOCKER (process
+    death, silent data corruption, unrecoverable state), WARNING (fails under
+    real load/edge conditions), or NIT (style/minor). Any BLOCKER lands below
+    the workflow.yaml `score < 0.6` threshold so the engine goes back to
+    development to fix it instead of silently continuing — this is the exact
+    gate that was previously dead (see GATED_PHASES comment above): scoring
+    always fell through to a fixed 0.75 baseline because no phase_output was
+    ever built for this phase, regardless of how many BLOCKERs were found.
+
+    No distinct signal currently exists to tell "needs a development fix"
+    apart from "needs an architectural redesign" (workflow.yaml's `score <
+    0.3 -> architecture_design` band), so any BLOCKER routes to development
+    rather than architecture_design -- a known limitation, not a silent gap.
+    """
+    if not result:
+        return 0.4, {
+            "gate": "adversarial_review",
+            "reason": "no adversarial_review_result.json found",
+            "result_missing": True,
+        }
+
+    blockers = int(result.get("blocker_count") or 0)
+    warnings = int(result.get("warning_count") or 0)
+
+    if blockers > 0:
+        return 0.4, {
+            "gate": "adversarial_review",
+            "band": "development",
+            "blocker_count": blockers,
+            "warning_count": warnings,
+            "reason": f"{blockers} BLOCKER(s) found — returning to development",
+        }
+    if warnings > 0:
+        return 0.7, {
+            "gate": "adversarial_review",
+            "band": "pass",
+            "warning_count": warnings,
+            "reason": f"no BLOCKERs, {warnings} WARNING(s) — proceeding",
+        }
+    return 0.9, {"gate": "adversarial_review", "band": "pass", "reason": "clean"}
+
+
+def score_architectural_review(
+    result: Optional[Dict[str, Any]],
+) -> Tuple[float, Dict[str, Any]]:
+    """Score an architectural_review_result.json by BLOCKER/FIX/DEFER counts.
+
+    architectural_review.yaml's report classifies findings as BLOCKER
+    (architecture violated), FIX (design deviation), or DEFER. Same dead-gate
+    bug and same fix as score_adversarial_review above — see GATED_PHASES
+    comment. Any BLOCKER routes to development (workflow.yaml's `score < 0.6`
+    band), same known limitation re: the `score < 0.3` architecture_design
+    band as noted there.
+    """
+    if not result:
+        return 0.4, {
+            "gate": "architectural_review",
+            "reason": "no architectural_review_result.json found",
+            "result_missing": True,
+        }
+
+    blockers = int(result.get("blocker_count") or 0)
+    fixes = int(result.get("fix_count") or 0)
+
+    if blockers > 0:
+        return 0.4, {
+            "gate": "architectural_review",
+            "band": "development",
+            "blocker_count": blockers,
+            "fix_count": fixes,
+            "reason": f"{blockers} BLOCKER(s) found — returning to development",
+        }
+    if fixes > 0:
+        return 0.7, {
+            "gate": "architectural_review",
+            "band": "pass",
+            "fix_count": fixes,
+            "reason": f"no BLOCKERs, {fixes} FIX item(s) — proceeding",
+        }
+    return 0.9, {"gate": "architectural_review", "band": "pass", "reason": "clean"}
+
+
 def read_result(working_directory: Any, filename: str) -> Optional[Dict[str, Any]]:
     """Read a structured result file an agent wrote.
 
@@ -639,6 +742,12 @@ def build_phase_output(
     if phase_name == "scope_review":
         result = read_result(working_directory, "scope_review_result.json")
         score, meta = score_scope_review(result)
+    elif phase_name == "architectural_review":
+        result = read_result(working_directory, "architectural_review_result.json")
+        score, meta = score_architectural_review(result)
+    elif phase_name == "adversarial_review":
+        result = read_result(working_directory, "adversarial_review_result.json")
+        score, meta = score_adversarial_review(result)
     elif phase_name == "qa_validation":
         result = read_result(working_directory, "qa_result.json")
         # Enhancement 1: Pass working_directory for independent test verification
