@@ -315,13 +315,15 @@ ${taskDetails.child_tasks.map((t: any) => `- ${t.description} (${t.status})`).jo
                     Task Details
                   </h3>
                   <p className="text-sm text-gray-600 dark:text-gray-400 font-mono">
-                    {taskDetails?.user_prompt?.slice(0, 80) || taskDetails?.id || taskId}
-                    {taskDetails?.user_prompt && taskDetails.user_prompt.length > 80 ? '...' : ''}
+                    {taskDetails?.user_prompt?.slice(0, 50) || taskDetails?.id || taskId}
+                    {taskDetails?.user_prompt && taskDetails.user_prompt.length > 50 ? '...' : ''}
                   </p>
                 </div>
+              </div>
 
+              <div className="flex items-center space-x-2">
                 {taskDetails && (
-                  <div className="flex items-center space-x-2">
+                  <>
                     <StatusBadge status={taskDetails.status} />
                     {taskDetails.phase_info && (
                       <PhaseBadge
@@ -355,15 +357,13 @@ ${taskDetails.child_tasks.map((t: any) => `- ${t.description} (${t.status})`).jo
                         </button>
                       </div>
                     )}
-                  </div>
+                  </>
                 )}
-              </div>
 
-              <div className="flex items-center space-x-2">
                 {taskDetails?.status === 'queued' && (
                   <button
                     onClick={handleBumpPriority}
-                    className="flex items-center px-2 py-1 bg-orange-100 text-orange-700 rounded hover:bg-orange-200 transition-colors text-xs font-medium"
+                    className="flex items-center px-2.5 py-1.5 bg-orange-100 text-orange-700 rounded hover:bg-orange-200 transition-colors text-xs font-medium"
                     title="Start immediately (bypasses agent limit)"
                   >
                     <Zap className="w-3 h-3 mr-1" />
