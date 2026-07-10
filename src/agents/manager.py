@@ -1825,7 +1825,30 @@ class AgentManager:
                 if spinner_re.match(clean) or thinking_re.match(clean):
                     continue
                 filtered_lines.append(line)
-            text = '\n'.join(filtered_lines)
+            
+            # Deduplicate: remove lines that are prefixes of the next line
+            # (catches partial \r redraws when transcript has no \r chars)
+            deduped = []
+            i = 0
+            while i < len(filtered_lines):
+                current = filtered_lines[i].strip()
+                # Strip ANSI for comparison
+                current_clean = re.sub(r'\x1b\[[?]?[0-9;]*[a-zA-Z]', '', current)
+                current_clean = re.sub(r'\x1b\][^\x07]*\x07', '', current_clean).strip()
+                
+                # Check if next line starts with this line (partial redraw)
+                if i + 1 < len(filtered_lines) and current_clean:
+                    next_line = filtered_lines[i + 1].strip()
+                    next_clean = re.sub(r'\x1b\[[?]?[0-9;]*[a-zA-Z]', '', next_line)
+                    next_clean = re.sub(r'\x1b\][^\x07]*\x07', '', next_clean).strip()
+                    if next_clean.startswith(current_clean) and len(next_clean) > len(current_clean):
+                        i += 1  # Skip this line, it's a partial redraw
+                        continue
+                
+                deduped.append(filtered_lines[i])
+                i += 1
+            
+            text = '\n'.join(deduped)
             
             return text
                     
