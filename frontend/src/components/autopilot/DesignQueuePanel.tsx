@@ -57,14 +57,15 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
     queryKey: ['autopilot-design-statuses', projectId, designs?.length],
     queryFn: async () => {
       if (!projectId || !designs || designs.length === 0) return {};
-      const statuses: Record<string, { status: string; workflowId?: string }> = {};
+      const statuses: Record<string, { status: string; workflowId?: string; error?: string | null }> = {};
       await Promise.all(
         designs.map(async (d: any) => {
           try {
             const status = await apiService.getAutopilotProjectDesignStatus(projectId, d.filename);
             statuses[d.filename] = {
               status: status.status || 'pending',
-              workflowId: status.workflows?.[0]?.id
+              workflowId: status.workflows?.[0]?.id,
+              error: status.error || null,
             };
           } catch {
             statuses[d.filename] = { status: 'pending' };
@@ -310,6 +311,7 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
                   isActive={item.name === currentDesign}
                   status={designStatuses[item.filename]?.status}
                   workflowId={designStatuses[item.filename]?.workflowId}
+                  error={designStatuses[item.filename]?.error}
                   projectId={projectId}
                   onDetail={handleDetail}
                   onTaskClick={setSelectedTaskId}
@@ -496,10 +498,11 @@ interface SortableDesignItemProps {
   actionPending?: { pause?: boolean; stop?: boolean; resume?: boolean; rerun?: boolean };
   status?: string;
   workflowId?: string;
+  error?: string | null;
   projectId: string | null;
 }
 
-const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, isActive, onRemove, onDetail, onTaskClick, onAction, actionPending, status, projectId }) => {
+const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, isActive, onRemove, onDetail, onTaskClick, onAction, actionPending, status, error, projectId }) => {
   const [expanded, setExpanded] = useState(() => {
     // Restore expanded state from localStorage
     const saved = localStorage.getItem('autopilot-expanded-designs');
@@ -624,6 +627,11 @@ const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, is
                 </span>
               )}
             </div>
+            {status === 'failed' && error && (
+              <p className="text-xs text-red-600 mt-1 truncate" title={error}>
+                {error}
+              </p>
+            )}
           </div>
 
           <div className="flex items-center gap-2">

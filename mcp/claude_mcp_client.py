@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """
-Claude MCP Client for Hephaestus
-This client connects to the Hephaestus server running on port 8300
+Claude-compatible MCP Client for Hephaestus
+This client connects to the Hephaestus server running on port 8300. Despite
+the filename, it's a generic MCP server usable by any compatible CLI agent
+(pi, Claude Code, Codex, etc.) via the shared ~/.config/mcp/mcp.json config
+-- not exclusive to Claude.
 """
 
 import os
@@ -42,7 +45,7 @@ async def create_task(
     done_definition: str,
     agent_id: str = None,
     workflow_id: str = None,
-    phase_id: int = None,
+    phase_id: str = None,
     priority: str = "medium",
     cwd: str = None,
     ticket_id: str = None,
@@ -677,7 +680,7 @@ async def broadcast_message(message: str, sender_agent_id: str = None) -> str:
     try:
         async with httpx.AsyncClient() as client:
             response = await client.post(
-                f"{HEPHAESTUS_URL}/broadcast_message",
+                f"{HEPHAESTUS_URL}/api/broadcast_message",
                 json={"message": message},
                 headers={
                     "Content-Type": "application/json",
@@ -735,7 +738,7 @@ async def send_message(
     try:
         async with httpx.AsyncClient() as client:
             response = await client.post(
-                f"{HEPHAESTUS_URL}/send_message",
+                f"{HEPHAESTUS_URL}/api/send_message",
                 json={"recipient_agent_id": recipient_agent_id, "message": message},
                 headers={
                     "Content-Type": "application/json",

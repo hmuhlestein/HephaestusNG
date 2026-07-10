@@ -1146,14 +1146,35 @@ def attempt_recovery(workflow_id: str, logger: OrchestratorLogger) -> Tuple[bool
     except Exception as e:
         logger.warning(f"  Failed to clean repo state: {e}")
 
-    # 3. Terminate stale agents
+    # 3. Terminate stale agents -- only genuinely stale ones (dead tmux
+    # session), never merely "still working". This function runs on every
+    # recovery cycle (every POLL_INTERVAL) whenever is_design_fully_complete
+    # says the workflow isn't done -- which is the normal state for a
+    # workflow with real in-progress work, e.g. right after a restart
+    # reloads state.current_workflow_id into this branch. Terminating every
+    # "working" agent unconditionally here killed live, actively-progressing
+    # agents roughly once a minute until the workflow ran out of retries
+    # (observed live: a security_review agent got killed and replaced three
+    # times in six minutes, purely because this step never checked whether
+    # the agent was actually still alive).
     agents = get_agents(workflow_id=workflow_id)
     active_agents = [
         a for a in agents if a.get("status") in ("working", "starting", "idle")
     ]
     for agent in active_agents:
         aid = agent.get("id", "")
-        logger.info(f"  Terminating stale agent {aid[:8]}")
+        tmux_name = agent.get("tmux_session_name")
+        try:
+            alive = bool(tmux_name) and subprocess.run(
+                ["tmux", "has-session", "-t", tmux_name],
+                capture_output=True,
+                timeout=3,
+            ).returncode == 0
+        except Exception:
+            alive = False
+        if alive:
+            continue  # genuinely still working -- leave it alone
+        logger.info(f"  Terminating stale agent {aid[:8]} (tmux session dead)")
         try:
             terminate_agent_direct(aid)
             recovered.append(f"terminated agent {aid[:8]}")
@@ -1582,6 +1603,17 @@ def pick_next_design(
                                     f"({retry_count}/{MAX_DESIGN_RETRIES}) — marking failed"
                                 )
                                 candidate.status = "failed"
+                                # Surfaced by /autopilot/status's last_error so
+                                # the UI can show a real popup instead of this
+                                # silently sitting in a log file no one reads
+                                # -- the pipeline itself keeps polling "queue
+                                # empty" every 60s afterward, looking healthy,
+                                # while having permanently given up on the
+                                # only design in the queue.
+                                candidate.error = (
+                                    f"Gave up after {MAX_DESIGN_RETRIES} retries: "
+                                    f"workflow {failed_wf.id[:8]} kept failing"
+                                )
                                 db.commit()
                                 continue
                             logger.info(
@@ -1591,6 +1623,7 @@ def pick_next_design(
                             )
                             _set_project_context(db, retry_key, retry_count + 1)
                             candidate.status = "pending"
+                            candidate.error = None  # clear any stale exhausted-retry message
                             db.commit()
                             continue
                         design = candidate
@@ -2147,41 +2180,6 @@ def _update_feature_status(
                 logger.info(f"Updated feature {feature.feature_key} status to {status}")
 
 
-def _update_feature_status_by_key(
-    feature_key: str,
-    design_id: Optional[str],
-    status: str,
-    error: Optional[str] = None,
-    logger: OrchestratorLogger = None,
-) -> None:
-    """Update a feature's status by feature_key (alternate lookup).
-
-    FIX #21: Separated from _update_feature_status to preserve the
-    original type contract (feature_id: str, not Optional[str]).
-    """
-    from datetime import datetime
-
-    from src.core.database import Feature, get_db
-
-    with get_db() as db:
-        feature = (
-            db.query(Feature)
-            .filter_by(design_id=design_id, feature_key=feature_key)
-            .first()
-        )
-        if feature:
-            feature.status = status
-            if status == "active":
-                feature.started_at = datetime.utcnow()
-            elif status in ("completed", "failed", "skipped"):
-                feature.completed_at = datetime.utcnow()
-            if error:
-                feature.error = error
-            db.commit()
-            if logger:
-                logger.info(f"Updated feature {feature_key} status to {status}")
-
-
 def _update_design_status(
     design_id: Optional[str],
     status: str,
@@ -2502,24 +2500,6 @@ def _validate_features_json(features_json: dict) -> None:
     dep_graph = {feat["id"]: feat.get("depends_on", []) for feat in features}
     if has_cycle(dep_graph):
         raise ValueError("Dependency cycle detected in features")
-
-
-def _should_skip(feature: dict, feature_results: Dict[str, str]) -> bool:
-    """Check if a feature should be skipped due to failed dependencies.
-
-    Args:
-        feature: Feature dict from features.json
-        feature_results: Mapping of feature_key -> status
-
-    Returns:
-        True if feature should be skipped
-    """
-    depends_on = feature.get("depends_on", [])
-    for dep in depends_on:
-        # Cascade: skip if any dependency failed OR was itself skipped (transitive).
-        if feature_results.get(dep) in ("failed", "skipped"):
-            return True
-    return False
 
 
 def _resolve_execution_order(
@@ -3949,11 +3929,19 @@ def run_single_workflow(
     # This makes --max-iterations control the engine's max_total_gotos.
     _update_orchestrator_max_gotos(max_iterations, logger)
 
-    # Check for existing active workflows and stop them
+    # Check for existing active workflows and stop them -- but never the
+    # workflow we're about to resume ourselves. Without this exclusion, an
+    # existing_workflow_id resume (e.g. after a backend restart) terminates
+    # its own live, working agent here before ever reaching the resume logic
+    # below, discarding whatever that agent was mid-task on (observed live:
+    # a just-finished agent's final report got dropped because its
+    # termination raced 35s ahead of it).
     if not pause_existing:
         existing_workflows = []
     else:
-        existing_workflows = get_active_workflows()
+        existing_workflows = [
+            wf for wf in get_active_workflows() if wf.get("id") != existing_workflow_id
+        ]
     if existing_workflows:
         logger.info(
             f"Found {len(existing_workflows)} active workflow(s) - stopping them..."
@@ -4063,6 +4051,20 @@ def run_single_workflow(
         if existing_workflow_id:
             exec_id = existing_workflow_id
             logger.info(f"Resuming existing workflow: {exec_id}")
+            # The worktree-path computation above may have recreated the
+            # deterministic path after an earlier failed attempt cleared
+            # working_directory (see _cleanup_worktree) -- restore it here.
+            # verify_output_artifact only reads Workflow.working_directory
+            # (never phases_folder_path), so a resumed workflow with this
+            # left None has every subsequent "done" claim rejected forever.
+            with get_db() as _db_resume:
+                _wf_resume = _db_resume.query(Workflow).filter_by(id=exec_id).first()
+                if _wf_resume and _wf_resume.working_directory != design_worktree_path:
+                    logger.info(
+                        f"Restoring working_directory for {exec_id[:8]}: "
+                        f"{_wf_resume.working_directory!r} -> {design_worktree_path}"
+                    )
+                    _wf_resume.working_directory = design_worktree_path
             restarted = _resume_stuck_workflow_tasks(exec_id, logger)
             logger.info(
                 f"Resume: reset {restarted} stuck task(s) for workflow {exec_id[:8]}"
@@ -5014,22 +5016,16 @@ def run_feature_pipelines(
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
     for group in execution_groups:
-        # Check for features that should be skipped
-        features_to_run = []
-        for feat in group:
-            if _should_skip(feat, feature_results):
-                feature_key = feat.get("id", "unknown")
-                logger.info(f"Skipping feature {feature_key} due to failed dependency")
-                feature_results[feature_key] = "skipped"
-                # FIX #21: Use _update_feature_status_by_key for feature_key lookups.
-                _update_feature_status_by_key(
-                    feature_key=feature_key,
-                    design_id=design_entry.db_id,
-                    status="skipped",
-                    logger=logger,
-                )
-            else:
-                features_to_run.append(feat)
+        # Every feature in the group is attempted -- a failed dependency no
+        # longer auto-skips its dependents. Skipping was a one-shot,
+        # permanent decision that nothing ever revisits (observed live: a
+        # dependency that failed transiently, e.g. from an unrelated
+        # workflow-timeout bug, later completed successfully, but its
+        # dependents stayed permanently "skipped" since skip status is
+        # never reconsidered). _resolve_execution_order's grouping still
+        # runs dependents after their dependencies complete; it just no
+        # longer discards them if a dependency didn't succeed.
+        features_to_run = list(group)
 
         if not features_to_run:
             continue
@@ -5550,45 +5546,21 @@ def run_continuous_pipeline(args) -> None:
     except Exception as e:
         logger.warning(f"Warning: Could not register orchestrator agent: {e}")
 
-    # Clean up stale active workflows from previous runs
-    try:
-        active_workflows = get_active_workflows()
-        if active_workflows:
-            logger.info(
-                f"Found {len(active_workflows)} stale active workflow(s) from previous runs - cleaning up..."
-            )
-            for wf in active_workflows:
-                wf_id = wf.get("id", "")
-                try:
-                    # A workflow only reaches here because it was still
-                    # "active" when the backend died mid-run -- but if every
-                    # phase had actually finished (its final "mark completed"
-                    # step just hadn't run yet), calling it "failed" would be
-                    # just as wrong as the old unconditional "completed" was.
-                    # Check real phase completion instead of assuming either way.
-                    with get_db() as _db:
-                        incomplete_phases = (
-                            _db.query(PhaseExecution)
-                            .join(Phase)
-                            .filter(
-                                Phase.workflow_id == wf_id,
-                                PhaseExecution.status != "completed",
-                            )
-                            .count()
-                        )
-                    if incomplete_phases == 0:
-                        complete_workflow_direct(wf_id)
-                        logger.info(f"  Cleaned up stale workflow {wf_id[:8]} (all phases done -> completed)")
-                    else:
-                        fail_workflow_direct(wf_id)
-                        logger.info(
-                            f"  Cleaned up stale workflow {wf_id[:8]} "
-                            f"({incomplete_phases} phase(s) unfinished -> failed, not completed)"
-                        )
-                except Exception as e:
-                    logger.warning(f"  Failed to clean up {wf_id[:8]}: {e}")
-    except Exception as e:
-        logger.warning(f"Warning: Could not check for stale workflows: {e}")
+    # NOTE: this used to unconditionally fail (or complete) every workflow
+    # still "active" at startup, on the theory that "active" + backend-just-
+    # restarted meant abandoned. That's no longer true: background_phase_
+    # advancement_sweep, the auto-resume-on-boot path, and _run_one_feature's
+    # existing_workflow_id resume branch are all specifically designed to
+    # pick a genuinely active workflow back up across a restart -- an active
+    # workflow with incomplete phases at boot is the NORMAL steady state,
+    # not evidence of staleness. This block ran on every single restart and
+    # force-failed whatever workflow was legitimately mid-flight before the
+    # resume machinery ever got a chance to run (observed live: real,
+    # actively-working agents killed and their workflow marked failed within
+    # seconds of every backend restart, all day). A workflow that's
+    # genuinely stuck (not just still in progress) is already caught more
+    # carefully elsewhere -- attempt_recovery's 5-attempt escalation, which
+    # verifies actual tmux liveness before giving up.
 
     logger.info("")
     logger.info(f"Watching design queue: {queue_dir}")

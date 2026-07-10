@@ -115,10 +115,17 @@ class TaskSimilarityService:
                         "max_similarity": 0.0,
                     }
 
-                # Calculate similarities in batch for efficiency
-                similarities = self.embedding_service.calculate_batch_similarities(
-                    task_embedding, existing_embeddings
-                )
+                # self.embedding_service is a src.memory.embedding_factory
+                # EmbeddingProvider (fastembed/OpenAI), which only exposes
+                # calculate_cosine_similarity, not the batch variant some
+                # other embedding_service implementations have -- looping
+                # this way works against every provider.
+                similarities = [
+                    self.embedding_service.calculate_cosine_similarity(
+                        task_embedding, emb
+                    )
+                    for emb in existing_embeddings
+                ]
 
                 # Find duplicate and related tasks
                 duplicate_task = None
