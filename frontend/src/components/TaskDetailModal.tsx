@@ -363,10 +363,10 @@ ${taskDetails.child_tasks.map((t: any) => `- ${t.description} (${t.status})`).jo
                 {taskDetails?.status === 'queued' && (
                   <button
                     onClick={handleBumpPriority}
-                    className="flex items-center px-3 py-2 bg-orange-500 text-white rounded-lg hover:bg-orange-600 transition-colors text-sm"
+                    className="flex items-center px-2 py-1 bg-orange-100 text-orange-700 rounded hover:bg-orange-200 transition-colors text-xs font-medium"
                     title="Start immediately (bypasses agent limit)"
                   >
-                    <Zap className="w-4 h-4 mr-1" />
+                    <Zap className="w-3 h-3 mr-1" />
                     Start Now
                   </button>
                 )}
