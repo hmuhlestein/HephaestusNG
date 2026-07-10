@@ -1806,23 +1806,7 @@ class AgentManager:
                 collapsed.append(line.rstrip())
             text = "\n".join(collapsed)
             
-            # Use tokenjuice first for output compaction
-            try:
-                import subprocess
-                result = subprocess.run(
-                    ['npx', 'tokenjuice', 'reduce'],
-                    input=text,
-                    capture_output=True,
-                    text=True,
-                    timeout=5,
-                    cwd=str(Path(__file__).parent.parent.parent / "frontend"),
-                )
-                if result.returncode == 0 and result.stdout.strip():
-                    text = result.stdout
-            except Exception:
-                pass  # tokenjuice not available
-            
-            # Then filter remaining TUI chrome (status bars, spinners, etc.)
+            # Filter TUI chrome (status bars, spinners, elapsed timers, etc.)
             spinner_re = re.compile(r'^\s*(?:[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]*\s*)?Working\.{0,3}\s*$')
             thinking_re = re.compile(r'^\s*Thinking\.{0,3}\s*$')
             tui_chrome_re = re.compile(r'^\s*\.\.\. \(\d+ (?:more|earlier) lines')
@@ -1830,7 +1814,6 @@ class AgentManager:
             mcp_status_re = re.compile(r'^\s*MCP:\s*\d+/\d+\s*servers')
             prompt_only_re = re.compile(r'^\s*\$\s*$|^\s*%\s*$|^\s*:\s*$')
             elapsed_re = re.compile(r'^\s*Elapsed \d+\.\d+s\s*$')
-            # Filter progress dots (npm install, etc.)
             dots_only_re = re.compile(r'^\.{1,20}\s*$')
             orphan_ansi_re = re.compile(r';\d+(?:;\d+)*m')
             filtered_lines = []
