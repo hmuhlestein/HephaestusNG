@@ -228,9 +228,22 @@ const RealTimeAgentOutput: React.FC<RealTimeAgentOutputProps> = ({
     // Deduplicate partial redraws: if line N is a prefix of line N+1, skip line N
     // Also handles same-tool-name deduplication (e.g., 'read /Users/hmuh' vs 'read ~/code/...')
     const toolRe = /^(\s*(?:read|write|edit|bash|subagent|mcp)\s+)(.*)/;
+    const commandRe = /^(\s*(?:read|write|edit|bash|subagent|mcp|\$)\s)/;
     const deduped: string[] = [];
     for (let i = 0; i < collapsed.length; i++) {
       const current = collapsed[i].trim();
+      
+      // If this is a write/edit command, skip all subsequent non-command lines
+      // until the next command (they are content being streamed)
+      if (/^\s*(?:write|edit)\s/.test(current) && !deduped.some(l => l.trim() === current)) {
+        deduped.push(collapsed[i]);
+        // Skip content lines until next command
+        while (i + 1 < collapsed.length && !commandRe.test(collapsed[i + 1].trim())) {
+          i++;
+        }
+        continue;
+      }
+      
       if (i + 1 < collapsed.length) {
         const next = collapsed[i + 1].trim();
         // Case 1: strict prefix
