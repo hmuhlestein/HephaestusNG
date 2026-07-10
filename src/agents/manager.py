@@ -1806,89 +1806,22 @@ class AgentManager:
                 collapsed.append(line.rstrip())
             text = "\n".join(collapsed)
             
-            # Strip TUI chrome (prompts, spinners) that ANSI stripping doesn't catch
-            from src.interfaces.cli_interface import get_cli_agent
+            # Use tokenjuice for output compaction (spinners, duplicates, TUI chrome)
             try:
-                text = get_cli_agent(agent.cli_type).strip_tui_chrome(text)
+                import subprocess
+                result = subprocess.run(
+                    ['npx', 'tokenjuice', 'reduce'],
+                    input=text,
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                    cwd=str(Path(__file__).parent.parent.parent),
+                )
+                if result.returncode == 0 and result.stdout.strip():
+                    text = result.stdout
+                # else: fall through with the pre-processed text
             except Exception:
-                pass
-            
-            # Filter out spinner-only lines and "Thinking..." lines
-            spinner_re = re.compile(r'^\s*(?:[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]*\s*)?Working\.{0,3}\s*$')
-            thinking_re = re.compile(r'^\s*Thinking\.{0,3}\s*$')
-            # Filter TUI chrome: "... (N more/earlier lines, ...)"
-            tui_chrome_re = re.compile(r'^\s*\.\.\. \(\d+ (?:more|earlier) lines')
-            # Filter status bar lines: "↑...↓...R...CH...$..."
-            status_bar_re = re.compile(r'^\s*↑\d+.*↓\d+.*R\d+.*CH\d+.*\$\d+')
-            # Filter MCP status lines
-            mcp_status_re = re.compile(r'^\s*MCP:\s*\d+/\d+\s*servers')
-            # Filter empty prompt lines (just a $ or %)
-            prompt_only_re = re.compile(r'^\s*\$\s*$|^\s*%\s*$')
-            # Filter elapsed time lines
-            elapsed_re = re.compile(r'^\s*Elapsed \d+\.\d+s\s*$')
-            filtered_lines = []
-            for line in text.split('\n'):
-                stripped = line.strip()
-                # Strip ANSI for pattern matching
-                clean = re.sub(r'\x1b\[[?]?[0-9;]*[a-zA-Z]', '', stripped)
-                clean = re.sub(r'\x1b\][^\x07]*\x07', '', clean).strip()
-                if spinner_re.match(clean) or thinking_re.match(clean):
-                    continue
-                if tui_chrome_re.match(clean) or status_bar_re.match(clean):
-                    continue
-                if mcp_status_re.match(clean) or prompt_only_re.match(clean):
-                    continue
-                if elapsed_re.match(clean):
-                    continue
-                # Filter lines that are just ANSI reset codes (empty after stripping)
-                if not clean and not stripped:
-                    continue
-                filtered_lines.append(line)
-            
-            # Deduplicate: remove lines that are strict prefixes of the next line
-            # OR lines that share the same tool name but are shorter
-            # (catches partial \r redraws when transcript has no \r chars)
-            tool_re = re.compile(r'^(\s*(?:read|write|edit|bash|subagent|mcp)\s+)(.*)')
-            deduped = []
-            i = 0
-            while i < len(filtered_lines):
-                current = filtered_lines[i].strip()
-                current_clean = re.sub(r'\x1b\[[?]?[0-9;]*[a-zA-Z]', '', current)
-                current_clean = re.sub(r'\x1b\][^\x07]*\x07', '', current_clean).strip()
-                
-                # Only deduplicate short lines that look like partial redraws
-                if len(current_clean) < 200 and i + 1 < len(filtered_lines):
-                    next_line = filtered_lines[i + 1].strip()
-                    next_clean = re.sub(r'\x1b\[[?]?[0-9;]*[a-zA-Z]', '', next_line)
-                    next_clean = re.sub(r'\x1b\][^\x07]*\x07', '', next_clean).strip()
-                    
-                    # Case 1: strict prefix
-                    if next_clean.startswith(current_clean) and len(next_clean) > len(current_clean):
-                        i += 1  # Skip this line, it's a partial redraw
-                        continue
-                    
-                    # Case 2: same tool name, shorter line is partial redraw
-                    cur_match = tool_re.match(current_clean)
-                    next_match = tool_re.match(next_clean)
-                    if cur_match and next_match and cur_match.group(1) == next_match.group(1):
-                        if len(current_clean) < len(next_clean):
-                            i += 1  # Skip shorter partial redraw
-                            continue
-                
-                deduped.append(filtered_lines[i])
-                i += 1
-            
-            # Collapse consecutive empty lines into at most one
-            final_lines = []
-            prev_empty = False
-            for line in deduped:
-                is_empty = not line.strip()
-                if is_empty and prev_empty:
-                    continue  # Skip consecutive empty lines
-                final_lines.append(line)
-                prev_empty = is_empty
-            
-            text = '\n'.join(final_lines)
+                pass  # tokenjuice not available, use pre-processed text
             
             return text
                     
