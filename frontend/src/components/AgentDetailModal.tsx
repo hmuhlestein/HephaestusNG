@@ -21,6 +21,8 @@ import { Agent } from '@/types';
 import ClickableTaskCard from './ClickableTaskCard';
 import TaskDetailModal from './TaskDetailModal';
 
+import StatusBadge from './StatusBadge';
+
 interface AgentDetailModalProps {
   agentId: string | null;
   onClose: () => void;
@@ -86,21 +88,6 @@ const AgentDetailModal: React.FC<AgentDetailModalProps> = ({
     }
   };
 
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'working':
-        return 'text-green-600 bg-green-100';
-      case 'stuck':
-        return 'text-red-600 bg-red-100';
-      case 'idle':
-        return 'text-gray-600 bg-gray-100';
-      case 'terminated':
-        return 'text-gray-500 bg-gray-200';
-      default:
-        return 'text-gray-600 bg-gray-100';
-    }
-  };
-
   if (!agentId) return null;
 
   return (
@@ -136,9 +123,7 @@ const AgentDetailModal: React.FC<AgentDetailModalProps> = ({
 
               <div className="flex items-center space-x-2">
                 {agent && (
-                  <span className={`px-2.5 py-1 rounded-full text-xs font-semibold ${getStatusColor(agent.status)}`}>
-                    {agent.status}
-                  </span>
+                  <StatusBadge status={agent.status} />
                 )}
                 {agent && onViewOutput && (
                   <button

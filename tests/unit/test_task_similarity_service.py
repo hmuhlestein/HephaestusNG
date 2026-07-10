@@ -7,7 +7,7 @@ from unittest.mock import Mock, patch
 import pytest
 
 from src.core.database import DatabaseManager, Task
-from src.services.embedding_service import EmbeddingService
+from src.memory.embedding_factory import EmbeddingProvider
 from src.services.task_similarity_service import TaskSimilarityService
 
 
@@ -36,8 +36,14 @@ class TestTaskSimilarityService:
 
     @pytest.fixture
     def mock_embedding_service(self):
-        """Create a mock embedding service."""
-        service = Mock(spec=EmbeddingService)
+        """Create a mock embedding service.
+
+        Spec'd on EmbeddingProvider (src.memory.embedding_factory) -- the
+        actual class TaskSimilarityService is wired up with in production
+        (via create_embedding_provider()), which only exposes
+        calculate_cosine_similarity, not a batch variant.
+        """
+        service = Mock(spec=EmbeddingProvider)
         return service
 
     @pytest.fixture
@@ -77,7 +83,7 @@ class TestTaskSimilarityService:
         self._setup_query_mock(session, [sample_task])
 
         # Mock perfect similarity
-        mock_embedding_service.calculate_batch_similarities.return_value = [1.0]
+        mock_embedding_service.calculate_cosine_similarity.side_effect = [1.0]
 
         # Check for duplicates
         result = await similarity_service.check_for_duplicates(
@@ -99,7 +105,7 @@ class TestTaskSimilarityService:
         _, session = mock_db_manager
 
         self._setup_query_mock(session, [sample_task])
-        mock_embedding_service.calculate_batch_similarities.return_value = [0.85]
+        mock_embedding_service.calculate_cosine_similarity.side_effect = [0.85]
 
         result = await similarity_service.check_for_duplicates(
             "Setup user login system", [0.2] * 3072
@@ -117,7 +123,7 @@ class TestTaskSimilarityService:
         _, session = mock_db_manager
 
         self._setup_query_mock(session, [sample_task])
-        mock_embedding_service.calculate_batch_similarities.return_value = [0.65]
+        mock_embedding_service.calculate_cosine_similarity.side_effect = [0.65]
 
         result = await similarity_service.check_for_duplicates(
             "Different task entirely", [0.5] * 3072
@@ -160,7 +166,7 @@ class TestTaskSimilarityService:
         self._setup_query_mock(session, [task1, task2, task3])
 
         # Mock similarities: task1 related, task2 not related, task3 related
-        mock_embedding_service.calculate_batch_similarities.return_value = [
+        mock_embedding_service.calculate_cosine_similarity.side_effect = [
             0.55,
             0.3,
             0.45,
@@ -191,7 +197,7 @@ class TestTaskSimilarityService:
         _, session = mock_db_manager
 
         self._setup_query_mock(session, [sample_task])
-        mock_embedding_service.calculate_batch_similarities.return_value = [0.2]
+        mock_embedding_service.calculate_cosine_similarity.side_effect = [0.2]
 
         result = await similarity_service.check_for_duplicates(
             "Completely unrelated task", [0.9] * 3072
@@ -224,7 +230,7 @@ class TestTaskSimilarityService:
         self._setup_query_mock(session, tasks)
 
         # Similarities: mix of related and not
-        mock_embedding_service.calculate_batch_similarities.return_value = [
+        mock_embedding_service.calculate_cosine_similarity.side_effect = [
             0.45,
             0.6,
             0.35,
@@ -366,16 +372,13 @@ class TestTaskSimilarityService:
         task3 = Mock(id="task-3", embedding="")  # Empty string
 
         self._setup_query_mock(session, [task1, task2, task3])
-        mock_embedding_service.calculate_batch_similarities.return_value = [0.5]
+        mock_embedding_service.calculate_cosine_similarity.side_effect = [0.5]
 
         await similarity_service.check_for_duplicates("New task", [0.5] * 3072)
 
-        # Should only compare with task2
-        mock_embedding_service.calculate_batch_similarities.assert_called_once()
-        embeddings_arg = mock_embedding_service.calculate_batch_similarities.call_args[
-            0
-        ][1]
-        assert len(embeddings_arg) == 1
+        # Should only compare with task2 -- one call, since task1/task3 have
+        # no usable embedding and are filtered out before comparison.
+        mock_embedding_service.calculate_cosine_similarity.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_handle_json_stored_embeddings(
@@ -394,16 +397,14 @@ class TestTaskSimilarityService:
         task.embedding = json.dumps([0.1] * 3072)
 
         self._setup_query_mock(session, [task])
-        mock_embedding_service.calculate_batch_similarities.return_value = [0.5]
+        mock_embedding_service.calculate_cosine_similarity.side_effect = [0.5]
 
         await similarity_service.check_for_duplicates("New task", [0.5] * 3072)
 
         # Should parse and use the JSON embedding
-        mock_embedding_service.calculate_batch_similarities.assert_called_once()
-        embeddings_arg = mock_embedding_service.calculate_batch_similarities.call_args[
-            0
-        ][1]
-        assert embeddings_arg[0] == [0.1] * 3072
+        mock_embedding_service.calculate_cosine_similarity.assert_called_once()
+        embedding_arg = mock_embedding_service.calculate_cosine_similarity.call_args[0][1]
+        assert embedding_arg == [0.1] * 3072
 
     @pytest.mark.asyncio
     async def test_error_handling_returns_safe_default(
@@ -447,7 +448,7 @@ class TestTaskSimilarityService:
 
         # All with similarity between 0.4 and 0.7
         similarities = [0.4 + (i * 0.01) for i in range(20)]
-        mock_embedding_service.calculate_batch_similarities.return_value = similarities
+        mock_embedding_service.calculate_cosine_similarity.side_effect = similarities
 
         result = await similarity_service.check_for_duplicates("New task", [0.5] * 3072)
 

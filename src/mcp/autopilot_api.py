@@ -310,6 +310,7 @@ class PipelineStatus(BaseModel):
     total_elapsed: int = 0
     queue_depth: int = 0
     last_event: Optional[Dict[str, Any]] = None
+    last_error: Optional[str] = None
     active_agents: int = 0
     # Which project the (globally single) AutopilotService is actually
     # running, if any -- lets the UI say "X is running" instead of a vague
@@ -355,18 +356,36 @@ async def get_pipeline_status(
     run_dir = _get_latest_run_dir()
     running = service_status.get("running", False)
 
-    # When project_id is provided, check if THIS project has active workflows
-    # (the service.running flag is global, not per-project)
+    # When project_id is provided, check if THIS project has active
+    # workflows OR active agents (the service.running flag is global,
+    # not per-project).
     if project_id:
         try:
-            from src.core.database import Workflow, get_db
+            from src.core.database import Agent, Task, Workflow, get_db
             with get_db() as db:
                 has_active = db.query(Workflow).filter(
                     Workflow.project_id == project_id,
                     Workflow.status.in_(["active", "running"])
                 ).first()
-                # Override running flag for this specific project
-                running = has_active is not None
+                if has_active:
+                    running = True
+                else:
+                    # Also check: are any agents working on tasks in this
+                    # project's workflows? A workflow can be "failed" while
+                    # an agent is still actively working on it.
+                    project_wf_ids = [
+                        w.id for w in db.query(Workflow)
+                        .filter(Workflow.project_id == project_id)
+                        .all()
+                    ]
+                    if project_wf_ids:
+                        active_agent = db.query(Agent).join(
+                            Task, Agent.current_task_id == Task.id
+                        ).filter(
+                            Task.workflow_id.in_(project_wf_ids),
+                            Agent.status.in_(["working", "starting", "idle"])
+                        ).first()
+                        running = active_agent is not None
         except Exception:
             pass
     elif not running:
@@ -482,6 +501,17 @@ async def get_pipeline_status(
             running_project_name = Path(running_project_path).name
 
     # Merge service status with file-based state
+    # Derive error/reason for why the pipeline stopped
+    last_error = None
+    if not running:
+        service_error = service_status.get("error")
+        if service_error:
+            last_error = service_error
+        elif last_event and last_event.get("type") == "error":
+            last_error = last_event.get("message", "Unknown error")
+        elif designs_failed > 0:
+            last_error = f"{designs_failed} design(s) failed"
+
     result = PipelineStatus(
         running=running,
         current_design=service_status.get("current_design")
@@ -497,6 +527,7 @@ async def get_pipeline_status(
         or state.get("total_elapsed", 0),
         queue_depth=queue_depth,
         last_event=last_event,
+        last_error=last_error,
         active_agents=active_agents,
         running_project_path=running_project_path,
         running_project_name=running_project_name,
@@ -2607,17 +2638,56 @@ async def get_project_design_status(project_id: str, filename: str):
                 "completed_at": None,
             })
 
+        # Collect workflow-level errors for failed workflows
+        workflow_errors = []
+        for wf in matching_workflows:
+            if wf.status == "failed":
+                wf_tasks = [t for t in all_tasks if t.get("workflow_id") == wf.id]
+                failed_tasks = [t for t in wf_tasks if t.get("status") == "failed"]
+                diag_failed = [
+                    t for t in failed_tasks
+                    if t.get("description", "").startswith("DIAGNOSTIC:")
+                ]
+                real_failed = [
+                    t for t in failed_tasks
+                    if not t.get("description", "").startswith("DIAGNOSTIC:")
+                ]
+                if real_failed:
+                    workflow_errors.append(
+                        f"Workflow {wf.id[:8]}: {len(real_failed)} task(s) failed"
+                    )
+                elif diag_failed:
+                    workflow_errors.append(
+                        f"Workflow {wf.id[:8]}: diagnostic task failed (all feature work completed)"
+                    )
+                else:
+                    workflow_errors.append(
+                        f"Workflow {wf.id[:8]}: marked failed"
+                    )
+
+        # Build warning message for completed designs with failed workflows
+        warning = None
+        if overall_status == "completed" and workflow_errors:
+            warning = (
+                f"Design completed but {len(workflow_errors)} workflow(s) had issues. "
+                + "; ".join(workflow_errors)
+            )
+
         return {
             "filename": filename,
             "name": design_name,
             "content": design_content,
             "status": overall_status,
-            "error": design_error if overall_status == "failed" else None,
+            "error": design_error,
+            "warning": warning,
             "workflows": [
                 {
                     "id": wf.id,
                     "status": wf.status,
                     "created_at": wf.created_at.isoformat() if wf.created_at else None,
+                    "error": next(
+                        (e for e in workflow_errors if wf.id[:8] in e), None
+                    ) if wf.status == "failed" else None,
                 }
                 for wf in matching_workflows
             ],
@@ -3301,7 +3371,21 @@ async def start_pipeline(
     from src.autopilot.service import get_autopilot_service
 
     service = get_autopilot_service()
-    if service.running:
+    # Give a freshly-(re)started pipeline time to actually reach its first
+    # workflow check before second-guessing it. Without this, a zombie
+    # verdict landing seconds after start cancels run_continuous_pipeline's
+    # task -- which resets its in-memory recovery-attempt counter -- before
+    # it ever gets a chance to hand off to the per-feature resume path.
+    # Observed live: zombie-detected and stopped 8s after auto-resume,
+    # trapping a genuinely in-progress workflow in a stop/restart loop that
+    # could never escalate past its own recovery counter.
+    ZOMBIE_CHECK_GRACE_SECONDS = 45
+    time_since_start = (
+        time.time() - service._start_time if service._start_time else None
+    )
+    if service.running and (
+        time_since_start is None or time_since_start >= ZOMBIE_CHECK_GRACE_SECONDS
+    ):
         # Check for zombie state: service says running but no active agents/workflows.
         # This happens when the pipeline task gets stuck. Auto-stop and restart.
         # BUT: if the queue is legitimately empty (all designs done), the pipeline

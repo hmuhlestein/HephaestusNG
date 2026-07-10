@@ -456,6 +456,13 @@ class MonitoringLoop:
         # Cache for Guardian summaries
         self.guardian_summaries_cache: Dict[str, Dict[str, Any]] = {}
 
+        # Tracks task_id -> when we last nudged an idle-but-still-"working"
+        # agent, for the stuck-task check in _audit_system_health. Reset on
+        # restart like the other in-process monitoring state on this class
+        # (e.g. _last_phase_states equivalents elsewhere) -- acceptable since
+        # a restart already re-derives everything from DB state.
+        self._stuck_task_nudges: Dict[str, datetime] = {}
+
         # Orphaned tmux session reconciliation collaborator (SOLID review
         # 3.4) — _cleanup_orphaned_tmux_sessions below delegates to this.
         from src.monitoring.orphan_reaper import OrphanSessionReaper
@@ -1603,52 +1610,104 @@ class MonitoringLoop:
         # Store for API access
         self._health_findings = result["findings"]
 
-        # Task stuck detection: tasks in_progress > 10min with no active agent
+        # Task stuck detection: an in_progress task is only genuinely stuck
+        # if its agent has produced no activity for stuck_detection_minutes
+        # -- not merely because the task has been open that long. A
+        # legitimately long phase (e.g. architecture_design) can run well
+        # past that mark while the agent keeps working (observed live: a
+        # 10-minute-old task with an agent that had reported activity 30s
+        # earlier got killed anyway under the old started_at-only check).
+        # An agent that looks idle gets nudged once and given one more
+        # window to respond before its task is failed, in case it's mid a
+        # slow tool call rather than truly stuck.
         try:
             session = self.db_manager.get_session()
-            from datetime import datetime, timedelta
-
             from src.core.database import Agent, Task
 
-            stale_cutoff = datetime.utcnow() - timedelta(minutes=10)
-            stuck_tasks = (
+            idle_minutes = timedelta(minutes=self.config.stuck_detection_minutes)
+            idle_cutoff = datetime.utcnow() - idle_minutes
+            candidate_tasks = (
                 session.query(Task)
                 .filter(
                     Task.status == "in_progress",
-                    Task.started_at < stale_cutoff,
+                    Task.started_at < idle_cutoff,
                     Task.started_at.isnot(None),
                 )
                 .all()
             )
-            for task in stuck_tasks:
-                # Check if agent is still active
+            live_task_ids = {t.id for t in candidate_tasks}
+            for stale_id in list(self._stuck_task_nudges):
+                if stale_id not in live_task_ids:
+                    self._stuck_task_nudges.pop(stale_id, None)
+
+            for task in candidate_tasks:
                 agent = (
-                    session.query(Agent)
-                    .filter_by(id=task.assigned_agent_id, status="working")
-                    .first()
+                    session.query(Agent).filter_by(id=task.assigned_agent_id).first()
                     if task.assigned_agent_id
                     else None
                 )
-                if not agent:
-                    # If the agent called update_task_status(done) but the session
-                    # was killed before the response was processed, completion_notes
-                    # will be set. Promote to done instead of failing.
-                    if task.completion_notes:
-                        logger.info(
-                            f"[HEALTH] Task {task.id[:8]} stuck in_progress but has "
-                            f"completion_notes — promoting to done (agent finished then crashed)"
-                        )
-                        task.status = "done"
-                        task.completed_at = datetime.utcnow()
-                    else:
-                        logger.warning(
-                            f"[HEALTH] Task {task.id[:8]} stuck in_progress for >10min with no active agent — marking failed"
-                        )
-                        task.status = "failed"
-                        task.failure_reason = (
-                            "Task stuck: no active agent for >10 minutes"
-                        )
-                    session.commit()
+
+                if agent and agent.status == "working":
+                    last_seen = agent.last_activity or task.started_at
+                    if last_seen >= idle_cutoff:
+                        # Producing output within the window -- not stuck.
+                        self._stuck_task_nudges.pop(task.id, None)
+                        continue
+
+                    nudged_at = self._stuck_task_nudges.get(task.id)
+                    if nudged_at is None:
+                        try:
+                            await self.agent_manager.send_message_to_agent(
+                                agent.id,
+                                "No activity has been seen from you in a while. "
+                                "If you're still working, please continue and "
+                                "report your current status.",
+                            )
+                            self._stuck_task_nudges[task.id] = datetime.utcnow()
+                            logger.info(
+                                f"[HEALTH] Nudged idle agent {agent.id[:8]} for task "
+                                f"{task.id[:8]} (no activity since {last_seen})"
+                            )
+                        except Exception as e:
+                            logger.warning(
+                                f"[HEALTH] Failed to nudge agent {agent.id[:8]}: {e}"
+                            )
+                        continue  # give it one more window before failing
+
+                    if last_seen > nudged_at:
+                        # Activity arrived after the nudge -- it was working.
+                        self._stuck_task_nudges.pop(task.id, None)
+                        continue
+
+                    if datetime.utcnow() - nudged_at < idle_minutes:
+                        continue  # still within the post-nudge grace period
+
+                # No agent, agent not active, or no response even after a
+                # nudge and a full grace period -- genuinely stuck.
+                self._stuck_task_nudges.pop(task.id, None)
+
+                # If the agent called update_task_status(done) but the session
+                # was killed before the response was processed, completion_notes
+                # will be set. Promote to done instead of failing.
+                if task.completion_notes:
+                    logger.info(
+                        f"[HEALTH] Task {task.id[:8]} stuck in_progress but has "
+                        f"completion_notes — promoting to done (agent finished then crashed)"
+                    )
+                    task.status = "done"
+                    task.completed_at = datetime.utcnow()
+                else:
+                    logger.warning(
+                        f"[HEALTH] Task {task.id[:8]} stuck in_progress with no "
+                        f"agent activity for >{self.config.stuck_detection_minutes} "
+                        "minutes (including a nudge) — marking failed"
+                    )
+                    task.status = "failed"
+                    task.failure_reason = (
+                        f"Task stuck: no agent activity for "
+                        f">{self.config.stuck_detection_minutes} minutes"
+                    )
+                session.commit()
         except Exception as e:
             logger.error(f"Error in task stuck detection: {e}")
         finally:
@@ -1988,133 +2047,25 @@ class MonitoringLoop:
     async def _create_diagnostic_agent(
         self, workflow_id: str, workflow_tasks: List, stuck_time: float
     ):
-        """Create and spawn a diagnostic agent.
+        """Log a stalled workflow without creating extra tasks.
 
-        Args:
-            workflow_id: ID of stuck workflow
-            workflow_tasks: All tasks in the workflow
-            stuck_time: How long we've been stuck (seconds)
+        Diagnostic tasks polluted the task list, got restarted on resume,
+        and wasted agents. Now we just log and let the pipeline's own
+        retry logic handle recovery.
+
+        A prior version of this method tried to mark in_progress/assigned
+        tasks with terminated agents as failed directly here, but this
+        caller only ever runs after confirming zero tasks are in an active
+        status (see the all_tasks_finished gate above) -- so that branch
+        could never fire. The real, working version of that logic is
+        _clean_stale_assigned_tasks in src/autopilot/orchestrator.py,
+        called every tick from background_phase_advancement_sweep.
         """
-        import uuid
-
-        from src.core.database import DiagnosticRun, Task
-
-        logger.info(
-            f"[DIAGNOSTIC MONITOR] 🔍 Creating diagnostic agent for workflow {workflow_id[:8]}"
+        logger.warning(
+            f"[DIAGNOSTIC MONITOR] Workflow {workflow_id[:8]} stuck for "
+            f"{stuck_time:.0f}s — no diagnostic task created, "
+            f"pipeline retry logic will handle recovery"
         )
-
-        session = self.db_manager.get_session()
-        try:
-            # Gather context for diagnostic agent
-            logger.info("[DIAGNOSTIC MONITOR] Gathering diagnostic context...")
-            context = await self._gather_diagnostic_context(
-                workflow_id, workflow_tasks, stuck_time
-            )
-            logger.info(
-                f"[DIAGNOSTIC MONITOR] Context gathered: {len(context['phases_summary'])} phases, {len(context['agents_summary'])} agents reviewed"
-            )
-
-            # Create diagnostic task on the most-recent active/done phase, not the first.
-            current_phase_id = None
-            for t in reversed(workflow_tasks):
-                if t.phase_id and t.status in ("done", "in_progress", "failed"):
-                    current_phase_id = t.phase_id
-                    break
-
-            if not current_phase_id:
-                logger.warning(
-                    "[DIAGNOSTIC MONITOR] No phase_id found on any task, skipping diagnostic creation"
-                )
-                return
-
-            task_id = str(uuid.uuid4())
-            diagnostic_task = Task(
-                id=task_id,
-                raw_description="DIAGNOSTIC: Analyze why workflow has stalled and create tasks to progress toward goal",
-                enriched_description=f"Diagnostic analysis for workflow {workflow_id[:8]} - {len(workflow_tasks)} tasks completed, stuck for {stuck_time:.0f}s",
-                done_definition="Created 1-5 new tasks with clear phase assignments and completion criteria to push workflow toward its goal",
-                status="pending",
-                priority="high",
-                workflow_id=workflow_id,
-                created_by_agent_id="monitor",
-                phase_id=current_phase_id,
-            )
-            session.add(diagnostic_task)
-            session.flush()
-            logger.info(f"[DIAGNOSTIC MONITOR] Created diagnostic task: {task_id[:8]}")
-
-            # Create diagnostic run record
-            run_id = str(uuid.uuid4())
-            diagnostic_run = DiagnosticRun(
-                id=run_id,
-                workflow_id=workflow_id,
-                diagnostic_task_id=task_id,
-                total_tasks_at_trigger=len(workflow_tasks),
-                done_tasks_at_trigger=len(
-                    [t for t in workflow_tasks if t.status == "done"]
-                ),
-                failed_tasks_at_trigger=len(
-                    [t for t in workflow_tasks if t.status == "failed"]
-                ),
-                time_since_last_task_seconds=int(stuck_time),
-                workflow_goal=context["workflow_goal"],
-                phases_analyzed=context["phases_summary"],
-                agents_reviewed=context["agents_summary"],
-                status="created",
-            )
-            session.add(diagnostic_run)
-            session.commit()
-            logger.info(f"[DIAGNOSTIC MONITOR] Created diagnostic run: {run_id[:8]}")
-
-            # Generate diagnostic prompt
-            logger.info("[DIAGNOSTIC MONITOR] Generating diagnostic prompt...")
-            diagnostic_prompt = await self._generate_diagnostic_prompt(context)
-            prompt_size = len(diagnostic_prompt)
-            logger.info(
-                f"[DIAGNOSTIC MONITOR] Prompt generated: {prompt_size} characters"
-            )
-
-            # Spawn diagnostic agent (no worktree, works in main repo)
-            enriched_data = {
-                "enriched_description": diagnostic_task.enriched_description,
-                "completion_criteria": [diagnostic_task.done_definition],
-                "diagnostic_context": context,
-                "validation_prompt": diagnostic_prompt,  # Use validation_prompt field for custom prompt
-            }
-
-            logger.info("[DIAGNOSTIC MONITOR] Spawning diagnostic agent...")
-            agent = await self.agent_manager.create_agent_for_task(
-                task=diagnostic_task,
-                enriched_data=enriched_data,
-                memories=[],  # Diagnostic agent gets everything in prompt
-                project_context="",
-                agent_type="diagnostic",
-                use_existing_worktree=True,
-                working_directory=str(self.config.main_repo_path),  # Use main repo
-            )
-
-            # Update diagnostic run with agent ID
-            diagnostic_run.diagnostic_agent_id = agent.id
-            diagnostic_run.status = "running"
-            session.commit()
-
-            logger.info(
-                "[DIAGNOSTIC MONITOR] ✅ Diagnostic agent created successfully!"
-            )
-            logger.info(f"[DIAGNOSTIC MONITOR] Agent ID: {agent.id[:8]}")
-            logger.info(f"[DIAGNOSTIC MONITOR] Task ID: {task_id[:8]}")
-            logger.info(f"[DIAGNOSTIC MONITOR] Run ID: {run_id[:8]}")
-            logger.info(f"[DIAGNOSTIC MONITOR] Workflow: {workflow_id[:8]}")
-
-        except Exception as e:
-            logger.error(
-                f"[DIAGNOSTIC MONITOR] ❌ Failed to create diagnostic agent: {e}",
-                exc_info=True,
-            )
-            session.rollback()
-            raise
-        finally:
-            session.close()
 
     async def _gather_diagnostic_context(
         self, workflow_id: str, workflow_tasks: List, stuck_time: float

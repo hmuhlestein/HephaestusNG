@@ -2,9 +2,10 @@
 
 import logging
 import os
+import threading
 from contextlib import contextmanager
 from datetime import datetime
-from typing import Optional
+from typing import Any, Dict, Optional
 
 from sqlalchemy import (
     JSON,
@@ -26,7 +27,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import backref, relationship, sessionmaker
-from sqlalchemy.pool import StaticPool
+from sqlalchemy.pool import QueuePool
 from sqlalchemy.sql import text
 
 Base = declarative_base()
@@ -1287,32 +1288,53 @@ class PhasePromptTemplate(Base):
 
 
 class DatabaseManager:
-    """Manager for database operations."""
+    """Manager for database operations.
+    
+    Uses engine caching to avoid creating duplicate engines for the same
+    database path. Each engine uses QueuePool for connection pooling,
+    allowing concurrent reads alongside writes (SQLite WAL mode).
+    """
+    
+    _engines: Dict[str, Any] = {}
+    _sessions: Dict[str, sessionmaker] = {}
+    _lock = threading.Lock()
 
     def __init__(self, database_path: str = "hephaestus.db"):
-        """Initialize database connection."""
+        """Initialize database connection (reuses cached engine if available)."""
         self.database_path = database_path
-        self.engine = create_engine(
-            f"sqlite:///{database_path}",
-            connect_args={"check_same_thread": False},
-            poolclass=StaticPool,
-            echo=False,
-        )
         
-        # Set SQLite pragmas for concurrent access
-        # WAL mode allows concurrent readers alongside a single writer
-        # busy_timeout makes writers block-and-retry instead of failing immediately
-        @event.listens_for(self.engine, "connect")
-        def _set_sqlite_pragma(dbapi_connection, connection_record):
-            cursor = dbapi_connection.cursor()
-            cursor.execute("PRAGMA journal_mode=WAL")
-            cursor.execute("PRAGMA busy_timeout=5000")
-            cursor.close()
-        
-        self.SessionLocal = sessionmaker(
-            autocommit=False, autoflush=False, bind=self.engine,
-            expire_on_commit=False  # Prevent DetachedInstanceError bugs (H-0*)
-        )
+        with DatabaseManager._lock:
+            if database_path not in DatabaseManager._engines:
+                engine = create_engine(
+                    f"sqlite:///{database_path}",
+                    connect_args={"check_same_thread": False},
+                    poolclass=QueuePool,
+                    pool_size=5,
+                    max_overflow=10,
+                    pool_timeout=30,
+                    pool_recycle=300,
+                    echo=False,
+                )
+                
+                # Set SQLite pragmas for concurrent access
+                # WAL mode allows concurrent readers alongside a single writer
+                # busy_timeout makes writers block-and-retry instead of failing
+                @event.listens_for(engine, "connect")
+                def _set_sqlite_pragma(dbapi_connection, connection_record):
+                    cursor = dbapi_connection.cursor()
+                    cursor.execute("PRAGMA journal_mode=WAL")
+                    cursor.execute("PRAGMA busy_timeout=30000")  # 30s
+                    cursor.execute("PRAGMA synchronous=NORMAL")
+                    cursor.close()
+                
+                DatabaseManager._engines[database_path] = engine
+                DatabaseManager._sessions[database_path] = sessionmaker(
+                    autocommit=False, autoflush=False, bind=engine,
+                    expire_on_commit=False  # Prevent DetachedInstanceError bugs (H-0*)
+                )
+            
+            self.engine = DatabaseManager._engines[database_path]
+            self.SessionLocal = DatabaseManager._sessions[database_path]
 
     def create_tables(self):
         """Create all database tables."""

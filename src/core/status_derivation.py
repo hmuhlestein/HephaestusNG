@@ -166,7 +166,8 @@ def derive_design_status(db: Session, design_id: str, write_back: bool = True) -
         return design.status
     
     # Derive from feature statuses
-    feature_statuses = {derive_feature_status(db, f.id, write_back=False) for f in features}
+    feature_status_map = {f: derive_feature_status(db, f.id, write_back=False) for f in features}
+    feature_statuses = set(feature_status_map.values())
     
     # Consider skipped features as "done" for status derivation
     # (they were intentionally excluded, not left incomplete)
@@ -219,8 +220,26 @@ def derive_design_status(db: Session, design_id: str, write_back: bool = True) -
             f"{design.status} -> {derived}"
         )
         design.status = derived
+        if derived == FeatureStatus.FAILED:
+            # Surfaced on the design row in the UI -- without this, a design
+            # that rolls up to "failed" purely because every task on one of
+            # its features failed (no retryable workflow involved, so
+            # pick_next_design's own retry-exhaustion message never fires)
+            # shows a bare "failed" badge with no explanation.
+            failed_names = [
+                f.name for f, s in feature_status_map.items() if s == FeatureStatus.FAILED
+            ]
+            design.error = (
+                f"Feature(s) failed: {', '.join(failed_names)}"
+                if failed_names
+                else "One or more features failed"
+            )
+        else:
+            # Clear a stale message from a previous failure now that the
+            # design has healed to a non-failed status.
+            design.error = None
         db.commit()
-    
+
     return derived
 
 

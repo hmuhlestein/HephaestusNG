@@ -956,13 +956,6 @@ async def startup_event():
     )
     logger.info("Background phase advancement sweep task created")
 
-    # Resume any workflows that were mid-flight when the server last stopped
-    # (crash / laptop sleep / manual restart) so real work isn't stranded.
-    try:
-        await _resume_interrupted_workflows()
-    except Exception as e:
-        logger.error(f"[RESUME] resume scan failed: {e}")
-
     # Resume the autopilot pipeline driver itself if it was running when the
     # server last stopped. AutopilotService lives entirely in-process (see
     # src/autopilot/service.py) — its polling loop (which fires phase
@@ -972,6 +965,15 @@ async def startup_event():
     # but the next phase's task never gets created, until a much later,
     # cruder fallback (the diagnostic monitor's stuck-workflow detector)
     # eventually notices and manually patches the gap.
+    #
+    # Done BEFORE _resume_interrupted_workflows below (rather than after, as
+    # this used to be ordered) so that if the persisted state says the user
+    # last had this running, AutopilotService.running flips true as early as
+    # possible in startup -- not after the slower interrupted-workflow scan
+    # has already run. Every check elsewhere that reads "is the pipeline
+    # active" (status endpoints, the frontend queue page, orphan/recovery
+    # logic) should see "active" for as much of the startup window as
+    # possible instead of a transient "idle" read.
     try:
         from src.autopilot.service import get_autopilot_service
 
@@ -988,6 +990,13 @@ async def startup_event():
             )
     except Exception as e:
         logger.error(f"[RESUME] Failed to auto-resume autopilot pipeline: {e}")
+
+    # Resume any workflows that were mid-flight when the server last stopped
+    # (crash / laptop sleep / manual restart) so real work isn't stranded.
+    try:
+        await _resume_interrupted_workflows()
+    except Exception as e:
+        logger.error(f"[RESUME] resume scan failed: {e}")
 
     logger.info("Server started successfully")
 
