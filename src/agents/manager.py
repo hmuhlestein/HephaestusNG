@@ -1827,7 +1827,11 @@ class AgentManager:
             status_bar_re = re.compile(r'^\s*↑\d+.*↓\d+.*R\d+.*CH\d+.*\$\d+')
             mcp_status_re = re.compile(r'^\s*MCP:\s*\d+/\d+\s*servers')
             prompt_only_re = re.compile(r'^\s*\$\s*$|^\s*%\s*$|^\s*:\s*$')
-            elapsed_re = re.compile(r'^\s*Elapsed \d+\.\d+s\s*$')
+            elapsed_re = re.compile(r'^\s*(?:Elapsed|Took) \d+\.\d+s\s*$')
+            # Filter shell prompt lines (~/path (branch))
+            shell_prompt_re = re.compile(r'^~/\S+ \([^)]+\)\s*$')
+            # Filter empty command lines ($ ...)
+            empty_cmd_re = re.compile(r'^\s*\$ \.\.\.\s*$')
             dots_only_re = re.compile(r'^\.{1,20}\s*$')
             orphan_ansi_re = re.compile(r';\d+(?:;\d+)*m')
             filtered_lines = []
@@ -1843,6 +1847,10 @@ class AgentManager:
                 if mcp_status_re.match(clean) or prompt_only_re.match(clean):
                     continue
                 if elapsed_re.match(clean):
+                    continue
+                if shell_prompt_re.match(clean):
+                    continue
+                if empty_cmd_re.match(clean):
                     continue
                 if dots_only_re.match(clean):
                     continue
