@@ -1814,6 +1814,20 @@ class AgentManager:
             except Exception:
                 pass
             
+            # Filter out spinner-only lines and "Thinking..." lines
+            spinner_re = re.compile(r'^\s*(?:[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]*\s*)?Working\.{0,3}\s*$')
+            thinking_re = re.compile(r'^\s*Thinking\.{0,3}\s*$')
+            filtered_lines = []
+            for line in text.split('\n'):
+                stripped = line.strip()
+                # Strip ANSI for pattern matching
+                clean = re.sub(r'\x1b\[[?]?[0-9;]*[a-zA-Z]', '', stripped)
+                clean = re.sub(r'\x1b\][^\x07]*\x07', '', clean).strip()
+                if spinner_re.match(clean) or thinking_re.match(clean):
+                    continue
+                filtered_lines.append(line)
+            text = '\n'.join(filtered_lines)
+            
             return text
                     
         except Exception as e:
