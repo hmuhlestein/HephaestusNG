@@ -59,6 +59,22 @@ const Autopilot: React.FC = () => {
     placeholderData: undefined,  // Don't carry over stale data from previous project
   });
 
+  // Tasks sitting at status="pending" with no agent assigned -- distinct
+  // from status.queue_depth (design-level: designs not yet processed) AND
+  // from getQueueStatus's queued_tasks_count (only tasks explicitly queued
+  // because capacity was full at creation time -- a pending task with slots
+  // currently available never enters that queue at all, which is exactly
+  // the orphaned-pending-task class of bug this session spent a while
+  // fixing elsewhere: task genuinely stuck pending/no-agent while
+  // queue_status correctly reports 0 queued and slots available). This
+  // queries actual DB task status directly so it reflects reality.
+  const { data: pendingTasks } = useQuery({
+    queryKey: ['autopilot-pending-tasks', projectId],
+    queryFn: () => apiService.getTasks(0, 500, 'pending', undefined, projectId || undefined),
+    refetchInterval: 3000,
+    enabled: !!projectId,
+  });
+
   const togglePipeline = useMutation({
     mutationFn: async () => {
       if (status?.running) {
@@ -220,10 +236,11 @@ const Autopilot: React.FC = () => {
       {/* Pipeline Status Hero */}
       <PipelineStatusCard
         status={status}
+        pendingAgents={pendingTasks?.length}
         projectName={activeProject?.name}
         onToggle={() => togglePipeline.mutate()}
         onMetricClick={(metric) => {
-          if (metric === 'agents') {
+          if (metric === 'agents' || metric === 'pending_agents') {
             navigate('/agents');
           } else {
             // Map metric to filter: processed → all, succeeded → validated, failed → failed

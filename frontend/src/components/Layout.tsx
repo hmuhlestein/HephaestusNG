@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { NavLink, Outlet } from 'react-router-dom';
-import { Home, FileText, Bot, Database, GitBranch, Activity, Layers, Monitor, Compass, ListChecks, Menu, ChevronLeft, Ticket, Workflow, Rocket, Settings } from 'lucide-react';
+import { Home, FileText, Bot, Database, GitBranch, Activity, Layers, Monitor, Compass, ListChecks, Menu, ChevronLeft, Ticket, Workflow, Rocket, Settings, Wifi } from 'lucide-react';
 import { useWebSocket } from '@/context/WebSocketContext';
 import { format } from 'date-fns';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -146,7 +146,8 @@ const Layout: React.FC = () => {
               </div>
               <div className="flex items-center space-x-2">
                 {isConnected && (
-                  <span className="text-xs text-green-600 bg-green-50 px-2 py-1 rounded">
+                  <span className="flex items-center gap-1 text-xs text-green-600 bg-green-50 px-2 py-1 rounded">
+                    <Wifi className="w-3 h-3" />
                     Live
                   </span>
                 )}
