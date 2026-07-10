@@ -502,6 +502,7 @@ async def get_pipeline_status(
 
     # Merge service status with file-based state
     # Derive error/reason for why the pipeline stopped
+    designs_failed = service_status.get("designs_failed", 0) or state.get("designs_failed", 0)
     last_error = None
     if not running:
         service_error = service_status.get("error")
@@ -521,8 +522,7 @@ async def get_pipeline_status(
         or state.get("designs_processed", 0),
         designs_succeeded=service_status.get("designs_succeeded", 0)
         or state.get("designs_succeeded", 0),
-        designs_failed=service_status.get("designs_failed", 0)
-        or state.get("designs_failed", 0),
+        designs_failed=designs_failed,
         total_elapsed=service_status.get("elapsed_seconds", 0)
         or state.get("total_elapsed", 0),
         queue_depth=queue_depth,
