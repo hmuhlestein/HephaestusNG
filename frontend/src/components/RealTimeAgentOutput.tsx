@@ -559,9 +559,10 @@ const RealTimeAgentOutput: React.FC<RealTimeAgentOutputProps> = ({
 
       <style>{`
         .ansi-output {
-          line-height: 1.2 !important;
+          line-height: 1.0 !important;
           padding: 0 !important;
           margin: 0 !important;
+          min-height: 100%;
         }
         .ansi-output br {
           display: none;
