@@ -1806,7 +1806,23 @@ class AgentManager:
                 collapsed.append(line.rstrip())
             text = "\n".join(collapsed)
             
-            # Filter TUI chrome (status bars, spinners, elapsed timers, etc.)
+            # Use tokenjuice first for output compaction
+            try:
+                import subprocess
+                result = subprocess.run(
+                    ['npx', 'tokenjuice', 'reduce'],
+                    input=text,
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                    cwd=str(Path(__file__).parent.parent.parent),
+                )
+                if result.returncode == 0 and result.stdout.strip():
+                    text = result.stdout
+            except Exception:
+                pass  # tokenjuice not available
+            
+            # Then filter remaining TUI chrome (status bars, spinners, etc.)
             spinner_re = re.compile(r'^\s*(?:[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]*\s*)?Working\.{0,3}\s*$')
             thinking_re = re.compile(r'^\s*Thinking\.{0,3}\s*$')
             tui_chrome_re = re.compile(r'^\s*\.\.\. \(\d+ (?:more|earlier) lines')
@@ -1837,22 +1853,6 @@ class AgentManager:
                     continue
                 filtered_lines.append(line)
             text = '\n'.join(filtered_lines)
-            
-            # Use tokenjuice for output compaction (dedup command output, etc.)
-            try:
-                import subprocess
-                result = subprocess.run(
-                    ['npx', 'tokenjuice', 'reduce'],
-                    input=text,
-                    capture_output=True,
-                    text=True,
-                    timeout=5,
-                    cwd=str(Path(__file__).parent.parent.parent),
-                )
-                if result.returncode == 0 and result.stdout.strip():
-                    text = result.stdout
-            except Exception:
-                pass  # tokenjuice not available, use filtered text
             
             return text
                     
