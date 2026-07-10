@@ -1851,6 +1851,46 @@ class AgentManager:
                 filtered_lines.append(line)
             text = '\n'.join(filtered_lines)
             
+            # Deduplicate partial redraws (lines that are prefixes of next line)
+            # Skip empty lines when looking for prefix matches
+            deduped = []
+            i = 0
+            while i < len(filtered_lines):
+                current = filtered_lines[i].strip()
+                current_clean = re.sub(r'\x1b\[[?]?[0-9;]*[a-zA-Z]', '', current).strip()
+                
+                if not current_clean:
+                    i += 1
+                    continue
+                
+                # Look ahead past empty lines for next non-empty line
+                j = i + 1
+                while j < len(filtered_lines) and not filtered_lines[j].strip():
+                    j += 1
+                
+                if j < len(filtered_lines):
+                    next_line = filtered_lines[j].strip()
+                    next_clean = re.sub(r'\x1b\[[?]?[0-9;]*[a-zA-Z]', '', next_line).strip()
+                    
+                    if next_clean.startswith(current_clean) and len(next_clean) > len(current_clean):
+                        i = j  # Skip to the next non-empty line (skip all intermediate empty lines too)
+                        continue
+                
+                deduped.append(filtered_lines[i])
+                i += 1
+            
+            # Collapse consecutive empty lines
+            final_lines = []
+            prev_empty = False
+            for line in deduped:
+                is_empty = not line.strip()
+                if is_empty and prev_empty:
+                    continue
+                final_lines.append(line)
+                prev_empty = is_empty
+            
+            text = '\n'.join(final_lines)
+            
             return text
                     
         except Exception as e:
