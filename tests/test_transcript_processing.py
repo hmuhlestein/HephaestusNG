@@ -326,3 +326,35 @@ class TestEndToEnd:
         assert "Done!" in result
         # Should not contain intermediate spinner states
         assert result.count("Working...") == 0 or "Done!" in result.split("\n")[-1]
+
+    def test_partial_redraw_same_tool_deduplication(self):
+        """Partial redraws with same tool name but diverging paths are deduplicated."""
+        import re
+        tool_re = re.compile(r'^(\s*(?:read|write|edit|bash|subagent|mcp)\s+)(.*)')
+
+        lines = [
+            'read /Users/hmuh',
+            'read ~/code/applitnator/.worktrees/wt_feature/src/config.py',
+            '',
+        ]
+        filtered_lines = [l for l in lines if l.strip()]
+        deduped = []
+        i = 0
+        while i < len(filtered_lines):
+            current = filtered_lines[i].strip()
+            if i + 1 < len(filtered_lines):
+                next_line = filtered_lines[i + 1].strip()
+                if next_line.startswith(current) and len(next_line) > len(current):
+                    i += 1
+                    continue
+                cur_match = tool_re.match(current)
+                next_match = tool_re.match(next_line)
+                if cur_match and next_match and cur_match.group(1) == next_match.group(1):
+                    if len(current) < len(next_line):
+                        i += 1
+                        continue
+            deduped.append(filtered_lines[i])
+            i += 1
+
+        assert 'read /Users/hmuh' not in deduped
+        assert 'read ~/code/applitnator/.worktrees/wt_feature/src/config.py' in deduped
