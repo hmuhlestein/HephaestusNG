@@ -620,6 +620,7 @@ def score_product_validation(
 
 def score_adversarial_review(
     result: Optional[Dict[str, Any]],
+    report_text: Optional[str] = None,
 ) -> Tuple[float, Dict[str, Any]]:
     """Score an adversarial_review_result.json by BLOCKER/WARNING/NIT counts.
 
@@ -648,12 +649,21 @@ def score_adversarial_review(
     warnings = int(result.get("warning_count") or 0)
 
     if blockers > 0:
+        # Send the full report, not just a count or an extracted snippet --
+        # a developer agent with no other context needs the actual attack
+        # vectors, failure sequences, and recommended fixes the reviewer
+        # wrote, not a summary that strips them back out.
+        reason = (
+            f"{blockers} BLOCKER(s) found in adversarial review:\n\n{report_text}"
+            if report_text
+            else f"{blockers} BLOCKER(s) found — returning to development"
+        )
         return 0.4, {
             "gate": "adversarial_review",
             "band": "development",
             "blocker_count": blockers,
             "warning_count": warnings,
-            "reason": f"{blockers} BLOCKER(s) found — returning to development",
+            "reason": reason,
         }
     if warnings > 0:
         return 0.7, {
@@ -667,6 +677,7 @@ def score_adversarial_review(
 
 def score_architectural_review(
     result: Optional[Dict[str, Any]],
+    report_text: Optional[str] = None,
 ) -> Tuple[float, Dict[str, Any]]:
     """Score an architectural_review_result.json by BLOCKER/FIX/DEFER counts.
 
@@ -688,12 +699,17 @@ def score_architectural_review(
     fixes = int(result.get("fix_count") or 0)
 
     if blockers > 0:
+        reason = (
+            f"{blockers} BLOCKER(s) found in architectural review:\n\n{report_text}"
+            if report_text
+            else f"{blockers} BLOCKER(s) found — returning to development"
+        )
         return 0.4, {
             "gate": "architectural_review",
             "band": "development",
             "blocker_count": blockers,
             "fix_count": fixes,
-            "reason": f"{blockers} BLOCKER(s) found — returning to development",
+            "reason": reason,
         }
     if fixes > 0:
         return 0.7, {
@@ -722,6 +738,22 @@ def read_result(working_directory: Any, filename: str) -> Optional[Dict[str, Any
     return None
 
 
+def read_report_text(working_directory: Any, filename: str) -> Optional[str]:
+    """Read a markdown report an agent wrote, same search path as
+    read_result but returning raw text instead of parsed JSON -- used to
+    quote a review's full report into the corrective task sent back to
+    development, rather than just a score/count.
+    """
+    base = Path(working_directory)
+    for candidate in (base / "docs" / filename, base / filename):
+        if candidate.exists():
+            try:
+                return candidate.read_text()
+            except Exception:
+                return None
+    return None
+
+
 def build_phase_output(
     phase_name: str,
     working_directory: Any,
@@ -744,10 +776,12 @@ def build_phase_output(
         score, meta = score_scope_review(result)
     elif phase_name == "architectural_review":
         result = read_result(working_directory, "architectural_review_result.json")
-        score, meta = score_architectural_review(result)
+        report_text = read_report_text(working_directory, "architectural_review_report.md")
+        score, meta = score_architectural_review(result, report_text=report_text)
     elif phase_name == "adversarial_review":
         result = read_result(working_directory, "adversarial_review_result.json")
-        score, meta = score_adversarial_review(result)
+        report_text = read_report_text(working_directory, "adversarial_review_report.md")
+        score, meta = score_adversarial_review(result, report_text=report_text)
     elif phase_name == "qa_validation":
         result = read_result(working_directory, "qa_result.json")
         # Enhancement 1: Pass working_directory for independent test verification

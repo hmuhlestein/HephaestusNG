@@ -190,10 +190,12 @@ additional_notes: |
   STEP 5: WRITE adversarial_review_result.json (NOT OPTIONAL)
   ═══════════════════════════════════════════════════════════════════════
 
-  The report above is for the developer to read. This file is for the
-  pipeline itself — without it, the pipeline cannot tell whether you found
-  BLOCKERs and will silently continue to the next phase regardless of what
-  you found. Write it to the same Docs Path as the report:
+  The report above is for the developer to read. This file is ALSO what
+  drives the pipeline: if BLOCKERs are found, the pipeline sends the
+  FULL adversarial_review_report.md straight to the developer agent as its
+  next task -- without a nonzero blocker_count here, the pipeline can't
+  tell BLOCKERs were found at all and will silently continue regardless.
+  Write it to the same Docs Path as the report:
 
   {
     "blocker_count": <int>,
