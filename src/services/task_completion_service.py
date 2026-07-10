@@ -184,8 +184,8 @@ class TaskCompletionService:
 
     @staticmethod
     def verify_no_open_tickets(session, task, phase=None) -> Optional[Dict[str, Any]]:
-        """Open-ticket hard floor for the development phase: reject 'done'
-        while unresolved bug tickets exist for this workflow.
+        """Open-ticket hard floor for development and git_commit_push: reject
+        'done' while unresolved bug tickets exist for this workflow.
 
         development.yaml's own prompt already tells the agent to check for
         and fix open bug tickets (QA/security findings) before considering
@@ -194,15 +194,28 @@ class TaskCompletionService:
         compliance-dependent, so a hard floor here means "fixed and marked
         resolved" is actually required, not just requested.
 
-        Only applies to the development phase -- QA/security_review are the
-        phases that CREATE these tickets in the first place and must not be
-        blocked by their own findings.
+        Also applies to git_commit_push -- the literal last phase before a
+        feature ships. security_review creates tickets for its findings but
+        has no content-scored workflow.yaml gate of its own (unlike
+        qa_validation/product_validation, which score their own result
+        files); its only enforcement path is this same check firing when the
+        pipeline happens to route back through development. If qa_validation
+        and product_validation both pass on their own separate criteria
+        without the pipeline ever revisiting development, a security ticket
+        could otherwise stay open all the way to git commit -- shipping code
+        with a known, already-reported security issue no gate ever rejected.
+        Checking again at the true end of the pipeline closes that gap
+        regardless of which path a given run took to get there.
+
+        Not applied to QA/security_review themselves -- those are the phases
+        that CREATE these tickets in the first place and must not be blocked
+        by their own findings.
         """
         from src.core.database import Phase, Ticket
 
         if phase is None:
             phase = session.query(Phase).filter_by(id=task.phase_id).first()
-        if not phase or phase.name != "development":
+        if not phase or phase.name not in ("development", "git_commit_push"):
             return None
         if not task.workflow_id:
             return None
@@ -221,7 +234,7 @@ class TaskCompletionService:
 
         titles = [f"{t.id[:8]}: {t.title}" for t in open_tickets[:5]]
         logger.warning(
-            f"Agent claimed done on development but {len(open_tickets)} bug "
+            f"Agent claimed done on {phase.name} but {len(open_tickets)} bug "
             f"ticket(s) remain unresolved — rejecting"
         )
         task.status = "failed"
@@ -230,13 +243,28 @@ class TaskCompletionService:
             + "; ".join(titles)
         )
         session.commit()
+        # git_commit_push isn't the phase equipped to fix code — its own
+        # retry loop would just hit this same rejection again. The message
+        # is phrased for whichever agent reads it (development, if this
+        # fires there directly; otherwise whoever investigates the resulting
+        # failed task) rather than assuming the rejected agent itself can act
+        # on it.
+        fix_instruction = (
+            "Fix the underlying issue for each, then call "
+            "change_ticket_status/resolve_ticket before retrying "
+            "update_task_status(done)."
+            if phase.name == "development"
+            else (
+                "This phase cannot fix code itself — the workflow needs to "
+                "route back to development to resolve these before "
+                "git_commit_push can proceed."
+            )
+        )
         return {
             "status": "failed",
             "message": (
                 f"Cannot mark done: {len(open_tickets)} open bug ticket(s) still "
-                f"unresolved — {'; '.join(titles)}. Fix the underlying issue for "
-                "each, then call change_ticket_status/resolve_ticket before "
-                "retrying update_task_status(done)."
+                f"unresolved — {'; '.join(titles)}. {fix_instruction}"
             ),
         }
 
