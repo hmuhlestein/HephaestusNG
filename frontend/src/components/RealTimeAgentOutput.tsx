@@ -224,7 +224,30 @@ const RealTimeAgentOutput: React.FC<RealTimeAgentOutputProps> = ({
         collapsed.push(line);
       }
     }
-    return collapsed.join('\n');
+    
+    // Deduplicate partial redraws: if line N is a prefix of line N+1, skip line N
+    // Also handles same-tool-name deduplication (e.g., 'read /Users/hmuh' vs 'read ~/code/...')
+    const toolRe = /^(\s*(?:read|write|edit|bash|subagent|mcp)\s+)(.*)/;
+    const deduped: string[] = [];
+    for (let i = 0; i < collapsed.length; i++) {
+      const current = collapsed[i].trim();
+      if (i + 1 < collapsed.length) {
+        const next = collapsed[i + 1].trim();
+        // Case 1: strict prefix
+        if (next.startsWith(current) && next.length > current.length) {
+          continue; // Skip this line, it's a partial redraw
+        }
+        // Case 2: same tool name, shorter line is partial redraw
+        const curMatch = current.match(toolRe);
+        const nextMatch = next.match(toolRe);
+        if (curMatch && nextMatch && curMatch[1] === nextMatch[1] && current.length < next.length) {
+          continue; // Skip shorter partial redraw
+        }
+      }
+      deduped.push(collapsed[i]);
+    }
+    
+    return deduped.join('\n');
   }, [output]);
 
   // Filter output based on search and remove separator/spinner lines
