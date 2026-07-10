@@ -60,6 +60,24 @@ const RealTimeAgentOutput: React.FC<RealTimeAgentOutputProps> = ({
     newline: true,
     escapeXML: true,
     stream: false,
+    colors: {
+      0: '#1e1e1e',   // Black matches background
+      1: '#cd3131',
+      2: '#0dbc79',
+      3: '#e5e510',
+      4: '#2472c8',
+      5: '#bc3fbc',
+      6: '#11a8cd',
+      7: '#e5e5e5',
+      8: '#666666',
+      9: '#f14c4c',
+      10: '#23d18b',
+      11: '#f5f543',
+      12: '#3b8eea',
+      13: '#d670d6',
+      14: '#29b8db',
+      15: '#ffffff',
+    },
   }), []);
 
   const {
@@ -192,33 +210,49 @@ const RealTimeAgentOutput: React.FC<RealTimeAgentOutputProps> = ({
     }
   };
 
-  // Filter output based on search and remove separator lines
+  // Collapse carriage returns (\r) first, then filter
+  const processedOutput = useMemo(() => {
+    if (!output) return '';
+    const lines = output.split('\n');
+    const collapsed: string[] = [];
+    for (const line of lines) {
+      if (line.includes('\r')) {
+        // Keep only the last segment after the last \r
+        const last = line.split('\r').pop() || '';
+        collapsed.push(last);
+      } else {
+        collapsed.push(line);
+      }
+    }
+    return collapsed.join('\n');
+  }, [output]);
+
+  // Filter output based on search and remove separator/spinner lines
   const filteredOutput = useMemo(() => {
-    const lines = (output || '').split('\n');
+    if (!processedOutput) return '';
+    const lines = processedOutput.split('\n');
     const filtered = lines.filter(line => {
+      // Strip ALL ANSI codes for pattern matching
+      const stripped = line.replace(/\x1b\[[?]?[0-9;]*[a-zA-Z]/g, '').replace(/\x1b\][^\x07]*\x07/g, '').trim();
       // Filter out horizontal separator lines (────────────────────...)
-      if (/^[─━═▬▪▫\-]{20,}$/.test(line.trim())) return false;
+      if (/^[─━═▬▪▫\-=\s]{20,}$/.test(stripped)) return false;
+      // Filter out spinner-only lines: "⠋ Working..." or just "Working..."
+      if (/^(?:[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s*)?Working\.{0,3}$/.test(stripped)) return false;
+      // Filter out "Thinking..." lines
+      if (/^Thinking\.{0,3}$/.test(stripped)) return false;
+      // Filter out TUI chrome: "... (N earlier lines, ctrl+o to expand)"
+      if (/^\.\.\. \(\d+ earlier lines/.test(stripped)) return false;
+      // Filter out TUI chrome fragments
+      if (/^[AGBCD\s]+$/.test(stripped) && stripped.length < 10) return false;
       if (searchTerm && !line.toLowerCase().includes(searchTerm.toLowerCase())) return false;
       return true;
     });
     return filtered.join('\n');
-  }, [output, searchTerm]);
-
-  // Collapse carriage returns (\r) before converting to HTML.
-  // TUI spinners redraw lines using \r — keep only the final state.
-  const collapsedOutput = useMemo(() => {
-    if (!filteredOutput) return '';
-    return filteredOutput.split('\n').map(line => {
-      if (line.includes('\r')) {
-        return line.split('\r').pop() || '';
-      }
-      return line;
-    }).join('\n');
-  }, [filteredOutput]);
+  }, [processedOutput, searchTerm]);
 
   // Convert ANSI codes to HTML
   const htmlOutput = useMemo(() => {
-    const text = collapsedOutput || '';
+    const text = filteredOutput || '';
     if (!text) return '';
     try {
       return ansiConverter.toHtml(text);
@@ -409,9 +443,8 @@ const RealTimeAgentOutput: React.FC<RealTimeAgentOutputProps> = ({
               onScroll={handleScroll}
               onMouseDown={handleMouseDown}
               onMouseUp={handleMouseUp}
-              className="absolute inset-0 p-6 overflow-auto font-mono text-xs bg-gray-900 text-green-400 whitespace-pre-wrap break-all selection:bg-blue-500 selection:text-white"
+              className="absolute inset-0 p-6 overflow-auto font-mono text-xs bg-[#1e1e1e] text-[#d4d4d4] whitespace-pre-wrap break-all selection:bg-blue-500 selection:text-white ansi-output"
               style={{
-                lineHeight: '1.4',
                 fontFamily: 'Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace'
               }}
               dangerouslySetInnerHTML={{ __html: htmlOutput || (output ? 'No matching lines found' : 'No output available yet...') }}
@@ -525,6 +558,14 @@ const RealTimeAgentOutput: React.FC<RealTimeAgentOutputProps> = ({
           </div>
         </motion.div>
       </motion.div>
+
+      <style>{`
+        .ansi-output {
+          line-height: 1.0 !important;
+          padding: 0 !important;
+          margin: 0 !important;
+        }
+      `}</style>
     </AnimatePresence>
   );
 };

@@ -49,11 +49,6 @@ class AgentManager:
         self.config = get_config()
         self.tmux_server = libtmux.Server()
         
-        # Track agents that have had their initial transcript load done.
-        # First call reads full history from transcript log; subsequent calls
-        # use tmux capture-pane for clean live updates.
-        self._transcript_initial_load_done: set = set()
-
         # Branch manager for agent isolation
         self.branch_manager = WorktreeManager(db_manager)
 
@@ -769,16 +764,18 @@ class AgentManager:
             tmux_dir.mkdir(parents=True, exist_ok=True)
             transcript_path = tmux_dir / f"{session_name}.transcript.log"
             # pipe-pane gets the pane's raw pty bytes, unlike capture-pane
-            # (which tmux itself renders to plain text) — so without this,
-            # the transcript is full of ANSI CSI/OSC escape sequences from
-            # the CLI's TUI (color, cursor movement, spinner redraws),
-            # unreadable and ungreppable. Strip them inline, in the same
-            # pipe-pane command, since there's no post-processing step that
-            # every kill path would reliably reach.
+            # (which tmux itself renders to plain text). Keep ANSI codes
+            # so the frontend can render colors via ansi-to-html. Only
+            # strip \r to prevent spinner bloat.
+            # Strip terminal control sequences but keep ANSI color codes.
+            # Keep: SGR color sequences (\x1b[...m)
+            # Strip: everything else aggressively
             _ansi_strip = (
-                r"s/\x1b\[[0-9;?]*[a-zA-Z]//g; "
-                r"s/\x1b\][^\x07]*\x07//g; "
-                r"s/\x1b[()][A-Za-z0-9]//g; "
+                r"s/\x1b\][^\x07]*\x07//g; "  # OSC with BEL
+                r"s/\x1b\][^\x1b]*\x1b\\//g; "  # OSC with ST (single backslash)
+                r"s/\x1b\[[?]?[0-9;]*[^0-9;m]//g; "  # All CSI/DEC except m (color)
+                r"s/\x1b[()][A-Za-z0-9]//g; "  # Charset selection
+                r"s/\x1b[^\x1b\x5b\x5d]//g; "  # Any other bare ESC sequences
                 r"s/\r//g"
             )
             pipe_cmd = f"perl -pe {shlex.quote(_ansi_strip)} >> {shlex.quote(str(transcript_path))}"
@@ -1642,7 +1639,7 @@ class AgentManager:
                     session.query(AgentLog)
                     .filter_by(agent_id=agent_id)
                     .order_by(AgentLog.timestamp.desc())
-                    .limit(10)
+                    .limit(100)
                     .all()
                 )
                 if recent_logs:
@@ -1654,10 +1651,10 @@ class AgentManager:
                                 "trajectory_summary", ""
                             )
                             if summary:
-                                msg = f"{msg}: {summary[:100]}"
+                                msg = f"{msg}: {summary[:200]}"
                         if msg:
                             log_lines.append(f"[{log.log_type}] {msg}")
-                    return "Agent terminated. Last logs:\n" + "\n".join(log_lines[-10:])
+                    return "\n".join(log_lines)
                 return "Agent terminated - no output was captured"
 
             # For live agents, do a one-time load from transcript log for full
@@ -1666,14 +1663,14 @@ class AgentManager:
                 logger.warning(f"Agent {agent_id} has no tmux session name")
                 return ""
 
-            # First call: load full history from transcript log
-            if agent_id not in self._transcript_initial_load_done:
-                transcript_output = self._read_transcript_log(agent, lines)
-                if transcript_output:
-                    self._transcript_initial_load_done.add(agent_id)
-                    return transcript_output
+            # Always read from transcript log (has ANSI colors from pipe-pane).
+            # capture-pane returns plain text (tmux renders to text), so we
+            # prefer the transcript which preserves the original ANSI codes.
+            transcript_output = self._read_transcript_log(agent, lines)
+            if transcript_output:
+                return transcript_output
 
-            # Subsequent calls: use tmux capture-pane (clean, limited by scrollback)
+            # Fallback: capture-pane if transcript is unavailable
             logger.debug(
                 f"Attempting to access tmux session: {agent.tmux_session_name}"
             )
@@ -1725,6 +1722,7 @@ class AgentManager:
         Returns the last `lines` lines from the transcript, or empty string
         if no transcript is available.
         """
+        import re
         try:
             # Get the working directory from the agent's task workflow
             working_dir = None
@@ -1790,15 +1788,23 @@ class AgentManager:
                     # Terminated agents: return ALL lines
                     text = "".join(all_lines).rstrip()
             
+            # Strip terminal control sequences that pipe-pane might have missed
+            # Keep: SGR color sequences (\x1b[...m)
+            # Strip: everything else aggressively
+            text = re.sub(r'\x1b\][^\x07]*\x07', '', text)  # OSC with BEL
+            text = re.sub(r'\x1b\][^\x1b]*\x1b\\', '', text)  # OSC with ST (single backslash)
+            text = re.sub(r'\x1b\[[?]?[0-9;]*[^0-9;m]', '', text)  # All CSI/DEC except m
+            text = re.sub(r'\x1b[()][A-Za-z0-9]', '', text)  # Charset selection
+            text = re.sub(r'\x1b[^\x1b\x5b\x5d]', '', text)  # Any other bare ESC
+            
             # Collapse carriage-return redraws: TUI spinners redraw the same
-            # line using \r. Each redraw becomes a separate line in the log.
-            # Keep only the last state of each line.
+            # line using \r. Split on \n first, then for each line, if it
+            # contains \r, keep only the last segment (final state).
             collapsed = []
             for line in text.split("\n"):
                 if "\r" in line:
-                    # Take the last segment after the last \r
                     line = line.rsplit("\r", 1)[-1]
-                collapsed.append(line)
+                collapsed.append(line.rstrip())
             text = "\n".join(collapsed)
             
             # Strip TUI chrome (prompts, spinners) that ANSI stripping doesn't catch

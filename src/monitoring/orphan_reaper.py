@@ -91,11 +91,32 @@ class OrphanSessionReaper:
                             and task.workflow_id
                             and task.workflow_id not in active_workflow_ids
                         ):
+                            # A workflow status flip can be very recent (e.g.
+                            # a false failure elsewhere that hasn't been
+                            # corrected yet) while the agent itself is
+                            # demonstrably still alive and reporting in --
+                            # give it a short grace window instead of killing
+                            # on the workflow-status read alone. Also fixes a
+                            # standing invariant violation: this path set
+                            # status="terminated" without ever setting
+                            # terminated_at.
+                            if (
+                                agent.last_activity
+                                and (datetime.now() - agent.last_activity).total_seconds()
+                                < 30
+                            ):
+                                logger.debug(
+                                    f"Skipping agent {agent.id[:8]} - workflow "
+                                    f"{task.workflow_id[:8]} not active, but agent "
+                                    "reported activity within the last 30s"
+                                )
+                                continue
                             logger.info(
                                 f"Terminating orphaned agent {agent.id[:8]} - workflow {task.workflow_id[:8]} not active"
                             )
                             agent.status = "terminated"
                             agent.current_task_id = None  # Clear stale reference
+                            agent.terminated_at = datetime.now()
                 session.commit()
 
             finally:

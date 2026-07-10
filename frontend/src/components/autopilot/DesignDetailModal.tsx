@@ -167,6 +167,19 @@ const DesignDetailModal: React.FC<DesignDetailModalProps> = ({ projectId, filena
               </div>
             ) : (
               <div className="p-6 space-y-6">
+                {/* Warning — completed but with issues */}
+                {status?.warning && (
+                  <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
+                    <h3 className="text-sm font-semibold text-amber-800 mb-1 flex items-center gap-2">
+                      <AlertTriangle className="w-4 h-4" />
+                      Heads up
+                    </h3>
+                    <p className="text-sm text-amber-700 whitespace-pre-wrap">
+                      {status.warning}
+                    </p>
+                  </div>
+                )}
+
                 {/* Failure reason */}
                 {status?.error && (
                   <div className="rounded-lg border border-red-200 bg-red-50 p-3">
@@ -214,6 +227,11 @@ const DesignDetailModal: React.FC<DesignDetailModalProps> = ({ projectId, filena
                               {wfStatus.label}
                             </span>
                             <span className="text-xs font-mono text-gray-500">{wf.id.substring(0, 8)}</span>
+                            {wf.error && (
+                              <span className="text-xs text-red-600 truncate max-w-[200px]" title={wf.error}>
+                                {wf.error}
+                              </span>
+                            )}
                             {wf.created_at && (
                               <span className="text-xs text-gray-400 ml-auto">
                                 {formatDistanceToNow(new Date(wf.created_at), { addSuffix: true })}
