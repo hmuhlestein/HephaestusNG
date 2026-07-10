@@ -1846,8 +1846,9 @@ class AgentManager:
                 filtered_lines.append(line)
             
             # Deduplicate: remove lines that are strict prefixes of the next line
+            # OR lines that share the same tool name but are shorter
             # (catches partial \r redraws when transcript has no \r chars)
-            # Only apply when lines are short (< 80 chars) to avoid false positives
+            tool_re = re.compile(r'^(\s*(?:read|write|edit|bash|subagent|mcp)\s+)(.*)')
             deduped = []
             i = 0
             while i < len(filtered_lines):
@@ -1860,9 +1861,19 @@ class AgentManager:
                     next_line = filtered_lines[i + 1].strip()
                     next_clean = re.sub(r'\x1b\[[?]?[0-9;]*[a-zA-Z]', '', next_line)
                     next_clean = re.sub(r'\x1b\][^\x07]*\x07', '', next_clean).strip()
+                    
+                    # Case 1: strict prefix
                     if next_clean.startswith(current_clean) and len(next_clean) > len(current_clean):
                         i += 1  # Skip this line, it's a partial redraw
                         continue
+                    
+                    # Case 2: same tool name, shorter line is partial redraw
+                    cur_match = tool_re.match(current_clean)
+                    next_match = tool_re.match(next_clean)
+                    if cur_match and next_match and cur_match.group(1) == next_match.group(1):
+                        if len(current_clean) < len(next_clean):
+                            i += 1  # Skip shorter partial redraw
+                            continue
                 
                 deduped.append(filtered_lines[i])
                 i += 1
