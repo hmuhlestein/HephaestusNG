@@ -1824,6 +1824,8 @@ class AgentManager:
             mcp_status_re = re.compile(r'^\s*MCP:\s*\d+/\d+\s*servers')
             # Filter empty prompt lines (just a $ or %)
             prompt_only_re = re.compile(r'^\s*\$\s*$|^\s*%\s*$')
+            # Filter elapsed time lines
+            elapsed_re = re.compile(r'^\s*Elapsed \d+\.\d+s\s*$')
             filtered_lines = []
             for line in text.split('\n'):
                 stripped = line.strip()
@@ -1835,6 +1837,8 @@ class AgentManager:
                 if tui_chrome_re.match(clean) or status_bar_re.match(clean):
                     continue
                 if mcp_status_re.match(clean) or prompt_only_re.match(clean):
+                    continue
+                if elapsed_re.match(clean):
                     continue
                 # Filter lines that are just ANSI reset codes (empty after stripping)
                 if not clean and not stripped:
