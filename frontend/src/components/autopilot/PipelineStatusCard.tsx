@@ -5,13 +5,14 @@ import { formatTime } from '@/pages/Autopilot';
 
 interface PipelineStatusCardProps {
   status: any;
+  pendingAgents?: number;
   projectName?: string;
   onToggle?: () => void;
   onMetricClick?: (metric: string) => void;
   loading?: boolean;
 }
 
-const PipelineStatusCard: React.FC<PipelineStatusCardProps> = ({ status, projectName, onToggle, onMetricClick, loading }) => {
+const PipelineStatusCard: React.FC<PipelineStatusCardProps> = ({ status, pendingAgents, projectName, onToggle, onMetricClick, loading }) => {
   const running = status?.running ?? false;
   const currentDesign = status?.current_design;
   const designsProcessed = status?.designs_processed ?? 0;
@@ -97,6 +98,7 @@ const PipelineStatusCard: React.FC<PipelineStatusCardProps> = ({ status, project
           <div className="flex items-center gap-6">
             {[
               { label: 'Agents', value: status?.active_agents || 0, icon: Users, key: 'agents' },
+              { label: 'Pending', value: pendingAgents || 0, icon: Clock, key: 'pending_agents' },
               { label: 'Processed', value: status?.designs_processed || 0, icon: Activity, key: 'processed' },
               { label: 'Succeeded', value: status?.designs_succeeded || 0, icon: CheckCircle2, key: 'succeeded' },
               { label: 'Failed', value: status?.designs_failed || 0, icon: XCircle, key: 'failed' },

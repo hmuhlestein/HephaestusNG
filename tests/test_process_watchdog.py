@@ -151,3 +151,79 @@ class TestCheckDuplicateMonitorProcesses:
         watchdog = ProcessWatchdog()
         with patch("subprocess.run", side_effect=OSError("pgrep not found")):
             watchdog.check_duplicate_monitor_processes()  # should not raise
+
+
+class TestCheckBackendHealth:
+    """Regression: `heph status` reported the backend unreachable while its
+    PID was still alive and a background pipeline thread was still actively
+    running (py-spy dump confirmed it mid-stride) -- a hang, not a crash.
+    The plain PID-liveness check in _check_services waits forever for a
+    process that will never exit on its own; this is the health-check-based
+    check that can actually detect and recover from that class of hang.
+    """
+
+    def test_no_pid_does_nothing(self):
+        watchdog = ProcessWatchdog()
+        with patch("src.cli.commands.start.read_pid", return_value=None), patch(
+            "os.kill"
+        ) as mock_kill:
+            watchdog.check_backend_health(8300)
+        mock_kill.assert_not_called()
+
+    def test_dead_pid_does_nothing(self):
+        """PID-death is _check_services' job, not this method's."""
+        watchdog = ProcessWatchdog()
+        with patch("src.cli.commands.start.read_pid", return_value=111), patch(
+            "src.cli.commands.start.is_process_running", return_value=False
+        ), patch("os.kill") as mock_kill:
+            watchdog.check_backend_health(8300)
+        mock_kill.assert_not_called()
+
+    def test_healthy_response_resets_failure_count(self):
+        watchdog = ProcessWatchdog()
+        watchdog._backend_health_failures = 2
+        mock_resp = MagicMock(status_code=200)
+        mock_resp.json.return_value = {"status": "healthy"}
+        with patch("src.cli.commands.start.read_pid", return_value=111), patch(
+            "src.cli.commands.start.is_process_running", return_value=True
+        ), patch("httpx.get", return_value=mock_resp):
+            watchdog.check_backend_health(8300)
+        assert watchdog._backend_health_failures == 0
+
+    def test_single_failure_does_not_restart(self):
+        watchdog = ProcessWatchdog()
+        with patch("src.cli.commands.start.read_pid", return_value=111), patch(
+            "src.cli.commands.start.is_process_running", return_value=True
+        ), patch("httpx.get", side_effect=TimeoutError("no response")), patch(
+            "os.kill"
+        ) as mock_kill:
+            watchdog.check_backend_health(8300)
+        assert watchdog._backend_health_failures == 1
+        mock_kill.assert_not_called()
+
+    def test_reaching_threshold_kills_and_restarts(self):
+        watchdog = ProcessWatchdog(unresponsive_threshold=3)
+        callback = MagicMock(return_value=True)
+        watchdog.register_service("backend", callback)
+        with patch("src.cli.commands.start.read_pid", return_value=111), patch(
+            "src.cli.commands.start.is_process_running", return_value=True
+        ), patch("httpx.get", side_effect=TimeoutError("no response")), patch(
+            "os.kill"
+        ) as mock_kill:
+            watchdog.check_backend_health(8300)
+            watchdog.check_backend_health(8300)
+            watchdog.check_backend_health(8300)
+
+        mock_kill.assert_called_once()
+        assert mock_kill.call_args[0][0] == 111
+        callback.assert_called_once()
+        assert watchdog._backend_health_failures == 0
+
+    def test_non_200_status_counts_as_unhealthy(self):
+        watchdog = ProcessWatchdog()
+        mock_resp = MagicMock(status_code=500)
+        with patch("src.cli.commands.start.read_pid", return_value=111), patch(
+            "src.cli.commands.start.is_process_running", return_value=True
+        ), patch("httpx.get", return_value=mock_resp):
+            watchdog.check_backend_health(8300)
+        assert watchdog._backend_health_failures == 1

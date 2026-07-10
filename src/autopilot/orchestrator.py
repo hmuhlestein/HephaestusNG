@@ -2535,6 +2535,11 @@ def _resolve_execution_order(
 
     # Build lookup for quick access
     feat_map = {f["id"]: f for f in features}
+    # Architect's original features.json order, for ordering siblings within
+    # a dependency layer below -- Kahn's algorithm only guarantees a feature
+    # never runs before its dependencies (layer boundaries), it says nothing
+    # about the relative order of independent features at the same depth.
+    original_index = {f["id"]: i for i, f in enumerate(features)}
 
     while queue:
         # Collect current layer
@@ -2548,24 +2553,28 @@ def _resolve_execution_order(
         if not current_layer:
             break
 
-        # Separate parallel vs sequential features
-        parallel_features = []
-        sequential_features = []
-
+        # Group this layer's features in the architect's original list
+        # order -- consecutive "parallel" features batch into one group,
+        # a "sequential" feature gets its own group in place, rather than
+        # unconditionally running every parallel feature in the layer
+        # before any sequential one regardless of where it sat in the
+        # design's own ordering (observed live: a sequential feature that
+        # several other features depend on got pushed to run after two
+        # unrelated parallel features listed after it, purely because of
+        # the parallel/sequential split, not any real dependency).
+        current_layer.sort(key=lambda fid: original_index[fid])
+        parallel_batch = []
         for feat_id in current_layer:
             feat = feat_map[feat_id]
             if feat.get("execution", "parallel") == "parallel":
-                parallel_features.append(feat)
-            else:
-                sequential_features.append(feat)
-
-        # Parallel features at same depth -> one group
-        if parallel_features:
-            execution_groups.append(parallel_features)
-
-        # Sequential features -> each in own group
-        for feat in sequential_features:
+                parallel_batch.append(feat)
+                continue
+            if parallel_batch:
+                execution_groups.append(parallel_batch)
+                parallel_batch = []
             execution_groups.append([feat])
+        if parallel_batch:
+            execution_groups.append(parallel_batch)
 
         # Reduce in-degrees of dependents
         for feat_id in current_layer:
@@ -3496,10 +3505,30 @@ def _create_phase_task(
                 .first()
             )
             if existing:
-                logger.info(
-                    f"[PHASE-TASK] {phase_name} already has active task {existing.id[:8]}, skipping"
-                )
-                return False
+                # A "pending" task with no assigned_agent_id was never
+                # actually dispatched (or its agent was terminated after the
+                # fact, e.g. manual cleanup of a stuck agent) -- it isn't
+                # blocking anything, it's just an orphan. Treating it the
+                # same as a genuinely active task here means nothing ever
+                # replaces it (observed live: an architectural_review task
+                # sat "pending" with no agent for hours -- every self-heal
+                # pass saw it and silently skipped, since its status string
+                # alone made it look active). Clear it and fall through to
+                # create a fresh task instead of returning early.
+                if existing.status == "pending" and not existing.assigned_agent_id:
+                    logger.info(
+                        f"[PHASE-TASK] {phase_name} has an orphaned pending task "
+                        f"{existing.id[:8]} (never dispatched) -- marking failed "
+                        "and creating a fresh one"
+                    )
+                    existing.status = "failed"
+                    existing.failure_reason = "Orphaned: never dispatched to an agent"
+                    db.commit()
+                else:
+                    logger.info(
+                        f"[PHASE-TASK] {phase_name} already has active task {existing.id[:8]}, skipping"
+                    )
+                    return False
 
             # Check for active agent on this phase
             active_agent = (

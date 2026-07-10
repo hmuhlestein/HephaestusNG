@@ -768,7 +768,7 @@ class AgentManager:
             # so the frontend can render colors via ansi-to-html. Only
             # strip \r to prevent spinner bloat.
             # Strip terminal control sequences but keep ANSI color codes.
-            # Keep: SGR color sequences (\x1b[...m)
+            # Keep: SGR color sequences (\x1b[...m) and \r (for spinner collapsing)
             # Strip: everything else aggressively
             _ansi_strip = (
                 r"s/\x1b\][^\x07]*\x07//g; "  # OSC with BEL
@@ -776,7 +776,6 @@ class AgentManager:
                 r"s/\x1b\[[?]?[0-9;]*[^0-9;m]//g; "  # All CSI/DEC except m (color)
                 r"s/\x1b[()][A-Za-z0-9]//g; "  # Charset selection
                 r"s/\x1b[^\x1b\x5b\x5d]//g; "  # Any other bare ESC sequences
-                r"s/\r//g"
             )
             pipe_cmd = f"perl -pe {shlex.quote(_ansi_strip)} >> {shlex.quote(str(transcript_path))}"
             session.attached_window.attached_pane.cmd("pipe-pane", "-o", pipe_cmd)
@@ -1807,12 +1806,53 @@ class AgentManager:
                 collapsed.append(line.rstrip())
             text = "\n".join(collapsed)
             
-            # Strip TUI chrome (prompts, spinners) that ANSI stripping doesn't catch
-            from src.interfaces.cli_interface import get_cli_agent
+            # Use tokenjuice first for output compaction
             try:
-                text = get_cli_agent(agent.cli_type).strip_tui_chrome(text)
+                import subprocess
+                result = subprocess.run(
+                    ['npx', 'tokenjuice', 'reduce'],
+                    input=text,
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                    cwd=str(Path(__file__).parent.parent.parent / "frontend"),
+                )
+                if result.returncode == 0 and result.stdout.strip():
+                    text = result.stdout
             except Exception:
-                pass
+                pass  # tokenjuice not available
+            
+            # Then filter remaining TUI chrome (status bars, spinners, etc.)
+            spinner_re = re.compile(r'^\s*(?:[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]*\s*)?Working\.{0,3}\s*$')
+            thinking_re = re.compile(r'^\s*Thinking\.{0,3}\s*$')
+            tui_chrome_re = re.compile(r'^\s*\.\.\. \(\d+ (?:more|earlier) lines')
+            status_bar_re = re.compile(r'^\s*↑\d+.*↓\d+.*R\d+.*CH\d+.*\$\d+')
+            mcp_status_re = re.compile(r'^\s*MCP:\s*\d+/\d+\s*servers')
+            prompt_only_re = re.compile(r'^\s*\$\s*$|^\s*%\s*$|^\s*:\s*$')
+            elapsed_re = re.compile(r'^\s*Elapsed \d+\.\d+s\s*$')
+            # Filter progress dots (npm install, etc.)
+            dots_only_re = re.compile(r'^\.{1,20}\s*$')
+            orphan_ansi_re = re.compile(r';\d+(?:;\d+)*m')
+            filtered_lines = []
+            for line in text.split('\n'):
+                stripped = line.strip()
+                clean = re.sub(r'\x1b\[[?]?[0-9;]*[a-zA-Z]', '', stripped)
+                clean = re.sub(r'\x1b\][^\x07]*\x07', '', clean).strip()
+                clean = orphan_ansi_re.sub('', clean).strip()
+                if spinner_re.match(clean) or thinking_re.match(clean):
+                    continue
+                if tui_chrome_re.match(clean) or status_bar_re.match(clean):
+                    continue
+                if mcp_status_re.match(clean) or prompt_only_re.match(clean):
+                    continue
+                if elapsed_re.match(clean):
+                    continue
+                if dots_only_re.match(clean):
+                    continue
+                if not clean and not stripped:
+                    continue
+                filtered_lines.append(line)
+            text = '\n'.join(filtered_lines)
             
             return text
                     

@@ -2766,6 +2766,34 @@ async def restart_task_endpoint(
             task.completed_at = None
             task.completion_notes = None
             task.failure_reason = None
+
+            # Reopen-point fix (same as _create_corrective_task): resetting
+            # the task alone isn't enough if its workflow/phase already
+            # thinks it's "completed". Observed live: restarting an
+            # already-done task left it stuck pending forever once the
+            # agent-creation below got interrupted (e.g. a backend restart
+            # mid-request) -- the phase-advancement sweep only ever
+            # reconsiders phases that are pending/in_progress, so a task
+            # sitting pending under a "completed" phase/workflow is
+            # invisible to every self-heal path and nothing ever recreates
+            # its agent. Without this, restart_task is only safe when its
+            # own inline agent-creation below never fails.
+            if task.workflow_id:
+                from src.core.database import PhaseExecution, Workflow
+
+                wf = session.query(Workflow).filter_by(id=task.workflow_id).first()
+                if wf and wf.status != "active":
+                    wf.status = "active"
+                if task.phase_id:
+                    execution = (
+                        session.query(PhaseExecution)
+                        .filter_by(phase_id=task.phase_id)
+                        .first()
+                    )
+                    if execution and execution.status != "in_progress":
+                        execution.status = "in_progress"
+                        execution.task_creation_claimed_at = None
+
             session.commit()
 
         finally:
