@@ -20,7 +20,11 @@ Commands:
 """
 
 import argparse
+import logging
 import sys
+from pathlib import Path
+
+from src.core.constants import HEPHAESTUS_LOGS_DIR
 
 from src.cli.commands import (
     agent,
@@ -98,6 +102,34 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _log_command(command: str, argv: list) -> None:
+    """Record a manually-run heph command to cli.log.
+
+    Lets a later investigation (e.g. "why did the backend restart?") tell a
+    manual `heph restart` apart from the watchdog's own restarts, which log
+    to watchdog.log instead and only fire on an actually-dead PID.
+
+    Uses its own logger/handler rather than logging_config.configure_logging
+    -- that helper always adds a stdout StreamHandler, which would print a
+    log line into every heph command's normal terminal output.
+    """
+    try:
+        log_dir = Path(HEPHAESTUS_LOGS_DIR)
+        log_dir.mkdir(parents=True, exist_ok=True)
+        logger = logging.getLogger("heph.cli")
+        if not logger.handlers:
+            handler = logging.FileHandler(log_dir / "cli.log")
+            handler.setFormatter(
+                logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+            )
+            logger.addHandler(handler)
+            logger.setLevel(logging.INFO)
+            logger.propagate = False
+        logger.info(f"heph {command} - argv={argv}")
+    except OSError:
+        pass
+
+
 def main(argv=None):
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -115,6 +147,8 @@ def main(argv=None):
     except AttributeError:
         parser.print_help()
         return 1
+
+    _log_command(args.command, argv if argv is not None else sys.argv[1:])
 
     try:
         return handler(args)
