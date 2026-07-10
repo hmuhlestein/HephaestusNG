@@ -87,8 +87,11 @@ const Autopilot: React.FC = () => {
           const isSelfConflict = globalStatus?.is_self_conflict ?? false;
 
           if (isSelfConflict) {
+            // Already running (this project) despite the 409 -- the
+            // optimistic "now running" flip from onMutate was actually
+            // correct, just confirmed a different way. Not a revert case.
             toast.success(`${activeProject.name} is already running — no action needed.`);
-            return;
+            return { confirmed: true };
           }
 
           const label = runningProjectName || 'Another project';
@@ -96,8 +99,10 @@ const Autopilot: React.FC = () => {
             `${label} is currently running.\n\nStop it and start ${activeProject.name}?`
           );
           if (!confirmed) {
+            // Genuinely nothing changed for this project -- revert the
+            // optimistic flip.
             toast(`Left ${label} running. ${activeProject.name} was not started.`);
-            return;
+            return { revert: true };
           }
 
           // Stop the global pipeline and wait for it to complete
@@ -116,17 +121,43 @@ const Autopilot: React.FC = () => {
       await queryClient.cancelQueries({ queryKey: ['autopilot-status', projectId] });
       // Optimistically toggle the running state
       const previous = queryClient.getQueryData<any>(['autopilot-status', projectId]);
+      const wasRunning = !!previous?.running;
       queryClient.setQueryData(['autopilot-status', projectId], (old: any) => {
         if (!old) return old;
-        return { ...old, running: !old.running };
+        return { ...old, running: !wasRunning, last_error: null };
       });
-      return { previous };
+      return { previous, wasRunning };
     },
-    onError: (_err, _vars, context) => {
+    onSuccess: (data: any, _vars, context) => {
+      // data === undefined happens when mutationFn's implicit no-op path
+      // ran (e.g. no activeProject) -- nothing was actually requested.
+      if (data?.revert || data === undefined) {
+        // Nothing actually changed for this project (user declined to stop
+        // another running project, or there was no project to act on) --
+        // undo the optimistic flip.
+        if (context?.previous) {
+          queryClient.setQueryData(['autopilot-status', projectId], context.previous);
+        }
+        return;
+      }
+      // Trust that the request actually succeeded over whatever the next
+      // poll happens to read -- a start/stop can briefly race a backend
+      // status read that hasn't caught up yet, which would otherwise flip
+      // the optimistic state back before the user ever sees it take effect.
+      queryClient.setQueryData(['autopilot-status', projectId], (old: any) => ({
+        ...(old || {}),
+        running: !context?.wasRunning,
+        last_error: null,
+      }));
+    },
+    onError: (err: any, _vars, context) => {
       // Rollback on error
       if (context?.previous) {
         queryClient.setQueryData(['autopilot-status', projectId], context.previous);
       }
+      const message =
+        err?.response?.data?.detail || err?.message || 'Failed to toggle pipeline';
+      toast.error(message);
     },
     onSettled: () => {
       // Refetch to get real state

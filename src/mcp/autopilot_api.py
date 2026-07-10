@@ -511,7 +511,7 @@ async def get_pipeline_status(
             last_error = last_event.get("message", "Unknown error")
         elif designs_failed > 0:
             last_error = f"{designs_failed} design(s) failed"
-    
+
     result = PipelineStatus(
         running=running,
         current_design=service_status.get("current_design")
@@ -3371,7 +3371,21 @@ async def start_pipeline(
     from src.autopilot.service import get_autopilot_service
 
     service = get_autopilot_service()
-    if service.running:
+    # Give a freshly-(re)started pipeline time to actually reach its first
+    # workflow check before second-guessing it. Without this, a zombie
+    # verdict landing seconds after start cancels run_continuous_pipeline's
+    # task -- which resets its in-memory recovery-attempt counter -- before
+    # it ever gets a chance to hand off to the per-feature resume path.
+    # Observed live: zombie-detected and stopped 8s after auto-resume,
+    # trapping a genuinely in-progress workflow in a stop/restart loop that
+    # could never escalate past its own recovery counter.
+    ZOMBIE_CHECK_GRACE_SECONDS = 45
+    time_since_start = (
+        time.time() - service._start_time if service._start_time else None
+    )
+    if service.running and (
+        time_since_start is None or time_since_start >= ZOMBIE_CHECK_GRACE_SECONDS
+    ):
         # Check for zombie state: service says running but no active agents/workflows.
         # This happens when the pipeline task gets stuck. Auto-stop and restart.
         # BUT: if the queue is legitimately empty (all designs done), the pipeline
