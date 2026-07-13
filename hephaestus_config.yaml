@@ -73,7 +73,7 @@ llm:
       reasoning_effort: low
 agents:
   default_cli_tool: pi
-  cli_model: openrouter/xiaomi/mimo-v2.5
+  cli_model: openrouter/xiaomi/mimo-v2.5-pro
   tmux_session_prefix: agent
   health_check_interval: 60
   max_health_failures: 3

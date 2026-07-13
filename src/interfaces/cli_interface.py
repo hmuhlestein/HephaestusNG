@@ -517,7 +517,7 @@ class PiAgent(CLIAgentInterface):
             else None
         )
 
-        model = self._get_model(kwargs, config, "openrouter/xiaomi/mimo-v2.5")
+        model = self._get_model(kwargs, config, "openrouter/xiaomi/mimo-v2.5-pro")
 
         # Thinking budget
         valid_thinking = {"off", "minimal", "low", "medium", "high", "xhigh"}
