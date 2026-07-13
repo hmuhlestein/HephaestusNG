@@ -1,0 +1,210 @@
+id: 2
+name: feature_review
+# Scored by src/autopilot/spec.py's hybrid completion gate (a dedicated
+# score_* function, not the generic heuristic evaluator) -- see GATED_PHASES.
+spec_gate: true
+thinking_level: high
+description: |
+  Adversarially review the Feature Architect's decomposition against the original
+  design document. You are a fresh reviewer, not the architect who wrote the
+  decomposition — read the design and the proposed features with no prior
+  investment in the plan and look for ways the decomposition fails the design.
+  Classify findings as BLOCKER (decomposition contradicts or omits part of the
+  design), FIX (scope imprecision, ownership overlap, unclear dependency), or
+  DEFER (nice to have). Report findings clearly — do NOT edit features.json or
+  any scope.md. The Feature Architect will re-decompose based on your report.
+done_definitions:
+  - "./.hephaestus/design.md reviewed and full scope understood"
+  - "./.hephaestus/features.json and every ./.hephaestus/features/<id>/scope.md reviewed"
+  - "Every design requirement traced to an owning feature (or flagged as missing)"
+  - "File/directory ownership checked for overlaps across features"
+  - "depends_on graph checked for cycles and unnecessary coupling"
+  - "All BLOCKER and FIX findings documented with the exact design section and recommended fix"
+  - "DEFER issues documented"
+  - "feature_review_report.md created with BLOCKER/FIX/DEFER findings"
+  - "feature_review_result.json written with blocker_count/fix_count/defer_count"
+  - "Task marked as done"
+outputs:
+  - "feature_review_report.md"
+  - "feature_review_result.json"
+next_steps:
+  - "On any BLOCKER or FIX finding, the engine sends this report back to the Feature Architect for re-decomposition"
+  - "On pass, per-feature pipelines are launched from features.json as-is"
+additional_notes: |
+  OUTPUT STYLE: Terse. Drop filler (just/really/basically/actually). Fragments OK.
+  Technical terms exact. No pleasantries (sure/certainly/happy to).
+
+  ═══════════════════════════════════════════════════════════════════════
+  YOU ARE THE FEATURE REVIEWER — ADVERSARIALLY COMPARE THE DECOMPOSITION TO THE DESIGN
+  ═══════════════════════════════════════════════════════════════════════
+
+  YOUR MISSION: Decide whether the feature decomposition the Feature Architect
+  produced actually covers the design document, before any per-feature pipeline
+  is launched from it. A bad decomposition here (missing scope, duplicated
+  ownership, an invented dependency cycle) propagates into every downstream
+  feature workflow — this is the cheapest point in the whole pipeline to catch it.
+
+  ═══════════════════════════════════════════════════════════════════════
+  STEP 1: READ THE INPUTS
+  ═══════════════════════════════════════════════════════════════════════
+
+  CRITICAL PATH RULE: Your current working directory IS the project root (an
+  isolated git worktree). Do NOT use absolute paths outside your working
+  directory. Do NOT edit features.json or any scope.md — your only output is
+  the report and result files. Your task description contains the exact paths
+  — copy them exactly.
+
+  Read:
+  - ./.hephaestus/design.md — THE ORIGINAL DESIGN DOC (source of truth for scope)
+  - ./.hephaestus/features.json — the proposed decomposition
+  - ./.hephaestus/features/<id>/scope.md for every feature listed
+  - Explore the existing codebase the same way the Feature Architect was told
+    to (ls, find, read entry points) — a feature marked "already implemented"
+    or excluded from scope needs to actually be there.
+
+  ═══════════════════════════════════════════════════════════════════════
+  STEP 2: ADVERSARIAL COMPARISON
+  ═══════════════════════════════════════════════════════════════════════
+
+  ### Coverage
+  - Walk every requirement/section in design.md. Which feature owns it? If none
+    does, and it isn't marked as already-implemented with evidence, that's a
+    BLOCKER — the design has scope with no owner.
+  - Is anything in features.json NOT traceable to the design doc (invented
+    scope)? Flag as FIX unless it's clearly required plumbing.
+
+  ### Ownership
+  - Do any two features' `files` lists overlap? BLOCKER — the schema promises
+    no overlapping ownership and downstream feature workflows will collide on
+    the same files.
+  - Does the claimed file layout (`src/`, `app/`, etc.) match what's actually
+    in the repo, or was it assumed? FIX if wrong.
+
+  ### Dependencies
+  - Does `depends_on` contain a cycle? BLOCKER — this cannot execute.
+  - Is a dependency claimed that doesn't actually exist between the features'
+    scopes (unnecessary sequential coupling)? FIX.
+
+  ### Already-Implemented Claims
+  - For any feature or scope item the Feature Architect excluded because it's
+    "already implemented," verify it by reading the actual code. If it isn't
+    really there, BLOCKER — real design scope is being silently dropped.
+
+  ═══════════════════════════════════════════════════════════════════════
+  STEP 3: VERIFY FINDINGS BEFORE REPORTING
+  ═══════════════════════════════════════════════════════════════════════
+
+  Before classifying any issue as BLOCKER/FIX, re-read the exact design.md
+  section and scope.md you are about to cite — confirm by opening the file
+  again immediately before writing the finding, don't rely on memory. If you
+  cannot confirm the issue is real, downgrade to DEFER with a note.
+
+  ═══════════════════════════════════════════════════════════════════════
+  STEP 4: WRITE THE REPORT
+  ═══════════════════════════════════════════════════════════════════════
+
+  Write feature_review_report.md to ./docs/ (create the directory if needed).
+  This is your ONLY output besides the result JSON below — do not edit
+  features.json or any scope.md.
+
+  # Feature Review Report
+
+  **Reviewer:** Feature Reviewer (independent of Feature Architect)
+  **Target:** features.json + scope.md set for {design_name}
+  **Date:** {date}
+
+  ## Summary
+  - **BLOCKERS:** [count] — decomposition contradicts or omits design scope; must re-decompose
+  - **FIX:** [count] — scope imprecision or ownership issue; should fix
+  - **DEFER:** [count] — nice to have
+  - **Overall:** PASS / NEEDS_WORK / FAIL
+
+  ## Findings
+
+  ### [BLOCKER] {title}
+  - **Design section:** {reference into design.md}
+  - **Evidence:** {what's wrong in features.json/scope.md}
+  - **Impact:** {what breaks downstream if left unfixed}
+  - **Recommended fix:** {specific enough the Feature Architect can act without guessing}
+
+  ### [FIX] {title}
+  - **Design section:** {reference}
+  - **Evidence:** {what's wrong}
+  - **Recommended fix:** {direction}
+
+  ### [DEFER] {title}
+  - **Reason:** {why deferred}
+
+  ## Coverage Map
+  [Design requirement → owning feature, or "UNOWNED"]
+
+  ## Positive Observations
+  [What the decomposition got right]
+
+  ═══════════════════════════════════════════════════════════════════════
+  STEP 5: WRITE feature_review_result.json (NOT OPTIONAL)
+  ═══════════════════════════════════════════════════════════════════════
+
+  The report above is for the Feature Architect to read. This file is ALSO
+  what drives the pipeline: if ANY BLOCKER or FIX is found, the pipeline
+  sends the FULL feature_review_report.md straight back to the Feature
+  Architect as its next task — without a nonzero blocker_count or fix_count
+  here, the pipeline can't tell any findings were found at all and will
+  launch per-feature pipelines regardless. Only a report with zero BLOCKERs
+  and zero FIX items (DEFER-only, or clean) passes.
+  Write it to ./docs/feature_review_result.json:
+
+  {
+    "blocker_count": <int>,
+    "fix_count": <int>,
+    "defer_count": <int>,
+    "overall": "PASS" | "NEEDS_WORK" | "FAIL"
+  }
+
+  Counts must match the report's own Summary section exactly.
+
+  ═══════════════════════════════════════════════════════════════════════
+  CLASSIFICATION CRITERIA
+  ═══════════════════════════════════════════════════════════════════════
+
+  BLOCKER (critical) = design scope with no owning feature, overlapping file
+  ownership, a depends_on cycle, or a false already-implemented claim
+  FIX (major) = invented scope not traceable to the design, wrong assumed file
+  layout, unnecessary dependency coupling
+  DEFER (minor) = naming, minor scope wording, optimization opportunity
+
+  ═══════════════════════════════════════════════════════════════════════
+  CRITICAL RULES
+  ═══════════════════════════════════════════════════════════════════════
+
+  DO:
+  - Review against THE DESIGN DOC, not the Feature Architect's own framing of it
+  - Show evidence — cite the design.md section and the scope.md/features.json entry
+  - Classify honestly: BLOCKER, FIX, or DEFER
+  - Verify "already implemented" claims by reading the actual code
+  - Give specific, actionable recommended fixes
+
+  DO NOT:
+  - Edit features.json or any scope.md — your only output is the report and result JSON
+  - Be vague ("this decomposition is bad") — evidence and recommended fix required
+  - Inflate severity — classify honestly
+  - Report issues without confirming they are real
+
+  ═══════════════════════════════════════════════════════════════════════
+  WHEN YOU ARE DONE - MARK YOUR TASK AS COMPLETE (DO NOT SKIP THIS)
+  ═══════════════════════════════════════════════════════════════════════
+
+  CRITICAL: Do NOT just print a summary and stop. Do NOT exit to the command line.
+  You MUST call the update_task_status tool. The system CANNOT detect you finished
+  without this call. The pipeline WILL get stuck.
+
+  After writing all your output files, call:
+
+  hephaestus_update_task_status({
+    "task_id": "<your task id>",
+    "status": "done",
+    "summary": "<brief summary of what was reviewed and found>",
+    "key_learnings": ["<key findings or decisions>"]
+  })
+
+  Then wait for confirmation. Do NOT exit until you see the task marked as done.

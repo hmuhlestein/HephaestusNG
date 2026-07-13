@@ -90,11 +90,11 @@ class TestCleanupDoesNotRemoveActiveWorktree:
         base_path = src.core.simple_config.get_config().worktree_base_path
 
         # An old, genuinely-stale worktree with no tracking Workflow row.
-        stale_path = _add_worktree(temp_repo, base_path, "autopilot-phase0/old-design")
+        stale_path = _add_worktree(temp_repo, base_path, "feature_architect/old-design")
 
         # A worktree that a currently-active workflow has just started using
         # -- the scenario that raced against Rerun.
-        active_path = _add_worktree(temp_repo, base_path, "autopilot-phase0/live-design")
+        active_path = _add_worktree(temp_repo, base_path, "feature_architect/live-design")
         session = test_db.get_session()
         session.add(
             Workflow(
@@ -102,7 +102,7 @@ class TestCleanupDoesNotRemoveActiveWorktree:
                 name="Phase 0",
                 phases_folder_path="/tmp",
                 status="active",
-                definition_id="autopilot-phase0",
+                definition_id="feature_architect",
                 working_directory=str(active_path),
             )
         )
@@ -123,8 +123,8 @@ class TestCleanupDoesNotRemoveActiveWorktree:
         branch_names = Repo(temp_repo.working_dir).git.branch(
             "--format=%(refname:short)"
         ).split("\n")
-        assert "autopilot-phase0/live-design" in branch_names
-        assert "autopilot-phase0/old-design" not in branch_names
+        assert "feature_architect/live-design" in branch_names
+        assert "feature_architect/old-design" not in branch_names
 
     def test_paused_workflows_worktree_survives_cleanup(
         self, test_db, temp_repo, worktree_manager
@@ -138,7 +138,7 @@ class TestCleanupDoesNotRemoveActiveWorktree:
         import src.core.simple_config
 
         base_path = src.core.simple_config.get_config().worktree_base_path
-        paused_path = _add_worktree(temp_repo, base_path, "autopilot-phase0/paused-design")
+        paused_path = _add_worktree(temp_repo, base_path, "feature_architect/paused-design")
 
         session = test_db.get_session()
         session.add(
@@ -147,7 +147,7 @@ class TestCleanupDoesNotRemoveActiveWorktree:
                 name="Phase 0",
                 phases_folder_path="/tmp",
                 status="paused",
-                definition_id="autopilot-phase0",
+                definition_id="feature_architect",
                 working_directory=str(paused_path),
             )
         )
@@ -155,7 +155,7 @@ class TestCleanupDoesNotRemoveActiveWorktree:
             AgentBranch(
                 agent_id=f"agent-{uuid.uuid4().hex[:8]}",
                 worktree_path=str(paused_path),
-                branch_name="autopilot-phase0/paused-design",
+                branch_name="feature_architect/paused-design",
                 parent_commit_sha=temp_repo.head.commit.hexsha,
                 base_commit_sha=temp_repo.head.commit.hexsha,
                 merge_status="active",
@@ -170,7 +170,7 @@ class TestCleanupDoesNotRemoveActiveWorktree:
         branch_names = Repo(temp_repo.working_dir).git.branch(
             "--format=%(refname:short)"
         ).split("\n")
-        assert "autopilot-phase0/paused-design" in branch_names
+        assert "feature_architect/paused-design" in branch_names
 
     def test_agent_branch_still_in_progress_is_not_merged_and_deleted(
         self, test_db, temp_repo, worktree_manager
@@ -221,6 +221,39 @@ class TestCleanupDoesNotRemoveActiveWorktree:
         assert working_path.exists()
 
 
+class TestCleanupHandlesLegacyBranchPrefix:
+    """config/workflows/autopilot-phase0/ was renamed to
+    config/workflows/feature_architect/, so new Phase 0 branches are named
+    "feature_architect/<design_id>" instead of "autopilot-phase0/<design_id>".
+    cleanup_all_stale_branches' prefix filter (src/core/worktree_manager.py)
+    keeps the old "autopilot-" prefix specifically so real branches created
+    before the rename shipped on an already-deployed system still get swept
+    up -- this test exercises that legacy path directly, since the rename's
+    mechanical test-fixture updates left nothing else creating an
+    "autopilot-*" branch anymore."""
+
+    def test_legacy_autopilot_prefixed_branch_still_cleaned_up(
+        self, test_db, temp_repo, worktree_manager
+    ):
+        import src.core.simple_config
+
+        base_path = src.core.simple_config.get_config().worktree_base_path
+        legacy_path = _add_worktree(
+            temp_repo, base_path, "autopilot-phase0/pre-rename-design"
+        )
+
+        worktree_manager.cleanup_all_stale_branches()
+
+        assert not legacy_path.exists(), (
+            "a genuinely stale worktree using the pre-rename branch prefix "
+            "must still be cleaned up"
+        )
+        branch_names = Repo(temp_repo.working_dir).git.branch(
+            "--format=%(refname:short)"
+        ).split("\n")
+        assert "autopilot-phase0/pre-rename-design" not in branch_names
+
+
 class TestCleanupNeverTouchesMainRepo:
     """Critical regression test: git worktree list --porcelain reports the
     *resolved* path for every entry, including the main repo's own, while
@@ -246,7 +279,7 @@ class TestCleanupNeverTouchesMainRepo:
             pytest.skip("main repo path has no symlink component on this platform")
 
         base_path = src.core.simple_config.get_config().worktree_base_path
-        _add_worktree(temp_repo, base_path, "autopilot-phase0/some-design")
+        _add_worktree(temp_repo, base_path, "feature_architect/some-design")
 
         worktree_manager.cleanup_all_stale_branches()
 

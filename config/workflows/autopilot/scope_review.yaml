@@ -1,5 +1,8 @@
 id: 2
 name: scope_review
+# Scored by src/autopilot/spec.py's hybrid completion gate (a dedicated
+# score_* function, not the generic heuristic evaluator) -- see GATED_PHASES.
+spec_gate: true
 thinking_level: high
 description: |
   Gate between product requirements and architecture. Verifies that the

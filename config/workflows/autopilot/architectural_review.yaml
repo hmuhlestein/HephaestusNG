@@ -1,5 +1,8 @@
 id: 5
 name: architectural_review
+# Scored by src/autopilot/spec.py's hybrid completion gate (a dedicated
+# score_* function, not the generic heuristic evaluator) -- see GATED_PHASES.
+spec_gate: true
 thinking_level: high
 description: |
   Review the developer's implementation against the architecture.

@@ -53,7 +53,7 @@ class TestCleanupWorktreeDoesNotTouchPausedWorkflow:
                 name="Phase 0",
                 phases_folder_path="/tmp",
                 status="paused",
-                definition_id="autopilot-phase0",
+                definition_id="feature_architect",
                 working_directory=str(worktree),
             )
         )
@@ -66,7 +66,7 @@ class TestCleanupWorktreeDoesNotTouchPausedWorkflow:
         with patch("src.core.worktree_manager.WorktreeManager") as MockWtMgr:
             mock_instance = MockWtMgr.return_value
             mock_instance.main_repo.git.worktree = MagicMock()
-            _cleanup_worktree(worktree, "autopilot-phase0/x", project_path, logger)
+            _cleanup_worktree(worktree, "feature_architect/x", project_path, logger)
 
         session = test_db.get_session()
         wf = session.query(Workflow).filter_by(id="wf-paused").first()
@@ -96,7 +96,7 @@ class TestCleanupWorktreeDoesNotTouchPausedWorkflow:
                 name="Phase 0",
                 phases_folder_path="/tmp",
                 status="failed",
-                definition_id="autopilot-phase0",
+                definition_id="feature_architect",
                 working_directory=str(worktree),
             )
         )
@@ -109,7 +109,7 @@ class TestCleanupWorktreeDoesNotTouchPausedWorkflow:
         with patch("src.core.worktree_manager.WorktreeManager") as MockWtMgr:
             mock_instance = MockWtMgr.return_value
             mock_instance.main_repo.git.worktree = MagicMock()
-            _cleanup_worktree(worktree, "autopilot-phase0/x", project_path, logger)
+            _cleanup_worktree(worktree, "feature_architect/x", project_path, logger)
 
         session = test_db.get_session()
         wf = session.query(Workflow).filter_by(id="wf-failed").first()
