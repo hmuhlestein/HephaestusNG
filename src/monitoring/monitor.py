@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import re
 import time
 from datetime import datetime, timedelta
 from enum import Enum
@@ -28,6 +29,22 @@ from src.monitoring.trajectory_context import TrajectoryContext
 from src.phases import PhaseManager
 
 logger = logging.getLogger(__name__)
+
+_SGR_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _strip_sgr(text: str) -> str:
+    """Strip SGR color escape codes (\\x1b[...m).
+
+    AgentManager._read_transcript_log deliberately KEEPS these when it
+    strips other ANSI, since other callers display output to a human and
+    want color preserved. Any detector here that compares tmux output
+    content across polls (frozen-signature check, repetition-loop line
+    counting) must strip them first -- a TUI that re-emits color codes on
+    every redraw otherwise makes two reads of identical visible content
+    differ byte-for-byte, silently defeating the comparison every time.
+    """
+    return _SGR_RE.sub("", text)
 
 
 class AgentState(Enum):
@@ -502,18 +519,25 @@ class MonitoringLoop:
         FROZEN_SECONDS = 300  # >a normal turn; a real loop stays frozen indefinitely
         MAX_RECOV = 2
         try:
-            import re
-
             if not hasattr(self, "_stuck_state"):
                 self._stuck_state = {}
             out = self.agent_manager.get_agent_output(agent.id, lines=40)
             if not out:
                 return
+            # Strip SGR color codes here, for the signature only -- other
+            # consumers of get_agent_output still get color preserved. See
+            # _strip_sgr's docstring: a TUI that re-emits color codes on
+            # every redraw otherwise makes two reads of an identical frozen
+            # screen differ byte-for-byte, silently disabling this whole
+            # detector -- observed live: an agent hard-stopped on a model
+            # error sat frozen for 12+ minutes with zero [MECH-RECOVERY] log
+            # lines, because its frozen screen still had colored text.
+            out_no_color = _strip_sgr(out)
             # Drop volatile lines (status bar %/tokens/$/MCP/time, spinner glyphs) so a
             # live spinner or ticking cost doesn't masquerade as real progress.
             sig = "\n".join(
                 ln
-                for ln in out.splitlines()
+                for ln in out_no_color.splitlines()
                 if not re.search(r"%/[\d.]+M|\$[\d.]+|MCP:|Took |[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏⣿]", ln)
             ).strip()
             now = time.time()
@@ -645,6 +669,12 @@ class MonitoringLoop:
             out = self.agent_manager.get_agent_output(agent.id, lines=WINDOW_LINES)
             if not out:
                 return
+            # Strip SGR color codes before comparing lines -- same gap as
+            # _mechanical_recovery_for_agent's frozen-signature check (see
+            # _strip_sgr's docstring): a repeated line wrapped in varying
+            # color codes on each redraw would otherwise count as a distinct
+            # line every time, never reaching REPEAT_THRESHOLD.
+            out = _strip_sgr(out)
             # Normalise: strip leading whitespace, drop blank/trivial lines.
             # Also exclude bare filesystem paths and shell prompts — these repeat
             # legitimately in ls output, shell prompts, and long file writes.

@@ -185,6 +185,136 @@ class TestGuardian:
         assert result["steering_message"] == "Remember: no external libraries allowed"
 
     @pytest.mark.asyncio
+    async def test_repeated_timeout_defaults_to_benign_until_threshold(
+        self, guardian, mock_llm_provider
+    ):
+        """A single (or a couple) slow/over-streaming LLM call must still
+        fall back to the benign default -- the timeout exists precisely so
+        an occasional slow call doesn't wrongly flag a healthy agent."""
+        import asyncio
+
+        async def _hang(*args, **kwargs):
+            raise asyncio.TimeoutError()
+
+        agent = Agent(id="timeout-agent", current_task_id="task-x")
+        mock_task = Task(id="task-x", enriched_description="Do work")
+
+        with patch.object(
+            guardian,
+            "_build_accumulated_context",
+            return_value={
+                "overall_goal": "Do work",
+                "constraints": [],
+                "session_start": datetime.utcnow(),
+            },
+        ):
+            with patch.object(
+                guardian, "_get_agent_task", return_value=_task_dict(mock_task)
+            ):
+                with patch("asyncio.wait_for", side_effect=_hang):
+                    result = await guardian.analyze_agent_with_trajectory(
+                        agent=agent, tmux_output="...", past_summaries=[]
+                    )
+
+        assert result["trajectory_aligned"] is True
+        assert result["needs_steering"] is False
+
+    @pytest.mark.asyncio
+    async def test_consecutive_timeouts_escalate_to_stuck_steering(
+        self, guardian, mock_llm_provider
+    ):
+        """After GUARDIAN_TIMEOUT_ESCALATION_THRESHOLD consecutive timeouts,
+        the timeout pattern itself must be treated as a stuck signal --
+        needs_steering=True/steering_type='stuck' feeds the same nudge +
+        auto-restart path a real stuck-trajectory detection would trigger.
+        Regression test: previously this returned the benign "aligned,
+        no steering needed" default forever, no matter how many times in a
+        row the analysis itself failed to complete (observed live: an agent
+        hard-stopped on a model error timed out 4+ times over 12 minutes
+        with zero intervention)."""
+        import asyncio
+
+        from src.monitoring.guardian import GUARDIAN_TIMEOUT_ESCALATION_THRESHOLD
+
+        async def _hang(*args, **kwargs):
+            raise asyncio.TimeoutError()
+
+        agent = Agent(id="timeout-agent-2", current_task_id="task-y")
+        mock_task = Task(id="task-y", enriched_description="Do work")
+
+        with patch.object(
+            guardian,
+            "_build_accumulated_context",
+            return_value={
+                "overall_goal": "Do work",
+                "constraints": [],
+                "session_start": datetime.utcnow(),
+            },
+        ):
+            with patch.object(
+                guardian, "_get_agent_task", return_value=_task_dict(mock_task)
+            ):
+                with patch("asyncio.wait_for", side_effect=_hang):
+                    result = None
+                    for _ in range(GUARDIAN_TIMEOUT_ESCALATION_THRESHOLD):
+                        result = await guardian.analyze_agent_with_trajectory(
+                            agent=agent, tmux_output="...", past_summaries=[]
+                        )
+
+        assert result["needs_steering"] is True
+        assert result["steering_type"] == "stuck"
+        assert result["trajectory_aligned"] is False
+
+    @pytest.mark.asyncio
+    async def test_successful_analysis_resets_timeout_counter(
+        self, guardian, mock_llm_provider
+    ):
+        """A successful analysis between timeouts must reset the consecutive
+        count -- an occasionally-slow model shouldn't accumulate toward
+        escalation across unrelated cycles."""
+        import asyncio
+
+        from src.monitoring.guardian import GUARDIAN_TIMEOUT_ESCALATION_THRESHOLD
+
+        async def _hang(*args, **kwargs):
+            raise asyncio.TimeoutError()
+
+        agent = Agent(id="timeout-agent-3", current_task_id="task-z")
+        mock_task = Task(id="task-z", enriched_description="Do work")
+
+        with patch.object(
+            guardian,
+            "_build_accumulated_context",
+            return_value={
+                "overall_goal": "Do work",
+                "constraints": [],
+                "session_start": datetime.utcnow(),
+            },
+        ):
+            with patch.object(
+                guardian, "_get_agent_task", return_value=_task_dict(mock_task)
+            ):
+                # One fewer than the threshold, then a real success.
+                with patch("asyncio.wait_for", side_effect=_hang):
+                    for _ in range(GUARDIAN_TIMEOUT_ESCALATION_THRESHOLD - 1):
+                        await guardian.analyze_agent_with_trajectory(
+                            agent=agent, tmux_output="...", past_summaries=[]
+                        )
+
+                result = await guardian.analyze_agent_with_trajectory(
+                    agent=agent, tmux_output="...", past_summaries=[]
+                )
+                assert result["needs_steering"] is False  # real success, not escalation
+
+                # Timing out again now should NOT immediately escalate --
+                # the counter was reset by the success above.
+                with patch("asyncio.wait_for", side_effect=_hang):
+                    result = await guardian.analyze_agent_with_trajectory(
+                        agent=agent, tmux_output="...", past_summaries=[]
+                    )
+                assert result["needs_steering"] is False
+
+    @pytest.mark.asyncio
     async def test_guardian_caching(self, guardian):
         """Test that Guardian caches trajectory analysis."""
         agent = Agent(id="test-agent-3", current_task_id="task-3")

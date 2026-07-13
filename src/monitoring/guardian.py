@@ -12,6 +12,11 @@ from src.interfaces import LLMProviderInterface
 
 logger = logging.getLogger(__name__)
 
+# Consecutive Guardian LLM-analysis timeouts (see analyze_agent_with_trajectory's
+# GUARDIAN_LLM_TIMEOUT) before the timeout pattern itself is treated as a stuck
+# signal, instead of silently returning the benign "aligned" default forever.
+GUARDIAN_TIMEOUT_ESCALATION_THRESHOLD = 3
+
 
 class SteeringType(Enum):
     """Types of steering interventions."""
@@ -76,6 +81,11 @@ class Guardian:
         # judgment call. Genuinely stuck/idle agents still act on the first
         # flag — waiting there only prolongs a frozen agent.
         self._consecutive_flags: Dict[str, Dict[str, Any]] = {}
+
+        # Consecutive Guardian LLM-analysis timeouts per agent (see
+        # analyze_agent_with_trajectory's GUARDIAN_LLM_TIMEOUT except-block).
+        # Reset to 0 on any successful analysis for that agent.
+        self._consecutive_timeouts: Dict[str, int] = {}
 
     async def analyze_agent_with_trajectory(
         self,
@@ -175,11 +185,32 @@ class Guardian:
                     ),
                     timeout=GUARDIAN_LLM_TIMEOUT,
                 )
+                self._consecutive_timeouts[agent.id] = 0
             except asyncio.TimeoutError:
+                timeouts = self._consecutive_timeouts.get(agent.id, 0) + 1
+                self._consecutive_timeouts[agent.id] = timeouts
                 logger.warning(
                     f"Guardian analysis timed out (>{GUARDIAN_LLM_TIMEOUT}s) for agent {agent.id} "
-                    f"— using default analysis (model over-streamed the structured call)"
+                    f"— using default analysis (model over-streamed the structured call) "
+                    f"[{timeouts} consecutive]"
                 )
+                # The benign default (trajectory_aligned=True, needs_steering=False)
+                # exists so a slow/over-streaming LLM call can never freeze the
+                # monitor loop itself -- but returning it unconditionally, forever,
+                # means an agent that's ACTUALLY stuck (not just slow to analyze)
+                # never gets flagged: every cycle reports "fine" regardless of how
+                # many times in a row the analysis itself failed to complete.
+                # Observed live: an agent hard-stopped on a model error timed out
+                # here 4+ times over 12 minutes, and Guardian reported "aligned,
+                # no steering needed" every single time. After repeated timeouts,
+                # treat the timeout pattern itself as the stuck signal.
+                if timeouts >= GUARDIAN_TIMEOUT_ESCALATION_THRESHOLD:
+                    logger.warning(
+                        f"Agent {agent.id} has timed out {timeouts} consecutive "
+                        "Guardian analyses — escalating to steering/auto-restart "
+                        "instead of defaulting to 'aligned'"
+                    )
+                    return self._get_timeout_escalation_analysis(agent, timeouts)
                 return self._get_default_analysis(agent)
 
             # Log what we got back from GPT-5
@@ -649,6 +680,47 @@ class Guardian:
             "active_constraints": [],
         }
 
+    def _get_timeout_escalation_analysis(
+        self, agent: Agent, consecutive_timeouts: int
+    ) -> Dict[str, Any]:
+        """Analysis returned after GUARDIAN_TIMEOUT_ESCALATION_THRESHOLD consecutive
+        Guardian LLM-analysis timeouts for this agent.
+
+        Unlike _get_default_analysis (a neutral "aligned" fallback for an
+        occasional slow call), this treats the timeout pattern itself as
+        evidence the agent needs intervention: needs_steering=True with
+        steering_type="stuck" feeds the same nudge + auto-restart path
+        (_guardian_analysis_for_agent's "Auto-restart if agent keeps ignoring
+        steering" block, monitor.py) that a real stuck-trajectory detection
+        would trigger, and low trajectory_aligned/alignment_score also
+        increments health_check_failures via _update_agent_health_from_trajectory.
+        """
+        return {
+            "agent_id": agent.id,
+            "agent_type": agent.agent_type,
+            "trajectory_summary": (
+                f"Guardian analysis timed out {consecutive_timeouts} times in a "
+                "row — agent output has not changed enough to analyze, or the "
+                "model itself is not responding"
+            ),
+            "current_phase": "unknown",
+            "trajectory_aligned": False,
+            "alignment_score": 0.2,
+            "alignment_issues": [
+                f"{consecutive_timeouts} consecutive Guardian analysis timeouts"
+            ],
+            "needs_steering": True,
+            "steering_type": "stuck",
+            "steering_message": (
+                "You appear unresponsive — the monitoring system has been unable "
+                "to analyze your output for several minutes. If your task is "
+                "complete, call update_task_status now. If you are blocked, call "
+                "update_task_status with status='failed' and explain why."
+            ),
+            "accumulated_goal": "Unknown",
+            "active_constraints": [],
+        }
+
     def get_cached_trajectory(self, agent_id: str) -> Optional[Dict[str, Any]]:
         """Get cached trajectory for agent (used by Conductor)."""
         return self.trajectory_cache.get(agent_id)
@@ -659,3 +731,4 @@ class Guardian:
             del self.trajectory_cache[agent_id]
         if agent_id in self.steering_history:
             del self.steering_history[agent_id]
+        self._consecutive_timeouts.pop(agent_id, None)

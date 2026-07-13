@@ -637,6 +637,27 @@ class TestDetectRepetitionLoop:
         await make_monitoring_loop._detect_repetition_loop(agent)
         mock_agent_manager.send_message_to_agent.assert_not_called()
 
+    @pytest.mark.asyncio
+    async def test_detects_repetition_despite_varying_color_codes(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        """Same gap class as TestMechanicalRecovery's color-code test: the
+        Counter(lines) exact-string count used to treat a repeated line
+        wrapped in different SGR color codes on each occurrence as N
+        distinct lines, never reaching REPEAT_THRESHOLD."""
+        agent = Agent(id="a1", cli_type="claude")
+        repeated = "This is a long enough line that repeats many times in the output"
+        colors = ["\x1b[31m", "\x1b[32m", "\x1b[33m"]
+        lines = [f"{colors[i % 3]}{repeated}\x1b[0m" for i in range(15)]
+        output = "\n".join(lines + ["Normal line that is different and unique here"])
+        mock_agent_manager.get_agent_output.return_value = output
+
+        session = Mock()
+        mock_db.get_session.return_value = session
+
+        await make_monitoring_loop._detect_repetition_loop(agent)
+        mock_agent_manager.send_message_to_agent.assert_called_once()
+
 
 # ── _update_agent_health_from_trajectory ─────────────────────────
 
@@ -925,6 +946,34 @@ class TestMechanicalRecovery:
         # Manually set frozen time to trigger recovery
         make_monitoring_loop._stuck_state["a1"]["since"] = time.time() - 400
 
+        await make_monitoring_loop._mechanical_recovery_for_agent(agent)
+        mock_agent_manager.send_recovery_keystrokes.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_frozen_with_varying_color_codes_still_detected(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        """AgentManager._read_transcript_log deliberately keeps SGR color
+        codes (\\x1b[...m) when stripping other ANSI. A TUI status bar that
+        re-emits color codes on every redraw makes two reads of an
+        otherwise-frozen screen differ byte-for-byte, which used to make the
+        frozen-signature comparison below never match -- silently disabling
+        this entire detector for any agent whose frozen screen had colored
+        text. Observed live: an agent hard-stopped on a model error sat
+        frozen for 12+ minutes with zero recovery attempts."""
+        agent = Agent(id="a1", cli_type="claude")
+        # Same visible content, different SGR color codes each read --
+        # simulates a themed status bar re-rendering on every poll.
+        frame1 = "\x1b[31mError: max output token limit\x1b[0m\nAgent idle at prompt"
+        frame2 = "\x1b[32mError: max output token limit\x1b[0m\nAgent idle at prompt"
+        mock_agent_manager.get_agent_output.side_effect = [frame1, frame2]
+        mock_agent_manager.send_recovery_keystrokes = AsyncMock(return_value=True)
+
+        # First call sets baseline
+        await make_monitoring_loop._mechanical_recovery_for_agent(agent)
+        make_monitoring_loop._stuck_state["a1"]["since"] = time.time() - 400
+
+        # Second call: different color codes, same visible content
         await make_monitoring_loop._mechanical_recovery_for_agent(agent)
         mock_agent_manager.send_recovery_keystrokes.assert_called_once()
 
