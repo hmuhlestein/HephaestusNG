@@ -2248,9 +2248,16 @@ def _get_phase0_completion(design_id: Optional[str]) -> Optional[dict]:
     separate Workflow — Phase 0 can't be "phase order=0" of any of those, since it
     runs before they exist) rather than a Phase row inside a shared one.
 
-    Note: assumes exactly one Phase/PhaseExecution per Phase 0 workflow, true today
-    (01_feature_architect.yaml declares a single phase). If Phase 0 ever gains a
-    second phase this needs revisiting.
+    Checks the LAST phase (by order) rather than the first, since Phase 0 now
+    runs two phases (Feature Architect, feature_review) — checking just the
+    first Phase's PhaseExecution would report "completed" as soon as Feature
+    Architect finished, before feature_review ever ran. Also requires the
+    Workflow's own status to be "completed": a couple of generic,
+    Phase-0-unaware code paths (WorkflowTerminationHandler.terminate_workflow,
+    the admin POST /api/workflow-executions/{id}/complete endpoint) can mark
+    a PhaseExecution "completed" as part of a forced/generic teardown without
+    the workflow itself having reached a real "completed" state — requiring
+    both catches a forced-complete that never actually ran feature_review.
 
     Returns designs_folder (NOT the workflow's own working_directory/worktree,
     which _cleanup_worktree removes once the workflow finishes) — run_phase0
@@ -2276,12 +2283,17 @@ def _get_phase0_completion(design_id: Optional[str]) -> Optional[dict]:
         if not design or not design.phase0_workflow_id or not design.designs_folder:
             return None
         wf = db.query(Workflow).filter_by(id=design.phase0_workflow_id).first()
-        if not wf:
+        if not wf or wf.status != "completed":
             return None
-        phase = db.query(Phase).filter_by(workflow_id=wf.id).first()
+        last_phase = (
+            db.query(Phase)
+            .filter_by(workflow_id=wf.id)
+            .order_by(Phase.order.desc())
+            .first()
+        )
         execution = (
-            db.query(PhaseExecution).filter_by(phase_id=phase.id).first()
-            if phase
+            db.query(PhaseExecution).filter_by(phase_id=last_phase.id).first()
+            if last_phase
             else None
         )
         if execution and execution.status == "completed":
@@ -4668,7 +4680,7 @@ def run_phase0(
     logger.info(f"Copied design document to: {dest}")
 
     # Create integration worktree for Phase 0
-    branch = f"autopilot-phase0/{design_entry.db_id or 'unknown'}"
+    branch = f"feature_architect/{design_entry.db_id or 'unknown'}"
     worktree = _create_integration_worktree(
         project_path, design_entry.db_id or "", branch, logger
     )
@@ -4700,7 +4712,7 @@ def run_phase0(
 
         wf_status = run_single_workflow(
             sdk,
-            "autopilot-phase0",
+            "feature_architect",
             str(worktree),
             description,
             logger,
@@ -4774,7 +4786,7 @@ def run_phase0(
                 with _get_db() as _ndb:
                     neg_wf = (
                         _ndb.query(_NegWF)
-                        .filter_by(design_id=design_entry.db_id, definition_id="autopilot-phase0")
+                        .filter_by(design_id=design_entry.db_id, definition_id="feature_architect")
                         .order_by(_NegWF.created_at.desc())
                         .first()
                     )
@@ -4867,7 +4879,7 @@ def run_phase0(
         with _get_db() as _db:
             phase0_wf = (
                 _db.query(_WF)
-                .filter_by(design_id=design_entry.db_id, definition_id="autopilot-phase0")
+                .filter_by(design_id=design_entry.db_id, definition_id="feature_architect")
                 .order_by(_WF.created_at.desc())
                 .first()
             )
@@ -5448,7 +5460,7 @@ def run_single_design(
     if features_json is None:
         raise RuntimeError(
             f"Phase 0 failed to produce features.json for design '{design_entry.name}'. "
-            "Check the autopilot-phase0 workflow and agent logs."
+            "Check the feature_architect workflow and agent logs."
         )
 
     # ── Stage 2: Per-feature pipelines ──
@@ -5555,7 +5567,7 @@ def run_continuous_pipeline(args) -> None:
         launch_template=AUTOPILOT_LAUNCH_TEMPLATE,
     )
 
-    # Load all workflow definitions from registry (including autopilot-phase0)
+    # Load all workflow definitions from registry (including feature_architect)
     from src.workflow_registry import get_all_workflow_definitions
     all_defs = get_all_workflow_definitions()
     # Add any definitions not already in our list

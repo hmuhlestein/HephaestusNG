@@ -37,6 +37,16 @@ _active_project_id_cache: Optional[str] = (
 
 ALLOWED_EXTENSIONS = {".md", ".txt"}
 
+# Workflow.definition_id values that identify a design's workflows.
+# "autopilot-phase0" is the pre-rename Phase 0 definition_id (see
+# config/workflows/feature_architect/, renamed from autopilot-phase0/) --
+# kept here for historical DB rows created before the rename, not because
+# new workflows still use it. One shared constant instead of repeating this
+# pair inline at every call site, so a future retirement of the old value
+# only has to happen in one place.
+PHASE0_DEFINITION_IDS = ("autopilot-phase0", "feature_architect")
+DESIGN_WORKFLOW_DEFINITION_IDS = ("autopilot",) + PHASE0_DEFINITION_IDS
+
 
 def _get_active_project_id() -> Optional[str]:
     """Get the current active project ID from the database."""
@@ -860,7 +870,7 @@ async def rerun_design(request: dict):
             matching_wfs = (
                 db.query(Workflow)
                 .filter(
-                    Workflow.definition_id.in_(["autopilot", "autopilot-phase0"]),
+                    Workflow.definition_id.in_(DESIGN_WORKFLOW_DEFINITION_IDS),
                     Workflow.launch_params.like(f"%{filename}%"),
                 )
                 .all()
@@ -2149,7 +2159,7 @@ async def remove_project_design(project_id: str, filename: str):
                 db.query(Workflow)
                 .filter(
                     Workflow.design_id.is_(None),
-                    Workflow.definition_id.in_(["autopilot-phase0", "autopilot"]),
+                    Workflow.definition_id.in_(DESIGN_WORKFLOW_DEFINITION_IDS),
                 )
                 .all()
             )
@@ -2339,7 +2349,7 @@ async def get_project_design_status(project_id: str, filename: str):
         matching_workflows = (
             db.query(Workflow)
             .filter(
-                Workflow.definition_id.in_(["autopilot", "autopilot-phase0"]),
+                Workflow.definition_id.in_(DESIGN_WORKFLOW_DEFINITION_IDS),
                 Workflow.launch_params.like(f"%{filename}%"),
             )
             .order_by(Workflow.created_at.desc())
@@ -2594,7 +2604,7 @@ async def get_project_design_status(project_id: str, filename: str):
         # the same shape as real features above) so FeatureRow renders it
         # identically -- including the clickable agent-id link per task.
         phase0_workflows = [
-            wf for wf in matching_workflows if wf.definition_id == "autopilot-phase0"
+            wf for wf in matching_workflows if wf.definition_id in PHASE0_DEFINITION_IDS
         ]
         if phase0_workflows:
             phase0_wf = phase0_workflows[0]  # most recent (matching_workflows is desc-ordered)

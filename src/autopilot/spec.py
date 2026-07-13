@@ -21,6 +21,8 @@ import re
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
+import yaml
+
 from src.core.constants import AUTOPILOT_STATE_DIR
 
 logger = logging.getLogger(__name__)
@@ -34,24 +36,58 @@ DEFAULT_SPEC: Dict[str, Any] = {
     "min_requirements_met_rate": 100,  # percent of requirements that must be met
 }
 
-# Phases gated by the hybrid spec (engine evaluation point keys).
-#
-# architectural_review/adversarial_review added after discovering their
-# workflow.yaml evaluation_points (score<0.3 -> goto architecture_design,
-# score<0.6 -> goto development) had never actually fired: build_phase_output
-# returned {} for any phase not in this tuple, so the heuristic evaluator's
-# json.dumps({}) scan found zero keywords and fell through to its baseline
-# 0.75 ("pass") every time -- regardless of how many BLOCKERs a review found.
-# Observed live: an adversarial review reporting 6 BLOCKERs still completed
-# with action="continue", because the score that would have triggered the
-# goto-back-to-development condition was never computed from real content.
-GATED_PHASES = (
-    "scope_review",
-    "architectural_review",
-    "adversarial_review",
-    "qa_validation",
-    "product_validation",
-)
+_WORKFLOWS_DIR = Path(__file__).parent.parent.parent / "config" / "workflows"
+
+
+def _load_gated_phases() -> Tuple[str, ...]:
+    """Phases gated by the hybrid spec (engine evaluation point keys).
+
+    Read from each phase's own YAML file (`spec_gate: true`) instead of a
+    hardcoded tuple here -- the two used to be able to drift silently.
+    architectural_review/adversarial_review were added to a hardcoded tuple
+    only after discovering their workflow.yaml evaluation_points (score<0.3
+    -> goto architecture_design, score<0.6 -> goto development) had never
+    actually fired: build_phase_output returned {} for any phase not in the
+    tuple, so the heuristic evaluator's json.dumps({}) scan found zero
+    keywords and fell through to its baseline 0.75 ("pass") every time --
+    regardless of how many BLOCKERs a review found. Observed live: an
+    adversarial review reporting 6 BLOCKERs still completed with
+    action="continue", because the score that would have triggered the
+    goto-back-to-development condition was never computed from real
+    content. Declaring the gate on the phase's own file (next to its
+    `outputs:`/`required_output:` declarations, the same place a phase
+    author already looks) removes the second place that has to be kept in
+    sync by hand.
+    """
+    gated = []
+    try:
+        if not _WORKFLOWS_DIR.exists():
+            return ()
+        workflow_dirs = sorted(_WORKFLOWS_DIR.iterdir())
+    except OSError as e:
+        # A filesystem hiccup here must not crash `import src.autopilot.spec`
+        # (this module is imported by orchestrator.py and
+        # task_completion_service.py) -- degrade to "no gated phases" instead
+        # of taking the whole app down at startup.
+        logger.error(f"Could not list {_WORKFLOWS_DIR} for spec_gate scan: {e}")
+        return ()
+    for workflow_dir in workflow_dirs:
+        if not workflow_dir.is_dir():
+            continue
+        for phase_file in sorted(workflow_dir.glob("*.yaml")):
+            if phase_file.name == "workflow.yaml":
+                continue
+            try:
+                phase_cfg = yaml.safe_load(phase_file.read_text())
+            except Exception as e:
+                logger.warning(f"Could not parse {phase_file} while scanning for spec_gate: {e}")
+                continue
+            if isinstance(phase_cfg, dict) and phase_cfg.get("spec_gate") and phase_cfg.get("name"):
+                gated.append(phase_cfg["name"])
+    return tuple(gated)
+
+
+GATED_PHASES = _load_gated_phases()
 
 # Single-file overrides per phase, keyed by phase name — used when a phase's
 # real output lives somewhere its own declared `outputs:` list doesn't
@@ -437,11 +473,22 @@ def score_scope_review(
     }
     if verdict == "PASS" and not out_of_scope and not missing:
         return 1.0, {**meta, "band": "pass"}
+    # Same handoff mechanism as score_architectural_review/score_adversarial_review's
+    # report_text quoting (see _fire_phase_transition's feedback extraction):
+    # without a real "reason" here, product_requirements only ever sees the
+    # static workflow.yaml condition text ("Scope drift detected...") on a
+    # goto, not which items actually drifted.
+    reason_parts = []
+    if out_of_scope:
+        reason_parts.append(f"Out of scope: {out_of_scope}")
+    if missing:
+        reason_parts.append(f"Missing from requirements: {missing}")
     return 0.2, {
         **meta,
         "band": "requirements",
         "out_of_scope": out_of_scope,
         "missing": missing,
+        "reason": "Scope drift detected — " + "; ".join(reason_parts),
     }
 
 
@@ -562,10 +609,15 @@ def score_qa(
 
     # Critical issues are treated as fundamental (architecture); other floor
     # breaches are code-level (development); otherwise pass + subjective blend.
+    # Same handoff mechanism as score_architectural_review/score_adversarial_review's
+    # report_text quoting (see _fire_phase_transition's feedback extraction):
+    # without a real "reason" here, development only ever sees the static
+    # workflow.yaml condition text ("QA failed, returning to development")
+    # on a goto, not which specific violations (already computed above) failed.
     if critical > spec.get("max_critical_issues", 0):
-        return _ARCH, {**meta, "band": "architecture"}
+        return _ARCH, {**meta, "band": "architecture", "reason": f"QA critical issues: {violations}"}
     if violations:
-        return _DEV, {**meta, "band": "development"}
+        return _DEV, {**meta, "band": "development", "reason": f"QA violations: {violations}"}
     return _pass_with_subjective(result.get("agent_score", 1.0)), {
         **meta,
         "band": "pass",
@@ -598,15 +650,24 @@ def score_product_validation(
         return _ARCH, {**meta, "band": "architecture"}
 
     # Hard floor: a PASS verdict cannot stand if requirements are unmet.
+    # Same handoff mechanism as score_architectural_review/score_adversarial_review's
+    # report_text quoting (see _fire_phase_transition's feedback extraction):
+    # quote the actual unmet_requirements list, not just "unmet requirements
+    # override verdict" -- development otherwise gets sent back with no idea
+    # which requirements were unmet.
     if unmet:
         return _DEV, {
             **meta,
             "band": "development",
-            "reason": "unmet requirements override verdict",
+            "reason": f"Unmet requirements override verdict: {unmet}",
         }
 
     if verdict in ("NEEDS_WORK", "FAIL", "NEEDS WORK"):
-        return _DEV, {**meta, "band": "development"}
+        return _DEV, {
+            **meta,
+            "band": "development",
+            "reason": f"Product validation verdict: {verdict}",
+        }
 
     if verdict == "PASS":
         return _pass_with_subjective(result.get("agent_score", 1.0)), {
@@ -721,6 +782,50 @@ def score_architectural_review(
     return 0.9, {"gate": "architectural_review", "band": "pass", "reason": "clean"}
 
 
+def score_feature_review(
+    result: Optional[Dict[str, Any]],
+    report_text: Optional[str] = None,
+) -> Tuple[float, Dict[str, Any]]:
+    """Score a feature_review_result.json by BLOCKER/FIX/DEFER counts.
+
+    02_feature_review.yaml's report classifies findings as BLOCKER (feature
+    decomposition contradicts or omits part of the design), FIX (scope
+    imprecision, ownership overlap), or DEFER. Unlike
+    score_architectural_review/score_adversarial_review (where a FIX-only
+    report proceeds and only a BLOCKER routes back), ANY finding here --
+    BLOCKER or FIX -- routes back to Feature Architect: Phase 0 runs once,
+    before any per-feature pipeline exists, so there's no later phase that
+    will independently catch an unaddressed FIX the way development/QA/
+    doc_review do downstream in the main pipeline. Only DEFER-only or a
+    clean report passes.
+    """
+    if not result:
+        return 0.4, {
+            "gate": "feature_review",
+            "reason": "no feature_review_result.json found",
+            "result_missing": True,
+        }
+
+    blockers = int(result.get("blocker_count") or 0)
+    fixes = int(result.get("fix_count") or 0)
+
+    if blockers > 0 or fixes > 0:
+        findings = f"{blockers} BLOCKER(s), {fixes} FIX item(s)"
+        reason = (
+            f"{findings} found in feature review:\n\n{report_text}"
+            if report_text
+            else f"{findings} found — returning to Feature Architect"
+        )
+        return 0.1, {
+            "gate": "feature_review",
+            "band": "feature_architect",
+            "blocker_count": blockers,
+            "fix_count": fixes,
+            "reason": reason,
+        }
+    return 0.9, {"gate": "feature_review", "band": "pass", "reason": "clean"}
+
+
 def read_result(working_directory: Any, filename: str) -> Optional[Dict[str, Any]]:
     """Read a structured result file an agent wrote.
 
@@ -786,6 +891,10 @@ def build_phase_output(
         result = read_result(working_directory, "qa_result.json")
         # Enhancement 1: Pass working_directory for independent test verification
         score, meta = score_qa(result, spec, working_directory=working_directory)
+    elif phase_name == "feature_review":
+        result = read_result(working_directory, "feature_review_result.json")
+        report_text = read_report_text(working_directory, "feature_review_report.md")
+        score, meta = score_feature_review(result, report_text=report_text)
     else:  # product_validation
         result = read_result(working_directory, "product_validation.json")
         score, meta = score_product_validation(result, spec)

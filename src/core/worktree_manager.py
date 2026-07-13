@@ -1041,7 +1041,8 @@ class WorktreeManager:
             untracked_branches = [
                 b
                 for b in all_branches
-                if b.startswith(("agent-", "autopilot-")) and b not in tracked_branches
+                if b.startswith(("agent-", "autopilot-", "feature_architect/"))
+                and b not in tracked_branches
             ]
 
             def _merge_and_delete(branch_name: str, agent_id: Optional[str]) -> None:

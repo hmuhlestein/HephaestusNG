@@ -13,8 +13,10 @@ from src.autopilot.spec import (
     read_result,
     score_adversarial_review,
     score_architectural_review,
+    score_feature_review,
     score_product_validation,
     score_qa,
+    score_scope_review,
 )
 
 
@@ -86,6 +88,35 @@ class TestLoadSpec:
         assert "extra_key" not in result
 
 
+class TestScoreScopeReview:
+    def test_none_result(self):
+        score, meta = score_scope_review(None)
+        assert score == 0.4
+        assert meta["result_missing"] is True
+
+    def test_pass_no_drift(self):
+        result = {"verdict": "PASS", "out_of_scope": [], "missing": []}
+        score, meta = score_scope_review(result)
+        assert score == 1.0
+        assert meta["band"] == "pass"
+
+    def test_drift_quotes_items_in_reason(self):
+        """The goto handoff (_fire_phase_transition) reads meta["reason"] --
+        must quote the actual out-of-scope/missing items, not just generic
+        "Scope drift detected" boilerplate, or product_requirements has no
+        idea what to fix on the return trip."""
+        result = {
+            "verdict": "FAIL",
+            "out_of_scope": ["admin dashboard"],
+            "missing": ["password reset flow"],
+        }
+        score, meta = score_scope_review(result)
+        assert score < 0.6
+        assert meta["band"] == "requirements"
+        assert "admin dashboard" in meta["reason"]
+        assert "password reset flow" in meta["reason"]
+
+
 class TestScoreQA:
     def test_none_result(self):
         score, meta = score_qa(None, DEFAULT_SPEC)
@@ -131,6 +162,11 @@ class TestScoreQA:
         assert score == 0.5  # development band
         assert meta["band"] == "development"
         assert any("failed_tests" in v for v in meta["violations"])
+        # The goto handoff (_fire_phase_transition) reads meta["reason"] --
+        # without it, development would only see the generic workflow.yaml
+        # boilerplate ("QA failed, returning to development"), not which
+        # specific violation triggered the goto.
+        assert "failed_tests" in meta["reason"]
 
     def test_low_pass_rate(self):
         result = {
@@ -277,12 +313,17 @@ class TestScoreProductValidation:
         score, meta = score_product_validation(result, DEFAULT_SPEC)
         assert score == 0.5
         assert meta["band"] == "development"
+        assert "NEEDS_WORK" in meta["reason"]
 
     def test_pass_with_unmet_overrides(self):
         result = {"verdict": "PASS", "unmet_requirements": ["req1", "req2"]}
         score, meta = score_product_validation(result, DEFAULT_SPEC)
         assert score == 0.5  # unmet overrides verdict
         assert meta["band"] == "development"
+        # The goto handoff (_fire_phase_transition) reads meta["reason"] --
+        # must quote the actual unmet requirements, not just boilerplate.
+        assert "req1" in meta["reason"]
+        assert "req2" in meta["reason"]
 
     def test_unknown_verdict(self):
         result = {"verdict": "MAYBE", "unmet_requirements": []}
@@ -370,6 +411,29 @@ class TestBuildPhaseOutput:
         result = build_phase_output("architectural_review", tmp_path)
         assert result["score"] < 0.6
 
+    def test_feature_review_no_result(self, tmp_path):
+        result = build_phase_output("feature_review", tmp_path)
+        assert result["score"] == 0.4  # no result → conservative fallback
+
+    def test_feature_review_with_fix_quotes_full_report_for_handoff(self, tmp_path):
+        """The goto/retry handoff back to Feature Architect
+        (_fire_phase_transition -> _create_phase_task's "WHY YOU'RE HERE:"
+        text) reads result["spec_gate"]["reason"] verbatim -- this is the
+        same mechanism architectural_review/adversarial_review gotos use, so
+        a FIX-only feature review (which now also routes back, unlike those
+        two) must quote its full report here too, not just a count."""
+        docs = tmp_path / "docs"
+        docs.mkdir()
+        (docs / "feature_review_result.json").write_text(
+            json.dumps({"blocker_count": 0, "fix_count": 1, "defer_count": 0})
+        )
+        (docs / "feature_review_report.md").write_text(
+            "# Feature Review Report\n\n### [FIX] Ownership overlap"
+        )
+        result = build_phase_output("feature_review", tmp_path)
+        assert result["score"] < 0.3
+        assert "Ownership overlap" in result["spec_gate"]["reason"]
+
 
 class TestScoreAdversarialReview:
     def test_none_result(self):
@@ -454,12 +518,53 @@ class TestScoreArchitecturalReview:
         assert report in meta["reason"]
 
 
+class TestScoreFeatureReview:
+    def test_none_result(self):
+        score, meta = score_feature_review(None)
+        assert score == 0.4
+        assert meta["result_missing"] is True
+
+    def test_blocker_routes_back_to_feature_architect(self):
+        score, meta = score_feature_review(
+            {"blocker_count": 1, "fix_count": 0, "defer_count": 0}
+        )
+        assert score < 0.3
+        assert meta["band"] == "feature_architect"
+
+    def test_fix_only_also_routes_back(self):
+        """Unlike architectural/adversarial review, a FIX-only feature
+        review still routes back — Phase 0 has no later phase to catch an
+        unaddressed FIX the way development/QA do downstream."""
+        score, meta = score_feature_review(
+            {"blocker_count": 0, "fix_count": 1, "defer_count": 0}
+        )
+        assert score < 0.3
+        assert meta["band"] == "feature_architect"
+
+    def test_clean_passes(self):
+        score, meta = score_feature_review(
+            {"blocker_count": 0, "fix_count": 0, "defer_count": 0}
+        )
+        assert score >= 0.3
+        assert meta["band"] == "pass"
+
+    def test_fix_with_report_text_quotes_full_report(self):
+        report = "# Feature Review Report\n\n### [FIX] Ownership overlap"
+        score, meta = score_feature_review(
+            {"blocker_count": 0, "fix_count": 1, "defer_count": 0},
+            report_text=report,
+        )
+        assert score < 0.3
+        assert report in meta["reason"]
+
+
 class TestConstants:
     def test_gated_phases(self):
         assert "qa_validation" in GATED_PHASES
         assert "product_validation" in GATED_PHASES
         assert "architectural_review" in GATED_PHASES
         assert "adversarial_review" in GATED_PHASES
+        assert "feature_review" in GATED_PHASES
         assert "development" not in GATED_PHASES
 
     def test_phase_artifacts(self):

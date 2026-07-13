@@ -1115,9 +1115,9 @@ class TestProjectDesigns:
             db.add(
                 Workflow(
                     id="wf-orphan-phase0",
-                    name="autopilot-phase0",
+                    name="feature_architect",
                     description="Phase 0: Feature Architect for Orphan",
-                    definition_id="autopilot-phase0",
+                    definition_id="feature_architect",
                     design_id=None,
                     phases_folder_path=".",
                     status="completed",

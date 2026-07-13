@@ -41,8 +41,11 @@ orchestrator:
         - if: "score < 0.3"
           action: goto
           target: Feature Architect
-          reason: "Feature decomposition contradicts or omits part of the design, re-decompose"
-        - if: "score >= 0.3"
+          reason: "Feature review found BLOCKER or FIX findings, re-decompose"
+        - if: "score < 0.6"
+          action: retry
+          reason: "Feature review produced no result, retry the review"
+        - if: "score >= 0.6"
           action: continue
           reason: "Feature decomposition matches the design"
 

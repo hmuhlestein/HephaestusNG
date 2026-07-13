@@ -295,7 +295,7 @@ class TestPhase0FeatureArchitectVisibility:
                 status_env["design_id"],
                 status_env["filename"],
                 status="active",
-                definition_id="autopilot-phase0",
+                definition_id="feature_architect",
             )
             _make_task(session, phase0_wf_id, "in_progress")
         finally:
@@ -324,7 +324,7 @@ class TestPhase0FeatureArchitectVisibility:
                 status_env["design_id"],
                 status_env["filename"],
                 status="completed",
-                definition_id="autopilot-phase0",
+                definition_id="feature_architect",
             )
             _make_task(session, phase0_wf_id, "done")
 
@@ -352,7 +352,7 @@ class TestPhase0FeatureArchitectVisibility:
                 status_env["design_id"],
                 status_env["filename"],
                 status="completed",
-                definition_id="autopilot-phase0",
+                definition_id="feature_architect",
             )
             _make_task(session, phase0_wf_id, "done")
         finally:
@@ -397,7 +397,7 @@ class TestPhase0FeatureArchitectVisibility:
                 status_env["design_id"],
                 status_env["filename"],
                 status="active",
-                definition_id="autopilot-phase0",
+                definition_id="feature_architect",
             )
         finally:
             session.close()

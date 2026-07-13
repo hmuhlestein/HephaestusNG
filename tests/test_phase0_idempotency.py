@@ -72,7 +72,7 @@ def _seed_phase0_workflow(db_manager, design_id, phase_execution_status):
             name="Phase 0",
             phases_folder_path="/tmp",
             status="completed" if phase_execution_status == "completed" else "active",
-            definition_id="autopilot-phase0",
+            definition_id="feature_architect",
             design_id=design_id,
         )
     )
@@ -153,6 +153,54 @@ class TestGetPhase0Completion:
         from src.autopilot.orchestrator import _get_phase0_completion
 
         assert _get_phase0_completion(None) is None
+
+    def test_returns_none_when_workflow_force_completed_but_last_phase_didnt_run(
+        self, db_manager, design
+    ):
+        """A generic teardown path (WorkflowTerminationHandler, the admin
+        POST /api/workflow-executions/{id}/complete endpoint) can set
+        Workflow.status="completed" without feature_review ever having run.
+        Trusting Workflow.status alone would wrongly treat Phase 0 as fully
+        reviewed; the last-phase PhaseExecution check must catch this."""
+        from src.autopilot.orchestrator import _get_phase0_completion
+
+        session = db_manager.get_session()
+        workflow_id = f"wf-{uuid.uuid4().hex[:8]}"
+        phase_id = f"phase-{uuid.uuid4().hex[:8]}"
+        session.add(
+            Workflow(
+                id=workflow_id,
+                name="Phase 0",
+                phases_folder_path="/tmp",
+                status="completed",  # forced complete by a generic teardown path
+                definition_id="feature_architect",
+                design_id=design,
+            )
+        )
+        session.add(
+            Phase(
+                id=phase_id,
+                workflow_id=workflow_id,
+                order=1,
+                name="Feature Architect",
+                description="d",
+                done_definitions=["done"],
+            )
+        )
+        session.add(
+            PhaseExecution(
+                id=f"exec-{uuid.uuid4().hex[:8]}",
+                phase_id=phase_id,
+                status="in_progress",  # feature_review never ran or completed
+            )
+        )
+        d = session.query(AutopilotDesign).filter_by(id=design).first()
+        d.phase0_workflow_id = workflow_id
+        d.designs_folder = "/tmp/some-designs-folder"
+        session.commit()
+        session.close()
+
+        assert _get_phase0_completion(design) is None
 
 
 class TestRunPhase0Tiers:
@@ -329,7 +377,7 @@ class TestRunPhase0Tiers:
                     name="Phase 0",
                     phases_folder_path="/tmp",
                     status="completed",
-                    definition_id="autopilot-phase0",
+                    definition_id="feature_architect",
                     design_id=design,
                 )
             )
