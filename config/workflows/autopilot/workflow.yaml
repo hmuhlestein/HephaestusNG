@@ -11,10 +11,10 @@ session_roles:
   development: developer
   architectural_review: architect       # checks design compliance vs architecture.md
   adversarial_review: adversarial       # reasons backward from failure modes
-  doc_review: doc-reviewer
   security_review: security-reviewer
   qa_validation: qa
   product_validation: product-requirements
+  doc_review: doc-reviewer
   git_commit_push: git
   forensics_analysis: forensics
 
@@ -109,22 +109,6 @@ orchestrator:
           action: continue
           reason: "Adversarial review passed, no critical failure modes found"
 
-    - after_phase: doc_review
-      evaluator: heuristic
-      max_retries: 2
-      conditions:
-        - if: "score < 0.3"
-          action: goto
-          target: architecture_design
-          reason: "Documentation gaps indicate architectural issues"
-        - if: "score < 0.6"
-          action: goto
-          target: development
-          reason: "Documentation needs code-level fixes"
-        - if: "score >= 0.6"
-          action: continue
-          reason: "Documentation approved"
-
     - after_phase: security_review
       evaluator: heuristic
       max_retries: 2
@@ -171,7 +155,23 @@ orchestrator:
           reason: "Product validation failed, returning to development"
         - if: "score >= 0.7"
           action: continue
-          reason: "Product validated, proceeding to commit"
+          reason: "Product validated, proceeding to doc review"
+
+    - after_phase: doc_review
+      evaluator: heuristic
+      max_retries: 2
+      conditions:
+        - if: "score < 0.3"
+          action: goto
+          target: architecture_design
+          reason: "Documentation gaps indicate architectural issues"
+        - if: "score < 0.6"
+          action: goto
+          target: development
+          reason: "Documentation needs code-level fixes"
+        - if: "score >= 0.6"
+          action: continue
+          reason: "Documentation approved"
 
     - after_phase: forensics_analysis
       evaluator: heuristic
@@ -215,22 +215,22 @@ workflow:
         name: In Review
         order: 5
         color: "#ec4899"
-      - id: doc-review
-        name: Doc Review
-        order: 6
-        color: "#06b6d4"
       - id: security
         name: Security
-        order: 7
+        order: 6
         color: "#ef4444"
       - id: qa
         name: QA
-        order: 8
+        order: 7
         color: "#14b8a6"
       - id: validated
         name: Validated
-        order: 9
+        order: 8
         color: "#22c55e"
+      - id: doc-review
+        name: Doc Review
+        order: 9
+        color: "#06b6d4"
       - id: shipped
         name: Shipped
         order: 10
