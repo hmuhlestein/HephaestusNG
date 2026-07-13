@@ -697,6 +697,195 @@ class TestGetTasks:
         assert result[0]["retry_count"] == 2
 
 
+class TestWorkflowBelongsToProject:
+    """_workflow_belongs_to_project underlies both get_active_workflows'
+    project scoping and run_continuous_pipeline's stale-workflow check --
+    covering its decision logic directly, once, is more precise than
+    re-deriving the same cases through each caller's DB/loop scaffolding."""
+
+    def test_project_id_match_wins_even_with_no_working_directory(self):
+        from src.autopilot.orchestrator import _workflow_belongs_to_project
+
+        assert _workflow_belongs_to_project("proj-a", None, "proj-a", "/x/a") is True
+
+    def test_project_id_mismatch_even_if_path_would_match(self):
+        """project_id is authoritative -- a stale/incorrect working_directory
+        (e.g. project directory renamed on disk after the workflow row was
+        created) must not override a definitive project_id mismatch."""
+        from src.autopilot.orchestrator import _workflow_belongs_to_project
+
+        assert (
+            _workflow_belongs_to_project("proj-b", "/x/a/.worktrees/wt_1", "proj-a", "/x/a")
+            is False
+        )
+
+    def test_falls_back_to_path_when_no_project_id_on_either_side(self, tmp_path):
+        from src.autopilot.orchestrator import _workflow_belongs_to_project
+
+        project = tmp_path / "sotto"
+        project.mkdir()
+        wt = project / ".worktrees" / "wt_1"
+        wt.mkdir(parents=True)
+
+        assert (
+            _workflow_belongs_to_project(None, str(wt), None, str(project)) is True
+        )
+
+    def test_sibling_directory_name_prefix_does_not_false_match(self, tmp_path):
+        """Regression: a raw str.startswith() prefix match wrongly treated
+        "/code/project-a" as matching "/code/project-ab/..." -- a sibling
+        project whose name happens to be a superstring. Path.is_relative_to
+        must be used instead, or a workflow in a same-parent-directory
+        sibling project silently blocks/gets force-failed/gets its agents
+        terminated by a different project's pipeline."""
+        from src.autopilot.orchestrator import _workflow_belongs_to_project
+
+        project_a = tmp_path / "project-a"
+        project_a.mkdir()
+        project_ab = tmp_path / "project-ab"
+        wt = project_ab / ".worktrees" / "wt_1"
+        wt.mkdir(parents=True)
+
+        assert (
+            _workflow_belongs_to_project(None, str(wt), None, str(project_a)) is False
+        )
+
+    def test_no_working_directory_and_no_project_id_defaults_to_false(self):
+        """Regression: the previous-workflow check used to only clear stale
+        state when working_directory was truthy AND mismatched -- a workflow
+        with no working_directory recorded at all silently fell through as
+        "still belongs to the current project," reproducing the original
+        cross-project blocking/force-fail bug for any such row."""
+        from src.autopilot.orchestrator import _workflow_belongs_to_project
+
+        assert _workflow_belongs_to_project(None, None, "proj-a", "/x/a") is False
+
+    def test_current_project_id_unknown_falls_back_to_path(self, tmp_path):
+        """If the CURRENT project's id couldn't be resolved (e.g. no
+        AutopilotProject row for this project_path yet), project_id
+        comparison is skipped entirely and the path check still applies."""
+        from src.autopilot.orchestrator import _workflow_belongs_to_project
+
+        project = tmp_path / "sotto"
+        project.mkdir()
+        wt = project / ".worktrees" / "wt_1"
+        wt.mkdir(parents=True)
+
+        assert (
+            _workflow_belongs_to_project("proj-a", str(wt), None, str(project)) is True
+        )
+
+
+class TestGetWorkflowStatus:
+    def test_returns_project_id_and_working_directory(self, orch_db_env):
+        """Regression: get_workflow_status used to omit project_id/
+        working_directory entirely, so run_continuous_pipeline's stale-
+        workflow check couldn't tell a previous run's workflow apart from a
+        DIFFERENT project's workflow -- switching the active project in the
+        UI left the pipeline blocked behind (and eventually force-failing)
+        an unrelated, possibly deliberately-paused workflow belonging to a
+        project it no longer had anything to do with."""
+        from src.autopilot.orchestrator import get_workflow_status
+        from src.core.database import Workflow
+
+        with orch_db_env.session_scope() as session:
+            session.add(
+                Workflow(
+                    id="wf-1",
+                    name="test",
+                    phases_folder_path="/tmp",
+                    status="paused",
+                    project_id="proj-other",
+                    working_directory="/Users/x/code/other-project/.worktrees/wt_1",
+                )
+            )
+
+        result = get_workflow_status("wf-1")
+        assert result["status"] == "paused"
+        assert result["project_id"] == "proj-other"
+        assert result["working_directory"] == "/Users/x/code/other-project/.worktrees/wt_1"
+
+    def test_returns_empty_dict_for_missing_workflow(self, orch_db_env):
+        from src.autopilot.orchestrator import get_workflow_status
+
+        assert get_workflow_status("nonexistent") == {}
+
+
+class TestGetActiveWorkflows:
+    def _make_workflow(self, db, wf_id, working_directory, status="active"):
+        from src.core.database import Workflow
+
+        with db.session_scope() as session:
+            session.add(
+                Workflow(
+                    id=wf_id,
+                    name="test",
+                    phases_folder_path="/tmp",
+                    status=status,
+                    working_directory=working_directory,
+                )
+            )
+
+    def test_unscoped_returns_all_active(self, orch_db_env):
+        from src.autopilot.orchestrator import get_active_workflows
+
+        self._make_workflow(orch_db_env, "wf-a", "/Users/x/code/project-a/.worktrees/wt_1")
+        self._make_workflow(orch_db_env, "wf-b", "/Users/x/code/project-b/.worktrees/wt_1")
+
+        result = get_active_workflows()
+        assert {r["id"] for r in result} == {"wf-a", "wf-b"}
+
+    def test_scoped_excludes_other_projects(self, orch_db_env):
+        """Regression: get_active_workflows() had no project scoping at
+        all -- an active workflow in a DIFFERENT project would block a new
+        project's design-queue loop forever (no escalation/timeout on that
+        branch, unlike the current_workflow_id completeness check) and,
+        on pipeline stop, get forcibly paused as pure collateral damage
+        from an unrelated project's pipeline stopping."""
+        from src.autopilot.orchestrator import get_active_workflows
+
+        self._make_workflow(orch_db_env, "wf-a", "/Users/x/code/project-a/.worktrees/wt_1")
+        self._make_workflow(orch_db_env, "wf-b", "/Users/x/code/project-b/.worktrees/wt_1")
+
+        result = get_active_workflows(project_path="/Users/x/code/project-a")
+        assert [r["id"] for r in result] == ["wf-a"]
+
+    def test_scoped_ignores_workflow_with_no_working_directory(self, orch_db_env):
+        from src.autopilot.orchestrator import get_active_workflows
+
+        self._make_workflow(orch_db_env, "wf-a", None)
+
+        result = get_active_workflows(project_path="/Users/x/code/project-a")
+        assert result == []
+
+    def test_scoped_excludes_sibling_directory_name_prefix(self, orch_db_env, tmp_path):
+        """Integration-level regression for the same str.startswith()
+        boundary bug covered directly in TestWorkflowBelongsToProject: a
+        workflow under a sibling directory whose name is a superstring of
+        the target project's name must not be scoped in."""
+        from src.autopilot.orchestrator import get_active_workflows
+
+        project_a = tmp_path / "project-a"
+        project_a.mkdir()
+        project_ab = tmp_path / "project-ab"
+        wt = project_ab / ".worktrees" / "wt_1"
+        wt.mkdir(parents=True)
+        self._make_workflow(orch_db_env, "wf-ab", str(wt))
+
+        result = get_active_workflows(project_path=str(project_a))
+        assert result == []
+
+    def test_paused_workflows_excluded_regardless_of_scope(self, orch_db_env):
+        from src.autopilot.orchestrator import get_active_workflows
+
+        self._make_workflow(
+            orch_db_env, "wf-a", "/Users/x/code/project-a/.worktrees/wt_1", status="paused"
+        )
+
+        assert get_active_workflows() == []
+        assert get_active_workflows(project_path="/Users/x/code/project-a") == []
+
+
 class TestPromptHumanDismissed:
     def test_dismissed_request_auto_continues_without_crashing(self, tmp_path):
         """Regression: the "dismissed" branch called

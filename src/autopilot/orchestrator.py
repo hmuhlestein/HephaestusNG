@@ -796,6 +796,38 @@ def get_task_progress(agent_id: str) -> dict:
     return {"done": len(agent_done), "in_progress": len(agent_active)}
 
 
+def _workflow_belongs_to_project(
+    wf_project_id: Optional[str],
+    wf_working_directory: Optional[str],
+    current_project_id: Optional[str],
+    current_project_path: str,
+) -> bool:
+    """Whether a workflow belongs to the given project.
+
+    Prefers the authoritative Workflow.project_id FK when both sides have
+    one. Falls back to a resolved-path containment check via
+    working_directory using Path.is_relative_to() -- NOT a raw
+    str.startswith() prefix match, which wrongly matches sibling
+    directories that share a name prefix (e.g. "/code/project-a" is a
+    string-prefix of "/code/project-ab/.worktrees/wt_1", so a plain
+    startswith() would treat project-ab's workflow as belonging to
+    project-a). Returns False (does not belong) when neither signal can
+    positively confirm membership -- the safe default for every caller of
+    this helper: don't block on, force-fail, force-pause, or terminate
+    agents for a workflow we can't positively confirm is ours.
+    """
+    if wf_project_id and current_project_id:
+        return wf_project_id == current_project_id
+    if not wf_working_directory:
+        return False
+    try:
+        return Path(wf_working_directory).resolve().is_relative_to(
+            Path(current_project_path).resolve()
+        )
+    except (OSError, ValueError):
+        return False
+
+
 def get_workflow_status(workflow_id: str) -> dict:
     """Get workflow status directly from database (H-2 fix)."""
     try:
@@ -808,23 +840,48 @@ def get_workflow_status(workflow_id: str) -> dict:
                 "status": wf.status,
                 "name": wf.name if hasattr(wf, 'name') else None,
                 "created_at": wf.created_at.isoformat() if wf.created_at else None,
+                "project_id": wf.project_id,
+                "working_directory": wf.working_directory,
             }
     except Exception as e:
         logger.debug(f"[get_workflow_status] Failed: {e}")
         return {}
 
 
-def get_active_workflows() -> list:
-    """Get list of active workflows directly from database (H-2 fix)."""
+def get_active_workflows(
+    project_path: Optional[str] = None, project_id: Optional[str] = None
+) -> list:
+    """Get list of active workflows directly from database (H-2 fix).
+
+    project_path/project_id: if given, only return workflows belonging to
+    this project (see _workflow_belongs_to_project). Without this, a
+    design-queue loop running against one project would see (and block
+    behind, or on stop -- see run_continuous_pipeline's "Pause all active
+    autopilot workflows" cleanup -- forcibly pause, or -- see
+    run_single_workflow's pause_existing branch -- terminate the agents of)
+    an unrelated ACTIVE workflow belonging to a completely different
+    project, with no escalation/timeout on the "waiting" branch to ever
+    recover from it.
+    """
     try:
         with get_db() as session:
             workflows = session.query(Workflow).filter(Workflow.status == "active").all()
+            if project_path:
+                workflows = [
+                    wf
+                    for wf in workflows
+                    if _workflow_belongs_to_project(
+                        wf.project_id, wf.working_directory, project_id, project_path
+                    )
+                ]
             return [
                 {
                     "id": wf.id,
                     "status": wf.status,
                     "name": wf.name if hasattr(wf, 'name') else None,
                     "created_at": wf.created_at.isoformat() if wf.created_at else None,
+                    "working_directory": wf.working_directory,
+                    "project_id": wf.project_id,
                 }
                 for wf in workflows
             ]
@@ -4052,11 +4109,23 @@ def run_single_workflow(
     # below, discarding whatever that agent was mid-task on (observed live:
     # a just-finished agent's final report got dropped because its
     # termination raced 35s ahead of it).
+    #
+    # Scoped to project_path (this function's own parameter): this is the
+    # most destructive of the three get_active_workflows() call sites in
+    # this file -- it doesn't just block or pause, it TERMINATES AGENTS for
+    # every match below. Left unscoped, a workflow launch in one project
+    # would kill live, working agents in a completely different project's
+    # concurrently-running pipeline, the same class of cross-project
+    # collateral damage fixed at this file's other two call sites (see
+    # run_continuous_pipeline's "previous workflow" check and its "pause
+    # all active workflows on stop" cleanup).
     if not pause_existing:
         existing_workflows = []
     else:
         existing_workflows = [
-            wf for wf in get_active_workflows() if wf.get("id") != existing_workflow_id
+            wf
+            for wf in get_active_workflows(project_path)
+            if wf.get("id") != existing_workflow_id
         ]
     if existing_workflows:
         logger.info(
@@ -5544,6 +5613,25 @@ def run_continuous_pipeline(args) -> None:
     project_path.mkdir(parents=True, exist_ok=True)
     queue_dir.mkdir(parents=True, exist_ok=True)
 
+    # Resolved once, used everywhere this loop needs to tell "is this
+    # workflow ours" apart from a different project's (see
+    # _workflow_belongs_to_project) -- authoritative when available, a
+    # fallback path-containment check on working_directory otherwise.
+    current_project_id = None
+    try:
+        from src.core.database import AutopilotProject as _AutopilotProject
+
+        with get_db() as _pdb:
+            _proj = (
+                _pdb.query(_AutopilotProject)
+                .filter_by(base_dir=str(project_path.resolve()))
+                .first()
+            )
+            if _proj:
+                current_project_id = _proj.id
+    except Exception:
+        pass
+
     processed_file = log_dir / "processed.json"
 
     sys.path.insert(0, str(HEPHAESTUS_DIR))
@@ -5698,9 +5786,13 @@ def run_continuous_pipeline(args) -> None:
             if now - last_queue_scan >= DESIGN_QUEUE_SCAN_INTERVAL:
                 last_queue_scan = now
 
-                # Check if any workflow is still active - don't start a new design while one is running
+                # Check if any workflow is still active - don't start a new design while one is running.
+                # Scoped to this project: an active workflow in a DIFFERENT
+                # project must never block this one (this branch has no
+                # escalation/timeout the way the current_workflow_id check
+                # below does -- an unscoped match here would block forever).
                 try:
-                    active_workflows = get_active_workflows()
+                    active_workflows = get_active_workflows(str(project_path), project_id=current_project_id)
                     if active_workflows:
                         wf_ids = [wf.get("id", "")[:8] for wf in active_workflows]
                         logger.info(
@@ -5726,6 +5818,49 @@ def run_continuous_pipeline(args) -> None:
                                 # Workflow no longer exists in DB — clear stale state
                                 logger.info(
                                     f"Previous workflow {state.current_workflow_id[:8]} no longer exists in DB, clearing stale state"
+                                )
+                                state.current_workflow_id = None
+                                continue
+                            # state.current_workflow_id is global, persisted
+                            # pipeline state (PersistentPipelineState), NOT
+                            # scoped per-project. Switching the active
+                            # project in the UI and starting a new run
+                            # against a different project_path used to leave
+                            # this pointing at the PREVIOUS project's
+                            # workflow -- the loop would then block the new
+                            # project's entire queue behind an unrelated
+                            # workflow it doesn't own (including a
+                            # deliberately paused one), and after
+                            # _recovery_attempts exhausted, force-mark that
+                            # OTHER project's workflow "failed" purely as a
+                            # side effect of switching projects. Observed
+                            # live: switching from applitnator to Sotto
+                            # force-failed applitnator's paused
+                            # Authentication & Fraud Detection workflow.
+                            # Uses _workflow_belongs_to_project: prefers the
+                            # authoritative project_id FK, falls back to a
+                            # resolved-path containment check (not a raw
+                            # str.startswith() prefix match, which wrongly
+                            # matched sibling directories sharing a name
+                            # prefix -- e.g. "project-a" vs "project-ab" --
+                            # silently reintroducing this exact bug for that
+                            # narrower case). Treats "can't verify either
+                            # signal" as NOT belonging (clears state rather
+                            # than risk blocking/damaging a workflow we
+                            # can't positively confirm is ours) -- consistent
+                            # with get_active_workflows' pre-existing
+                            # treatment of a missing working_directory.
+                            if not _workflow_belongs_to_project(
+                                wf_check.get("project_id"),
+                                wf_check.get("working_directory"),
+                                current_project_id,
+                                str(project_path),
+                            ):
+                                logger.info(
+                                    f"Previous workflow {state.current_workflow_id[:8]} belongs to a "
+                                    f"different project (or project ownership could not be verified: "
+                                    f"working_directory={wf_check.get('working_directory')!r}) "
+                                    "— clearing stale state, not blocking or touching it"
                                 )
                                 state.current_workflow_id = None
                                 continue
@@ -5992,9 +6127,13 @@ def run_continuous_pipeline(args) -> None:
         )
         _update_orchestrator_status("terminated")
 
-        # Pause all active autopilot workflows
+        # Pause all active autopilot workflows belonging to THIS project.
+        # Unscoped, this would forcibly pause an unrelated active workflow
+        # in a different project just because this project's pipeline
+        # stopped -- same class of cross-project collateral damage as the
+        # stale current_workflow_id bug fixed alongside this.
         try:
-            active_workflows = get_active_workflows()
+            active_workflows = get_active_workflows(str(project_path), project_id=current_project_id)
             for wf in active_workflows:
                 wf_id = wf.get("id", "")
                 try:
