@@ -1,0 +1,82 @@
+name: Feature Architect
+description: >-
+  Decomposes a design document into discrete, implementable features (aim
+  for around 5, but the actual count follows the design's structure) before
+  the per-feature pipelines run. Runs as its own workflow (see
+  docs/LOOP_ENGINEERING_REVIEW.md) since it determines how many per-feature
+  Workflow rows get created, so it can't be phase order=0 within one of them.
+
+default_model: xiaomi/mimo-v2.5
+default_thinking_level: high
+
+# Phase 0: Feature Architect decomposes the design into features, then
+# Feature Review adversarially compares that decomposition back against the
+# design document before any per-feature pipeline is launched.
+execution_order: [1, 2]
+
+session_roles:
+  feature_architect: architect
+  feature_review: feature_reviewer
+
+orchestrator:
+  type: evaluating
+  max_phase_retries: 1
+  max_total_gotos: 3
+  evaluation_points:
+    - after_phase: Feature Architect
+      evaluator: heuristic
+      max_retries: 1
+      conditions:
+        - if: "score < 0.5"
+          action: retry
+          reason: "Feature decomposition incomplete or invalid"
+        - if: "score >= 0.5"
+          action: continue
+          reason: "Feature decomposition validated"
+
+    - after_phase: feature_review
+      evaluator: heuristic
+      max_retries: 2
+      conditions:
+        - if: "score < 0.3"
+          action: goto
+          target: Feature Architect
+          reason: "Feature decomposition contradicts or omits part of the design, re-decompose"
+        - if: "score >= 0.3"
+          action: continue
+          reason: "Feature decomposition matches the design"
+
+workflow:
+  result_criteria: "features.json created with valid feature decomposition and scope.md files for each feature, reviewed against the design"
+  on_result_found: do_nothing
+  enable_tickets: false
+
+# Required output artifact per phase — the same completion hard floor every
+# other pipeline phase gets (update_task_status rejects 'done' when the
+# artifact is missing). Feature Architect writes to .hephaestus/, since it's
+# an internal orchestration artifact, not a project deliverable. feature_review
+# writes its report to docs/, matching every other review phase in the main
+# autopilot pipeline (architectural_review, adversarial_review), so the
+# spec-gate scorer's read_result/read_report_text (which only search docs/
+# and the worktree root) can find it.
+required_output:
+  Feature Architect: features.json
+  feature_review: feature_review_report.md
+
+launch_template:
+  parameters:
+    - name: design_document
+      label: Design Document Path
+      type: text
+      required: true
+      description: "Path to the design document (PRD, DESIGN.md, etc.)"
+    - name: project_path
+      label: Project Working Directory
+      type: text
+      required: true
+      description: "Where the project lives"
+    - name: design_id
+      label: Design ID
+      type: text
+      required: true
+      description: "Database ID of the design being processed"

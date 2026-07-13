@@ -249,6 +249,11 @@ class WorkflowOrchestrator:
             # Default: check phase_output for common success indicators
             score, evaluation_metadata = self._default_evaluate(phase_output)
 
+        # Pass through spec_gate from phase_output so feedback reasons
+        # survive to the task description on goto/retry
+        if "spec_gate" in phase_output and "spec_gate" not in evaluation_metadata:
+            evaluation_metadata["spec_gate"] = phase_output["spec_gate"]
+
         # Evaluate conditions
         action = self._evaluate_conditions(
             eval_point.conditions, score, evaluation_metadata, phase_output
