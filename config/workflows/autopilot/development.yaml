@@ -185,6 +185,40 @@ additional_notes: |
      - Verify component works as specified
   
   ═══════════════════════════════════════════════════════════════════════
+  CODE COMPOSITION PRINCIPLES (apply during implementation)
+  ═══════════════════════════════════════════════════════════════════════
+
+  While implementing, follow these principles to keep code maintainable:
+
+  ### Encapsulation and Hierarchy
+  - High-level classes/modules must NOT import or reference low-level implementation
+    details (e.g. a service layer must not import database column names, a controller
+    must not know about file paths)
+  - Push complex logic DOWN into lower-level modules. High-level functions should
+    read as a clear sequence of steps, not a wall of conditionals.
+  - If a function exceeds ~50 lines, extract helpers.
+
+  ### Polymorphism over Conditionals
+  - When you see `if type == X ... elif type == Y ... elif type == Z`, use polymorphism,
+    a strategy pattern, or a dispatch table instead.
+  - Adding a new variant should require adding ONE new file/class, not editing 3+ files.
+
+  ### Separate Concerns
+  - Business logic must not be tangled with infrastructure (SQL, HTTP, file I/O).
+  - Validation rules belong in domain models, not in API handlers.
+  - Database queries belong in repositories, not in service methods.
+
+  ### Acyclic Dependencies
+  - Low-level modules must NOT import from high-level modules.
+  - If module A depends on B, then B must not depend on A.
+  - Use dependency injection or interfaces to break cycles.
+
+  ### Leaky Abstractions
+  - A "repository" must not force callers to know about JOIN semantics.
+  - A "service" must not return raw database rows — map to domain objects.
+  - An "interface" must not expose implementation details that constrain future changes.
+  
+  ═══════════════════════════════════════════════════════════════════════
   STEP 5: CREATE PHASE 4 REVIEW TASKS
   ═══════════════════════════════════════════════════════════════════════
   
