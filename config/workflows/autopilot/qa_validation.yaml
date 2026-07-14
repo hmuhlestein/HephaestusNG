@@ -356,6 +356,7 @@ additional_notes: |
   ```json
   {
     "failed_tests": 0,
+    "failed_test_names": [],
     "passed_tests": 0,
     "total_tests": 0,
     "pass_rate": 100,
@@ -368,9 +369,14 @@ additional_notes: |
     "summary": "one-line summary"
   }
   ```
-  
+
   Field rules:
   - Counts must be integers reflecting actual test/issue counts.
+  - failed_test_names: identifier (e.g. "test_file.py::test_name") for EVERY
+    failing test, even ones pre-existing/unrelated to this feature. This is
+    what reaches you again if the gate sends this back -- an empty list on a
+    nonzero failed_tests count means the next attempt has to rediscover which
+    test failed from scratch.
   - pass_rate is a percent (0–100): passed_tests / total_tests * 100.
   - critical_issues = security/data-loss/complete-failure issues (these send the
     pipeline back to architecture). major issues go in major_issues.
@@ -378,6 +384,9 @@ additional_notes: |
     numbers don't capture (only used when all hard floors pass).
   - verdict is "PASS", "NEEDS_WORK", or "FAIL".
   - Do NOT inflate numbers. The gate enforces hard floors regardless of verdict.
+    This includes pre-existing/unrelated failures -- the gate requires 100%
+    pass rate unconditionally; do not treat "not caused by my feature" as a
+    reason to leave a failing test unreported.
   
   ═══════════════════════════════════════════════════════════════════════
   STEP 9: SAVE TO MEMORY

@@ -2841,6 +2841,10 @@ async def resume_feature(feature_id: str):
         if wf.status in ("paused", "failed"):
             wf.status = "active"
             wf.paused_by = None
+            # Clear a stale arbitration/pause reason -- otherwise it lingers
+            # and reads as an ongoing problem even after the user has
+            # manually resolved it and resumed.
+            wf.status_reason = None
 
         # Recover blocked/failed tasks, plus any task still marked
         # assigned/in_progress whose agent was terminated (errored/orphaned

@@ -612,7 +612,11 @@ def fail_workflow_direct(workflow_id: str) -> bool:
 
 
 def create_agent_for_task_direct(
-    task_id: str, workflow_id: str, phase_id: Optional[str] = None
+    task_id: str,
+    workflow_id: str,
+    phase_id: Optional[str] = None,
+    agent_type: str = "phase",
+    enriched_data_override: Optional[dict] = None,
 ) -> Optional[dict]:
     """Create an agent for a pending task directly in-process (H-2 fix).
 
@@ -620,6 +624,13 @@ def create_agent_for_task_direct(
     self-HTTP round trip. Callers here run in a background thread (not the
     asyncio event loop), so a fresh event loop is spun up to drive the
     async AgentManager.create_agent_for_task call.
+
+    agent_type/enriched_data_override: for non-"phase" agents (e.g.
+    "arbitration") dispatched from this same background-thread context --
+    mirrors validator_agent.py's pattern of passing a fully-custom initial
+    prompt via enriched_data["validation_prompt"], which
+    AgentPromptBuilder.format_initial_message returns verbatim for these
+    agent types instead of building the normal phase-task message.
     """
     import asyncio
 
@@ -640,11 +651,14 @@ def create_agent_for_task_direct(
                 logger.debug(f"[create_agent_for_task_direct] Task {task_id} not found")
                 return None
 
-            enriched_data = {}
-            if task.enriched_description:
-                enriched_data["enriched_description"] = task.enriched_description
-            if getattr(task, "completion_criteria", None):
-                enriched_data["completion_criteria"] = task.completion_criteria
+            if enriched_data_override is not None:
+                enriched_data = enriched_data_override
+            else:
+                enriched_data = {}
+                if task.enriched_description:
+                    enriched_data["enriched_description"] = task.enriched_description
+                if getattr(task, "completion_criteria", None):
+                    enriched_data["completion_criteria"] = task.completion_criteria
 
             agent = asyncio.run(
                 server_state.agent_manager.create_agent_for_task(
@@ -652,7 +666,7 @@ def create_agent_for_task_direct(
                     enriched_data=enriched_data,
                     memories=[],
                     project_context="",
-                    agent_type="phase",
+                    agent_type=agent_type,
                     use_existing_worktree=True,
                 )
             )
@@ -713,6 +727,7 @@ def get_tasks(status: str = None, workflow_id: str = None) -> list:
                     "raw_description": t.raw_description,
                     "enriched_description": t.enriched_description,
                     "assigned_agent_id": t.assigned_agent_id,
+                    "created_by_agent_id": t.created_by_agent_id,
                     "created_at": t.created_at.isoformat() if t.created_at else None,
                     "started_at": t.started_at.isoformat() if t.started_at else None,
                     "completed_at": t.completed_at.isoformat() if t.completed_at else None,
@@ -838,6 +853,7 @@ def get_workflow_status(workflow_id: str) -> dict:
             return {
                 "id": wf.id,
                 "status": wf.status,
+                "status_reason": wf.status_reason,
                 "name": wf.name if hasattr(wf, 'name') else None,
                 "created_at": wf.created_at.isoformat() if wf.created_at else None,
                 "project_id": wf.project_id,
@@ -1033,6 +1049,17 @@ def _retry_failed_tasks(workflow_id: str, logger: OrchestratorLogger) -> List[st
     for task in failed:
         task_id = task.get("id")
         phase_id = task.get("phase_id")
+
+        # Arbitration tasks carry a one-off custom prompt
+        # (enriched_data["validation_prompt"], see _trigger_arbitration) that
+        # this generic retry path has no way to reconstruct -- re-creating
+        # one via create_agent_for_task_direct's default agent_type="phase"
+        # would silently launch it with the wrong identity and instructions.
+        # A failed arbitration task is instead picked up by
+        # _maybe_resolve_arbitration as a "fail" outcome -- explicit and
+        # visible, not silently retried into a broken prompt.
+        if task.get("created_by_agent_id") == ARBITRATION_CREATED_BY:
+            continue
 
         # Only retry if not retried too many times
         retry_count = task.get("retry_count", 0)
@@ -3113,6 +3140,34 @@ def _claim_phase_task_creation(db, phase_id: str) -> bool:
     return result > 0
 
 
+def _release_phase_task_creation_claim(db, phase_id: str) -> None:
+    """Release a claim taken by _claim_phase_task_creation, once the task
+    it was guarding actually exists -- mirrors what _create_phase_task
+    already does for every phase after the first (see its own claim-release
+    comment). Also flips PhaseExecution.status to "in_progress" if it's
+    still "pending"/"completed", since server.py's synchronous
+    /start_workflow_execution step creates phase 1's task via the generic
+    /create_task handler, which has no knowledge of this bookkeeping at all
+    (unlike _create_phase_task).
+
+    Without this, the claim stays held forever: _case_in_progress_complete
+    reuses task_creation_claimed_at as a guard against evaluating a phase
+    transition while another caller is mid-creation, so a permanently-held
+    claim silently blocks phase 1 from ever being recognized as complete --
+    no matter how many times its task actually finishes. Observed live:
+    phase 1's task completed successfully but the pipeline never advanced
+    to phase 2, indefinitely, for every UI-launched workflow.
+    """
+    execution = db.query(PhaseExecution).filter_by(phase_id=phase_id).first()
+    if not execution:
+        return
+    if execution.status in ("pending", "completed"):
+        execution.status = "in_progress"
+        execution.started_at = datetime.utcnow()  # matches _create_phase_task's own convention
+    execution.task_creation_claimed_at = None
+    db.commit()
+
+
 def _case_start_first_phase(
     db, workflow_id: str, pending: list, in_progress: list, completed: list, logger: OrchestratorLogger
 ) -> Optional[bool]:
@@ -3251,6 +3306,22 @@ def _case_in_progress_complete(
     """
     for ps in in_progress:
         phase = ps["phase"]
+
+        # A held task_creation_claimed_at means this phase is owned
+        # elsewhere right now -- most importantly, mid-arbitration (see
+        # _trigger_arbitration/_maybe_resolve_arbitration, which hold the
+        # claim for the arbitration task's entire lifetime). Skip the whole
+        # per-phase body, not just the later "fire transition" step: a
+        # FAILED arbitration task would otherwise reach
+        # _maybe_retry_failed_tasks below and get re-dispatched through the
+        # generic retry path, losing its arbitration-specific prompt (same
+        # class of bug already fixed for _retry_failed_tasks's sweep-level
+        # retry). _maybe_resolve_arbitration is the only thing that should
+        # ever touch a claimed phase's failed/done arbitration task.
+        execution = ps.get("execution")
+        if execution and execution.task_creation_claimed_at is not None:
+            continue
+
         # Check if all tasks are done. DIAGNOSTIC tasks (created by the
         # monitor itself when a workflow looks stuck -- see
         # _create_diagnostic_agent) are deliberately excluded, matching the
@@ -3359,7 +3430,37 @@ def _case_in_progress_complete(
         # Extract primitives before session closes to avoid DetachedInstanceError
         phase_id = phase.id
         phase_name = phase.name
-        return _fire_phase_transition(workflow_id, phase_id, phase_name, logger)
+        try:
+            return _fire_phase_transition(workflow_id, phase_id, phase_name, logger)
+        finally:
+            # The claim above only needed to guard AGAINST a concurrent
+            # re-entry DURING evaluation -- once _fire_phase_transition
+            # returns (however it went), that's done, and the claim must
+            # not outlive it. Left set, it becomes a permanently stale
+            # non-null value on a now-"completed" phase's row forever (only
+            # _start_next_phase's explicit clear-on-reopen ever touched it
+            # again, and only IF the phase gets normally reopened).
+            # Observed live: _trigger_arbitration's exhaustion path tried
+            # to claim this exact phase later and read the leftover stale
+            # claim as "arbitration already in flight", silently refusing
+            # to ever arbitrate it -- worse than the original bug, since
+            # there wasn't even a pause to notice.
+            #
+            # Bypass update (synchronize_session=False), not load-then-
+            # mutate-then-commit: this project runs with
+            # expire_on_commit=False (see DatabaseManager), so `phase`
+            # (loaded earlier in this same session, before
+            # _claim_phase_task_creation's own bypass update) is a stale
+            # cached object -- re-querying by phase_id returns that SAME
+            # cached instance from the identity map, already showing
+            # task_creation_claimed_at as whatever it was at load time.
+            # Setting an in-memory attribute back to a value it already
+            # appears to hold produces no dirty column for SQLAlchemy to
+            # write, so the commit was a silent no-op in testing.
+            db.query(PhaseExecution).filter_by(phase_id=phase_id).update(
+                {"task_creation_claimed_at": None}, synchronize_session=False
+            )
+            db.commit()
     return None
 
 
@@ -3500,8 +3601,9 @@ def _fire_phase_transition(
             return False
 
         if action == "arbitrate":
-            # TODO: spawn arbitration agent via API
             logger.warning(f"[PHASE-ADVANCE] Arbitration needed for {phase_name}")
+            reason = result.get("reason") or f"{phase_name} exhausted its retry budget"
+            _trigger_arbitration(workflow_id, target_phase_id, phase_name, reason, logger)
             return True
 
         if not target_phase_id:
@@ -3532,6 +3634,464 @@ def _fire_phase_transition(
     except Exception as e:
         logger.warning(f"[PHASE-ADVANCE] Transition error: {e}")
         return False
+
+
+# ── Arbitration ──────────────────────────────────────────────────────
+# When a phase's retry/goto budget is exhausted -- either the cross-source
+# bound in _create_phase_task, or an eval_point's own max_retries via
+# PhaseManager's "arbitrate" action -- the pipeline used to just pause the
+# whole workflow silently: paused_by=None, no reason recorded anywhere but
+# a single WARNING line in a multi-megabyte log file, and nothing to
+# un-pause it short of a human noticing and intervening. These functions
+# replace that with a real decision: spawn a one-shot LLM agent with the
+# phase's actual attempt history and let IT choose continue/goto/fail --
+# the workflow never sits paused waiting on a human. A genuine dead end
+# becomes a clearly-explained "failed" state (terminal, and the reason is
+# recorded on Workflow.status_reason), not a silent pause.
+
+ARBITRATION_CREATED_BY = "arbitration"
+
+
+def _gather_arbitration_context(phase_id: str, phase_name: str) -> str:
+    """Plain-text summary of why this phase is stuck: its own recent
+    attempt history, each carrying the "WHY YOU'RE HERE" reason
+    _create_phase_task embedded in that attempt's task description."""
+    with get_db() as db:
+        recent_tasks = (
+            db.query(Task)
+            .filter(Task.phase_id == phase_id)
+            .order_by(Task.created_at.desc())
+            .limit(6)
+            .all()
+        )
+        lines = [f"Phase: {phase_name}", ""]
+        if not recent_tasks:
+            lines.append("No task history found for this phase.")
+        for t in reversed(recent_tasks):
+            lines.append(
+                f"- [{t.created_at.isoformat() if t.created_at else '?'}] "
+                f"action={t.action or 'initial'} status={t.status}"
+            )
+            if t.raw_description:
+                lines.append(f"  {t.raw_description.strip()[:500]}")
+            if t.failure_reason:
+                lines.append(f"  failure_reason: {t.failure_reason}")
+            if t.completion_notes:
+                lines.append(f"  completion_notes: {str(t.completion_notes)[:300]}")
+    return "\n".join(lines)
+
+
+def _build_arbitration_prompt(
+    phase_id: str,
+    phase_name: str,
+    reason: str,
+    working_directory: Optional[str],
+    valid_phase_names: Optional[list] = None,
+) -> str:
+    context = _gather_arbitration_context(phase_id, phase_name)
+    phase_list_text = (
+        ", ".join(valid_phase_names)
+        if valid_phase_names
+        else "(could not be determined -- use the exact name from RECENT HISTORY above)"
+    )
+    return f"""=== ARBITRATION TASK ===
+
+The autopilot pipeline's phase "{phase_name}" has exhausted its automatic
+retry/goto budget. Why: {reason}
+
+Your job is ONLY to decide what happens next -- you are not the one who
+fixes anything. Do NOT edit, write, or delete any project files, and do
+NOT run commands that change repository state (a read-only investigation
+via read/grep/bash-for-inspection is fine). If a fix is needed, that is
+what a "goto" decision is for: it dispatches a fresh agent to make the
+fix, with your specific instructions. Making the fix yourself here skips
+that agent's own review/test cycle for the change.
+
+The pipeline acts on your decision immediately -- it is NOT waiting for a
+human, so be decisive.
+
+RECENT HISTORY FOR THIS PHASE:
+{context}
+
+Working directory: {working_directory or "(unknown)"}
+
+VALID PHASE NAMES (target_phase, if you choose "goto", MUST be exactly
+one of these -- copy it verbatim, do not paraphrase, abbreviate, or
+change case): {phase_list_text}
+
+WHAT TO DO:
+1. Read whatever evidence is relevant -- the latest gate output file(s) in
+   ./docs/ (e.g. qa_result.json, qa_report.md, adversarial_review_report.md,
+   security_report.md -- whichever exist for this workflow), and the
+   phase's own recent deliverables, to understand exactly what's blocking
+   progress.
+2. Decide ONE of:
+   - "continue": the blocker is not a real defect worth another cycle --
+     e.g. a single pre-existing/unrelated/flaky test failure, a cosmetic
+     gate violation, or something already effectively resolved. Proceeding
+     is safe.
+   - "goto": one more attempt is warranted, but the automatic retries
+     clearly weren't converging -- give a SPECIFIC, narrow instruction
+     naming the exact file/test/issue to fix, not a repeat of the vague
+     reason that already failed multiple times. You are explicitly allowed
+     to instruct fixing pre-existing or seemingly-unrelated failures (e.g.
+     a stale test assertion) if that's what's actually blocking the gate --
+     "not my feature's fault" is not a reason to leave a required gate
+     failing forever.
+   - "fail": only if this is genuinely unrecoverable by any code change
+     (e.g. a missing external credential, a fundamentally contradictory
+     requirement) -- explain exactly why in your reason so a human reading
+     the workflow's status later understands immediately, with no further
+     digging required.
+3. Write your decision to ./{CONTEXT_DIR_NAME}/arbitration_result.json:
+   {{
+     "decision": "continue" | "goto" | "fail",
+     "target_phase": "<one of the VALID PHASE NAMES above, only if decision is goto, else null>",
+     "reason": "<specific, actionable, one paragraph>"
+   }}
+4. Call hephaestus_update_task_status(status="done") once written. If you
+   cannot complete this analysis, call it with status="failed" and a
+   failure_reason -- a failed arbitration is treated as a "fail" decision,
+   so an explicit reason there is still far more useful than none.
+"""
+
+
+def _trigger_arbitration(
+    workflow_id: str,
+    phase_id: str,
+    phase_name: str,
+    reason: str,
+    logger: OrchestratorLogger,
+) -> bool:
+    """Spawn a one-shot arbitration agent for a stuck phase, unless one is
+    already in flight (idempotent via the same task_creation_claimed_at
+    claim _create_phase_task uses -- see _claim_phase_task_creation).
+
+    Hard-capped at MAX_ARBITRATIONS_PER_PHASE: a "goto" decision's task
+    counts toward the SAME MAX_PHASE_ATTEMPTS budget as a normal retry
+    (both go through _create_phase_task), so a persistently-confused
+    arbiter that keeps choosing "goto" back into a phase that keeps
+    re-exhausting could otherwise cycle forever -- 5 real attempts,
+    arbitrate, goto, 5 more attempts, arbitrate again... "never pause for
+    a human" doesn't mean "never terminate": an unbounded loop still
+    silently burns cost/tokens forever with nobody aware. Past the cap,
+    fail immediately instead of spawning yet another arbitration agent.
+    """
+    import uuid
+
+    with get_db() as db:
+        MAX_ARBITRATIONS_PER_PHASE = 3
+        prior_arbitrations = (
+            db.query(Task)
+            .filter(
+                Task.phase_id == phase_id,
+                Task.created_by_agent_id == ARBITRATION_CREATED_BY,
+            )
+            .count()
+        )
+        if prior_arbitrations >= MAX_ARBITRATIONS_PER_PHASE:
+            logger.error(
+                f"[ARBITRATE] {phase_name} has already been arbitrated "
+                f"{prior_arbitrations} times without converging -- failing "
+                "the workflow instead of arbitrating again"
+            )
+            wf = db.query(Workflow).filter_by(id=workflow_id).first()
+            if wf:
+                wf.status = "failed"
+                wf.status_reason = (
+                    f"{phase_name}: arbitrated {prior_arbitrations} times without "
+                    f"converging (last reason: {reason})"
+                )
+                db.commit()
+            return False
+
+        if not _claim_phase_task_creation(db, phase_id):
+            logger.info(
+                f"[ARBITRATE] {phase_name} already has arbitration in flight -- skipping"
+            )
+            return False
+
+        execution = db.query(PhaseExecution).filter_by(phase_id=phase_id).first()
+        if execution:
+            # Keep the phase alive/visible until arbitration resolves.
+            # Deliberately NOT "completed": mark_phase_complete would bail
+            # via its idempotency guard when arbitration resolves. And NOT
+            # "pending" either -- see _handle_evaluation_arbitrate's own
+            # comment on this exact status value for why a mid-pipeline
+            # "pending" phase sitting behind later-order completed phases
+            # gets bypassed entirely by _case_completed_with_successor's
+            # ordering logic. "in_progress" (with the arbitration task
+            # that already exists) reads as a normal active phase to every
+            # other advancement case.
+            execution.status = "in_progress"
+
+        wf = db.query(Workflow).filter_by(id=workflow_id).first()
+        working_directory = wf.working_directory if wf else None
+        if wf:
+            wf.status_reason = f"Awaiting arbiter decision for {phase_name}: {reason}"
+        db.commit()
+
+        valid_phase_names = [
+            p.name
+            for p in db.query(Phase)
+            .filter_by(workflow_id=workflow_id)
+            .order_by(Phase.order)
+            .all()
+        ]
+
+    prompt = _build_arbitration_prompt(
+        phase_id, phase_name, reason, working_directory, valid_phase_names
+    )
+
+    task_id = str(uuid.uuid4())
+    with get_db() as db:
+        task = Task(
+            id=task_id,
+            raw_description=f"Arbitrate stuck phase: {phase_name}",
+            enriched_description=prompt,
+            done_definition="Write arbitration_result.json with a decision and mark done",
+            status="pending",
+            priority="high",
+            phase_id=phase_id,
+            workflow_id=workflow_id,
+            created_by_agent_id=ARBITRATION_CREATED_BY,
+            action="arbitrate",
+        )
+        db.add(task)
+        db.commit()
+
+    agent_data = create_agent_for_task_direct(
+        task_id,
+        workflow_id,
+        phase_id,
+        agent_type="arbitration",
+        enriched_data_override={"validation_prompt": prompt},
+    )
+    if not agent_data:
+        # Dispatch itself failed -- never leave the phase silently claimed
+        # forever with nothing working on it. Fail loudly and immediately
+        # instead of quietly re-attempting every sweep tick.
+        logger.error(
+            f"[ARBITRATE] Failed to dispatch arbitration agent for {phase_name} -- "
+            "failing the workflow instead of leaving it stuck silently"
+        )
+        with get_db() as db:
+            task = db.query(Task).filter_by(id=task_id).first()
+            if task:
+                task.status = "failed"
+                task.failure_reason = "Failed to dispatch arbitration agent"
+
+        pm = PhaseManager(DatabaseManager())
+        pm.workflow_id = workflow_id
+        pm.mark_phase_complete(
+            phase_id,
+            "Arbitration dispatch failed",
+            force_action="fail",
+        )
+        with get_db() as db:
+            wf = db.query(Workflow).filter_by(id=workflow_id).first()
+            if wf:
+                wf.status_reason = (
+                    f"{phase_name}: could not dispatch an arbitration agent after "
+                    f"exhausting retries ({reason})"
+                )
+                db.commit()
+        return False
+
+    logger.warning(
+        f"[ARBITRATE] Dispatched arbitration agent {agent_data.get('agent_id', '?')[:8]} "
+        f"for {phase_name}"
+    )
+    return True
+
+
+def _maybe_resolve_arbitration(workflow_id: str, logger: OrchestratorLogger) -> None:
+    """Check every phase with an in-flight arbitration for this workflow and
+    act on the result once the arbitration agent finishes (or dies).
+
+    Called every sweep tick alongside _advance_phases -- see
+    _run_phase_advancement_sweep_once.
+    """
+    with get_db() as db:
+        phases = db.query(Phase).filter_by(workflow_id=workflow_id).all()
+        claimed_phase_ids = [
+            p.id
+            for p in phases
+            if db.query(PhaseExecution)
+            .filter_by(phase_id=p.id)
+            .filter(PhaseExecution.task_creation_claimed_at.isnot(None))
+            .first()
+        ]
+        arb_tasks = {}
+        for phase_id in claimed_phase_ids:
+            t = (
+                db.query(Task)
+                .filter(
+                    Task.phase_id == phase_id,
+                    Task.created_by_agent_id == ARBITRATION_CREATED_BY,
+                )
+                .order_by(Task.created_at.desc())
+                .first()
+            )
+            if t:
+                arb_tasks[phase_id] = t
+        wf = db.query(Workflow).filter_by(id=workflow_id).first()
+        working_directory = wf.working_directory if wf else None
+        phase_names = {p.id: p.name for p in phases}
+
+    for phase_id, task in arb_tasks.items():
+        phase_name = phase_names.get(phase_id, phase_id)
+
+        if task.status == "failed":
+            reason = task.failure_reason or "Arbitration agent failed with no reason given"
+            logger.error(f"[ARBITRATE] {phase_name}: arbitration agent failed -- {reason}")
+            _resolve_arbitration_outcome(
+                workflow_id, phase_id, phase_name, "fail", None, reason, logger
+            )
+            continue
+
+        if task.status != "done":
+            continue  # still running -- self-heal handles a dead agent eventually
+
+        decision, target_phase, dec_reason = _read_arbitration_result(working_directory)
+        if decision is None:
+            logger.error(
+                f"[ARBITRATE] {phase_name}: arbitration task marked done but "
+                "arbitration_result.json is missing/invalid -- treating as fail"
+            )
+            _resolve_arbitration_outcome(
+                workflow_id,
+                phase_id,
+                phase_name,
+                "fail",
+                None,
+                "Arbitration agent finished without writing a valid decision file",
+                logger,
+            )
+            continue
+
+        _resolve_arbitration_outcome(
+            workflow_id, phase_id, phase_name, decision, target_phase, dec_reason, logger
+        )
+
+
+def _read_arbitration_result(
+    working_directory: Optional[str],
+) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+    """Read + validate arbitration_result.json. Returns (decision, target_phase, reason);
+    decision is None if the file is missing, unparseable, or has an invalid decision value."""
+    if not working_directory:
+        return None, None, None
+    path = Path(working_directory) / CONTEXT_DIR_NAME / "arbitration_result.json"
+    if not path.exists():
+        return None, None, None
+    try:
+        data = json.loads(path.read_text())
+    except Exception:
+        return None, None, None
+    decision = data.get("decision")
+    if decision not in ("continue", "goto", "fail"):
+        return None, None, None
+    return decision, data.get("target_phase"), data.get("reason") or "(no reason given)"
+
+
+def _resolve_arbitration_outcome(
+    workflow_id: str,
+    phase_id: str,
+    phase_name: str,
+    decision: str,
+    target_phase: Optional[str],
+    reason: str,
+    logger: OrchestratorLogger,
+) -> None:
+    """Act on an arbitration decision and always release the phase's
+    task_creation_claimed_at claim afterward -- regardless of outcome, or
+    the phase stays permanently locked out of both normal advancement and
+    future arbitration attempts.
+
+    CRITICAL: mark_phase_complete NEVER creates the next task itself, for
+    ANY action -- not force_action, not a normal evaluation. Every code
+    path (_start_next_phase for continue, _handle_force_goto/
+    _handle_evaluation_goto for goto) only flips PhaseExecution.status and
+    returns a result dict; creating the actual Task row is always the
+    CALLER's job (see _fire_phase_transition's explicit _create_phase_task
+    call right after its own mark_phase_complete). An earlier version of
+    this function discarded mark_phase_complete's return value entirely --
+    "continue" and "goto" decisions closed out the arbitrating phase
+    successfully but never dispatched anything for the next one, silently
+    stranding the pipeline with workflow.status="active" and no agent
+    ever running again, while status_reason got cleared as if everything
+    were fine. Mirror _fire_phase_transition's pattern exactly.
+    """
+    logger.warning(f"[ARBITRATE] {phase_name}: decision={decision} -- {reason}")
+
+    pm = PhaseManager(DatabaseManager())
+    pm.workflow_id = workflow_id
+    result: Dict[str, Any] = {}
+    try:
+        if decision == "continue":
+            result = pm.mark_phase_complete(
+                phase_id, f"Arbiter: proceed -- {reason}", force_action="continue"
+            )
+        elif decision == "goto" and target_phase:
+            result = pm.mark_phase_complete(
+                phase_id,
+                f"Arbiter: return for another attempt -- {reason}",
+                force_action="goto",
+                force_target_phase=target_phase,
+                force_reason=reason,
+            )
+        else:
+            result = pm.mark_phase_complete(
+                phase_id, f"Arbiter: unrecoverable -- {reason}", force_action="fail"
+            )
+    finally:
+        # mark_phase_complete's _close_execution sets status but never
+        # touches task_creation_claimed_at -- clear it directly rather than
+        # reusing _release_phase_task_creation_claim, which would wrongly
+        # flip a just-set "completed"/"failed" status back to "in_progress".
+        with get_db() as db:
+            execution = db.query(PhaseExecution).filter_by(phase_id=phase_id).first()
+            if execution:
+                execution.task_creation_claimed_at = None
+            wf = db.query(Workflow).filter_by(id=workflow_id).first()
+            if wf:
+                # A "goto" whose target_phase didn't resolve to a real phase
+                # (_find_phase_by_name_or_order does an exact-string match --
+                # an LLM-hallucinated or mis-cased name won't match) falls
+                # back to _advance_or_complete internally and returns
+                # action != "goto" -- check the ACTUAL returned action, not
+                # the raw decision, or a failed goto gets treated as a
+                # silent success and status_reason is wrongly cleared.
+                goto_target_missing = decision == "goto" and result.get("action") != "goto"
+                if decision == "fail" or (decision == "goto" and not target_phase) or goto_target_missing:
+                    detail = reason
+                    if goto_target_missing:
+                        detail = f"arbiter targeted unknown phase {target_phase!r} -- {reason}"
+                    wf.status_reason = f"{phase_name}: {detail}"
+                else:
+                    wf.status_reason = None
+            db.commit()
+
+    # Dispatch the actual next task -- see this function's docstring for
+    # why this can't be skipped. Any action that leaves should_continue
+    # True and names a target phase (continue -> next phase in sequence,
+    # goto -> the arbiter's chosen phase, or _advance_or_complete's own
+    # fallback if the target didn't resolve) needs a real Task+agent.
+    target_phase_id = result.get("target_phase_id")
+    target_phase_name = result.get("target_phase")
+    action = result.get("action")
+    if target_phase_id and action in ("continue", "goto", "retry"):
+        dispatched = _create_phase_task(
+            workflow_id, target_phase_id, target_phase_name, action, logger,
+            feedback=result.get("reason"),
+        )
+        if not dispatched:
+            logger.error(
+                f"[ARBITRATE] {phase_name}: resolved to {action} -> "
+                f"{target_phase_name}, but failed to create its task -- "
+                "pipeline may be stalled"
+            )
 
 
 def _run_ash_scan(worktree: Path, logger: OrchestratorLogger) -> None:
@@ -3680,7 +4240,7 @@ def _create_phase_task(
                 return False
 
             # Check retry/goto bounds
-            MAX_PHASE_ATTEMPTS = 3
+            MAX_PHASE_ATTEMPTS = 5
             if action in ("retry", "goto"):
                 retries = (
                     db.query(Task)
@@ -3693,12 +4253,17 @@ def _create_phase_task(
                 )
                 if retries >= MAX_PHASE_ATTEMPTS:
                     logger.warning(
-                        f"[PHASE-TASK] {phase_name} hit retry bound ({retries}/{MAX_PHASE_ATTEMPTS}), pausing"
+                        f"[PHASE-TASK] {phase_name} hit retry bound "
+                        f"({retries}/{MAX_PHASE_ATTEMPTS}), triggering arbitration"
                     )
-                    wf = db.query(Workflow).filter_by(id=workflow_id).first()
-                    if wf and wf.status == "active":
-                        wf.status = "paused"
-                        db.commit()
+                    _trigger_arbitration(
+                        workflow_id,
+                        phase_id,
+                        phase_name,
+                        f"{phase_name} was sent back {retries} times without resolving "
+                        f"(last reason: {feedback or 'unknown'})",
+                        logger,
+                    )
                     return False
 
             # Get phase info
@@ -4921,6 +5486,19 @@ def run_phase0(
                     shutil.copy2(scope_src, scope_dest)
                 else:
                     logger.warning(f"scope.md not found for feature {feat_id}")
+
+        # Copy feature_review's report/result out too, same reason as
+        # features.json/scope.md above: .hephaestus/ is git-excluded and
+        # gets deleted entirely by _cleanup_worktree once this workflow
+        # finishes, with no merge step to preserve it the way docs/*.md
+        # reports survive. Without this, a clean feature_review pass (no
+        # goto ever fired, so the report text never got embedded in a
+        # corrective task's description either) leaves no audit trail at
+        # all of what the reviewer actually checked and confirmed was fine.
+        for review_file in ("feature_review_report.md", "feature_review_result.json"):
+            review_src = features_json_path.parent / review_file
+            if review_src.exists():
+                shutil.copy2(review_src, designs_folder / review_file)
 
         # Persist designs_folder BEFORE creating feature records so recovery is possible
         # if _create_feature_records raises (e.g. disk full). Also persist

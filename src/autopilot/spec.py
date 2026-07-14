@@ -23,7 +23,7 @@ from typing import Any, Dict, Optional, Tuple
 
 import yaml
 
-from src.core.constants import AUTOPILOT_STATE_DIR
+from src.core.constants import AUTOPILOT_STATE_DIR, CONTEXT_DIR_NAME
 
 logger = logging.getLogger(__name__)
 
@@ -614,10 +614,37 @@ def score_qa(
     # without a real "reason" here, development only ever sees the static
     # workflow.yaml condition text ("QA failed, returning to development")
     # on a goto, not which specific violations (already computed above) failed.
+    #
+    # failed_test_names (if the agent populated it) names the ACTUAL failing
+    # tests -- without this, a goto only carried a bare count
+    # ("failed_tests=1 > 0"), leaving development to guess which test and
+    # whether touching it was even in scope. Observed live: a single
+    # pre-existing/stale test failure bounced the pipeline between
+    # qa_validation and development for 4+ cycles because development never
+    # knew which test to fix or that fixing a pre-existing failure (not
+    # newly broken by this feature) was acceptable -- the gate requires
+    # 100% pass rate regardless of whose fault a failure is.
+    failed_test_names = result.get("failed_test_names")
+    test_detail = f" Failing tests: {failed_test_names}." if failed_test_names else ""
+    permission = (
+        " You may fix ANY failing test blocking this gate, including "
+        "pre-existing/stale ones unrelated to this feature's own changes -- "
+        "the gate requires 100% pass rate regardless of whose change broke it."
+        if failed > 0
+        else ""
+    )
     if critical > spec.get("max_critical_issues", 0):
-        return _ARCH, {**meta, "band": "architecture", "reason": f"QA critical issues: {violations}"}
+        return _ARCH, {
+            **meta,
+            "band": "architecture",
+            "reason": f"QA critical issues: {violations}.{test_detail}",
+        }
     if violations:
-        return _DEV, {**meta, "band": "development", "reason": f"QA violations: {violations}"}
+        return _DEV, {
+            **meta,
+            "band": "development",
+            "reason": f"QA violations: {violations}.{test_detail}{permission}",
+        }
     return _pass_with_subjective(result.get("agent_score", 1.0)), {
         **meta,
         "band": "pass",
@@ -826,15 +853,29 @@ def score_feature_review(
     return 0.9, {"gate": "feature_review", "band": "pass", "reason": "clean"}
 
 
-def read_result(working_directory: Any, filename: str) -> Optional[Dict[str, Any]]:
+def read_result(
+    working_directory: Any, filename: str, subdir: Optional[str] = None
+) -> Optional[Dict[str, Any]]:
     """Read a structured result file an agent wrote.
 
     Agents write to ./docs/ (merged from their worktree to <project>/docs/);
     fall back to the project root. Does NOT iterate worktrees (too slow for
     per-turn calls — the merge should bring files to <project>/docs/).
+
+    subdir: if given, this phase's real (sole, not a fallback) output
+    location isn't docs/ at all -- e.g. feature_review writes to
+    .hephaestus/, like its sibling Feature Architect, since Phase 0's
+    artifacts are internal orchestration state, not a git-tracked project
+    deliverable. Reads ONLY from working_directory/subdir/filename in that
+    case; does not also try docs/ or root.
     """
     base = Path(working_directory)
-    for candidate in (base / "docs" / filename, base / filename):
+    candidates = (
+        (base / subdir / filename,)
+        if subdir is not None
+        else (base / "docs" / filename, base / filename)
+    )
+    for candidate in candidates:
         if candidate.exists():
             try:
                 return json.loads(candidate.read_text())
@@ -843,14 +884,22 @@ def read_result(working_directory: Any, filename: str) -> Optional[Dict[str, Any
     return None
 
 
-def read_report_text(working_directory: Any, filename: str) -> Optional[str]:
+def read_report_text(
+    working_directory: Any, filename: str, subdir: Optional[str] = None
+) -> Optional[str]:
     """Read a markdown report an agent wrote, same search path as
-    read_result but returning raw text instead of parsed JSON -- used to
-    quote a review's full report into the corrective task sent back to
-    development, rather than just a score/count.
+    read_result (including the subdir override) but returning raw text
+    instead of parsed JSON -- used to quote a review's full report into
+    the corrective task sent back to development, rather than just a
+    score/count.
     """
     base = Path(working_directory)
-    for candidate in (base / "docs" / filename, base / filename):
+    candidates = (
+        (base / subdir / filename,)
+        if subdir is not None
+        else (base / "docs" / filename, base / filename)
+    )
+    for candidate in candidates:
         if candidate.exists():
             try:
                 return candidate.read_text()
@@ -892,8 +941,15 @@ def build_phase_output(
         # Enhancement 1: Pass working_directory for independent test verification
         score, meta = score_qa(result, spec, working_directory=working_directory)
     elif phase_name == "feature_review":
-        result = read_result(working_directory, "feature_review_result.json")
-        report_text = read_report_text(working_directory, "feature_review_report.md")
+        # .hephaestus/, not docs/ -- matches Feature Architect (the phase it
+        # reviews), whose own outputs already live there. Phase 0 artifacts
+        # are internal orchestration state, never a git-tracked deliverable.
+        result = read_result(
+            working_directory, "feature_review_result.json", subdir=CONTEXT_DIR_NAME
+        )
+        report_text = read_report_text(
+            working_directory, "feature_review_report.md", subdir=CONTEXT_DIR_NAME
+        )
         score, meta = score_feature_review(result, report_text=report_text)
     else:  # product_validation
         result = read_result(working_directory, "product_validation.json")

@@ -68,6 +68,63 @@ def test_qa_failed_tests_goto_development(strict_spec):
     assert any("failed_tests" in v for v in meta["violations"])
 
 
+def test_qa_failed_tests_reason_names_specific_tests(strict_spec):
+    """Regression: the goto reason used to carry only a bare count
+    ("failed_tests=1 > 0"), leaving development to guess which test and
+    whether fixing it was even in scope. Observed live: a single
+    pre-existing/stale test failure bounced the pipeline between
+    qa_validation and development for 4+ cycles because development never
+    knew which test to fix. failed_test_names (if populated) must reach
+    the reason, plus explicit permission to fix pre-existing failures."""
+    score, meta = S.score_qa(
+        {
+            "failed_tests": 1,
+            "failed_test_names": ["test_anthropic_provider.py::test_stale_assertion"],
+            "passed_tests": 999,
+            "total_tests": 1000,
+            "critical_issues": 0,
+            "agent_score": 1.0,
+        },
+        strict_spec,
+    )
+    assert meta["band"] == "development"
+    assert "test_anthropic_provider.py::test_stale_assertion" in meta["reason"]
+    assert "pre-existing" in meta["reason"]
+
+def test_qa_failed_tests_without_names_still_gets_permission_language(strict_spec):
+    """failed_test_names is optional (agents may not populate it) -- the
+    permission to fix pre-existing failures must still reach development
+    even without specific names."""
+    score, meta = S.score_qa(
+        {
+            "failed_tests": 1,
+            "passed_tests": 9,
+            "total_tests": 10,
+            "critical_issues": 0,
+            "agent_score": 1.0,
+        },
+        strict_spec,
+    )
+    assert meta["band"] == "development"
+    assert "pre-existing" in meta["reason"]
+
+def test_qa_pass_reason_has_no_permission_language(strict_spec):
+    """A clean pass must not carry "you may fix failing tests" noise --
+    there's nothing to fix."""
+    score, meta = S.score_qa(
+        {
+            "failed_tests": 0,
+            "passed_tests": 10,
+            "total_tests": 10,
+            "critical_issues": 0,
+            "agent_score": 1.0,
+        },
+        strict_spec,
+    )
+    assert meta["band"] == "pass"
+    assert "reason" not in meta
+
+
 def test_qa_critical_issue_goto_architecture(strict_spec):
     score, meta = S.score_qa(
         {

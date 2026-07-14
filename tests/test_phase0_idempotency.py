@@ -408,4 +408,79 @@ class TestRunPhase0Tiers:
         assert d.phase0_workflow_id == real_workflow_id
         wf = session.query(Workflow).filter_by(id=real_workflow_id).first()
         assert wf.workflow_type == "design"
-        session.close()
+
+    def test_feature_review_report_copied_to_designs_folder(
+        self, db_manager, design, tmp_path
+    ):
+        """Regression: .hephaestus/ is git-excluded and gets deleted
+        entirely by _cleanup_worktree once Phase 0's workflow finishes --
+        unlike features.json/scope.md, feature_review's report/result had
+        no equivalent copy-to-designs_folder step, so a clean review pass
+        (no goto ever fired to embed the report text in a corrective task)
+        left zero audit trail of what the reviewer actually checked."""
+        from src.autopilot.orchestrator import run_phase0
+
+        design_entry = self._make_design_entry(design, tmp_path)
+        worktree = tmp_path / "worktree"
+        (worktree / ".hephaestus" / "features").mkdir(parents=True)
+        features_json_content = {
+            "design_name": "Test Design",
+            "features": [
+                {
+                    "id": "auth",
+                    "name": "Auth",
+                    "scope": "s",
+                    "files": ["src/auth.py"],
+                    "depends_on": [],
+                    "execution": "parallel",
+                }
+            ],
+        }
+        (worktree / ".hephaestus" / "features.json").write_text(
+            json.dumps(features_json_content)
+        )
+        (worktree / ".hephaestus" / "feature_review_report.md").write_text(
+            "# Feature Review Report\n\nClean pass."
+        )
+        (worktree / ".hephaestus" / "feature_review_result.json").write_text(
+            json.dumps({"blocker_count": 0, "fix_count": 0, "defer_count": 0})
+        )
+
+        def fake_run_single_workflow(*args, **kwargs):
+            session = db_manager.get_session()
+            session.add(
+                Workflow(
+                    id=f"wf-{uuid.uuid4().hex[:8]}",
+                    name="Phase 0",
+                    phases_folder_path="/tmp",
+                    status="completed",
+                    definition_id="feature_architect",
+                    design_id=design,
+                )
+            )
+            session.commit()
+            session.close()
+            return "completed"
+
+        with patch(
+            "src.autopilot.orchestrator._create_integration_worktree",
+            return_value=worktree,
+        ), patch(
+            "src.autopilot.orchestrator.run_single_workflow",
+            side_effect=fake_run_single_workflow,
+        ), patch(
+            "src.autopilot.orchestrator._cleanup_worktree"
+        ):
+            features_json, designs_folder = run_phase0(
+                sdk=MagicMock(),
+                design_entry=design_entry,
+                project_path=tmp_path,
+                logger=MagicMock(),
+            )
+
+        assert (designs_folder / "feature_review_report.md").read_text() == (
+            "# Feature Review Report\n\nClean pass."
+        )
+        assert json.loads(
+            (designs_folder / "feature_review_result.json").read_text()
+        ) == {"blocker_count": 0, "fix_count": 0, "defer_count": 0}

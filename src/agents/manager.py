@@ -451,23 +451,26 @@ class AgentManager:
             # Generate deterministic session ID for persistent agent sessions.
             # Same project + design + role = same session across gotos (§10.1.1).
             #
-            # EXCLUDED: validator/result_validator/diagnostic agents. The key is
-            # (project_id, design_slug, phase_name) -- it doesn't factor in
-            # agent_type or task_id at all. A diagnostic agent is deliberately
-            # assigned the SAME phase_id as the stuck phase it's investigating
-            # (see monitor.py's _create_diagnostic_agent), so it would compute
-            # the identical session_id as every normal phase agent that has
-            # ever worked that phase. Since the CLI (`pi --session-id X`)
-            # resumes an existing session for that ID rather than starting
-            # fresh, the diagnostic agent would silently resume a PRIOR phase
-            # agent's live conversation -- inheriting that agent's old
-            # "=== TASK ASSIGNMENT ===" header (its agent_id, its task_id) as
-            # part of the resumed context, on top of its own fresh
-            # --append-system-prompt. Observed live: a diagnostic agent spent
-            # its entire run trying to close out a stale, already-terminated
-            # agent's task using that agent's identity, because its resumed
-            # session told it that was who it was -- never touching its own
-            # actual diagnostic task. These agent types are one-shot
+            # EXCLUDED: validator/result_validator/diagnostic/arbitration agents.
+            # The key is (project_id, design_slug, phase_name) -- it doesn't
+            # factor in agent_type or task_id at all. A diagnostic agent is
+            # deliberately assigned the SAME phase_id as the stuck phase it's
+            # investigating (see monitor.py's _create_diagnostic_agent), so it
+            # would compute the identical session_id as every normal phase
+            # agent that has ever worked that phase. Since the CLI
+            # (`pi --session-id X`) resumes an existing session for that ID
+            # rather than starting fresh, the diagnostic agent would silently
+            # resume a PRIOR phase agent's live conversation -- inheriting
+            # that agent's old "=== TASK ASSIGNMENT ===" header (its agent_id,
+            # its task_id) as part of the resumed context, on top of its own
+            # fresh --append-system-prompt. Observed live: a diagnostic agent
+            # spent its entire run trying to close out a stale,
+            # already-terminated agent's task using that agent's identity,
+            # because its resumed session told it that was who it was --
+            # never touching its own actual diagnostic task. Arbitration
+            # agents have the exact same collision (reuse the exhausted
+            # phase's own phase_id -- see _trigger_arbitration in
+            # orchestrator.py). These agent types are one-shot
             # investigations/verifications, never meant to share warm context
             # across runs, so they must always get a fresh (empty) session_id.
             session_id = ""
@@ -475,6 +478,7 @@ class AgentManager:
                 "validator",
                 "result_validator",
                 "diagnostic",
+                "arbitration",
             ):
                 try:
                     _s = self.db_manager.get_session()
@@ -505,7 +509,9 @@ class AgentManager:
                             if _pid and _dsl and phase_name:
                                 from src.autopilot.phases import get_session_id
 
-                                session_id = get_session_id(_pid, _dsl, phase_name)
+                                session_id = get_session_id(
+                                    _pid, _dsl, phase_name, model=model
+                                )
                     finally:
                         _s.close()
                 except Exception as e:
@@ -1269,7 +1275,7 @@ class AgentManager:
 
             # Update agent status
             agent.status = "terminated"
-            agent.current_task_id = None  # Clear stale task reference
+            agent.current_task_id = None  # Clear stale reference
             agent.terminated_at = datetime.utcnow()
 
             # Log termination with captured output
@@ -1474,7 +1480,7 @@ class AgentManager:
                                 from src.autopilot.phases import get_session_id
 
                                 session_id = get_session_id(
-                                    _pid, _dsl, restart_phase_name
+                                    _pid, _dsl, restart_phase_name, model=model
                                 )
                     finally:
                         _s.close()
@@ -1768,24 +1774,45 @@ class AgentManager:
             else:
                 transcript_path = Path(working_dir) / CONTEXT_DIR_NAME / "tmux" / f"{agent.tmux_session_name}.transcript.log"
             
-            if not transcript_path.exists() or transcript_path.stat().st_size == 0:
+            file_stat = transcript_path.stat()
+            if file_stat.st_size == 0:
                 return ""
-            
-            # Read ALL lines for terminated agents (full history),
-            # or last N lines for live agents
+
+            # Filtering the whole file (ANSI strip, redraw/dedup passes,
+            # spacing) is real work -- up to ~4s for a large (~30MB), long-
+            # running agent's transcript. A live agent gets polled roughly
+            # every second, and pipe-pane only ever APPENDS, so between
+            # polls with no new output the file's (mtime, size) are
+            # unchanged and the previous filtered result is still exactly
+            # correct -- do the expensive pass once, then reuse it until
+            # the file actually grows, instead of redoing it from scratch
+            # on every single poll regardless of whether anything changed.
+            if not hasattr(self, "_transcript_filter_cache"):
+                self._transcript_filter_cache = {}
+            cache_key = str(transcript_path)
+            cache_stamp = (file_stat.st_mtime, file_stat.st_size)
+            cached = self._transcript_filter_cache.get(cache_key)
+            if cached and cached[0] == cache_stamp:
+                out_lines = cached[1]
+                if lines > 0 and agent.status != 'terminated':
+                    out_lines = out_lines[-lines:]
+                return '\n'.join(out_lines).rstrip()
+
+            # Always read and filter the WHOLE file, then tail AFTER
+            # filtering (see below) -- not before. The dedup passes below
+            # (repeated-block collapse, progressive-redraw collapse) need
+            # both halves of a pattern within their working set to detect
+            # and collapse it; tailing the RAW transcript first could cut
+            # a pattern's first half out of the window, leaving the second
+            # half unfiltered. Observed live: a live agent's output showed
+            # visible duplication/redraw artifacts that were absent once
+            # the same agent terminated and the whole file got processed.
             with open(transcript_path, 'r', errors='replace') as f:
                 all_lines = f.readlines()
                 # Drop trailing empty lines (partial writes from pipe-pane)
                 while all_lines and not all_lines[-1].strip():
                     all_lines.pop()
-                
-                if lines > 0 and agent.status != 'terminated':
-                    # Live agents: return last N lines
-                    tail_lines = all_lines[-lines:]
-                    text = "".join(tail_lines).rstrip()
-                else:
-                    # Terminated agents: return ALL lines
-                    text = "".join(all_lines).rstrip()
+                text = "".join(all_lines).rstrip()
             
             # Strip terminal control sequences that pipe-pane might have missed
             # Keep: SGR color sequences (\x1b[...m)
@@ -1833,74 +1860,233 @@ class AgentManager:
             # Filter empty command lines ($ ...)
             empty_cmd_re = re.compile(r'^\s*\$ \.\.\.\s*$')
             dots_only_re = re.compile(r'^\.{1,20}\s*$')
+            # Horizontal separator lines pi draws between message blocks
+            # (each char individually SGR-wrapped). Same pattern as the
+            # frontend's RealTimeAgentOutput filter. Filtering these is
+            # load-bearing for the redraw dedup below: separators sit
+            # BETWEEN progressive redraw frames, so leaving them in breaks
+            # the frames' adjacency and defeats the prefix comparison.
+            separator_re = re.compile(r'^[─━═▬▪▫\-=\s]{20,}$')
             orphan_ansi_re = re.compile(r';\d+(?:;\d+)*m')
-            filtered_lines = []
+            # pi pads every row to full pane width with background-colored
+            # spaces, and the trailing SGR resets sit AFTER the padding --
+            # so a plain rstrip never removes it. In wrapping views
+            # (whitespace-pre-wrap) the padding wraps into what looks like
+            # a blank line after every row. Strip the padding but keep the
+            # codes (a dropped reset would bleed color into the next line).
+            #
+            # NOT a single regex: `(?:\x1b\[[?]?[0-9;]*m|[ \t])+$` looks
+            # simple but its alternation is ambiguous about how to
+            # partition a long trailing run between the two branches,
+            # which is classic catastrophic-backtracking bait. Measured
+            # live: a single ~106KB merged line (a pipe-pane artifact --
+            # the pty went a long stretch without a newline) took 257ms
+            # for THIS ONE regex call alone; across one real 3.1MB
+            # transcript (10.7K lines) it was 3.8 of a 4.0s total read,
+            # on every poll of a live agent. A plain backward scan (no
+            # backtracking possible) does the identical strip in <10ms.
+            sgr_at_end_re = re.compile(r'\x1b\[[?]?[0-9;]*m$')
+
+            def _strip_trailing_pad(line: str) -> str:
+                end = len(line)
+                codes = []
+                while end > 0:
+                    if line[end - 1] in ' \t':
+                        end -= 1
+                        continue
+                    m = sgr_at_end_re.search(line[:end])
+                    if m:
+                        codes.append(m.group(0))
+                        end = m.start()
+                        continue
+                    break
+                if end == len(line):
+                    return line
+                return line[:end] + ''.join(reversed(codes))
+
+            # Classify every line first; separators need a look-ahead over
+            # later lines' kinds, so this can't be a single filter pass.
+            classified = []  # (kind, line, clean)
             for line in text.split('\n'):
+                line = _strip_trailing_pad(line)
                 stripped = line.strip()
                 clean = re.sub(r'\x1b\[[?]?[0-9;]*[a-zA-Z]', '', stripped)
                 clean = re.sub(r'\x1b\][^\x07]*\x07', '', clean).strip()
                 clean = orphan_ansi_re.sub('', clean).strip()
-                if spinner_re.match(clean) or thinking_re.match(clean):
-                    continue
-                if tui_chrome_re.match(clean) or status_bar_re.match(clean):
-                    continue
-                if mcp_status_re.match(clean) or prompt_only_re.match(clean):
-                    continue
-                if elapsed_re.match(clean):
-                    continue
-                if shell_prompt_re.match(clean):
-                    continue
-                if empty_cmd_re.match(clean):
-                    continue
-                if dots_only_re.match(clean):
-                    continue
-                if not clean and not stripped:
-                    continue
-                filtered_lines.append(line)
-            text = '\n'.join(filtered_lines)
-            
-            # Deduplicate partial redraws (lines that are prefixes of next line)
-            # Skip empty lines when looking for prefix matches
-            deduped = []
-            i = 0
-            while i < len(filtered_lines):
-                current = filtered_lines[i].strip()
-                current_clean = re.sub(r'\x1b\[[?]?[0-9;]*[a-zA-Z]', '', current).strip()
-                
-                if not current_clean:
-                    i += 1
-                    continue
-                
-                # Look ahead past empty lines for next non-empty line
-                j = i + 1
-                while j < len(filtered_lines) and not filtered_lines[j].strip():
-                    j += 1
-                
-                if j < len(filtered_lines):
-                    next_line = filtered_lines[j].strip()
-                    next_clean = re.sub(r'\x1b\[[?]?[0-9;]*[a-zA-Z]', '', next_line).strip()
-                    
-                    if next_clean.startswith(current_clean) and len(next_clean) > len(current_clean):
-                        i = j  # Skip to the next non-empty line (skip all intermediate empty lines too)
-                        continue
-                
-                deduped.append(filtered_lines[i])
-                i += 1
-            
-            # Collapse consecutive empty lines
+                if (
+                    spinner_re.match(clean)
+                    or thinking_re.match(clean)
+                    or tui_chrome_re.match(clean)
+                    or status_bar_re.match(clean)
+                    or mcp_status_re.match(clean)
+                    or prompt_only_re.match(clean)
+                    or elapsed_re.match(clean)
+                    or shell_prompt_re.match(clean)
+                    or empty_cmd_re.match(clean)
+                    or dots_only_re.match(clean)
+                ):
+                    kind = 'chrome'
+                elif separator_re.match(clean):
+                    kind = 'sep'
+                elif not clean:
+                    # Blank padding rows and lines that are only ANSI codes
+                    # (the latter render as literal garbage in non-ANSI
+                    # views). Raw stream blanks are NOT kept as spacing:
+                    # pi's redraw pads every content line with one, so
+                    # preserving them doubles the output.
+                    kind = 'blank'
+                else:
+                    kind = 'content'
+                classified.append((kind, line, clean))
+
+            # Separators become a single blank line ONLY at real block
+            # boundaries -- i.e. when the next non-blank/non-separator
+            # line is actual content. While streaming, pi re-renders its
+            # bottom status-bar chrome (separator pair + shell prompt +
+            # stats + MCP line) on EVERY frame; those separators are part
+            # of the chrome, and converting them to blanks puts a blank
+            # between every pair of content lines.
+            filtered_lines = []
+            clean_lines = []
+            for idx, (kind, line, clean) in enumerate(classified):
+                if kind == 'content':
+                    filtered_lines.append(line)
+                    clean_lines.append(clean)
+                elif kind == 'sep':
+                    j = idx + 1
+                    while (
+                        j < len(classified)
+                        and j - idx <= 12
+                        and classified[j][0] in ('blank', 'sep')
+                    ):
+                        j += 1
+                    if j < len(classified) and classified[j][0] == 'content':
+                        filtered_lines.append("")
+                        clean_lines.append("")
+
+            # Deduplicate progressive redraws: pi re-renders a line as its
+            # arguments stream in ($ cd /, $ cd /Users, ... or
+            # `read /:200-299`, `read /Users/hmuh:200-299`, ...). A frame
+            # is dropped when the next non-blank line supersedes it:
+            #   - extends it (plain prefix), or
+            #   - fills in its `...` elision, or
+            #   - inserts text mid-line (one contiguous gap; the frames
+            #     keep a constant tail like `:200-299` while the path
+            #     grows). Gap matches are only accepted as part of a CHAIN
+            #     of matching pairs -- an isolated gap match can be two
+            #     legitimately similar lines (read src/__init__.py ->
+            #     read src/sub/__init__.py) that must not be collapsed.
+            # Paths are ~-expanded before comparing: pi switches a growing
+            # path from absolute to ~-abbreviated form mid-stream.
+            import os as _os
+
+            _home = _os.path.expanduser("~")
+
+            def _norm(s):
+                return re.sub(r"(^|\s)~(?=/)", lambda m: m.group(1) + _home, s)
+
+            def _frame_kind(cur, nxt):
+                cur = cur.replace("…", "...")
+                cur_n, nxt_n = _norm(cur), _norm(nxt)
+                if nxt_n.startswith(cur_n):
+                    return "prefix"
+                if "..." in cur:
+                    head, tail = cur.split("...", 1)
+                    if nxt_n.startswith(_norm(head)) and nxt_n.endswith(tail):
+                        return "elide"
+                if len(nxt_n) > len(cur_n):
+                    p = 0
+                    while p < len(cur_n) and cur_n[p] == nxt_n[p]:
+                        p += 1
+                    s = 0
+                    while s < len(cur_n) - p and cur_n[-1 - s] == nxt_n[-1 - s]:
+                        s += 1
+                    if p + s >= len(cur_n):
+                        return "gap"
+                return None
+
+            nonblank = [k for k, c in enumerate(clean_lines) if c]
+            kinds = [
+                _frame_kind(clean_lines[a], clean_lines[b])
+                for a, b in zip(nonblank, nonblank[1:])
+            ]
+            drop = set()
+            for idx, k in enumerate(nonblank[:-1] if nonblank else []):
+                kind = kinds[idx]
+                if kind in ("prefix", "elide"):
+                    drop.add(k)
+                elif kind == "gap":
+                    prev_kind = kinds[idx - 1] if idx > 0 else None
+                    next_kind = kinds[idx + 1] if idx + 1 < len(kinds) else None
+                    if prev_kind or next_kind:
+                        drop.add(k)
+
+            deduped = [l for k, l in enumerate(filtered_lines) if k not in drop]
+            deduped_clean = [c for k, c in enumerate(clean_lines) if k not in drop]
+
+            # Deduplicate whole-block redraws: pi re-emits an entire past
+            # block (e.g. an mcp call + its JSON body) in dim gray once its
+            # result arrives. Drop the FIRST copy of any immediately-repeated
+            # run of lines, keeping the re-render (it carries the final
+            # styling and is followed by the result). Single-line repeats
+            # only count for non-blank lines -- blank collapsing is handled
+            # separately below.
             final_lines = []
-            prev_empty = False
-            for line in deduped:
-                is_empty = not line.strip()
-                if is_empty and prev_empty:
+            final_clean = []
+            n = len(deduped)
+            i = 0
+            while i < n:
+                repeat_size = 0
+                for size in range(min(40, (n - i) // 2), 0, -1):
+                    if size == 1 and not deduped_clean[i]:
+                        continue
+                    if deduped_clean[i:i + size] == deduped_clean[i + size:i + 2 * size]:
+                        repeat_size = size
+                        break
+                if repeat_size:
+                    i += repeat_size
+                else:
+                    final_lines.append(deduped[i])
+                    final_clean.append(deduped_clean[i])
+                    i += 1
+
+            # Spacing: pi's stream carries no usable paragraph structure --
+            # every separator in a live stream belongs to the per-frame
+            # status-bar chrome (measured 217/217 in a real transcript),
+            # so block spacing is derived from content instead: each
+            # tool-invocation line starts a new visual block and gets one
+            # blank line above it. Runs of blanks never survive.
+            block_start_re = re.compile(
+                r'^(?:\$ |(?:read|write|edit|bash|grep|find|ls|mcp|subagent)\b)'
+            )
+            out_lines = []
+            prev_blank = True  # also drops leading blanks
+            for line, cl in zip(final_lines, final_clean):
+                blank = not cl
+                if blank and prev_blank:
                     continue
-                final_lines.append(line)
-                prev_empty = is_empty
-            
-            text = '\n'.join(final_lines)
-            
+                if not blank and not prev_blank and block_start_re.match(cl):
+                    out_lines.append("")
+                out_lines.append(line)
+                prev_blank = blank
+
+            # Cache the fully-filtered result (before tailing) keyed on
+            # this exact (mtime, size) -- see the cache-read at the top of
+            # this method. A terminated agent's file never changes again,
+            # so this also means a terminated agent's full history is only
+            # ever ANSI-stripped/deduped once, not on every future request
+            # for it either.
+            self._transcript_filter_cache[cache_key] = (cache_stamp, out_lines)
+
+            # Tail AFTER filtering, not before (see the read-loop comment
+            # above) -- terminated agents still get full history.
+            if lines > 0 and agent.status != 'terminated':
+                out_lines = out_lines[-lines:]
+
+            text = '\n'.join(out_lines).rstrip()
+
             return text
-                    
+
         except Exception as e:
             logger.debug(f"Could not read transcript log: {e}")
             return ""

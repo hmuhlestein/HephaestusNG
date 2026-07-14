@@ -28,12 +28,6 @@ description: |
 
   ## Your Task
 
-  YOUR MODEL HAS A HARD OUTPUT TOKEN LIMIT PER TURN: reading a large design
-  doc plus multiple codebase files back-to-back in one continuous turn can hit
-  this limit mid-task ("Error: Model stopped because it reached the maximum
-  output token limit"). Read ONE file per turn, then stop -- take brief notes
-  as you go instead of re-reading or re-quoting earlier files in later turns.
-
   ### Step 1: Read and Understand the Design Document
   Read the design document carefully. Understand:
   - What is being built

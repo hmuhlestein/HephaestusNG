@@ -358,3 +358,371 @@ class TestEndToEnd:
 
         assert 'read /Users/hmuh' not in deduped
         assert 'read ~/code/applitnator/.worktrees/wt_feature/src/config.py' in deduped
+
+
+class TestReadTranscriptLogReal:
+    """Tests calling the REAL AgentManager._read_transcript_log.
+
+    The other classes in this file test inline COPIES of the filtering
+    logic, which is exactly how the backend filter silently drifted from
+    the frontend's (the backend was missing the separator filter entirely
+    while the copy-based tests kept passing). These tests exercise the
+    actual production code path against a transcript file on disk.
+    """
+
+    def _run(self, tmp_path, content, lines=200):
+        from unittest.mock import MagicMock
+
+        from src.agents.manager import AgentManager
+
+        _write_transcript(tmp_path, "test_agent", content)
+
+        mgr = AgentManager.__new__(AgentManager)
+        task = MagicMock()
+        task.workflow.working_directory = str(tmp_path)
+        task.workflow.project_id = None
+        session = MagicMock()
+        session.query.return_value.filter_by.return_value.first.return_value = task
+        mgr.db_manager = MagicMock()
+        mgr.db_manager.get_session.return_value = session
+
+        agent = _make_agent(current_task_id="t1")
+        return mgr._read_transcript_log(agent, lines)
+
+    def test_filters_separator_lines(self, tmp_path):
+        """pi's block-separator lines (each char SGR-wrapped) are chrome,
+        not content -- and leaving them in breaks the redraw dedup by
+        splitting adjacent redraw frames."""
+        sep = "".join("\x1b[38;2;129;162;190m─\x1b[39m" for _ in range(50))
+        content = f"real line\n{sep}\nanother line\n"
+        result = self._run(tmp_path, content)
+        assert "real line" in result
+        assert "another line" in result
+        assert "─" not in result
+
+    def test_dedups_progressive_typing_redraws_across_separators(self, tmp_path):
+        """pi re-renders a command line as it streams ($ cd /, $ cd /Users,
+        ...), with a separator line between frames. All partial frames must
+        collapse to the final one."""
+        sep = "".join("\x1b[38;2;129;162;190m─\x1b[39m" for _ in range(50))
+        content = (
+            f"$ cd /\n{sep}\n"
+            f"$ cd /Users/x\n{sep}\n"
+            "$ cd /Users/x/proj && pytest\n"
+        )
+        result = self._run(tmp_path, content)
+        assert result.count("$ cd") == 1
+        assert "$ cd /Users/x/proj && pytest" in result
+
+    def test_dedups_identical_consecutive_lines(self, tmp_path):
+        content = "All 147 tests pass. Running more:\nAll 147 tests pass. Running more:\n"
+        result = self._run(tmp_path, content)
+        assert result.count("All 147 tests pass") == 1
+
+    def test_dedups_repeated_block_redraws(self, tmp_path):
+        """pi re-emits a whole past block (mcp call + JSON body) in dim gray
+        once its result arrives -- the first copy must be dropped."""
+        block = (
+            " mcp call hephaestus_save_memory\n"
+            " {\n"
+            '   "content": "something",\n'
+            '   "agent_id": "abc"\n'
+            " }\n"
+        )
+        content = block + block + " ✅ Memory saved!\n"
+        result = self._run(tmp_path, content)
+        assert result.count("mcp call hephaestus_save_memory") == 1
+        assert result.count('"content": "something"') == 1
+        assert "✅ Memory saved!" in result
+
+    def test_filter_runs_before_tail_not_after(self, tmp_path):
+        """Regression: the tail (last N lines) used to be taken from the
+        RAW transcript BEFORE any filtering ran. For a live agent (status
+        != terminated) with a small `lines` limit, that could cut a
+        duplicated block in half -- the first copy falls outside the raw
+        window, the second survives alone, and the block-repeat dedup
+        (which needs BOTH copies present to detect and collapse the
+        pattern) has nothing to match against. Observed live: a live
+        agent's output showed visible duplication that was absent once
+        the same agent terminated and the whole file got filtered.
+        Filtering must run on the WHOLE file first, with the tail applied
+        to the already-deduped result."""
+        filler = "\n".join(f"filler line {i}" for i in range(50))
+        block = (
+            " mcp call hephaestus_save_memory\n"
+            " {\n"
+            '   "content": "something",\n'
+            '   "agent_id": "abc"\n'
+            " }\n"
+        )
+        content = filler + "\n" + block + block + " done\n"
+
+        # lines=9 puts the raw (pre-filter) tail boundary exactly inside
+        # the first block copy, at its "content" line -- so the raw
+        # window contains a truncated fragment of copy 1 (content/
+        # agent_id/}) immediately followed by all of copy 2. Comparing
+        # just that window, the two aren't adjacent-identical (different
+        # preceding lines), so the old raw-tail-first code couldn't
+        # collapse them -- both "content" lines would survive.
+        result = self._run(tmp_path, content, lines=9)
+
+        assert result.count('"content": "something"') == 1
+
+    def test_drops_ansi_only_lines(self, tmp_path):
+        """A line containing only ANSI codes renders as literal garbage in
+        views that don't convert ANSI to HTML. Genuine blank lines are
+        fine (kept for spacing); a NON-empty line must have visible text."""
+        content = "real content\n\x1b[48;2;40;40;50m \x1b[49m\x1b[0m\nmore content\n"
+        result = self._run(tmp_path, content)
+        for line in result.split("\n"):
+            import re as _re
+
+            if not line:
+                continue
+            visible = _re.sub(r"\x1b\[[?]?[0-9;]*[a-zA-Z]", "", line).strip()
+            assert visible, f"ANSI-only line survived: {line!r}"
+
+    def test_separators_become_single_blank_lines(self, tmp_path):
+        """Separators mark pi's block boundaries -- each run must become
+        exactly ONE blank line (visual spacing), never multiple. Raw
+        stream blanks (pi pads every content line with one) are dropped,
+        or output would double in length."""
+        sep = "".join("\x1b[38;2;129;162;190m─\x1b[39m" for _ in range(50))
+        content = (
+            "block one line a\n"
+            "\n"
+            "block one line b\n"
+            f"{sep}\n\n{sep}\n\n{sep}\n"
+            "block two\n"
+        )
+        result = self._run(tmp_path, content)
+        lines = result.split("\n")
+        assert lines == ["block one line a", "block one line b", "", "block two"]
+
+    def test_dedups_midline_growing_redraws_with_constant_tail(self, tmp_path):
+        """Observed live (qa_validation agent): pi re-renders a read line
+        with a constant `:200-299` tail while the path grows in the
+        MIDDLE, switching from absolute to ~-abbreviated form mid-stream.
+        Plain prefix comparison can't catch any of these frames."""
+        content = (
+            "All tests pass. Let me verify:\n"
+            "read ...:200-299\n"
+            "read /:200-299\n"
+            "read /Users/hmuh:200-299\n"
+            "read ~/code/s:200-299\n"
+            "read ~/code/sotto/.worktrees:200-299\n"
+            "read ~/code/sotto/.worktrees/wt_feature/docs:200-299\n"
+            "read ~/code/sotto/.worktrees/wt_feature/docs/requirements_analysis.md:200-299\n"
+        )
+        result = self._run(tmp_path, content)
+        assert result.count("read") == 1
+        assert (
+            "read ~/code/sotto/.worktrees/wt_feature/docs/requirements_analysis.md:200-299"
+            in result
+        )
+        assert "All tests pass. Let me verify:" in result
+
+    def test_isolated_gap_match_is_not_collapsed(self, tmp_path):
+        """Two legitimately similar consecutive lines (one insertable into
+        the other at a single point) must survive when isolated -- only
+        CHAINS of such pairs are redraw frames. Reading several
+        __init__.py files in a row is a real agent pattern."""
+        content = (
+            "read src/__init__.py\n"
+            "read src/sub/__init__.py\n"
+        )
+        result = self._run(tmp_path, content)
+        assert "read src/__init__.py" in result
+        assert "read src/sub/__init__.py" in result
+
+    def test_streaming_chrome_separators_do_not_become_blanks(self, tmp_path):
+        """While streaming, pi re-renders its bottom status-bar chrome
+        (separator pair + shell prompt + stats + MCP line) on EVERY frame.
+        Those separators are chrome, not block boundaries -- converting
+        them to blank lines put a blank between every pair of content
+        lines. A separator earns a blank only when followed by content."""
+        sep = "─" * 50
+        frame_chrome = (
+            f"{sep}\n\n{sep}\n"
+            "~/code/sotto/.worktrees/wt_feature (feature/branch)\n"
+            "↑62k ↓4.6k R629k CH88.3% $0.033 6.1%/1.0M (auto)\n"
+            "MCP: 1/1 servers\n"
+            "⠧ Working...\n"
+        )
+        content = (
+            "import sys\n"
+            + frame_chrome
+            + "sys.path.insert(0, 'src')\n"
+            + frame_chrome
+            + "from sotto.llm import factory\n"
+        )
+        result = self._run(tmp_path, content)
+        lines = result.split("\n")
+        assert lines == [
+            "import sys",
+            "sys.path.insert(0, 'src')",
+            "from sotto.llm import factory",
+        ]
+
+    def test_tool_invocation_lines_get_blank_line_above(self, tmp_path):
+        """Block spacing is derived from content, not stream separators --
+        every separator in a live pi stream belongs to the per-frame
+        status-bar chrome (measured 217/217 in a real transcript), so
+        separator-based spacing either put blanks everywhere or nowhere.
+        Each tool-invocation line starts a visual block and gets exactly
+        one blank line above it."""
+        content = (
+            " mcp call hephaestus_update_task_status\n"
+            ' { "status": "done" }\n'
+            " ✅ Task done successfully\n"
+            " write ~/code/proj/docs/qa_report.md\n"
+            " # QA Report\n"
+            " $ pytest -q\n"
+            " 10 passed\n"
+        )
+        result = self._run(tmp_path, content)
+        lines = result.split("\n")
+        assert lines == [
+            " mcp call hephaestus_update_task_status",
+            ' { "status": "done" }',
+            " ✅ Task done successfully",
+            "",
+            " write ~/code/proj/docs/qa_report.md",
+            " # QA Report",
+            "",
+            " $ pytest -q",
+            " 10 passed",
+        ]
+
+    def _make_manager_and_agent(self, tmp_path, content, status="working"):
+        """Like _run, but returns the (manager, agent) pair instead of
+        calling _read_transcript_log immediately -- needed to exercise the
+        instance-level cache across multiple calls on the SAME manager
+        (each _run() call builds a fresh AgentManager, which would never
+        share a cache)."""
+        from unittest.mock import MagicMock
+
+        from src.agents.manager import AgentManager
+
+        _write_transcript(tmp_path, "test_agent", content)
+
+        mgr = AgentManager.__new__(AgentManager)
+        task = MagicMock()
+        task.workflow.working_directory = str(tmp_path)
+        task.workflow.project_id = None
+        session = MagicMock()
+        session.query.return_value.filter_by.return_value.first.return_value = task
+        mgr.db_manager = MagicMock()
+        mgr.db_manager.get_session.return_value = session
+
+        agent = _make_agent(current_task_id="t1", status=status)
+        return mgr, agent
+
+    def test_unchanged_file_uses_cache_not_reprocessed(self, tmp_path):
+        """Regression: filtering a whole transcript is real work (ANSI
+        strip + redraw/dedup passes) -- up to seconds for a large,
+        long-running agent. A live agent gets polled roughly every
+        second, and pipe-pane only ever appends, so between polls with no
+        new output the file is byte-for-byte unchanged and the previous
+        filtered result is still exactly correct. The second call must
+        not re-open/re-read the file at all."""
+        import builtins
+        from unittest.mock import patch
+
+        mgr, agent = self._make_manager_and_agent(tmp_path, "hello\nworld\n")
+
+        first = mgr._read_transcript_log(agent, 200)
+        assert "hello" in first
+
+        real_open = builtins.open
+        with patch("builtins.open") as mock_open:
+            mock_open.side_effect = AssertionError(
+                "file was re-opened on a cache-hit poll"
+            )
+            second = mgr._read_transcript_log(agent, 200)
+
+        assert second == first
+
+    def test_changed_file_invalidates_cache(self, tmp_path):
+        """The cache must not go stale forever -- once the file actually
+        grows (a real new poll's worth of agent output), the next read
+        must reflect it, not keep serving the old cached result. The
+        cache key is (mtime, size) together, so a size change alone
+        invalidates it regardless of filesystem mtime resolution."""
+        mgr, agent = self._make_manager_and_agent(tmp_path, "hello\n")
+        first = mgr._read_transcript_log(agent, 200)
+        assert "world" not in first
+
+        transcript = tmp_path / ".hephaestus" / "tmux" / "test_agent.transcript.log"
+        with open(transcript, "a") as f:
+            f.write("world\n")
+
+        second = mgr._read_transcript_log(agent, 200)
+        assert "world" in second
+
+    def test_cache_respects_tail_limit_per_call(self, tmp_path):
+        """A cache hit must still apply THIS call's own `lines` tail limit
+        -- the cache stores the fully-filtered (untailed) result once, and
+        two callers asking for different tail lengths against the same
+        cached file must each get their own length back."""
+        content = "\n".join(f"line {i}" for i in range(50))
+        mgr, agent = self._make_manager_and_agent(tmp_path, content)
+
+        full = mgr._read_transcript_log(agent, 200)
+        assert len(full.split("\n")) == 50
+
+        short = mgr._read_transcript_log(agent, 5)
+        assert len(short.split("\n")) == 5
+        assert short.split("\n") == full.split("\n")[-5:]
+
+    def test_terminated_agent_result_also_cached(self, tmp_path):
+        """A terminated agent's transcript file never changes again -- its
+        full (ANSI-strip + dedup) history should only ever be computed
+        once, not on every future request for it."""
+        import builtins
+        from unittest.mock import patch
+
+        mgr, agent = self._make_manager_and_agent(
+            tmp_path, "hello\nworld\n", status="terminated"
+        )
+
+        first = mgr._read_transcript_log(agent, 200)
+
+        with patch("builtins.open") as mock_open:
+            mock_open.side_effect = AssertionError(
+                "file was re-opened on a cache-hit poll"
+            )
+            second = mgr._read_transcript_log(agent, 200)
+
+        assert second == first
+
+    def test_strips_trailing_pane_padding_before_sgr_resets(self, tmp_path):
+        """pi pads every row to full pane width with background-colored
+        spaces, with the SGR resets AFTER the padding -- so rstrip alone
+        never removes it. In wrapping views the padding wraps into what
+        looks like a blank line after every row. The padding must go; the
+        codes must stay (a dropped reset bleeds color into the next line)."""
+        line = (
+            "\x1b[48;2;40;40;50m import sys"
+            + " " * 130
+            + "\x1b[49m\x1b[0m"
+        )
+        result = self._run(tmp_path, line + "\nnext line\n")
+        first = result.split("\n")[0]
+        assert "import sys" in first
+        assert "  " not in first.replace("\x1b", "")  # no padding runs left
+        assert first.endswith("\x1b[49m\x1b[0m")  # resets preserved
+
+    def test_keeps_real_content_and_colors(self, tmp_path):
+        """The filter must not eat actual output -- including SGR colors,
+        which the frontend renders."""
+        content = (
+            "\x1b[32m124 passed\x1b[0m in 12.01s\n"
+            "Coverage HTML written to dir htmlcov\n"
+            "FAIL Required test coverage of 80% not reached.\n"
+        )
+        result = self._run(tmp_path, content)
+        assert "124 passed" in result
+        assert "\x1b[32m" in result
+        assert "Coverage HTML written to dir htmlcov" in result
+        assert "FAIL Required test coverage of 80% not reached." in result

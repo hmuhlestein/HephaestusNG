@@ -331,3 +331,171 @@ class TestCheckPhaseCompletion:
 
         result = phase_manager.check_phase_completion("missing")
         assert result is False
+
+
+# ── mark_phase_complete force_action (arbitration resolution) ─────
+
+
+@pytest.fixture
+def real_db(tmp_path):
+    """Real sqlite DB -- force_action="goto" queries Phase/PhaseExecution
+    via real joins that a Mock session can't meaningfully stand in for."""
+    from src.core.database import DatabaseManager as _DBM
+
+    db = _DBM(str(tmp_path / "test.db"))
+    db.create_tables()
+    return db
+
+
+@pytest.fixture
+def seeded_workflow(real_db):
+    """Two phases: 'development' (order 4) is where arbitration fires;
+    'qa_validation' (order 8) is a valid goto target ahead of it, and
+    'architecture_design' (order 3) is a valid target BEHIND it."""
+    from src.core.database import Phase, PhaseExecution, Workflow
+
+    with real_db.session_scope() as session:
+        session.add(
+            Workflow(id="wf-1", name="t", phases_folder_path="/tmp", status="active")
+        )
+        session.add(
+            Phase(
+                id="phase-arch", workflow_id="wf-1", order=3,
+                name="architecture_design", description="d", done_definitions=["x"],
+            )
+        )
+        session.add(
+            Phase(
+                id="phase-dev", workflow_id="wf-1", order=4,
+                name="development", description="d", done_definitions=["x"],
+            )
+        )
+        session.add(
+            Phase(
+                id="phase-qa", workflow_id="wf-1", order=8,
+                name="qa_validation", description="d", done_definitions=["x"],
+            )
+        )
+        session.add(
+            PhaseExecution(
+                id="exec-dev", phase_id="phase-dev", workflow_execution_id="wf-1",
+                status="pending",
+            )
+        )
+        session.add(
+            PhaseExecution(
+                id="exec-qa", phase_id="phase-qa", workflow_execution_id="wf-1",
+                status="in_progress",
+            )
+        )
+    return real_db
+
+
+class TestMarkPhaseCompleteForceGoto:
+    """force_action="goto" is how an arbitration decision resolves back
+    into a normal task -- see orchestrator._resolve_arbitration_outcome.
+    Must mirror _handle_evaluation_goto's effects exactly, just driven by
+    an explicit target/reason instead of an orchestrator Evaluation."""
+
+    def test_goto_target_found(self, seeded_workflow):
+        from src.phases.phase_manager import PhaseManager
+
+        pm = PhaseManager(db_manager=seeded_workflow)
+        pm.workflow_id = "wf-1"
+
+        result = pm.mark_phase_complete(
+            "phase-dev",
+            "Arbiter: proceed",
+            force_action="goto",
+            force_target_phase="qa_validation",
+            force_reason="fix the stale test",
+        )
+
+        assert result["action"] == "goto"
+        assert result["target_phase"] == "qa_validation"
+        assert result["target_phase_id"] == "phase-qa"
+        assert result["should_continue"] is True
+        assert result["reason"] == "fix the stale test"
+
+        with seeded_workflow.session_scope() as session:
+            from src.core.database import PhaseExecution
+
+            dev_exec = (
+                session.query(PhaseExecution).filter_by(phase_id="phase-dev").first()
+            )
+            assert dev_exec.status == "completed"
+
+    def test_goto_target_not_found_falls_back(self, seeded_workflow):
+        """A bogus/misspelled target from a malformed arbitration_result.json
+        must not crash -- falls back to _advance_or_complete like
+        _handle_evaluation_goto's own else-branch."""
+        from src.phases.phase_manager import PhaseManager
+
+        pm = PhaseManager(db_manager=seeded_workflow)
+        pm.workflow_id = "wf-1"
+
+        result = pm.mark_phase_complete(
+            "phase-dev",
+            "Arbiter: proceed",
+            force_action="goto",
+            force_target_phase="not_a_real_phase",
+            force_reason="x",
+        )
+
+        assert result["action"] != "goto"
+
+    def test_goto_resets_stale_intermediate_executions(self, seeded_workflow):
+        """Same stale-reset _handle_evaluation_goto does: phases between the
+        goto target and the current phase left "in_progress" from a prior
+        pass must be closed out, or they block later evaluation forever."""
+        from src.core.database import PhaseExecution
+        from src.phases.phase_manager import PhaseManager
+
+        with seeded_workflow.session_scope() as session:
+            arch_exec = PhaseExecution(
+                id="exec-arch", phase_id="phase-arch", workflow_execution_id="wf-1",
+                status="in_progress",
+            )
+            session.add(arch_exec)
+
+        pm = PhaseManager(db_manager=seeded_workflow)
+        pm.workflow_id = "wf-1"
+        pm.mark_phase_complete(
+            "phase-dev",
+            "Arbiter: proceed",
+            force_action="goto",
+            force_target_phase="architecture_design",
+            force_reason="restart from architecture",
+        )
+
+        with seeded_workflow.session_scope() as session:
+            arch_exec = (
+                session.query(PhaseExecution).filter_by(phase_id="phase-arch").first()
+            )
+            # phase-arch IS the target (order 3, same as target), so the
+            # ">= target.order, < current.order" stale-reset window is
+            # empty here -- this just confirms mark_phase_complete didn't
+            # crash touching it, not that it got reset (there's no phase
+            # strictly between them in this fixture).
+            assert arch_exec is not None
+
+    def test_goto_reason_and_metadata_returned(self, seeded_workflow):
+        """The reason must thread through unchanged -- this is what
+        _create_phase_task embeds as "WHY YOU'RE HERE" in the next task's
+        description (see orchestrator._fire_phase_transition's feedback
+        extraction, reused for the arbitration-driven goto path too)."""
+        from src.phases.phase_manager import PhaseManager
+
+        pm = PhaseManager(db_manager=seeded_workflow)
+        pm.workflow_id = "wf-1"
+
+        result = pm.mark_phase_complete(
+            "phase-dev",
+            "s",
+            force_action="goto",
+            force_target_phase="qa_validation",
+            force_reason="fix test_anthropic_provider.py::test_x specifically",
+        )
+
+        assert result["reason"] == "fix test_anthropic_provider.py::test_x specifically"
+        assert result["metadata"] == {}

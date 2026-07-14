@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+# Protected `rm` wrapper for CLI agent sessions (any CLIAgentInterface
+# implementation can put this directory first on its launch command's PATH
+# -- see PiAgent.get_launch_command in src/interfaces/cli_interface.py for
+# the first wiring).
+#
+# pi's own destructive-command confirmation extension
+# (~/.pi/agent/extensions/confirm-destructive.ts) was removed, so there is no
+# interactive safety net there anymore -- a real `rm -rf` call now runs
+# immediately. This wrapper enforces the same rule the system prompt states
+# (see base_system_prompt/feature_architect_system_prompt in
+# config/prompts/system_prompts.yaml) at the shell level instead of trusting
+# the model to follow it: deletions are only allowed under .hephaestus/
+# (git-excluded orchestration scratch data, never a project deliverable).
+# Anything else is refused, fail-closed, with no exceptions.
+#
+# This is deliberately a hard technical guardrail, not a second copy of the
+# prompt instruction -- an LLM can misread or ignore a written rule; a PATH
+# resolving `rm` to a script that says no cannot be talked out of it.
+
+set -euo pipefail
+
+# Find the real rm binary, skipping past this wrapper's own directory so we
+# don't recurse into ourselves.
+real_rm=""
+IFS=':' read -ra path_dirs <<< "$PATH"
+for dir in "${path_dirs[@]}"; do
+    if [[ "$dir" == "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" ]]; then
+        continue
+    fi
+    if [[ -x "$dir/rm" ]]; then
+        real_rm="$dir/rm"
+        break
+    fi
+done
+if [[ -z "$real_rm" ]]; then
+    real_rm="/bin/rm"
+fi
+
+for arg in "$@"; do
+    case "$arg" in
+        -*) continue ;;  # flags, not a path
+    esac
+    # Portable path resolution: macOS's built-in `realpath` has no `-m`
+    # (GNU-only extension), so it silently no-ops on a not-yet-existing or
+    # relative path instead of resolving it -- confirmed live, this let a
+    # relative "src/important.py" slip through unresolved and never match
+    # the .hephaestus/ check below. python3's os.path.realpath is portable
+    # and doesn't require the target to exist.
+    resolved="$(python3 -c "import os, sys; print(os.path.realpath(sys.argv[1]))" "$arg" 2>/dev/null || echo "$PWD/$arg")"
+    case "$resolved" in
+        */.hephaestus/*|*/.hephaestus)
+            continue  # allowed: inside a .hephaestus/ scratch directory
+            ;;
+        *)
+            echo "BLOCKED: rm on '$arg' (resolved: $resolved) is outside .hephaestus/." >&2
+            echo "Only .hephaestus/ orchestration scratch data may be deleted directly." >&2
+            echo "For anything else: overwrite files directly instead of deleting first," >&2
+            echo "or if you genuinely need something outside .hephaestus/ removed, fail" >&2
+            echo "the task and explain why -- do not attempt to work around this." >&2
+            exit 1
+            ;;
+    esac
+done
+
+exec "$real_rm" "$@"

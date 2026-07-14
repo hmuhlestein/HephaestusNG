@@ -421,13 +421,19 @@ class TestBuildPhaseOutput:
         text) reads result["spec_gate"]["reason"] verbatim -- this is the
         same mechanism architectural_review/adversarial_review gotos use, so
         a FIX-only feature review (which now also routes back, unlike those
-        two) must quote its full report here too, not just a count."""
-        docs = tmp_path / "docs"
-        docs.mkdir()
-        (docs / "feature_review_result.json").write_text(
+        two) must quote its full report here too, not just a count.
+
+        Written to .hephaestus/, not docs/ -- feature_review's real output
+        location, matching its sibling Feature Architect (Phase 0 artifacts
+        are internal orchestration state, not a git-tracked deliverable)."""
+        from src.core.constants import CONTEXT_DIR_NAME
+
+        heph_dir = tmp_path / CONTEXT_DIR_NAME
+        heph_dir.mkdir()
+        (heph_dir / "feature_review_result.json").write_text(
             json.dumps({"blocker_count": 0, "fix_count": 1, "defer_count": 0})
         )
-        (docs / "feature_review_report.md").write_text(
+        (heph_dir / "feature_review_report.md").write_text(
             "# Feature Review Report\n\n### [FIX] Ownership overlap"
         )
         result = build_phase_output("feature_review", tmp_path)

@@ -16,15 +16,21 @@ _project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(_project_root))
 
 
-def generate_pi_agent(phase_cfg: dict, default_model: str) -> str:
-    """Generate pi agent markdown from YAML phase config."""
+def generate_pi_agent(phase_cfg: dict) -> str:
+    """Generate pi agent markdown from YAML phase config.
+
+    No model: field in the frontmatter -- cli_interface.py's PiAgent reads
+    it from there and, when present, lets it silently override the model
+    actually resolved from Phase.cli_model/config at launch time. That
+    caused every phase's agent to keep launching on a stale model after a
+    config-level model switch, until these files were manually
+    regenerated. Omitting the field here means there's nothing to fall out
+    of sync -- the launch-time resolution is the only source of truth.
+    """
 
     name = phase_cfg["name"]
     phase_num = phase_cfg["id"]
     agent_name = f"hephaestus-{name.replace('_', '-')}"
-
-    model_slug = phase_cfg.get("model", default_model)
-    model = f"openrouter/{model_slug}"
 
     mcp_tools = [
         "mcp:hephaestus/save_memory",
@@ -73,7 +79,6 @@ If you cannot proceed, call it with status="failed".
     agent_md = f"""---
 name: {agent_name}
 description: "Hephaestus Phase {phase_num}: {role_title} — {first_line}"
-model: {model}
 tools: {tools_str}
 systemPromptMode: replace
 inheritProjectContext: true
@@ -91,12 +96,6 @@ def main():
     workflow_dir = project_root / "config" / "workflows" / "autopilot"
     output_dir = project_root / "agents" / "pi"
 
-    # Load shared config for default_model
-    with open(workflow_dir / "workflow.yaml") as f:
-        shared_cfg = yaml.safe_load(f)
-
-    default_model = shared_cfg.get("default_model", "xiaomi/mimo-v2.5")
-
     # Load per-phase files (skip workflow.yaml)
     phases = []
     for p in sorted(workflow_dir.glob("*.yaml")):
@@ -112,7 +111,7 @@ def main():
     print(f"Found {len(phases)} phases in YAML")
 
     for phase_cfg in phases:
-        agent_content = generate_pi_agent(phase_cfg, default_model)
+        agent_content = generate_pi_agent(phase_cfg)
 
         name = phase_cfg["name"]
         agent_filename = f"hephaestus-{name.replace('_', '-')}.md"
