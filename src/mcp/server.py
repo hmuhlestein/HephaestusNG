@@ -1445,6 +1445,7 @@ def _run_phase_advancement_sweep_once(sweep_logger) -> None:
     from src.autopilot.orchestrator import (
         _advance_phases,
         _clean_stale_assigned_tasks,
+        _maybe_resolve_arbitration,
         _retry_failed_tasks,
     )
     from src.core.database import Workflow
@@ -1479,6 +1480,10 @@ def _run_phase_advancement_sweep_once(sweep_logger) -> None:
                 _retry_failed_tasks(wf_id, sweep_logger)
             except Exception as e:
                 logger.error(f"[PHASE-SWEEP] Failed-task retry error for {wf_id[:8]}: {e}")
+            try:
+                _maybe_resolve_arbitration(wf_id, sweep_logger)
+            except Exception as e:
+                logger.error(f"[PHASE-SWEEP] Arbitration resolve error for {wf_id[:8]}: {e}")
 
         try:
             _advance_phases(wf_id, sweep_logger)
@@ -2193,15 +2198,57 @@ async def update_task_status(
     # on early returns (404, 403, rejection dict).
     session = server_state.db_manager.get_session()
     try:
-        # 1. Verify task exists and agent owns it
+        # 1. Verify task exists and agent is authorized.
+        # Primary check: agent is the currently assigned agent.
+        # Secondary check: agent was created for this task (current_task_id match).
+        #   This handles retry scenarios where a new agent is dispatched for the
+        #   same task but the old agent (still running) tries to report its status.
+        #   The old agent's current_task_id still points to this task.
         task = session.query(Task).filter_by(id=request.task_id).first()
         if not task:
             raise HTTPException(status_code=404, detail="Task not found")
 
-        if task.assigned_agent_id != agent_id:
-            raise HTTPException(
-                status_code=403, detail="Agent not authorized for this task"
-            )
+        is_current_assignee = (task.assigned_agent_id == agent_id)
+        if not is_current_assignee:
+            # Secondary check: does this agent have this task as its current_task_id?
+            agent_record = session.query(Agent).filter_by(id=agent_id).first()
+            if agent_record and agent_record.current_task_id == request.task_id:
+                logger.warning(
+                    f"Agent {agent_id[:8]} updating task {request.task_id[:8]} "
+                    f"but is not current assignee (current: {task.assigned_agent_id}). "
+                    f"Allowing because agent's current_task_id matches."
+                )
+            else:
+                # Tertiary check: was this agent ever assigned to this task?
+                # This handles the case where an agent was terminated (current_task_id
+                # cleared) but its tmux session is still alive and trying to report.
+                from src.core.database import AgentLog
+                agent_was_assigned = session.query(AgentLog).filter(
+                    AgentLog.agent_id == agent_id,
+                    AgentLog.log_type == "created",
+                    AgentLog.details["task_id"].as_string() == request.task_id,
+                ).first()
+                if not agent_was_assigned:
+                    # Fallback: check if agent's details contain the task_id
+                    agent_logs = session.query(AgentLog).filter(
+                        AgentLog.agent_id == agent_id,
+                        AgentLog.log_type == "created",
+                    ).all()
+                    for log in agent_logs:
+                        if log.details and log.details.get("task_id") == request.task_id:
+                            agent_was_assigned = log
+                            break
+                
+                if agent_was_assigned:
+                    logger.warning(
+                        f"Agent {agent_id[:8]} updating task {request.task_id[:8]} "
+                        f"but is not current assignee (current: {task.assigned_agent_id}). "
+                        f"Allowing because agent was previously assigned to this task (terminated agent completing work)."
+                    )
+                else:
+                    raise HTTPException(
+                        status_code=403, detail="Agent not authorized for this task"
+                    )
 
         # 2. Save learnings as memories
         await TaskCompletionService.record_learnings(
@@ -3773,6 +3820,7 @@ async def list_workflow_executions(status: str = "all"):
                 "definition_name": e.definition.name if e.definition else None,
                 "description": e.description,
                 "status": e.status,
+                "status_reason": e.status_reason,
                 "created_at": e.created_at.isoformat() if e.created_at else None,
                 "working_directory": e.working_directory,
                 # Add stats
@@ -3854,6 +3902,24 @@ async def start_workflow_execution(request: StartWorkflowRequest):
                 logger.info(
                     f"Created initial task {task_response.task_id} for workflow {workflow_id}"
                 )
+
+                # create_task (the generic /create_task handler) knows
+                # nothing about PhaseExecution bookkeeping -- see
+                # _release_phase_task_creation_claim's own docstring for
+                # what silently breaks without this call.
+                try:
+                    from src.autopilot.orchestrator import (
+                        _release_phase_task_creation_claim,
+                    )
+                    from src.core.database import get_db as _get_db_for_release
+
+                    with _get_db_for_release() as _pdb:
+                        _release_phase_task_creation_claim(_pdb, phase_uuid)
+                except Exception as claim_error:
+                    logger.error(
+                        f"Failed to release phase 1 task-creation claim for "
+                        f"workflow {workflow_id}: {claim_error}"
+                    )
             except Exception as task_error:
                 logger.error(
                     f"Failed to create initial task for workflow {workflow_id}: {task_error}"
@@ -3941,6 +4007,7 @@ async def get_workflow_execution(workflow_id: str):
         "definition_name": workflow.definition.name if workflow.definition else None,
         "description": workflow.description,
         "status": workflow.status,
+        "status_reason": workflow.status_reason,
         "created_at": workflow.created_at.isoformat() if workflow.created_at else None,
         "working_directory": workflow.working_directory,
         "stats": stats,
@@ -4058,6 +4125,7 @@ async def resume_workflow(workflow_id: str, request: Request):
 
         workflow.status = "active"
         workflow.paused_by = None
+        workflow.status_reason = None
         session.commit()
         return {"status": "active", "workflow_id": workflow_id}
     finally:

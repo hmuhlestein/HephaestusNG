@@ -32,6 +32,24 @@ logger = logging.getLogger(__name__)
 
 _SGR_RE = re.compile(r"\x1b\[[0-9;]*m")
 
+# Matches pi's "⚠️ Dangerous command:" confirmation screen and captures the
+# command it's asking about. Deliberately anchored to this exact prompt
+# shape (not a generic "does the screen contain the word rm" check) to
+# avoid false-positive matches on an agent's own reasoning text that merely
+# mentions "rm" or "dangerous".
+_DANGEROUS_CMD_RE = re.compile(
+    r"Dangerous command:\s*\n\s*(\S[^\n]*)", re.IGNORECASE
+)
+
+# pi's exact error text when the underlying model hits its per-turn output
+# token ceiling mid-generation. Anchored to this specific string (not a
+# generic "did generation fail" check) so this detector never fires on an
+# agent's own reasoning text that happens to discuss token limits.
+_MAX_TOKEN_LIMIT_RE = re.compile(
+    r"Error: Model stopped because it reached the maximum output token limit",
+    re.IGNORECASE,
+)
+
 
 def _strip_sgr(text: str) -> str:
     """Strip SGR color escape codes (\\x1b[...m).
@@ -65,6 +83,12 @@ class MonitoringDecision(Enum):
     ANSWER = "answer"
     RESTART = "restart"
     RECREATE = "recreate"
+
+
+# Hard timeout for analyze_agent_state's LLM call -- see the call site's own
+# comment for why this must never be unbounded (mirrors Guardian's
+# GUARDIAN_LLM_TIMEOUT in guardian.py).
+AGENT_STATE_LLM_TIMEOUT = 90
 
 
 class IntelligentMonitor:
@@ -106,15 +130,24 @@ class IntelligentMonitor:
             # Collect comprehensive context
             context = await self._collect_agent_context(agent)
 
-            # Analyze with LLM
-            analysis = await self.llm_provider.analyze_agent_state(
-                agent_output=context["tmux_output"],
-                task_info={
-                    "description": context["task_description"],
-                    "done_definition": context["done_definition"],
-                    "time_elapsed": context["time_elapsed"],
-                },
-                project_context=context["project_context"],
+            # Hard timeout so a slow/over-streaming model can never freeze this
+            # shared monitoring loop task -- same reasoning and value as
+            # Guardian's GUARDIAN_LLM_TIMEOUT (guardian.py) and Conductor's
+            # CONDUCTOR_LLM_TIMEOUT (langchain_llm_client.py): an unbounded await
+            # here previously froze the entire monitoring cycle (and therefore
+            # every agent's auto-recovery, not just this one) for as long as the
+            # model stayed silent.
+            analysis = await asyncio.wait_for(
+                self.llm_provider.analyze_agent_state(
+                    agent_output=context["tmux_output"],
+                    task_info={
+                        "description": context["task_description"],
+                        "done_definition": context["done_definition"],
+                        "time_elapsed": context["time_elapsed"],
+                    },
+                    project_context=context["project_context"],
+                ),
+                timeout=AGENT_STATE_LLM_TIMEOUT,
             )
 
             logger.info(
@@ -552,6 +585,31 @@ class MonitoringLoop:
                 st["sig"] = sig
                 st["since"] = None
                 st["recov"] = 0
+                # Also refresh Agent.last_activity -- the separate "task
+                # stuck" check in _audit_system_health relies entirely on
+                # this field, which is otherwise ONLY touched by an MCP
+                # tool call (_touch_agent_activity, server.py) or a
+                # successful Guardian analysis cycle. A read-heavy phase
+                # (e.g. feature_review reading design.md + several scope.md
+                # files before writing anything) can go 5+ minutes without
+                # either of those firing while genuinely, visibly working --
+                # the stuck-task check would then kill it on its hard
+                # stuck_detection_minutes timer despite real progress being
+                # right here in the tmux output. Observed live: the same
+                # feature_review task died to "no agent activity for >5
+                # minutes" on three consecutive retries, each time visibly
+                # active (spinner, new tool calls) when checked manually.
+                try:
+                    with self.db_manager.session_scope() as _session:
+                        from src.core.database import Agent as _Agent
+
+                        _db_agent = (
+                            _session.query(_Agent).filter_by(id=agent.id).first()
+                        )
+                        if _db_agent:
+                            _db_agent.last_activity = datetime.utcnow()
+                except Exception:
+                    pass  # best-effort; the mechanical-recovery check itself must not fail
                 return
             frozen_for = now - st["since"] if st["since"] else 0
             # Fast-path: "Operation aborted" leaves the agent idle at the shell
@@ -731,6 +789,127 @@ class MonitoringLoop:
         except Exception as e:
             logger.debug(f"[REP-LOOP] check failed for {agent.id[:8]}: {e}")
 
+    async def _detect_dangerous_command_confirmation(self, agent):
+        """Detect a pending 'Dangerous command' confirmation for an rm
+        command and auto-deny it (Escape) + nudge the agent, instead of
+        relying on the generic frozen-output detector.
+
+        A static Yes/No confirmation screen is a DIFFERENT failure mode than
+        a frozen "Thinking..." loop: it isn't reliably caught by
+        _mechanical_recovery_for_agent's signature comparison (observed
+        live: an agent sat on an unanswered rm -rf confirmation for 9+
+        minutes, well past FROZEN_SECONDS, with zero [MECH-RECOVERY] log
+        lines -- something elsewhere in that 40-line window kept the
+        captured signature changing between polls). This check is narrowly
+        scoped to rm specifically, matches immediately (no frozen-timer
+        wait), and always denies -- the system prompt already tells every
+        agent to NEVER run rm/destructive commands in the first place, so
+        there is no case where approving is the right call here.
+        """
+        try:
+            if not hasattr(self, "_denied_dangerous_cmds"):
+                self._denied_dangerous_cmds = {}
+            out = self.agent_manager.get_agent_output(agent.id, lines=40)
+            if not out:
+                return
+            match = _DANGEROUS_CMD_RE.search(_strip_sgr(out))
+            if not match:
+                return
+            command = match.group(1).strip()
+            if not re.search(r"(^|[/\s;&|])rm\b", command):
+                # Only auto-handle rm -- a different dangerous command (e.g.
+                # curl | sh) still needs a human or Guardian's judgment call.
+                return
+
+            # Cooldown, not a permanent one-shot flag: if the first Escape
+            # doesn't register (e.g. a second, later rm prompt appears for
+            # the same agent), retry after a short window instead of
+            # leaving it stuck forever because we already "handled" this
+            # agent once.
+            last_denied = self._denied_dangerous_cmds.get(agent.id)
+            if last_denied is not None and time.time() - last_denied < 30:
+                return
+            self._denied_dangerous_cmds[agent.id] = time.time()
+
+            logger.warning(
+                f"[DANGEROUS-CMD] Agent {agent.id[:8]} ({agent.cli_type}) has a "
+                f"pending rm confirmation — auto-denying and nudging: {command[:120]!r}"
+            )
+            from src.interfaces.cli_interface import get_cli_agent
+
+            try:
+                cli = get_cli_agent(agent.cli_type)
+                keys = cli.recovery_keystrokes()  # Escape for pi -- cancels the prompt
+            except Exception:
+                keys = []
+            if keys:
+                await self.agent_manager.send_recovery_keystrokes(agent.id)
+            await self.agent_manager.send_message_to_agent(
+                agent.id,
+                "Your rm command was denied — you must NEVER run `rm -rf` or any "
+                "other destructive filesystem command; this is a hard rule from "
+                "your system prompt, not a suggestion. If you need to replace or "
+                "clean up a file/directory, overwrite it directly with your "
+                "write/edit tools instead of deleting it first. Continue your "
+                "task without using rm.",
+            )
+        except Exception as e:
+            logger.debug(f"[DANGEROUS-CMD] check failed for {agent.id[:8]}: {e}")
+
+    async def _detect_max_token_limit_error(self, agent):
+        """Detect pi's own "Error: Model stopped because it reached the
+        maximum output token limit" message and immediately nudge with
+        specific, actionable guidance instead of waiting for the generic
+        frozen-output detector's 300s threshold (or Guardian's periodic
+        analysis) to eventually notice and send a generic "you appear
+        stuck" nudge.
+
+        Unlike _detect_dangerous_command_confirmation, there is no dialog
+        to dismiss here -- pi already returned control after the error, so
+        this is nudge-only, no recovery keystrokes.
+
+        On mimo-v2.5-pro's much larger output ceiling this should be rare
+        (routine multi-file work fit comfortably under the old, smaller
+        ceiling too, once chunked) -- hitting it at all now usually means a
+        genuine runaway (a single write far too large, or a reasoning loop
+        that doesn't visibly repeat text the way _detect_repetition_loop's
+        pattern-matching would catch) rather than the systemic ceiling
+        problem the model switch already solved.
+        """
+        try:
+            if not hasattr(self, "_nudged_token_limit"):
+                self._nudged_token_limit = {}
+            out = self.agent_manager.get_agent_output(agent.id, lines=40)
+            if not out:
+                return
+            if not _MAX_TOKEN_LIMIT_RE.search(_strip_sgr(out)):
+                return
+
+            # Cooldown, not a permanent one-shot flag -- same reasoning as
+            # _detect_dangerous_command_confirmation: if this keeps
+            # happening for the same agent, keep nudging rather than going
+            # silent after the first attempt.
+            last_nudged = self._nudged_token_limit.get(agent.id)
+            if last_nudged is not None and time.time() - last_nudged < 30:
+                return
+            self._nudged_token_limit[agent.id] = time.time()
+
+            logger.warning(
+                f"[MAX-TOKEN-LIMIT] Agent {agent.id[:8]} ({agent.cli_type}) hit "
+                "the model's output token limit — nudging with chunking guidance"
+            )
+            await self.agent_manager.send_message_to_agent(
+                agent.id,
+                "You just hit the model's output token limit — whatever you were "
+                "doing (reading, reasoning, or writing) was too large for one "
+                "turn. Break it into smaller pieces: one file read or write per "
+                "turn, not several chained together, and don't try to redo the "
+                "whole thing at once. Check what actually got written before "
+                "continuing — a write that hit this limit may be truncated.",
+            )
+        except Exception as e:
+            logger.debug(f"[MAX-TOKEN-LIMIT] check failed for {agent.id[:8]}: {e}")
+
     async def _monitoring_cycle(self):
         """Execute one monitoring cycle with trajectory monitoring."""
         logger.debug("Starting trajectory monitoring cycle")
@@ -750,13 +929,17 @@ class MonitoringLoop:
         agents = self.agent_manager.get_active_agents()
         logger.info(f"Trajectory monitoring {len(agents)} active agents")
 
-        # Phase 0: cheap mechanical recovery (no LLM). Two complementary checks:
+        # Phase 0: cheap mechanical recovery (no LLM). Four complementary checks:
         #   a) frozen output — same substantive 40-line sig for ≥5 min
         #   b) repetition loop — output growing but same sentence repeats 5+ times
         #      in the last 80 lines (LLM cycling "Actually, let me try…")
+        #   c) pending rm confirmation — auto-deny immediately, don't wait for (a)
+        #   d) max output token limit hit — nudge immediately, don't wait for (a)
         for agent in agents:
             await self._mechanical_recovery_for_agent(agent)
             await self._detect_repetition_loop(agent)
+            await self._detect_dangerous_command_confirmation(agent)
+            await self._detect_max_token_limit_error(agent)
 
         # Phase 1: Guardian Analysis (Parallel)
         guardian_summaries = []

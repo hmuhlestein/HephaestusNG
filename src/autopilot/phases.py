@@ -45,22 +45,39 @@ _cfg = load_workflow_from_dir(_WORKFLOW_DIR)
 SESSION_ROLES = _cfg["session_roles"]
 
 
-def get_session_id(project_id: str, design_slug: str, phase_name: str) -> str:
+def get_session_id(
+    project_id: str, design_slug: str, phase_name: str, model: str = ""
+) -> str:
     """Generate a deterministic session ID for a phase.
 
-    Same project + design + role = same session. This means:
+    Same project + design + role + model = same session. This means:
     - Goto back to development → developer session resumes with full memory.
     - Architect re-invoked for adversarial review → architect session resumes.
     - Any phase retry → same session, agent picks up where it left off.
 
     Pi handles storage internally — we just pass the ID via --session-id.
+
+    model is part of the hash, not just informational: pi's --session-id
+    resume permanently pins whatever model the session was FIRST created
+    with -- a --model flag passed on a later resume is silently ignored
+    (confirmed live: a session's own file had exactly one modelId entry,
+    recorded at creation, unchanged across 343 subsequent turns). Without
+    the model in this hash, changing the configured model (e.g. switching
+    off a model whose output-token ceiling turned out too small) has zero
+    effect on any EXISTING session for a role that's already been used --
+    every goto back to that role keeps resuming the stale session on the
+    old model forever, silently, no matter what config says now. Folding
+    the model in means a model change naturally produces a different
+    session_id, so pi treats it as a fresh session instead of resuming the
+    pinned one -- continuity is preserved exactly as long as the model
+    doesn't change, which is the common case.
     """
     role = SESSION_ROLES.get(phase_name, phase_name)
     def safe(s):
         return re.sub(r"[^a-z0-9\-_]", "", s.lower().replace(" ", "-"))[:30]
     # Stable hash suffix prevents collisions between similar names
     # e.g. 'my-proj-add-calc' vs 'my-proj-add-calculator'
-    raw = f"{project_id}:{design_slug}:{role}"
+    raw = f"{project_id}:{design_slug}:{role}:{model}"
     h = hashlib.sha256(raw.encode()).hexdigest()[:8]
     return f"hephaestus-{safe(project_id)}-{safe(design_slug)}-{safe(role)}-{h}"
 

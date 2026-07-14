@@ -132,6 +132,27 @@ class Agent(Base):
     )
     cli_type = Column(String, nullable=False)  # claude, codex, etc.
     tmux_session_name = Column(String, unique=True)
+    # Must be set to None on every path that sets status="terminated" (see
+    # CLAUDE.md's Critical Invariants / Forbidden lists). This column means
+    # "the task this LIVE agent is currently working on" -- a dozen+ call
+    # sites across the codebase query it (Agent.current_task_id.in_(...),
+    # == task_id) to find the agent associated with a task, for bulk
+    # termination sweeps, duplicate-agent prevention, inter-agent message
+    # routing, and self-heal/retry detection, and most of them don't
+    # separately filter status != "terminated". Leaving a stale value here
+    # after termination makes a dead agent indistinguishable from a live
+    # one to all of them -- a task can appear to already have an agent
+    # (a stale pointer to a corpse) and never get picked up by retry
+    # logic, stalling silently.
+    #
+    # To verify what task a TERMINATED agent was assigned to (e.g. an
+    # authorization check for a terminated-but-still-reporting tmux
+    # session), don't repurpose this column -- query AgentLog instead
+    # (log_type="created", details["task_id"]), which is exactly what
+    # src/mcp/server.py's update_task_status tertiary check already does.
+    # That mechanism predates and is unrelated to this column's clearing;
+    # it works precisely because it doesn't depend on current_task_id
+    # surviving termination.
     current_task_id = Column(String, ForeignKey("tasks.id"))
     last_activity = Column(DateTime, default=datetime.utcnow)
     health_check_failures = Column(Integer, default=0)
@@ -424,6 +445,13 @@ class Workflow(Base):
     # that function's docstring for the bug this prevents. NULL/"system" ->
     # eligible for auto-resume; "user" -> left alone until manually resumed.
     paused_by = Column(String, nullable=True)
+
+    # Human-readable explanation for the current status -- e.g. why the
+    # workflow paused/failed, or that it's awaiting an arbiter decision.
+    # Without this, a defensive pause/fail was only ever explained in a log
+    # line buried among thousands of others; the DB row itself gave no clue
+    # why it stopped. Cleared when the workflow becomes active/completed.
+    status_reason = Column(String, nullable=True)
 
     # Relationships
     definition = relationship("WorkflowDefinition", back_populates="executions")
@@ -1357,6 +1385,7 @@ class DatabaseManager:
         self._migrate_phase_execution_task_claim_column()
         self._migrate_autopilot_designs_error_column()
         self._migrate_workflow_paused_by_column()
+        self._migrate_workflow_status_reason_column()
 
     def _create_fts5_tables(self):
         """Create FTS5 virtual tables and triggers for ticket search."""
@@ -1873,6 +1902,24 @@ class DatabaseManager:
                 logger.info("Migrated workflows.paused_by column")
         except Exception as e:
             logger.debug(f"workflows.paused_by migration (may already exist): {e}")
+
+    def _migrate_workflow_status_reason_column(self):
+        """Add workflows.status_reason for existing databases.
+
+        Idempotent - safe to call on every startup.
+        """
+        try:
+            with self.engine.connect() as conn:
+                try:
+                    conn.execute(
+                        text("ALTER TABLE workflows ADD COLUMN status_reason VARCHAR")
+                    )
+                except Exception:
+                    pass  # Column already exists
+                conn.commit()
+                logger.info("Migrated workflows.status_reason column")
+        except Exception as e:
+            logger.debug(f"workflows.status_reason migration (may already exist): {e}")
 
     def get_session(self):
         """Get a database session."""

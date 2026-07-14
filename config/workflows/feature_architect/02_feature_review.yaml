@@ -62,13 +62,6 @@ additional_notes: |
     to (ls, find, read entry points) — a feature marked "already implemented"
     or excluded from scope needs to actually be there.
 
-  YOUR MODEL HAS A HARD OUTPUT TOKEN LIMIT PER TURN: reading design.md plus
-  every feature's scope.md back-to-back in one continuous turn has hit this
-  limit mid-task ("Error: Model stopped because it reached the maximum output
-  token limit"). Read ONE file per turn, then stop -- do not chain design.md
-  + all scope.md files + reasoning about them into a single response. Take
-  brief notes as you go instead of re-reading or re-quoting earlier files.
-
   ═══════════════════════════════════════════════════════════════════════
   STEP 2: ADVERSARIAL COMPARISON
   ═══════════════════════════════════════════════════════════════════════
@@ -110,9 +103,13 @@ additional_notes: |
   STEP 4: WRITE THE REPORT
   ═══════════════════════════════════════════════════════════════════════
 
-  Write feature_review_report.md to ./docs/ (create the directory if needed).
-  This is your ONLY output besides the result JSON below — do not edit
-  features.json or any scope.md.
+  Write feature_review_report.md to ./.hephaestus/ (the same directory
+  everything you read in Step 1 already lives in — design.md, features.json,
+  scope.md) — NOT ./docs/. This report is internal orchestration input for
+  the Feature Architect's next attempt, not a project deliverable, so it
+  belongs alongside Feature Architect's own outputs, not in the project's
+  docs/. This is your ONLY output besides the result JSON below — do not
+  edit features.json or any scope.md.
 
   # Feature Review Report
 
@@ -159,7 +156,8 @@ additional_notes: |
   here, the pipeline can't tell any findings were found at all and will
   launch per-feature pipelines regardless. Only a report with zero BLOCKERs
   and zero FIX items (DEFER-only, or clean) passes.
-  Write it to ./docs/feature_review_result.json:
+  Write it to ./.hephaestus/feature_review_result.json — NOT ./docs/, same
+  reason as Step 4.
 
   {
     "blocker_count": <int>,

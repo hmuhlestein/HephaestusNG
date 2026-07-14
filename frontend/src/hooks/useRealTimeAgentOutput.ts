@@ -88,11 +88,11 @@ export const useRealTimeAgentOutput = (
           'Failed to connect to agent output' : null,
       }));
 
-      // Stop polling if we've exceeded max retries
-      if (retryCountRef.current >= maxRetries && intervalRef.current) {
-        clearInterval(intervalRef.current);
-        intervalRef.current = null;
-      }
+      // Keep polling through failures -- the backend restarts routinely,
+      // and it takes only maxRetries seconds of downtime to reach this
+      // state. Stopping the interval here permanently stranded the viewer
+      // on "Failed to connect" after every restart until a manual Retry;
+      // the next successful poll clears the error on its own.
     }
   }, [agentId, enabled, maxRetries]);
 

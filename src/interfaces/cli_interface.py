@@ -11,9 +11,17 @@ import logging
 import os
 import re
 from abc import ABC, abstractmethod
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
+
+# Prepended to a launched CLI agent's PATH so `rm` resolves to
+# scripts/agent-safe-bin/rm instead of the real binary -- a hard technical
+# guardrail against a destructive command outside .hephaestus/, since pi's
+# own confirm-destructive extension was removed and there is no interactive
+# safety net anymore. See that script's own header for the full rationale.
+AGENT_SAFE_BIN_DIR = str(Path(__file__).parent.parent.parent / "scripts" / "agent-safe-bin")
 
 
 class CLIAgentInterface(ABC):
@@ -530,17 +538,13 @@ class PiAgent(CLIAgentInterface):
         if agent_file and os.path.exists(agent_file):
             # Parse the agent file: strip YAML frontmatter so only the body
             # (identity + completion instructions) reaches --append-system-prompt.
-            # Also honour the model declared in frontmatter when present.
+            # The frontmatter deliberately carries no model: field -- model is
+            # always resolved from Phase.cli_model/config at launch time via
+            # _get_model above, never from this file (see generate_pi_agents.py).
             raw = open(agent_file).read()
             if raw.startswith("---"):
                 parts = raw.split("---", 2)
                 body = parts[2].strip() if len(parts) >= 3 else raw
-                # Pull model from frontmatter if declared
-                import re as _re
-
-                fm_model = _re.search(r"^model:\s*(\S+)", parts[1], _re.MULTILINE)
-                if fm_model:
-                    model = fm_model.group(1)
             else:
                 body = raw
 
@@ -557,7 +561,7 @@ class PiAgent(CLIAgentInterface):
             session_args = self.get_session_args(kwargs.get("session_id", ""))
             command = f'pi --append-system-prompt "$(cat {prompt_file})" --model {model}{thinking_flag} --approve --no-context-files {session_args}'
 
-        return command
+        return f'PATH="{AGENT_SAFE_BIN_DIR}:$PATH" {command}'
 
     def get_tui_status_patterns(self) -> List[str]:
         """Pi TUI status bar patterns that look like garbled output but aren't."""

@@ -64,6 +64,12 @@ class ComponentType(Enum):
     AGENT_PROMPTS = "agent_prompts"
 
 
+# Hard timeout for Conductor's LLM calls (analyze_system_coherence,
+# review_qa_report) -- see each call site's own comment for why this must
+# never be unbounded (mirrors Guardian's GUARDIAN_LLM_TIMEOUT in guardian.py).
+CONDUCTOR_LLM_TIMEOUT = 90
+
+
 class LangChainLLMClient:
     """Multi-provider LLM client using LangChain."""
 
@@ -748,9 +754,17 @@ class LangChainLLMClient:
             HumanMessage(content=prompt),
         ]
 
+        # Hard timeout so a slow/over-streaming model (mimo can stream a reasoning
+        # trace for minutes and still fail to parse) can NEVER freeze the monitor
+        # loop -- this call runs inside MonitoringLoop's single shared cycle, so an
+        # unbounded await here blocks the entire loop's heartbeat and every other
+        # agent's recovery, not just this one call. Same pattern as Guardian's
+        # GUARDIAN_LLM_TIMEOUT (guardian.py).
         for attempt in range(3):
             try:
-                response = await model.ainvoke(messages)
+                response = await asyncio.wait_for(
+                    model.ainvoke(messages), timeout=CONDUCTOR_LLM_TIMEOUT
+                )
 
                 # Parse the response as structured output
                 parser = JsonOutputParser()
@@ -845,9 +859,14 @@ Consider:
             HumanMessage(content=prompt),
         ]
 
+        # Same unbounded-hang risk as analyze_system_coherence above -- this also
+        # runs inside MonitoringLoop's shared cycle (via conductor.py), so a
+        # slow/over-streaming model must never be allowed to block indefinitely.
         for attempt in range(3):
             try:
-                response = await model.ainvoke(messages)
+                response = await asyncio.wait_for(
+                    model.ainvoke(messages), timeout=CONDUCTOR_LLM_TIMEOUT
+                )
 
                 # Parse the response as structured output
                 parser = JsonOutputParser()

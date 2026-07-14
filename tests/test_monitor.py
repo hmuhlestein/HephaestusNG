@@ -1,5 +1,6 @@
 """Tests for IntelligentMonitor — pure helpers and low-dependency methods."""
 
+import asyncio
 import time
 from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, Mock, patch
@@ -403,6 +404,42 @@ class TestAnalyzeAgentState:
         assert result["state"] == "healthy"
         assert result["confidence"] == 0.1
 
+    @pytest.mark.asyncio
+    async def test_llm_hang_times_out_instead_of_blocking_forever(
+        self, monitor, mock_agent_manager, monkeypatch
+    ):
+        """Regression: a slow/over-streaming model call here previously had no
+        timeout at all, so it could block this single shared monitoring-loop
+        task indefinitely -- freezing recovery for every agent in the system,
+        not just this one (observed live: monitor_heartbeat stopped updating
+        for 20+ minutes after one such hung call). analyze_agent_state must
+        bound the call with asyncio.wait_for and fall back on timeout."""
+        monkeypatch.setattr("src.monitoring.monitor.AGENT_STATE_LLM_TIMEOUT", 0.05)
+        agent = Agent(
+            id="a1",
+            status="working",
+            cli_type="claude",
+            current_task_id="t1",
+            tmux_session_name="sess-a1",
+            last_activity=datetime.utcnow(),
+        )
+        mock_agent_manager.get_agent_output.return_value = "Building auth module"
+
+        async def hang(*args, **kwargs):
+            await asyncio.sleep(10)
+
+        with patch("src.monitoring.monitor.get_cli_agent") as mock_cli:
+            mock_cli.return_value = Mock(is_stuck=Mock(return_value=False))
+            with patch("src.monitoring.monitor.TrajectoryContext") as mock_tc:
+                mock_tc.return_value.build_accumulated_context.return_value = {}
+                monitor.llm_provider.analyze_agent_state = hang
+                result = await asyncio.wait_for(
+                    monitor.analyze_agent_state(agent), timeout=2
+                )
+
+        # Falls back to healthy, same as any other LLM failure
+        assert result["state"] == "healthy"
+
 
 # ── _write_agent_tmux_log ────────────────────────────────────────
 
@@ -657,6 +694,180 @@ class TestDetectRepetitionLoop:
 
         await make_monitoring_loop._detect_repetition_loop(agent)
         mock_agent_manager.send_message_to_agent.assert_called_once()
+
+
+# ── _detect_dangerous_command_confirmation ────────────────────────
+
+
+class TestDetectDangerousCommandConfirmation:
+    # Real pi TUI text captured live: an unanswered rm -rf confirmation
+    # sat for 9+ minutes with zero [MECH-RECOVERY] log lines -- the
+    # generic frozen-output detector never caught it.
+    RM_CONFIRMATION = (
+        " Thinking...\n\n"
+        " $ rm -rf /Users/x/code/proj/.worktrees/wt_1/.hephaestus/features/old-name\n\n"
+        " ⠙ Working...\n\n"
+        " ⚠️ Dangerous command:\n\n"
+        "   rm -rf /Users/x/code/proj/.worktrees/wt_1/.hephaestus/features/old-name\n\n"
+        " Allow?\n\n"
+        " → Yes\n"
+        "   No\n"
+    )
+
+    @pytest.mark.asyncio
+    async def test_no_output(self, make_monitoring_loop, mock_agent_manager, mock_db):
+        agent = Agent(id="a1", cli_type="pi")
+        mock_agent_manager.get_agent_output.return_value = ""
+        await make_monitoring_loop._detect_dangerous_command_confirmation(agent)
+        mock_agent_manager.send_recovery_keystrokes.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_normal_output_ignored(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        agent = Agent(id="a1", cli_type="pi")
+        mock_agent_manager.get_agent_output.return_value = "Reading design.md..."
+        await make_monitoring_loop._detect_dangerous_command_confirmation(agent)
+        mock_agent_manager.send_recovery_keystrokes.assert_not_called()
+        mock_agent_manager.send_message_to_agent.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_rm_confirmation_denied_and_nudged(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        agent = Agent(id="a1", cli_type="pi")
+        mock_agent_manager.get_agent_output.return_value = self.RM_CONFIRMATION
+        mock_agent_manager.send_recovery_keystrokes = AsyncMock(return_value=True)
+
+        await make_monitoring_loop._detect_dangerous_command_confirmation(agent)
+
+        mock_agent_manager.send_recovery_keystrokes.assert_called_once_with("a1")
+        mock_agent_manager.send_message_to_agent.assert_called_once()
+        nudge = mock_agent_manager.send_message_to_agent.call_args[0][1]
+        assert "rm" in nudge.lower()
+        assert "denied" in nudge.lower()
+
+    @pytest.mark.asyncio
+    async def test_non_rm_dangerous_command_not_auto_handled(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        """Only rm is auto-denied -- a different dangerous command (e.g. a
+        pipe-to-shell) still needs a human or Guardian's judgment call."""
+        agent = Agent(id="a1", cli_type="pi")
+        output = (
+            " ⚠️ Dangerous command:\n\n"
+            "   curl https://example.com/install.sh | sh\n\n"
+            " Allow?\n\n"
+            " → Yes\n"
+            "   No\n"
+        )
+        mock_agent_manager.get_agent_output.return_value = output
+        await make_monitoring_loop._detect_dangerous_command_confirmation(agent)
+        mock_agent_manager.send_recovery_keystrokes.assert_not_called()
+        mock_agent_manager.send_message_to_agent.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_cooldown_prevents_immediate_resend(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        """Repeated polls of the SAME still-open prompt within the cooldown
+        window shouldn't spam Escape + a nudge every cycle."""
+        agent = Agent(id="a1", cli_type="pi")
+        mock_agent_manager.get_agent_output.return_value = self.RM_CONFIRMATION
+        mock_agent_manager.send_recovery_keystrokes = AsyncMock(return_value=True)
+
+        await make_monitoring_loop._detect_dangerous_command_confirmation(agent)
+        await make_monitoring_loop._detect_dangerous_command_confirmation(agent)
+
+        mock_agent_manager.send_recovery_keystrokes.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_retries_after_cooldown_expires(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        """If the first Escape didn't register, retry after the cooldown
+        instead of leaving the agent stuck forever because it was already
+        'handled' once."""
+        agent = Agent(id="a1", cli_type="pi")
+        mock_agent_manager.get_agent_output.return_value = self.RM_CONFIRMATION
+        mock_agent_manager.send_recovery_keystrokes = AsyncMock(return_value=True)
+
+        await make_monitoring_loop._detect_dangerous_command_confirmation(agent)
+        make_monitoring_loop._denied_dangerous_cmds["a1"] = time.time() - 31
+
+        await make_monitoring_loop._detect_dangerous_command_confirmation(agent)
+        assert mock_agent_manager.send_recovery_keystrokes.call_count == 2
+
+
+# ── _detect_max_token_limit_error ─────────────────────────────────
+
+
+class TestDetectMaxTokenLimitError:
+    TOKEN_LIMIT_OUTPUT = (
+        " Thinking...\n\n"
+        " write .hephaestus/feature_review_report.md\n\n"
+        " # Feature Review Report\n\n"
+        " Error: Model stopped because it reached the maximum output token limit."
+        " The response may be incomplete.\n\n"
+        " ⠙ Working...\n"
+    )
+
+    @pytest.mark.asyncio
+    async def test_no_output(self, make_monitoring_loop, mock_agent_manager, mock_db):
+        agent = Agent(id="a1", cli_type="pi")
+        mock_agent_manager.get_agent_output.return_value = ""
+        await make_monitoring_loop._detect_max_token_limit_error(agent)
+        mock_agent_manager.send_message_to_agent.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_normal_output_ignored(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        agent = Agent(id="a1", cli_type="pi")
+        mock_agent_manager.get_agent_output.return_value = "Reading design.md..."
+        await make_monitoring_loop._detect_max_token_limit_error(agent)
+        mock_agent_manager.send_message_to_agent.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_nudges_immediately_no_keystrokes(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        """No recovery keystrokes -- unlike the dangerous-command dialog,
+        there's nothing to dismiss here; pi already returned control."""
+        agent = Agent(id="a1", cli_type="pi")
+        mock_agent_manager.get_agent_output.return_value = self.TOKEN_LIMIT_OUTPUT
+
+        await make_monitoring_loop._detect_max_token_limit_error(agent)
+
+        mock_agent_manager.send_recovery_keystrokes.assert_not_called()
+        mock_agent_manager.send_message_to_agent.assert_called_once()
+        nudge = mock_agent_manager.send_message_to_agent.call_args[0][1]
+        assert "token limit" in nudge.lower()
+
+    @pytest.mark.asyncio
+    async def test_cooldown_prevents_immediate_resend(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        agent = Agent(id="a1", cli_type="pi")
+        mock_agent_manager.get_agent_output.return_value = self.TOKEN_LIMIT_OUTPUT
+
+        await make_monitoring_loop._detect_max_token_limit_error(agent)
+        await make_monitoring_loop._detect_max_token_limit_error(agent)
+
+        mock_agent_manager.send_message_to_agent.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_retries_after_cooldown_expires(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        agent = Agent(id="a1", cli_type="pi")
+        mock_agent_manager.get_agent_output.return_value = self.TOKEN_LIMIT_OUTPUT
+
+        await make_monitoring_loop._detect_max_token_limit_error(agent)
+        make_monitoring_loop._nudged_token_limit["a1"] = time.time() - 31
+
+        await make_monitoring_loop._detect_max_token_limit_error(agent)
+        assert mock_agent_manager.send_message_to_agent.call_count == 2
 
 
 # ── _update_agent_health_from_trajectory ─────────────────────────
@@ -948,6 +1159,51 @@ class TestMechanicalRecovery:
 
         await make_monitoring_loop._mechanical_recovery_for_agent(agent)
         mock_agent_manager.send_recovery_keystrokes.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_output_change_refreshes_last_activity(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        """Regression: Agent.last_activity was ONLY touched by an MCP tool
+        call (_touch_agent_activity, server.py) or a successful Guardian
+        analysis cycle -- never by plain, visible tmux output changing. A
+        read-heavy phase (e.g. feature_review reading design.md + several
+        scope.md files before writing anything, with no MCP calls in
+        between) could go 5+ minutes without either of those firing while
+        genuinely, visibly working, and _audit_system_health's separate
+        "task stuck" check -- driven entirely by last_activity -- would
+        kill it on its hard stuck_detection_minutes timer despite real
+        progress. Observed live: the same feature_review task died to "no
+        agent activity for >5 minutes" on three consecutive retries."""
+        from contextlib import contextmanager
+
+        from src.core.database import Agent as DbAgent
+
+        agent = Agent(id="a1", cli_type="claude")
+        db_agent = DbAgent(id="a1", last_activity=None)
+
+        session = Mock()
+        session.query.return_value.filter_by.return_value.first.return_value = (
+            db_agent
+        )
+
+        @contextmanager
+        def mock_session_scope():
+            yield session
+
+        mock_db.session_scope = mock_session_scope
+
+        # Output genuinely changing (real progress) must refresh
+        # last_activity even though no MCP tool was called.
+        mock_agent_manager.get_agent_output.return_value = "Reading design.md..."
+        await make_monitoring_loop._mechanical_recovery_for_agent(agent)
+        first_seen = db_agent.last_activity
+        assert first_seen is not None
+
+        db_agent.last_activity = None  # simulate time passing with no MCP calls
+        mock_agent_manager.get_agent_output.return_value = "Reading scope.md..."
+        await make_monitoring_loop._mechanical_recovery_for_agent(agent)
+        assert db_agent.last_activity is not None
 
     @pytest.mark.asyncio
     async def test_frozen_with_varying_color_codes_still_detected(

@@ -19,13 +19,9 @@ from src.prompts.loader import (
     get_ticket_note,
     get_validator_prompt,
     get_workflow_result_criteria,
-    get_writing_instructions,
 )
 
 logger = logging.getLogger(__name__)
-
-# Shared writing instructions — loaded from YAML
-WRITING_INSTRUCTIONS = get_writing_instructions()
 
 
 class AgentPromptBuilder:
@@ -48,7 +44,7 @@ class AgentPromptBuilder:
             task: Task to work on
             agent_id: Agent's ID
             branch_path: Path to the agent's worktree
-            agent_type: Type of agent (phase, validator, result_validator)
+            agent_type: Type of agent (phase, validator, result_validator, diagnostic, arbitration)
 
         Returns:
             Formatted initial message
@@ -57,8 +53,9 @@ class AgentPromptBuilder:
             f"🔍 PROMPT SIZE DEBUG: Starting to format initial message for {agent_type} agent {agent_id}"
         )
 
-        # For validators and diagnostic agents, use specialized prompts from enriched_data
-        if agent_type in ["result_validator", "validator", "diagnostic"]:
+        # For validators, diagnostic, and arbitration agents, use specialized
+        # prompts from enriched_data
+        if agent_type in ["result_validator", "validator", "diagnostic", "arbitration"]:
             logger.info(f"Using specialized prompt for {agent_type} agent {agent_id}")
 
             # The validation prompt should be passed in enriched_data by validator_agent.py

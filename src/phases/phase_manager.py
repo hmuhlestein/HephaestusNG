@@ -671,6 +671,48 @@ class PhaseManager:
             "should_continue": False,
         }
 
+    def _handle_force_goto(
+        self, session, phase, execution, summary, target_phase_name: str, reason: str
+    ) -> Dict[str, Any]:
+        """Same effect as _handle_evaluation_goto, driven by an explicit
+        target/reason instead of an orchestrator Evaluation object -- used
+        after arbitration resolves with a "goto" decision."""
+        self._close_execution(session, execution, "completed", summary)
+
+        target_phase = self._find_phase_by_name_or_order(
+            session, phase.workflow_id, target_phase_name
+        )
+        if not target_phase:
+            logger.warning(f"[ARBITRATE] Goto target phase not found: {target_phase_name}")
+            return self._advance_or_complete(session, phase.id)
+
+        logger.info(f"[ARBITRATE] Goto phase {target_phase.name} from {phase.name}")
+        stale = (
+            session.query(PhaseExecution)
+            .join(Phase)
+            .filter(
+                Phase.workflow_id == phase.workflow_id,
+                Phase.order >= target_phase.order,
+                Phase.order < phase.order,
+                PhaseExecution.status == "in_progress",
+            )
+            .all()
+        )
+        for s in stale:
+            s.status = "completed"
+            s.completed_at = datetime.utcnow()
+        if stale:
+            session.commit()
+
+        return {
+            "action": "goto",
+            "target_phase": target_phase.name,
+            "target_phase_id": target_phase.id,
+            "should_continue": True,
+            "reason": reason,
+            "metadata": {},
+        }
+
     def _handle_sequential_mode(self, session, phase, execution, summary) -> Dict[str, Any]:
         self._close_execution(session, execution, "completed", summary)
         logger.info(f"Marked phase {phase.name} as complete (sequential mode)")
@@ -792,10 +834,25 @@ class PhaseManager:
     def _handle_evaluation_arbitrate(
         self, session, phase, execution, summary, evaluation
     ) -> Dict[str, Any]:
-        # Budget exhausted — pause the phase and request LLM arbitration.
-        # The monitor will spawn an arbitration agent; once it writes
-        # arbitration_result.json the pipeline resumes (proceed) or stops (impasse).
-        execution.status = "pending"  # keep phase alive until arbitration resolves
+        # Budget exhausted — orchestrator._trigger_arbitration (called by
+        # _fire_phase_transition right after this returns) spawns an
+        # arbitration agent; once it writes arbitration_result.json,
+        # _maybe_resolve_arbitration resumes the pipeline (continue/goto) or
+        # fails it (never leaves it silently paused for a human).
+        #
+        # Status must be "in_progress", NOT "pending": _case_completed_
+        # with_successor picks its target by "next pending phase with
+        # order > the latest COMPLETED phase's order" -- not "the next
+        # phase in full pipeline order". A phase reopened as "pending"
+        # while LATER phases are already completed (the common case here:
+        # the phase whose gate fired this arbitrate decision closes its
+        # own execution to "completed" before handing off) is invisible to
+        # that ordering logic, and _advance_phases races ahead to whatever
+        # pending phase comes after the latest completed one instead --
+        # completely bypassing the phase actually awaiting arbitration.
+        # "in_progress" (with a task already existing -- the arbitration
+        # task) reads as a normal active phase to every other case.
+        execution.status = "in_progress"
         # Same reset as _start_next_phase/_handle_evaluation_retry -- see
         # those for why this one-time-per-cycle claim must not survive a
         # phase being reopened for further work.
@@ -849,6 +906,8 @@ class PhaseManager:
         summary: str = "",
         phase_output: Dict[str, Any] = None,
         force_action: str = None,
+        force_target_phase: str = None,
+        force_reason: str = None,
     ) -> Dict[str, Any]:
         """Mark a phase as complete and evaluate with orchestrator.
 
@@ -856,8 +915,13 @@ class PhaseManager:
             phase_id: Phase ID to mark complete
             summary: Completion summary
             phase_output: Output from the phase for orchestrator evaluation
-            force_action: If set ("continue" or "fail"), skip orchestrator evaluation
-                and use this action directly.  Used after arbitration resolves.
+            force_action: If set ("continue", "goto", or "fail"), skip orchestrator
+                evaluation and use this action directly. Used after arbitration
+                resolves.
+            force_target_phase: Required when force_action == "goto" -- the
+                target phase name/order the arbiter chose.
+            force_reason: Threaded into the next task's description when
+                force_action == "goto", same as a normal goto's reason.
 
         Returns:
             Dict with keys:
@@ -908,6 +972,10 @@ class PhaseManager:
             # Arbitration override: skip evaluation and use the resolved action.
             if force_action == "continue":
                 return self._handle_force_continue(session, phase, execution, summary)
+            elif force_action == "goto":
+                return self._handle_force_goto(
+                    session, phase, execution, summary, force_target_phase, force_reason
+                )
             elif force_action == "fail":
                 return self._handle_force_fail(session, execution, summary)
 

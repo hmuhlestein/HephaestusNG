@@ -140,11 +140,10 @@ export const useMultiAgentOutput = (
 
       const agentId = agentIds[i];
 
-      // Skip if we've exceeded max retries for this agent
-      if (retryCountsRef.current[agentId] >= maxRetries) {
-        continue;
-      }
-
+      // Keep polling through failures -- the backend restarts routinely,
+      // and skipping an agent permanently after maxRetries failures
+      // stranded its panel on "Failed to connect" after every restart.
+      // The error state stays until a poll succeeds, which clears it.
       fetchAgentOutput(agentId);
 
       // Wait before fetching the next agent

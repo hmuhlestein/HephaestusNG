@@ -82,11 +82,6 @@ def get_prompt(key: str, variables: Optional[Dict[str, Any]] = None) -> str:
     return value
 
 
-def get_writing_instructions() -> str:
-    """Get the shared writing instructions."""
-    return get_prompt("writing_instructions")
-
-
 def get_base_system_prompt(
     agent_id: str,
     task_id: str,
