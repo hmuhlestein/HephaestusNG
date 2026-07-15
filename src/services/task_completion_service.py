@@ -148,6 +148,17 @@ class TaskCompletionService:
                     if candidate.exists():
                         found = True
                         break
+                # Fallback: search subdirectories of docs/ (agents sometimes
+                # write to feature-specific subdirectories instead of root docs/)
+                if not found:
+                    docs_dir = _Path(wf.working_directory) / "docs"
+                    if docs_dir.is_dir():
+                        for sub in docs_dir.iterdir():
+                            if sub.is_dir():
+                                candidate = sub / declared_output
+                                if candidate.exists():
+                                    found = True
+                                    break
             # 2. Check feature folder
             if not found and feature_dir.exists():
                 for d in sorted(feature_dir.iterdir(), reverse=True):
@@ -531,7 +542,9 @@ class TaskCompletionService:
             logger.info(
                 f"[SPEC-GATE] {phase.name}: GOTO {result.get('target_phase')} (score too low)"
             )
-            task.action = "goto"
+            # task.action/action_target_phase already set by
+            # mark_phase_complete's own _tag_completing_task -- only
+            # has_results is this caller's own responsibility.
             task.has_results = True
             session.commit()
 
