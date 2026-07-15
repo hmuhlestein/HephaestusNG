@@ -230,7 +230,7 @@ def ticket_db(tmp_path, monkeypatch):
 
 
 def _seed_dev_phase_and_ticket(db, workflow_id, phase_id, is_resolved=False, ticket_type="bug"):
-    from src.core.database import Phase, Ticket, Workflow
+    from src.core.database import Agent, Phase, Ticket, Workflow
 
     with db.session_scope() as session:
         session.add(
@@ -246,6 +246,7 @@ def _seed_dev_phase_and_ticket(db, workflow_id, phase_id, is_resolved=False, tic
                 done_definitions=["done"],
             )
         )
+        session.add(Agent(id="agent-qa", system_prompt="t", cli_type="pi"))
         session.add(
             Ticket(
                 id="ticket-abc12345",
@@ -314,7 +315,7 @@ class TestOpenTicketsInjection:
         assert "OPEN BUG TICKETS" not in message
 
     def test_no_injection_outside_development_phase(self, ticket_db):
-        from src.core.database import Phase, Ticket, Workflow
+        from src.core.database import Agent, Phase, Ticket, Workflow
 
         with ticket_db.session_scope() as session:
             session.add(
@@ -330,6 +331,7 @@ class TestOpenTicketsInjection:
                     done_definitions=["done"],
                 )
             )
+            session.add(Agent(id="agent-qa", system_prompt="t", cli_type="pi"))
             session.add(
                 Ticket(
                     id="ticket-abc12345",
@@ -356,9 +358,13 @@ class _FakePhaseManagerForPhaseName:
     """Like _FakePhaseManagerWithContext, but lets the test pick the phase
     name so it can land on a real shared or unique session_role."""
 
-    def __init__(self, phase_name: str):
+    def __init__(self, phase_name: str, role_previously_completed: bool = False):
         self.workflow_id = "wf-456"
         self._phase_name = phase_name
+        self._role_previously_completed = role_previously_completed
+
+    def phase_role_previously_completed(self, phase_id, role):
+        return self._role_previously_completed
 
     def get_phase_context(self, phase_id):
         sdk_phase = SdkPhase(
@@ -388,9 +394,11 @@ class TestResumedSessionWarning:
     the agent to infer a hard task boundary from a fresh ID alone.
     """
 
-    def test_warns_when_phase_shares_a_session_role(self):
+    def test_warns_when_an_earlier_same_role_phase_already_completed(self):
         builder = AgentPromptBuilder(
-            phase_manager=_FakePhaseManagerForPhaseName("architectural_review")
+            phase_manager=_FakePhaseManagerForPhaseName(
+                "architectural_review", role_previously_completed=True
+            )
         )
         message = builder.format_initial_message(
             task=_FakeTask(), agent_id="agent-abc"
@@ -401,9 +409,151 @@ class TestResumedSessionWarning:
 
     def test_no_warning_for_a_phase_with_a_unique_role(self):
         builder = AgentPromptBuilder(
-            phase_manager=_FakePhaseManagerForPhaseName("development")
+            phase_manager=_FakePhaseManagerForPhaseName(
+                "development", role_previously_completed=False
+            )
         )
         message = builder.format_initial_message(
             task=_FakeTask(), agent_id="agent-abc"
         )
+        assert "RESUMED SESSION" not in message
+
+    def test_no_warning_for_the_first_occurrence_of_a_shared_role(self):
+        """Regression: architecture_design is the FIRST phase in the
+        pipeline to use the "architect" role. A role appearing more than
+        once in workflow.yaml's session_roles used to be treated, by
+        itself, as evidence the session was reused -- so this phase's very
+        first, session-less invocation was told its session was
+        "previously used" and "already complete", directly contradicting
+        pi's own "No project session found ... creating a new session"
+        log line for that exact session id. Confirmed live for task
+        52f22f1f (architecture_design phase, apple-foundation-integration
+        feature).
+        """
+        builder = AgentPromptBuilder(
+            phase_manager=_FakePhaseManagerForPhaseName(
+                "architecture_design", role_previously_completed=False
+            )
+        )
+        message = builder.format_initial_message(
+            task=_FakeTask(), agent_id="agent-abc"
+        )
+        assert "RESUMED SESSION" not in message
+
+
+class _FakePhaseManagerFull:
+    """Supports every method format_initial_message calls on phase_manager,
+    with real non-empty content behind each one -- used to prove resumed-
+    session trimming actually SKIPS content that would otherwise be
+    present, rather than content that just happened to be empty already."""
+
+    def __init__(self, phase_name: str, role_previously_completed: bool):
+        self.workflow_id = "wf-456"
+        self._phase_name = phase_name
+        self._role_previously_completed = role_previously_completed
+
+    def get_workflow(self, workflow_id):
+        return type("W", (), {"description": "Build a URL shortener with analytics."})()
+
+    def get_workflow_config(self, workflow_id):
+        return type(
+            "C",
+            (),
+            {
+                "enable_tickets": True,
+                "result_criteria": "All tests pass and the feature is deployed.",
+            },
+        )()
+
+    def get_phase_context(self, phase_id):
+        sdk_phase = SdkPhase(
+            id=1,
+            name=self._phase_name,
+            description="Do the thing",
+            done_definitions=["done"],
+            working_directory=".",
+        )
+        return PhaseContext(
+            phase_id=phase_id,
+            workflow_id=self.workflow_id,
+            phase=sdk_phase,
+            all_phases=[sdk_phase],
+            current_status="in_progress",
+        )
+
+    def phase_role_previously_completed(self, phase_id, role):
+        return self._role_previously_completed
+
+
+class TestResumedSessionTrimming:
+    """Regression: a resumed session used to get the FULL initial-message
+    template resent every time -- workflow description, ticket/result-
+    criteria rules, and the entire tool-call instructions block -- even
+    though pi already has all of that in its conversation history from the
+    earlier phase that established the shared session. Only genuinely new
+    content (task id/description, completion criteria, updated pipeline
+    position, live open tickets, the resumed-session warning) needs to be
+    sent again.
+    """
+
+    def test_resumed_session_omits_static_workflow_content(self):
+        builder = AgentPromptBuilder(
+            phase_manager=_FakePhaseManagerFull(
+                "architectural_review", role_previously_completed=True
+            )
+        )
+        message = builder.format_initial_message(
+            task=_FakeTask(), agent_id="agent-abc"
+        )
+        assert "Build a URL shortener" not in message
+        assert "WORKFLOW-LEVEL GOAL" not in message
+        assert "Ticket tracking is ON" not in message
+        assert "RESUMED SESSION" in message
+
+    def test_resumed_session_omits_full_tool_instructions_but_keeps_reminder(self):
+        builder = AgentPromptBuilder(
+            phase_manager=_FakePhaseManagerFull(
+                "architectural_review", role_previously_completed=True
+            )
+        )
+        message = builder.format_initial_message(
+            task=_FakeTask(), agent_id="agent-abc"
+        )
+        assert "FILE PLACEMENT" not in message
+        assert "hephaestus_search_memory" not in message
+        assert "unchanged from earlier in this session" in message
+        status_lines = [
+            line
+            for line in message.splitlines()
+            if "hephaestus_update_task_status(" in line
+        ]
+        assert status_lines, "expected at least one update_task_status example"
+        for line in status_lines:
+            assert 'task_id="task-123"' in line
+            assert 'agent_id="agent-abc"' in line
+
+    def test_resumed_session_keeps_pipeline_position(self):
+        builder = AgentPromptBuilder(
+            phase_manager=_FakePhaseManagerFull(
+                "architectural_review", role_previously_completed=True
+            )
+        )
+        message = builder.format_initial_message(
+            task=_FakeTask(), agent_id="agent-abc"
+        )
+        assert "Pipeline (use phase=N" in message
+
+    def test_non_resumed_session_keeps_all_static_content(self):
+        builder = AgentPromptBuilder(
+            phase_manager=_FakePhaseManagerFull(
+                "architecture_design", role_previously_completed=False
+            )
+        )
+        message = builder.format_initial_message(
+            task=_FakeTask(), agent_id="agent-abc"
+        )
+        assert "Build a URL shortener" in message
+        assert "WORKFLOW-LEVEL GOAL" in message
+        assert "Ticket tracking is ON" in message
+        assert "FILE PLACEMENT" in message
         assert "RESUMED SESSION" not in message

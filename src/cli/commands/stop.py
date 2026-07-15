@@ -26,22 +26,44 @@ def run(args):
     except Exception:
         port = 8300
 
-    # First, kill ALL processes on the backend port to prevent stale processes
+    # First, kill ALL processes on the backend port to prevent stale processes.
+    # Block until the processes themselves fully exit instead of a flat
+    # sleep(1) or a port-LISTEN check -- a graceful ASGI shutdown unbinds the
+    # listening socket quickly but can keep the process alive much longer
+    # finishing in-flight background work (e.g. a spec-gate evaluation's
+    # multi-minute pytest subprocess). A port-only check declares success
+    # while the OLD process is still alive underneath, sharing the same
+    # database as the freshly-started one -- observed live: a stale
+    # pre-restart evaluation finished ~7 minutes late and silently clobbered
+    # state a legitimately-running agent (started by the NEW process after
+    # the restart) had just changed. Checking actual process liveness
+    # (is_process_running), not just the port, closes that gap.
     try:
         result = subprocess.run(
             ["lsof", "-ti", f":{port}"], capture_output=True, text=True
         )
-        if result.stdout.strip():
-            pids = result.stdout.strip().split("\n")
-            for pid_str in pids:
+        pids = [int(p) for p in result.stdout.strip().split("\n") if p.strip()]
+        if pids:
+            for pid in pids:
                 try:
-                    pid = int(pid_str)
-                    sig = signal.SIGKILL if args.force else signal.SIGTERM
-                    os.kill(pid, sig)
+                    os.kill(pid, signal.SIGKILL if args.force else signal.SIGTERM)
                     stopped[f"port-{port}-pid-{pid}"] = "killed"
                 except (OSError, ValueError):
                     pass
-            time.sleep(1)
+
+            for _ in range(10):
+                time.sleep(0.5)
+                if not any(is_process_running(pid) for pid in pids):
+                    break
+            else:
+                # Didn't shut down gracefully within 5s -- force it so
+                # `start` never mistakes it for still running.
+                for pid in pids:
+                    try:
+                        os.kill(pid, signal.SIGKILL)
+                    except OSError:
+                        pass
+                time.sleep(1)
     except Exception:
         pass
 

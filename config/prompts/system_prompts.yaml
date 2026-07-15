@@ -153,6 +153,20 @@ phase_agent_instructions: |
   {phase_context_section}
   Begin now.
 
+# Condensed instructions for a genuinely RESUMED phase-agent session (shares
+# a session_role with an earlier, already-completed phase in this same
+# workflow, so pi resumes the same conversation). The full tool-call
+# conventions, workflow description, and ticket/result-criteria rules below
+# were already delivered verbatim on this session's first turn -- restating
+# them on every subsequent phase just bloats context for no new information.
+phase_agent_resumed_instructions: |
+  Reminder (agent_id="{agent_id}"): this is a NEW task assignment in your existing session, not a new agent.
+  - hephaestus_update_task_status(task_id="{task_id}", agent_id="{agent_id}", status="done") — REQUIRED when done
+  - hephaestus_update_task_status(task_id="{task_id}", agent_id="{agent_id}", status="failed", failure_reason="...") — on unrecoverable error
+  Everything else about the tools (create_task, save_memory, search_memory, file placement, ticket rules if any) is unchanged from earlier in this session.
+  {phase_context_section}
+  Begin now.
+
 # Non-phase agent instructions template
 non_phase_agent_instructions: |
   INSTRUCTIONS (agent_id="{agent_id}"):

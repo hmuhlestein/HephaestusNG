@@ -476,6 +476,40 @@ class TaskCompletionService:
             task.action = "goto"
             task.has_results = True
             session.commit()
+
+            # mark_phase_complete only decides the goto and closes THIS
+            # phase's execution -- it deliberately doesn't create the
+            # target phase's task itself (that's _fire_phase_transition's
+            # job, mirrored here). Without this, the target phase's
+            # PhaseExecution stays "completed" from its own earlier,
+            # unrelated pass, so _advance_phases's background sweep never
+            # sees it as needing new work -- it just keeps marching
+            # forward by phase order from the highest completed phase and
+            # picks the next PENDING phase instead, silently skipping the
+            # goto entirely. Observed live: an adversarial_review gate
+            # found 4 BLOCKER findings and decided "GOTO development", but
+            # the pipeline proceeded straight to security_review with the
+            # blockers never addressed.
+            from src.autopilot.orchestrator import _create_phase_task
+
+            metadata = result.get("metadata") or {}
+            feedback = (
+                metadata.get("spec_gate", {}).get("reason")
+                or result.get("reason")
+                or None
+            )
+            await loop.run_in_executor(
+                None,
+                functools.partial(
+                    _create_phase_task,
+                    task.workflow_id,
+                    result["target_phase_id"],
+                    result.get("target_phase"),
+                    "goto",
+                    logger,
+                    feedback=feedback,
+                ),
+            )
         elif result.get("action") == "continue":
             logger.info(f"[SPEC-GATE] {phase.name}: PASSED (score >= 0.7)")
 

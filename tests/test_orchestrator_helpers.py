@@ -2727,6 +2727,67 @@ class TestWorkflowAppearsAbandoned:
         assert _workflow_appears_abandoned("wf-1") is False
 
 
+class TestUpdateResumedWorkflowRecoveryAttempts:
+    """Regression: run_continuous_pipeline's resume-across-restart path
+    used to increment its recovery-attempts counter on every scan a
+    workflow wasn't 100% complete, with no regard for whether real work
+    was actively happening -- so ANY workflow not fully done within ~6
+    scans of an orchestrator restart got force-failed, even mid-phase with
+    a live agent. Observed live: adversarial_review's agent completed its
+    task successfully, and the workflow was force-failed about two minutes
+    later anyway, purely because enough scans had elapsed since the last
+    backend restart."""
+
+    def test_resets_to_zero_on_real_activity(self, orch_db_env, monkeypatch):
+        from src.autopilot.orchestrator import (
+            _update_resumed_workflow_recovery_attempts,
+        )
+
+        monkeypatch.setattr(
+            "src.autopilot.orchestrator._workflow_appears_abandoned",
+            lambda wf_id: False,
+        )
+
+        assert _update_resumed_workflow_recovery_attempts("wf-1", 5) == 0
+
+    def test_increments_when_genuinely_abandoned(self, orch_db_env, monkeypatch):
+        from src.autopilot.orchestrator import (
+            _update_resumed_workflow_recovery_attempts,
+        )
+
+        monkeypatch.setattr(
+            "src.autopilot.orchestrator._workflow_appears_abandoned",
+            lambda wf_id: True,
+        )
+
+        assert _update_resumed_workflow_recovery_attempts("wf-1", 3) == 4
+
+    def test_a_single_active_scan_prevents_escalation_across_many_calls(
+        self, orch_db_env, monkeypatch
+    ):
+        """A workflow that's abandoned on most scans but shows one real
+        activity blip in between must never reach the kill threshold from
+        that blip's contribution -- each abandoned run has to restart from
+        zero after it."""
+        from src.autopilot.orchestrator import (
+            _update_resumed_workflow_recovery_attempts,
+        )
+
+        abandoned_flags = iter([True, True, True, False, True, True, True])
+        monkeypatch.setattr(
+            "src.autopilot.orchestrator._workflow_appears_abandoned",
+            lambda wf_id: next(abandoned_flags),
+        )
+
+        attempts = 0
+        seen = []
+        for _ in range(7):
+            attempts = _update_resumed_workflow_recovery_attempts("wf-1", attempts)
+            seen.append(attempts)
+
+        assert seen == [1, 2, 3, 0, 1, 2, 3]
+
+
 class TestEscalateStaleActiveWorkflows:
     """Regression: run_continuous_pipeline's "wait for active workflow"
     gate had no escalation/timeout -- a workflow stuck "active" in the DB

@@ -566,6 +566,54 @@ class PhaseManager:
         finally:
             session.close()
 
+    def phase_role_previously_completed(self, phase_id: str, role: str) -> bool:
+        """Check whether an EARLIER phase in this same workflow shares the
+        given session role and has already completed.
+
+        Session IDs are deterministic per (project, design, role, model) --
+        see get_session_id in src.autopilot.phases -- so a phase only
+        resumes a genuine prior pi conversation if an earlier-ordered phase
+        mapped to the same role actually ran before it. A role appearing
+        more than once in the pipeline config is not by itself evidence of
+        reuse: the *first* phase to use a shared role has no prior session
+        either.
+        """
+        from src.autopilot.phases import SESSION_ROLES
+
+        session = self.db_manager.get_session()
+        try:
+            phase = session.query(Phase).filter_by(id=phase_id).first()
+            if not phase:
+                return False
+
+            earlier_phases = (
+                session.query(Phase)
+                .filter(
+                    Phase.workflow_id == phase.workflow_id,
+                    Phase.order < phase.order,
+                )
+                .all()
+            )
+            earlier_same_role_ids = [
+                p.id
+                for p in earlier_phases
+                if SESSION_ROLES.get(p.name, p.name) == role
+            ]
+            if not earlier_same_role_ids:
+                return False
+
+            completed = (
+                session.query(PhaseExecution)
+                .filter(
+                    PhaseExecution.phase_id.in_(earlier_same_role_ids),
+                    PhaseExecution.status == "completed",
+                )
+                .first()
+            )
+            return completed is not None
+        finally:
+            session.close()
+
     def check_phase_completion(self, phase_id: str) -> bool:
         """Check if a phase is complete based on its done_definitions.
 
