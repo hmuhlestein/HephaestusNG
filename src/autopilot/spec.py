@@ -938,6 +938,19 @@ def read_result(
                 return json.loads(candidate.read_text())
             except Exception:
                 return None
+    # Fallback: search subdirectories of docs/ (agents sometimes write to
+    # feature-specific subdirectories instead of root docs/)
+    if subdir is None:
+        docs_dir = base / "docs"
+        if docs_dir.is_dir():
+            for sub in docs_dir.iterdir():
+                if sub.is_dir():
+                    candidate = sub / filename
+                    if candidate.exists():
+                        try:
+                            return json.loads(candidate.read_text())
+                        except Exception:
+                            return None
     return None
 
 
@@ -962,6 +975,19 @@ def read_report_text(
                 return candidate.read_text()
             except Exception:
                 return None
+    # Fallback: search subdirectories of docs/ (agents sometimes write to
+    # feature-specific subdirectories instead of root docs/)
+    if subdir is None:
+        docs_dir = base / "docs"
+        if docs_dir.is_dir():
+            for sub in docs_dir.iterdir():
+                if sub.is_dir():
+                    candidate = sub / filename
+                    if candidate.exists():
+                        try:
+                            return candidate.read_text()
+                        except Exception:
+                            return None
     return None
 
 
