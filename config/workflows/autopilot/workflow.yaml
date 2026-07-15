@@ -30,8 +30,12 @@ required_output:
   adversarial_review:
     - adversarial_review_report.md
     - adversarial_review_result.json
-  qa_validation: qa_result.json
-  product_validation: product_validation.json
+  qa_validation:
+    - qa_report.md
+    - qa_result.json
+  product_validation:
+    - product_validation.md
+    - product_validation.json
 
 # Optional phases that can fail without blocking the pipeline.
 # All other phases are required — if they fail after MAX_PHASE_ATTEMPTS,
