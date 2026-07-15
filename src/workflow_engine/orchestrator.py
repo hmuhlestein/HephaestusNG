@@ -337,16 +337,18 @@ class WorkflowOrchestrator:
         # Common phase name patterns
         name_to_order = {
             "product_requirements": 1,
-            "architecture_design": 2,
-            "architecture": 2,
-            "development": 3,
-            "adversarial_review": 4,
-            "security_review": 5,
-            "qa_validation": 6,
-            "product_validation": 7,
-            "doc_review": 8,
-            "git_commit_push": 9,
-            "forensics_analysis": 10,
+            "scope_review": 2,
+            "architecture_design": 3,
+            "architecture": 3,
+            "development": 4,
+            "architectural_review": 5,
+            "adversarial_review": 6,
+            "security_review": 7,
+            "qa_validation": 8,
+            "product_validation": 9,
+            "doc_review": 10,
+            "git_commit_push": 11,
+            "forensics_analysis": 12,
         }
 
         # Try exact match
