@@ -229,6 +229,14 @@ additional_notes: |
   - If a file is missing, fix the code that should have created it — don't add
     `if path.exists() ... else use_fallback`.
   - Every fallback you add is a future production incident hiding in plain sight.
+
+  ### Log Every Exception and Error
+  - Every `except` block MUST log the exception. No silent catches.
+  - Use `logger.exception(msg)` or `logger.error(f"{msg}: {e}")` — include the error.
+  - If you re-raise, log before raising.
+  - If you return a fallback value, log the error before returning.
+  - The only acceptable silent catch is in a cleanup/teardown path where the original
+    operation already succeeded and logging would be noise.
   
   ═══════════════════════════════════════════════════════════════════════
   STEP 5: CREATE PHASE 4 REVIEW TASKS

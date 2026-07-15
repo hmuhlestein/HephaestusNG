@@ -144,6 +144,15 @@ additional_notes: |
   - Is the module dependency graph acyclic, or do low-level modules import from
     high-level ones?
 
+  ### 2j. Root Causes and Silent Failures
+  - Does any code catch exceptions and return a fallback value instead of fixing
+    the root cause? (Unless the design explicitly calls for a fallback.)
+  - Is any `except` block silent — no logging, no re-raise, just swallowed?
+  - Does any code use `if x is None: x = default` instead of fixing the caller?
+  - Does any code use `if path.exists() ... else fallback` instead of fixing the
+    code that should have created the file?
+  - Is every exception and error logged with enough context to diagnose it?
+
   ═══════════════════════════════════════════════════════════════════════
   STEP 3: CONFIRM BEFORE REPORTING
   ═══════════════════════════════════════════════════════════════════════
@@ -181,7 +190,7 @@ additional_notes: |
 
   **Reviewer:** Adversarial (failure-mode analysis)
   **Date:** {date}
-  **Attack vectors applied:** [list the 2a–2i lenses above]
+  **Attack vectors applied:** [list the 2a–2j lenses above]
 
   ## Summary
   - **BLOCKERs:** [count] — process death, data corruption, or silent wrong result
