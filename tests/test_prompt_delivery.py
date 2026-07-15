@@ -135,6 +135,43 @@ async def test_send_initial_prompt_without_verification(
 
 
 @pytest.mark.asyncio
+async def test_chunks_are_never_individually_submitted(
+    agent_manager, mock_pane, mock_cli_agent
+):
+    """Regression: the chunk loop called pane.send_keys(chunk) with no
+    explicit enter -- but libtmux's send_keys defaults enter=True, so every
+    2500-char chunk was SUBMITTED as its own message. Observed live with a
+    pi agent: it started working off the first fragment alone, while each
+    later chunk arrived mid-run and queued up as a garbled mid-word
+    "Steering:" message. Every chunk must pass enter=False; only the final
+    empty send may press Enter.
+    """
+    task_id = "test-task-456"
+    # Long enough for 3+ chunks at the 2500-char chunk size.
+    initial_message = f"Task ID: {task_id}\n" + ("x" * 8000)
+
+    await agent_manager._send_initial_prompt_with_retry(
+        pane=mock_pane,
+        cli_agent=mock_cli_agent,
+        cli_type="pi",
+        initial_message=initial_message,
+        agent_id="test-agent-123",
+        task_id=task_id,
+        verify_delivery=False,
+    )
+
+    calls = mock_pane.send_keys.call_args_list
+    assert len(calls) >= 4, "expected 3+ chunks plus the final Enter"
+    *chunk_calls, submit_call = calls
+    for call in chunk_calls:
+        assert call.kwargs.get("enter") is False, (
+            f"chunk submitted early (libtmux defaults enter=True): {call}"
+        )
+    assert submit_call.args[0] == ""
+    assert submit_call.kwargs.get("enter") is True
+
+
+@pytest.mark.asyncio
 async def test_send_initial_prompt_with_retry_success_first_attempt(
     agent_manager, mock_pane, mock_cli_agent
 ):

@@ -262,5 +262,50 @@ def test_load_spec_missing_file_is_defaults(tmp_path):
     assert S.load_spec(tmp_path / "nope.json") == S.DEFAULT_SPEC
 
 
+class TestConsumeGateArtifacts:
+    """Regression: after a gate's goto decision fired, the result files its
+    score was computed from stayed on disk. The re-run agent's output floor
+    only checks the report EXISTS (not that it's fresh), and the gate
+    re-scores the same stale file -- observed live: development genuinely
+    fixed all 4 BLOCKERs, but every adversarial_review re-run re-scored the
+    pre-fix result.json (blocker_count=4) and looped the pipeline back to
+    development, burning one goto per cycle."""
+
+    def test_deletes_result_and_report_from_docs(self, tmp_path):
+        docs = tmp_path / "docs"
+        docs.mkdir()
+        (docs / "adversarial_review_result.json").write_text("{}")
+        (docs / "adversarial_review_report.md").write_text("# report")
+
+        deleted = S.consume_gate_artifacts("adversarial_review", tmp_path)
+
+        assert len(deleted) == 2
+        assert not (docs / "adversarial_review_result.json").exists()
+        assert not (docs / "adversarial_review_report.md").exists()
+
+    def test_unknown_phase_is_a_noop(self, tmp_path):
+        docs = tmp_path / "docs"
+        docs.mkdir()
+        (docs / "something.json").write_text("{}")
+
+        assert S.consume_gate_artifacts("development", tmp_path) == []
+        assert (docs / "something.json").exists()
+
+    def test_missing_files_return_empty(self, tmp_path):
+        assert S.consume_gate_artifacts("adversarial_review", tmp_path) == []
+
+    def test_every_mapped_artifact_gets_consumed(self, tmp_path):
+        """Guardrail: for each mapped phase, writing then consuming its
+        artifacts must leave the gate scorer with nothing stale to read."""
+        docs = tmp_path / "docs"
+        docs.mkdir()
+        for phase_name, filenames in S.GATE_RESULT_ARTIFACTS.items():
+            for filename in filenames:
+                (docs / filename).write_text("{}")
+            S.consume_gate_artifacts(phase_name, tmp_path)
+            for filename in filenames:
+                assert not (docs / filename).exists(), (phase_name, filename)
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "-p", "no:libtmux"])

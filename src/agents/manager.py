@@ -1010,7 +1010,13 @@ class AgentManager:
 
                 for i in range(0, len(formatted_message), chunk_size):
                     chunk = formatted_message[i : i + chunk_size]
-                    pane.send_keys(chunk)  # No enter=True, just send the text
+                    # enter=False is required: libtmux's send_keys defaults
+                    # enter=True, which SUBMITS each chunk as its own message.
+                    # Observed live with pi: the agent started working off the
+                    # first 2500-char fragment alone, while every later chunk
+                    # arrived mid-run and queued up as a garbled mid-word
+                    # "Steering:" message.
+                    pane.send_keys(chunk, enter=False)
                     await asyncio.sleep(
                         0.2
                     )  # Delay between chunks to avoid overwhelming tmux
@@ -1059,7 +1065,10 @@ class AgentManager:
 
                 for i in range(0, len(formatted_message), chunk_size):
                     chunk = formatted_message[i : i + chunk_size]
-                    pane.send_keys(chunk)  # No enter=True, just send the text
+                    # enter=False: see the verification-disabled branch above --
+                    # libtmux defaults enter=True, which submits each chunk as
+                    # its own message instead of accumulating one prompt.
+                    pane.send_keys(chunk, enter=False)
                     await asyncio.sleep(
                         0.1
                     )  # Delay between chunks to avoid overwhelming tmux

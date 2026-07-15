@@ -965,6 +965,65 @@ def read_report_text(
     return None
 
 
+# The result/report files each gated phase's score is computed from --
+# mirrors the filenames build_phase_output reads below (keep in sync).
+# Used by consume_gate_artifacts when a gate's goto decision fires.
+GATE_RESULT_ARTIFACTS: Dict[str, Tuple[str, ...]] = {
+    "scope_review": ("scope_review_result.json",),
+    "architectural_review": (
+        "architectural_review_result.json",
+        "architectural_review_report.md",
+    ),
+    "adversarial_review": (
+        "adversarial_review_result.json",
+        "adversarial_review_report.md",
+    ),
+    "qa_validation": ("qa_result.json",),
+    "product_validation": ("product_validation.json",),
+}
+
+
+def consume_gate_artifacts(phase_name: str, working_directory: Any) -> list:
+    """Delete a gated phase's result artifacts after its goto decision has
+    been acted on (the findings are already threaded into the corrective
+    task's description), so a later re-run of the phase MUST produce fresh
+    ones.
+
+    Without this, the stale files satisfy both the output-existence floor
+    (update_task_status only checks the declared report EXISTS, not that
+    it's fresh) and the gate's own scorer -- observed live: development
+    genuinely fixed all 4 BLOCKERs, but every adversarial_review re-run
+    re-scored the pre-fix result.json (blocker_count=4) and sent the
+    pipeline back to development again, in a loop, burning one goto per
+    cycle until max_total_gotos would have force-failed the workflow.
+
+    The files are safe to delete: task completion commits docs/ to the
+    worktree's git history before the gate fires (commit_and_link_ticket),
+    so nothing is lost.
+
+    Returns the paths actually deleted.
+    """
+    deleted = []
+    base = Path(working_directory)
+    for filename in GATE_RESULT_ARTIFACTS.get(phase_name, ()):
+        for candidate in (base / "docs" / filename, base / filename):
+            if candidate.exists():
+                try:
+                    candidate.unlink()
+                    deleted.append(str(candidate))
+                except OSError as e:
+                    logger.warning(
+                        f"[SPEC-GATE] Could not remove consumed gate artifact "
+                        f"{candidate}: {e}"
+                    )
+    if deleted:
+        logger.info(
+            f"[SPEC-GATE] {phase_name}: consumed gate artifacts after goto "
+            f"(re-run must regenerate them): {deleted}"
+        )
+    return deleted
+
+
 def build_phase_output(
     phase_name: str,
     working_directory: Any,

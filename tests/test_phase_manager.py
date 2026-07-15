@@ -613,3 +613,131 @@ class TestPhaseRolePreviouslyCompleted:
         assert pm.phase_role_previously_completed(
             "phase-arch-design", "architect"
         ) is False
+
+
+class TestEvaluationGotoConsumesGateArtifacts:
+    """Regression: _handle_evaluation_goto acted on a gate's findings but
+    left the result files the score came from on disk -- a later re-run of
+    the gate phase re-scored the same stale files and sent the pipeline
+    back to development again, in a loop (see
+    spec.consume_gate_artifacts)."""
+
+    def test_goto_deletes_the_gate_phases_result_files(self, real_db, tmp_path):
+        from types import SimpleNamespace
+
+        from src.core.database import Phase, PhaseExecution, Workflow
+        from src.phases.phase_manager import PhaseManager
+
+        docs = tmp_path / "docs"
+        docs.mkdir()
+        (docs / "adversarial_review_result.json").write_text('{"blocker_count": 4}')
+        (docs / "adversarial_review_report.md").write_text("# stale report")
+
+        with real_db.session_scope() as session:
+            session.add(
+                Workflow(
+                    id="wf-1", name="t", phases_folder_path="/tmp",
+                    working_directory=str(tmp_path), status="active",
+                )
+            )
+            session.add(
+                Phase(
+                    id="phase-dev", workflow_id="wf-1", order=4,
+                    name="development", description="d", done_definitions=["x"],
+                )
+            )
+            session.add(
+                Phase(
+                    id="phase-adv", workflow_id="wf-1", order=6,
+                    name="adversarial_review", description="d", done_definitions=["x"],
+                )
+            )
+            session.add(
+                PhaseExecution(
+                    id="exec-adv", phase_id="phase-adv",
+                    workflow_execution_id="wf-1", status="in_progress",
+                )
+            )
+
+        pm = PhaseManager(db_manager=real_db)
+        pm.workflow_id = "wf-1"
+
+        session = real_db.get_session()
+        try:
+            phase = session.query(Phase).filter_by(id="phase-adv").first()
+            execution = (
+                session.query(PhaseExecution).filter_by(phase_id="phase-adv").first()
+            )
+            evaluation = SimpleNamespace(
+                target_phase="development",
+                reason="4 BLOCKER(s) found",
+                metadata={},
+            )
+
+            result = pm._handle_evaluation_goto(
+                session, phase, execution, "gate fired", evaluation
+            )
+        finally:
+            session.close()
+
+        assert result["action"] == "goto"
+        assert result["target_phase"] == "development"
+        assert not (docs / "adversarial_review_result.json").exists()
+        assert not (docs / "adversarial_review_report.md").exists()
+
+
+class TestForceGotoConsumesGateArtifacts:
+    """Regression: _handle_force_goto (arbitration's goto resolution) had
+    the exact same gap as _handle_evaluation_goto -- an arbiter routing a
+    gated phase back for another attempt left its stale result file on
+    disk, so a later re-run of that phase could re-score the same stale
+    findings and loop the pipeline through arbitration again."""
+
+    def test_force_goto_deletes_the_gate_phases_result_files(self, real_db, tmp_path):
+        from src.core.database import Phase, PhaseExecution, Workflow
+        from src.phases.phase_manager import PhaseManager
+
+        docs = tmp_path / "docs"
+        docs.mkdir()
+        (docs / "qa_result.json").write_text('{"failed_tests": 3}')
+
+        with real_db.session_scope() as session:
+            session.add(
+                Workflow(
+                    id="wf-1", name="t", phases_folder_path="/tmp",
+                    working_directory=str(tmp_path), status="active",
+                )
+            )
+            session.add(
+                Phase(
+                    id="phase-arch", workflow_id="wf-1", order=3,
+                    name="architecture_design", description="d", done_definitions=["x"],
+                )
+            )
+            session.add(
+                Phase(
+                    id="phase-qa", workflow_id="wf-1", order=8,
+                    name="qa_validation", description="d", done_definitions=["x"],
+                )
+            )
+            session.add(
+                PhaseExecution(
+                    id="exec-qa", phase_id="phase-qa", workflow_execution_id="wf-1",
+                    status="in_progress",
+                )
+            )
+
+        pm = PhaseManager(db_manager=real_db)
+        pm.workflow_id = "wf-1"
+
+        result = pm.mark_phase_complete(
+            "phase-qa",
+            "Arbiter: return for another attempt",
+            force_action="goto",
+            force_target_phase="architecture_design",
+            force_reason="arbiter says redo the architecture",
+        )
+
+        assert result["action"] == "goto"
+        assert result["target_phase"] == "architecture_design"
+        assert not (docs / "qa_result.json").exists()
