@@ -20,6 +20,7 @@ export interface Agent {
     description: string;
     status: string;
     priority: string;
+    action?: string;
     started_at: string | null;
     completed_at: string | null;
     runtime_seconds: number;
@@ -49,6 +50,8 @@ export interface Task {
   phase_order?: number | null;
   workflow_id?: string | null;
   ticket_id?: string | null;
+  // Engine action (continue, retry, goto)
+  action?: string | null;
   // Task deduplication fields
   duplicate_of_task_id?: string | null;
   similarity_score?: number | null;
@@ -221,6 +224,7 @@ export interface TaskFullDetails {
   system_prompt: string | null;
   user_prompt: string;
   workflow_id: string | null;
+  action?: string | null;
   // Task deduplication fields
   duplicate_of_task_id?: string | null;
   similarity_score?: number | null;

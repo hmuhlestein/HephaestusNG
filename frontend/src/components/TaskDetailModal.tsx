@@ -325,6 +325,16 @@ ${taskDetails.child_tasks.map((t: any) => `- ${t.description} (${t.status})`).jo
                 {taskDetails && (
                   <>
                     <StatusBadge status={taskDetails.status} />
+                    {taskDetails.action === 'goto' && (
+                      <span className="px-2 py-1 text-xs font-medium bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300 rounded-full">
+                        ↩ goto
+                      </span>
+                    )}
+                    {taskDetails.action === 'retry' && (
+                      <span className="px-2 py-1 text-xs font-medium bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300 rounded-full">
+                        ↻ retry
+                      </span>
+                    )}
                     {taskDetails.phase_info && (
                       <PhaseBadge
                         phaseOrder={taskDetails.phase_info.order}
