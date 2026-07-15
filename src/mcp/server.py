@@ -2416,14 +2416,6 @@ async def update_task_status(
                 session, task
             )
 
-        # 3c. Spec gate firing — when a gated phase task completes and the phase
-        # is now complete, trigger the gate immediately (don't wait for monitor poll).
-        # The orchestrator's _advance_phases only fires when the next phase is
-        # pending — if it's already in_progress, the gate is missed. Fix: fire from
-        # the completion path itself and actually trigger the evaluation.
-        if request.status == "done" and task.phase_id:
-            await TaskCompletionService.fire_spec_gate_if_ready(session, task)
-
         # 4. Check if task has validation enabled
         validation_spawned = False
         if request.status == "done" and task.validation_enabled:
@@ -2479,6 +2471,22 @@ async def update_task_status(
                 await process_queue()
 
             asyncio.create_task(terminate_and_process_queue())
+
+        # 3c. Spec gate firing — when a gated phase task completes and the phase
+        # is now complete, trigger the gate immediately (don't wait for monitor poll).
+        # The orchestrator's _advance_phases only fires when the next phase is
+        # pending — if it's already in_progress, the gate is missed. Fix: fire from
+        # the completion path itself and actually trigger the evaluation.
+        #
+        # Must run AFTER the worktree commit above, not before: a goto decision
+        # deletes the gate phase's result files (consume_gate_artifacts) so a
+        # later re-run can't re-score stale ones. Firing before the commit
+        # deleted a report the agent had just written in the same request,
+        # before it was ever captured in git history -- the file (and its
+        # findings, beyond what's threaded into the corrective task's
+        # description) would be lost outright instead of preserved in a commit.
+        if request.status == "done" and task.phase_id:
+            await TaskCompletionService.fire_spec_gate_if_ready(session, task)
 
         # 5. Broadcast update
         await server_state.broadcast_update(

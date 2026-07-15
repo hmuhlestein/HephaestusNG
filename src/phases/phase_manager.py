@@ -752,6 +752,8 @@ class PhaseManager:
         if stale:
             session.commit()
 
+        self._consume_gate_artifacts_for(session, phase)
+
         return {
             "action": "goto",
             "target_phase": target_phase.name,
@@ -860,6 +862,9 @@ class PhaseManager:
                 logger.info(
                     f"Reset {len(stale)} stale in_progress phase(s) before GOTO to {target_phase.name}"
                 )
+
+            self._consume_gate_artifacts_for(session, phase)
+
             return {
                 "action": "goto",
                 "target_phase": target_phase.name,
@@ -878,6 +883,26 @@ class PhaseManager:
         else:
             logger.warning(f"Target phase not found: {evaluation.target_phase}")
             return self._advance_or_complete(session, phase.id)
+
+    def _consume_gate_artifacts_for(self, session, phase) -> None:
+        """This goto consumed the gate's findings (they're threaded into
+        the corrective task's description) -- delete the result files the
+        score was computed from, or a later re-run of this phase can
+        re-score the same stale files and loop the pipeline back here
+        forever (see spec.consume_gate_artifacts). Shared by
+        _handle_evaluation_goto and _handle_force_goto (arbitration) --
+        both close out a gated phase via a goto decision.
+        """
+        try:
+            from src.autopilot.spec import consume_gate_artifacts
+
+            workflow = (
+                session.query(Workflow).filter_by(id=phase.workflow_id).first()
+            )
+            if workflow and workflow.working_directory:
+                consume_gate_artifacts(phase.name, workflow.working_directory)
+        except Exception as e:
+            logger.warning(f"Could not consume gate artifacts for {phase.name}: {e}")
 
     def _handle_evaluation_arbitrate(
         self, session, phase, execution, summary, evaluation
