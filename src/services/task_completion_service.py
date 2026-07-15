@@ -183,6 +183,64 @@ class TaskCompletionService:
         }
 
     @staticmethod
+    def verify_gate_result_schema(session, task, phase=None) -> Optional[Dict[str, Any]]:
+        """Schema hard floor for gated phases: reject 'done' when the
+        phase's structured JSON result exists (verify_output_artifact
+        already covers it being missing) but has none of the keys its
+        score_* function actually reads.
+
+        Complements verify_output_artifact -- that checks the file EXISTS,
+        this checks it looks like the documented schema. Observed live: a
+        QA agent wrote a custom nested shape instead of the documented flat
+        one; every field score_qa reads defaulted silently to "everything
+        passed" (including critical_issues and requirements_met, which
+        nothing else independently re-verifies), so the gate's judgement
+        checks never actually ran against real content.
+        """
+        from src.autopilot.spec import (
+            GATE_RESULT_ARTIFACTS,
+            GATE_RESULT_SUBDIR,
+            GATED_PHASES,
+            read_result,
+            validate_gate_result_schema,
+        )
+        from src.core.database import Phase
+
+        if phase is None:
+            phase = session.query(Phase).filter_by(id=task.phase_id).first()
+        if not phase or phase.name not in GATED_PHASES:
+            return None
+
+        artifacts = GATE_RESULT_ARTIFACTS.get(phase.name)
+        if not artifacts:
+            return None
+        json_filename = artifacts[0]  # JSON result is always listed first.
+
+        wf = None
+        if task.workflow_id:
+            from src.core.database import Workflow as _WF
+
+            wf = session.query(_WF).filter_by(id=task.workflow_id).first()
+        if not (wf and wf.working_directory):
+            return None  # verify_output_artifact already surfaces this case.
+
+        result = read_result(
+            wf.working_directory, json_filename, subdir=GATE_RESULT_SUBDIR.get(phase.name)
+        )
+        error = validate_gate_result_schema(phase.name, result)
+        if not error:
+            return None
+
+        logger.warning(
+            f"Agent claimed done on {phase.name} but {json_filename} doesn't "
+            f"match the documented schema — rejecting: {error}"
+        )
+        task.status = "failed"
+        task.failure_reason = error
+        session.commit()
+        return {"status": "failed", "message": error}
+
+    @staticmethod
     def verify_no_open_tickets(session, task, phase=None) -> Optional[Dict[str, Any]]:
         """Open-ticket hard floor for development and git_commit_push: reject
         'done' while unresolved bug tickets exist for this workflow.
