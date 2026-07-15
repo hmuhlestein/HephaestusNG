@@ -2613,13 +2613,33 @@ class TestRunOneFeatureWorktreeCleanupTiming:
         assert status == "completed"
         mock_cleanup.assert_called_once()
 
-    @pytest.mark.parametrize("wf_status", ["paused", "interrupted", "timeout", "failed"])
+    @pytest.mark.parametrize("wf_status", ["interrupted", "timeout", "failed"])
     def test_non_completed_statuses_never_clean_up_worktree(
         self, orch_db_env, tmp_path, wf_status
     ):
         status, mock_cleanup = self._run(orch_db_env, tmp_path, wf_status)
         assert status == "failed"
         mock_cleanup.assert_not_called()
+
+    def test_paused_status_reports_paused_not_failed(self, orch_db_env, tmp_path):
+        """Regression: a "paused" wf_status used to be folded into the same
+        generic "failed" bucket as every other non-completed status. Since
+        derive_design_status treats ANY failed feature as design-failed,
+        this permanently killed the whole design's "active" status the
+        moment a later-execution-group feature was created and legitimately
+        sat paused waiting its turn -- even after an earlier group's
+        feature that was genuinely running went on to complete
+        successfully. "paused" must report as "paused", a real
+        FeatureStatus, not get collapsed into "failed"."""
+        status, mock_cleanup = self._run(orch_db_env, tmp_path, "paused")
+        assert status == "paused"
+        mock_cleanup.assert_not_called()
+
+        from src.core.database import Feature
+
+        with orch_db_env.session_scope() as session:
+            feature = session.query(Feature).filter_by(id="feature-row-1").first()
+            assert feature.status == "paused"
 
     def test_exception_mid_pipeline_never_cleans_up_worktree(self, orch_db_env, tmp_path):
         from src.autopilot.orchestrator import OrchestratorLogger, _run_one_feature
