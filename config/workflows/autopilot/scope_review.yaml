@@ -9,6 +9,11 @@ description: |
   extracted requirements exactly match the original design doc scope — no
   additions, no omissions. Returns to product_requirements with specific
   corrections if scope has drifted.
+
+  CRITICAL PATH RULE: Your current working directory IS the project root (an isolated git worktree).
+  - "Project Path" = your working directory (.).  "Docs Path" = ./docs/ (create it if missing).
+  - Write ALL reports to "Docs Path" (./docs/) — NOT the project root.
+  - Write scope_review_result.json to ./docs/
 done_definitions:
   - "Original design doc read from ./.hephaestus/design.md"
   - "./docs/requirements_analysis.md read and compared line-by-line against design doc"
