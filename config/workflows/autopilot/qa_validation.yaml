@@ -10,6 +10,11 @@ description: |
   Executes unit tests, integration tests, and end-to-end validation.
   Compares implementation against requirements and generates a final
   QA report with pass/fail status and recommendations.
+
+  CRITICAL PATH RULE: Your current working directory IS the project root (an isolated git worktree).
+  - "Project Path" = your working directory (.).  "Docs Path" = ./docs/ (create it if missing).
+  - Write ALL reports to "Docs Path" (./docs/) — NOT the project root.
+  - Write qa_report.md and qa_result.json to ./docs/
 done_definitions:
   - "TESTING.md checked (exists or noted as missing)"
   - "TESTING.md read thoroughly (if exists)"

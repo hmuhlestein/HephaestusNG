@@ -11,6 +11,11 @@ description: |
   Compares the implemented feature against the original design document,
   verifies all requirements are met, checks integration with existing system,
   and produces a validation report for human review.
+
+  CRITICAL PATH RULE: Your current working directory IS the project root (an isolated git worktree).
+  - "Project Path" = your working directory (.).  "Docs Path" = ./docs/ (create it if missing).
+  - Write ALL reports to "Docs Path" (./docs/) — NOT the project root.
+  - Write product_validation.md and product_validation.json to ./docs/
 done_definitions:
   - "Original design document re-read and compared to implementation"
   - "All functional requirements verified against working code"
