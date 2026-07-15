@@ -65,7 +65,9 @@ workflow:
 # pass subdir=CONTEXT_DIR_NAME explicitly to match.
 required_output:
   Feature Architect: features.json
-  feature_review: feature_review_result.json
+  feature_review:
+    - feature_review_report.md
+    - feature_review_result.json
 
 launch_template:
   parameters:

@@ -137,11 +137,14 @@ def _extract_declared_files(outputs: Any) -> list:
 def get_phase_required_files(phase: Any, workflow_id: Optional[str] = None) -> list:
     """The list of output files `phase` must produce for its 'done' claim
     to be accepted, derived from its own YAML-declared `outputs:` (stored on
-    Phase.outputs), with an optional single-file override from
-    workflow.yaml's `required_output:` block.
+    Phase.outputs), with an optional override from workflow.yaml's
+    `required_output:` block (string or list).
     """
     override = load_phase_output_artifacts(workflow_id).get(phase.name)
     if override:
+        # Support both string and list values
+        if isinstance(override, list):
+            return override
         return [override]
     return _extract_declared_files(getattr(phase, "outputs", None))
 
