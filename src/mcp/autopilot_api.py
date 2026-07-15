@@ -347,7 +347,7 @@ async def get_pipeline_status(
     project_id: Optional[str] = None,
     project_path: Optional[str] = None,
 ):
-    from src.autopilot.service import get_autopilot_service
+    from src.autopilot.service import get_autopilot_service, get_registry
 
     # project_path must be part of the key too, not just project_id: the
     # self-conflict check calls this with project_id=None (global status)
@@ -360,8 +360,34 @@ async def get_pipeline_status(
     if cached is not None:
         return cached
 
-    service = get_autopilot_service()
-    service_status = service.status()
+    # AutopilotService is now per-project (see get_registry) -- there's no
+    # longer a single global service to ask when project_id isn't given, so
+    # the "any project running" fallback used below relies on the DB check,
+    # not service_status. When project_id IS given, ask that project's own
+    # service directly instead of the DB-workaround this endpoint used
+    # before per-project services existed (kept below as a belt-and-
+    # suspenders check, not the primary source of truth anymore).
+    if project_id:
+        service_status = get_autopilot_service(project_id).status()
+    else:
+        # PipelineStatus is a single-object shape (running_project_path/
+        # running_project_name are singular fields, by the same pre-multi-
+        # project assumption noted on those fields above) -- it can't
+        # represent "N projects running" without a schema change. Sum what
+        # CAN be honestly aggregated (counts) across every running project
+        # instead of arbitrarily reporting only the first one's numbers;
+        # current_design/elapsed_seconds/error still reflect just one
+        # project (the first), since those genuinely have no multi-project
+        # representation in this response shape.
+        running_services = get_registry().running()
+        if running_services:
+            service_status = dict(running_services[0].status())
+            for extra in running_services[1:]:
+                extra_status = extra.status()
+                for key in ("designs_processed", "designs_succeeded", "designs_failed"):
+                    service_status[key] = service_status.get(key, 0) + extra_status.get(key, 0)
+        else:
+            service_status = {}
 
     run_dir = _get_latest_run_dir()
     running = service_status.get("running", False)
@@ -434,7 +460,9 @@ async def get_pipeline_status(
             try:
                 from src.autopilot.orchestrator import PersistentPipelineState
 
-                state_obj, _processed = PersistentPipelineState().load()
+                state_obj, _processed = PersistentPipelineState(
+                    project_id=project_id
+                ).load()
                 state = state_obj.to_dict()
             except Exception:
                 state = {}
@@ -787,11 +815,14 @@ async def rerun_design(request: dict):
     # src/autopilot/service.py's module docstring for why the in-process
     # service replaced the subprocess approach in the first place.
     try:
+        from src.autopilot.orchestrator import _resolve_project_id
         from src.autopilot.service import get_autopilot_service
 
-        service = get_autopilot_service()
-        if service.running:
-            await service.stop()
+        rerun_project_id = _resolve_project_id(str(project))
+        if rerun_project_id:
+            service = get_autopilot_service(rerun_project_id)
+            if service.running:
+                await service.stop()
     except Exception as e:
         logger.error(f"Error stopping in-process pipeline for rerun: {e}")
 
@@ -988,25 +1019,47 @@ async def rerun_design(request: dict):
     _save_queue_order(order)
     _invalidate("queue")
 
+    # Resolved once and reused below -- clearing pipeline state (Step 5) and
+    # starting the pipeline (Step 6) must scope to the SAME project, not two
+    # independently-resolved ids.
+    from src.autopilot.orchestrator import _get_or_create_project_id
+
+    rerun_start_project_id = _get_or_create_project_id(str(project))
+
     # Step 5: Clear pipeline state so orchestrator starts fresh
     try:
         from src.autopilot.orchestrator import PersistentPipelineState
 
-        PersistentPipelineState().clear()
+        PersistentPipelineState(project_id=rerun_start_project_id).clear()
     except Exception as e:
         logger.error(f"Error clearing pipeline state: {e}")
 
     # Step 6: Start pipeline via the in-process AutopilotService (the same
     # singleton the play/pause button drives), not a spawned subprocess.
     try:
-        from src.autopilot.service import get_autopilot_service
+        from src.autopilot.service import get_autopilot_service, get_registry
 
-        service = get_autopilot_service()
-        await service.start(
-            project_path=str(project),
-            design_queue=str(queue_dir),
-            max_iterations=3,
-        )
+        # Same concurrency-cap check POST /start enforces -- without this,
+        # rerun could start a brand-new, not-yet-running project's pipeline
+        # even while already at max_concurrent_projects, silently exceeding
+        # the cap that starting the identical project via POST /start would
+        # have rejected with a 409. try_reserve (not can_start) also closes
+        # the TOCTOU race between two concurrent starts both checking the
+        # cap before either has actually started -- release it as soon as
+        # service.start() resolves, success or not.
+        can_start, cap_message = get_registry().try_reserve(rerun_start_project_id)
+        if not can_start:
+            raise HTTPException(409, cap_message)
+
+        service = get_autopilot_service(rerun_start_project_id)
+        try:
+            await service.start(
+                project_path=str(project),
+                design_queue=str(queue_dir),
+                max_iterations=3,
+            )
+        finally:
+            get_registry().release_reservation(rerun_start_project_id)
 
         # Wait for new workflow to be created (up to 15 seconds). asyncio.sleep,
         # not time.sleep -- this is an async route handler, and a blocking
@@ -2285,7 +2338,7 @@ async def remove_project_design(project_id: str, filename: str):
             content = filename.encode()
         h = hashlib.sha256(content).hexdigest()[:16]
 
-        PersistentPipelineState().remove_processed_hash(h)
+        PersistentPipelineState(project_id=project_id).remove_processed_hash(h)
     except Exception:
         pass  # Non-critical
 
@@ -2459,7 +2512,7 @@ async def get_project_design_status(project_id: str, filename: str):
         # over workflow-level heuristics, because workflow statuses may include
         # retries, gotos, or partial failures that don't reflect final outcome.
         _design_id = None
-        design_error = None
+        _design_raw_error = None
         with get_db() as _db:
             _design = (
                 _db.query(AutopilotDesign)
@@ -2474,7 +2527,7 @@ async def get_project_design_status(project_id: str, filename: str):
                 # written by run_design_aggregate at the very end of a run.
                 design_status = derive_design_status(_db, _design.id, write_back=True)
                 _design_id = _design.id
-                design_error = _design.error
+                _design_raw_error = _design.error
             else:
                 design_status = None
 
@@ -2500,6 +2553,13 @@ async def get_project_design_status(project_id: str, filename: str):
                 overall_status = "failed"
             else:
                 overall_status = _wf_statuses[0] if _wf_statuses else "unknown"
+
+        # Only surface the stored error while the design is actually
+        # failed -- _design.error isn't cleared when a design is re-run
+        # successfully (or reset to pending), so showing it unconditionally
+        # would leak a stale message from a previous failed attempt onto a
+        # design that's since recovered.
+        design_error = _design_raw_error if overall_status == "failed" else None
 
         # Find feature folder
         feature_folder = None
@@ -3521,9 +3581,43 @@ async def start_pipeline(
     project_path: str, design_queue: str = "", max_iterations: int = 3
 ):
     """Start the autopilot pipeline."""
+    from src.autopilot.orchestrator import _get_or_create_project_id
+    from src.autopilot.service import get_registry
+
+    project_id = _get_or_create_project_id(project_path)
+
+    # Concurrency-cap check, before anything else touches the (possibly
+    # already-running) service for this project -- a genuinely new project
+    # over the cap should be rejected before the zombie-detection block
+    # below does any mutating work (stop()) on a service we're about to
+    # refuse anyway. Restarting a project already occupying a slot is
+    # always allowed (try_reserve never counts that as a new slot).
+    # try_reserve (not can_start) atomically reserves the slot too, closing
+    # the race window between two concurrent /start calls both checking the
+    # cap before either has actually started -- the reservation MUST be
+    # released below once service.start() has resolved either way.
+    can_start, cap_message = get_registry().try_reserve(project_id)
+    if not can_start:
+        raise HTTPException(409, cap_message)
+
+    try:
+        return await _start_pipeline_reserved(
+            project_id, project_path, design_queue, max_iterations
+        )
+    finally:
+        get_registry().release_reservation(project_id)
+
+
+async def _start_pipeline_reserved(
+    project_id: str, project_path: str, design_queue: str, max_iterations: int
+):
+    """Body of start_pipeline() that runs after the concurrency-cap slot for
+    project_id has been reserved -- split out so the reservation can be
+    released in a finally regardless of which of the several early-return/
+    raise paths below is taken."""
     from src.autopilot.service import get_autopilot_service
 
-    service = get_autopilot_service()
+    service = get_autopilot_service(project_id)
     # Give a freshly-(re)started pipeline time to actually reach its first
     # workflow check before second-guessing it. Without this, a zombie
     # verdict landing seconds after start cancels run_continuous_pipeline's
@@ -3543,21 +3637,38 @@ async def start_pipeline(
         # This happens when the pipeline task gets stuck. Auto-stop and restart.
         # BUT: if the queue is legitimately empty (all designs done), the pipeline
         # is correctly idle — not a zombie.
+        # Scoped to THIS project's own workflows/agents/designs -- a busy
+        # OTHER project must never mask (or falsely trigger) this check.
         try:
-            from src.core.database import Agent, AutopilotDesign, Workflow, get_db
+            from src.core.database import Agent, AutopilotDesign, Task, Workflow, get_db
 
             with get_db() as db:
-                active_agents = db.query(Agent).filter(
-                    Agent.status.in_(["working", "starting", "idle"])
-                ).count()
+                project_wf_ids = [
+                    w.id for w in db.query(Workflow)
+                    .filter(Workflow.project_id == project_id)
+                    .all()
+                ]
+                active_agents = (
+                    db.query(Agent)
+                    .join(Task, Agent.current_task_id == Task.id)
+                    .filter(
+                        Task.workflow_id.in_(project_wf_ids),
+                        Agent.status.in_(["working", "starting", "idle"]),
+                    )
+                    .count()
+                    if project_wf_ids
+                    else 0
+                )
                 active_wfs = db.query(Workflow).filter(
-                    Workflow.status == "active"
+                    Workflow.project_id == project_id,
+                    Workflow.status == "active",
                 ).count()
 
                 # Only zombie-detect if there are pending designs that
                 # should be getting processed. Empty queue = legitimate idle.
                 pending_designs = db.query(AutopilotDesign).filter(
-                    AutopilotDesign.status.in_(["pending", "active"])
+                    AutopilotDesign.project_id == project_id,
+                    AutopilotDesign.status.in_(["pending", "active"]),
                 ).count()
 
             if active_agents == 0 and active_wfs == 0 and pending_designs > 0:
@@ -3605,13 +3716,32 @@ async def stop_pipeline(clear_state: bool = False, project_id: Optional[str] = N
         clear_state: If True, clear persistent pipeline state (fresh start next time)
         project_id: If provided, only stop workflows for this project
     """
-    from src.autopilot.service import get_autopilot_service
+    from src.autopilot.service import get_autopilot_service, get_registry
     from src.core.database import Agent, Task, get_db
 
-    service = get_autopilot_service()
-
-    # Stop the service (this stops the pipeline task)
-    result = await service.stop()
+    # Stop the service(s) (this stops the pipeline task). With project_id,
+    # stop just that project's service; without one, preserve the old
+    # "stop whatever's running" behavior by stopping every running service
+    # (there's no longer a single global service to fall back to).
+    # stopped_project_ids feeds the clear_state block below -- it must be
+    # captured here, not re-derived from get_registry().running() after the
+    # fact, since every service in it is no longer "running" once stopped.
+    if project_id:
+        result = await get_autopilot_service(project_id).stop()
+        stopped_project_ids = [project_id]
+    else:
+        stopped_any = False
+        stopped_project_ids = []
+        aggregate = {"designs_processed": 0, "designs_succeeded": 0, "designs_failed": 0}
+        for running_service in get_registry().running():
+            r = await running_service.stop()
+            stopped_any = True
+            stopped_project_ids.append(running_service.project_id)
+            for key in aggregate:
+                aggregate[key] += r.get(key, 0)
+        result = {"stopped": stopped_any, **aggregate} if stopped_any else {
+            "stopped": True, "message": "Pipeline was not running"
+        }
 
     # Terminate autopilot agents and pause workflows
     terminated_count = 0
@@ -3658,6 +3788,30 @@ async def stop_pipeline(clear_state: bool = False, project_id: Optional[str] = N
                         except Exception:
                             pass
 
+                # Also terminate agents that are still "working" but whose
+                # tasks are already done/failed -- stale agents that weren't
+                # cleaned up properly (e.g. task completed while agent was
+                # still processing, or agent didn't get the termination signal)
+                stale_agents = (
+                    db.query(Agent)
+                    .join(Task, Agent.current_task_id == Task.id)
+                    .filter(
+                        Task.workflow_id.in_(autopilot_wf_ids),
+                        Agent.status.in_(["working", "starting", "idle"]),
+                        Task.status.in_(["done", "failed"]),
+                    )
+                    .all()
+                )
+                for agent in stale_agents:
+                    try:
+                        logger.info(f"Terminating stale agent {agent.id[:8]} (task {agent.current_task_id[:8]} is {agent.current_task_id and 'done'})")
+                        agent.status = "terminated"
+                        agent.current_task_id = None
+                        agent.terminated_at = datetime.utcnow()
+                        terminated_count += 1
+                    except Exception:
+                        pass
+
                 # paused_by="user" is what every self-heal/retry path (e.g.
                 # _create_corrective_task, the stuck-workflow restart in
                 # attempt_recovery) actually checks before auto-resuming a
@@ -3673,12 +3827,15 @@ async def stop_pipeline(clear_state: bool = False, project_id: Optional[str] = N
     except Exception as e:
         logger.error(f"Error cleaning up autopilot agents: {e}")
 
-    # Clear persistent state if requested
+    # Clear persistent state if requested -- scoped to whichever project(s)
+    # this call actually stopped, not the old bare global key, so stopping
+    # project A can't wipe project B's still-running pipeline state.
     if clear_state:
         from src.autopilot.orchestrator import PersistentPipelineState
 
-        PersistentPipelineState().clear()
-        logger.info("Cleared persistent pipeline state")
+        for stopped_project_id in stopped_project_ids:
+            PersistentPipelineState(project_id=stopped_project_id).clear()
+        logger.info(f"Cleared persistent pipeline state for {stopped_project_ids}")
 
     _invalidate("status")
     return {
