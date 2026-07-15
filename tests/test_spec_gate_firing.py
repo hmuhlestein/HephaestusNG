@@ -8,6 +8,8 @@ This test verifies that:
 
 import json
 
+import pytest
+
 
 class TestSpecGateFiring:
     """Test that the spec gate fires correctly on qa_validation completion."""
@@ -111,6 +113,99 @@ class TestOptionalPhases:
 
         result = load_phase_output_artifacts(None)
         assert result is PHASE_OUTPUT_ARTIFACTS
+
+
+class TestPerWorkflowDefinitionCacheIsolation:
+    """Regression: load_phase_output_artifacts/load_optional_phases used to
+    merge every workflow.yaml's overrides into ONE shared module-level
+    dict/set (via .update() / reassignment), so a phase name declared
+    differently by two unrelated workflow definitions would clobber each
+    other -- whichever workflow got queried last for the process's entire
+    remaining lifetime silently won for every other workflow's lookups too.
+    Caching must be scoped per Workflow.definition_id."""
+
+    @pytest.fixture
+    def two_workflow_defs(self, tmp_path, monkeypatch):
+        from src.core.database import DatabaseManager, Workflow, WorkflowDefinition
+
+        db_path = tmp_path / "test.db"
+        real_db = DatabaseManager(str(db_path))
+        real_db.create_tables()
+        monkeypatch.setattr(
+            "src.core.database.DatabaseManager", lambda *a, **kw: real_db
+        )
+
+        workflows_dir = tmp_path / "workflows"
+        (workflows_dir / "def_a").mkdir(parents=True)
+        (workflows_dir / "def_a" / "workflow.yaml").write_text(
+            "required_output:\n  qa_validation: a_result.json\n"
+            "optional_phases:\n  - phase_x\n"
+        )
+        (workflows_dir / "def_b").mkdir(parents=True)
+        (workflows_dir / "def_b" / "workflow.yaml").write_text(
+            "required_output:\n  qa_validation: b_result.json\n"
+            "optional_phases:\n  - phase_y\n"
+        )
+        # def_c declares no optional_phases override at all -- it must fall
+        # back to the true OPTIONAL_PHASES default, not whatever another
+        # workflow definition's override happened to leave behind.
+        (workflows_dir / "def_c").mkdir(parents=True)
+        (workflows_dir / "def_c" / "workflow.yaml").write_text(
+            "required_output:\n  qa_validation: c_result.json\n"
+        )
+        monkeypatch.setattr("src.workflow_registry._WORKFLOWS_DIR", workflows_dir)
+
+        session = real_db.get_session()
+        for def_id in ("def_a", "def_b", "def_c"):
+            session.add(WorkflowDefinition(id=def_id, name=def_id))
+        session.add(
+            Workflow(id="wf-a", name="A", phases_folder_path="/tmp", definition_id="def_a")
+        )
+        session.add(
+            Workflow(id="wf-b", name="B", phases_folder_path="/tmp", definition_id="def_b")
+        )
+        session.add(
+            Workflow(id="wf-c", name="C", phases_folder_path="/tmp", definition_id="def_c")
+        )
+        session.commit()
+        session.close()
+
+        return real_db
+
+    def test_required_output_does_not_leak_across_definitions(self, two_workflow_defs):
+        from src.autopilot.spec import load_phase_output_artifacts
+
+        result_a = load_phase_output_artifacts("wf-a")
+        result_b = load_phase_output_artifacts("wf-b")
+
+        assert result_a["qa_validation"] == "a_result.json"
+        assert result_b["qa_validation"] == "b_result.json"
+        # Re-querying A after B must still see A's own override, not B's.
+        assert load_phase_output_artifacts("wf-a")["qa_validation"] == "a_result.json"
+
+    def test_optional_phases_does_not_leak_across_definitions(self, two_workflow_defs):
+        from src.autopilot.spec import load_optional_phases
+
+        result_a = load_optional_phases("wf-a")
+        result_b = load_optional_phases("wf-b")
+
+        assert result_a == {"phase_x"}
+        assert result_b == {"phase_y"}
+        assert load_optional_phases("wf-a") == {"phase_x"}
+
+    def test_workflow_without_override_gets_true_default_not_a_leftover(
+        self, two_workflow_defs
+    ):
+        """def_c declares no optional_phases key. Querying it after wf-a
+        must NOT silently inherit wf-a's {"phase_x"} override -- it must see
+        the real OPTIONAL_PHASES default."""
+        from src.autopilot.spec import OPTIONAL_PHASES, load_optional_phases
+
+        load_optional_phases("wf-a")
+        result_c = load_optional_phases("wf-c")
+
+        assert result_c == OPTIONAL_PHASES
+        assert "phase_x" not in result_c
 
 
 class TestOutputExistenceFloor:

@@ -206,6 +206,9 @@ class TestOrphanSessionReaper:
         mock_agent.tmux_session_name = "agent-test-123"
         mock_agent.status = "working"
         mock_agent.current_task_id = "task-456"
+        # Outside the 30s "recently active" grace window, or the
+        # termination path below is skipped.
+        mock_agent.last_activity = datetime.now() - timedelta(seconds=100)
 
         mock_task = MagicMock()
         mock_task.workflow_id = "wf-old"
@@ -246,3 +249,77 @@ class TestOrphanSessionReaper:
 
         # Agent should be terminated
         assert mock_agent.status == "terminated"
+
+
+class TestActiveAgentStatusFilter:
+    """Regression: the active-agent query filtered on
+    Agent.status.in_(["working", "pending", "assigned"]) -- but
+    "pending"/"assigned" are Task.status values, not Agent.status ones
+    (Agent.status's CheckConstraint only allows idle/working/stuck/
+    terminated), so those two never matched anything. In practice this
+    made the filter equivalent to status == "working" only, silently
+    excluding "idle"/"stuck" agents from orphaned-workflow cleanup. Uses a
+    real sqlite DB (not the MagicMock chain the rest of this file uses)
+    because a mocked .filter() can't distinguish the old broken predicate
+    from the fixed one -- it returns whatever .all.return_value is set to
+    regardless of what was actually passed to filter()."""
+
+    @pytest.fixture
+    def reaper(self):
+        from src.core.database import DatabaseManager
+        from src.monitoring.orphan_reaper import OrphanSessionReaper
+
+        db_manager = DatabaseManager(":memory:")
+        db_manager.create_tables()
+        agent_manager = MagicMock()
+        return OrphanSessionReaper(db_manager, agent_manager), db_manager
+
+    @pytest.mark.asyncio
+    async def test_idle_agent_with_inactive_workflow_is_terminated(self, reaper):
+        reaper_obj, db_manager = reaper
+        from src.core.database import Agent, Task, Workflow
+
+        session = db_manager.get_session()
+        session.add(
+            Workflow(id="wf-active", name="A", phases_folder_path="/tmp", status="active")
+        )
+        session.add(
+            Workflow(id="wf-old", name="B", phases_folder_path="/tmp", status="completed")
+        )
+        session.add(
+            Task(
+                id="task-1",
+                raw_description="r",
+                done_definition="d",
+                status="in_progress",
+                workflow_id="wf-old",
+            )
+        )
+        session.commit()  # Task must exist before Agent.current_task_id's FK references it
+        session.add(
+            Agent(
+                id="agent-test-123",
+                system_prompt="p",
+                status="idle",
+                cli_type="pi",
+                tmux_session_name="agent-test-123",
+                current_task_id="task-1",
+                # Outside the 30s "recently active" grace window, or the
+                # termination path is skipped.
+                last_activity=datetime.now() - timedelta(seconds=100),
+            )
+        )
+        session.commit()
+        session.close()
+
+        mock_tmux_sess = MagicMock()
+        mock_tmux_sess.name = "agent-test-123"
+        reaper_obj.agent_manager.tmux_server.sessions = [mock_tmux_sess]
+        reaper_obj.last_check_time = datetime.now() - timedelta(seconds=200)
+
+        await reaper_obj.cleanup_orphaned_tmux_sessions()
+
+        session = db_manager.get_session()
+        agent = session.query(Agent).filter_by(id="agent-test-123").first()
+        assert agent.status == "terminated"
+        session.close()

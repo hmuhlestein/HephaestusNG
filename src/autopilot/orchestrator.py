@@ -11,6 +11,7 @@ A continuous multi-agent workflow engine that:
 Designed to run for days/weeks, processing designs as they arrive.
 """
 
+import copy
 import hashlib
 import json
 import logging
@@ -93,6 +94,15 @@ PARENT_PEEK_INTERVAL = int(
 MAX_PHASE0_TIME = 3600  # 1 hour timeout for Phase 0 (deprecated: use config)
 MAX_PARALLEL_FEATURES = 4  # max concurrent feature pipelines
 MAX_DESIGN_RETRIES = 3  # max times a failed design is auto-retried
+# How many CONSECUTIVE design-queue scans (each DESIGN_QUEUE_SCAN_INTERVAL
+# apart) a workflow can show zero agent/task activity while "active" before
+# the "wait for active workflow" gate gives up on it as abandoned -- see
+# _escalate_stale_active_workflows. Consecutive, not elapsed-time-since-
+# first-seen: a single activity blip resets the streak, so this only fires
+# on genuinely sustained abandonment, matching the same
+# "self-healing an infinite wait" pattern as the state.current_workflow_id
+# escalation nearby (5 consecutive not-yet-complete checks).
+STALE_ACTIVE_WORKFLOW_CONSECUTIVE_CHECKS = 10  # ~10 min at the default 60s scan interval
 
 # Module-level orchestrator agent ID (set during registration)
 _orchestrator_agent_id: Optional[str] = None
@@ -904,6 +914,113 @@ def get_active_workflows(
     except Exception as e:
         logger.debug(f"[get_active_workflows] Failed: {e}")
         return []
+
+
+def _workflow_appears_abandoned(workflow_id: str) -> bool:
+    """True if nothing is currently happening for this workflow: no active
+    agents and no task in any non-terminal status.
+
+    Used only to decide whether a workflow stuck "active" past
+    STALE_ACTIVE_WORKFLOW_TIMEOUT_SECONDS is genuinely abandoned (e.g. a
+    phase's task completed but the next phase's task was never created --
+    a restart mid-flight can lose that in-memory progress with nothing to
+    resume it) versus still legitimately doing real work. A workflow with
+    any active agent or any pending/in_progress/assigned/queued/etc. task
+    is never considered abandoned, no matter how long it's been running.
+    """
+    try:
+        agents = get_agents(workflow_id=workflow_id)
+        if any(a.get("status") in ACTIVE_AGENT_STATUSES for a in agents):
+            return False
+        non_terminal_statuses = (
+            "pending",
+            "in_progress",
+            "assigned",
+            "queued",
+            "under_review",
+            "validation_in_progress",
+            "needs_work",
+            "blocked",
+        )
+        for status in non_terminal_statuses:
+            if get_tasks(status=status, workflow_id=workflow_id):
+                return False
+        return True
+    except Exception:
+        # Can't verify either signal -- treat as NOT abandoned (don't risk
+        # force-failing a workflow we can't positively confirm is idle).
+        return False
+
+
+def _escalate_stale_active_workflows(
+    active_workflows: list,
+    abandoned_streak: Dict[str, int],
+    logger: OrchestratorLogger,
+) -> List[str]:
+    """Self-heal for run_continuous_pipeline's "wait for active workflow"
+    gate, which otherwise has no escalation and blocks the design queue
+    forever on a workflow that stays "active" in the DB but never actually
+    progresses again (e.g. a backend restart mid-flight loses a multi-
+    feature pipeline's in-memory progress between one feature finishing
+    and the next feature's task being created, with nothing else
+    positioned to notice or resume it).
+
+    Marks a workflow "failed" once it's been observed abandoned (see
+    _workflow_appears_abandoned) on STALE_ACTIVE_WORKFLOW_CONSECUTIVE_CHECKS
+    CONSECUTIVE calls -- any call where it shows real activity resets its
+    streak to zero, so this only fires on genuinely sustained abandonment,
+    never on a workflow that's just between two real actions.
+
+    Args:
+        active_workflows: raw get_active_workflows() result for this cycle.
+        abandoned_streak: workflow_id -> consecutive abandoned-observation
+            count, mutated in place so state persists across calls.
+
+    Returns:
+        workflow_ids that are still legitimately blocking (real activity,
+        or not yet past the streak threshold) -- i.e. what the caller
+        should still wait on.
+    """
+    still_blocking = []
+    for wf in active_workflows:
+        wf_id = wf.get("id", "")
+        if not _workflow_appears_abandoned(wf_id):
+            abandoned_streak.pop(wf_id, None)
+            still_blocking.append(wf_id)
+            continue
+
+        streak = abandoned_streak.get(wf_id, 0) + 1
+        if streak < STALE_ACTIVE_WORKFLOW_CONSECUTIVE_CHECKS:
+            abandoned_streak[wf_id] = streak
+            still_blocking.append(wf_id)
+            continue
+
+        logger.warning(
+            f"Workflow {wf_id[:8]} has shown no agent/task activity for "
+            f"{streak} consecutive scans -- marking failed so the design "
+            "queue can proceed"
+        )
+        try:
+            with get_db() as _db:
+                _wf_row = _db.query(Workflow).filter_by(id=wf_id).first()
+                if _wf_row and _wf_row.status == "active":
+                    _wf_row.status = "failed"
+                    _wf_row.status_reason = (
+                        f"Abandoned: no agent/task activity for {streak} "
+                        "consecutive scans -- likely lost mid-flight across "
+                        "a backend restart"
+                    )
+        except Exception as e:
+            logger.error(f"Failed to mark stale workflow {wf_id[:8]} as failed: {e}")
+        abandoned_streak.pop(wf_id, None)
+
+    # Drop tracking for workflows no longer reported active.
+    current_ids = {wf.get("id", "") for wf in active_workflows}
+    for tracked_id in list(abandoned_streak):
+        if tracked_id not in current_ids:
+            abandoned_streak.pop(tracked_id, None)
+
+    return still_blocking
 
 
 def is_design_fully_complete(
@@ -4295,7 +4412,13 @@ def _create_phase_task(
                 priority="high",
                 phase_id=phase.id,
                 workflow_id=workflow_id,
-                created_by_agent_id="orchestrator",
+                # The literal "orchestrator" string was never a real Agent
+                # row (the real one is registered as "orchestrator-<hex8>",
+                # see run_continuous_pipeline) -- with FK enforcement this
+                # unconditionally violated Task.created_by_agent_id's FK.
+                # created_by_agent_id is nullable; fall back to None if the
+                # orchestrator agent hasn't been registered in this process.
+                created_by_agent_id=_orchestrator_agent_id,
                 action=action,
             )
             db.add(task)
@@ -4443,7 +4566,7 @@ def _create_corrective_task(
             priority="high",
             phase_id=phase_id,
             workflow_id=workflow_id,
-            created_by_agent_id="orchestrator",
+            created_by_agent_id=_orchestrator_agent_id,  # see _create_phase_task
             action="retry",
         )
         db.add(task)
@@ -5688,6 +5811,17 @@ def _run_one_feature(
         # Set workflow type and link to feature
         # Note: We'll do this after workflow is created
 
+        # run_single_workflow mutates state.current_workflow_id/_design_branch/
+        # _design_worktree while it launches and polls the workflow. When
+        # features run in parallel (run_feature_pipelines' ThreadPoolExecutor),
+        # every thread is handed the SAME PipelineState object -- without a
+        # thread-local copy here, one feature's workflow_id can be stomped by
+        # another's mid-poll, and _link_workflow_to_feature below would then
+        # attach the WRONG workflow to this feature. The status-display fields
+        # (designs_processed, current_design, ...) are untouched by
+        # run_single_workflow and stay correctly shared via `state`.
+        thread_state = copy.copy(state) if state else None
+
         wf_status = run_single_workflow(
             sdk,
             "autopilot",
@@ -5695,7 +5829,7 @@ def _run_one_feature(
             description,
             logger,
             launch_params=launch_params,
-            state=state,
+            state=thread_state,
             max_iterations=max_iterations,
             design_id=design_entry.db_id,
             pause_existing=False,  # features run in parallel; don't clobber each other
@@ -5703,8 +5837,8 @@ def _run_one_feature(
         )
 
         # Link workflow to feature in DB
-        if state and state.current_workflow_id and feature_id:
-            _link_workflow_to_feature(state.current_workflow_id, feature_id)
+        if thread_state and thread_state.current_workflow_id and feature_id:
+            _link_workflow_to_feature(thread_state.current_workflow_id, feature_id)
 
         # Determine final status
         if wf_status == "completed":
@@ -5730,15 +5864,28 @@ def _run_one_feature(
                     if not dest.exists():
                         shutil.copy2(f, dest)
 
+        if wf_status == "completed":
+            # Only clean up the worktree once the feature's pipeline has
+            # genuinely, permanently finished. This used to run
+            # unconditionally in a `finally:` block, so a "paused"/
+            # "interrupted"/"timeout"/"failed" status -- every one of them
+            # resumable via the existing_workflow_id check above, which
+            # re-uses this exact deterministic worktree path -- deleted the
+            # worktree anyway. Root cause of "shared worktree missing" in
+            # create_agent_for_task on the next resume attempt (e.g. a
+            # graceful backend restart mid-pipeline returns "interrupted"
+            # here, then destroyed the very worktree resume needed).
+            _cleanup_worktree(worktree, branch, project_path, logger)
+
         return final_status
 
     except Exception as e:
         logger.error(f"Feature pipeline failed for {feature_key}: {e}")
         _update_feature_status(feature_id, design_entry.db_id, "failed", str(e), logger)
+        # Do not clean up the worktree here either -- an exception mid-
+        # pipeline is exactly the case resume needs the worktree to still
+        # exist for.
         return "failed"
-    finally:
-        # Cleanup worktree
-        _cleanup_worktree(worktree, branch, project_path, logger)
 
 
 def run_feature_pipelines(
@@ -6351,6 +6498,11 @@ def run_continuous_pipeline(args) -> None:
     logger.info("")
 
     last_queue_scan = 0
+    # workflow_id -> consecutive count of scans where it showed zero agent/
+    # task activity while blocking this gate. Reset whenever the workflow
+    # drops out of the active set, or shows real activity (see the
+    # escalation below).
+    active_workflow_abandoned_streak: Dict[str, int] = {}
 
     try:
         while True:
@@ -6366,13 +6518,23 @@ def run_continuous_pipeline(args) -> None:
 
                 # Check if any workflow is still active - don't start a new design while one is running.
                 # Scoped to this project: an active workflow in a DIFFERENT
-                # project must never block this one (this branch has no
-                # escalation/timeout the way the current_workflow_id check
-                # below does -- an unscoped match here would block forever).
+                # project must never block this one. A workflow that stays
+                # "active" with zero agent/task activity for
+                # STALE_ACTIVE_WORKFLOW_CONSECUTIVE_CHECKS consecutive scans
+                # is escalated below (marked failed) instead of blocking
+                # this gate forever -- e.g. a backend restart mid-flight can
+                # lose the in-memory progress of a multi-feature pipeline
+                # between one feature finishing and the next feature's task
+                # being created, with nothing else positioned to notice or
+                # resume it. A workflow with real activity is never
+                # touched, no matter how long it legitimately runs.
                 try:
                     active_workflows = get_active_workflows(str(project_path), project_id=current_project_id)
-                    if active_workflows:
-                        wf_ids = [wf.get("id", "")[:8] for wf in active_workflows]
+                    still_blocking = _escalate_stale_active_workflows(
+                        active_workflows, active_workflow_abandoned_streak, logger
+                    )
+                    if still_blocking:
+                        wf_ids = [i[:8] for i in still_blocking]
                         logger.info(
                             f"Workflow still active ({', '.join(wf_ids)}) - waiting before picking next design"
                         )

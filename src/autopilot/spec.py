@@ -146,13 +146,26 @@ def get_phase_required_files(phase: Any, workflow_id: Optional[str] = None) -> l
     return _extract_declared_files(getattr(phase, "outputs", None))
 
 
+# Per-workflow-definition caches for the two loaders below, keyed by
+# Workflow.definition_id. A workflow.yaml's required_output/optional_phases
+# don't change during the process's lifetime, so caching is safe -- but it
+# must be keyed per definition, not merged into one shared dict/set. The
+# previous implementation mutated PHASE_OUTPUT_ARTIFACTS/OPTIONAL_PHASES
+# in place (.update() / reassignment) every time ANY workflow was queried,
+# so one workflow definition's overrides leaked into every other workflow
+# definition's lookups for the rest of the process's life (e.g. two
+# unrelated workflow.yaml files declaring a same-named phase with different
+# required_output would silently clobber each other, last-loaded-wins).
+_PHASE_OUTPUT_ARTIFACTS_CACHE: Dict[str, dict] = {}
+_OPTIONAL_PHASES_CACHE: Dict[str, set] = {}
+
+
 def load_phase_output_artifacts(workflow_id: Optional[str] = None) -> dict:
     """Load required_output artifacts from workflow.yaml if available.
 
     Falls back to DEFAULT_PHASE_OUTPUT_ARTIFACTS if workflow_id is None
     or workflow.yaml doesn't have required_output config.
     """
-    global PHASE_OUTPUT_ARTIFACTS
     if workflow_id is None:
         return PHASE_OUTPUT_ARTIFACTS
 
@@ -163,22 +176,31 @@ def load_phase_output_artifacts(workflow_id: Optional[str] = None) -> dict:
         session = db.get_session()
         try:
             wf = session.query(Workflow).filter_by(id=workflow_id).first()
-            if wf and wf.definition_id:
-                # Load workflow definition from YAML
-                from src.workflow_registry import _WORKFLOWS_DIR
+            if not wf or not wf.definition_id:
+                return PHASE_OUTPUT_ARTIFACTS
 
-                wf_dir = _WORKFLOWS_DIR / wf.definition_id
-                workflow_yaml = wf_dir / "workflow.yaml"
-                if workflow_yaml.exists():
-                    import yaml
+            cached = _PHASE_OUTPUT_ARTIFACTS_CACHE.get(wf.definition_id)
+            if cached is not None:
+                return cached
 
-                    with open(workflow_yaml) as f:
-                        wf_config = yaml.safe_load(f)
-                    if wf_config and "required_output" in wf_config:
-                        PHASE_OUTPUT_ARTIFACTS.update(wf_config["required_output"])
-                        logger.info(
-                            f"Loaded required_output from workflow.yaml: {PHASE_OUTPUT_ARTIFACTS}"
-                        )
+            # Load workflow definition from YAML
+            from src.workflow_registry import _WORKFLOWS_DIR
+
+            wf_dir = _WORKFLOWS_DIR / wf.definition_id
+            workflow_yaml = wf_dir / "workflow.yaml"
+            merged = dict(DEFAULT_PHASE_OUTPUT_ARTIFACTS)
+            if workflow_yaml.exists():
+                import yaml
+
+                with open(workflow_yaml) as f:
+                    wf_config = yaml.safe_load(f)
+                if wf_config and "required_output" in wf_config:
+                    merged.update(wf_config["required_output"])
+                    logger.info(
+                        f"Loaded required_output from workflow.yaml: {merged}"
+                    )
+            _PHASE_OUTPUT_ARTIFACTS_CACHE[wf.definition_id] = merged
+            return merged
         finally:
             session.close()
     except Exception as e:
@@ -193,7 +215,6 @@ OPTIONAL_PHASES = {"forensics_analysis", "git_commit_push"}
 
 def load_optional_phases(workflow_id: Optional[str] = None) -> set:
     """Load optional_phases from workflow.yaml if available."""
-    global OPTIONAL_PHASES
     if workflow_id is None:
         return OPTIONAL_PHASES
 
@@ -204,21 +225,30 @@ def load_optional_phases(workflow_id: Optional[str] = None) -> set:
         session = db.get_session()
         try:
             wf = session.query(Workflow).filter_by(id=workflow_id).first()
-            if wf and wf.definition_id:
-                from src.workflow_registry import _WORKFLOWS_DIR
+            if not wf or not wf.definition_id:
+                return OPTIONAL_PHASES
 
-                wf_dir = _WORKFLOWS_DIR / wf.definition_id
-                workflow_yaml = wf_dir / "workflow.yaml"
-                if workflow_yaml.exists():
-                    import yaml
+            cached = _OPTIONAL_PHASES_CACHE.get(wf.definition_id)
+            if cached is not None:
+                return cached
 
-                    with open(workflow_yaml) as f:
-                        wf_config = yaml.safe_load(f)
-                    if wf_config and "optional_phases" in wf_config:
-                        OPTIONAL_PHASES = set(wf_config["optional_phases"])
-                        logger.info(
-                            f"Loaded optional_phases from workflow.yaml: {OPTIONAL_PHASES}"
-                        )
+            from src.workflow_registry import _WORKFLOWS_DIR
+
+            wf_dir = _WORKFLOWS_DIR / wf.definition_id
+            workflow_yaml = wf_dir / "workflow.yaml"
+            result = OPTIONAL_PHASES
+            if workflow_yaml.exists():
+                import yaml
+
+                with open(workflow_yaml) as f:
+                    wf_config = yaml.safe_load(f)
+                if wf_config and "optional_phases" in wf_config:
+                    result = set(wf_config["optional_phases"])
+                    logger.info(
+                        f"Loaded optional_phases from workflow.yaml: {result}"
+                    )
+            _OPTIONAL_PHASES_CACHE[wf.definition_id] = result
+            return result
         finally:
             session.close()
     except Exception as e:
@@ -727,9 +757,18 @@ def score_adversarial_review(
     rather than architecture_design -- a known limitation, not a silent gap.
     """
     if not result:
+        # The agent may have written the markdown report but failed (or
+        # forgot) to also emit the structured JSON -- don't discard real
+        # findings just because the JSON is missing.
+        reason = (
+            f"no adversarial_review_result.json found, but a report was "
+            f"written:\n\n{report_text}"
+            if report_text
+            else "no adversarial_review_result.json found"
+        )
         return 0.4, {
             "gate": "adversarial_review",
-            "reason": "no adversarial_review_result.json found",
+            "reason": reason,
             "result_missing": True,
         }
 
@@ -777,9 +816,18 @@ def score_architectural_review(
     band as noted there.
     """
     if not result:
+        # The agent may have written the markdown report but failed (or
+        # forgot) to also emit the structured JSON -- don't discard real
+        # findings just because the JSON is missing.
+        reason = (
+            f"no architectural_review_result.json found, but a report was "
+            f"written:\n\n{report_text}"
+            if report_text
+            else "no architectural_review_result.json found"
+        )
         return 0.4, {
             "gate": "architectural_review",
-            "reason": "no architectural_review_result.json found",
+            "reason": reason,
             "result_missing": True,
         }
 
@@ -827,9 +875,18 @@ def score_feature_review(
     clean report passes.
     """
     if not result:
+        # The agent may have written the markdown report but failed (or
+        # forgot) to also emit the structured JSON -- don't discard real
+        # findings just because the JSON is missing.
+        reason = (
+            f"no feature_review_result.json found, but a report was "
+            f"written:\n\n{report_text}"
+            if report_text
+            else "no feature_review_result.json found"
+        )
         return 0.4, {
             "gate": "feature_review",
-            "reason": "no feature_review_result.json found",
+            "reason": reason,
             "result_missing": True,
         }
 

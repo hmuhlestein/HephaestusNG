@@ -356,6 +356,22 @@ Current time: {datetime.utcnow().isoformat()}
                 logger.error(f"Task {agent.current_task_id} not found")
                 return
 
+            # Same restart-loop protection as AgentManager.restart_agent.
+            # This path creates a brand-new Agent row via create_agent_for_task
+            # rather than incrementing restart_count on the existing one, so
+            # without this check it has no bound at all: a decision-maker
+            # that keeps returning RECREATE for the same stuck task could
+            # spin up unlimited new agents.
+            if (agent.restart_count or 0) >= 3:
+                logger.warning(
+                    f"Agent {agent.id[:8]} exceeded max restarts "
+                    f"({agent.restart_count}), failing task instead of recreating"
+                )
+                task.status = "failed"
+                task.failure_reason = f"Agent exceeded max restarts ({agent.restart_count})"
+                session.commit()
+                return
+
             # Terminate old agent
             await self.agent_manager.terminate_agent(agent.id)
 
@@ -418,6 +434,14 @@ Please try a different approach, considering:
                 phase_glm_token_env=phase_glm_token_env,
                 phase_thinking_level=phase_thinking_level,
             )
+
+            # Carry the restart count forward onto the new agent row -- it's
+            # a fresh Agent id, so without this the max-restarts check above
+            # would never see accumulated attempts across recreations.
+            db_new_agent = session.query(Agent).filter_by(id=new_agent.id).first()
+            if db_new_agent:
+                db_new_agent.restart_count = (agent.restart_count or 0) + 1
+                session.commit()
 
             logger.info(f"Created new agent {new_agent.id} to replace {agent.id}")
 
@@ -542,12 +566,16 @@ class MonitoringLoop:
         logger.info("Stopping monitoring loop")
         self.running = False
 
-    async def _mechanical_recovery_for_agent(self, agent):
+    async def _mechanical_recovery_for_agent(self, agent) -> bool:
         """Cheap, no-LLM stuck detection + keystroke recovery (the CLI/keystroke-level
         monitor). If an agent's substantive TUI output is frozen for FROZEN_SECONDS
         (a pi/mimo thought-loop that never exits), send the CLI's recovery keystrokes
         (Esc, polymorphic via CLIAgentInterface) + a short nudge. Bounded by MAX_RECOV;
         beyond that the Guardian / restart path takes over.
+
+        Returns True if a real intervention (nudge or termination) happened
+        this call, so the caller can skip Guardian analysis for this agent
+        this same cycle -- see _monitoring_cycle.
         """
         FROZEN_SECONDS = 300  # >a normal turn; a real loop stays frozen indefinitely
         MAX_RECOV = 2
@@ -675,6 +703,7 @@ class MonitoringLoop:
                             f"update_task_status.{mcp_note}"
                         )
                     await self.agent_manager.send_message_to_agent(agent.id, msg)
+                    return True
             elif frozen_for >= FROZEN_SECONDS and st["recov"] >= MAX_RECOV:
                 # All recovery attempts exhausted and agent is still frozen.
                 # Fail the task so the monitor's retry-bound path handles it
@@ -703,10 +732,12 @@ class MonitoringLoop:
                         )
                 await self.agent_manager.terminate_agent(agent.id)
                 self._stuck_state.pop(agent.id, None)
+                return True
         except Exception as e:
-            logger.debug(f"[MECH-RECOVERY] check failed for {agent.id[:8]}: {e}")
+            logger.warning(f"[MECH-RECOVERY] check failed for {agent.id[:8]}: {e}")
+        return False
 
-    async def _detect_repetition_loop(self, agent):
+    async def _detect_repetition_loop(self, agent) -> bool:
         """Detect and interrupt an LLM thought-loop where the same sentence repeats
         many times in recent output (output IS growing, just cycling the same text).
 
@@ -786,10 +817,12 @@ class MonitoringLoop:
                 "and if you are still blocked call update_task_status with "
                 "status='failed' and explain why.",
             )
+            return True
         except Exception as e:
-            logger.debug(f"[REP-LOOP] check failed for {agent.id[:8]}: {e}")
+            logger.warning(f"[REP-LOOP] check failed for {agent.id[:8]}: {e}")
+        return False
 
-    async def _detect_dangerous_command_confirmation(self, agent):
+    async def _detect_dangerous_command_confirmation(self, agent) -> bool:
         """Detect a pending 'Dangerous command' confirmation for an rm
         command and auto-deny it (Escape) + nudge the agent, instead of
         relying on the generic frozen-output detector.
@@ -853,10 +886,12 @@ class MonitoringLoop:
                 "write/edit tools instead of deleting it first. Continue your "
                 "task without using rm.",
             )
+            return True
         except Exception as e:
-            logger.debug(f"[DANGEROUS-CMD] check failed for {agent.id[:8]}: {e}")
+            logger.warning(f"[DANGEROUS-CMD] check failed for {agent.id[:8]}: {e}")
+        return False
 
-    async def _detect_max_token_limit_error(self, agent):
+    async def _detect_max_token_limit_error(self, agent) -> bool:
         """Detect pi's own "Error: Model stopped because it reached the
         maximum output token limit" message and immediately nudge with
         specific, actionable guidance instead of waiting for the generic
@@ -907,8 +942,10 @@ class MonitoringLoop:
                 "whole thing at once. Check what actually got written before "
                 "continuing — a write that hit this limit may be truncated.",
             )
+            return True
         except Exception as e:
-            logger.debug(f"[MAX-TOKEN-LIMIT] check failed for {agent.id[:8]}: {e}")
+            logger.warning(f"[MAX-TOKEN-LIMIT] check failed for {agent.id[:8]}: {e}")
+        return False
 
     async def _monitoring_cycle(self):
         """Execute one monitoring cycle with trajectory monitoring."""
@@ -935,17 +972,36 @@ class MonitoringLoop:
         #      in the last 80 lines (LLM cycling "Actually, let me try…")
         #   c) pending rm confirmation — auto-deny immediately, don't wait for (a)
         #   d) max output token limit hit — nudge immediately, don't wait for (a)
+        mechanically_intervened = set()
         for agent in agents:
-            await self._mechanical_recovery_for_agent(agent)
-            await self._detect_repetition_loop(agent)
-            await self._detect_dangerous_command_confirmation(agent)
-            await self._detect_max_token_limit_error(agent)
+            if await self._mechanical_recovery_for_agent(agent):
+                mechanically_intervened.add(agent.id)
+            if await self._detect_repetition_loop(agent):
+                mechanically_intervened.add(agent.id)
+            if await self._detect_dangerous_command_confirmation(agent):
+                mechanically_intervened.add(agent.id)
+            if await self._detect_max_token_limit_error(agent):
+                mechanically_intervened.add(agent.id)
 
         # Phase 1: Guardian Analysis (Parallel)
         guardian_summaries = []
         guardian_tasks = []
 
         for agent in agents:
+            if agent.id in mechanically_intervened:
+                # Mechanical recovery already nudged/restarted/terminated
+                # this agent this cycle -- running Guardian immediately
+                # afterward on the same pre-intervention `agents` snapshot
+                # double-intervenes: a redundant nudge on top of the one
+                # just sent, or worse, a "missing tmux session" false
+                # positive reviving an agent mechanical recovery just
+                # deliberately terminated and failed. Let the next cycle
+                # re-evaluate with fresh state instead.
+                logger.debug(
+                    f"Skipping Guardian analysis for agent {agent.id[:8]} -- "
+                    "mechanical recovery already intervened this cycle"
+                )
+                continue
             # Create async task for each Guardian analysis
             task = asyncio.create_task(self._guardian_analysis_for_agent(agent))
             guardian_tasks.append(task)
@@ -1480,18 +1536,28 @@ class MonitoringLoop:
             if not db_agent:
                 return
 
-            db_agent.last_activity = datetime.utcnow()
-
             # Track health_check_failures for Guardian last-resort steering
             if analysis.get("trajectory_aligned", True):
-                # Agent is on track — reset failures so it recovers
+                # Agent is on track — reset failures so it recovers. This
+                # also counts as real progress, mirroring the mechanical-
+                # recovery detector's "tmux output changed" touch above:
+                # refresh last_activity.
                 db_agent.health_check_failures = 0
+                db_agent.last_activity = datetime.utcnow()
             else:
                 alignment_score = analysis.get("alignment_score", 0.5)
                 if alignment_score < 0.3:
                     db_agent.health_check_failures += 2
                 elif alignment_score < 0.5:
                     db_agent.health_check_failures += 1
+                # Deliberately NOT touching last_activity here. Doing so
+                # unconditionally (on every Guardian cycle, aligned or not)
+                # defeated the max_ignored_steering auto-restart check
+                # above: a persistently stuck agent that keeps failing
+                # trajectory analysis would look "recently active" one
+                # cycle later purely because Guardian ran, not because it
+                # made progress -- silently disabling the restart's
+                # idle_seconds >= 300 gate.
 
             # Save to dedicated Guardian analysis table
             guardian_analysis = GuardianAnalysis(

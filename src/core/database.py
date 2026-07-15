@@ -1347,9 +1347,11 @@ class DatabaseManager:
                 # Set SQLite pragmas for concurrent access
                 # WAL mode allows concurrent readers alongside a single writer
                 # busy_timeout makes writers block-and-retry instead of failing
+                # foreign_keys=ON enforces foreign key constraints
                 @event.listens_for(engine, "connect")
                 def _set_sqlite_pragma(dbapi_connection, connection_record):
                     cursor = dbapi_connection.cursor()
+                    cursor.execute("PRAGMA foreign_keys=ON")  # Enforce FK constraints
                     cursor.execute("PRAGMA journal_mode=WAL")
                     cursor.execute("PRAGMA busy_timeout=30000")  # 30s
                     cursor.execute("PRAGMA synchronous=NORMAL")

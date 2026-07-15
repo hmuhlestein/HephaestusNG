@@ -55,9 +55,15 @@ class OrphanSessionReaper:
             # Get all active agent session names from database
             session = self.db_manager.get_session()
             try:
+                # "pending"/"assigned" are Task.status values, not
+                # Agent.status ones -- Agent.status's CheckConstraint only
+                # allows idle/working/stuck/terminated, so those two never
+                # matched anything here. List every non-terminated status
+                # instead of just "working" so this stays correct if
+                # idle/stuck ever start actually being set.
                 active_agents = (
                     session.query(Agent)
-                    .filter(Agent.status.in_(["working", "pending", "assigned"]))
+                    .filter(Agent.status.in_(["working", "idle", "stuck"]))
                     .all()
                 )
 
