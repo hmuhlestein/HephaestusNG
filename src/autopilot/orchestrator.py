@@ -5948,6 +5948,21 @@ def _run_one_feature(
             # Check if product validation passed
             # For now, mark as completed if workflow completed
             final_status = "completed"
+        elif wf_status == "paused":
+            # Not a failure -- run_single_workflow returns "paused" for a
+            # deliberately-paused workflow, fully resumable later via
+            # existing_workflow_id (same resumability the worktree-cleanup
+            # guard below already grants "paused"). Marking the FEATURE
+            # "failed" here rolled the whole design's derived status to
+            # "failed" too (derive_design_status treats any FAILED feature
+            # as design-failed), permanently, even though nothing about
+            # this feature had actually gone wrong -- it just hadn't had
+            # its turn yet. Observed live: features from later sequential
+            # execution groups sat "paused" with zero tasks, got marked
+            # "failed" here, and the design could never be picked up as
+            # "active" again even after an earlier group's feature that
+            # WAS actively running went on to complete successfully.
+            final_status = "paused"
         elif wf_status == "interrupted":
             final_status = "failed"
         else:
