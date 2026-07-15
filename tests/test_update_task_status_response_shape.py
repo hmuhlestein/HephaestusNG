@@ -186,3 +186,98 @@ class TestUpdateTaskStatusResponseShape:
         task = session.query(Task).filter_by(id=task_id).first()
         assert "Scope review FAILED" in task.completion_notes
         assert '"verdict": "FAIL"' in task.completion_notes
+
+
+def _seed_qa_validation(test_db, tmp_path):
+    import json
+
+    session = test_db.get_session()
+    workflow_id = f"wf-{uuid.uuid4().hex[:8]}"
+    phase_id = f"phase-{uuid.uuid4().hex[:8]}"
+    task_id = f"task-{uuid.uuid4().hex[:8]}"
+    agent_id = f"agent-{uuid.uuid4().hex[:8]}"
+
+    session.add(
+        Workflow(
+            id=workflow_id, name="t", phases_folder_path="/tmp",
+            status="active", working_directory=str(tmp_path),
+        )
+    )
+    session.add(
+        Phase(
+            id=phase_id, workflow_id=workflow_id, order=8,
+            name="qa_validation", description="d", done_definitions=["done"],
+            outputs=json.dumps(["qa_result.json"]),
+        )
+    )
+    session.add(
+        Agent(id=agent_id, system_prompt="p", status="working", cli_type="claude", agent_type="phase")
+    )
+    session.add(
+        Task(
+            id=task_id, raw_description="raw", done_definition="done",
+            status="in_progress", workflow_id=workflow_id, phase_id=phase_id,
+            assigned_agent_id=agent_id,
+        )
+    )
+    session.commit()
+    return task_id, agent_id
+
+
+class TestGateResultSchemaFloor:
+    """End-to-end regression for the live incident: a QA agent wrote
+    docs/qa_result.json in its own nested shape ({"overall_status": ...,
+    "test_results": {"main_suite": {...}}}) instead of the documented flat
+    schema. The declared-output floor passed (the file existed) but
+    score_qa's field reads all silently defaulted to "everything passed"
+    -- this floor catches the shape mismatch at completion time instead."""
+
+    def test_incompatible_qa_shape_is_rejected_not_500(self, test_db, test_client, tmp_path):
+        import json
+
+        task_id, agent_id = _seed_qa_validation(test_db, tmp_path)
+        docs = tmp_path / "docs"
+        docs.mkdir()
+        (docs / "qa_result.json").write_text(
+            json.dumps(
+                {
+                    "overall_status": "PASS",
+                    "test_results": {"main_suite": {"total": 1410, "passed": 1410}},
+                }
+            )
+        )
+
+        resp = test_client.post(
+            "/update_task_status",
+            json={"task_id": task_id, "status": "done", "summary": "done", "key_learnings": []},
+            headers={"X-Agent-ID": agent_id},
+        )
+
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["success"] is False
+        assert "qa_validation" in body["message"]
+
+        session = test_db.get_session()
+        task = session.query(Task).filter_by(id=task_id).first()
+        assert task.failure_reason is not None
+        assert "qa_validation" in task.failure_reason
+
+    def test_documented_qa_shape_still_succeeds(self, test_db, test_client, tmp_path):
+        import json
+
+        task_id, agent_id = _seed_qa_validation(test_db, tmp_path)
+        docs = tmp_path / "docs"
+        docs.mkdir()
+        (docs / "qa_result.json").write_text(
+            json.dumps({"failed_tests": 0, "passed_tests": 1410, "critical_issues": 0})
+        )
+
+        resp = test_client.post(
+            "/update_task_status",
+            json={"task_id": task_id, "status": "done", "summary": "done", "key_learnings": []},
+            headers={"X-Agent-ID": agent_id},
+        )
+
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["success"] is True

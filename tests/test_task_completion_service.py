@@ -183,6 +183,116 @@ class TestVerifyOutputArtifact:
             assert result is None
 
 
+class TestVerifyGateResultSchema:
+    """Regression: a QA agent wrote its own nested JSON shape instead of
+    the documented flat schema. verify_output_artifact only checks the
+    declared file EXISTS -- it passed, since qa_result.json was there --
+    but score_qa's field reads all silently defaulted to "everything
+    passed" against that shape, including critical_issues and
+    requirements_met, which nothing else independently re-verifies."""
+
+    def test_returns_none_for_non_gated_phase(self, tmp_path):
+        phase = Mock(name="development", id="phase-1")
+        phase.name = "development"
+        task = Mock(phase_id="phase-1", workflow_id="wf-1", id="task-1")
+        result = TaskCompletionService.verify_gate_result_schema(
+            session=Mock(), task=task, phase=phase
+        )
+        assert result is None
+
+    def test_rejects_the_live_incompatible_qa_shape(self, tmp_path):
+        phase = Mock(name="qa_validation", id="phase-1")
+        phase.name = "qa_validation"
+        task = Mock(phase_id="phase-1", workflow_id="wf-1", id="task-1")
+
+        docs = tmp_path / "docs"
+        docs.mkdir()
+        (docs / "qa_result.json").write_text(
+            '{"overall_status": "PASS", "test_results": '
+            '{"main_suite": {"total": 1410, "passed": 1410}}}'
+        )
+
+        mock_session = Mock()
+        mock_session.query.return_value.filter_by.return_value.first.return_value = (
+            Mock(working_directory=str(tmp_path))
+        )
+
+        result = TaskCompletionService.verify_gate_result_schema(
+            session=mock_session, task=task, phase=phase
+        )
+
+        assert result is not None
+        assert result["status"] == "failed"
+        assert "qa_validation" in result["message"]
+        assert task.status == "failed"
+        assert task.failure_reason == result["message"]
+
+    def test_passes_the_documented_qa_shape(self, tmp_path):
+        phase = Mock(name="qa_validation", id="phase-1")
+        phase.name = "qa_validation"
+        task = Mock(phase_id="phase-1", workflow_id="wf-1", id="task-1")
+
+        docs = tmp_path / "docs"
+        docs.mkdir()
+        (docs / "qa_result.json").write_text(
+            '{"failed_tests": 0, "passed_tests": 1410, "critical_issues": 0}'
+        )
+
+        mock_session = Mock()
+        mock_session.query.return_value.filter_by.return_value.first.return_value = (
+            Mock(working_directory=str(tmp_path))
+        )
+
+        result = TaskCompletionService.verify_gate_result_schema(
+            session=mock_session, task=task, phase=phase
+        )
+        assert result is None
+
+    def test_returns_none_when_file_missing(self, tmp_path):
+        """A missing result file is verify_output_artifact's job -- this
+        floor only fires once a file exists but has the wrong shape."""
+        phase = Mock(name="qa_validation", id="phase-1")
+        phase.name = "qa_validation"
+        task = Mock(phase_id="phase-1", workflow_id="wf-1", id="task-1")
+
+        mock_session = Mock()
+        mock_session.query.return_value.filter_by.return_value.first.return_value = (
+            Mock(working_directory=str(tmp_path))
+        )
+
+        result = TaskCompletionService.verify_gate_result_schema(
+            session=mock_session, task=task, phase=phase
+        )
+        assert result is None
+
+    def test_reads_feature_reviews_hephaestus_subdir(self, tmp_path):
+        """feature_review's result lives under .hephaestus/, not docs/ --
+        the schema floor must read from the same subdir build_phase_output
+        actually uses, or it would always see 'missing' and never fire."""
+        from src.core.constants import CONTEXT_DIR_NAME
+
+        phase = Mock(name="feature_review", id="phase-1")
+        phase.name = "feature_review"
+        task = Mock(phase_id="phase-1", workflow_id="wf-1", id="task-1")
+
+        internal_dir = tmp_path / CONTEXT_DIR_NAME
+        internal_dir.mkdir()
+        (internal_dir / "feature_review_result.json").write_text(
+            '{"summary": "no counts here"}'
+        )
+
+        mock_session = Mock()
+        mock_session.query.return_value.filter_by.return_value.first.return_value = (
+            Mock(working_directory=str(tmp_path))
+        )
+
+        result = TaskCompletionService.verify_gate_result_schema(
+            session=mock_session, task=task, phase=phase
+        )
+        assert result is not None
+        assert "feature_review" in result["message"]
+
+
 class TestVerifyNoOpenTickets:
     """Tests for verify_no_open_tickets method."""
 

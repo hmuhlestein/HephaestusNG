@@ -967,7 +967,9 @@ def read_report_text(
 
 # The result/report files each gated phase's score is computed from --
 # mirrors the filenames build_phase_output reads below (keep in sync).
-# Used by consume_gate_artifacts when a gate's goto decision fires.
+# Used by consume_gate_artifacts when a gate's goto decision fires, and by
+# verify_gate_result_schema's output-schema floor. JSON result is always
+# listed first (both callers assume artifacts[0] is the JSON one).
 GATE_RESULT_ARTIFACTS: Dict[str, Tuple[str, ...]] = {
     "scope_review": ("scope_review_result.json",),
     "architectural_review": (
@@ -980,6 +982,19 @@ GATE_RESULT_ARTIFACTS: Dict[str, Tuple[str, ...]] = {
     ),
     "qa_validation": ("qa_result.json",),
     "product_validation": ("product_validation.json",),
+    "feature_review": (
+        "feature_review_result.json",
+        "feature_review_report.md",
+    ),
+}
+
+# Override for the (rare) gated phase whose result lives somewhere other
+# than docs/<file> or <root>/<file> -- feature_review writes to the
+# git-excluded .hephaestus/ dir, like its sibling Feature Architect, since
+# Phase 0's artifacts are internal orchestration state rather than a
+# git-tracked deliverable (see read_result's own subdir parameter).
+GATE_RESULT_SUBDIR: Dict[str, str] = {
+    "feature_review": CONTEXT_DIR_NAME,
 }
 
 
@@ -1005,8 +1020,14 @@ def consume_gate_artifacts(phase_name: str, working_directory: Any) -> list:
     """
     deleted = []
     base = Path(working_directory)
+    subdir = GATE_RESULT_SUBDIR.get(phase_name)
+    candidates_for = (
+        (lambda f: (base / subdir / f,))
+        if subdir
+        else (lambda f: (base / "docs" / f, base / f))
+    )
     for filename in GATE_RESULT_ARTIFACTS.get(phase_name, ()):
-        for candidate in (base / "docs" / filename, base / filename):
+        for candidate in candidates_for(filename):
             if candidate.exists():
                 try:
                     candidate.unlink()
@@ -1022,6 +1043,59 @@ def consume_gate_artifacts(phase_name: str, working_directory: Any) -> list:
             f"(re-run must regenerate them): {deleted}"
         )
     return deleted
+
+
+# Top-level keys each gated phase's structured JSON result must have AT
+# LEAST ONE of, for its score_* function below to read real signal instead
+# of an optimistic silent default. Missing every one of these means the
+# agent almost certainly wrote an incompatible custom shape -- observed
+# live: a QA agent wrote {"overall_status": ..., "test_results": {"main_
+# suite": {"total": ..., "passed": ...}}, "requirements_compliance": {...}}
+# instead of the documented flat schema. score_qa's own field reads
+# (result.get("failed_tests"), result.get("critical_issues"), etc.) all
+# silently defaulted to "everything passed" -- including critical_issues
+# and requirements_met, which nothing else independently re-verifies the
+# way the pytest re-run catches a wrong pass/fail count. Each tuple lists
+# every variant the corresponding score_* function actually accepts (see
+# scope_review's documented nested-schema fallback), not just the primary
+# documented key, so this doesn't reject a shape the scorer already
+# tolerates.
+GATE_RESULT_REQUIRED_KEYS: Dict[str, Tuple[str, ...]] = {
+    "scope_review": ("verdict", "scope_review", "analysis_summary"),
+    "architectural_review": ("blocker_count",),
+    "adversarial_review": ("blocker_count",),
+    "qa_validation": ("failed_tests", "passed_tests", "critical_issues"),
+    "product_validation": ("verdict",),
+    "feature_review": ("blocker_count",),
+}
+
+
+def validate_gate_result_schema(
+    phase_name: str, result: Optional[Dict[str, Any]]
+) -> Optional[str]:
+    """Check a gated phase's structured JSON result has at least one of its
+    required top-level keys actually present (not just defaulted).
+
+    Returns an error message describing the gap if the schema looks wrong,
+    else None. A missing/unparseable result file is a separate, already-
+    handled case -- each score_* function treats result=None as its own
+    "result_missing" band -- so this only fires once a file exists but
+    doesn't resemble the documented schema at all.
+    """
+    required = GATE_RESULT_REQUIRED_KEYS.get(phase_name)
+    if not required or result is None:
+        return None
+    if any(key in result for key in required):
+        return None
+    return (
+        f"{phase_name}'s result JSON has none of the required keys "
+        f"{required} -- this looks like an incompatible schema, not the "
+        f"one documented in {phase_name}.yaml. Rewrite it in the exact "
+        "documented shape so the pipeline gate can read your findings "
+        "(silently defaulting missing fields would mask real issues, e.g. "
+        "blocker/critical-issue counts reading as 0 when they weren't "
+        "actually checked)."
+    )
 
 
 def build_phase_output(

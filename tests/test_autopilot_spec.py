@@ -296,15 +296,83 @@ class TestConsumeGateArtifacts:
 
     def test_every_mapped_artifact_gets_consumed(self, tmp_path):
         """Guardrail: for each mapped phase, writing then consuming its
-        artifacts must leave the gate scorer with nothing stale to read."""
+        artifacts must leave the gate scorer with nothing stale to read --
+        including phases like feature_review that live under a
+        GATE_RESULT_SUBDIR override instead of docs/."""
         docs = tmp_path / "docs"
         docs.mkdir()
         for phase_name, filenames in S.GATE_RESULT_ARTIFACTS.items():
+            subdir = S.GATE_RESULT_SUBDIR.get(phase_name)
+            target_dir = tmp_path / subdir if subdir else docs
+            target_dir.mkdir(exist_ok=True)
             for filename in filenames:
-                (docs / filename).write_text("{}")
+                (target_dir / filename).write_text("{}")
             S.consume_gate_artifacts(phase_name, tmp_path)
             for filename in filenames:
-                assert not (docs / filename).exists(), (phase_name, filename)
+                assert not (target_dir / filename).exists(), (phase_name, filename)
+
+
+class TestValidateGateResultSchema:
+    """Regression: a QA agent wrote its own nested JSON shape
+    ({"overall_status": ..., "test_results": {"main_suite": {...}}})
+    instead of the documented flat schema. score_qa's field reads all
+    silently defaulted to "everything passed" -- including critical_issues
+    and requirements_met, which nothing else independently re-verifies the
+    way the pytest re-run catches a wrong pass/fail count."""
+
+    def test_accepts_the_documented_qa_schema(self):
+        result = {
+            "failed_tests": 0,
+            "passed_tests": 1410,
+            "total_tests": 1410,
+            "critical_issues": 0,
+        }
+        assert S.validate_gate_result_schema("qa_validation", result) is None
+
+    def test_rejects_the_live_incompatible_qa_shape(self):
+        result = {
+            "overall_status": "PASS",
+            "test_results": {"main_suite": {"total": 1410, "passed": 1410}},
+            "requirements_compliance": {"FR-1": "PASS"},
+        }
+        error = S.validate_gate_result_schema("qa_validation", result)
+        assert error is not None
+        assert "qa_validation" in error
+
+    def test_accepts_only_one_required_key_present(self):
+        """Any one of the required keys is enough -- doesn't demand all of
+        them, just evidence the agent used the right schema shape."""
+        assert S.validate_gate_result_schema(
+            "qa_validation", {"critical_issues": 2}
+        ) is None
+
+    def test_scope_review_accepts_documented_nested_variant(self):
+        """score_scope_review itself normalizes {"scope_review": {...}} --
+        the schema check must not reject a shape the scorer already
+        tolerates."""
+        assert S.validate_gate_result_schema(
+            "scope_review", {"scope_review": {"verdict": "PASS"}}
+        ) is None
+
+    def test_architectural_review_rejects_missing_blocker_count(self):
+        error = S.validate_gate_result_schema(
+            "architectural_review", {"summary": "looks fine"}
+        )
+        assert error is not None
+
+    def test_unmapped_phase_is_a_noop(self):
+        assert S.validate_gate_result_schema("development", {"anything": True}) is None
+
+    def test_none_result_is_a_noop(self):
+        """A missing/unparseable file is verify_output_artifact's job --
+        each score_* already has its own result_missing band for None."""
+        assert S.validate_gate_result_schema("qa_validation", None) is None
+
+    def test_every_gated_phase_has_a_required_keys_mapping(self):
+        """Guardrail: every phase in GATED_PHASES should have a schema
+        check, or a newly-added gated phase silently skips this floor."""
+        for phase_name in S.GATED_PHASES:
+            assert phase_name in S.GATE_RESULT_REQUIRED_KEYS, phase_name
 
 
 if __name__ == "__main__":

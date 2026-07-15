@@ -2391,6 +2391,24 @@ async def update_task_status(
                     termination_scheduled=False,
                 )
 
+        # 3b-0-b. Gate-result schema hard floor — for gated phases, reject
+        # done when the structured JSON result exists (3b already covers it
+        # being missing) but doesn't have any of the keys the gate's score_*
+        # function actually reads. Same class of check as 3b: a documented
+        # schema alone is compliance-dependent (an agent can write valid
+        # JSON in a totally different shape and still pass the existence
+        # check), this makes the shape itself enforced.
+        if request.status == "done" and task.phase_id:
+            rejection = TaskCompletionService.verify_gate_result_schema(session, task, phase=phase)
+            if rejection:
+                task.failure_reason = rejection.get("message", "Gate result schema invalid")
+                session.commit()
+                return UpdateTaskStatusResponse(
+                    success=False,
+                    message=rejection.get("message", "Gate result schema invalid"),
+                    termination_scheduled=False,
+                )
+
         # 3b-1. Open-ticket hard floor — reject done on the development phase
         # while unresolved bug tickets (QA/security findings) remain. Same
         # class of check as 3b above: a prompt instruction alone is
