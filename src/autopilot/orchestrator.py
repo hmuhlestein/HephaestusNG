@@ -104,6 +104,20 @@ MAX_DESIGN_RETRIES = 3  # max times a failed design is auto-retried
 # escalation nearby (5 consecutive not-yet-complete checks).
 STALE_ACTIVE_WORKFLOW_CONSECUTIVE_CHECKS = 10  # ~10 min at the default 60s scan interval
 
+# How long a PhaseExecution's task_creation_claimed_at can be held before
+# _case_in_progress_complete treats it as abandoned rather than "still being
+# created elsewhere" -- see the staleness check there. A legitimate holder
+# (first-task creation, or an arbitration task's whole lifetime) finishes in
+# well under this; anything still holding it this long had its releaser
+# crash, get killed, or (as observed live) simply predate the claim/release
+# wiring being added at all, permanently hiding the phase from completion
+# detection -- no matter how many times its task actually finished.
+CLAIM_STALE_TIMEOUT_SECONDS = 480  # 8 minutes -- must stay shorter than
+# STALE_ACTIVE_WORKFLOW_CONSECUTIVE_CHECKS * DESIGN_QUEUE_SCAN_INTERVAL
+# (10 * 60s = 600s), or a workflow whose only problem is a stuck claim gets
+# killed by that other escalation before this one ever gets a chance to
+# clear it and let the workflow self-heal instead.
+
 # Module-level orchestrator agent ID (set during registration)
 _orchestrator_agent_id: Optional[str] = None
 
@@ -3132,6 +3146,11 @@ def _advance_phases(workflow_id: str, logger: OrchestratorLogger) -> bool:
                 if wf.status == "paused":
                     return False  # Still paused, nothing to do
 
+            # Self-heal any abandoned task-creation claim before reading
+            # phase statuses below, so the dispatch that follows sees the
+            # repaired state, not a claim-blocked snapshot.
+            _release_stale_task_creation_claims(db, workflow_id, logger)
+
             # Get all phases and their statuses
             phase_statuses = _get_phase_statuses(db, workflow_id)
 
@@ -3202,6 +3221,60 @@ def _try_auto_resume_paused_workflow(db, workflow_id: str, wf, logger: Orchestra
                 wf.status = "active"
                 db.commit()
                 break
+
+
+def _release_stale_task_creation_claims(
+    db, workflow_id: str, logger: OrchestratorLogger
+) -> None:
+    """Self-heal for any PhaseExecution in this workflow whose
+    task_creation_claimed_at claim has been held past
+    CLAIM_STALE_TIMEOUT_SECONDS -- regardless of the phase's current
+    status.
+
+    Must run before _get_phase_statuses is read for this cycle's dispatch;
+    it works phase-by-phase, in-progress or not, whereas
+    _case_in_progress_complete's own claim check only ever sees phases
+    already "in_progress" -- and a phase whose claim was never released
+    also never had its status flipped to "in_progress" in the first place
+    (that flip is itself part of releasing the claim). Without this, such
+    a phase is invisible to every case in _advance_phases's dispatch, not
+    just Case 2 -- no matter how many times its task actually finishes.
+    Observed live: a phase's task completed successfully, but its
+    PhaseExecution sat "pending" with a day-old claim indefinitely.
+
+    Repairs each stale claim exactly as if its rightful holder had
+    released it (_release_phase_task_creation_claim): if a Task already
+    exists for the phase, treat the guarded work as done -- flip
+    pending/completed to in_progress and clear the claim. If no Task
+    exists at all, just clear the claim so Case 0/0b can create one fresh.
+    """
+    stale_cutoff = datetime.now() - timedelta(seconds=CLAIM_STALE_TIMEOUT_SECONDS)
+    stale_executions = (
+        db.query(PhaseExecution)
+        .join(Phase, PhaseExecution.phase_id == Phase.id)
+        .filter(
+            Phase.workflow_id == workflow_id,
+            PhaseExecution.task_creation_claimed_at.isnot(None),
+            PhaseExecution.task_creation_claimed_at < stale_cutoff,
+        )
+        .all()
+    )
+    for execution in stale_executions:
+        phase = db.query(Phase).filter_by(id=execution.phase_id).first()
+        has_task = (
+            db.query(Task).filter_by(phase_id=execution.phase_id).first() is not None
+        )
+        logger.warning(
+            f"[PHASE-ADVANCE] {phase.name if phase else execution.phase_id}: "
+            "task_creation_claimed_at held with no release -- clearing "
+            f"stale claim ({'task exists' if has_task else 'no task yet'})"
+        )
+        if has_task and execution.status in ("pending", "completed"):
+            execution.status = "in_progress"
+            execution.started_at = execution.started_at or datetime.utcnow()
+        execution.task_creation_claimed_at = None
+    if stale_executions:
+        db.commit()
 
 
 def _get_phase_statuses(db, workflow_id: str) -> list:
@@ -3435,6 +3508,15 @@ def _case_in_progress_complete(
         # class of bug already fixed for _retry_failed_tasks's sweep-level
         # retry). _maybe_resolve_arbitration is the only thing that should
         # ever touch a claimed phase's failed/done arbitration task.
+        #
+        # A genuinely stale claim (no releaser left) is repaired earlier in
+        # _advance_phases by _release_stale_task_creation_claims, which runs
+        # workflow-wide before phase_statuses is even read -- it has to run
+        # there, not here, because a phase whose claim was never released
+        # also never had its status flipped to "in_progress" (that flip is
+        # itself part of releasing the claim), so it wouldn't be in this
+        # `in_progress` list at all. By the time this loop runs, any claim
+        # still held is a genuinely live one.
         execution = ps.get("execution")
         if execution and execution.task_creation_claimed_at is not None:
             continue
@@ -6295,6 +6377,76 @@ def _should_stop() -> bool:
     return False
 
 
+def _register_orchestrator_agent(
+    log_dir: Path, cli_tool: str, logger: OrchestratorLogger
+) -> Optional[str]:
+    """Register (or re-register, after a restart) the orchestrator's own
+    Agent row, whose id becomes Task.created_by_agent_id for every task the
+    orchestrator itself creates (_create_phase_task, _create_corrective_task).
+
+    Returns the new agent's id, or None if registration failed -- in which
+    case those task-creation call sites fall back to created_by_agent_id=
+    None (the column is nullable).
+    """
+    try:
+        import uuid
+
+        from src.core.database import Agent, DatabaseManager
+
+        db_manager = DatabaseManager()
+        session = db_manager.get_session()
+        try:
+            new_agent_id = f"orchestrator-{uuid.uuid4().hex[:8]}"
+            orchestrator_agent = session.query(Agent).filter_by(id=new_agent_id).first()
+            if orchestrator_agent:
+                orchestrator_agent.status = "working"
+                orchestrator_agent.last_activity = datetime.utcnow()
+            else:
+                # Check if tmux_session_name is already taken
+                existing = session.query(Agent).filter_by(tmux_session_name="orchestrator").first()
+                if existing:
+                    existing.status = "terminated"
+                    existing.current_task_id = None  # Clear stale reference
+                    existing.terminated_at = datetime.utcnow()
+                    # tmux_session_name has a UNIQUE constraint -- marking
+                    # the old row "terminated" alone doesn't free the value
+                    # "orchestrator" up, so the commit below still collides
+                    # with it. Without this, registration silently failed
+                    # on every restart after the first (logged as just a
+                    # warning), leaving the caller's _orchestrator_agent_id
+                    # pointing at an Agent row that was never actually
+                    # persisted -- so any task creation using it as
+                    # created_by_agent_id (_create_phase_task) hit a
+                    # FOREIGN KEY failure the moment FK enforcement was
+                    # turned on. Uses the FULL id, not a slice: every
+                    # orchestrator agent id shares the literal prefix
+                    # "orchestrator-", so id[:8] is always "orchestr" for
+                    # every one of them -- not unique at all, and the very
+                    # first fix attempt using it collided with itself
+                    # across restarts the same way the original bug did.
+                    existing.tmux_session_name = f"orchestrator-terminated-{existing.id}"
+                orchestrator_agent = Agent(
+                    id=new_agent_id,
+                    system_prompt=f"LOG_DIR:{log_dir}",
+                    status="working",
+                    cli_type=cli_tool,
+                    agent_type="orchestrator",
+                    tmux_session_name="orchestrator",
+                )
+                session.add(orchestrator_agent)
+            session.commit()
+            logger.info(f"Registered orchestrator agent: {orchestrator_agent.id[:8]}")
+            return new_agent_id
+        except Exception as e:
+            logger.warning(f"Warning: Could not register orchestrator agent: {e}")
+            return None
+        finally:
+            session.close()
+    except Exception as e:
+        logger.warning(f"Warning: Could not register orchestrator agent: {e}")
+        return None
+
+
 def run_continuous_pipeline(args) -> None:
     log_dir = Path(AUTOPILOT_STATE_DIR) / datetime.now().strftime("run-%Y%m%d-%H%M%S")
     logger = OrchestratorLogger(log_dir)
@@ -6438,42 +6590,7 @@ def run_continuous_pipeline(args) -> None:
 
     # Register orchestrator as an agent
     global _orchestrator_agent_id
-    try:
-        import uuid
-
-        from src.core.database import Agent, DatabaseManager
-
-        db_manager = DatabaseManager()
-        session = db_manager.get_session()
-        try:
-            _orchestrator_agent_id = f"orchestrator-{uuid.uuid4().hex[:8]}"
-            orchestrator_agent = session.query(Agent).filter_by(id=_orchestrator_agent_id).first()
-            if orchestrator_agent:
-                orchestrator_agent.status = "working"
-                orchestrator_agent.last_activity = datetime.utcnow()
-            else:
-                # Check if tmux_session_name is already taken
-                existing = session.query(Agent).filter_by(tmux_session_name="orchestrator").first()
-                if existing:
-                    existing.status = "terminated"
-                    existing.current_task_id = None  # Clear stale reference
-                orchestrator_agent = Agent(
-                    id=_orchestrator_agent_id,
-                    system_prompt=f"LOG_DIR:{log_dir}",
-                    status="working",
-                    cli_type=cli_tool,
-                    agent_type="orchestrator",
-                    tmux_session_name="orchestrator",
-                )
-                session.add(orchestrator_agent)
-            session.commit()
-            logger.info(f"Registered orchestrator agent: {orchestrator_agent.id[:8]}")
-        except Exception as e:
-            logger.warning(f"Warning: Could not register orchestrator agent: {e}")
-        finally:
-            session.close()
-    except Exception as e:
-        logger.warning(f"Warning: Could not register orchestrator agent: {e}")
+    _orchestrator_agent_id = _register_orchestrator_agent(log_dir, cli_tool, logger)
 
     # NOTE: this used to unconditionally fail (or complete) every workflow
     # still "active" at startup, on the theory that "active" + backend-just-

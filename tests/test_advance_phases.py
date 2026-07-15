@@ -666,6 +666,39 @@ class TestCaseInProgressComplete:
         mock_fire.assert_not_called()
 
     @patch("src.autopilot.orchestrator._fire_phase_transition")
+    def test_any_held_claim_blocks_evaluation(
+        self, mock_fire, db_manager, sample_workflow
+    ):
+        """A held claim -- stale or not -- blocks this function on its own;
+        staleness is handled earlier, by _release_stale_task_creation_claims
+        (see TestReleaseStaleTaskCreationClaims), before phase_statuses is
+        even read for this cycle. By the time this loop runs, any claim
+        still present is a genuinely live one (e.g. mid-arbitration)."""
+        from datetime import timedelta
+
+        from src.autopilot.orchestrator import (
+            PhaseExecution,
+            _case_in_progress_complete,
+            _get_phase_statuses,
+        )
+
+        self._seed_done_task(db_manager)
+        with db_manager.session_scope() as session:
+            execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            execution.task_creation_claimed_at = datetime.now() - timedelta(minutes=5)
+
+        with db_manager.session_scope() as session:
+            phase_statuses = _get_phase_statuses(session, "wf-1")
+            in_progress = [p for p in phase_statuses if p["status"] == "in_progress"]
+            result = _case_in_progress_complete(session, "wf-1", in_progress, MagicMock())
+
+        assert result is None
+        mock_fire.assert_not_called()
+        with db_manager.session_scope() as session:
+            execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            assert execution.task_creation_claimed_at is not None
+
+    @patch("src.autopilot.orchestrator._fire_phase_transition")
     def test_orphaned_diagnostic_task_does_not_block_completion(
         self, mock_fire, db_manager, sample_workflow
     ):
@@ -743,6 +776,145 @@ class TestCaseInProgressComplete:
         with db_manager.session_scope() as session:
             task = session.query(Task).filter_by(id="failed-task-1").first()
             assert task.status == "failed"  # untouched, not reset to pending
+
+
+class TestReleaseStaleTaskCreationClaims:
+    """Regression, found live: _case_in_progress_complete's own claim check
+    only ever sees phases already "in_progress" -- but a phase whose claim
+    was never released also never had its status flipped to "in_progress"
+    in the first place (that flip is itself part of releasing the claim).
+    So a phase stuck "pending" with a stale claim and an already-done task
+    was invisible to every case in _advance_phases's dispatch, not just
+    Case 2 -- no matter how many times its task actually finished.
+    Observed live: a phase's task completed successfully over a day
+    earlier; the claim, set before the claim/release wiring existed, was
+    never released, and the workflow sat blocking the entire design queue
+    indefinitely. _release_stale_task_creation_claims runs workflow-wide,
+    before phase_statuses is read, so it catches this regardless of the
+    phase's current status."""
+
+    def _seed_done_task(self, db_manager, phase_id="phase-1", workflow_id="wf-1"):
+        with db_manager.session_scope() as session:
+            session.add(
+                Task(
+                    id="task-done-1",
+                    workflow_id=workflow_id,
+                    phase_id=phase_id,
+                    raw_description="r",
+                    done_definition="d",
+                    status="done",
+                )
+            )
+
+    def test_stale_claim_on_pending_phase_with_done_task_flips_to_in_progress(
+        self, db_manager, sample_workflow
+    ):
+        from datetime import timedelta
+
+        from src.autopilot.orchestrator import (
+            CLAIM_STALE_TIMEOUT_SECONDS,
+            PhaseExecution,
+            _release_stale_task_creation_claims,
+        )
+
+        self._seed_done_task(db_manager)
+        with db_manager.session_scope() as session:
+            execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            # sample_workflow's fixture defaults phase-1 to "in_progress" --
+            # the actual live precondition is "pending" (its status never
+            # got flipped, because that flip is itself part of releasing
+            # the claim, which never happened).
+            execution.status = "pending"
+            execution.task_creation_claimed_at = datetime.now() - timedelta(
+                seconds=CLAIM_STALE_TIMEOUT_SECONDS + 1
+            )
+
+        with db_manager.session_scope() as session:
+            _release_stale_task_creation_claims(session, "wf-1", MagicMock())
+
+        with db_manager.session_scope() as session:
+            execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            assert execution.task_creation_claimed_at is None
+            assert execution.status == "in_progress"
+
+    def test_stale_claim_with_no_task_just_clears_claim(self, db_manager, sample_workflow):
+        """No task exists yet -- don't fabricate progress that didn't
+        happen; just free the claim so Case 0/0b can create one fresh."""
+        from datetime import timedelta
+
+        from src.autopilot.orchestrator import (
+            CLAIM_STALE_TIMEOUT_SECONDS,
+            PhaseExecution,
+            _release_stale_task_creation_claims,
+        )
+
+        with db_manager.session_scope() as session:
+            execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            execution.status = "pending"
+            execution.task_creation_claimed_at = datetime.now() - timedelta(
+                seconds=CLAIM_STALE_TIMEOUT_SECONDS + 1
+            )
+
+        with db_manager.session_scope() as session:
+            _release_stale_task_creation_claims(session, "wf-1", MagicMock())
+
+        with db_manager.session_scope() as session:
+            execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            assert execution.task_creation_claimed_at is None
+            assert execution.status == "pending"  # unchanged -- no task to justify the flip
+
+    def test_recent_claim_is_left_alone(self, db_manager, sample_workflow):
+        """A claim well within CLAIM_STALE_TIMEOUT_SECONDS is exactly the
+        legitimate in-flight case (e.g. mid-arbitration) this guard exists
+        for -- must be left completely untouched."""
+        from datetime import timedelta
+
+        from src.autopilot.orchestrator import PhaseExecution, _release_stale_task_creation_claims
+
+        self._seed_done_task(db_manager)
+        with db_manager.session_scope() as session:
+            execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            execution.task_creation_claimed_at = datetime.now() - timedelta(minutes=1)
+
+        with db_manager.session_scope() as session:
+            _release_stale_task_creation_claims(session, "wf-1", MagicMock())
+
+        with db_manager.session_scope() as session:
+            execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            assert execution.task_creation_claimed_at is not None
+            assert execution.status == "in_progress"  # unchanged from fixture default
+
+    @patch("src.autopilot.orchestrator._fire_phase_transition")
+    def test_advance_phases_end_to_end_fires_transition_for_stale_pending_phase(
+        self, mock_fire, db_manager, sample_workflow
+    ):
+        """The exact live bug, end to end through the real dispatcher: a
+        "pending" phase (not "in_progress") with a done task and a
+        day-old, never-released claim must actually advance -- not just
+        have its claim cleared in isolation."""
+        from datetime import timedelta
+
+        from src.autopilot.orchestrator import (
+            CLAIM_STALE_TIMEOUT_SECONDS,
+            PhaseExecution,
+            _advance_phases,
+        )
+
+        self._seed_done_task(db_manager)
+        with db_manager.session_scope() as session:
+            execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            # sample_workflow's fixture defaults phase-1 to "in_progress" --
+            # the actual live precondition is "pending".
+            execution.status = "pending"
+            execution.task_creation_claimed_at = datetime.now() - timedelta(
+                seconds=CLAIM_STALE_TIMEOUT_SECONDS + 1
+            )
+        mock_fire.return_value = True
+
+        result = _advance_phases("wf-1", MagicMock())
+
+        assert result is True
+        mock_fire.assert_called_once()
 
 
 class TestCaseCompletedWithSuccessor:
