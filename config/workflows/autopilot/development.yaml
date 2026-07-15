@@ -217,6 +217,18 @@ additional_notes: |
   - A "repository" must not force callers to know about JOIN semantics.
   - A "service" must not return raw database rows — map to domain objects.
   - An "interface" must not expose implementation details that constrain future changes.
+
+  ### Root Causes, Not Fallbacks
+  - When something fails, fix the ROOT CAUSE. Do not add fallback logic that masks the bug.
+  - Fallbacks are ONLY acceptable when the design document explicitly calls for them
+    (e.g. "if service X is unavailable, use cached data Y").
+  - If you find yourself writing `try/except` that silently swallows an error and uses
+    a default, STOP. Fix why the error happens instead.
+  - If a value is None when it shouldn't be, fix the caller that passed None — don't
+    add `if x is None: x = default`.
+  - If a file is missing, fix the code that should have created it — don't add
+    `if path.exists() ... else use_fallback`.
+  - Every fallback you add is a future production incident hiding in plain sight.
   
   ═══════════════════════════════════════════════════════════════════════
   STEP 5: CREATE PHASE 4 REVIEW TASKS
