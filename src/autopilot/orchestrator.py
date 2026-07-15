@@ -966,6 +966,27 @@ def _workflow_appears_abandoned(workflow_id: str) -> bool:
         return False
 
 
+def _update_resumed_workflow_recovery_attempts(
+    workflow_id: str, recovery_attempts: int
+) -> int:
+    """Advance run_continuous_pipeline's per-resume "recovery attempts"
+    counter for a workflow that isn't fully complete yet.
+
+    Resets to 0 on real activity instead of incrementing regardless --
+    without this, the counter measured only "scans since this orchestrator
+    process last resumed the workflow", not "scans with no actual
+    progress", so ANY workflow not fully done within its threshold got
+    killed even with a real agent actively mid-phase. Observed live:
+    adversarial_review's agent completed its task successfully, and the
+    workflow was force-failed about two minutes later anyway, purely
+    because enough scans had elapsed since a backend restart. Mirrors
+    _escalate_stale_active_workflows' streak-reset-on-activity pattern.
+    """
+    if not _workflow_appears_abandoned(workflow_id):
+        return 0
+    return recovery_attempts + 1
+
+
 def _escalate_stale_active_workflows(
     active_workflows: list,
     abandoned_streak: Dict[str, int],
@@ -6741,10 +6762,17 @@ def run_continuous_pipeline(args) -> None:
                         if not is_complete:
                             logger.info(f"Previous workflow not yet complete: {reason}")
 
-                            # Track recovery attempts to prevent infinite loops
+                            # Track recovery attempts to prevent infinite
+                            # loops -- see _update_resumed_workflow_recovery_
+                            # attempts for why this must reset on real
+                            # activity rather than ticking up regardless.
                             if not hasattr(state, "_recovery_attempts"):
                                 state._recovery_attempts = 0
-                            state._recovery_attempts += 1
+                            state._recovery_attempts = (
+                                _update_resumed_workflow_recovery_attempts(
+                                    state.current_workflow_id, state._recovery_attempts
+                                )
+                            )
 
                             if state._recovery_attempts > 5:
                                 logger.warning(
@@ -6775,6 +6803,11 @@ def run_continuous_pipeline(args) -> None:
                                         )
                                         if wf:
                                             wf.status = "failed"
+                                            wf.status_reason = (
+                                                f"Abandoned: no agent/task activity for "
+                                                f"{state._recovery_attempts} consecutive resume "
+                                                "attempts after a backend restart"
+                                            )
                                             db.commit()
                                             logger.warning(
                                                 f"Workflow {state.current_workflow_id[:8]} marked as failed (abandoned phase)"

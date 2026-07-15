@@ -16,6 +16,7 @@ from src.core.database import Task
 from src.prompts.loader import (
     get_non_phase_agent_instructions,
     get_phase_agent_instructions,
+    get_phase_agent_resumed_instructions,
     get_ticket_note,
     get_validator_prompt,
     get_workflow_result_criteria,
@@ -103,13 +104,16 @@ class AgentPromptBuilder:
         # Add phase information if available
         phase_context_section = ""
         resumed_session_warning = ""
+        # True only when an EARLIER-ordered phase sharing this phase's
+        # session_role already completed in this workflow -- meaning pi is
+        # about to resume the SAME conversation, not start a fresh one (see
+        # phase_role_previously_completed). Gates re-sending content that's
+        # static per workflow/session and was already delivered verbatim on
+        # that session's first turn: workflow description, ticket/result-
+        # criteria rules, and the full tool-call instructions block.
+        resumed_session = False
         if hasattr(task, "phase_id") and task.phase_id:
             base_message += f"\nPhase ID: {task.phase_id}"
-
-            # Add workflow description if available (ID already stated in the
-            # header above — no need to repeat it here)
-            if workflow_description:
-                base_message += f"\n\n=== WORKFLOW CONTEXT ===\nWorkflow Description: {workflow_description}\n"
 
             logger.info(f"=== PHASE CONTEXT DEBUG for task {task.id} ===")
             logger.info(f"Task has phase_id: {task.phase_id}")
@@ -157,7 +161,10 @@ class AgentPromptBuilder:
                         # stated clearly above. Call this out explicitly rather than
                         # trusting the agent to infer it from a fresh task_id alone.
                         role = SESSION_ROLES.get(phase_ctx.phase.name)
-                        if role and list(SESSION_ROLES.values()).count(role) > 1:
+                        if role and self.phase_manager.phase_role_previously_completed(
+                            task.phase_id, role
+                        ):
+                            resumed_session = True
                             resumed_session_warning = f"""
 
 ⚠️  RESUMED SESSION — READ BEFORE DOING ANYTHING ELSE ⚠️
@@ -193,6 +200,13 @@ yourself about to act on a different task ID from memory, stop and re-read this.
                 f"Task {task.id} has no phase_id: {getattr(task, 'phase_id', 'NO ATTRIBUTE')}"
             )
 
+        # Workflow description is static per workflow -- a resumed session
+        # already received it verbatim on its first turn, so skip repeating
+        # it (goes right before the resumed-session warning, matching where
+        # it used to sit relative to the rest of the header).
+        if workflow_description and not resumed_session:
+            base_message += f"\n\n=== WORKFLOW CONTEXT ===\nWorkflow Description: {workflow_description}\n"
+
         base_message += resumed_session_warning
 
         base_message += f"""
@@ -203,10 +217,17 @@ TASK DESCRIPTION:
 COMPLETION CRITERIA:
 {task.done_definition}"""
 
-        # Add workflow result criteria if available
+        # Add workflow result criteria if available. Both this and the
+        # ticket-tracking note below are static per workflow -- a resumed
+        # session already saw them verbatim on its first turn.
         result_criteria_section = ""
         ticket_note = ""
-        if hasattr(task, "workflow_id") and task.workflow_id and self.phase_manager:
+        if (
+            not resumed_session
+            and hasattr(task, "workflow_id")
+            and task.workflow_id
+            and self.phase_manager
+        ):
             try:
                 workflow_config = self.phase_manager.get_workflow_config(
                     task.workflow_id
@@ -277,7 +298,16 @@ COMPLETION CRITERIA:
 
         base_message += open_tickets_section
 
-        if is_phase_agent:
+        if is_phase_agent and resumed_session:
+            # The full tool-call instructions were already delivered
+            # verbatim earlier in this same pi session -- send only the
+            # short reminder + updated pipeline position.
+            base_message += "\n" + get_phase_agent_resumed_instructions(
+                agent_id=agent_id,
+                task_id=task.id,
+                phase_context_section=phase_context_section,
+            )
+        elif is_phase_agent:
             # Compact instructions for workflow phase agents — keep context window lean
             base_message += "\n" + get_phase_agent_instructions(
                 agent_id=agent_id,

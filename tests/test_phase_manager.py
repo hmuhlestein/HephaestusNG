@@ -499,3 +499,117 @@ class TestMarkPhaseCompleteForceGoto:
 
         assert result["reason"] == "fix test_anthropic_provider.py::test_x specifically"
         assert result["metadata"] == {}
+
+
+@pytest.fixture
+def two_architect_phases(real_db):
+    """architecture_design (order 3) and architectural_review (order 5)
+    both map to the "architect" session role in workflow.yaml. No
+    PhaseExecution rows are seeded here -- individual tests add them to
+    control completion status."""
+    from src.core.database import Phase, Workflow
+
+    with real_db.session_scope() as session:
+        session.add(
+            Workflow(id="wf-1", name="t", phases_folder_path="/tmp", status="active")
+        )
+        session.add(
+            Phase(
+                id="phase-arch-design", workflow_id="wf-1", order=3,
+                name="architecture_design", description="d", done_definitions=["x"],
+            )
+        )
+        session.add(
+            Phase(
+                id="phase-arch-review", workflow_id="wf-1", order=5,
+                name="architectural_review", description="d", done_definitions=["x"],
+            )
+        )
+    return real_db
+
+
+class TestPhaseRolePreviouslyCompleted:
+    """Regression: the resumed-session warning shown to agents used to be
+    driven by a static check ("does this role appear more than once in the
+    pipeline config?"), which is true for BOTH architecture_design and
+    architectural_review -- so the very first phase to use a shared role
+    was wrongly told its session was "previously used" and "already
+    complete". The real question is whether an earlier-ordered phase
+    sharing the role has actually completed in THIS workflow.
+    """
+
+    def test_false_for_first_occurrence_with_no_earlier_phase_run(
+        self, two_architect_phases
+    ):
+        from src.phases.phase_manager import PhaseManager
+
+        pm = PhaseManager(db_manager=two_architect_phases)
+        pm.workflow_id = "wf-1"
+
+        assert pm.phase_role_previously_completed(
+            "phase-arch-design", "architect"
+        ) is False
+
+    def test_false_when_earlier_same_role_phase_exists_but_not_completed(
+        self, two_architect_phases
+    ):
+        from src.core.database import PhaseExecution
+        from src.phases.phase_manager import PhaseManager
+
+        with two_architect_phases.session_scope() as session:
+            session.add(
+                PhaseExecution(
+                    id="exec-arch-design", phase_id="phase-arch-design",
+                    workflow_execution_id="wf-1", status="in_progress",
+                )
+            )
+
+        pm = PhaseManager(db_manager=two_architect_phases)
+        pm.workflow_id = "wf-1"
+
+        assert pm.phase_role_previously_completed(
+            "phase-arch-review", "architect"
+        ) is False
+
+    def test_true_when_earlier_same_role_phase_completed(self, two_architect_phases):
+        from src.core.database import PhaseExecution
+        from src.phases.phase_manager import PhaseManager
+
+        with two_architect_phases.session_scope() as session:
+            session.add(
+                PhaseExecution(
+                    id="exec-arch-design", phase_id="phase-arch-design",
+                    workflow_execution_id="wf-1", status="completed",
+                )
+            )
+
+        pm = PhaseManager(db_manager=two_architect_phases)
+        pm.workflow_id = "wf-1"
+
+        assert pm.phase_role_previously_completed(
+            "phase-arch-review", "architect"
+        ) is True
+
+    def test_false_for_a_completed_phase_that_is_not_earlier(
+        self, two_architect_phases
+    ):
+        """A LATER phase with the same role completing must not make an
+        EARLIER phase's invocation claim reuse -- only order < current
+        counts."""
+        from src.core.database import PhaseExecution
+        from src.phases.phase_manager import PhaseManager
+
+        with two_architect_phases.session_scope() as session:
+            session.add(
+                PhaseExecution(
+                    id="exec-arch-review", phase_id="phase-arch-review",
+                    workflow_execution_id="wf-1", status="completed",
+                )
+            )
+
+        pm = PhaseManager(db_manager=two_architect_phases)
+        pm.workflow_id = "wf-1"
+
+        assert pm.phase_role_previously_completed(
+            "phase-arch-design", "architect"
+        ) is False

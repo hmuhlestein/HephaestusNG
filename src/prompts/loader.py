@@ -131,6 +131,20 @@ def get_phase_agent_instructions(
     })
 
 
+def get_phase_agent_resumed_instructions(
+    agent_id: str,
+    task_id: str,
+    phase_context_section: str = "",
+) -> str:
+    """Get the condensed instructions for a genuinely resumed phase-agent
+    session, with variables interpolated."""
+    return get_prompt("phase_agent_resumed_instructions", {
+        "agent_id": agent_id,
+        "task_id": task_id,
+        "phase_context_section": phase_context_section,
+    })
+
+
 def get_non_phase_agent_instructions(
     agent_id: str,
     task_id: str,
