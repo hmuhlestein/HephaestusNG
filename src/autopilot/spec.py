@@ -1055,17 +1055,37 @@ def consume_gate_artifacts(phase_name: str, working_directory: Any) -> list:
         if subdir
         else (lambda f: (base / "docs" / f, base / f))
     )
-    for filename in GATE_RESULT_ARTIFACTS.get(phase_name, ()):
+    for filename in GATE_RESULT_ARTIFACTS.get(phase_name, ()): 
+        found = False
         for candidate in candidates_for(filename):
             if candidate.exists():
                 try:
                     candidate.unlink()
                     deleted.append(str(candidate))
+                    found = True
                 except OSError as e:
                     logger.warning(
                         f"[SPEC-GATE] Could not remove consumed gate artifact "
                         f"{candidate}: {e}"
                     )
+        # Fallback: search subdirectories of docs/ (agents sometimes write to
+        # feature-specific subdirectories instead of root docs/)
+        if not found and not subdir:
+            docs_dir = base / "docs"
+            if docs_dir.is_dir():
+                for sub in docs_dir.iterdir():
+                    if sub.is_dir():
+                        candidate = sub / filename
+                        if candidate.exists():
+                            try:
+                                candidate.unlink()
+                                deleted.append(str(candidate))
+                            except OSError as e:
+                                logger.warning(
+                                    f"[SPEC-GATE] Could not remove consumed gate artifact "
+                                    f"{candidate}: {e}"
+                                )
+                            break
     if deleted:
         logger.info(
             f"[SPEC-GATE] {phase_name}: consumed gate artifacts after goto "
