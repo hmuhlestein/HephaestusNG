@@ -49,6 +49,36 @@ class TestFileHash:
         assert len(file_hash(f)) == 16
 
 
+class TestSelfHealTimeoutOrdering:
+    """Regression: two independent self-heal escalations can race on the
+    same stuck workflow -- _escalate_stale_active_workflows (kills a
+    workflow with zero agent/task activity after
+    STALE_ACTIVE_WORKFLOW_CONSECUTIVE_CHECKS consecutive scans) and the
+    stale task_creation_claimed_at clearing inside _case_in_progress_complete
+    (CLAIM_STALE_TIMEOUT_SECONDS). _advance_phases refuses to touch a
+    workflow once its status is "failed" (its own first check), so if the
+    "kill it" escalation is faster than the "repair its claim" escalation,
+    a workflow whose only real problem was a stuck claim gets killed before
+    the claim-clearing fix ever gets a chance to run -- permanently, since
+    nothing revives a "failed" workflow except the design's own limited
+    retry budget. Observed live: a workflow got killed and re-killed this
+    way until the design's retry budget was fully exhausted. The claim
+    timeout must stay strictly shorter than the workflow-abandonment
+    timeout so the targeted repair always gets a chance to fire first."""
+
+    def test_claim_timeout_is_shorter_than_workflow_abandonment_timeout(self):
+        from src.autopilot.orchestrator import (
+            CLAIM_STALE_TIMEOUT_SECONDS,
+            DESIGN_QUEUE_SCAN_INTERVAL,
+            STALE_ACTIVE_WORKFLOW_CONSECUTIVE_CHECKS,
+        )
+
+        workflow_abandonment_timeout = (
+            STALE_ACTIVE_WORKFLOW_CONSECUTIVE_CHECKS * DESIGN_QUEUE_SCAN_INTERVAL
+        )
+        assert CLAIM_STALE_TIMEOUT_SECONDS < workflow_abandonment_timeout
+
+
 class TestPipelineState:
     def test_to_dict(self):
         from src.autopilot.orchestrator import PipelineState
@@ -632,6 +662,76 @@ class TestCollectFilesCreated:
         result = collect_files_created(tmp_path)
         assert len(result) == 1
         assert "main.py" in result[0]
+
+
+class TestRegisterOrchestratorAgent:
+    """Regression: registering the orchestrator's own Agent row on restart
+    tried to reuse Agent.tmux_session_name="orchestrator" by marking the
+    OLD row from the previous session "terminated" -- but never freed the
+    tmux_session_name value itself, which has a UNIQUE constraint. The old
+    "terminated" row still occupied it, so the new row's INSERT always
+    collided and the whole registration silently failed (caught, logged as
+    just a warning). Every restart after the first left the returned agent
+    id pointing at a row that was never actually persisted -- so any task
+    creation using it as created_by_agent_id (_create_phase_task) hit a
+    FOREIGN KEY failure the moment FK enforcement was turned on. Observed
+    live: doc_review's phase task creation failed this exact way after a
+    second restart.
+
+    The first fix attempt renamed the freed-up row's tmux_session_name
+    using existing.id[:8] -- but every orchestrator agent id shares the
+    literal prefix "orchestrator-" (id = f"orchestrator-{uuid4().hex[:8]}"),
+    so id[:8] is always the same string "orchestr" for every one of them.
+    That's not unique at all: the SECOND collision (third restart) renamed
+    its freed-up row to the exact same value the FIRST collision (second
+    restart) already used, colliding with it and failing exactly the same
+    way the original bug did. Observed live, restart after restart."""
+
+    def test_three_consecutive_registrations_never_collide(
+        self, orch_db_env, tmp_path, monkeypatch
+    ):
+        from src.autopilot.orchestrator import (
+            OrchestratorLogger,
+            _register_orchestrator_agent,
+        )
+        from src.core.database import Agent
+
+        # _register_orchestrator_agent calls the bare DatabaseManager()
+        # (defaults to hephaestus.db, not HEPHAESTUS_TEST_DB) -- redirect it
+        # to this test's real sqlite fixture instead of the live production
+        # database.
+        monkeypatch.setattr(
+            "src.core.database.DatabaseManager", lambda *a, **kw: orch_db_env
+        )
+
+        logger = OrchestratorLogger(tmp_path)
+
+        # Three rounds, not two: the id[:8] bug only manifests on the
+        # SECOND rename (third registration), when it collides with the
+        # FIRST rename (from the second registration) instead of the live
+        # "orchestrator" row.
+        ids = [_register_orchestrator_agent(tmp_path, "pi", logger) for _ in range(3)]
+
+        assert all(i is not None for i in ids), ids
+        assert len(set(ids)) == 3, "each registration must produce a distinct agent id"
+
+        with orch_db_env.session_scope() as session:
+            current = session.query(Agent).filter_by(id=ids[-1]).first()
+            assert current is not None
+            assert current.tmux_session_name == "orchestrator"
+
+            terminated = [
+                session.query(Agent).filter_by(id=i).first() for i in ids[:-1]
+            ]
+            for agent in terminated:
+                assert agent.status == "terminated"
+                assert agent.terminated_at is not None
+                assert agent.tmux_session_name != "orchestrator"
+
+            # The real regression: both freed-up rows must land on
+            # DISTINCT renamed names, not collide with each other.
+            renamed_names = [agent.tmux_session_name for agent in terminated]
+            assert len(set(renamed_names)) == len(renamed_names), renamed_names
 
 
 class TestGetTasks:
