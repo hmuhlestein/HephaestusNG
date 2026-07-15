@@ -24,8 +24,8 @@ session_roles:
 required_output:
   architecture_design: architecture.md
   scope_review: scope_review_result.json
-  architectural_review: architectural_review_report.md
-  adversarial_review: adversarial_review_report.md
+  architectural_review: architectural_review_result.json
+  adversarial_review: adversarial_review_result.json
   qa_validation: qa_result.json
   product_validation: product_validation.json
 
