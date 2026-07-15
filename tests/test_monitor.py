@@ -942,6 +942,54 @@ class TestUpdateAgentHealth:
         # alignment_score < 0.3 → += 2
         assert db_agent.health_check_failures == 2
 
+    @pytest.mark.asyncio
+    async def test_off_track_does_not_touch_last_activity(
+        self, make_monitoring_loop, mock_db
+    ):
+        """Regression: unconditionally refreshing last_activity on every
+        Guardian cycle (aligned or not) defeated the max_ignored_steering
+        auto-restart check -- a persistently stuck agent would look
+        "recently active" one cycle later purely because Guardian ran, not
+        because it made progress."""
+        from contextlib import contextmanager
+
+        agent = Agent(id="a1")
+        analysis = {"trajectory_aligned": False, "alignment_score": 0.2}
+        db_agent = Mock(id="a1", health_check_failures=0, last_activity="sentinel")
+        session = Mock()
+        session.query.return_value.filter_by.return_value.first.return_value = db_agent
+
+        @contextmanager
+        def mock_session_scope():
+            yield session
+
+        mock_db.session_scope = mock_session_scope
+
+        await make_monitoring_loop._update_agent_health_from_trajectory(agent, analysis)
+        assert db_agent.last_activity == "sentinel"
+
+    @pytest.mark.asyncio
+    async def test_on_track_refreshes_last_activity(
+        self, make_monitoring_loop, mock_db
+    ):
+        from contextlib import contextmanager
+        from datetime import datetime
+
+        agent = Agent(id="a1")
+        analysis = {"trajectory_aligned": True, "alignment_score": 0.9}
+        db_agent = Mock(id="a1", health_check_failures=1, last_activity="sentinel")
+        session = Mock()
+        session.query.return_value.filter_by.return_value.first.return_value = db_agent
+
+        @contextmanager
+        def mock_session_scope():
+            yield session
+
+        mock_db.session_scope = mock_session_scope
+
+        await make_monitoring_loop._update_agent_health_from_trajectory(agent, analysis)
+        assert isinstance(db_agent.last_activity, datetime)
+
 
 # ── _save_conductor_analysis ─────────────────────────────────────
 
@@ -1120,6 +1168,30 @@ class TestRecreateAgentWithNewApproach:
 
         # Should not raise
         await monitor._recreate_agent_with_new_approach(agent, "Error")
+
+    @pytest.mark.asyncio
+    async def test_max_restarts_fails_task_instead_of_recreating(
+        self, monitor, mock_agent_manager, mock_db, mock_rag
+    ):
+        """Regression: this path creates a brand-new Agent row via
+        create_agent_for_task rather than incrementing restart_count on the
+        existing one (unlike AgentManager.restart_agent), so it had no
+        restart-loop bound at all -- a decision-maker that kept returning
+        RECREATE for the same stuck task could spin up unlimited agents."""
+        agent = Agent(id="a1", current_task_id="t1", restart_count=3)
+        session = Mock()
+        task = Mock(id="t1", status="in_progress")
+        session.query.return_value.filter_by.return_value.first.return_value = task
+        mock_db.get_session.return_value = session
+
+        mock_agent_manager.terminate_agent = AsyncMock()
+        mock_agent_manager.create_agent_for_task = AsyncMock()
+
+        await monitor._recreate_agent_with_new_approach(agent, "Stuck too long")
+
+        mock_agent_manager.terminate_agent.assert_not_called()
+        mock_agent_manager.create_agent_for_task.assert_not_called()
+        assert task.status == "failed"
 
 
 # ── _mechanical_recovery_for_agent ────────────────────────────────
@@ -1450,3 +1522,67 @@ class TestGenerateDiagnosticPrompt:
         except FileNotFoundError:
             # Template not found in test environment - expected
             pass
+
+
+# ── _monitoring_cycle: mechanical recovery / Guardian coordination ─
+
+
+class TestMonitoringCycleGuardianSkip:
+    """Regression: mechanical recovery (Phase 0) and Guardian analysis
+    (Phase 1) both ran against the same `agents` snapshot in one
+    _monitoring_cycle with no coordination -- an agent mechanical recovery
+    had just nudged or terminated still got an immediate, redundant (or
+    outright harmful, in the termination case) Guardian pass in the same
+    cycle. Guardian must skip any agent mechanical recovery intervened on
+    this cycle and let the next cycle re-evaluate with fresh state."""
+
+    def _make_agent(self):
+        return Agent(id="a1", cli_type="pi", tmux_session_name="s1", status="working")
+
+    @pytest.mark.asyncio
+    async def test_intervened_agent_skips_guardian(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        agent = self._make_agent()
+        mock_agent_manager.get_active_agents = Mock(return_value=[agent])
+        # _monitoring_cycle's own diagnostic "active workflows" query needs a
+        # real list back from the Mock session, or len() on it blows up --
+        # unrelated to this fix, just a requirement of exercising the real
+        # method end-to-end.
+        mock_db.get_session.return_value.query.return_value.filter_by.return_value.all.return_value = (
+            []
+        )
+
+        make_monitoring_loop._mechanical_recovery_for_agent = AsyncMock(return_value=True)
+        make_monitoring_loop._detect_repetition_loop = AsyncMock(return_value=False)
+        make_monitoring_loop._detect_dangerous_command_confirmation = AsyncMock(
+            return_value=False
+        )
+        make_monitoring_loop._detect_max_token_limit_error = AsyncMock(return_value=False)
+        make_monitoring_loop._guardian_analysis_for_agent = AsyncMock(return_value=None)
+
+        await make_monitoring_loop._monitoring_cycle()
+
+        make_monitoring_loop._guardian_analysis_for_agent.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_non_intervened_agent_still_gets_guardian(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        agent = self._make_agent()
+        mock_agent_manager.get_active_agents = Mock(return_value=[agent])
+        mock_db.get_session.return_value.query.return_value.filter_by.return_value.all.return_value = (
+            []
+        )
+
+        make_monitoring_loop._mechanical_recovery_for_agent = AsyncMock(return_value=False)
+        make_monitoring_loop._detect_repetition_loop = AsyncMock(return_value=False)
+        make_monitoring_loop._detect_dangerous_command_confirmation = AsyncMock(
+            return_value=False
+        )
+        make_monitoring_loop._detect_max_token_limit_error = AsyncMock(return_value=False)
+        make_monitoring_loop._guardian_analysis_for_agent = AsyncMock(return_value=None)
+
+        await make_monitoring_loop._monitoring_cycle()
+
+        make_monitoring_loop._guardian_analysis_for_agent.assert_called_once()

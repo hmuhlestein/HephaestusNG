@@ -447,6 +447,16 @@ class TestScoreAdversarialReview:
         assert score == 0.4
         assert meta["result_missing"] is True
 
+    def test_none_result_with_report_text_still_quotes_report(self):
+        """Regression: the JSON can be missing (agent forgot/failed to
+        write it) while the markdown report still exists with real
+        findings -- don't discard those findings just because the JSON
+        didn't get written."""
+        report = "# Adversarial Review Report\n\n### [BLOCKER] Connection leak"
+        score, meta = score_adversarial_review(None, report_text=report)
+        assert meta["result_missing"] is True
+        assert report in meta["reason"]
+
     def test_blocker_routes_to_development(self):
         score, meta = score_adversarial_review(
             {"blocker_count": 6, "warning_count": 6, "nit_count": 5}
@@ -492,6 +502,12 @@ class TestScoreArchitecturalReview:
         assert score == 0.4
         assert meta["result_missing"] is True
 
+    def test_none_result_with_report_text_still_quotes_report(self):
+        report = "# Architectural Review Report\n\n### [BLOCKER] Interface contract violated"
+        score, meta = score_architectural_review(None, report_text=report)
+        assert meta["result_missing"] is True
+        assert report in meta["reason"]
+
     def test_blocker_routes_to_development(self):
         score, meta = score_architectural_review(
             {"blocker_count": 2, "fix_count": 1, "defer_count": 0}
@@ -529,6 +545,12 @@ class TestScoreFeatureReview:
         score, meta = score_feature_review(None)
         assert score == 0.4
         assert meta["result_missing"] is True
+
+    def test_none_result_with_report_text_still_quotes_report(self):
+        report = "# Feature Review Report\n\n### [BLOCKER] Missing auth handling"
+        score, meta = score_feature_review(None, report_text=report)
+        assert meta["result_missing"] is True
+        assert report in meta["reason"]
 
     def test_blocker_routes_back_to_feature_architect(self):
         score, meta = score_feature_review(

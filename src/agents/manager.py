@@ -254,19 +254,28 @@ class AgentManager:
                     if wf and wf.working_directory:
                         # If working_directory contains '.worktrees/', it's a shared worktree
                         if ".worktrees/" in wf.working_directory:
-                            # Verify the worktree directory still exists before using it
+                            # The worktree must exist -- it holds every prior
+                            # phase's commits for this workflow. There is no
+                            # safe fallback: forking a disconnected new
+                            # worktree strands that work unmergeable, and
+                            # silently recovering it masks whatever actually
+                            # deleted it. Fail loudly instead so the real
+                            # cause gets fixed -- see _run_one_feature, whose
+                            # worktree cleanup used to run on every exit
+                            # (including "paused"/"interrupted"/"failed",
+                            # all resumable via existing_workflow_id, which
+                            # re-uses this exact path) instead of only on
+                            # genuine completion.
                             wt_path = Path(wf.working_directory)
-                            if wt_path.exists() and (wt_path / ".git").exists():
-                                shared_worktree = wf.working_directory
-                                self.branch_manager.reload(wt_path)
-                            else:
-                                logger.warning(
-                                    f"Workflow working_directory {wf.working_directory} no longer exists "
-                                    f"(worktree was likely cleaned up). Falling back to project root."
+                            if not (wt_path.exists() and (wt_path / ".git").exists()):
+                                raise RuntimeError(
+                                    f"Workflow {task.workflow_id[:8]}'s shared worktree "
+                                    f"{wt_path} is missing or not a valid git worktree. "
+                                    "Refusing to fork a disconnected replacement or "
+                                    "silently recover it -- find out what deleted it."
                                 )
-                                # Clear the stale working_directory from the workflow
-                                wf.working_directory = None
-                                session.commit()
+                            shared_worktree = wf.working_directory
+                            self.branch_manager.reload(wt_path)
 
             if shared_worktree:
                 # Use the shared worktree — all phases commit here

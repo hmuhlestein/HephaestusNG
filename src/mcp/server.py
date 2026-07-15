@@ -22,7 +22,7 @@ from fastapi import (
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, StreamingResponse
 from git import Repo
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, validator
 
 from src.agents.manager import AgentManager
 from src.auth.auth_api import router as auth_router
@@ -153,6 +153,9 @@ app.include_router(memory_router)
 
 
 # Request/Response Models
+from pydantic import BaseModel, Field, validator
+
+
 class CreateTaskRequest(BaseModel):
     """Request model for creating a task."""
 
@@ -196,6 +199,22 @@ class CreateTaskRequest(BaseModel):
         description="Additional context for the agent (e.g., design document content, requirements summary)",
         max_length=100000,
     )
+
+    @validator('ticket_id', pre=True, always=True)
+    def validate_ticket_id(cls, v):
+        """Strip whitespace and reject whitespace-only ticket_id values."""
+        if v is None:
+            return v
+        # Strip leading and trailing whitespace
+        stripped = v.strip()
+        # Reject whitespace-only values (after stripping, result is empty)
+        if v and not stripped:
+            raise ValueError(
+                "ticket_id cannot be whitespace-only. "
+                "Provide a valid ticket identifier or omit the field."
+            )
+        # Return the stripped value (trimmed)
+        return stripped if stripped else v
 
 
 class CreateTaskResponse(BaseModel):
@@ -1471,6 +1490,16 @@ def _run_phase_advancement_sweep_once(sweep_logger) -> None:
         # mid-work just sat "assigned"/"in_progress" forever, since nothing
         # else ever notices the agent is dead. Running both here makes it
         # universal instead of tied to one specific caller.
+        #
+        # _maybe_resolve_arbitration is bundled into this same "active only"
+        # guard for the same reason, even though it isn't self-healing: a
+        # successful resolution dispatches the next phase's task (see
+        # _resolve_arbitration_outcome), which is exactly the "spawn new
+        # agent work" side effect a pause is meant to prevent. If the
+        # arbitration agent finishes while paused, its decision simply stays
+        # unresolved (the claim it holds has no expiry) until the workflow
+        # is resumed -- the very next sweep tick after that picks it up and
+        # resolves it normally. Not a permanent stall, just deferred.
         if wf_status == "active":
             try:
                 _clean_stale_assigned_tasks(wf_id, sweep_logger)

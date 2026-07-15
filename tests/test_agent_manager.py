@@ -298,6 +298,57 @@ class TestCreateAgentForTask:
             assert log.log_type == "created"
 
 
+class TestCreateAgentForTaskMissingSharedWorktree:
+    """Regression: a missing shared worktree used to either silently fork a
+    disconnected new one (stranding every prior phase's commits, unmergeable)
+    or, briefly, silently recover it (masking whatever actually deleted it --
+    see _run_one_feature's worktree-cleanup-timing fix for the real root
+    cause). Neither is acceptable: this must fail loudly instead, so the
+    real cause gets found and fixed rather than papered over."""
+
+    @pytest.mark.asyncio
+    async def test_raises_when_shared_worktree_directory_is_missing(
+        self, mock_agent_manager, db_manager, tmp_path
+    ):
+        missing_wt = tmp_path / ".worktrees" / "wt_feature-des-1-my-feature"
+        with db_manager.session_scope() as session:
+            session.add(
+                Workflow(
+                    id="wf-shared",
+                    name="Shared WF",
+                    status="active",
+                    working_directory=str(missing_wt),
+                    phases_folder_path="/tmp",
+                )
+            )
+            session.add(
+                Task(
+                    id="task-shared",
+                    workflow_id="wf-shared",
+                    raw_description="r",
+                    done_definition="d",
+                    status="pending",
+                )
+            )
+
+        with db_manager.session_scope() as session:
+            task = session.query(Task).filter_by(id="task-shared").first()
+            with pytest.raises(RuntimeError, match="missing or not a valid git worktree"):
+                await mock_agent_manager.create_agent_for_task(
+                    task=task,
+                    enriched_data={},
+                    memories=[],
+                    project_context="",
+                )
+
+        # The task must land on "failed" with the real reason recorded --
+        # not silently discarded or left pending forever.
+        with db_manager.session_scope() as session:
+            task = session.query(Task).filter_by(id="task-shared").first()
+            assert task.status == "failed"
+            assert "missing or not a valid git worktree" in (task.failure_reason or "")
+
+
 class TestRestartAgent:
     """Tests for restart_agent method."""
     
