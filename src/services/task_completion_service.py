@@ -608,6 +608,7 @@ class TaskCompletionService:
                     "goto",
                     logger,
                     feedback=feedback,
+                    source_phase_name=phase.name,
                 ),
             )
         elif result.get("action") == "continue":
