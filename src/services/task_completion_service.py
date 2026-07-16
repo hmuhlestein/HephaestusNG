@@ -562,6 +562,7 @@ class TaskCompletionService:
             # the pipeline proceeded straight to security_review with the
             # blockers never addressed.
             from src.autopilot.orchestrator import _create_phase_task
+            from src.core.database import Phase as _Phase, PhaseExecution as _PE
 
             metadata = result.get("metadata") or {}
             feedback = (
@@ -569,6 +570,34 @@ class TaskCompletionService:
                 or result.get("reason")
                 or None
             )
+
+            # Reset stale phase executions at/after the target phase.
+            # Same fix as _handle_evaluation_goto in phase_manager.py:
+            # without this, phases after the target keep their "completed"
+            # status from a prior pass and get re-evaluated without running.
+            target_order = (
+                session.query(_Phase.order)
+                .filter_by(id=result["target_phase_id"])
+                .scalar()
+            )
+            if target_order is not None:
+                stale = (
+                    session.query(_PE)
+                    .join(_Phase, _PE.phase_id == _Phase.id)
+                    .filter(
+                        _Phase.workflow_id == task.workflow_id,
+                        _Phase.order >= target_order,
+                        _PE.status.in_(["in_progress", "completed"]),
+                    )
+                    .all()
+                )
+                for s in stale:
+                    s.status = "pending"
+                    s.completed_at = None
+                    s.task_creation_claimed_at = None
+                if stale:
+                    session.commit()
+
             await loop.run_in_executor(
                 None,
                 functools.partial(
