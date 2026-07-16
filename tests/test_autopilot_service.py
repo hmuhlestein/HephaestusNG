@@ -314,12 +314,166 @@ class TestAutopilotService:
 
 
 class TestGetAutopilotService:
-    def test_singleton(self):
+    """get_autopilot_service() used to be a single-instance global
+    singleton -- one AutopilotService for the entire backend, regardless of
+    project. Now it's keyed by project_id via AutopilotServiceRegistry, so
+    two projects can each have their own instance and run concurrently."""
+
+    @pytest.fixture(autouse=True)
+    def _fresh_registry(self, monkeypatch):
+        import src.autopilot.service as service_module
+
+        monkeypatch.setattr(service_module, "_registry", None)
+
+    def test_same_project_id_returns_same_instance(self):
         from src.autopilot.service import get_autopilot_service
 
-        s1 = get_autopilot_service()
-        s2 = get_autopilot_service()
+        s1 = get_autopilot_service("proj-a")
+        s2 = get_autopilot_service("proj-a")
         assert s1 is s2
+
+    def test_different_project_id_returns_different_instance(self):
+        from src.autopilot.service import get_autopilot_service
+
+        s1 = get_autopilot_service("proj-a")
+        s2 = get_autopilot_service("proj-b")
+        assert s1 is not s2
+        assert s1.project_id == "proj-a"
+        assert s2.project_id == "proj-b"
+
+
+class TestAutopilotServiceRegistry:
+    """Regression coverage for the concurrency cap: a second, genuinely new
+    project must be rejected once max_concurrent is reached, but restarting
+    a project that's already tracked as running must never be blocked by
+    its own occupied slot."""
+
+    def _running_service(self, registry, project_id):
+        from src.autopilot.service import AutopilotService
+
+        service = registry.get_or_create(project_id)
+        service._running = True
+        service._task = Mock()
+        service._task.done.return_value = False
+        return service
+
+    def test_can_start_allows_under_cap(self):
+        from src.autopilot.service import AutopilotServiceRegistry
+
+        registry = AutopilotServiceRegistry(max_concurrent=2)
+        self._running_service(registry, "proj-a")
+
+        allowed, message = registry.can_start("proj-b")
+        assert allowed is True
+        assert message == ""
+
+    def test_can_start_rejects_over_cap(self):
+        from src.autopilot.service import AutopilotServiceRegistry
+
+        registry = AutopilotServiceRegistry(max_concurrent=2)
+        self._running_service(registry, "proj-a")
+        self._running_service(registry, "proj-b")
+
+        allowed, message = registry.can_start("proj-c")
+        assert allowed is False
+        assert "proj-a" in message
+        assert "proj-b" in message
+
+    def test_can_start_never_blocks_restart_of_already_running_project(self):
+        from src.autopilot.service import AutopilotServiceRegistry
+
+        registry = AutopilotServiceRegistry(max_concurrent=1)
+        self._running_service(registry, "proj-a")
+
+        allowed, message = registry.can_start("proj-a")
+        assert allowed is True
+        assert message == ""
+
+    def test_running_excludes_stopped_services(self):
+        from src.autopilot.service import AutopilotServiceRegistry
+
+        registry = AutopilotServiceRegistry(max_concurrent=2)
+        registry.get_or_create("proj-a")  # never started
+
+        assert registry.running() == []
+
+
+class TestAutopilotServiceRegistryTryReserve:
+    """Regression: can_start() alone is check-then-act with no lock spanning
+    the check and the caller's own start() call -- two concurrent callers
+    could both pass the cap check before either registers as running,
+    landing N+1 concurrent pipelines against a cap of N. try_reserve()
+    closes this by marking the slot occupied atomically, under the same
+    lock as the check itself."""
+
+    def _running_service(self, registry, project_id):
+        service = registry.get_or_create(project_id)
+        service._running = True
+        service._task = Mock()
+        service._task.done.return_value = False
+        return service
+
+    def test_reserve_then_reserve_again_for_new_project_is_rejected(self):
+        """This is the exact race can_start() alone misses: a project
+        that's only RESERVED (not yet actually running) must still count
+        against the cap for a second, different project's reservation
+        attempt."""
+        from src.autopilot.service import AutopilotServiceRegistry
+
+        registry = AutopilotServiceRegistry(max_concurrent=1)
+
+        allowed_a, _ = registry.try_reserve("proj-a")
+        assert allowed_a is True
+        # proj-a isn't running yet (start() hasn't resolved) -- can_start()
+        # alone would see zero running services here and wrongly allow a
+        # second reservation too.
+        assert registry.running() == []
+
+        allowed_b, message_b = registry.try_reserve("proj-b")
+        assert allowed_b is False
+        assert "proj-a" in message_b
+
+    def test_reserve_same_project_twice_is_allowed(self):
+        from src.autopilot.service import AutopilotServiceRegistry
+
+        registry = AutopilotServiceRegistry(max_concurrent=1)
+
+        allowed_1, _ = registry.try_reserve("proj-a")
+        allowed_2, _ = registry.try_reserve("proj-a")
+        assert allowed_1 is True
+        assert allowed_2 is True
+
+    def test_release_reservation_frees_the_slot(self):
+        from src.autopilot.service import AutopilotServiceRegistry
+
+        registry = AutopilotServiceRegistry(max_concurrent=1)
+
+        registry.try_reserve("proj-a")
+        registry.release_reservation("proj-a")
+
+        # proj-a never actually started (release simulates start() failing)
+        # -- the slot must be free for a different project now.
+        allowed, message = registry.try_reserve("proj-b")
+        assert allowed is True
+        assert message == ""
+
+    def test_release_reservation_of_unreserved_project_is_safe(self):
+        from src.autopilot.service import AutopilotServiceRegistry
+
+        registry = AutopilotServiceRegistry(max_concurrent=1)
+        registry.release_reservation("never-reserved")  # should not raise
+
+    def test_reserve_counts_running_and_pending_together_against_cap(self):
+        from src.autopilot.service import AutopilotServiceRegistry
+
+        registry = AutopilotServiceRegistry(max_concurrent=2)
+        self._running_service(registry, "proj-a")
+        registry.try_reserve("proj-b")
+
+        allowed, message = registry.try_reserve("proj-c")
+        assert allowed is False
+        assert "proj-a" in message
+        assert "proj-b" in message
 
 
 class TestRunningStatePersistence:
@@ -380,3 +534,102 @@ class TestRunningStatePersistence:
         # Should not raise even if nothing was ever persisted
         service.clear_persisted_state()
         assert service.load_persisted_state() is None
+
+    @pytest.mark.asyncio
+    async def test_persisted_state_is_namespaced_per_project(self, tmp_path):
+        """Regression: persisted running-state used to live under one bare
+        key shared by the whole backend -- a second project starting would
+        silently overwrite the first project's "resume on restart" marker.
+        Two services for two different projects must each see only their
+        own persisted state."""
+        from src.autopilot.service import AutopilotService
+
+        service_a = AutopilotService()
+        service_b = AutopilotService()
+
+        project_a = tmp_path / "project-a"
+        project_a.mkdir()
+        (project_a / ".git").mkdir()
+        project_b = tmp_path / "project-b"
+        project_b.mkdir()
+        (project_b / ".git").mkdir()
+
+        with patch.object(service_a, "_run_pipeline", new_callable=AsyncMock):
+            await service_a.start(str(project_a), max_iterations=3)
+        with patch.object(service_b, "_run_pipeline", new_callable=AsyncMock):
+            await service_b.start(str(project_b), max_iterations=9)
+
+        state_a = service_a.load_persisted_state()
+        state_b = service_b.load_persisted_state()
+        assert state_a["project_path"] == str(project_a)
+        assert state_a["max_iterations"] == 3
+        assert state_b["project_path"] == str(project_b)
+        assert state_b["max_iterations"] == 9
+
+        await service_a.stop()
+        # Stopping project A must not touch project B's persisted state.
+        assert service_b.load_persisted_state() is not None
+
+        await service_b.stop()
+
+    def test_enumerate_persisted_states_migrates_legacy_key(self, tmp_path):
+        """Sotto's currently-running pipeline (pre-multi-project) persisted
+        its "resume on restart" marker under the old bare key. The very
+        first read after this change deploys must migrate it onto the
+        namespaced key in place, or it silently stops auto-resuming."""
+        from src.autopilot.orchestrator import (
+            _RUNNING_STATE_KEY_LEGACY,
+            _running_state_key,
+            _set_project_context,
+        )
+        from src.autopilot.service import AutopilotService
+        from src.core.database import AutopilotProject, get_db
+
+        project = tmp_path / "sotto"
+        project.mkdir()
+
+        with get_db() as db:
+            db.add(
+                AutopilotProject(
+                    id="proj-sotto",
+                    name="sotto",
+                    base_dir=str(project.resolve()),
+                    is_active=True,
+                )
+            )
+            _set_project_context(
+                db,
+                _RUNNING_STATE_KEY_LEGACY,
+                {
+                    "project_path": str(project),
+                    "design_queue": "",
+                    "max_iterations": 10,
+                },
+            )
+
+        results = AutopilotService.enumerate_persisted_states()
+
+        assert results == [("proj-sotto", {
+            "project_path": str(project),
+            "design_queue": "",
+            "max_iterations": 10,
+        })]
+
+        with get_db() as db:
+            from src.core.database import ProjectContext
+
+            assert (
+                db.query(ProjectContext).filter_by(key=_RUNNING_STATE_KEY_LEGACY).first()
+                is None
+            )
+            assert (
+                db.query(ProjectContext)
+                .filter_by(key=_running_state_key("proj-sotto"))
+                .first()
+                is not None
+            )
+
+        # Idempotent: a second call after migration sees the namespaced key
+        # like any other project, and doesn't duplicate/re-migrate anything.
+        results_again = AutopilotService.enumerate_persisted_states()
+        assert results_again == results

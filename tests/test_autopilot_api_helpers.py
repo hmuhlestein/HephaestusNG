@@ -3,7 +3,7 @@
 import json
 import time
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
@@ -185,3 +185,71 @@ class TestQueueOrder:
         with patch("src.mcp.autopilot_api._get_queue_order_path", return_value=None):
             result = _load_queue_order()
             assert result == []
+
+
+# ── POST /start concurrency cap ──────────────────────────────────
+
+
+class TestStartPipelineConcurrencyCap:
+    """POST /start used to have no project_id or concurrency cap at all --
+    a genuinely new project starting while others were already running
+    could pile up unboundedly. Exercises the actual start_pipeline route
+    body directly (its DB/service dependencies are all mocked out) rather
+    than the FastAPI TestClient, since a real /start call also needs a
+    real git-repo project directory and worktree machinery unrelated to
+    what this is regression-testing."""
+
+    @pytest.mark.asyncio
+    async def test_rejects_when_over_concurrency_cap(self):
+        from fastapi import HTTPException
+
+        from src.mcp.autopilot_api import start_pipeline
+
+        fake_registry = Mock()
+        fake_registry.try_reserve.return_value = (
+            False,
+            "Max concurrent projects (2) reached: proj-a, proj-b. "
+            "Stop one before starting another.",
+        )
+
+        with patch(
+            "src.autopilot.orchestrator._get_or_create_project_id",
+            return_value="proj-c",
+        ), patch(
+            "src.autopilot.service.get_registry", return_value=fake_registry
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await start_pipeline("/some/new/project")
+
+        assert exc_info.value.status_code == 409
+        assert "proj-a" in exc_info.value.detail
+        assert "proj-b" in exc_info.value.detail
+
+    @pytest.mark.asyncio
+    async def test_allows_restart_of_currently_running_project(self):
+        from src.mcp.autopilot_api import start_pipeline
+
+        fake_registry = Mock()
+        # try_reserve() never treats a project already occupying a slot as a
+        # new one -- restarting it is always allowed.
+        fake_registry.try_reserve.return_value = (True, "")
+
+        fake_service = Mock()
+        fake_service.running = False
+        fake_service._start_time = None
+        fake_service.start = AsyncMock(return_value={"started": True})
+
+        with patch(
+            "src.autopilot.orchestrator._get_or_create_project_id",
+            return_value="proj-a",
+        ), patch(
+            "src.autopilot.service.get_registry", return_value=fake_registry
+        ), patch(
+            "src.autopilot.service.get_autopilot_service", return_value=fake_service
+        ), patch(
+            "src.mcp.autopilot_api._invalidate"
+        ):
+            result = await start_pipeline("/some/already/running/project")
+
+        assert result == {"started": True}
+        fake_service.start.assert_awaited_once()

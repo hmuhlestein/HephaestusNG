@@ -21,6 +21,7 @@ export interface Agent {
     status: string;
     priority: string;
     action?: string;
+    action_target_phase?: string | null;
     started_at: string | null;
     completed_at: string | null;
     runtime_seconds: number;
@@ -52,6 +53,8 @@ export interface Task {
   ticket_id?: string | null;
   // Engine action (continue, retry, goto)
   action?: string | null;
+  // Phase name the engine returned to/retried, set when action is 'goto' or 'retry'
+  action_target_phase?: string | null;
   // Task deduplication fields
   duplicate_of_task_id?: string | null;
   similarity_score?: number | null;
@@ -225,6 +228,7 @@ export interface TaskFullDetails {
   user_prompt: string;
   workflow_id: string | null;
   action?: string | null;
+  action_target_phase?: string | null;
   // Task deduplication fields
   duplicate_of_task_id?: string | null;
   similarity_score?: number | null;

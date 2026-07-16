@@ -166,11 +166,48 @@ class WorkflowOrchestrator:
             goto_phase(result.target_phase)
     """
 
-    def __init__(self, config: OrchestratorConfig):
+    # Best-effort fallback for _phase_name_to_order when no phase_order_map
+    # was provided (see __init__) -- the autopilot pipeline's phase names,
+    # matching each phase's own `id:` field in config/workflows/autopilot/
+    # (NOT workflow.yaml's session_roles dict order, which lists
+    # git_commit_push before forensics_analysis but isn't itself load-
+    # bearing for execution order -- a prior fix trusted that ordering and
+    # got this pair backwards).
+    _LEGACY_NAME_TO_ORDER: Dict[str, int] = {
+        "product_requirements": 1,
+        "scope_review": 2,
+        "architecture_design": 3,
+        "architecture": 3,
+        "development": 4,
+        "architectural_review": 5,
+        "adversarial_review": 6,
+        "security_review": 7,
+        "qa_validation": 8,
+        "product_validation": 9,
+        "doc_review": 10,
+        "forensics_analysis": 11,
+        "git_commit_push": 12,
+    }
+
+    def __init__(
+        self,
+        config: OrchestratorConfig,
+        phase_order_map: Optional[Dict[str, int]] = None,
+    ):
         self.config = config
         self.phase_retry_counts: Dict[str, int] = {}
         self.total_gotos: int = 0  # Track total GOTO operations
         self.evaluation_history: List[Dict[str, Any]] = []
+        # Phase.name -> Phase.order for the actual workflow this orchestrator
+        # was built for (see PhaseManager._get_orchestrator) -- the
+        # authoritative source for _phase_name_to_order. Without this, the
+        # only option was a hand-maintained dict of one caller's phase
+        # vocabulary baked into this supposedly generic, config-driven
+        # engine (SOLID review 2.11) -- which is exactly how it drifted out
+        # of sync with the real phase ids in the first place. Falls back to
+        # _LEGACY_NAME_TO_ORDER only when unavailable (e.g. a orchestrator
+        # constructed directly, without going through PhaseManager).
+        self.phase_order_map: Dict[str, int] = phase_order_map or {}
 
     def evaluate(
         self,
@@ -331,25 +368,16 @@ class WorkflowOrchestrator:
     def _phase_name_to_order(self, phase_name: str) -> int:
         """Convert phase name to order number.
 
-        This is a best-effort lookup based on common naming patterns.
-        Returns 0 if unable to determine order.
+        Prefers self.phase_order_map (the real Phase.order values for the
+        workflow this orchestrator was built for -- see __init__). Falls
+        back to _LEGACY_NAME_TO_ORDER, a best-effort guess based on the
+        autopilot pipeline's phase names, only when phase_order_map wasn't
+        provided. Returns 0 if unable to determine order either way.
         """
-        # Common phase name patterns
-        name_to_order = {
-            "product_requirements": 1,
-            "scope_review": 2,
-            "architecture_design": 3,
-            "architecture": 3,
-            "development": 4,
-            "architectural_review": 5,
-            "adversarial_review": 6,
-            "security_review": 7,
-            "qa_validation": 8,
-            "product_validation": 9,
-            "doc_review": 10,
-            "git_commit_push": 11,
-            "forensics_analysis": 12,
-        }
+        if phase_name in self.phase_order_map:
+            return self.phase_order_map[phase_name]
+
+        name_to_order = self._LEGACY_NAME_TO_ORDER
 
         # Try exact match
         if phase_name in name_to_order:

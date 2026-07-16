@@ -194,6 +194,7 @@ class Config:
         autopilot = config.get("autopilot", {})
         self.workflow_timeout_seconds = autopilot.get("workflow_timeout_seconds", 7200)  # 2 hours
         self.phase0_timeout_seconds = autopilot.get("phase0_timeout_seconds", 3600)  # 1 hour
+        self.max_concurrent_projects = autopilot.get("max_concurrent_projects", 2)
 
         # Ticket tracking settings
         ticket_tracking = config.get("ticket_tracking", {})

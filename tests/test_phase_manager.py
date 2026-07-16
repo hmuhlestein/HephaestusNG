@@ -741,3 +741,334 @@ class TestForceGotoConsumesGateArtifacts:
         assert result["action"] == "goto"
         assert result["target_phase"] == "architecture_design"
         assert not (docs / "qa_result.json").exists()
+
+
+class TestGetOrchestratorPhaseOrderMap:
+    """_get_orchestrator must build WorkflowOrchestrator's phase_order_map
+    from the workflow's real Phase.order DB values, not leave the
+    orchestrator to fall back to its own hand-maintained vocabulary of the
+    autopilot pipeline's phase names (SOLID review 2.11) -- that hardcoded
+    dict has already drifted out of sync with the real phase ids once."""
+
+    @pytest.fixture
+    def real_db(self, tmp_path):
+        from src.core.database import DatabaseManager as _DBM
+
+        db = _DBM(str(tmp_path / "test.db"))
+        db.create_tables()
+        return db
+
+    def _seed(self, real_db):
+        from src.core.database import Phase, Workflow
+        from src.core.database import WorkflowDefinition as DBWorkflowDefinition
+
+        with real_db.session_scope() as session:
+            session.add(
+                DBWorkflowDefinition(
+                    id="def-1",
+                    name="Test Definition",
+                    orchestrator_config={"type": "evaluating"},
+                )
+            )
+            session.add(
+                Workflow(
+                    id="wf-1",
+                    name="t",
+                    phases_folder_path="/tmp",
+                    status="active",
+                    definition_id="def-1",
+                )
+            )
+            session.add(
+                Phase(
+                    id="phase-arch", workflow_id="wf-1", order=3,
+                    name="architecture_design", description="d", done_definitions=["x"],
+                )
+            )
+            session.add(
+                Phase(
+                    id="phase-dev", workflow_id="wf-1", order=4,
+                    name="development", description="d", done_definitions=["x"],
+                )
+            )
+
+    def test_phase_order_map_reflects_real_phase_rows(self, real_db):
+        from src.phases.phase_manager import PhaseManager
+
+        self._seed(real_db)
+        pm = PhaseManager(db_manager=real_db)
+
+        with real_db.session_scope() as session:
+            orchestrator = pm._get_orchestrator(session, "wf-1")
+
+        assert orchestrator is not None
+        assert orchestrator.phase_order_map == {
+            "architecture_design": 3,
+            "development": 4,
+        }
+
+    def test_phase_order_map_wins_over_legacy_fallback(self, real_db):
+        """Regression proof: the legacy hardcoded dict has
+        forensics_analysis/git_commit_push at the wrong orders relative to
+        an unusual real workflow -- a workflow-supplied phase_order_map
+        must always be consulted first, never silently overridden by the
+        fallback vocabulary."""
+        from src.core.database import Phase
+        from src.phases.phase_manager import PhaseManager
+
+        self._seed(real_db)
+        with real_db.session_scope() as session:
+            # A phase named "development" at a DB order (99) that
+            # deliberately disagrees with the legacy dict's guess (4) --
+            # proves the real map wins, not the hardcoded one.
+            session.query(Phase).filter_by(id="phase-dev").update({"order": 99})
+
+        pm = PhaseManager(db_manager=real_db)
+        with real_db.session_scope() as session:
+            orchestrator = pm._get_orchestrator(session, "wf-1")
+
+        assert orchestrator._phase_name_to_order("development") == 99
+
+    def test_orchestrator_cached_after_first_build(self, real_db):
+        from src.phases.phase_manager import PhaseManager
+
+        self._seed(real_db)
+        pm = PhaseManager(db_manager=real_db)
+
+        with real_db.session_scope() as session:
+            first = pm._get_orchestrator(session, "wf-1")
+            second = pm._get_orchestrator(session, "wf-1")
+
+        assert first is second
+
+
+class TestPhaseNameToOrderLegacyFallback:
+    """_phase_name_to_order falls back to _LEGACY_NAME_TO_ORDER only when
+    no phase_order_map was supplied (e.g. an orchestrator constructed
+    directly, not via PhaseManager._get_orchestrator). Regression: a prior
+    fix corrected 10 of these 12 entries but swapped forensics_analysis and
+    git_commit_push, trusting workflow.yaml's session_roles dict key order
+    (which lists git_commit_push first) instead of each phase's own `id:`
+    field in config/workflows/autopilot/*.yaml (forensics_analysis: id 11,
+    git_commit_push: id 12)."""
+
+    def _orchestrator(self):
+        from src.workflow_engine.orchestrator import (
+            OrchestratorConfig,
+            WorkflowOrchestrator,
+        )
+
+        return WorkflowOrchestrator(OrchestratorConfig())
+
+    def test_forensics_analysis_before_git_commit_push(self):
+        orch = self._orchestrator()
+        assert orch._phase_name_to_order("forensics_analysis") == 11
+        assert orch._phase_name_to_order("git_commit_push") == 12
+
+    def test_matches_real_phase_ids_in_every_autopilot_yaml(self):
+        """Cross-checks the legacy fallback dict against the actual `id:`
+        field in every phase YAML file -- the same source of truth
+        _get_orchestrator's phase_order_map now reads from the DB copy of.
+        Catches the next drift automatically instead of relying on someone
+        noticing by hand again."""
+        import re
+        from pathlib import Path
+
+        orch = self._orchestrator()
+        phases_dir = (
+            Path(__file__).parent.parent
+            / "config"
+            / "workflows"
+            / "autopilot"
+        )
+        for phase_file in phases_dir.glob("*.yaml"):
+            if phase_file.name == "workflow.yaml":
+                continue
+            text = phase_file.read_text()
+            match = re.search(r"^id:\s*(\d+)", text, re.MULTILINE)
+            assert match, f"{phase_file.name} has no top-level id: field"
+            expected_order = int(match.group(1))
+            phase_name = phase_file.stem
+            assert orch._phase_name_to_order(phase_name) == expected_order, (
+                f"{phase_name}: _LEGACY_NAME_TO_ORDER says "
+                f"{orch._phase_name_to_order(phase_name)}, "
+                f"but {phase_file.name} declares id: {expected_order}"
+            )
+
+
+class TestTagCompletingTask:
+    """Regression: only one of mark_phase_complete's six external callers
+    ever set Task.action, and only for 'goto' -- 'retry' was never set
+    anywhere, so that badge was dead in the frontend. _tag_completing_task
+    is the single choke point every mark_phase_complete return path now
+    routes through, so it only needs testing once instead of at each of the
+    six callers separately."""
+
+    @pytest.fixture
+    def real_db(self, tmp_path):
+        from src.core.database import DatabaseManager as _DBM
+
+        db = _DBM(str(tmp_path / "test.db"))
+        db.create_tables()
+        return db
+
+    def _seed_completed_task(self, real_db, phase_id="phase-1", task_id="task-1"):
+        from src.core.database import Phase, Task, Workflow
+
+        with real_db.session_scope() as session:
+            session.add(
+                Workflow(id="wf-1", name="t", phases_folder_path="/tmp", status="active")
+            )
+            session.add(
+                Phase(
+                    id=phase_id, workflow_id="wf-1", order=1,
+                    name="development", description="d", done_definitions=["x"],
+                )
+            )
+            session.add(
+                Task(
+                    id=task_id,
+                    raw_description="r",
+                    done_definition="d",
+                    status="done",
+                    phase_id=phase_id,
+                    workflow_id="wf-1",
+                )
+            )
+
+    def test_goto_sets_action_and_target_phase(self, real_db):
+        from src.phases.phase_manager import PhaseManager
+
+        self._seed_completed_task(real_db)
+        pm = PhaseManager(db_manager=real_db)
+
+        with real_db.session_scope() as session:
+            pm._tag_completing_task(
+                session, "phase-1",
+                {"action": "goto", "target_phase": "architecture_design"},
+            )
+
+        from src.core.database import Task
+
+        with real_db.session_scope() as session:
+            task = session.query(Task).filter_by(id="task-1").first()
+            assert task.action == "goto"
+            assert task.action_target_phase == "architecture_design"
+
+    def test_retry_sets_action_and_target_phase(self, real_db):
+        """Regression proof: retry was never tagged anywhere in production
+        code before -- confirms the same choke point handles it too, not
+        just goto."""
+        from src.phases.phase_manager import PhaseManager
+
+        self._seed_completed_task(real_db)
+        pm = PhaseManager(db_manager=real_db)
+
+        with real_db.session_scope() as session:
+            pm._tag_completing_task(
+                session, "phase-1",
+                {"action": "retry", "target_phase": "development"},
+            )
+
+        from src.core.database import Task
+
+        with real_db.session_scope() as session:
+            task = session.query(Task).filter_by(id="task-1").first()
+            assert task.action == "retry"
+            assert task.action_target_phase == "development"
+
+    def test_continue_does_not_touch_action(self, real_db):
+        from src.phases.phase_manager import PhaseManager
+
+        self._seed_completed_task(real_db)
+        pm = PhaseManager(db_manager=real_db)
+
+        with real_db.session_scope() as session:
+            pm._tag_completing_task(
+                session, "phase-1", {"action": "continue", "target_phase": "qa_validation"},
+            )
+
+        from src.core.database import Task
+
+        with real_db.session_scope() as session:
+            task = session.query(Task).filter_by(id="task-1").first()
+            assert task.action == ""
+            assert task.action_target_phase is None
+
+    def test_no_completed_task_for_phase_is_safe(self, real_db):
+        """No 'done'/'failed' task exists for this phase yet -- must not
+        raise, just silently skip tagging."""
+        from src.core.database import Phase, Workflow
+        from src.phases.phase_manager import PhaseManager
+
+        with real_db.session_scope() as session:
+            session.add(
+                Workflow(id="wf-1", name="t", phases_folder_path="/tmp", status="active")
+            )
+            session.add(
+                Phase(
+                    id="phase-1", workflow_id="wf-1", order=1,
+                    name="development", description="d", done_definitions=["x"],
+                )
+            )
+
+        pm = PhaseManager(db_manager=real_db)
+        with real_db.session_scope() as session:
+            pm._tag_completing_task(
+                session, "phase-1", {"action": "goto", "target_phase": "architecture_design"},
+            )  # should not raise
+
+    def test_force_goto_path_tags_the_completing_task(self, real_db):
+        """Integration-level: mark_phase_complete(force_action='goto') --
+        the arbitration path, _resolve_arbitration_outcome's real call
+        shape -- actually tags the completing task end-to-end, not just
+        the isolated _tag_completing_task unit."""
+        from src.core.database import Phase, PhaseExecution, Task, Workflow
+        from src.phases.phase_manager import PhaseManager
+
+        with real_db.session_scope() as session:
+            session.add(
+                Workflow(id="wf-1", name="t", phases_folder_path="/tmp", status="active")
+            )
+            session.add(
+                Phase(
+                    id="phase-dev", workflow_id="wf-1", order=4,
+                    name="development", description="d", done_definitions=["x"],
+                )
+            )
+            session.add(
+                Phase(
+                    id="phase-arch", workflow_id="wf-1", order=3,
+                    name="architecture_design", description="d", done_definitions=["x"],
+                )
+            )
+            session.add(
+                PhaseExecution(
+                    id="exec-dev", phase_id="phase-dev", workflow_execution_id="wf-1",
+                    status="in_progress",
+                )
+            )
+            session.add(
+                Task(
+                    id="task-dev",
+                    raw_description="r",
+                    done_definition="d",
+                    status="done",
+                    phase_id="phase-dev",
+                    workflow_id="wf-1",
+                )
+            )
+
+        pm = PhaseManager(db_manager=real_db)
+        pm.mark_phase_complete(
+            "phase-dev",
+            "Arbiter: return for another attempt",
+            force_action="goto",
+            force_target_phase="architecture_design",
+            force_reason="arbiter says redo the architecture",
+        )
+
+        with real_db.session_scope() as session:
+            task = session.query(Task).filter_by(id="task-dev").first()
+            assert task.action == "goto"
+            assert task.action_target_phase == "architecture_design"

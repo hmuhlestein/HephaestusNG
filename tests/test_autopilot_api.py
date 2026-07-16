@@ -208,7 +208,14 @@ class TestQueueRerun:
         fake_service.start = AsyncMock(return_value={"started": True})
         fake_service.stop = AsyncMock(return_value={"stopped": True})
         monkeypatch.setattr(
-            "src.autopilot.service.get_autopilot_service", lambda: fake_service
+            "src.autopilot.service.get_autopilot_service", lambda project_id: fake_service
+        )
+        monkeypatch.setattr(
+            "src.autopilot.orchestrator._resolve_project_id", lambda project_path: "proj-fixed"
+        )
+        monkeypatch.setattr(
+            "src.autopilot.orchestrator._get_or_create_project_id",
+            lambda project_path: "proj-fixed",
         )
 
         popen_mock = Mock(side_effect=AssertionError("subprocess.Popen must not be called by rerun"))
@@ -238,7 +245,14 @@ class TestQueueRerun:
         fake_service.start = AsyncMock(return_value={"started": True})
         fake_service.stop = AsyncMock(return_value={"stopped": True})
         monkeypatch.setattr(
-            "src.autopilot.service.get_autopilot_service", lambda: fake_service
+            "src.autopilot.service.get_autopilot_service", lambda project_id: fake_service
+        )
+        monkeypatch.setattr(
+            "src.autopilot.orchestrator._resolve_project_id", lambda project_path: "proj-fixed"
+        )
+        monkeypatch.setattr(
+            "src.autopilot.orchestrator._get_or_create_project_id",
+            lambda project_path: "proj-fixed",
         )
 
         resp = client.post(
@@ -270,7 +284,14 @@ class TestQueueRerun:
         )
         fake_service.stop = AsyncMock(return_value={"stopped": True})
         monkeypatch.setattr(
-            "src.autopilot.service.get_autopilot_service", lambda: fake_service
+            "src.autopilot.service.get_autopilot_service", lambda project_id: fake_service
+        )
+        monkeypatch.setattr(
+            "src.autopilot.orchestrator._resolve_project_id", lambda project_path: "proj-fixed"
+        )
+        monkeypatch.setattr(
+            "src.autopilot.orchestrator._get_or_create_project_id",
+            lambda project_path: "proj-fixed",
         )
 
         resp = client.post(
@@ -296,7 +317,14 @@ class TestQueueRerun:
         )
         fake_service.stop = AsyncMock(return_value={"stopped": True})
         monkeypatch.setattr(
-            "src.autopilot.service.get_autopilot_service", lambda: fake_service
+            "src.autopilot.service.get_autopilot_service", lambda project_id: fake_service
+        )
+        monkeypatch.setattr(
+            "src.autopilot.orchestrator._resolve_project_id", lambda project_path: "proj-fixed"
+        )
+        monkeypatch.setattr(
+            "src.autopilot.orchestrator._get_or_create_project_id",
+            lambda project_path: "proj-fixed",
         )
 
         resp = client.post(
@@ -305,6 +333,43 @@ class TestQueueRerun:
         )
 
         assert resp.status_code == 400, resp.text
+
+    def test_rerun_rejects_when_over_concurrency_cap(
+        self, client, autopilot_dirs, monkeypatch, tmp_path
+    ):
+        """Regression: rerun_design used to call service.start() with no
+        concurrency-cap check at all, unlike POST /start -- a "rerun" on a
+        brand-new, not-yet-running project could silently exceed
+        max_concurrent_projects even while POST /start would reject the
+        identical project with a 409."""
+        project_dir = tmp_path / "project"
+        (project_dir / ".hephaestus" / "designs").mkdir(parents=True)
+        (project_dir / ".hephaestus" / "designs" / "my_design.md").write_text("# Design")
+
+        monkeypatch.setattr(
+            "src.autopilot.orchestrator._resolve_project_id", lambda project_path: None
+        )
+        monkeypatch.setattr(
+            "src.autopilot.orchestrator._get_or_create_project_id",
+            lambda project_path: "proj-over-cap",
+        )
+        fake_registry = Mock()
+        fake_registry.try_reserve.return_value = (
+            False,
+            "Max concurrent projects (2) reached: proj-a, proj-b. "
+            "Stop one before starting another.",
+        )
+        monkeypatch.setattr(
+            "src.autopilot.service.get_registry", lambda: fake_registry
+        )
+
+        resp = client.post(
+            "/api/autopilot/queue/rerun",
+            json={"filename": "my_design.md", "project_path": str(project_dir)},
+        )
+
+        assert resp.status_code == 409, resp.text
+        assert "proj-a" in resp.text
 
 
 # ── Caching ──────────────────────────────────────────────────────
@@ -610,8 +675,12 @@ class TestPipelineStatus:
                     "error": None,
                 }
 
+        # No project_id given (global status) -- the handler asks the
+        # registry for whatever's running, not a single global service.
+        fake_registry = Mock()
+        fake_registry.running.return_value = [FakeService()]
         monkeypatch.setattr(
-            "src.autopilot.service.get_autopilot_service", lambda: FakeService()
+            "src.autopilot.service.get_registry", lambda: fake_registry
         )
 
         resp = client.get("/api/autopilot/status")
@@ -621,6 +690,55 @@ class TestPipelineStatus:
         # No AutopilotProject DB row registered for this path (no DB wired
         # in this test) -- falls back to the directory basename.
         assert data["running_project_name"] == "some-project"
+
+    def test_status_sums_design_counts_across_concurrently_running_projects(
+        self, client, autopilot_dirs, monkeypatch
+    ):
+        """Regression: with no project_id given, the global status endpoint
+        used to report running_services[0].status() outright -- whichever
+        project happened to be first in registry dict-iteration order.
+        Concurrent projects are only possible at all since the multi-project
+        concurrency diff; before that, there was only ever one service to
+        ask. designs_processed/succeeded/failed must be summed across every
+        running project, not just the first one's."""
+        import src.mcp.autopilot_api as api_mod
+
+        api_mod._cache.clear()
+
+        class FakeService:
+            def __init__(self, processed, succeeded, failed):
+                self.running = True
+                self._processed = processed
+                self._succeeded = succeeded
+                self._failed = failed
+
+            def status(self):
+                return {
+                    "running": True,
+                    "project_path": "/Users/test/project-a",
+                    "current_design": None,
+                    "designs_processed": self._processed,
+                    "designs_succeeded": self._succeeded,
+                    "designs_failed": self._failed,
+                    "elapsed_seconds": 0,
+                    "error": None,
+                }
+
+        fake_registry = Mock()
+        fake_registry.running.return_value = [
+            FakeService(5, 4, 1),
+            FakeService(3, 2, 1),
+        ]
+        monkeypatch.setattr(
+            "src.autopilot.service.get_registry", lambda: fake_registry
+        )
+
+        resp = client.get("/api/autopilot/status")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["designs_processed"] == 8
+        assert data["designs_succeeded"] == 6
+        assert data["designs_failed"] == 2
 
 
 # ── Messages ─────────────────────────────────────────────────────
@@ -1093,10 +1211,21 @@ class TestProjectDesigns:
         client, dirs = project_client
         pid = self._create_project(client, dirs)
 
-        from src.core.database import AutopilotDesign, Workflow, get_db
+        from src.core.database import (
+            AutopilotDesign,
+            Workflow,
+            WorkflowDefinition,
+            get_db,
+        )
 
         design_id = "des-test-orphan"
         with get_db() as db:
+            # Workflow.definition_id is a foreign key to workflow_definitions
+            # -- these rows must exist for the Workflow inserts below to
+            # satisfy PRAGMA foreign_keys=ON.
+            db.add(WorkflowDefinition(id="feature_architect", name="Feature Architect"))
+            db.add(WorkflowDefinition(id="autopilot", name="Autopilot"))
+
             db.add(
                 AutopilotDesign(
                     id=design_id,

@@ -218,6 +218,12 @@ class Task(Base):
     failure_reason = Column(Text)
     estimated_complexity = Column(Integer)
     action = Column(String, default="")  # Engine action: 'continue', 'retry', 'goto'
+    # Phase name the engine returned to/retried, when action is 'goto' or
+    # 'retry' -- set alongside action by PhaseManager.mark_phase_complete's
+    # single choke point, so the frontend can show WHICH phase (and, via
+    # SESSION_ROLES, which agent) a goto is actually returning to instead
+    # of a bare, contextless "goto" badge.
+    action_target_phase = Column(String)
 
     # Persisted count of orchestrator.attempt_recovery's automatic retries.
     # attempt_recovery previously read this from the get_tasks() dict, which
@@ -1388,6 +1394,7 @@ class DatabaseManager:
         self._migrate_autopilot_designs_error_column()
         self._migrate_workflow_paused_by_column()
         self._migrate_workflow_status_reason_column()
+        self._migrate_task_action_target_phase_column()
 
     def _create_fts5_tables(self):
         """Create FTS5 virtual tables and triggers for ticket search."""
@@ -1922,6 +1929,24 @@ class DatabaseManager:
                 logger.info("Migrated workflows.status_reason column")
         except Exception as e:
             logger.debug(f"workflows.status_reason migration (may already exist): {e}")
+
+    def _migrate_task_action_target_phase_column(self):
+        """Add tasks.action_target_phase for existing databases.
+
+        Idempotent - safe to call on every startup.
+        """
+        try:
+            with self.engine.connect() as conn:
+                try:
+                    conn.execute(
+                        text("ALTER TABLE tasks ADD COLUMN action_target_phase VARCHAR")
+                    )
+                except Exception:
+                    pass  # Column already exists
+                conn.commit()
+                logger.info("Migrated tasks.action_target_phase column")
+        except Exception as e:
+            logger.debug(f"tasks.action_target_phase migration (may already exist): {e}")
 
     def get_session(self):
         """Get a database session."""

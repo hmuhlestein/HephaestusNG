@@ -283,6 +283,7 @@ class FrontendAPI:
                     "phase_id": task.phase_id,
                     "workflow_id": task.workflow_id,
                     "action": task.action or "",
+                    "action_target_phase": task.action_target_phase or None,
                     "depends_on": task.depends_on,
                     "parallel_group": task.parallel_group,
                     "max_concurrent": task.max_concurrent,
@@ -371,6 +372,7 @@ class FrontendAPI:
                             "status": task.status,
                             "priority": task.priority,
                             "action": task.action or "",
+                            "action_target_phase": task.action_target_phase or None,
                             "started_at": task.started_at.isoformat() + "Z"
                             if task.started_at
                             else None,
@@ -898,6 +900,7 @@ class FrontendAPI:
                 "workflow_id": task.workflow_id,
                 # Engine action (continue, retry, goto)
                 "action": task.action or "",
+                "action_target_phase": task.action_target_phase or None,
                 # Deduplication fields
                 "duplicate_of_task_id": task.duplicate_of_task_id,
                 "similarity_score": task.similarity_score,
@@ -1165,6 +1168,7 @@ class FrontendAPI:
                 "user_prompt": task.enriched_description or task.raw_description,
                 "workflow_id": task.workflow_id,
                 "action": task.action or "",
+                "action_target_phase": task.action_target_phase or None,
                 "phase_info": phase_info,
                 "agent_info": agent_info,
                 "parent_task": parent_task,
