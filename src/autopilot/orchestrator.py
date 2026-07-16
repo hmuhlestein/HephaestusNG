@@ -4868,6 +4868,7 @@ def _create_corrective_task(
             workflow_id=workflow_id,
             created_by_agent_id=_orchestrator_agent_id,  # see _create_phase_task
             action="retry",
+            action_target_phase=phase_name,
         )
         db.add(task)
         db.commit()
