@@ -106,10 +106,16 @@ class TestCreateAgentForTask:
     @pytest.mark.asyncio
     async def test_creates_agent_with_valid_task(self, mock_agent_manager, sample_task, db_manager):
         """Should create agent successfully with valid task."""
-        # Mock dependencies
-        mock_agent_manager.branch_manager.create_worktree = MagicMock(
-            return_value="/tmp/test-project-agent"
+        # Mock dependencies — must mock create_agent_branch (not create_worktree)
+        # because the workflow's working_directory doesn't contain '.worktrees/'
+        # so the code takes the isolated-worktree branch.
+        mock_agent_manager.branch_manager.create_agent_branch = MagicMock(
+            return_value={
+                "working_directory": "/tmp/test-project-agent",
+                "branch_name": "agent-test-branch",
+            }
         )
+        mock_agent_manager.branch_manager.switch_to_branch = MagicMock()
         mock_agent_manager.llm_provider.generate_agent_prompt = AsyncMock(
             return_value="You are an AI agent."
         )
@@ -120,7 +126,8 @@ class TestCreateAgentForTask:
         mock_agent_manager.tmux_server.new_session.return_value = mock_session
         mock_session.attached_window.attached_pane = MagicMock()
         
-        with patch("src.agents.manager.get_cli_agent") as mock_get_cli:
+        with patch("src.agents.manager.get_cli_agent") as mock_get_cli, \
+             patch("src.agents.manager.asyncio.sleep", new_callable=AsyncMock):
             mock_cli = MagicMock()
             mock_cli.get_launch_command.return_value = ["pi", "--task", "test"]
             mock_get_cli.return_value = mock_cli
@@ -171,9 +178,13 @@ class TestCreateAgentForTask:
                 "feature_id": "calculator-module",
             }
 
-        mock_agent_manager.branch_manager.create_worktree = MagicMock(
-            return_value="/tmp/test-project-agent"
+        mock_agent_manager.branch_manager.create_agent_branch = MagicMock(
+            return_value={
+                "working_directory": "/tmp/test-project-agent",
+                "branch_name": "agent-test-branch",
+            }
         )
+        mock_agent_manager.branch_manager.switch_to_branch = MagicMock()
         mock_agent_manager.llm_provider.generate_agent_prompt = AsyncMock(
             return_value="You are an AI agent."
         )
@@ -183,7 +194,8 @@ class TestCreateAgentForTask:
         mock_agent_manager.tmux_server.new_session.return_value = mock_session
         mock_session.attached_window.attached_pane = MagicMock()
 
-        with patch("src.agents.manager.get_cli_agent") as mock_get_cli:
+        with patch("src.agents.manager.get_cli_agent") as mock_get_cli, \
+             patch("src.agents.manager.asyncio.sleep", new_callable=AsyncMock):
             mock_cli = MagicMock()
             mock_cli.get_launch_command.return_value = ["pi", "--task", "test"]
             mock_get_cli.return_value = mock_cli
@@ -230,9 +242,13 @@ class TestCreateAgentForTask:
                 "feature_id": "calculator-module",
             }
 
-        mock_agent_manager.branch_manager.create_worktree = MagicMock(
-            return_value="/tmp/test-project-agent"
+        mock_agent_manager.branch_manager.create_agent_branch = MagicMock(
+            return_value={
+                "working_directory": "/tmp/test-project-agent",
+                "branch_name": "agent-test-branch",
+            }
         )
+        mock_agent_manager.branch_manager.switch_to_branch = MagicMock()
         mock_agent_manager.llm_provider.generate_agent_prompt = AsyncMock(
             return_value="You are an AI agent."
         )
@@ -242,7 +258,8 @@ class TestCreateAgentForTask:
         mock_agent_manager.tmux_server.new_session.return_value = mock_session
         mock_session.attached_window.attached_pane = MagicMock()
 
-        with patch("src.agents.manager.get_cli_agent") as mock_get_cli:
+        with patch("src.agents.manager.get_cli_agent") as mock_get_cli, \
+             patch("src.agents.manager.asyncio.sleep", new_callable=AsyncMock):
             mock_cli = MagicMock()
             mock_cli.get_launch_command.return_value = ["pi", "--task", "test"]
             mock_get_cli.return_value = mock_cli
@@ -267,9 +284,13 @@ class TestCreateAgentForTask:
     @pytest.mark.asyncio
     async def test_creates_agent_log_entry(self, mock_agent_manager, sample_task, db_manager):
         """Should create agent log entry when agent is created."""
-        mock_agent_manager.branch_manager.create_worktree = MagicMock(
-            return_value="/tmp/test-project-agent"
+        mock_agent_manager.branch_manager.create_agent_branch = MagicMock(
+            return_value={
+                "working_directory": "/tmp/test-project-agent",
+                "branch_name": "agent-test-branch",
+            }
         )
+        mock_agent_manager.branch_manager.switch_to_branch = MagicMock()
         mock_agent_manager.llm_provider.generate_agent_prompt = AsyncMock(
             return_value="You are an AI agent."
         )
@@ -279,7 +300,8 @@ class TestCreateAgentForTask:
         mock_agent_manager.tmux_server.new_session.return_value = mock_session
         mock_session.attached_window.attached_pane = MagicMock()
         
-        with patch("src.agents.manager.get_cli_agent") as mock_get_cli:
+        with patch("src.agents.manager.get_cli_agent") as mock_get_cli, \
+             patch("src.agents.manager.asyncio.sleep", new_callable=AsyncMock):
             mock_cli = MagicMock()
             mock_cli.get_launch_command.return_value = ["pi", "--task", "test"]
             mock_get_cli.return_value = mock_cli
@@ -401,6 +423,7 @@ class TestRestartAgent:
                 status="in_progress",
             )
             session.add(task)
+            session.flush()  # Ensure task exists before agent references it via FK
             agent = Agent(
                 id="agent-2",
                 system_prompt="Test prompt",
@@ -434,7 +457,15 @@ class TestRestartAgent:
     async def test_increments_restart_count(self, mock_agent_manager, db_manager):
         """Should increment restart count on successful restart."""
         with db_manager.session_scope() as session:
-            # Create task for the agent
+            # Create workflow and phase for FK references
+            session.add(Workflow(
+                id="wf-1", name="Test WF", status="active", phases_folder_path="/tmp",
+            ))
+            session.add(Phase(
+                id="phase-1", workflow_id="wf-1", name="impl", order=1,
+                description="Implement", done_definitions=["done"],
+            ))
+            # Create task for the agent (no assigned_agent_id yet — agent doesn't exist)
             task = Task(
                 id="task-1",
                 workflow_id="wf-1",
@@ -442,9 +473,9 @@ class TestRestartAgent:
                 raw_description="Test task",
                 done_definition="Done",
                 status="in_progress",
-                assigned_agent_id="agent-3",
             )
             session.add(task)
+            session.flush()  # Ensure task exists before agent references it via FK
             
             agent = Agent(
                 id="agent-3",
