@@ -283,13 +283,15 @@ additional_notes: |
   - Include error handling
   - Write meaningful tests
   - Handle edge cases
-  
+  - For bug fixes: stash-verify each new test (fails without your fix, passes with it) before marking done
+
   DO NOT:
   - Deviate from architecture without documenting why
   - Skip tests
   - Leave TODO/FIXME without tracking
   - Ignore error handling
   - Create code that doesn't match the interface spec
+  - Mark a bug-fix test done without proving it can fail (stash-verify it)
   
   
   ═══════════════════════════════════════════════════════════════════════
