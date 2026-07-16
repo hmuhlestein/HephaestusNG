@@ -4,6 +4,7 @@ name: adversarial_review
 # score_* function, not the generic heuristic evaluator) -- see GATED_PHASES.
 spec_gate: true
 thinking_level: high
+cli_tool: claude
 description: |
   Assume the code is broken. Prove it.
 

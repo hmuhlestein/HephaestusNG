@@ -1299,14 +1299,15 @@ class MonitoringLoop:
                 return None
 
             # Detect garbled TUI output (CLI rendering corruption)
-            # Get TUI status patterns from the active CLI interface
+            # Get TUI status patterns from this agent's own CLI interface --
+            # not a global default, since a mixed fleet (e.g. pi + claude)
+            # would otherwise check every agent's output against pi's
+            # patterns regardless of what CLI it's actually running.
             tui_patterns = None
             try:
-                from src.core.simple_config import get_config
                 from src.interfaces.cli_interface import get_cli_agent
 
-                config = get_config()
-                cli_agent = get_cli_agent(getattr(config, "cli_agent_type", "pi"))
+                cli_agent = get_cli_agent(agent.cli_type)
                 tui_patterns = cli_agent.get_tui_status_patterns()
             except Exception:
                 pass  # No CLI agent configured — use no patterns (strictest check)

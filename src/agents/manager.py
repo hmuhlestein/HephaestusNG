@@ -327,8 +327,20 @@ class AgentManager:
             )
 
             # 3. Prepare environment variables for GLM if needed
-            # Use phase config with fallback to global defaults
-            model = phase_cli_model or getattr(self.config, "cli_model", "sonnet")
+            # Use phase config with fallback to global defaults. The global
+            # agents.cli_model is a single string paired with
+            # agents.default_cli_tool (e.g. an OpenRouter path for pi) --
+            # only honor it when this task's resolved cli_type actually IS
+            # that default. A phase that opts into a different cli_tool
+            # must fall back to that CLI's own default_model instead, or it
+            # launches with a model string the CLI can't parse.
+            cli_agent = get_cli_agent(cli_type)
+            global_model = (
+                getattr(self.config, "cli_model", None)
+                if cli_type == self.config.default_cli_tool
+                else None
+            )
+            model = phase_cli_model or global_model or cli_agent.default_model
             env_vars = self._build_glm_env_vars(
                 model, phase_glm_token_env, agent_id, label="agent"
             )
@@ -364,8 +376,7 @@ class AgentManager:
                 session_name, working_directory=branch_path, env_vars=env_vars
             )
 
-            # 5. Launch CLI agent
-            cli_agent = get_cli_agent(cli_type)
+            # 5. Launch CLI agent (cli_agent already resolved above)
 
             # Resolve phase_name before launching so pi can reference the agent file
             phase_name = None
@@ -1377,8 +1388,20 @@ class AgentManager:
                 except Exception:
                     pass
 
-            # Prepare environment variables for GLM if needed
-            model = agent.cli_model or getattr(self.config, "cli_model", "sonnet")
+            # Prepare environment variables for GLM if needed. Same
+            # cli_type-scoped fallback as create_agent_for_task_direct --
+            # the global agents.cli_model only applies to the CLI it's
+            # paired with (agents.default_cli_tool).
+            global_model = (
+                getattr(self.config, "cli_model", None)
+                if agent.cli_type == self.config.default_cli_tool
+                else None
+            )
+            model = (
+                agent.cli_model
+                or global_model
+                or get_cli_agent(agent.cli_type).default_model
+            )
             env_vars = self._build_glm_env_vars(
                 model, None, agent_id, label="restarted agent"
             )

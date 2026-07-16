@@ -10,6 +10,7 @@ To add a new CLI tool: subclass CLIAgentInterface and register in CLI_AGENTS.
 import logging
 import os
 import re
+import uuid
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -41,6 +42,14 @@ class CLIAgentInterface(ABC):
     #: (SOLID review 3.3) — a new CLI agent opts into chunked delivery by
     #: setting this attribute instead of the caller needing to know its type.
     needs_chunked_delivery: bool = False
+
+    #: This CLI's own sensible default model, used when no phase/task
+    #: override is given. hephaestus_config.yaml's global agents.cli_model
+    #: is a single string paired with agents.default_cli_tool (historically
+    #: an OpenRouter path for pi) -- callers must not apply it to a
+    #: different CLI a phase opts into, or that CLI launches with a model
+    #: string it can't parse. Override per subclass.
+    default_model: str = "sonnet"
 
     def get_session_args(self, session_id: str) -> str:
         """Return the CLI-specific flag to resume/create a named session.
@@ -257,7 +266,7 @@ class ClaudeCodeAgent(CLIAgentInterface):
 
         task_id = kwargs.get("task_id", "default")
         prompt_file = self._save_prompt_to_file(system_prompt, "claude_prompt", task_id)
-        model = self._get_model(kwargs, config, "sonnet")
+        model = self._get_model(kwargs, config, self.default_model)
 
         # Reasoning budget
         effort_map = {
@@ -284,10 +293,27 @@ class ClaudeCodeAgent(CLIAgentInterface):
 
         from src.core.utils import is_glm_model
 
-        if is_glm_model(model):
-            command = f'claude --model sonnet{effort_flag} --dangerously-skip-permissions {mcp_flag} --append-system-prompt "$(cat {prompt_file})" --verbose'
+        resolved_model = "sonnet" if is_glm_model(model) else model
+        base_flags = (
+            f'--model {resolved_model}{effort_flag} --dangerously-skip-permissions '
+            f'{mcp_flag} --append-system-prompt "$(cat {prompt_file})" --verbose'
+        )
+
+        session_id = kwargs.get("session_id", "")
+        if session_id:
+            # Unlike pi's single --session-id (create-or-resume), Claude
+            # requires a UUID and splits this into two flags that each only
+            # work once: --session-id errors "already in use" on a repeat
+            # id, --resume errors "no conversation found" on a fresh one.
+            # Try create-new first, fall back to resume -- covers both the
+            # first launch and every goto/retry that reuses this id.
+            session_uuid = str(uuid.uuid5(uuid.NAMESPACE_URL, session_id))
+            command = (
+                f"(claude --session-id {session_uuid} {base_flags} || "
+                f"claude --resume {session_uuid} {base_flags})"
+            )
         else:
-            command = f'claude --model {model}{effort_flag} --dangerously-skip-permissions {mcp_flag} --append-system-prompt "$(cat {prompt_file})" --verbose'
+            command = f"claude {base_flags}"
 
         return command
 
@@ -333,6 +359,8 @@ class ClaudeCodeAgent(CLIAgentInterface):
 class OpenCodeAgent(CLIAgentInterface):
     """Implementation for OpenCode CLI."""
 
+    default_model = "anthropic/claude-sonnet-4"
+
     def get_launch_command(self, system_prompt: str, **kwargs) -> str:
         from src.core.simple_config import get_config
 
@@ -342,7 +370,7 @@ class OpenCodeAgent(CLIAgentInterface):
         prompt_file = self._save_prompt_to_file(
             system_prompt, "opencode_prompt", task_id
         )
-        model = self._get_model(kwargs, config, "anthropic/claude-sonnet-4")
+        model = self._get_model(kwargs, config, self.default_model)
 
         return f'opencode run "$(cat {prompt_file})" --model {model}'
 
@@ -496,6 +524,7 @@ class PiAgent(CLIAgentInterface):
 
     display_name = "Pi"
     needs_chunked_delivery = True
+    default_model = "openrouter/xiaomi/mimo-v2.5-pro"
 
     def get_session_args(self, session_id: str) -> str:
         """Pi uses --session-id to resume or create a named session.
@@ -525,7 +554,7 @@ class PiAgent(CLIAgentInterface):
             else None
         )
 
-        model = self._get_model(kwargs, config, "openrouter/xiaomi/mimo-v2.5-pro")
+        model = self._get_model(kwargs, config, self.default_model)
 
         # Thinking budget
         valid_thinking = {"off", "minimal", "low", "medium", "high", "xhigh"}
