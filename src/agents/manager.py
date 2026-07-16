@@ -736,9 +736,7 @@ class AgentManager:
         # Check if session already exists
         if self.tmux_server.has_session(session_name):
             logger.warning(f"Session {session_name} already exists, killing it")
-            existing = self.tmux_server.get_by_id(session_name)
-            if existing:
-                existing.kill_session()
+            self.tmux_server.kill_session(session_name)
 
         # Create new session with working directory (should be worktree path)
         session_kwargs = {
