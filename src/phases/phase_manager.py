@@ -741,14 +741,14 @@ class PhaseManager:
             .filter(
                 Phase.workflow_id == phase.workflow_id,
                 Phase.order >= target_phase.order,
-                Phase.order < phase.order,
-                PhaseExecution.status == "in_progress",
+                PhaseExecution.status.in_(["in_progress", "completed"]),
             )
             .all()
         )
         for s in stale:
-            s.status = "completed"
-            s.completed_at = datetime.utcnow()
+            s.status = "pending"
+            s.completed_at = None
+            s.task_creation_claimed_at = None
         if stale:
             session.commit()
 
@@ -840,27 +840,33 @@ class PhaseManager:
         )
         if target_phase:
             logger.info(f"Goto phase {target_phase.name} from {phase.name}")
-            # Reset any phase_executions between target and current that are
-            # still "in_progress" — these are stale records from a prior pass
-            # that were never closed when the pipeline rewound.
+            # Reset any phase_executions at or after the target phase that are
+            # still "in_progress" or "completed" — these are stale records
+            # from a prior pass that were never closed when the pipeline
+            # rewound. Without resetting "completed" executions, a later
+            # re-entry of that phase (e.g. adversarial_review after
+            # architectural_review completes) finds its execution already
+            # "completed" and _case_in_progress_complete re-evaluates it
+            # without running it — finding consumed artifacts and sending the
+            # pipeline back with a confusing "no result.json found" message.
             stale = (
                 session.query(PhaseExecution)
                 .join(Phase)
                 .filter(
                     Phase.workflow_id == phase.workflow_id,
                     Phase.order >= target_phase.order,
-                    Phase.order < phase.order,
-                    PhaseExecution.status == "in_progress",
+                    PhaseExecution.status.in_(["in_progress", "completed"]),
                 )
                 .all()
             )
             for s in stale:
-                s.status = "completed"
-                s.completed_at = datetime.utcnow()
+                s.status = "pending"
+                s.completed_at = None
+                s.task_creation_claimed_at = None
             if stale:
                 session.commit()
                 logger.info(
-                    f"Reset {len(stale)} stale in_progress phase(s) before GOTO to {target_phase.name}"
+                    f"Reset {len(stale)} stale phase execution(s) at/after {target_phase.name}"
                 )
 
             self._consume_gate_artifacts_for(session, phase)
