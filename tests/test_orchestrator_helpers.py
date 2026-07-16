@@ -1540,6 +1540,33 @@ class TestResumeStuckWorkflowTasks:
             task = session.query(Task).filter_by(id="task-1").first()
             assert task.assigned_agent_id == "live-agent"
 
+    @patch("src.autopilot.orchestrator.create_agent_for_task_direct")
+    def test_clears_stale_goto_action_on_restart(self, mock_create_agent, orch_db_env, tmp_path):
+        """Regression: this row is reused (not recreated) for the restart --
+        a task previously tagged action='goto' by _tag_completing_task (from
+        an earlier life, before ending up 'failed'/'blocked' here) kept
+        showing that stale badge, with a now-meaningless action_target_phase,
+        on what the UI displays as a brand new attempt. Observed live: a
+        restarted task still showed "goto" with no (or a wrong) target."""
+        from src.autopilot.orchestrator import OrchestratorLogger, _resume_stuck_workflow_tasks
+        from src.core.database import Task
+
+        self._make_agent(orch_db_env, "new-agent", "working")
+        mock_create_agent.return_value = {"agent_id": "new-agent"}
+        self._make_workflow(orch_db_env, "wf-1", "paused")
+        self._make_task(orch_db_env, "task-1", "wf-1", "failed")
+        with orch_db_env.session_scope() as session:
+            task = session.query(Task).filter_by(id="task-1").first()
+            task.action = "goto"
+            task.action_target_phase = "development"
+
+        _resume_stuck_workflow_tasks("wf-1", OrchestratorLogger(tmp_path))
+
+        with orch_db_env.session_scope() as session:
+            task = session.query(Task).filter_by(id="task-1").first()
+            assert task.action == ""
+            assert task.action_target_phase is None
+
 
 class TestCreateAgentForTaskDirectAppStateGuard:
     """Regression: get_app_state() was called BEFORE create_agent_for_task_

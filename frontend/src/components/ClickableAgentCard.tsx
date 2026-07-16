@@ -111,7 +111,7 @@ const ClickableAgentCard: React.FC<ClickableAgentCardProps> = ({
                 <StatusBadge status={agent.current_task.status} size="sm" />
                 {agent.current_task.action === 'goto' && (
                   <span className="px-1.5 py-0.5 text-[10px] font-medium bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300 rounded-full">
-                    ↩ goto{agent.current_task.action_target_phase ? ` → ${agent.current_task.action_target_phase}` : ''}
+                    ↩ goto{agent.current_task.action_target_phase ? ` (${agent.current_task.action_target_phase})` : ''}
                   </span>
                 )}
                 {agent.current_task.action === 'retry' && (

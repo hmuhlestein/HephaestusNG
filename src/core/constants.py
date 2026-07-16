@@ -28,3 +28,10 @@ DESIGN_CONTEXT_SUBDIR = ".hephaestus/designs"
 
 # Pipeline metrics filename
 PIPELINE_METRICS_FILE = "pipeline_metrics.json"
+
+# Prefix _create_phase_task (orchestrator.py) embeds in a goto/retry task's
+# description ahead of the gate's actual finding -- centralized here so the
+# one place that needs to strip it back out for display (autopilot_api.py's
+# get_project_design_status) doesn't hardcode a second, driftable copy of
+# the exact same label text.
+GOTO_REASON_PREFIX = "WHY YOU'RE HERE: "

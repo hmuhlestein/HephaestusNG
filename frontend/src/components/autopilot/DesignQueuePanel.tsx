@@ -899,6 +899,17 @@ const TaskRow: React.FC<{
 }> = ({ task, onTaskClick, onTaskUpdate }) => {
   const [actionPending, setActionPending] = useState<{ pause?: boolean; stop?: boolean; resume?: boolean; rerun?: boolean }>({});
 
+  // What the agent is actually doing, not the raw task prompt: the goto
+  // reason (why this task exists -- a gate sent it back with a specific
+  // finding to fix) when there is one, else the phase's own config-sourced
+  // description (Phase.description, from that phase's YAML) instead of
+  // re-parsing it back out of the "Execute {phase}: ..." task text.
+  // Collapsed to one line -- a multi-line reason/description would
+  // otherwise wrap oddly in this compact, single-line-truncated row.
+  const whatItsDoing = (task.goto_reason || task.phase_description || task.description || '')
+    .replace(/\s*\n+\s*/g, ' ')
+    .trim();
+
   const runTaskAction = async (action: 'pause' | 'stop' | 'resume' | 'rerun') => {
     setActionPending((p) => ({ ...p, [action]: true }));
     try {
@@ -931,10 +942,19 @@ const TaskRow: React.FC<{
         className="flex-1 min-w-0 cursor-pointer"
         onClick={() => onTaskClick(task.id)}
       >
-        <p className="text-xs text-gray-600 truncate">{task.description || task.id.substring(0, 8)}</p>
-        <div className="flex items-center gap-2 mt-0.5">
+        <div className="flex items-center gap-2">
           {task.phase_name && (
-            <span className="text-[10px] text-gray-400">{task.phase_name}</span>
+            <span className="text-[10px] text-gray-900">{task.phase_name}</span>
+          )}
+          {task.action === 'goto' && (
+            <span className="text-[10px] px-1 py-0.5 rounded bg-amber-100 text-amber-700">
+              ↩ goto{task.action_target_phase ? ` (${task.action_target_phase})` : ''}
+            </span>
+          )}
+          {task.action === 'retry' && (
+            <span className="text-[10px] px-1 py-0.5 rounded bg-blue-100 text-blue-700">
+              ↻ retry
+            </span>
           )}
           {task.agent_status && task.agent_status !== 'terminated' && (
             <span className={`text-[10px] px-1 py-0.5 rounded ${
@@ -951,6 +971,12 @@ const TaskRow: React.FC<{
             </span>
           )}
         </div>
+        <p
+          className="text-xs text-gray-600 truncate mt-0.5"
+          title={task.description || undefined}
+        >
+          {whatItsDoing || task.id.substring(0, 8)}
+        </p>
       </div>
       {task.agent_id && (
         <a

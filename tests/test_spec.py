@@ -116,6 +116,40 @@ class TestScoreScopeReview:
         assert "admin dashboard" in meta["reason"]
         assert "password reset flow" in meta["reason"]
 
+    def test_drift_with_no_itemized_details_falls_back_to_summary(self):
+        """Regression: an agent can write verdict='FAIL' (or the analysis_
+        summary.scope_drift_detected=True variant) using a schema this
+        scorer doesn't itemize from (e.g. a nested "analysis": {...} shape
+        with aggregate counts instead of flat out_of_scope/missing lists)
+        -- out_of_scope/missing then default to [], and reason_parts ends
+        up empty. Observed live: the resulting reason was a dangling
+        "Scope drift detected — " with nothing after it, giving
+        development zero information about what to actually fix. Must fall
+        back to the agent's own free-text summary instead."""
+        result = {
+            "verdict": "FAIL",
+            "summary": "Feature adds an admin dashboard not in the design doc.",
+            "analysis": {"out_of_scope": 1, "missing_from_design": 0},
+        }
+        score, meta = score_scope_review(result)
+        assert score < 0.6
+        assert meta["reason"] == (
+            "Scope drift detected — Feature adds an admin dashboard not in "
+            "the design doc."
+        )
+
+    def test_drift_with_no_details_and_no_summary_is_still_not_a_dangling_reason(self):
+        """Even with no itemized details AND no summary field at all, the
+        reason must say something honest rather than trailing off after
+        the em-dash with nothing following it."""
+        result = {"verdict": "FAIL"}
+        score, meta = score_scope_review(result)
+        assert score < 0.6
+        assert meta["reason"] == (
+            "Scope drift detected — no specific out-of-scope/missing items "
+            "reported by the agent"
+        )
+
 
 class TestScoreQA:
     def test_none_result(self):

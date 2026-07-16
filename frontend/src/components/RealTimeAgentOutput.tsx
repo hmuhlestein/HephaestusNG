@@ -22,6 +22,7 @@ import { formatDistanceToNow } from 'date-fns';
 import { useRealTimeAgentOutput } from '@/hooks/useRealTimeAgentOutput';
 import { Agent } from '@/types';
 import { apiService } from '@/services/api';
+import { isNoiseLine, stripAnsiCodes } from '@/lib/agentOutput';
 import StatusBadge from './StatusBadge';
 import AnsiToHtml from 'ansi-to-html';
 
@@ -216,20 +217,8 @@ const RealTimeAgentOutput: React.FC<RealTimeAgentOutputProps> = ({
     if (!processedOutput) return '';
     const lines = processedOutput.split('\n');
     const filtered = lines.filter(line => {
-      // Strip ALL ANSI codes for pattern matching
-      const stripped = line.replace(/\x1b\[[?]?[0-9;]*[a-zA-Z]/g, '').replace(/\x1b\][^\x07]*\x07/g, '').trim();
-      // Filter out horizontal separator lines (────────────────────...)
-      if (/^[─━═▬▪▫\-=\s]{20,}$/.test(stripped)) return false;
-      // Filter out spinner-only lines: "⠋ Working..." or just "Working..."
-      if (/^(?:[\s⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]*\s*)?Working\.{0,3}\s*$/.test(stripped)) return false;
-      // Filter out "Thinking..." lines
-      if (/^Thinking\.{0,3}\s*$/.test(stripped)) return false;
-      // Filter out lines that are just a spinner + Working (broader catch)
-      if (/^[\s⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏Working\.]+$/.test(stripped) && stripped.includes('Working')) return false;
-      // Filter out TUI chrome: "... (N earlier lines, ctrl+o to expand)"
-      if (/^\.\.\. \(\d+ earlier lines/.test(stripped)) return false;
-      // Filter out TUI chrome fragments
-      if (/^[AGBCD\s]+$/.test(stripped) && stripped.length < 10) return false;
+      const stripped = stripAnsiCodes(line).trim();
+      if (isNoiseLine(stripped)) return false;
       if (searchTerm && !line.toLowerCase().includes(searchTerm.toLowerCase())) return false;
       return true;
     });

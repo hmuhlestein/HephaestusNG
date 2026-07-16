@@ -1310,6 +1310,79 @@ class TestCreatePhaseTaskExhaustionArbitrates:
 
         assert result is True
 
+    def test_goto_records_source_phase_as_action_target_phase(
+        self, db_manager, sample_workflow
+    ):
+        """Regression: Task.action="goto" has meant "why was I created"
+        since before this session (set here, at creation, by
+        _create_phase_task) -- a DIFFERENT, non-conflicting piece of
+        information than _tag_completing_task's "what did I decide when I
+        completed" (set on the phase that DECIDED the goto, a different
+        task row). Without source_phase_name, a goto-created task's own
+        action_target_phase was never populated at all, showing a bare
+        "goto" badge with no indication of which phase's finding sent it
+        back."""
+        from src.autopilot.orchestrator import _create_phase_task
+        from src.core.database import Agent
+
+        # create_agent_for_task_direct is mocked below (this test isn't
+        # exercising real agent dispatch) but the Task row it returns an id
+        # for still gets an UPDATE against Agent.id via a real FK -- must
+        # exist for that update to succeed under PRAGMA foreign_keys=ON.
+        with db_manager.session_scope() as session:
+            session.add(Agent(id="a1", system_prompt="p", status="working", cli_type="pi"))
+
+        with patch(
+            "src.autopilot.orchestrator.create_agent_for_task_direct",
+            return_value={"agent_id": "a1"},
+        ):
+            result = _create_phase_task(
+                "wf-1", "phase-1", "requirements", "goto", MagicMock(),
+                feedback="Scope drift detected — missing FR-3",
+                source_phase_name="scope_review",
+            )
+
+        assert result is True
+        with db_manager.session_scope() as session:
+            task = (
+                session.query(Task)
+                .filter_by(phase_id="phase-1", action="goto")
+                .order_by(Task.created_at.desc())
+                .first()
+            )
+            assert task is not None
+            assert task.action_target_phase == "scope_review"
+
+    def test_continue_never_sets_action_target_phase(self, db_manager, sample_workflow):
+        """source_phase_name is irrelevant for normal forward advancement --
+        must not leak onto a "continue"-created task even if a caller
+        passed one."""
+        from src.autopilot.orchestrator import _create_phase_task
+        from src.core.database import Agent
+
+        with db_manager.session_scope() as session:
+            session.add(Agent(id="a1", system_prompt="p", status="working", cli_type="pi"))
+
+        with patch(
+            "src.autopilot.orchestrator.create_agent_for_task_direct",
+            return_value={"agent_id": "a1"},
+        ):
+            result = _create_phase_task(
+                "wf-1", "phase-1", "requirements", "continue", MagicMock(),
+                source_phase_name="some_prior_phase",
+            )
+
+        assert result is True
+        with db_manager.session_scope() as session:
+            task = (
+                session.query(Task)
+                .filter_by(phase_id="phase-1", action="continue")
+                .order_by(Task.created_at.desc())
+                .first()
+            )
+            assert task is not None
+            assert task.action_target_phase is None
+
 
 class TestArbitrationDoesNotConfuseAdvancement:
     """Gap found in review: _trigger_arbitration (and the pre-existing
@@ -1682,7 +1755,8 @@ class TestResolveArbitrationOutcome:
             "phase-1", ANY, force_action="continue"
         )
         mock_create_task.assert_called_once_with(
-            "wf-1", "phase-2", "implementation", "continue", ANY, feedback=None
+            "wf-1", "phase-2", "implementation", "continue", ANY,
+            feedback=None, source_phase_name="requirements",
         )
         with db_manager.session_scope() as session:
             execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
@@ -1745,7 +1819,8 @@ class TestResolveArbitrationOutcome:
             force_reason="fix x",
         )
         mock_create_task.assert_called_once_with(
-            "wf-1", "phase-2", "implementation", "goto", ANY, feedback="fix x"
+            "wf-1", "phase-2", "implementation", "goto", ANY,
+            feedback="fix x", source_phase_name="requirements",
         )
         with db_manager.session_scope() as session:
             execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
@@ -1878,7 +1953,8 @@ class TestResolveArbitrationOutcome:
         # keeps making progress even though the arbiter's exact target
         # didn't resolve.
         mock_create_task.assert_called_once_with(
-            "wf-1", "phase-2", "next_real_phase", "continue", ANY, feedback=None
+            "wf-1", "phase-2", "next_real_phase", "continue", ANY,
+            feedback=None, source_phase_name="requirements",
         )
 
 
@@ -1939,7 +2015,8 @@ class TestMaybeResolveArbitration:
         )
         # The critical regression: the next task must actually get created.
         mock_create_task.assert_called_once_with(
-            "wf-1", "phase-2", "implementation", "continue", ANY, feedback=None
+            "wf-1", "phase-2", "implementation", "continue", ANY,
+            feedback=None, source_phase_name="requirements",
         )
         with db_manager.session_scope() as session:
             execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()

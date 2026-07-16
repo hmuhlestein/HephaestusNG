@@ -641,6 +641,12 @@ async def _resume_interrupted_workflows(
                     t.status = "pending"
                     t.failure_reason = None
                     t.assigned_agent_id = None
+                    # This row is reused for the retry -- clear any stale
+                    # goto/retry tag from a previous life (see the matching
+                    # fix in restart_task_endpoint / orchestrator.py's
+                    # per-phase failed-task retry).
+                    t.action = ""
+                    t.action_target_phase = None
                 if failed_tasks:
                     session.commit()
                     logger.info(
@@ -2904,6 +2910,13 @@ async def restart_task_endpoint(
             task.completed_at = None
             task.completion_notes = None
             task.failure_reason = None
+            # This row is reused (not recreated) on restart -- without
+            # clearing these too, a task previously tagged action="goto"/
+            # "retry" by _tag_completing_task keeps showing that badge
+            # (and a now-meaningless action_target_phase) after being
+            # restarted into an unrelated fresh attempt.
+            task.action = ""
+            task.action_target_phase = None
 
             # Reopen-point fix (same as _create_corrective_task): resetting
             # the task alone isn't enough if its workflow/phase already
