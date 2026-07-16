@@ -311,6 +311,37 @@ class TestConsumeGateArtifacts:
             for filename in filenames:
                 assert not (target_dir / filename).exists(), (phase_name, filename)
 
+    def test_deletes_from_phase_scoped_subdirectory(self, tmp_path):
+        """Agents are told to write to the one sanctioned docs/<phase_name>/
+        subdirectory -- consume_gate_artifacts must find and delete stale
+        results there too, not just flat docs/."""
+        sub = tmp_path / "docs" / "adversarial_review"
+        sub.mkdir(parents=True)
+        (sub / "adversarial_review_result.json").write_text("{}")
+        (sub / "adversarial_review_report.md").write_text("# report")
+
+        deleted = S.consume_gate_artifacts("adversarial_review", tmp_path)
+
+        assert len(deleted) == 2
+        assert not (sub / "adversarial_review_result.json").exists()
+        assert not (sub / "adversarial_review_report.md").exists()
+
+    def test_does_not_delete_a_different_phases_subdirectory_file(self, tmp_path):
+        """Regression: the old fallback searched EVERY subdirectory of
+        docs/ for a same-named file and deleted the first match -- risking
+        deletion of a DIFFERENT feature's (or phase's) still-needed result
+        file. Consuming adversarial_review's artifacts must never touch a
+        file sitting under an unrelated subdirectory."""
+        docs = tmp_path / "docs"
+        other = docs / "some_other_feature"
+        other.mkdir(parents=True)
+        (other / "adversarial_review_result.json").write_text("{}")
+
+        deleted = S.consume_gate_artifacts("adversarial_review", tmp_path)
+
+        assert deleted == []
+        assert (other / "adversarial_review_result.json").exists()
+
 
 class TestValidateGateResultSchema:
     """Regression: a QA agent wrote its own nested JSON shape

@@ -137,6 +137,14 @@ class TaskCompletionService:
             # above is treated as an error).
             if wf and wf.working_directory:
                 for candidate in [
+                    # docs/<phase.name>/ is the one sanctioned subdirectory
+                    # this phase's own CRITICAL PATH RULE tells it to write
+                    # to -- checked first, not guessed at: iterating every
+                    # subdirectory of docs/ risked treating a DIFFERENT
+                    # feature's (or an earlier retry pass's) leftover file
+                    # as proof this task's own agent produced its required
+                    # output.
+                    _Path(wf.working_directory) / "docs" / phase.name / declared_output,
                     _Path(wf.working_directory) / "docs" / declared_output,
                     _Path(wf.working_directory) / declared_output,
                     # Some phases (e.g. Phase 0's Feature Architect) write
@@ -148,17 +156,6 @@ class TaskCompletionService:
                     if candidate.exists():
                         found = True
                         break
-                # Fallback: search subdirectories of docs/ (agents sometimes
-                # write to feature-specific subdirectories instead of root docs/)
-                if not found:
-                    docs_dir = _Path(wf.working_directory) / "docs"
-                    if docs_dir.is_dir():
-                        for sub in docs_dir.iterdir():
-                            if sub.is_dir():
-                                candidate = sub / declared_output
-                                if candidate.exists():
-                                    found = True
-                                    break
             # 2. Check feature folder
             if not found and feature_dir.exists():
                 for d in sorted(feature_dir.iterdir(), reverse=True):
@@ -236,7 +233,10 @@ class TaskCompletionService:
             return None  # verify_output_artifact already surfaces this case.
 
         result = read_result(
-            wf.working_directory, json_filename, subdir=GATE_RESULT_SUBDIR.get(phase.name)
+            wf.working_directory,
+            json_filename,
+            subdir=GATE_RESULT_SUBDIR.get(phase.name),
+            phase_name=phase.name,
         )
         error = validate_gate_result_schema(phase.name, result)
         if not error:

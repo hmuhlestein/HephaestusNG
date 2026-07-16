@@ -17,7 +17,11 @@ description: |
   CRITICAL PATH RULE: Your current working directory IS the project root (an isolated git worktree).
   - "Project Path" = your working directory (.).  "Docs Path" = ./docs/ (create it if missing).
   - Write ALL reports to "Docs Path" (./docs/) — NOT the project root.
-  - Write architectural_review_report.md and architectural_review_result.json to ./docs/
+  - Write architectural_review_report.md and architectural_review_result.json
+    to ./docs/architectural_review/.
+  - Use exactly that subdirectory name (./docs/architectural_review/) — the
+    pipeline only looks for that one exact name; anything else is invisible
+    to it.
 done_definitions:
   - "./docs/architecture.md reviewed and design rationale understood"
   - "./docs/requirements_analysis.md reviewed and requirements verified"

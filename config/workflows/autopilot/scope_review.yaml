@@ -13,7 +13,10 @@ description: |
   CRITICAL PATH RULE: Your current working directory IS the project root (an isolated git worktree).
   - "Project Path" = your working directory (.).  "Docs Path" = ./docs/ (create it if missing).
   - Write ALL reports to "Docs Path" (./docs/) — NOT the project root.
-  - Write scope_review_result.json to ./docs/
+  - Write scope_review_result.json to ./docs/scope_review/scope_review_result.json.
+  - Use exactly that subdirectory name (./docs/scope_review/) — the
+    pipeline only looks for that one exact name; anything else is invisible
+    to it.
 done_definitions:
   - "Original design doc read from ./.hephaestus/design.md"
   - "./docs/requirements_analysis.md read and compared line-by-line against design doc"
