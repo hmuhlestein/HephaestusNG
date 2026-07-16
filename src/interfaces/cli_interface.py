@@ -65,6 +65,24 @@ class CLIAgentInterface(ABC):
         """
         return ""
 
+    def prepare_working_directory(self, working_directory: str) -> None:
+        """Do any one-time setup a CLI needs for a directory before first
+        launch there (e.g. pre-accepting a first-run trust prompt). Every
+        Hephaestus worktree is a path this CLI has never seen, so a CLI
+        with an interactive first-run gate would otherwise hang forever
+        with no one at the keyboard to answer it. No-op by default.
+        """
+        return None
+
+    def post_launch_confirmation_keys(self) -> List[str]:
+        """tmux key names to send, in order with a pause between each,
+        after the launch wait and before the initial task prompt -- for a
+        CLI whose launch triggers a SECOND interactive confirmation that
+        --dangerously-skip-permissions-style flags don't suppress (e.g. a
+        one-time "you're bypassing all safety checks, are you sure?"
+        dialog). Empty = no confirmation needed for this CLI."""
+        return []
+
     @abstractmethod
     def get_launch_command(self, system_prompt: str, **kwargs) -> str:
         """Generate the launch command for the CLI tool.
@@ -146,18 +164,25 @@ class CLIAgentInterface(ABC):
         os.chmod(prompt_file, 0o644)
         return prompt_file
 
-    def _get_model(self, kwargs: dict, config: Any, default: str = "sonnet") -> str:
-        """Get model from kwargs or config.
+    def _get_model(self, kwargs: dict, default: str = "sonnet") -> str:
+        """Get model from kwargs, falling back to this CLI's own default.
+
+        The global agents.cli_model config value is scoped to one specific
+        CLI (agents.default_cli_tool) -- honoring it here regardless of
+        which CLI subclass is asking would hand e.g. an OpenRouter model
+        path to a CLI that can't parse it. Callers that want to honor that
+        global override resolve it themselves, CLI-aware, before calling
+        (see AgentManager.create_agent_for_task_direct), and pass the
+        result in via kwargs['model'].
 
         Args:
             kwargs: Keyword arguments (may contain 'model')
-            config: Config object (may have 'cli_model')
-            default: Default model if nothing else found
+            default: This CLI's own default model (pass self.default_model)
 
         Returns:
             Model name string
         """
-        return kwargs.get("model") or getattr(config, "cli_model", default)
+        return kwargs.get("model") or default
 
     def _extract_id(self, text: str, prefix: str) -> Optional[str]:
         """Extract an ID value from text like 'IDs: Agent=xxx | Task=yyy'.
@@ -259,6 +284,72 @@ class ClaudeCodeAgent(CLIAgentInterface):
     display_name = "Claude"
     needs_chunked_delivery = True
 
+    #: Per-project flags in ~/.claude.json that gate first-run interactive
+    #: dialogs with no one at the keyboard to answer them: workspace trust,
+    #: and (independently) the "what's new since you last opened this
+    #: project" onboarding prompts (fullscreen-renderer opt-in, Chrome
+    #: extension opt-in, etc. -- the exact set has already changed between
+    #: CLI versions during this investigation; hasCompletedProjectOnboarding
+    #: suppresses all of them at once rather than clicking through each by
+    #: name). Verified empirically against claude 2.1.211.
+    _TRUST_FLAGS = {
+        "hasTrustDialogAccepted": True,
+        "hasCompletedProjectOnboarding": True,
+    }
+
+    def prepare_working_directory(self, working_directory: str) -> None:
+        """Pre-seed _TRUST_FLAGS for a worktree Claude Code has never seen
+        before, keyed by its *canonical* path (Claude resolves symlinks,
+        e.g. macOS's /tmp -> /private/tmp, before the lookup). Without
+        this every launch in a fresh worktree hangs at one of these
+        dialogs forever.
+
+        Uses a flock + atomic replace: this file is also read/written by
+        any real interactive Claude Code session on the same machine, and
+        concurrent Hephaestus agent launches all touch it too.
+        """
+        import json
+        import os
+
+        canonical_path = os.path.realpath(working_directory)
+        config_path = os.path.expanduser("~/.claude.json")
+        if not os.path.exists(config_path):
+            return
+
+        try:
+            # Shared worktrees see many agents launch in the same
+            # directory across a workflow's phases -- an unlocked read-only
+            # check keeps every one of those (after the first) from taking
+            # an exclusive lock on a file a real interactive session may
+            # also be using.
+            with open(config_path) as f:
+                existing = json.load(f).get("projects", {}).get(canonical_path, {})
+            if all(existing.get(k) == v for k, v in self._TRUST_FLAGS.items()):
+                return
+
+            import fcntl
+
+            with open(config_path + ".lock", "w") as lock_file:
+                fcntl.flock(lock_file, fcntl.LOCK_EX)
+                try:
+                    with open(config_path) as f:
+                        cfg = json.load(f)
+                    projects = cfg.setdefault("projects", {})
+                    entry = projects.setdefault(canonical_path, {})
+                    if all(entry.get(k) == v for k, v in self._TRUST_FLAGS.items()):
+                        return
+                    entry.update(self._TRUST_FLAGS)
+                    tmp_path = config_path + ".tmp"
+                    with open(tmp_path, "w") as f:
+                        json.dump(cfg, f)
+                    os.replace(tmp_path, config_path)
+                finally:
+                    fcntl.flock(lock_file, fcntl.LOCK_UN)
+        except Exception as e:
+            logger.warning(
+                f"Could not pre-trust {canonical_path} for Claude Code: {e}"
+            )
+
     def get_launch_command(self, system_prompt: str, **kwargs) -> str:
         from src.core.simple_config import get_config
 
@@ -266,7 +357,7 @@ class ClaudeCodeAgent(CLIAgentInterface):
 
         task_id = kwargs.get("task_id", "default")
         prompt_file = self._save_prompt_to_file(system_prompt, "claude_prompt", task_id)
-        model = self._get_model(kwargs, config, self.default_model)
+        model = self._get_model(kwargs, self.default_model)
 
         # Reasoning budget
         effort_map = {
@@ -370,9 +461,18 @@ class OpenCodeAgent(CLIAgentInterface):
         prompt_file = self._save_prompt_to_file(
             system_prompt, "opencode_prompt", task_id
         )
-        model = self._get_model(kwargs, config, self.default_model)
+        model = self._get_model(kwargs, self.default_model)
 
-        return f'opencode run "$(cat {prompt_file})" --model {model}'
+        # Bare `opencode run <message>` is one-shot: it answers and exits,
+        # leaving the pane at a dead shell prompt for the task message
+        # manager.py sends ~25s later via tmux (same bug class as the
+        # claude/pi launch -- an agent that exits before the real task
+        # arrives). -i keeps it running interactively after the initial
+        # message, matching how claude/pi stay alive for MCP tool calls.
+        return (
+            f'opencode run -i --dangerously-skip-permissions --model {model} '
+            f'"$(cat {prompt_file})"'
+        )
 
     def get_health_check_pattern(self) -> str:
         return r"(›|>|opencode>)"
@@ -554,7 +654,7 @@ class PiAgent(CLIAgentInterface):
             else None
         )
 
-        model = self._get_model(kwargs, config, self.default_model)
+        model = self._get_model(kwargs, self.default_model)
 
         # Thinking budget
         valid_thinking = {"off", "minimal", "low", "medium", "high", "xhigh"}

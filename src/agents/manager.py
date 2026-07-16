@@ -371,6 +371,7 @@ class AgentManager:
 
             # 4. Create tmux session IN THE WORKTREE with env vars
             # Use agent_id for unique session names (not task_id which can be reused on restarts)
+            cli_agent.prepare_working_directory(branch_path)
             session_name = f"{self.config.tmux_session_prefix}_{agent_id[:8]}"
             tmux_session = self._create_tmux_session(
                 session_name, working_directory=branch_path, env_vars=env_vars
@@ -655,6 +656,14 @@ class AgentManager:
                 )
                 raise Exception("Tmux session died during initialization wait")
 
+            # Dismiss any CLI-specific one-time interactive confirmation
+            # (e.g. Claude's bypass-permissions warning) before the real
+            # task prompt arrives -- sending it into that dialog instead
+            # of the CLI's prompt would just select whatever's focused.
+            for key in cli_agent.post_launch_confirmation_keys():
+                pane.send_keys(key)
+                await asyncio.sleep(1.5)
+
             # Send initial prompt (or just Enter for OpenCode)
             await self._send_initial_prompt_with_retry(
                 pane=pane,
@@ -767,6 +776,25 @@ class AgentManager:
         session_kwargs["start_directory"] = working_directory
 
         session = self.tmux_server.new_session(**session_kwargs)
+
+        # New sessions inherit the tmux server's environment at the time it
+        # was first started -- if that happened to be a shell running
+        # inside a Claude Code session (e.g. `heph restart` invoked from
+        # this very CLI), every future pane on this server carries
+        # CLAUDECODE=1 and friends indefinitely, regardless of who spawns
+        # the pane afterward. `claude` itself refuses to launch when it
+        # sees CLAUDECODE=1 ("cannot be launched inside another Claude
+        # Code session"), so an agent using the claude CLI would silently
+        # never start. Clear it in the new pane before anything runs.
+        try:
+            pane0 = session.attached_window.attached_pane
+            pane0.send_keys(
+                "unset CLAUDECODE CLAUDE_CODE_ENTRYPOINT CLAUDE_CODE_SESSION_ID "
+                "CLAUDE_CODE_CHILD_SESSION CLAUDE_AGENT_SDK_VERSION",
+                enter=True,
+            )
+        except Exception:
+            pass  # Non-critical -- worst case the launch command fails visibly
 
         # Keep a small scrollback — pipe-pane already captures the full
         # transcript to a durable file, so large history-limit just wastes
@@ -1439,12 +1467,13 @@ class AgentManager:
                         restart_wd = wf.working_directory
                 finally:
                     restart_sess.close()
+            # Relaunch agent
+            cli_agent = get_cli_agent(agent.cli_type)
+            if restart_wd:
+                cli_agent.prepare_working_directory(restart_wd)
             tmux_session = self._create_tmux_session(
                 new_session_name, working_directory=restart_wd, env_vars=env_vars
             )
-
-            # Relaunch agent
-            cli_agent = get_cli_agent(agent.cli_type)
 
             # Resolve phase_name + per-phase thinking budget for the relaunch
             restart_phase_name = None
@@ -1593,6 +1622,9 @@ class AgentManager:
             try:
                 await asyncio.sleep(25)  # let the CLI boot before typing into it
                 if self.tmux_server.has_session(new_session_name):
+                    for key in cli_agent.post_launch_confirmation_keys():
+                        pane.send_keys(key)
+                        await asyncio.sleep(1.5)
                     await self._send_initial_prompt_with_retry(
                         pane=pane,
                         cli_agent=cli_agent,
