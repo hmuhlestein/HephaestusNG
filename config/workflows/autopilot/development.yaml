@@ -18,6 +18,7 @@ done_definitions:
   - "Code follows project style guide"
   - ".gitignore created if missing, covering standard runtime/tool artifacts for this language"
   - "Unit tests written and passing"
+  - "For each bug fix: the new/changed test was stash-verified to fail before the fix and pass after (git stash discipline — see STEP 4)"
   - "`ruff check .` and `ruff format --check .` pass with ZERO errors (logging not print, imports at top, sorted) and `mypy` passes — run `ruff check --fix . && ruff format .` first, then verify clean before marking done"
   - "Implementation status documented"
   - "Phase 4 review tasks created"
@@ -177,12 +178,27 @@ additional_notes: |
      - Integration tests for interfaces
      - Edge case tests
      - Aim for meaningful coverage, not just line count
-  
+
+     STASH-VERIFY EVERY BUG-FIX TEST (this phase re-entering to fix an open
+     bug ticket, per STEP 2 — not a from-scratch new-feature test with no
+     "before" state): a test that passes whether or not your fix is applied
+     proves nothing. For each new or changed test covering a bug fix:
+       1. `git stash` (or `git stash -- <file>` for just your fix, keeping
+          the test) to remove your fix, leaving the test in place.
+       2. Run that test — confirm it FAILS. If it still passes, the test
+          isn't actually exercising the bug; rewrite it until stashing the
+          fix makes it fail.
+       3. `git stash pop` to restore your fix.
+       4. Run the test again — confirm it PASSES.
+     Do this before marking done, not as an afterthought — a test you
+     haven't proven can fail is not a regression test, it's decoration.
+
   4. **Verify implementation**
      - Run tests and ensure they pass
      - Run linter and fix issues
      - Run type checker if applicable
      - Verify component works as specified
+     - For bug fixes: confirm every new/changed test was stash-verified per STEP 3 above
   
   ═══════════════════════════════════════════════════════════════════════
   CODE COMPOSITION PRINCIPLES (apply during implementation)

@@ -994,21 +994,57 @@ async def startup_event():
     # logic) should see "active" for as much of the startup window as
     # possible instead of a transient "idle" read.
     try:
-        from src.autopilot.service import get_autopilot_service
+        from src.autopilot.service import AutopilotService, get_autopilot_service, get_registry
 
-        persisted = get_autopilot_service().load_persisted_state()
-        if persisted and persisted.get("project_path"):
+        # Enumerate every project with a persisted "was running" marker, not
+        # just one -- multiple projects can each have their own pipeline to
+        # resume now (see docs/MULTI_PROJECT_CONCURRENCY_DESIGN.md). This is
+        # also the one and only call site of enumerate_persisted_states'
+        # legacy-key migration, so a pipeline that was running before this
+        # change deployed self-heals onto the namespaced key right here.
+        for resume_project_id, persisted in AutopilotService.enumerate_persisted_states():
+            if not persisted.get("project_path"):
+                continue
+
+            # Same cap POST /start enforces. Without this, a restart with
+            # more persisted "was running" projects than max_concurrent_
+            # projects (e.g. the cap was lowered, or that many really were
+            # running when the backend went down) would silently resume all
+            # of them, permanently exceeding the cap until the next manual
+            # stop. try_reserve() always allows a project already counted as
+            # running, so this only ever rejects the (N+1)th and later
+            # resumes within this same loop, not earlier ones. Using
+            # try_reserve (not can_start) here too, not just its atomicity:
+            # an incoming POST /start could in principle race this loop if
+            # the server starts accepting connections before startup_event
+            # finishes.
+            can_start, cap_message = get_registry().try_reserve(resume_project_id)
+            if not can_start:
+                logger.warning(
+                    f"[RESUME] Skipping auto-resume for project {resume_project_id}: "
+                    f"{cap_message}"
+                )
+                continue
+
             logger.info(
-                f"[RESUME] Auto-resuming autopilot pipeline for "
-                f"{persisted['project_path']} (was running before restart)"
+                f"[RESUME] Auto-resuming autopilot pipeline for project "
+                f"{resume_project_id} ({persisted['project_path']}) "
+                "(was running before restart)"
             )
-            await get_autopilot_service().start(
-                project_path=persisted["project_path"],
-                design_queue=persisted.get("design_queue") or "",
-                max_iterations=persisted.get("max_iterations", 10),
-            )
+            try:
+                await get_autopilot_service(resume_project_id).start(
+                    project_path=persisted["project_path"],
+                    design_queue=persisted.get("design_queue") or "",
+                    max_iterations=persisted.get("max_iterations", 10),
+                )
+            except Exception as e:
+                logger.error(
+                    f"[RESUME] Failed to auto-resume project {resume_project_id}: {e}"
+                )
+            finally:
+                get_registry().release_reservation(resume_project_id)
     except Exception as e:
-        logger.error(f"[RESUME] Failed to auto-resume autopilot pipeline: {e}")
+        logger.error(f"[RESUME] Failed to enumerate persisted autopilot state: {e}")
 
     # Resume any workflows that were mid-flight when the server last stopped
     # (crash / laptop sleep / manual restart) so real work isn't stranded.

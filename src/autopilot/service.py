@@ -11,9 +11,10 @@ This fixes:
 
 import asyncio
 import logging
+import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from src.core.constants import DESIGN_CONTEXT_SUBDIR, DESIGN_SUBDIR
 
@@ -24,23 +25,33 @@ logger = logging.getLogger(__name__)
 # restart/crash (this class lives entirely in-process, see module docstring),
 # and nothing ever notices except the separate diagnostic monitor process,
 # which only patches over the gap much later and much more crudely.
-# See src.autopilot.orchestrator._RUNNING_STATE_KEY -- backed by the
+# See src.autopilot.orchestrator._running_state_key -- backed by the
 # ProjectContext table (a generic key-value store) instead of a JSON file,
 # so a DB-level reset of workflow state can't leave this pointing at a
-# workflow that no longer exists.
+# workflow that no longer exists. Namespaced per project_id (see
+# AutopilotServiceRegistry below) -- multiple projects can each have their
+# own persisted "was running" marker.
 
 
 class AutopilotService:
-    """Manages the autopilot pipeline as an asyncio task inside the backend.
+    """Manages one project's autopilot pipeline as an asyncio task inside
+    the backend. One instance per project_id -- see AutopilotServiceRegistry,
+    which is the only supported way to obtain one (via get_autopilot_service).
 
     Usage:
-        service = AutopilotService()
+        service = get_autopilot_service(project_id)
         await service.start(project_path="/path/to/project")
         status = service.status()
         await service.stop()
     """
 
-    def __init__(self):
+    def __init__(self, project_id: Optional[str] = None):
+        # project_id is always overwritten with the real resolved id by
+        # start() before it returns (via _get_or_create_project_id) -- the
+        # None default here only matters transiently before the first
+        # start() call, and preserves the zero-arg construction existing
+        # tests/callers may still use.
+        self.project_id = project_id
         self._task: Optional[asyncio.Task] = None
         self._running = False
         self._stop_event = asyncio.Event()
@@ -96,72 +107,17 @@ class AutopilotService:
         dq = design_queue or str(project / DESIGN_CONTEXT_SUBDIR)
         Path(dq).mkdir(parents=True, exist_ok=True)
 
-        # Activate the matching project so pick_next_design() finds its designs.
-        # Without this, the pipeline queries is_active=True which may point
-        # at a completely different project (e.g. Sotto instead of smoke-test).
-        #
-        # Auto-create the row if none exists (e.g. its project was deleted
-        # via the UI, or a pipeline was started against a path never
-        # registered through the projects API at all) -- otherwise this
-        # path is invisible/unmanageable in the UI even though the pipeline
-        # itself runs fine underneath via the file-based design-queue
-        # fallback in pick_next_design, which doesn't need a project row.
+        # Activate the matching project so pick_next_design() finds its
+        # designs, auto-creating the AutopilotProject row if none exists,
+        # and resume any workflows the user had explicitly paused for it.
+        # Extracted to _get_or_create_project_id (orchestrator.py) so
+        # callers that need project_id BEFORE starting a pipeline (e.g.
+        # POST /start's concurrency-cap check) share this exact logic
+        # instead of a second, divergent copy.
         try:
-            import uuid as _uuid
+            from src.autopilot.orchestrator import _get_or_create_project_id
 
-            from src.core.database import AutopilotProject, get_db
-
-            with get_db() as db:
-                proj = (
-                    db.query(AutopilotProject)
-                    .filter_by(base_dir=str(project))
-                    .first()
-                )
-                if not proj:
-                    proj = AutopilotProject(
-                        id=f"proj-{_uuid.uuid4().hex[:12]}",
-                        name=project.name,
-                        base_dir=str(project),
-                        is_active=False,
-                    )
-                    db.add(proj)
-                    db.flush()
-                    logger.info(
-                        f"Auto-created project '{proj.name}' for {project} "
-                        "(none registered)"
-                    )
-                if not proj.is_active:
-                    # Deactivate current active project
-                    current = db.query(AutopilotProject).filter_by(is_active=True).first()
-                    if current:
-                        current.is_active = False
-                    proj.is_active = True
-                    db.commit()
-                    logger.info(f"Activated project '{proj.name}' for pipeline")
-
-                # Clear the deliberate-pause marker /autopilot/stop sets
-                # (Workflow.paused_by="user") for this project's workflows --
-                # otherwise every self-heal/retry path that correctly skips
-                # user-paused workflows (see _try_auto_resume_paused_workflow)
-                # would also skip them here, leaving a workflow permanently
-                # stuck even after the user explicitly hits play again.
-                # Mirrors resume_feature's exact resume behavior, one level
-                # up at the whole-pipeline "start" action.
-                from src.core.database import Workflow
-
-                resumed = (
-                    db.query(Workflow)
-                    .filter(
-                        Workflow.project_id == proj.id,
-                        Workflow.paused_by == "user",
-                    )
-                    .update({Workflow.status: "active", Workflow.paused_by: None})
-                )
-                if resumed:
-                    db.commit()
-                    logger.info(
-                        f"Resumed {resumed} user-paused workflow(s) for '{proj.name}'"
-                    )
+            self.project_id = _get_or_create_project_id(str(project))
         except Exception as e:
             logger.warning(f"Could not activate project: {e}")
 
@@ -190,7 +146,7 @@ class AutopilotService:
         """Write current run params so a restart can resume this pipeline."""
         try:
             from src.autopilot.orchestrator import (
-                _RUNNING_STATE_KEY,
+                _running_state_key,
                 _set_project_context,
             )
             from src.core.database import get_db
@@ -198,7 +154,7 @@ class AutopilotService:
             with get_db() as db:
                 _set_project_context(
                     db,
-                    _RUNNING_STATE_KEY,
+                    _running_state_key(self.project_id),
                     {
                         "project_path": self._project_path,
                         "design_queue": self._design_queue,
@@ -208,36 +164,93 @@ class AutopilotService:
         except Exception as e:
             logger.warning(f"Failed to persist autopilot running state: {e}")
 
-    @staticmethod
-    def clear_persisted_state() -> None:
+    def clear_persisted_state(self) -> None:
         """Remove the persisted run state (deliberate stop — don't auto-resume)."""
         try:
             from src.autopilot.orchestrator import (
-                _RUNNING_STATE_KEY,
+                _running_state_key,
                 _delete_project_context,
             )
             from src.core.database import get_db
 
             with get_db() as db:
-                _delete_project_context(db, _RUNNING_STATE_KEY)
+                _delete_project_context(db, _running_state_key(self.project_id))
         except Exception as e:
             logger.warning(f"Failed to clear persisted autopilot state: {e}")
 
-    @staticmethod
-    def load_persisted_state() -> Optional[Dict[str, Any]]:
+    def load_persisted_state(self) -> Optional[Dict[str, Any]]:
         """Read persisted run params, if any (used to auto-resume on startup)."""
         try:
             from src.autopilot.orchestrator import (
-                _RUNNING_STATE_KEY,
+                _running_state_key,
                 _get_project_context,
             )
             from src.core.database import get_db
 
             with get_db() as db:
-                return _get_project_context(db, _RUNNING_STATE_KEY)
+                return _get_project_context(db, _running_state_key(self.project_id))
         except Exception as e:
             logger.warning(f"Failed to read persisted autopilot state: {e}")
         return None
+
+    @staticmethod
+    def enumerate_persisted_states() -> List[Tuple[str, Dict[str, Any]]]:
+        """All (project_id, state) pairs with a persisted "was running"
+        marker, for server.py's startup auto-resume across every project.
+
+        Migrates the pre-multi-project bare key in place on first read:
+        resolves its project_id from its own persisted project_path, writes
+        it under the namespaced key, deletes the old one. Idempotent -- a
+        second call after migration just sees the namespaced key like any
+        other project. Without this, a pipeline that was running before
+        this change deployed would silently stop auto-resuming on the next
+        backend restart.
+        """
+        from src.autopilot.orchestrator import (
+            _RUNNING_STATE_KEY_LEGACY,
+            _RUNNING_STATE_KEY_PREFIX,
+            _delete_project_context,
+            _get_project_context,
+            _get_project_contexts_by_prefix,
+            _resolve_project_id,
+            _running_state_key,
+            _set_project_context,
+        )
+        from src.core.database import get_db
+
+        results: List[Tuple[str, Dict[str, Any]]] = []
+        try:
+            with get_db() as db:
+                legacy = _get_project_context(db, _RUNNING_STATE_KEY_LEGACY)
+                if legacy and legacy.get("project_path"):
+                    project_id = _resolve_project_id(legacy["project_path"])
+                    if project_id:
+                        logger.info(
+                            f"[MIGRATE] Namespacing legacy running-pipeline "
+                            f"state to project {project_id}"
+                        )
+                        _set_project_context(db, _running_state_key(project_id), legacy)
+                        _delete_project_context(db, _RUNNING_STATE_KEY_LEGACY)
+                        db.commit()
+                        results.append((project_id, legacy))
+                    else:
+                        logger.warning(
+                            "[MIGRATE] Legacy running-pipeline state's "
+                            f"project_path {legacy['project_path']!r} no "
+                            "longer resolves to a known project -- leaving "
+                            "it in place, not auto-resuming"
+                        )
+
+                by_prefix = _get_project_contexts_by_prefix(db, _RUNNING_STATE_KEY_PREFIX)
+                seen = {pid for pid, _ in results}
+                for key, state in by_prefix.items():
+                    project_id = key[len(_RUNNING_STATE_KEY_PREFIX):]
+                    if project_id not in seen:
+                        results.append((project_id, state))
+                        seen.add(project_id)
+        except Exception as e:
+            logger.warning(f"Failed to enumerate persisted autopilot state: {e}")
+        return results
 
     async def stop(self) -> Dict[str, Any]:
         """Stop the autopilot pipeline.
@@ -331,6 +344,15 @@ class AutopilotService:
                 # which builds its own argparse.Namespace without this flag)
                 # -- see sdk.start()'s assume_backend_running.
                 in_process=True,
+                # self.project_id was already reliably resolved by start()
+                # (via _get_or_create_project_id) -- pass it through instead
+                # of making run_continuous_pipeline re-derive it from a
+                # fresh, independently-fallible DB lookup. Without this, a
+                # transient failure in that lookup leaves current_project_id
+                # None for the run's entire duration, which silently turns
+                # _should_stop(None) into a permanent no-op (see
+                # _should_stop's "no project_id, don't guess" guard).
+                project_id=self.project_id,
             )
 
             # Run the synchronous pipeline in a thread executor
@@ -357,11 +379,14 @@ class AutopilotService:
 
         This is a thin wrapper that sets up the stop callback.
         """
-        # Monkey-patch the stop event into the module so the pipeline can check it
+        # Register this service's stop event under its own project_id so
+        # the pipeline can check it via _should_stop(project_id) -- keyed,
+        # not a single bare module global, so a second project starting
+        # can't silently steal control of this project's stop signal.
         import src.autopilot.orchestrator as orch_module
         from src.autopilot.orchestrator import run_continuous_pipeline
 
-        orch_module._service_stop_event = self._stop_event
+        orch_module._stop_events[self.project_id] = self._stop_event
 
         try:
             run_continuous_pipeline(args)
@@ -374,13 +399,115 @@ class AutopilotService:
             self._running = False
 
 
-# Global singleton instance
-_service: Optional[AutopilotService] = None
+class AutopilotServiceRegistry:
+    """Per-project AutopilotService instances, replacing the old single
+    global singleton -- see docs/MULTI_PROJECT_CONCURRENCY_DESIGN.md.
+
+    threading.Lock, not asyncio.Lock: run_continuous_pipeline executes
+    inside loop.run_in_executor(None, ...) -- a real OS thread, not a
+    coroutine -- while AutopilotService.start()/stop() are coroutines on
+    the event loop. This dict is touched from both, so it needs a
+    primitive safe across that boundary (matches OrchestratorLogger._lock's
+    same reasoning, orchestrator.py).
+    """
+
+    def __init__(self, max_concurrent: int):
+        self._services: Dict[str, AutopilotService] = {}
+        self._max_concurrent = max_concurrent
+        self._lock = threading.Lock()
+        # project_ids in the process of starting, between try_reserve()
+        # and their AutopilotService actually becoming .running -- closes
+        # the check-then-act gap plain can_start() has on its own (see
+        # try_reserve's docstring).
+        self._pending: Set[str] = set()
+
+    def get_or_create(self, project_id: str) -> AutopilotService:
+        with self._lock:
+            if project_id not in self._services:
+                self._services[project_id] = AutopilotService(project_id)
+            return self._services[project_id]
+
+    def get(self, project_id: str) -> Optional[AutopilotService]:
+        return self._services.get(project_id)
+
+    def running(self) -> List[AutopilotService]:
+        return [s for s in self._services.values() if s.running]
+
+    def _occupied_slots(self) -> Set[str]:
+        """project_ids currently counted against the cap: genuinely running
+        services plus ones with an in-flight reservation. Must be read
+        under self._lock -- callers hold it already (try_reserve) or don't
+        need atomicity (can_start's best-effort read for display)."""
+        return {s.project_id for s in self._services.values() if s.running} | self._pending
+
+    def can_start(self, project_id: str) -> Tuple[bool, str]:
+        """Best-effort cap check for display/logging -- NOT atomic, see
+        try_reserve() for the version that actually closes the race between
+        checking the cap and registering as running."""
+        with self._lock:
+            occupied = self._occupied_slots()
+        if project_id in occupied:
+            return True, ""  # restarting/already-tracked project, not a new slot
+        if len(occupied) >= self._max_concurrent:
+            names = ", ".join(sorted(occupied))
+            return False, (
+                f"Max concurrent projects ({self._max_concurrent}) reached: "
+                f"{names}. Stop one before starting another."
+            )
+        return True, ""
+
+    def try_reserve(self, project_id: str) -> Tuple[bool, str]:
+        """Atomically check the concurrency cap and, if it passes, reserve
+        a slot for project_id -- closes the TOCTOU window plain can_start()
+        has: two concurrent callers checking can_start() before either has
+        actually started could otherwise both pass the same cap check and
+        land N+1 concurrent pipelines against a cap of N.
+
+        Every caller that gets (True, "") back MUST call
+        release_reservation(project_id) exactly once afterward (success or
+        failure) -- typically in a try/finally around the actual
+        service.start() call. Safe to call repeatedly for a project already
+        running or already reserved (never counts as a second slot).
+        """
+        with self._lock:
+            occupied = self._occupied_slots()
+            if project_id in occupied:
+                return True, ""
+            if len(occupied) >= self._max_concurrent:
+                names = ", ".join(sorted(occupied))
+                return False, (
+                    f"Max concurrent projects ({self._max_concurrent}) reached: "
+                    f"{names}. Stop one before starting another."
+                )
+            self._pending.add(project_id)
+            return True, ""
+
+    def release_reservation(self, project_id: str) -> None:
+        """Release a try_reserve() slot once the caller's own start()
+        attempt has resolved (successfully or not) -- a successful start
+        continues occupying a slot via running(), not _pending, from then
+        on; safe to call even if nothing was reserved."""
+        with self._lock:
+            self._pending.discard(project_id)
 
 
-def get_autopilot_service() -> AutopilotService:
-    """Get the global AutopilotService instance."""
-    global _service
-    if _service is None:
-        _service = AutopilotService()
-    return _service
+_registry: Optional[AutopilotServiceRegistry] = None
+_registry_lock = threading.Lock()
+
+
+def get_registry() -> AutopilotServiceRegistry:
+    """Get the global AutopilotServiceRegistry instance (one per backend
+    process, tracking every project's AutopilotService)."""
+    global _registry
+    if _registry is None:
+        with _registry_lock:
+            if _registry is None:
+                from src.core.simple_config import get_config
+
+                _registry = AutopilotServiceRegistry(get_config().max_concurrent_projects)
+    return _registry
+
+
+def get_autopilot_service(project_id: str) -> AutopilotService:
+    """Get (or create) the AutopilotService instance for this project."""
+    return get_registry().get_or_create(project_id)

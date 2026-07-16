@@ -285,10 +285,114 @@ def _delete_project_context(db, key: str) -> None:
     db.query(ProjectContext).filter_by(key=key).delete()
 
 
-# ProjectContext key for AutopilotService's "was a pipeline running, with
+def _get_project_contexts_by_prefix(db, prefix: str) -> Dict[str, Any]:
+    """Read every ProjectContext row whose key starts with `prefix`.
+
+    Used for multi-project state that's namespaced per-project by key
+    (e.g. _running_state_key(project_id)) rather than looked up by one
+    known key -- see AutopilotService.enumerate_persisted_states.
+    """
+    rows = db.query(ProjectContext).filter(ProjectContext.key.like(f"{prefix}%")).all()
+    return {row.key: row.value for row in rows}
+
+
+def _resolve_project_id(project_path: str) -> Optional[str]:
+    """Look up AutopilotProject.id for a project root path, read-only.
+
+    Returns None if no AutopilotProject row exists yet for this path --
+    callers that need one to exist should use _get_or_create_project_id
+    instead.
+    """
+    from src.core.database import AutopilotProject
+
+    try:
+        with get_db() as db:
+            proj = (
+                db.query(AutopilotProject)
+                .filter_by(base_dir=str(Path(project_path).resolve()))
+                .first()
+            )
+            return proj.id if proj else None
+    except Exception:
+        return None
+
+
+def _get_or_create_project_id(project_path: str) -> str:
+    """Get-or-create + activate the AutopilotProject row for project_path,
+    and resume any workflows the user had explicitly paused for it.
+
+    Single source of truth for logic that used to live inline in
+    AutopilotService.start() only -- extracted so callers that need
+    project_id BEFORE starting a pipeline (e.g. POST /start's concurrency-
+    cap check, AutopilotServiceRegistry.get_or_create) don't need a second,
+    divergent copy of the same insert-if-missing/activate logic.
+    """
+    import uuid as _uuid
+
+    from sqlalchemy.exc import IntegrityError
+
+    from src.core.database import AutopilotProject
+
+    project = Path(project_path).resolve()
+    with get_db() as db:
+        proj = db.query(AutopilotProject).filter_by(base_dir=str(project)).first()
+        if not proj:
+            proj = AutopilotProject(
+                id=f"proj-{_uuid.uuid4().hex[:12]}",
+                name=project.name,
+                base_dir=str(project),
+                is_active=False,
+            )
+            db.add(proj)
+            try:
+                db.flush()
+            except IntegrityError:
+                # Lost a race with a concurrent first-time call for the
+                # same brand-new path (base_dir is unique) -- the other
+                # caller's row already exists; use it instead of failing.
+                db.rollback()
+                proj = db.query(AutopilotProject).filter_by(base_dir=str(project)).first()
+            else:
+                logger.info(f"Auto-created project '{proj.name}' for {project} (none registered)")
+
+        if not proj.is_active:
+            current = db.query(AutopilotProject).filter_by(is_active=True).first()
+            if current:
+                current.is_active = False
+            proj.is_active = True
+            logger.info(f"Activated project '{proj.name}' for pipeline")
+
+        # Clear the deliberate-pause marker /autopilot/stop sets
+        # (Workflow.paused_by="user") for this project's workflows --
+        # otherwise every self-heal/retry path that correctly skips
+        # user-paused workflows would also skip them here, leaving a
+        # workflow permanently stuck even after the user explicitly hits
+        # play again.
+        resumed = (
+            db.query(Workflow)
+            .filter(Workflow.project_id == proj.id, Workflow.paused_by == "user")
+            .update({Workflow.status: "active", Workflow.paused_by: None})
+        )
+        if resumed:
+            logger.info(f"Resumed {resumed} user-paused workflow(s) for '{proj.name}'")
+
+        db.commit()
+        return proj.id
+
+
+# ProjectContext keys for AutopilotService's "was a pipeline running, with
 # what args" resume marker -- see src/autopilot/service.py's
-# _persist_running_state/load_persisted_state/clear_persisted_state.
-_RUNNING_STATE_KEY = "autopilot_running_pipeline"
+# _persist_running_state/load_persisted_state/clear_persisted_state/
+# enumerate_persisted_states. Namespaced per-project (multiple pipelines
+# can be running concurrently); _RUNNING_STATE_KEY_LEGACY is the single
+# pre-multi-project bare key, migrated in place by enumerate_persisted_states
+# the first time the backend reads it after this change deploys.
+_RUNNING_STATE_KEY_PREFIX = "autopilot_running_pipeline_"
+_RUNNING_STATE_KEY_LEGACY = "autopilot_running_pipeline"
+
+
+def _running_state_key(project_id: str) -> str:
+    return f"{_RUNNING_STATE_KEY_PREFIX}{project_id}"
 
 
 class PersistentPipelineState:
@@ -303,8 +407,57 @@ class PersistentPipelineState:
     reset of workflow state naturally carries this along with it.
     """
 
-    STATE_KEY = "autopilot_pipeline_state"
-    PROCESSED_KEY = "autopilot_processed_designs"
+    STATE_KEY_PREFIX = "autopilot_pipeline_state_"
+    PROCESSED_KEY_PREFIX = "autopilot_processed_designs_"
+    # Pre-multi-project bare keys, shared by every project under the old
+    # single-global scheme. Migrated in place onto this project's namespaced
+    # keys the first time a project_id-aware caller loads state and finds
+    # nothing under its own key yet -- see _migrate_legacy_state_if_present.
+    STATE_KEY_LEGACY = "autopilot_pipeline_state"
+    PROCESSED_KEY_LEGACY = "autopilot_processed_designs"
+
+    def __init__(self, project_id: Optional[str] = None):
+        # Without project_id, two concurrent run_continuous_pipeline loops
+        # (one per project, see AutopilotServiceRegistry) would share these
+        # SAME bare keys and clobber each other's processed-design tracking
+        # and current-design/workflow pointer. Falls back to the legacy
+        # bare keys when project_id isn't given (the standalone CLI path,
+        # which only ever runs one project at a time).
+        self.project_id = project_id
+        if project_id:
+            self.STATE_KEY = f"{self.STATE_KEY_PREFIX}{project_id}"
+            self.PROCESSED_KEY = f"{self.PROCESSED_KEY_PREFIX}{project_id}"
+        else:
+            self.STATE_KEY = self.STATE_KEY_LEGACY
+            self.PROCESSED_KEY = self.PROCESSED_KEY_LEGACY
+
+    def _migrate_legacy_state_if_present(self) -> None:
+        """One-time migration of the pre-multi-project bare keys onto this
+        project's namespaced keys. Best-effort: assumes the legacy state
+        belongs to whichever project_id-aware caller asks first, which
+        holds at the moment this migration ships (only one project's
+        pipeline could have been running under the old single-global
+        scheme). Idempotent -- a no-op once the namespaced key exists.
+        """
+        try:
+            with get_db() as db:
+                if _get_project_context(db, self.STATE_KEY) is not None:
+                    return
+                legacy_state = _get_project_context(db, self.STATE_KEY_LEGACY)
+                legacy_processed = _get_project_context(db, self.PROCESSED_KEY_LEGACY)
+                if legacy_state is None and legacy_processed is None:
+                    return
+                logger.info(
+                    f"[MIGRATE] Namespacing legacy pipeline state to project {self.project_id}"
+                )
+                if legacy_state is not None:
+                    _set_project_context(db, self.STATE_KEY, legacy_state)
+                    _delete_project_context(db, self.STATE_KEY_LEGACY)
+                if legacy_processed is not None:
+                    _set_project_context(db, self.PROCESSED_KEY, legacy_processed)
+                    _delete_project_context(db, self.PROCESSED_KEY_LEGACY)
+        except Exception as e:
+            logger.warning(f"Failed to migrate legacy pipeline state: {e}")
 
     def save(self, state: PipelineState, processed_hashes: Set[str]):
         """Save pipeline state and processed designs to the DB.
@@ -361,6 +514,9 @@ class PersistentPipelineState:
 
     def load(self) -> Tuple[PipelineState, Set[str]]:
         """Load pipeline state and processed designs from the DB."""
+        if self.project_id:
+            self._migrate_legacy_state_if_present()
+
         state = PipelineState()
         processed_hashes: Set[str] = set()
 
@@ -1761,20 +1917,37 @@ def scan_design_queue(queue_dir: Path, processed_hashes: Set[str]) -> List[Desig
 
 
 def pick_next_design(
-    queue_dir: Path, processed_hashes: Set[str], logger: OrchestratorLogger
+    queue_dir: Path,
+    processed_hashes: Set[str],
+    logger: OrchestratorLogger,
+    project_id: Optional[str] = None,
 ) -> Optional[DesignEntry]:
     """Pick the next design to process.
 
     Reads from DB (autopilot_designs) if available, falls back to file scan.
     Uses file_path column if available, falls back to filename-based path.
+
+    project_id: which project's queue to pick from. Without this, two
+    concurrent run_continuous_pipeline loops (one per project, see
+    AutopilotServiceRegistry) would both resolve "the project" via the
+    single global AutopilotProject.is_active flag -- whichever project
+    most recently started/restarted -- and silently steal each other's
+    designs the moment a second project starts. Falls back to is_active
+    only when project_id isn't supplied (the standalone CLI path, which
+    has no per-project registry and only ever runs one project at a time).
     """
     # Try DB-based queue first
     try:
         from src.core.database import AutopilotDesign, AutopilotProject, Feature, Workflow, get_db
 
         with get_db() as db:
-            # Find active project
-            project = db.query(AutopilotProject).filter_by(is_active=True).first()
+            # Find the target project: by id when given (concurrent,
+            # per-project loop), else the single active project (standalone
+            # CLI path).
+            if project_id:
+                project = db.query(AutopilotProject).filter_by(id=project_id).first()
+            else:
+                project = db.query(AutopilotProject).filter_by(is_active=True).first()
             if not project:
                 logger.info("pick_next_design: no active project found")
                 return None
@@ -1981,7 +2154,10 @@ def pick_next_design(
         from src.core.database import AutopilotDesign, AutopilotProject
         from src.core.database import get_db as _get_db
         with _get_db() as _db:
-            project = _db.query(AutopilotProject).filter_by(is_active=True).first()
+            if project_id:
+                project = _db.query(AutopilotProject).filter_by(id=project_id).first()
+            else:
+                project = _db.query(AutopilotProject).filter_by(is_active=True).first()
             if project:
                 db_design = _db.query(AutopilotDesign).filter_by(
                     project_id=project.id, filename=next_design.path.name
@@ -4703,7 +4879,12 @@ def _create_corrective_task(
     return task_id
 
 
-def _wait_for_task_terminal(task_id: str, timeout_seconds: int, logger: OrchestratorLogger) -> str:
+def _wait_for_task_terminal(
+    task_id: str,
+    timeout_seconds: int,
+    logger: OrchestratorLogger,
+    project_id: Optional[str] = None,
+) -> str:
     """Poll a task until it reaches a terminal status or times out.
 
     Returns "done", "failed", "timeout", or "interrupted".
@@ -4712,7 +4893,7 @@ def _wait_for_task_terminal(task_id: str, timeout_seconds: int, logger: Orchestr
 
     start = time.time()
     while time.time() - start < timeout_seconds:
-        if _should_stop():
+        if _should_stop(project_id):
             return "interrupted"
         with get_db() as db:
             task = db.query(Task).filter_by(id=task_id).first()
@@ -4734,6 +4915,7 @@ def _negotiate_validation_fix(
     logger: OrchestratorLogger,
     max_attempts: int = 2,
     timeout_seconds: int = 900,
+    project_id: Optional[str] = None,
 ) -> Tuple[bool, Optional[dict]]:
     """When a phase's output fails a validation check, don't discard the
     whole run — ask the same worktree's agent to fix the specific problem,
@@ -4753,7 +4935,7 @@ def _negotiate_validation_fix(
         if not task_id:
             return False, None
 
-        result = _wait_for_task_terminal(task_id, timeout_seconds, logger)
+        result = _wait_for_task_terminal(task_id, timeout_seconds, logger, project_id)
         if result not in ("done",):
             logger.warning(
                 f"[NEGOTIATE] Corrective task {result} for {phase_name} — giving up"
@@ -4869,6 +5051,7 @@ def run_single_workflow(
     timeout_seconds: int = None,
     pause_existing: bool = True,
     existing_workflow_id: Optional[str] = None,
+    project_id: Optional[str] = None,
 ) -> str:
     """Run a single workflow execution.
 
@@ -4876,6 +5059,11 @@ def run_single_workflow(
         max_iterations: Maps to the engine's max_total_gotos.
         timeout_seconds: Hard deadline for this workflow (default: from config).
             Pass 0 or a custom value for Phase 0 runs.
+        project_id: AutopilotProject.id this workflow belongs to, for
+            per-project stop-signal scoping (_should_stop). NOT the same
+            as project_path above, which at both call sites is actually a
+            worktree path, not the project root -- project_id must be
+            passed explicitly by the caller, not derived from project_path.
         pause_existing: If False, skip pausing currently-active workflows. Set to
             False when running feature pipelines in parallel so threads don't
             clobber each other's workflows.
@@ -4915,7 +5103,7 @@ def run_single_workflow(
     else:
         existing_workflows = [
             wf
-            for wf in get_active_workflows(project_path)
+            for wf in get_active_workflows(project_path, project_id=project_id)
             if wf.get("id") != existing_workflow_id
         ]
     if existing_workflows:
@@ -5065,7 +5253,7 @@ def run_single_workflow(
             # persisted state (no live fallback), so without this it stays
             # pointed at the previous, already-finished workflow for this
             # run's entire duration.
-            PersistentPipelineState().save_state_only(state)
+            PersistentPipelineState(project_id=project_id).save_state_only(state)
 
         # Patch pipeline_metrics.json with the workflow_id so the UI can link tasks to features
         if state and state.current_feature_folder:
@@ -5131,7 +5319,7 @@ def run_single_workflow(
             time.sleep(POLL_INTERVAL)
 
             # Check if in-process service requested a stop
-            if _should_stop():
+            if _should_stop(project_id):
                 logger.info("Stop requested during workflow execution")
                 return "interrupted"
 
@@ -5444,6 +5632,7 @@ def run_phase0(
     project_path: Path,
     logger: OrchestratorLogger,
     state: Optional[PipelineState] = None,
+    project_id: Optional[str] = None,
 ) -> Tuple[Optional[dict], Optional[Path]]:
     """Run Phase 0: Feature Architect to decompose design into features.
 
@@ -5453,6 +5642,9 @@ def run_phase0(
         project_path: Path to the project root
         logger: Orchestrator logger
         state: Pipeline state
+        project_id: AutopilotProject.id, threaded down to run_single_workflow
+            for per-project stop-signal scoping (see run_single_workflow's
+            own project_id docstring).
 
     Returns:
         Tuple of (features_json dict, designs_folder path) or (None, None) on failure
@@ -5581,6 +5773,7 @@ def run_phase0(
             max_iterations=3,
             design_id=design_entry.db_id,
             timeout_seconds=_get_phase0_timeout(),
+            project_id=project_id,
         )
 
         if wf_status != "completed":
@@ -5667,6 +5860,7 @@ def run_phase0(
                         _validate_features_json,
                         str(e),
                         logger,
+                        project_id=project_id,
                     )
                     if fixed:
                         features_json = negotiated_json
@@ -5797,6 +5991,7 @@ def _run_one_feature(
     logger: OrchestratorLogger,
     state: Optional[PipelineState] = None,
     max_iterations: int = 10,
+    project_id: Optional[str] = None,
 ) -> str:
     """Run a single feature through the 12-phase pipeline.
 
@@ -5809,6 +6004,8 @@ def _run_one_feature(
         logger: Orchestrator logger
         state: Pipeline state
         max_iterations: Max iterations for the pipeline
+        project_id: AutopilotProject.id, threaded down to run_single_workflow
+            for per-project stop-signal scoping.
 
     Returns:
         Feature status string (completed, failed, skipped)
@@ -5937,6 +6134,7 @@ def _run_one_feature(
             design_id=design_entry.db_id,
             pause_existing=False,  # features run in parallel; don't clobber each other
             existing_workflow_id=existing_workflow_id,
+            project_id=project_id,
         )
 
         # Link workflow to feature in DB
@@ -6015,6 +6213,7 @@ def run_feature_pipelines(
     logger: OrchestratorLogger,
     state: Optional[PipelineState] = None,
     max_iterations: int = 10,
+    project_id: Optional[str] = None,
 ) -> Dict[str, str]:
     """Run feature pipelines with parallel/sequential execution.
 
@@ -6027,6 +6226,8 @@ def run_feature_pipelines(
         logger: Orchestrator logger
         state: Pipeline state
         max_iterations: Max iterations for the pipeline
+        project_id: AutopilotProject.id, threaded down to each feature's
+            run_single_workflow call for per-project stop-signal scoping.
 
     Returns:
         Dict mapping feature_key -> status
@@ -6072,6 +6273,7 @@ def run_feature_pipelines(
                 logger,
                 state,
                 max_iterations,
+                project_id,
             )
             feature_results[feature_key] = status
         else:
@@ -6090,6 +6292,7 @@ def run_feature_pipelines(
                         logger,
                         state,
                         max_iterations,
+                        project_id,
                     ): feat
                     for feat in features_to_run
                 }
@@ -6353,6 +6556,7 @@ def run_single_design(
     logger: OrchestratorLogger,
     state: Optional[PipelineState] = None,
     max_iterations: int = 10,
+    project_id: Optional[str] = None,
 ) -> Tuple[DesignStatus, FeatureReport]:
     """Three-stage coordinator: Phase 0 → per-feature pipelines → design aggregate."""
     project_path.mkdir(parents=True, exist_ok=True)
@@ -6367,7 +6571,7 @@ def run_single_design(
 
     # ── Stage 1: Phase 0 — Feature Architect ──
     features_json, designs_folder = run_phase0(
-        sdk, design_entry, project_path, logger, state
+        sdk, design_entry, project_path, logger, state, project_id=project_id
     )
     if features_json is None:
         raise RuntimeError(
@@ -6381,7 +6585,7 @@ def run_single_design(
 
     feature_results = run_feature_pipelines(
         sdk, design_entry, features_json, designs_folder,
-        project_path, logger, state, max_iterations,
+        project_path, logger, state, max_iterations, project_id=project_id,
     )
 
     # ── Stage 3: Design aggregate ──
@@ -6397,13 +6601,29 @@ def run_single_design(
     return status, report
 
 
-def _should_stop() -> bool:
-    """Check if the pipeline should stop.
+# project_id -> the AutopilotService's own asyncio.Event, registered by
+# AutopilotService._run_pipeline_sync. Was a single bare module global
+# (_service_stop_event) -- a second project starting overwrote the first
+# project's reference silently, so whichever project's stop() fired last
+# won control of BOTH pipelines' stop signal (project A's "stop" could be
+# swallowed, or could incorrectly stop project B). Keyed by project_id,
+# not workflow_id: AutopilotService is 1:1 with a project, not a workflow
+# (run_continuous_pipeline, one of this function's three call sites, spans
+# many workflows over its life and has no single workflow_id to key by).
+_stop_events: Dict[str, "asyncio.Event"] = {}
 
-    Returns True if the in-process AutopilotService has requested a stop
-    (via the module-level _service_stop_event).
+
+def _should_stop(project_id: Optional[str]) -> bool:
+    """Check if the pipeline should stop for this project.
+
+    Returns True if the in-process AutopilotService for this project has
+    requested a stop (via _stop_events, keyed by project_id). A caller
+    that couldn't resolve its own project_id gets False rather than
+    guessing at some other project's stop signal.
     """
-    event = globals().get("_service_stop_event")
+    if not project_id:
+        return False
+    event = _stop_events.get(project_id)
     if event is not None:
         try:
             # Non-blocking check
@@ -6487,8 +6707,19 @@ def run_continuous_pipeline(args) -> None:
     log_dir = Path(AUTOPILOT_STATE_DIR) / datetime.now().strftime("run-%Y%m%d-%H%M%S")
     logger = OrchestratorLogger(log_dir)
 
+    # Used everywhere this loop needs to tell "is this workflow/design/stop
+    # request/pipeline-state ours" apart from a different project's (see
+    # _workflow_belongs_to_project, pick_next_design, _should_stop,
+    # PersistentPipelineState). AutopilotService.start() already resolved
+    # this reliably (via _get_or_create_project_id) before this loop ever
+    # began and passes it straight through args. Only the standalone CLI
+    # path (`python -m src.autopilot.orchestrator`, which builds its own
+    # argparse Namespace with no project_id) falls back to a DB lookup
+    # further below, once project_path is available.
+    current_project_id = getattr(args, "project_id", None)
+
     # Load persistent state from previous runs
-    persistent_state = PersistentPipelineState()
+    persistent_state = PersistentPipelineState(project_id=current_project_id)
     state, processed_hashes = persistent_state.load()
 
     # Check for incomplete work from previous run
@@ -6526,24 +6757,27 @@ def run_continuous_pipeline(args) -> None:
     project_path.mkdir(parents=True, exist_ok=True)
     queue_dir.mkdir(parents=True, exist_ok=True)
 
-    # Resolved once, used everywhere this loop needs to tell "is this
-    # workflow ours" apart from a different project's (see
-    # _workflow_belongs_to_project) -- authoritative when available, a
-    # fallback path-containment check on working_directory otherwise.
-    current_project_id = None
-    try:
-        from src.core.database import AutopilotProject as _AutopilotProject
+    # Standalone CLI path only (see current_project_id's resolution above):
+    # no project_id in args, so fall back to a fresh DB lookup now that
+    # project_path is available. A transient failure here leaving
+    # current_project_id None for the run's duration is an acceptable
+    # degradation for that path alone (it was the pre-existing behavior),
+    # not a regression of AutopilotService's stop button -- that path
+    # always has project_id from args.
+    if not current_project_id:
+        try:
+            from src.core.database import AutopilotProject as _AutopilotProject
 
-        with get_db() as _pdb:
-            _proj = (
-                _pdb.query(_AutopilotProject)
-                .filter_by(base_dir=str(project_path.resolve()))
-                .first()
-            )
-            if _proj:
-                current_project_id = _proj.id
-    except Exception:
-        pass
+            with get_db() as _pdb:
+                _proj = (
+                    _pdb.query(_AutopilotProject)
+                    .filter_by(base_dir=str(project_path.resolve()))
+                    .first()
+                )
+                if _proj:
+                    current_project_id = _proj.id
+        except Exception:
+            pass
 
     processed_file = log_dir / "processed.json"
 
@@ -6660,7 +6894,7 @@ def run_continuous_pipeline(args) -> None:
     try:
         while True:
             # Check if in-process service requested a stop
-            if _should_stop():
+            if _should_stop(current_project_id):
                 logger.info("Stop requested by AutopilotService")
                 break
 
@@ -6857,7 +7091,9 @@ def run_continuous_pipeline(args) -> None:
                 except Exception as e:
                     logger.warning(f"Warning: Could not check active workflows: {e}")
 
-                next_design = pick_next_design(queue_dir, processed_hashes, logger)
+                next_design = pick_next_design(
+                    queue_dir, processed_hashes, logger, project_id=current_project_id
+                )
 
                 if next_design is None:
                     logger.info(
@@ -6900,6 +7136,7 @@ def run_continuous_pipeline(args) -> None:
                         logger,
                         state,
                         max_iterations=args.max_iterations,
+                        project_id=current_project_id,
                     )
                     # Save state AFTER run_single_design so current_workflow_id is captured
                     logger.save_state(state)
@@ -6922,11 +7159,18 @@ def run_continuous_pipeline(args) -> None:
                     from src.core.database import get_db as _get_db
 
                     with _get_db() as _db:
-                        _proj = (
-                            _db.query(AutopilotProject)
-                            .filter_by(is_active=True)
-                            .first()
-                        )
+                        if current_project_id:
+                            _proj = (
+                                _db.query(AutopilotProject)
+                                .filter_by(id=current_project_id)
+                                .first()
+                            )
+                        else:
+                            _proj = (
+                                _db.query(AutopilotProject)
+                                .filter_by(is_active=True)
+                                .first()
+                            )
                         if _proj:
                             _des = (
                                 _db.query(AutopilotDesign)

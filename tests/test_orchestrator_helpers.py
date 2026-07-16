@@ -264,6 +264,83 @@ class TestPersistentPipelineState:
         assert state.current_workflow_id == "wf-new"
         assert hashes == {"h1", "h2"}
 
+    def test_namespaced_per_project(self, orch_db_env):
+        """Regression: PersistentPipelineState used to store current_
+        workflow_id/current_feature_folder/processed_hashes under bare,
+        unnamespaced ProjectContext keys shared by EVERY project -- two
+        concurrent run_continuous_pipeline loops (one per project) would
+        clobber each other's processed-design tracking and resume pointer.
+        Two instances for two different project_ids must see only their
+        own state."""
+        from src.autopilot.orchestrator import PersistentPipelineState, PipelineState
+
+        pps_a = PersistentPipelineState(project_id="proj-a")
+        pps_b = PersistentPipelineState(project_id="proj-b")
+
+        pps_a.save(PipelineState(designs_processed=3, run_id="run-a"), {"hash-a"})
+        pps_b.save(PipelineState(designs_processed=9, run_id="run-b"), {"hash-b"})
+
+        state_a, hashes_a = pps_a.load()
+        state_b, hashes_b = pps_b.load()
+
+        assert state_a.designs_processed == 3
+        assert state_a.run_id == "run-a"
+        assert hashes_a == {"hash-a"}
+
+        assert state_b.designs_processed == 9
+        assert state_b.run_id == "run-b"
+        assert hashes_b == {"hash-b"}
+
+        # Clearing project A must not touch project B's state.
+        pps_a.clear()
+        cleared_a, _ = pps_a.load()
+        still_there_b, _ = pps_b.load()
+        assert cleared_a.designs_processed == 0
+        assert still_there_b.designs_processed == 9
+
+    def test_migrates_legacy_state_on_first_load(self, orch_db_env):
+        """Sotto's currently-running pipeline (pre-multi-project) persisted
+        its pipeline state and processed hashes under the old bare keys.
+        The first project_id-aware load() must migrate them onto the
+        namespaced keys in place, or a design already processed under the
+        legacy key would appear un-processed and get reprocessed."""
+        from src.autopilot.orchestrator import PersistentPipelineState, PipelineState
+        from src.core.database import ProjectContext, get_db
+
+        legacy = PersistentPipelineState()  # project_id=None -> legacy keys
+        legacy.save(PipelineState(designs_processed=7, run_id="run-legacy"), {"h1", "h2"})
+
+        pps = PersistentPipelineState(project_id="proj-sotto")
+        state, hashes = pps.load()
+
+        assert state.designs_processed == 7
+        assert state.run_id == "run-legacy"
+        assert hashes == {"h1", "h2"}
+
+        with get_db() as db:
+            assert (
+                db.query(ProjectContext)
+                .filter_by(key=PersistentPipelineState.STATE_KEY_LEGACY)
+                .first()
+                is None
+            )
+            assert (
+                db.query(ProjectContext)
+                .filter_by(key=PersistentPipelineState.PROCESSED_KEY_LEGACY)
+                .first()
+                is None
+            )
+            assert (
+                db.query(ProjectContext).filter_by(key=pps.STATE_KEY).first()
+                is not None
+            )
+
+        # Idempotent: a second load() after migration behaves like any
+        # other project's state, no re-migration/duplication.
+        state_again, hashes_again = pps.load()
+        assert state_again.designs_processed == 7
+        assert hashes_again == {"h1", "h2"}
+
 
 class TestSetProjectContextUpsert:
     """_set_project_context uses an atomic INSERT ... ON CONFLICT DO UPDATE
@@ -585,6 +662,59 @@ class TestPickNextDesign:
                 .all()
             )
             assert len(matches) == 1
+
+    def test_project_id_wins_over_is_active_when_given(self, tmp_path, orch_db_env):
+        """Regression: pick_next_design used to resolve "the project" purely
+        via AutopilotProject.is_active=True, with no project_id parameter at
+        all. Two concurrent run_continuous_pipeline loops (one per project,
+        see AutopilotServiceRegistry) would both hit this same global flag --
+        whichever project most recently (re)started flips is_active, so an
+        earlier-started project's loop would silently start pulling the
+        OTHER project's designs the moment a second project starts. Passing
+        project_id must make pick_next_design pick from THAT project
+        regardless of which one is currently is_active."""
+        from src.autopilot.orchestrator import OrchestratorLogger, pick_next_design
+        from src.core.database import AutopilotDesign, AutopilotProject
+
+        session = orch_db_env.get_session()
+        session.add(
+            AutopilotProject(
+                id="proj-a", name="a", base_dir="/tmp/proj-a", is_active=False
+            )
+        )
+        session.add(
+            AutopilotProject(
+                id="proj-b", name="b", base_dir="/tmp/proj-b", is_active=True
+            )
+        )
+        (tmp_path / "a.md").write_text("# A")
+        (tmp_path / "b.md").write_text("# B")
+        session.add(
+            AutopilotDesign(
+                id="des-a", project_id="proj-a", filename="a.md", name="A",
+                status="pending", ordinal=1, file_path=str(tmp_path / "a.md"),
+            )
+        )
+        session.add(
+            AutopilotDesign(
+                id="des-b", project_id="proj-b", filename="b.md", name="B",
+                status="pending", ordinal=1, file_path=str(tmp_path / "b.md"),
+            )
+        )
+        session.commit()
+        session.close()
+
+        logger = OrchestratorLogger(tmp_path)
+
+        # proj-a is passed explicitly even though proj-b is is_active=True.
+        # file_path exists on disk for both designs, so the DB-first path
+        # returns directly without ever falling through to file-scan --
+        # this pins down the project = filter_by(id=project_id) lookup
+        # itself, not the separate file-scan-fallback project linking.
+        result = pick_next_design(tmp_path, set(), logger, project_id="proj-a")
+
+        assert result is not None
+        assert result.db_id == "des-a"
 
 
 class TestCreateFeatureFolder:
@@ -2358,51 +2488,6 @@ class TestUpdateOrchestratorMaxGotos:
         # Should not raise
 
 
-class TestShouldStop:
-    def test_no_event(self):
-        import src.autopilot.orchestrator as mod
-        from src.autopilot.orchestrator import _should_stop
-
-        old = mod._service_stop_event if hasattr(mod, "_service_stop_event") else None
-        mod._service_stop_event = None
-        try:
-            assert _should_stop() is False
-        finally:
-            if old is not None:
-                mod._service_stop_event = old
-
-    def test_event_not_set(self):
-        import threading
-
-        import src.autopilot.orchestrator as mod
-        from src.autopilot.orchestrator import _should_stop
-
-        event = threading.Event()
-        old = getattr(mod, "_service_stop_event", None)
-        mod._service_stop_event = event
-        try:
-            assert _should_stop() is False
-        finally:
-            if old is not None:
-                mod._service_stop_event = old
-
-    def test_event_set(self):
-        import threading
-
-        import src.autopilot.orchestrator as mod
-        from src.autopilot.orchestrator import _should_stop
-
-        event = threading.Event()
-        event.set()
-        old = getattr(mod, "_service_stop_event", None)
-        mod._service_stop_event = event
-        try:
-            assert _should_stop() is True
-        finally:
-            if old is not None:
-                mod._service_stop_event = old
-
-
 class TestGetLitellmConfig:
     def test_reads_env(self):
         import os
@@ -2668,6 +2753,83 @@ class TestRunOneFeatureWorktreeCleanupTiming:
 
         assert status == "failed"
         mock_cleanup.assert_not_called()
+
+
+class TestRunOneFeatureThreadsProjectId:
+    """Regression: run_single_workflow's project_path parameter is actually
+    a worktree path, not the real project root (see its docstring) --
+    project_id has to be threaded down as its own explicit parameter from
+    _run_one_feature, not derived from project_path. Confirms
+    _run_one_feature actually forwards the project_id it's given through to
+    run_single_workflow, so _should_stop ends up checking the real
+    project's stop signal instead of silently getting None."""
+
+    def test_project_id_forwarded_to_run_single_workflow(self, orch_db_env, tmp_path):
+        from src.autopilot.orchestrator import (
+            DesignEntry,
+            OrchestratorLogger,
+            _run_one_feature,
+        )
+        from src.core.database import AutopilotDesign, AutopilotProject, Feature
+
+        design_id = "design-1"
+        feature_key = "feat-a"
+        with orch_db_env.session_scope() as session:
+            session.add(AutopilotProject(id="proj-1", name="p", base_dir="/tmp/proj-1"))
+            session.add(
+                AutopilotDesign(id=design_id, project_id="proj-1", filename="d.md", name="D")
+            )
+            session.add(
+                Feature(
+                    id="feature-row-1",
+                    design_id=design_id,
+                    feature_key=feature_key,
+                    name="Feature A",
+                    scope="s",
+                    status="pending",
+                )
+            )
+
+        design_path = tmp_path / "design.md"
+        design_path.write_text("# Design\n")
+        design_entry = DesignEntry(
+            path=design_path, name="Test Design", content_hash="hash", db_id=design_id
+        )
+        feature = {"id": feature_key, "name": "Feature A"}
+        designs_folder = tmp_path / "designs"
+        (designs_folder / "features" / feature_key).mkdir(parents=True)
+        project_path = tmp_path / "project"
+        project_path.mkdir()
+        worktree_dir = tmp_path / "worktree"
+        worktree_dir.mkdir()
+
+        captured = {}
+
+        def fake_run_single_workflow(*args, **kwargs):
+            captured["project_id"] = kwargs.get("project_id")
+            return "completed"
+
+        with patch(
+            "src.autopilot.orchestrator._create_integration_worktree",
+            return_value=worktree_dir,
+        ), patch(
+            "src.autopilot.orchestrator.run_single_workflow",
+            side_effect=fake_run_single_workflow,
+        ), patch(
+            "src.autopilot.orchestrator._cleanup_worktree"
+        ):
+            _run_one_feature(
+                sdk=MagicMock(),
+                design_entry=design_entry,
+                feature=feature,
+                designs_folder=designs_folder,
+                project_path=project_path,
+                logger=OrchestratorLogger(tmp_path),
+                state=None,
+                project_id="proj-1",
+            )
+
+        assert captured["project_id"] == "proj-1"
 
 
 class TestWorkflowAppearsAbandoned:
@@ -2938,3 +3100,179 @@ class TestEscalateStaleActiveWorkflows:
         with orch_db_env.session_scope() as session:
             wf = session.query(Workflow).filter_by(id="wf-1").first()
             assert wf.status == "active"
+
+
+class TestShouldStop:
+    """Regression: _should_stop() used to read a single bare module global
+    (_service_stop_event) -- a second project starting overwrote the first
+    project's reference, so whichever project's stop() fired last won
+    control of BOTH pipelines' stop signal. Now keyed by project_id via
+    the _stop_events dict."""
+
+    @pytest.fixture(autouse=True)
+    def _clean_stop_events(self):
+        from src.autopilot import orchestrator
+
+        orchestrator._stop_events.clear()
+        yield
+        orchestrator._stop_events.clear()
+
+    def test_returns_true_only_for_the_project_whose_event_is_set(self):
+        import asyncio
+
+        from src.autopilot import orchestrator
+        from src.autopilot.orchestrator import _should_stop
+
+        event_a = asyncio.Event()
+        event_a.set()
+        event_b = asyncio.Event()
+        orchestrator._stop_events["proj-a"] = event_a
+        orchestrator._stop_events["proj-b"] = event_b
+
+        assert _should_stop("proj-a") is True
+        assert _should_stop("proj-b") is False
+
+    def test_unregistered_project_id_returns_false(self):
+        from src.autopilot.orchestrator import _should_stop
+
+        assert _should_stop("proj-never-registered") is False
+
+    def test_none_project_id_returns_false_instead_of_guessing(self):
+        import asyncio
+
+        from src.autopilot import orchestrator
+        from src.autopilot.orchestrator import _should_stop
+
+        # Even if some other project's event happens to be set, a caller
+        # that couldn't resolve its own project_id must not accidentally
+        # inherit a different project's stop signal.
+        event_a = asyncio.Event()
+        event_a.set()
+        orchestrator._stop_events["proj-a"] = event_a
+
+        assert _should_stop(None) is False
+
+
+class TestGetOrCreateProjectId:
+    def test_creates_and_activates_new_project(self, orch_db_env, tmp_path):
+        from src.autopilot.orchestrator import _get_or_create_project_id
+        from src.core.database import AutopilotProject
+
+        project = tmp_path / "myproject"
+        project.mkdir()
+
+        project_id = _get_or_create_project_id(str(project))
+
+        with orch_db_env.session_scope() as session:
+            proj = session.query(AutopilotProject).filter_by(id=project_id).first()
+            assert proj is not None
+            assert proj.base_dir == str(project.resolve())
+            assert proj.is_active is True
+
+    def test_repeat_call_is_idempotent_no_duplicate_row(self, orch_db_env, tmp_path):
+        from src.autopilot.orchestrator import _get_or_create_project_id
+        from src.core.database import AutopilotProject
+
+        project = tmp_path / "myproject"
+        project.mkdir()
+
+        first_id = _get_or_create_project_id(str(project))
+        second_id = _get_or_create_project_id(str(project))
+
+        assert first_id == second_id
+        with orch_db_env.session_scope() as session:
+            matches = (
+                session.query(AutopilotProject)
+                .filter_by(base_dir=str(project.resolve()))
+                .all()
+            )
+            assert len(matches) == 1
+
+    def test_activating_new_project_deactivates_previous(self, orch_db_env, tmp_path):
+        from src.autopilot.orchestrator import _get_or_create_project_id
+        from src.core.database import AutopilotProject
+
+        project_a = tmp_path / "project-a"
+        project_a.mkdir()
+        project_b = tmp_path / "project-b"
+        project_b.mkdir()
+
+        id_a = _get_or_create_project_id(str(project_a))
+        id_b = _get_or_create_project_id(str(project_b))
+
+        with orch_db_env.session_scope() as session:
+            proj_a = session.query(AutopilotProject).filter_by(id=id_a).first()
+            proj_b = session.query(AutopilotProject).filter_by(id=id_b).first()
+            assert proj_a.is_active is False
+            assert proj_b.is_active is True
+
+    def test_concurrent_insert_race_recovers_instead_of_raising(
+        self, orch_db_env, tmp_path
+    ):
+        """Simulates two callers racing to create the same brand-new
+        project row: the second caller's db.flush() hits IntegrityError on
+        AutopilotProject.base_dir's unique constraint, and must recover by
+        re-querying rather than propagating the error."""
+        from sqlalchemy.exc import IntegrityError
+        from sqlalchemy.orm import Session
+
+        from src.autopilot.orchestrator import _get_or_create_project_id
+        from src.core.database import AutopilotProject
+
+        project = tmp_path / "myproject"
+        project.mkdir()
+
+        real_flush = Session.flush
+        raised = {"done": False}
+
+        def flaky_flush(self, *args, **kwargs):
+            pending_new = [o for o in self.new if isinstance(o, AutopilotProject)]
+            if pending_new and not raised["done"]:
+                raised["done"] = True
+                # Simulate a concurrent caller's insert landing first, in a
+                # separate session/transaction, before this flush fails.
+                other = orch_db_env.get_session()
+                try:
+                    other.add(
+                        AutopilotProject(
+                            id="proj-raced-in-first",
+                            name="myproject",
+                            base_dir=str(project.resolve()),
+                            is_active=False,
+                        )
+                    )
+                    real_flush(other)
+                    other.commit()
+                finally:
+                    other.close()
+                raise IntegrityError("insert", {}, Exception("UNIQUE constraint failed"))
+            return real_flush(self, *args, **kwargs)
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(Session, "flush", flaky_flush)
+            project_id = _get_or_create_project_id(str(project))
+
+        assert project_id == "proj-raced-in-first"
+
+
+class TestGetProjectContextsByPrefix:
+    def test_returns_only_matching_prefix(self, orch_db_env):
+        from src.autopilot.orchestrator import (
+            _get_project_contexts_by_prefix,
+            _set_project_context,
+        )
+
+        with orch_db_env.session_scope() as session:
+            _set_project_context(session, "autopilot_running_pipeline_proj-a", {"x": 1})
+            _set_project_context(session, "autopilot_running_pipeline_proj-b", {"x": 2})
+            _set_project_context(session, "unrelated_key", {"x": 3})
+
+        with orch_db_env.session_scope() as session:
+            result = _get_project_contexts_by_prefix(
+                session, "autopilot_running_pipeline_"
+            )
+
+        assert set(result.keys()) == {
+            "autopilot_running_pipeline_proj-a",
+            "autopilot_running_pipeline_proj-b",
+        }

@@ -973,6 +973,37 @@ class PhaseManager:
         "fail",
     }
 
+    def _tag_completing_task(
+        self, session, phase_id: str, result: Dict[str, Any]
+    ) -> None:
+        """Record a goto/retry decision on the task whose completion
+        triggered it, so the frontend can show WHICH phase it's actually
+        returning to (e.g. "goto -> development") instead of a bare,
+        contextless badge.
+
+        Single choke point: every mark_phase_complete return path (normal
+        evaluation, force_action from arbitration) routes through here, so
+        this only needs writing once instead of duplicated at each of the
+        (currently six) external callers. Previously only one of those six
+        callers ever set Task.action at all, and only for "goto" -- "retry"
+        was never set anywhere, so that badge was dead code in the
+        frontend.
+        """
+        action = result.get("action")
+        if action not in ("goto", "retry"):
+            return
+        task = (
+            session.query(Task)
+            .filter(Task.phase_id == phase_id, Task.status.in_(["done", "failed"]))
+            .order_by(Task.completed_at.desc(), Task.created_at.desc())
+            .first()
+        )
+        if not task:
+            return
+        task.action = action
+        task.action_target_phase = result.get("target_phase")
+        session.commit()
+
     def mark_phase_complete(
         self,
         phase_id: str,
@@ -1044,11 +1075,15 @@ class PhaseManager:
 
             # Arbitration override: skip evaluation and use the resolved action.
             if force_action == "continue":
-                return self._handle_force_continue(session, phase, execution, summary)
+                result = self._handle_force_continue(session, phase, execution, summary)
+                self._tag_completing_task(session, phase.id, result)
+                return result
             elif force_action == "goto":
-                return self._handle_force_goto(
+                result = self._handle_force_goto(
                     session, phase, execution, summary, force_target_phase, force_reason
                 )
+                self._tag_completing_task(session, phase.id, result)
+                return result
             elif force_action == "fail":
                 return self._handle_force_fail(session, execution, summary)
 
@@ -1107,7 +1142,9 @@ class PhaseManager:
             action_value = evaluation.action.value
             if action_value in self._EVALUATION_ACTION_VALUES:
                 handler = getattr(self, f"_handle_evaluation_{action_value}")
-                return handler(session, phase, execution, summary, evaluation)
+                result = handler(session, phase, execution, summary, evaluation)
+                self._tag_completing_task(session, phase.id, result)
+                return result
 
             return {
                 "action": "continue",
@@ -1153,8 +1190,16 @@ class PhaseManager:
             if config.type == "sequential":
                 return None
 
+            # Real Phase.name -> Phase.order for this workflow, not a
+            # hand-maintained vocabulary baked into the engine (SOLID review
+            # 2.11) -- see WorkflowOrchestrator._phase_name_to_order.
+            phase_order_map = {
+                p.name: p.order
+                for p in session.query(Phase).filter_by(workflow_id=workflow_id).all()
+            }
+
             # Create and cache orchestrator
-            orchestrator = WorkflowOrchestrator(config)
+            orchestrator = WorkflowOrchestrator(config, phase_order_map=phase_order_map)
             self._orchestrators[workflow_id] = orchestrator
             return orchestrator
         except Exception as e:
