@@ -914,7 +914,10 @@ def score_feature_review(
 
 
 def read_result(
-    working_directory: Any, filename: str, subdir: Optional[str] = None
+    working_directory: Any,
+    filename: str,
+    subdir: Optional[str] = None,
+    phase_name: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """Read a structured result file an agent wrote.
 
@@ -928,69 +931,59 @@ def read_result(
     artifacts are internal orchestration state, not a git-tracked project
     deliverable. Reads ONLY from working_directory/subdir/filename in that
     case; does not also try docs/ or root.
+
+    phase_name: each gated phase's task description tells it the ONE
+    sanctioned subdirectory of docs/ to write to -- docs/<phase_name>/, see
+    each gated phase's CRITICAL PATH RULE -- so this is checked first, not
+    guessed at: iterating every subdirectory that happens to contain a
+    same-named file risks picking up a stale file left behind by an earlier
+    retry/goto pass of this same phase, since filesystem iteration order
+    isn't "most recent." Root docs/ and the project root remain as fallback
+    locations for older agent behavior.
     """
     base = Path(working_directory)
-    candidates = (
-        (base / subdir / filename,)
-        if subdir is not None
-        else (base / "docs" / filename, base / filename)
-    )
+    if subdir is not None:
+        candidates = (base / subdir / filename,)
+    else:
+        candidates = []
+        if phase_name:
+            candidates.append(base / "docs" / phase_name / filename)
+        candidates += [base / "docs" / filename, base / filename]
     for candidate in candidates:
         if candidate.exists():
             try:
                 return json.loads(candidate.read_text())
             except Exception:
                 return None
-    # Fallback: search subdirectories of docs/ (agents sometimes write to
-    # feature-specific subdirectories instead of root docs/)
-    if subdir is None:
-        docs_dir = base / "docs"
-        if docs_dir.is_dir():
-            for sub in docs_dir.iterdir():
-                if sub.is_dir():
-                    candidate = sub / filename
-                    if candidate.exists():
-                        try:
-                            return json.loads(candidate.read_text())
-                        except Exception:
-                            return None
     return None
 
 
 def read_report_text(
-    working_directory: Any, filename: str, subdir: Optional[str] = None
+    working_directory: Any,
+    filename: str,
+    subdir: Optional[str] = None,
+    phase_name: Optional[str] = None,
 ) -> Optional[str]:
     """Read a markdown report an agent wrote, same search path as
-    read_result (including the subdir override) but returning raw text
-    instead of parsed JSON -- used to quote a review's full report into
-    the corrective task sent back to development, rather than just a
-    score/count.
+    read_result (including the subdir override and phase_name-scoped
+    location) but returning raw text instead of parsed JSON -- used to
+    quote a review's full report into the corrective task sent back to
+    development, rather than just a score/count.
     """
     base = Path(working_directory)
-    candidates = (
-        (base / subdir / filename,)
-        if subdir is not None
-        else (base / "docs" / filename, base / filename)
-    )
+    if subdir is not None:
+        candidates = (base / subdir / filename,)
+    else:
+        candidates = []
+        if phase_name:
+            candidates.append(base / "docs" / phase_name / filename)
+        candidates += [base / "docs" / filename, base / filename]
     for candidate in candidates:
         if candidate.exists():
             try:
                 return candidate.read_text()
             except Exception:
                 return None
-    # Fallback: search subdirectories of docs/ (agents sometimes write to
-    # feature-specific subdirectories instead of root docs/)
-    if subdir is None:
-        docs_dir = base / "docs"
-        if docs_dir.is_dir():
-            for sub in docs_dir.iterdir():
-                if sub.is_dir():
-                    candidate = sub / filename
-                    if candidate.exists():
-                        try:
-                            return candidate.read_text()
-                        except Exception:
-                            return None
     return None
 
 
@@ -1055,37 +1048,25 @@ def consume_gate_artifacts(phase_name: str, working_directory: Any) -> list:
         if subdir
         else (lambda f: (base / "docs" / f, base / f))
     )
-    for filename in GATE_RESULT_ARTIFACTS.get(phase_name, ()): 
-        found = False
-        for candidate in candidates_for(filename):
+    for filename in GATE_RESULT_ARTIFACTS.get(phase_name, ()):
+        # docs/<phase_name>/ is the one sanctioned subdirectory name this
+        # phase's own CRITICAL PATH RULE tells it to use, checked first --
+        # not a search: iterating every subdirectory of docs/ risked
+        # deleting a DIFFERENT feature's (or an earlier retry pass's)
+        # still-needed result file.
+        candidates = (
+            [base / "docs" / phase_name / filename] if not subdir else []
+        ) + list(candidates_for(filename))
+        for candidate in candidates:
             if candidate.exists():
                 try:
                     candidate.unlink()
                     deleted.append(str(candidate))
-                    found = True
                 except OSError as e:
                     logger.warning(
                         f"[SPEC-GATE] Could not remove consumed gate artifact "
                         f"{candidate}: {e}"
                     )
-        # Fallback: search subdirectories of docs/ (agents sometimes write to
-        # feature-specific subdirectories instead of root docs/)
-        if not found and not subdir:
-            docs_dir = base / "docs"
-            if docs_dir.is_dir():
-                for sub in docs_dir.iterdir():
-                    if sub.is_dir():
-                        candidate = sub / filename
-                        if candidate.exists():
-                            try:
-                                candidate.unlink()
-                                deleted.append(str(candidate))
-                            except OSError as e:
-                                logger.warning(
-                                    f"[SPEC-GATE] Could not remove consumed gate artifact "
-                                    f"{candidate}: {e}"
-                                )
-                            break
     if deleted:
         logger.info(
             f"[SPEC-GATE] {phase_name}: consumed gate artifacts after goto "
@@ -1165,18 +1146,28 @@ def build_phase_output(
     spec = spec if spec is not None else load_spec()
 
     if phase_name == "scope_review":
-        result = read_result(working_directory, "scope_review_result.json")
+        result = read_result(
+            working_directory, "scope_review_result.json", phase_name=phase_name
+        )
         score, meta = score_scope_review(result)
     elif phase_name == "architectural_review":
-        result = read_result(working_directory, "architectural_review_result.json")
-        report_text = read_report_text(working_directory, "architectural_review_report.md")
+        result = read_result(
+            working_directory, "architectural_review_result.json", phase_name=phase_name
+        )
+        report_text = read_report_text(
+            working_directory, "architectural_review_report.md", phase_name=phase_name
+        )
         score, meta = score_architectural_review(result, report_text=report_text)
     elif phase_name == "adversarial_review":
-        result = read_result(working_directory, "adversarial_review_result.json")
-        report_text = read_report_text(working_directory, "adversarial_review_report.md")
+        result = read_result(
+            working_directory, "adversarial_review_result.json", phase_name=phase_name
+        )
+        report_text = read_report_text(
+            working_directory, "adversarial_review_report.md", phase_name=phase_name
+        )
         score, meta = score_adversarial_review(result, report_text=report_text)
     elif phase_name == "qa_validation":
-        result = read_result(working_directory, "qa_result.json")
+        result = read_result(working_directory, "qa_result.json", phase_name=phase_name)
         # Enhancement 1: Pass working_directory for independent test verification
         score, meta = score_qa(result, spec, working_directory=working_directory)
     elif phase_name == "feature_review":
@@ -1191,7 +1182,9 @@ def build_phase_output(
         )
         score, meta = score_feature_review(result, report_text=report_text)
     else:  # product_validation
-        result = read_result(working_directory, "product_validation.json")
+        result = read_result(
+            working_directory, "product_validation.json", phase_name=phase_name
+        )
         score, meta = score_product_validation(result, spec)
 
     return {"score": score, "spec_gate": meta}

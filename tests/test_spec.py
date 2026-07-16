@@ -354,6 +354,44 @@ class TestReadResult:
         result = read_result(tmp_path, "qa_result.json")
         assert result is None
 
+    def test_reads_from_phase_scoped_subdirectory(self, tmp_path):
+        """Regression: agents are now told to write to the one sanctioned
+        docs/<phase_name>/ subdirectory (see each gated phase's CRITICAL
+        PATH RULE) -- this must be checked, not just flat docs/."""
+        sub = tmp_path / "docs" / "qa_validation"
+        sub.mkdir(parents=True)
+        (sub / "qa_result.json").write_text('{"passed": true}')
+        result = read_result(tmp_path, "qa_result.json", phase_name="qa_validation")
+        assert result == {"passed": True}
+
+    def test_phase_scoped_subdirectory_wins_over_stale_flat_docs_file(self, tmp_path):
+        """The phase-scoped location is the canonical one an agent was
+        actually told to use -- it must win over a stale file sitting flat
+        in docs/ from an earlier attempt, not the other way around."""
+        docs = tmp_path / "docs"
+        docs.mkdir()
+        (docs / "qa_result.json").write_text('{"passed": false, "stale": true}')
+        sub = docs / "qa_validation"
+        sub.mkdir()
+        (sub / "qa_result.json").write_text('{"passed": true, "stale": false}')
+
+        result = read_result(tmp_path, "qa_result.json", phase_name="qa_validation")
+        assert result == {"passed": True, "stale": False}
+
+    def test_no_phase_name_does_not_search_other_subdirectories(self, tmp_path):
+        """Regression: the old fallback searched EVERY subdirectory of
+        docs/ for a same-named file, which could silently pick up a
+        DIFFERENT feature's (or an unrelated phase's) file. Without a
+        phase_name, only flat docs/ and root are checked -- no guessing."""
+        docs = tmp_path / "docs"
+        docs.mkdir()
+        other = docs / "some_other_feature"
+        other.mkdir()
+        (other / "qa_result.json").write_text('{"passed": true}')
+
+        result = read_result(tmp_path, "qa_result.json")
+        assert result is None
+
 
 class TestBuildPhaseOutput:
     def test_non_gated_phase(self, tmp_path):

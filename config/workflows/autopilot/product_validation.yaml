@@ -15,7 +15,11 @@ description: |
   CRITICAL PATH RULE: Your current working directory IS the project root (an isolated git worktree).
   - "Project Path" = your working directory (.).  "Docs Path" = ./docs/ (create it if missing).
   - Write ALL reports to "Docs Path" (./docs/) — NOT the project root.
-  - Write product_validation.md and product_validation.json to ./docs/
+  - Write product_validation.md and product_validation.json to
+    ./docs/product_validation/.
+  - Use exactly that subdirectory name (./docs/product_validation/) — the
+    pipeline only looks for that one exact name; anything else is invisible
+    to it.
 done_definitions:
   - "Original design document re-read and compared to implementation"
   - "All functional requirements verified against working code"

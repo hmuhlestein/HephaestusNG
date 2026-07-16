@@ -135,8 +135,70 @@ class TestVerifyOutputArtifact:
             assert result["status"] == "failed"
             assert "system error" in result["message"].lower()
 
+    def test_finds_output_in_phase_scoped_subdirectory(self, tmp_path):
+        """Regression: agents are now told to write to the one sanctioned
+        docs/<phase.name>/ subdirectory (see each gated phase's CRITICAL
+        PATH RULE) -- this must be checked, not just flat docs/."""
+        phase = Mock(name="qa_validation", id="phase-1")
+        phase.name = "qa_validation"
+        task = Mock(phase_id="phase-1", workflow_id="wf-1", id="task-1")
+
+        sub = tmp_path / "docs" / "qa_validation"
+        sub.mkdir(parents=True)
+        (sub / "qa_report.md").write_text("# QA Report")
+
+        mock_session = Mock()
+        mock_session.query.return_value.filter_by.return_value.first.return_value = (
+            Mock(working_directory=str(tmp_path))
+        )
+
+        with patch(
+            "src.autopilot.spec.get_phase_required_files", return_value=["qa_report.md"]
+        ):
+            result = TaskCompletionService.verify_output_artifact(
+                session=mock_session, task=task, phase=phase
+            )
+            assert result is None
+
+    def test_does_not_find_a_different_phases_subdirectory_output(self, tmp_path):
+        """Regression: the old fallback searched EVERY subdirectory of
+        docs/ for a same-named file -- a leftover file from a DIFFERENT
+        feature or an earlier retry pass must not count as proof THIS
+        phase's own agent produced its required output."""
+        phase = Mock(name="qa_validation", id="phase-1")
+        phase.name = "qa_validation"
+        task = Mock(phase_id="phase-1", workflow_id="wf-1", id="task-1")
+
+        other = tmp_path / "docs" / "some_other_feature"
+        other.mkdir(parents=True)
+        (other / "qa_report.md").write_text("# stale report from elsewhere")
+
+        mock_session = Mock()
+        mock_session.query.return_value.filter_by.return_value.first.return_value = (
+            Mock(working_directory=str(tmp_path))
+        )
+
+        # Step 2's feature_dir fallback defaults to the REAL config's
+        # project_root (cwd under pytest -- this actual repo, which has
+        # real leftover .hephaestus/features/*/docs/qa_report.md files from
+        # past pipeline runs) unless pinned at tmp_path -- without this the
+        # test could pass for the wrong reason (finding an unrelated real
+        # file) instead of proving the subdirectory-search removal.
+        with patch(
+            "src.autopilot.spec.get_phase_required_files", return_value=["qa_report.md"]
+        ), patch("src.autopilot.spec.load_optional_phases", return_value=[]), patch(
+            "src.core.simple_config.get_config",
+            return_value=Mock(project_root=tmp_path),
+        ):
+            result = TaskCompletionService.verify_output_artifact(
+                session=mock_session, task=task, phase=phase
+            )
+            assert result is not None
+            assert result["status"] == "failed"
+
     def test_rejects_when_output_file_missing(self):
         phase = Mock(name="development", id="phase-1")
+        phase.name = "development"
         task = Mock(phase_id="phase-1", workflow_id="wf-1", id="task-1")
 
         mock_session = Mock()
@@ -153,6 +215,7 @@ class TestVerifyOutputArtifact:
 
     def test_passes_when_output_file_exists(self):
         phase = Mock(name="development", id="phase-1")
+        phase.name = "development"
         task = Mock(phase_id="phase-1", workflow_id="wf-1", id="task-1")
 
         mock_session = Mock()
