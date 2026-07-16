@@ -253,9 +253,7 @@ async def spawn_validator_tmux_session(
 
         # Kill existing session if it exists
         if tmux_server.has_session(session_name):
-            existing = tmux_server.get_by_id(session_name)
-            if existing:
-                existing.kill_session()
+            tmux_server.kill_session(session_name)
 
         # Create new tmux session
         tmux_session = tmux_server.new_session(

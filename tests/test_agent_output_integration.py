@@ -84,7 +84,7 @@ class TestAgentOutputIntegration:
 
         # Clean up any existing test session
         if tmux_server.has_session(session_name):
-            tmux_server.get_by_id(session_name).kill_session()
+            tmux_server.kill_session(session_name)
 
         # Create new session
         tmux_session = tmux_server.new_session(
