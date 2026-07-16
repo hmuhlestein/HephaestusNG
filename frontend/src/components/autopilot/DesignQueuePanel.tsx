@@ -942,22 +942,22 @@ const TaskRow: React.FC<{
         className="flex-1 min-w-0 cursor-pointer"
         onClick={() => onTaskClick(task.id)}
       >
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 mb-0.5">
           {task.phase_name && (
-            <span className="text-[10px] text-gray-900">{task.phase_name}</span>
+            <span className="text-xs font-semibold text-gray-800">{task.phase_name}</span>
           )}
           {task.action === 'goto' && (
-            <span className="text-[10px] px-1 py-0.5 rounded bg-amber-100 text-amber-700">
+            <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 font-medium">
               ↩ goto{task.action_target_phase ? ` (${task.action_target_phase})` : ''}
             </span>
           )}
           {task.action === 'retry' && (
-            <span className="text-[10px] px-1 py-0.5 rounded bg-blue-100 text-blue-700">
+            <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 font-medium">
               ↻ retry
             </span>
           )}
           {task.agent_status && task.agent_status !== 'terminated' && (
-            <span className={`text-[10px] px-1 py-0.5 rounded ${
+            <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${
               task.agent_status === 'working' ? 'bg-green-100 text-green-700' :
               task.agent_status === 'idle' ? 'bg-gray-100 text-gray-600' :
               'bg-gray-100 text-gray-500'
@@ -966,13 +966,13 @@ const TaskRow: React.FC<{
             </span>
           )}
           {task.agent_status === 'terminated' && task.status === 'done' && (
-            <span className="text-[10px] px-1 py-0.5 rounded bg-green-100 text-green-700">
+            <span className="text-[10px] px-1.5 py-0.5 rounded bg-green-100 text-green-700 font-medium">
               done
             </span>
           )}
         </div>
         <p
-          className="text-xs text-gray-600 truncate mt-0.5"
+          className="text-xs text-gray-500 truncate leading-relaxed"
           title={task.description || undefined}
         >
           {whatItsDoing || task.id.substring(0, 8)}
