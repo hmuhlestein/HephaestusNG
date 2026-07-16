@@ -37,6 +37,7 @@ from src.core.constants import (
     DESIGN_CONTEXT_SUBDIR,
     DESIGN_SUBDIR,
     DIAGNOSTIC_TASK_PREFIX,
+    GOTO_REASON_PREFIX,
 )
 from src.core.database import (
     Agent,
@@ -3900,6 +3901,13 @@ def _maybe_retry_failed_tasks(db, phase, logger: OrchestratorLogger) -> Optional
                 )
             task.status = "pending"
             task.failure_reason = None
+            # This row is reused (not recreated) for the retry -- without
+            # clearing these too, a task previously tagged action="goto"/
+            # "retry" by _tag_completing_task keeps showing that stale
+            # badge (and a now-meaningless action_target_phase) on what is
+            # now an unrelated fresh attempt.
+            task.action = ""
+            task.action_target_phase = None
             reset_task_ids.append(task.id)
         db.commit()
 
@@ -4024,7 +4032,8 @@ def _fire_phase_transition(
 
         # Create task and agent for the next phase
         return _create_phase_task(
-            workflow_id, target_phase_id, target_phase_name, action, logger, feedback=feedback
+            workflow_id, target_phase_id, target_phase_name, action, logger,
+            feedback=feedback, source_phase_name=phase_name,
         )
 
     except Exception as e:
@@ -4480,7 +4489,7 @@ def _resolve_arbitration_outcome(
     if target_phase_id and action in ("continue", "goto", "retry"):
         dispatched = _create_phase_task(
             workflow_id, target_phase_id, target_phase_name, action, logger,
-            feedback=result.get("reason"),
+            feedback=result.get("reason"), source_phase_name=phase_name,
         )
         if not dispatched:
             logger.error(
@@ -4543,8 +4552,17 @@ def _create_phase_task(
     action: str,
     logger: OrchestratorLogger,
     feedback: Optional[str] = None,
+    source_phase_name: Optional[str] = None,
 ) -> bool:
-    """Create a task and agent for a phase via API."""
+    """Create a task and agent for a phase via API.
+
+    source_phase_name: the phase whose evaluation decided `action` -- e.g.
+    for a goto, the phase whose gate found something wrong and sent the
+    pipeline back here. Recorded as this new task's own action_target_phase
+    (same field _tag_completing_task sets on the DECIDING phase's task, just
+    the complementary direction: "where I came from" here vs. "where I sent
+    things" there). Irrelevant for action="continue" (normal advancement).
+    """
     try:
         import uuid
 
@@ -4672,7 +4690,7 @@ def _create_phase_task(
             base_description = f"Execute {phase.name}: {phase.description}"
             description = (
                 f"{base_description}\n\n"
-                f"WHY YOU'RE HERE: {feedback}\n"
+                f"{GOTO_REASON_PREFIX}{feedback}\n"
                 "Address this specifically -- this is not a fresh implementation "
                 "pass, it's a return from review with a concrete issue to fix."
                 if feedback
@@ -4699,6 +4717,9 @@ def _create_phase_task(
                 # orchestrator agent hasn't been registered in this process.
                 created_by_agent_id=_orchestrator_agent_id,
                 action=action,
+                action_target_phase=(
+                    source_phase_name if action in ("goto", "retry") else None
+                ),
             )
             db.add(task)
 
@@ -5013,6 +5034,11 @@ def _resume_stuck_workflow_tasks(workflow_id: str, logger: OrchestratorLogger) -
             t.status = "pending"
             t.failure_reason = None
             t.assigned_agent_id = None
+            # This row is reused for the restart -- clear any stale
+            # goto/retry tag from a previous life (see the matching fix in
+            # restart_task_endpoint / server.py's on-demand-retry resume).
+            t.action = ""
+            t.action_target_phase = None
 
         db.commit()
 

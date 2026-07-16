@@ -23,6 +23,7 @@ from src.core.constants import (
     CONTEXT_DIR_NAME,
     DESIGN_CONTEXT_SUBDIR,
     DESIGN_SUBDIR,
+    GOTO_REASON_PREFIX,
 )
 
 logger = logging.getLogger(__name__)
@@ -2616,16 +2617,35 @@ async def get_project_design_status(project_id: str, filename: str):
                 phase_ids = set(t.phase_id for t in wf_tasks if t.phase_id)
                 phases_q = db.query(Phase).filter(Phase.id.in_(phase_ids)).all() if phase_ids else []
                 phase_map = {p.id: p.name for p in phases_q}
-                
+                # Phase.description is config-sourced (each phase YAML's own
+                # `description:`) -- exposed per task so the UI can show what
+                # the phase actually does without re-deriving it from the
+                # task's own free-text description (which also carries the
+                # "Execute {phase}: " label and, for goto/retry tasks, the
+                # GOTO_REASON_PREFIX block below).
+                phase_description_map = {p.id: p.description for p in phases_q}
+
                 for t in wf_tasks:
                     agent_status = None
                     if t.assigned_agent_id:
                         agent = db.query(Agent).filter_by(id=t.assigned_agent_id).first()
                         agent_status = agent.status if agent else None
+                    # The full (untruncated) text -- goto_reason is parsed
+                    # out of this, not the 200-char-truncated `description`
+                    # below, since a long phase description could otherwise
+                    # push the reason past the truncation point.
+                    full_description = t.enriched_description or t.raw_description or ""
+                    goto_reason = None
+                    if GOTO_REASON_PREFIX in full_description:
+                        goto_reason = full_description.split(GOTO_REASON_PREFIX, 1)[1].split("\n", 1)[0].strip()
                     feat_tasks.append({
                         "id": t.id,
-                        "description": (t.enriched_description or t.raw_description or "")[:200],
+                        "description": full_description[:200],
+                        "phase_description": phase_description_map.get(t.phase_id),
+                        "goto_reason": goto_reason,
                         "status": t.status,
+                        "action": t.action or "",
+                        "action_target_phase": t.action_target_phase or None,
                         "phase_id": t.phase_id,
                         "phase_name": phase_map.get(t.phase_id),
                         "workflow_id": t.workflow_id,

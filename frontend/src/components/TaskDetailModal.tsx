@@ -327,7 +327,7 @@ ${taskDetails.child_tasks.map((t: any) => `- ${t.description} (${t.status})`).jo
                     <StatusBadge status={taskDetails.status} />
                     {taskDetails.action === 'goto' && (
                       <span className="px-2 py-1 text-xs font-medium bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300 rounded-full">
-                        ↩ goto{taskDetails.action_target_phase ? ` → ${taskDetails.action_target_phase}` : ''}
+                        ↩ goto{taskDetails.action_target_phase ? ` (${taskDetails.action_target_phase})` : ''}
                       </span>
                     )}
                     {taskDetails.action === 'retry' && (

@@ -1361,6 +1361,120 @@ class TestProjectDesigns:
         assert resp.status_code == 200, resp.text
         assert resp.json()["error"] is None
 
+    def test_task_row_shows_config_description_and_goto_reason(self, project_client):
+        """Regression: the queue's task rows used to show the raw task
+        prompt verbatim ("Execute development: ...\\n\\nWHY YOU'RE HERE:
+        ..."), truncated to 200 chars -- noisy, and a long phase
+        description could push the actual goto reason past the truncation
+        point entirely. phase_description must come from the phase's own
+        config-sourced Phase.description (not re-parsed from the task
+        text), and goto_reason must be the clean text after
+        GOTO_REASON_PREFIX, parsed from the FULL untruncated description."""
+        client, dirs = project_client
+        pid = self._create_project(client, dirs)
+
+        from src.core.constants import GOTO_REASON_PREFIX
+        from src.core.database import (
+            AutopilotDesign,
+            Feature,
+            Phase,
+            Task,
+            Workflow,
+            get_db,
+        )
+
+        design_dir = dirs["project_dir"] / ".hephaestus" / "designs"
+        design_dir.mkdir(parents=True, exist_ok=True)
+        (design_dir / "goto-design.md").write_text("# Design")
+
+        # Separate get_db() blocks, in FK dependency order (Workflow before
+        # Feature/Phase, both before Task) -- each commits before the next
+        # starts, sidestepping any reliance on the ORM's automatic flush
+        # ordering for a same-transaction multi-insert.
+        with get_db() as db:
+            db.add(
+                AutopilotDesign(
+                    id="des-test-goto",
+                    project_id=pid,
+                    filename="goto-design.md",
+                    name="Goto Design",
+                    ordinal=12,
+                    size_bytes=10,
+                    extension=".md",
+                    status="active",
+                )
+            )
+            db.add(
+                Workflow(
+                    id="wf-goto-1",
+                    name="autopilot",
+                    phases_folder_path="/tmp",
+                    status="active",
+                )
+            )
+
+        with get_db() as db:
+            db.add(
+                Feature(
+                    id="feat-goto-1",
+                    design_id="des-test-goto",
+                    feature_key="core",
+                    name="Core",
+                    scope="s",
+                    status="active",
+                    workflow_id="wf-goto-1",
+                )
+            )
+            db.add(
+                Phase(
+                    id="phase-goto-1",
+                    workflow_id="wf-goto-1",
+                    order=4,
+                    name="development",
+                    description="Implement all components according to the architecture.",
+                    done_definitions=["x"],
+                )
+            )
+
+        with get_db() as db:
+            # A padded-length base description, long enough that a naive
+            # 200-char truncation of the combined text would cut off the
+            # goto reason below it -- pins down that goto_reason is parsed
+            # from the FULL description, not the truncated `description`
+            # field.
+            padding = "x" * 250
+            full_description = (
+                f"Execute development: {padding}\n\n"
+                f"{GOTO_REASON_PREFIX}6 BLOCKER findings in adversarial review\n"
+                "Address this specifically -- this is not a fresh implementation "
+                "pass, it's a return from review with a concrete issue to fix."
+            )
+            db.add(
+                Task(
+                    id="task-goto-1",
+                    raw_description=full_description,
+                    enriched_description=full_description,
+                    done_definition="d",
+                    status="pending",
+                    phase_id="phase-goto-1",
+                    workflow_id="wf-goto-1",
+                    action="goto",
+                    action_target_phase="development",
+                )
+            )
+
+        resp = client.get(f"/api/autopilot/projects/{pid}/designs/goto-design.md/status")
+        assert resp.status_code == 200, resp.text
+        tasks = resp.json()["features"][0]["tasks"]
+        assert len(tasks) == 1
+        task = tasks[0]
+        assert task["phase_description"] == (
+            "Implement all components according to the architecture."
+        )
+        assert task["goto_reason"] == "6 BLOCKER findings in adversarial review"
+        assert task["action"] == "goto"
+        assert task["action_target_phase"] == "development"
+
 
 class TestProjectPathTraversal:
     def test_design_content_rejects_traversal(self, project_client):

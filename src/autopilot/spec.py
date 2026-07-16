@@ -516,6 +516,18 @@ def score_scope_review(
         reason_parts.append(f"Out of scope: {out_of_scope}")
     if missing:
         reason_parts.append(f"Missing from requirements: {missing}")
+    if not reason_parts:
+        # verdict says FAIL (or scope_drift_detected=True) but the agent
+        # didn't populate itemized out_of_scope/missing in any schema
+        # variant this reads (e.g. a nested "analysis": {...} shape with
+        # aggregate counts instead of itemized lists) -- fall back to the
+        # agent's own free-text summary rather than leaving development
+        # staring at a dangling "Scope drift detected — " with nothing
+        # after it and no way to know what to actually fix.
+        summary_text = flat.get("summary") or result.get("summary")
+        reason_parts.append(
+            summary_text or "no specific out-of-scope/missing items reported by the agent"
+        )
     return 0.2, {
         **meta,
         "band": "requirements",
