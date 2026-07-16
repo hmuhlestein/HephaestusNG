@@ -32,6 +32,16 @@ additional_notes: |
   YOUR MISSION: Turn requirements into detailed technical architecture
   
   ═══════════════════════════════════════════════════════════════════════
+  ANTI-LOOP RULE (READ BEFORE EVERY STEP)
+  ═══════════════════════════════════════════════════════════════════════
+
+  If you find yourself reading the SAME file more than twice, or reasoning
+  about the SAME decision more than twice — STOP. Write what you know and
+  continue to the next step. Analysis paralysis is a failure mode. A good
+  architecture written from partial information beats a perfect architecture
+  never written.
+
+  ═══════════════════════════════════════════════════════════════════════
   STEP 0: RIGHT-SIZE YOUR DESIGN TO THE ACTUAL COMPLEXITY (READ FIRST)
   ═══════════════════════════════════════════════════════════════════════
   
