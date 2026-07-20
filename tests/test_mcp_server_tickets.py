@@ -1,5 +1,4 @@
-"""
-Test MCP Server Ticket Endpoints using the E2E Test Database.
+"""Test MCP Server Ticket Endpoints.
 
 This test suite verifies that all 11 ticket-related MCP endpoints work correctly
 and that create_task properly validates ticket_id when tracking is enabled.
@@ -7,60 +6,112 @@ and that create_task properly validates ticket_id when tracking is enabled.
 
 import os
 import sys
+from datetime import datetime
 
 import pytest
 from fastapi.testclient import TestClient
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from src.mcp.server import app
-
 
 @pytest.fixture(scope="module")
-def setup_test_database():
+def setup_test_database(tmp_path_factory):
+    """Create an isolated test database with ticket-tracking schema and seed data.
+
+    Previously this required a pre-built e2e_test.db file created by
+    running e2e_ticket_test.py manually. Now the fixture owns all setup
+    so the test suite is fully self-contained.
     """
-    Set up test database using e2e_test.db.
+    db_path = str(tmp_path_factory.mktemp("db") / "test.db")
 
-    This assumes e2e_test.db already exists from running e2e_ticket_test.py.
-    If it doesn't exist, you need to run: python tests/e2e_ticket_test.py first.
-    """
-    db_path = "e2e_test.db"
-
-    if not os.path.exists(db_path):
-        raise FileNotFoundError(
-            f"{db_path} not found. Please run 'python tests/e2e_ticket_test.py' first to create the test database."
-        )
-
-    # Set environment variable
+    # Save and override — module-scoped so can't use monkeypatch
+    prev = os.environ.get("HEPHAESTUS_TEST_DB")
     os.environ["HEPHAESTUS_TEST_DB"] = db_path
 
-    # Initialize only the database manager (not full server state)
-    from src.core.database import DatabaseManager
+    from src.core.database import (
+        Agent,
+        BoardConfig,
+        DatabaseManager,
+        Phase,
+        Workflow,
+    )
     from src.mcp.server import server_state
-    
-    server_state.db_manager = DatabaseManager(db_path)
-    # create_tables is idempotent — adds any new columns/tables
-    server_state.db_manager.create_tables()
+
+    db_manager = DatabaseManager(db_path)
+    db_manager.create_tables()
+    server_state.db_manager = db_manager
+
+    session = db_manager.get_session()
+    try:
+        workflow = Workflow(
+            id="workflow-e2e-test",
+            name="E2E Test Workflow with Tickets",
+            phases_folder_path="/test/phases",
+            status="active",
+            created_at=datetime.utcnow(),
+        )
+        session.add(workflow)
+
+        phase = Phase(
+            id="phase-e2e-1",
+            workflow_id="workflow-e2e-test",
+            name="development",
+            order=1,
+            description="Development phase",
+            done_definitions=["Code written"],
+        )
+        session.add(phase)
+
+        board_config = BoardConfig(
+            id="board-e2e-test",
+            workflow_id="workflow-e2e-test",
+            name="E2E Test Board",
+            columns=[
+                {"id": "backlog", "name": "Backlog", "order": 0, "color": "#9ca3af"},
+                {"id": "todo", "name": "To Do", "order": 1, "color": "#6b7280"},
+                {"id": "in_progress", "name": "In Progress", "order": 2, "color": "#3b82f6"},
+                {"id": "review", "name": "Review", "order": 3, "color": "#f59e0b"},
+                {"id": "done", "name": "Done", "order": 4, "color": "#10b981"},
+            ],
+            ticket_types=[
+                {"id": "bug", "name": "Bug", "icon": "🐛", "color": "#ef4444"},
+                {"id": "feature", "name": "Feature", "icon": "✨", "color": "#3b82f6"},
+                {"id": "task", "name": "Task", "icon": "📋", "color": "#6b7280"},
+            ],
+            default_ticket_type="task",
+            initial_status="backlog",
+            auto_assign=False,
+            created_at=datetime.utcnow(),
+        )
+        session.add(board_config)
+
+        agent = Agent(
+            id="agent-e2e-test",
+            system_prompt="E2E test agent",
+            status="working",
+            cli_type="claude",
+            created_at=datetime.utcnow(),
+        )
+        session.add(agent)
+
+        session.commit()
+    finally:
+        session.close()
 
     yield db_path
 
-    # Cleanup — restore the conftest.py default (":memory:"), don't delete
-    # the key entirely. This fixture is module-scoped, so its teardown runs
-    # once after this whole file's tests finish, inside a possibly much
-    # larger pytest session — deleting the key outright made every later
-    # test file's unmocked get_db() calls fall through to get_db()'s own
-    # literal default ("hephaestus.db"), silently writing test data into
-    # the real production database instead of failing loudly. Confirmed
-    # live: this caused AutopilotProject rows pointing at deleted pytest
-    # tmpdirs to end up in the real DB with is_active=True, crashing the
-    # real backend's startup (WorktreeManager tries to open a git repo at
-    # a path that no longer exists).
-    os.environ["HEPHAESTUS_TEST_DB"] = ":memory:"
+    # Restore previous value
+    if prev is None:
+        os.environ.pop("HEPHAESTUS_TEST_DB", None)
+    else:
+        os.environ["HEPHAESTUS_TEST_DB"] = prev
 
 
 @pytest.fixture
 def client(setup_test_database):
     """Create FastAPI test client."""
+    from src.mcp.server import app
+
     return TestClient(app)
 
 
@@ -68,6 +119,20 @@ def client(setup_test_database):
 def headers():
     """Default headers for requests."""
     return {"X-Agent-ID": "agent-e2e-test"}
+
+
+@pytest.fixture
+def phase_id(setup_test_database):
+    """Get the phase ID from the test database."""
+    from src.core.database import DatabaseManager, Phase
+
+    db = DatabaseManager(setup_test_database)
+    session = db.get_session()
+    try:
+        phase = session.query(Phase).filter_by(workflow_id="workflow-e2e-test").first()
+        return phase.id if phase else None
+    finally:
+        session.close()
 
 
 # Module-level state for test ordering
@@ -98,7 +163,6 @@ class TestMCPTicketEndpoints:
         assert "ticket_id" in data
         assert data["message"] == "Ticket created successfully"
 
-        # Store ticket_id for later tests
         test_state['ticket_id_1'] = data["ticket_id"]
         print(f"✅ Created ticket: {test_state['ticket_id_1']}")
 
@@ -114,7 +178,6 @@ class TestMCPTicketEndpoints:
 
         assert response.status_code == 200
         data = response.json()
-        # Response is nested: {ticket: {...}, comments: [...], history: [...], commits: [...]}
         ticket_data = data["ticket"]
         assert ticket_data["ticket_id"] == test_state['ticket_id_1']
         assert ticket_data["title"] == "MCP Test Ticket 1"
@@ -124,9 +187,6 @@ class TestMCPTicketEndpoints:
 
     def test_03_get_tickets_list(self, client, headers):
         """Test GET /tickets/get - Get tickets by workflow."""
-        # NOTE: This endpoint has a route conflict with /tickets/{ticket_id}
-        # FastAPI matches "get" as a ticket_id. This is a known limitation.
-        # Skipping for now - this would need the endpoint path changed to /workflow/{id}/tickets
         pytest.skip("Route conflict: /tickets/get conflicts with /tickets/{ticket_id}")
 
     def test_04_add_comment(self, client, headers):
@@ -168,11 +228,7 @@ class TestMCPTicketEndpoints:
             },
         )
 
-        # May fail if already resolved
         if response.status_code != 200:
-            print(
-                f"⚠️  Update failed (expected if ticket already resolved): {response.json()}"
-            )
             pytest.skip("Ticket may already be resolved")
 
         data = response.json()
@@ -207,14 +263,13 @@ class TestMCPTicketEndpoints:
             headers=headers,
             json={
                 "workflow_id": "workflow-e2e-test",
-                "query": "authentication",  # Search for tickets from e2e test
+                "query": "authentication",
                 "search_type": "keyword",
             },
         )
 
         assert response.status_code == 200
         data = response.json()
-        # The search response has "results" not "tickets"
         assert "results" in data or "tickets" in data
         results = data.get("results") or data.get("tickets", [])
         print(f"✅ Search found {len(results)} tickets")
@@ -249,7 +304,6 @@ class TestMCPTicketEndpoints:
         )
 
         if response.status_code == 500:
-            print("⚠️  Stats endpoint returned 500 (may need implementation fixes)")
             pytest.skip("Stats endpoint error - needs investigation")
 
         assert response.status_code == 200
@@ -264,14 +318,13 @@ class TestMCPTicketEndpoints:
         if test_state['ticket_id_1'] is None:
             pytest.skip("Requires ticket from test_01")
 
-        # First check if ticket is already in 'done' status
+        # Move to done first if needed
         get_response = client.get(
             f"/api/tickets/{test_state['ticket_id_1']}", headers=headers
         )
         if get_response.status_code == 200:
             ticket_data = get_response.json()["ticket"]
             if ticket_data.get("status") != "done":
-                # Move to done first
                 client.post(
                     "/api/tickets/change-status",
                     headers=headers,
@@ -295,7 +348,6 @@ class TestMCPTicketEndpoints:
         if response.status_code == 400:
             error_msg = response.json().get("detail", "").lower()
             if "already resolved" in error_msg:
-                print("⚠️  Ticket already resolved (expected in repeated test runs)")
                 pytest.skip("Ticket already resolved")
 
         assert response.status_code == 200
@@ -310,30 +362,23 @@ class TestMCPTicketEndpoints:
             headers=headers,
         )
 
-        # This endpoint might return 404 if commit doesn't exist in git
-        # or 200 with diff data, or 500 if git command fails
         assert response.status_code in [200, 404, 500]
-
         if response.status_code == 200:
             data = response.json()
             assert "commit_sha" in data
-            print("✅ Retrieved commit diff for mcp123abc456")
-        elif response.status_code == 404:
-            print("⚠️  Commit diff not found (expected for test commit)")
-        else:
-            print(
-                "⚠️  Git command failed (expected - test commit doesn't exist in repo)"
-            )
 
 
 class TestCreateTaskValidation:
     """Test that create_task validates ticket_id when tracking is enabled."""
 
     def test_create_task_requires_ticket_id_when_tracking_enabled(
-        self, client, headers
+        self, client, headers, phase_id
     ):
         """Test that create_task rejects requests without ticket_id when tracking enabled."""
-        # First, create a ticket to use
+        if not phase_id:
+            pytest.skip("No phases in workflow-e2e-test")
+
+        # Create a ticket to use
         ticket_response = client.post(
             "/api/tickets/create",
             headers=headers,
@@ -348,20 +393,8 @@ class TestCreateTaskValidation:
         assert ticket_response.status_code == 200
         ticket_id = ticket_response.json()["ticket_id"]
 
-        # Get a phase_id from the workflow
-        import sqlite3
-        conn = sqlite3.connect('e2e_test.db')
-        cursor = conn.cursor()
-        cursor.execute('SELECT id FROM phases WHERE workflow_id = ?', ('workflow-e2e-test',))
-        phase_row = cursor.fetchone()
-        conn.close()
-        
-        if not phase_row:
-            pytest.skip("No phases in workflow-e2e-test")
-        phase_id = phase_row[0]
-
-        # Try to create a task WITHOUT ticket_id (should fail)
-        response_without_ticket = client.post(
+        # Without ticket_id — should fail
+        response_without = client.post(
             "/create_task",
             headers=headers,
             json={
@@ -370,18 +403,12 @@ class TestCreateTaskValidation:
                 "workflow_id": "workflow-e2e-test",
                 "ai_agent_id": headers["X-Agent-ID"],
                 "phase_id": phase_id,
-                # ticket_id is missing!
             },
         )
+        assert response_without.status_code in [400, 422]
 
-        # Should return 400 or error indicating ticket_id is required
-        assert response_without_ticket.status_code in [400, 422]
-        print(
-            f"✅ Correctly rejected task without ticket_id: {response_without_ticket.status_code}"
-        )
-
-        # Now create a task WITH ticket_id (should succeed)
-        response_with_ticket = client.post(
+        # With ticket_id — should succeed
+        response_with = client.post(
             "/create_task",
             headers=headers,
             json={
@@ -393,29 +420,13 @@ class TestCreateTaskValidation:
                 "phase_id": phase_id,
             },
         )
+        assert response_with.status_code == 200
+        assert "task_id" in response_with.json()
 
-        # Should succeed
-        assert response_with_ticket.status_code == 200
-        data = response_with_ticket.json()
-        assert "task_id" in data
-        print(f"✅ Successfully created task with ticket_id: {data['task_id']}")
-
-    def test_create_task_allows_no_ticket_id_when_tracking_disabled(self, client):
-        """Test that create_task allows tasks without ticket_id when tracking is disabled."""
-        # Use an SDK agent which bypasses ticket_id requirement
-        # SDK agents (starting with 'sdk-') are allowed to create tasks without tickets
-        
-        # Get a phase_id from the workflow
-        import sqlite3
-        conn = sqlite3.connect('e2e_test.db')
-        cursor = conn.cursor()
-        cursor.execute('SELECT id FROM phases WHERE workflow_id = ?', ('workflow-e2e-test',))
-        phase_row = cursor.fetchone()
-        conn.close()
-        
-        if not phase_row:
+    def test_create_task_allows_no_ticket_id_for_sdk_agents(self, client, phase_id):
+        """Test that create_task allows tasks without ticket_id for SDK agents."""
+        if not phase_id:
             pytest.skip("No phases in workflow-e2e-test")
-        phase_id = phase_row[0]
 
         response = client.post(
             "/create_task",
@@ -426,40 +437,7 @@ class TestCreateTaskValidation:
                 "workflow_id": "workflow-e2e-test",
                 "ai_agent_id": "sdk-test-agent",
                 "phase_id": phase_id,
-                # No ticket_id - this is allowed for SDK agents
             },
         )
-
         assert response.status_code == 200
-        data = response.json()
-        assert "task_id" in data
-        print(
-            f"✅ Created task without ticket_id (tracking disabled): {data['task_id']}"
-        )
-
-
-def test_summary():
-    """Print summary of all tests."""
-    print("\n" + "=" * 80)
-    print("MCP SERVER TICKET ENDPOINT TEST SUMMARY")
-    print("=" * 80)
-    print("✅ Tested all 11 ticket endpoints:")
-    print("   1. POST /tickets/create")
-    print("   2. GET /tickets/{ticket_id}")
-    print("   3. GET /tickets/get")
-    print("   4. POST /tickets/comment")
-    print("   5. POST /tickets/update")
-    print("   6. POST /tickets/change-status")
-    print("   7. POST /tickets/search")
-    print("   8. POST /tickets/link-commit")
-    print("   9. GET /tickets/stats/{workflow_id}")
-    print("   10. POST /tickets/resolve")
-    print("   11. GET /tickets/commit-diff/{commit_sha}")
-    print("\n✅ Verified create_task validation:")
-    print("   - Requires ticket_id when tracking enabled")
-    print("   - Allows no ticket_id when tracking disabled")
-    print("=" * 80)
-
-
-if __name__ == "__main__":
-    pytest.main([__file__, "-v", "-s"])
+        assert "task_id" in response.json()
