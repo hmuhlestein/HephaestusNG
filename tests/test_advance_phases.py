@@ -300,9 +300,12 @@ class TestAdvancePhases:
         result = _advance_phases("wf-1", logger)
         assert result is False
     
-    def test_auto_resumes_paused_workflow_with_done_task(self, db_manager, sample_workflow):
+    @patch("src.autopilot.orchestrator.create_agent_for_task_direct")
+    def test_auto_resumes_paused_workflow_with_done_task(self, mock_create_agent, db_manager, sample_workflow):
         """Should auto-resume paused workflow if it has a done task in stalled phase."""
         from src.autopilot.orchestrator import _advance_phases
+        
+        mock_create_agent.return_value = {"agent_id": "new-agent-1"}
         
         # Pause the workflow and add a done task
         with db_manager.session_scope() as session:
@@ -320,8 +323,6 @@ class TestAdvancePhases:
             session.add(task)
         
         logger = MagicMock()
-        # This should auto-resume and then try to advance
-        # (may return True or False depending on phase state)
         _advance_phases("wf-1", logger)
         
         # Verify workflow was resumed
@@ -1878,6 +1879,95 @@ class TestFirePhaseTransition:
         logger.warning.assert_not_called()  # no "[PHASE-ADVANCE] Transition error"
         mock_build_output.assert_called_once()
         mock_pm.mark_phase_complete.assert_called_once()
+
+    @patch("src.autopilot.orchestrator.PhaseManager")
+    @patch("src.autopilot.orchestrator._create_phase_task")
+    def test_prefers_completing_tasks_own_notes_over_result_missing_reason(
+        self, mock_create, mock_pm_class, db_manager, sample_workflow
+    ):
+        """Regression, observed live: an adversarial_review gate scored
+        "no adversarial_review_result.json found" (result_missing=True) at
+        the exact instant it evaluated -- a pure file-read timing artifact
+        -- even though the reviewing agent's own completion_notes described
+        3 concrete BLOCKERs it had genuinely found and reported. The
+        resulting goto embedded the generic "missing" message as the
+        corrective development task's "WHY YOU'RE HERE" reason, so the
+        developer had to rediscover the real findings itself instead of
+        being told directly. A "result_missing" gate reason says nothing
+        about whether the agent actually did the work -- the completing
+        task's own completion_notes, when present, is strictly more
+        accurate and must win."""
+        from src.autopilot.orchestrator import _fire_phase_transition
+
+        with db_manager.session_scope() as session:
+            session.add(
+                Task(
+                    id="task-review-done",
+                    workflow_id="wf-1",
+                    phase_id="phase-1",
+                    raw_description="r",
+                    done_definition="d",
+                    status="done",
+                    completion_notes="Adversarial review found 3 BLOCKERs: B-1 ..., B-2 ..., B-3 ...",
+                )
+            )
+
+        mock_pm = MagicMock()
+        mock_pm_class.return_value = mock_pm
+        mock_pm.mark_phase_complete.return_value = {
+            "action": "goto",
+            "target_phase_id": "phase-2",
+            "target_phase": "development",
+            "reason": "no adversarial_review_result.json found",
+            "metadata": {
+                "spec_gate": {
+                    "reason": "no adversarial_review_result.json found",
+                    "result_missing": True,
+                }
+            },
+        }
+        mock_create.return_value = True
+
+        logger = MagicMock()
+        result = _fire_phase_transition("wf-1", "phase-1", "adversarial_review", logger)
+
+        assert result is True
+        _, kwargs = mock_create.call_args
+        assert kwargs["feedback"] == (
+            "Adversarial review found 3 BLOCKERs: B-1 ..., B-2 ..., B-3 ..."
+        )
+
+    @patch("src.autopilot.orchestrator.PhaseManager")
+    @patch("src.autopilot.orchestrator._create_phase_task")
+    def test_uses_missing_reason_when_no_completion_notes_available(
+        self, mock_create, mock_pm_class, db_manager, sample_workflow
+    ):
+        """Sanity check the fix isn't overbroad: with no completing task
+        (or no completion_notes on it), the gate's own "missing" reason is
+        still the best available signal and must be used as before."""
+        from src.autopilot.orchestrator import _fire_phase_transition
+
+        mock_pm = MagicMock()
+        mock_pm_class.return_value = mock_pm
+        mock_pm.mark_phase_complete.return_value = {
+            "action": "goto",
+            "target_phase_id": "phase-2",
+            "target_phase": "development",
+            "reason": "no adversarial_review_result.json found",
+            "metadata": {
+                "spec_gate": {
+                    "reason": "no adversarial_review_result.json found",
+                    "result_missing": True,
+                }
+            },
+        }
+        mock_create.return_value = True
+
+        logger = MagicMock()
+        _fire_phase_transition("wf-1", "phase-1", "adversarial_review", logger)
+
+        _, kwargs = mock_create.call_args
+        assert kwargs["feedback"] == "no adversarial_review_result.json found"
 
 
 class TestFirePhaseTransitionArbitrate:

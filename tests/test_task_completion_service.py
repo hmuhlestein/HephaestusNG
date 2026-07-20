@@ -717,6 +717,57 @@ class TestFireSpecGateIfReadyGoto:
         assert kwargs["feedback"] == "4 BLOCKER(s) found — returning to development"
 
     @pytest.mark.asyncio
+    async def test_result_missing_prefers_completing_tasks_own_notes(self, gate_db, tmp_path):
+        """Regression, observed live: a "result_missing" gate reason ("no
+        adversarial_review_result.json found") only means build_phase_
+        output's file read came up empty at this exact evaluation instant
+        -- not that the agent didn't do the work. An adversarial_review
+        agent's own completion_notes described 3 concrete BLOCKERs it had
+        genuinely found, but the corrective development task's "WHY YOU'RE
+        HERE" reason ended up as the generic missing-file message instead,
+        because this path always preferred the gate's own reason
+        unconditionally. The completing task's own completion_notes, when
+        present, is a strictly more accurate signal and must win."""
+        self._seed(gate_db, tmp_path)
+
+        with gate_db.session_scope() as session:
+            from src.core.database import Task
+
+            task = session.query(Task).filter_by(id="task-adv").first()
+            task.completion_notes = (
+                "Adversarial review found 3 BLOCKERs: B-1 ..., B-2 ..., B-3 ..."
+            )
+
+            with patch(
+                "src.phases.phase_manager.PhaseManager.mark_phase_complete",
+                return_value={
+                    "action": "goto",
+                    "target_phase": "development",
+                    "target_phase_id": "phase-dev",
+                    "reason": "no adversarial_review_result.json found",
+                    "metadata": {
+                        "spec_gate": {
+                            "reason": "no adversarial_review_result.json found",
+                            "result_missing": True,
+                        }
+                    },
+                },
+            ), patch(
+                "src.autopilot.spec.GATED_PHASES", ("adversarial_review",)
+            ), patch(
+                "src.autopilot.spec.build_phase_output", return_value={"score": 0.4}
+            ), patch(
+                "src.autopilot.orchestrator._create_phase_task"
+            ) as mock_create_task:
+                mock_create_task.return_value = True
+                await TaskCompletionService.fire_spec_gate_if_ready(session, task)
+
+        _, kwargs = mock_create_task.call_args
+        assert kwargs["feedback"] == (
+            "Adversarial review found 3 BLOCKERs: B-1 ..., B-2 ..., B-3 ..."
+        )
+
+    @pytest.mark.asyncio
     async def test_continue_does_not_create_a_task(self, gate_db, tmp_path):
         """The 'continue' branch must not be affected by this fix -- no
         target phase to create a task for."""
