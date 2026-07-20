@@ -3010,6 +3010,129 @@ class TestRunOneFeatureSyncsFeatureStatusOnEarlyReturn:
             )
 
 
+class TestSyncStaleFeatureStatuses:
+    """_sync_stale_feature_statuses: the Feature-table-wide self-heal for
+    the same underlying bug TestRunOneFeatureSyncsFeatureStatusOnEarlyReturn
+    covers, for the case that fix can't reach -- a feature whose workflow
+    finished through some path other than a fresh _run_one_feature call
+    for that exact feature (e.g. a resumed backend continuing an in-flight
+    workflow directly, never re-walking the whole design), so nothing ever
+    calls _update_feature_status for it again."""
+
+    def test_flips_feature_to_completed_when_workflow_already_completed(
+        self, orch_db_env
+    ):
+        from src.autopilot.orchestrator import _sync_stale_feature_statuses
+        from src.core.database import AutopilotDesign, AutopilotProject, Feature, Workflow
+
+        with orch_db_env.session_scope() as session:
+            session.add(AutopilotProject(id="proj-1", name="p", base_dir="/tmp/proj-1"))
+            session.add(
+                AutopilotDesign(id="design-1", project_id="proj-1", filename="d.md", name="D")
+            )
+            session.add(
+                Workflow(
+                    id="wf-done",
+                    name="feature pipeline",
+                    phases_folder_path="/tmp",
+                    status="completed",
+                    definition_id="feature_pipeline",
+                )
+            )
+            session.add(
+                Feature(
+                    id="feature-row-1",
+                    design_id="design-1",
+                    feature_key="feat-a",
+                    name="Feature A",
+                    scope="s",
+                    status="active",
+                    workflow_id="wf-done",
+                )
+            )
+
+        repaired = _sync_stale_feature_statuses(MagicMock())
+
+        assert repaired == 1
+        with orch_db_env.session_scope() as session:
+            feat = session.query(Feature).filter_by(id="feature-row-1").first()
+            assert feat.status == "completed"
+            assert feat.completed_at is not None
+
+    def test_leaves_feature_alone_when_workflow_still_active(self, orch_db_env):
+        from src.autopilot.orchestrator import _sync_stale_feature_statuses
+        from src.core.database import AutopilotDesign, AutopilotProject, Feature, Workflow
+
+        with orch_db_env.session_scope() as session:
+            session.add(AutopilotProject(id="proj-1", name="p", base_dir="/tmp/proj-1"))
+            session.add(
+                AutopilotDesign(id="design-1", project_id="proj-1", filename="d.md", name="D")
+            )
+            session.add(
+                Workflow(
+                    id="wf-active",
+                    name="feature pipeline",
+                    phases_folder_path="/tmp",
+                    status="active",
+                    definition_id="feature_pipeline",
+                )
+            )
+            session.add(
+                Feature(
+                    id="feature-row-1",
+                    design_id="design-1",
+                    feature_key="feat-a",
+                    name="Feature A",
+                    scope="s",
+                    status="active",
+                    workflow_id="wf-active",
+                )
+            )
+
+        repaired = _sync_stale_feature_statuses(MagicMock())
+
+        assert repaired == 0
+        with orch_db_env.session_scope() as session:
+            feat = session.query(Feature).filter_by(id="feature-row-1").first()
+            assert feat.status == "active"
+
+    def test_leaves_already_completed_feature_alone(self, orch_db_env):
+        """Sanity check: must not re-stamp completed_at on a feature that's
+        already correctly synced."""
+        from src.autopilot.orchestrator import _sync_stale_feature_statuses
+        from src.core.database import AutopilotDesign, AutopilotProject, Feature, Workflow
+
+        with orch_db_env.session_scope() as session:
+            session.add(AutopilotProject(id="proj-1", name="p", base_dir="/tmp/proj-1"))
+            session.add(
+                AutopilotDesign(id="design-1", project_id="proj-1", filename="d.md", name="D")
+            )
+            session.add(
+                Workflow(
+                    id="wf-done",
+                    name="feature pipeline",
+                    phases_folder_path="/tmp",
+                    status="completed",
+                    definition_id="feature_pipeline",
+                )
+            )
+            session.add(
+                Feature(
+                    id="feature-row-1",
+                    design_id="design-1",
+                    feature_key="feat-a",
+                    name="Feature A",
+                    scope="s",
+                    status="completed",
+                    workflow_id="wf-done",
+                )
+            )
+
+        repaired = _sync_stale_feature_statuses(MagicMock())
+
+        assert repaired == 0
+
+
 class TestWorkflowAppearsAbandoned:
     """_workflow_appears_abandoned: the signal _escalate_stale_active_
     workflows uses to decide whether a workflow stuck "active" is
