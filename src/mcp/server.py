@@ -1508,8 +1508,16 @@ def _run_phase_advancement_sweep_once(sweep_logger) -> None:
         _clean_stale_assigned_tasks,
         _maybe_resolve_arbitration,
         _retry_failed_tasks,
+        _sync_stale_feature_statuses,
     )
     from src.core.database import Workflow
+
+    # Feature-table-wide, not scoped to any one workflow -- see its own
+    # docstring for why this can't just live inside _run_one_feature.
+    try:
+        _sync_stale_feature_statuses(sweep_logger)
+    except Exception as e:
+        logger.error(f"[PHASE-SWEEP] Feature-status sync error: {e}")
 
     session = server_state.db_manager.get_session()
     try:

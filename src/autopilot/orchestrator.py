@@ -2603,6 +2603,61 @@ def _update_feature_status(
                 logger.info(f"Updated feature {feature.feature_key} status to {status}")
 
 
+def _sync_stale_feature_statuses(logger: OrchestratorLogger) -> int:
+    """Self-heal: flip Feature.status to "completed" for any feature whose
+    linked Workflow has already reached "completed", if the Feature row
+    itself hasn't caught up.
+
+    _update_feature_status is the normal write path for this, but it only
+    ever runs as a side effect of _run_one_feature actually being called
+    again for that specific feature -- which only happens on a fresh,
+    full re-walk of the whole design (run_single_design ->
+    run_feature_pipelines). A backend restart's resume path continues
+    whatever workflow was actually in-flight directly (run_single_workflow's
+    own poll loop), not a full design re-walk -- so a feature whose
+    workflow finished (e.g. via a goto/retry cycle that happened to
+    complete on its own after the restart) days ago can have its
+    Feature.status stuck "active" indefinitely, with nothing left to ever
+    call _run_one_feature for it again. Observed live: a feature's
+    workflow status showed "completed" (git_commit_push had run) while its
+    Feature row still showed "active" in the UI, unresolved across
+    multiple backend restarts.
+
+    Runs from the same generic, restart-safe background sweep that already
+    drives _advance_phases for every workflow (see
+    background_phase_advancement_sweep in server.py) -- Feature-table-wide,
+    not scoped to a single workflow, since the whole point is to catch
+    features no workflow-scoped loop is going to revisit.
+
+    Returns the number of features repaired.
+    """
+    from src.core.database import Feature, Workflow, get_db
+
+    repaired = 0
+    with get_db() as db:
+        stale = (
+            db.query(Feature)
+            .join(Workflow, Feature.workflow_id == Workflow.id)
+            .filter(
+                Feature.status.notin_(["completed", "failed", "skipped"]),
+                Workflow.status == "completed",
+            )
+            .all()
+        )
+        for feature in stale:
+            logger.info(
+                f"[FEATURE-SYNC] {feature.feature_key}: workflow already "
+                f"completed but Feature.status was {feature.status!r} -- "
+                "syncing to completed"
+            )
+            feature.status = "completed"
+            feature.completed_at = feature.completed_at or datetime.utcnow()
+            repaired += 1
+        if repaired:
+            db.commit()
+    return repaired
+
+
 def _update_design_status(
     design_id: Optional[str],
     status: str,
