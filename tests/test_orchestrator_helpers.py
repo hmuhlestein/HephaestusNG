@@ -2918,6 +2918,98 @@ class TestRunOneFeatureThreadsProjectId:
         assert captured["project_id"] == "proj-1"
 
 
+class TestRunOneFeatureSyncsFeatureStatusOnEarlyReturn:
+    """Regression: found live for a real feature ("Advisor Pattern and
+    Runtime Integration" in project sotto) -- its workflow had genuinely
+    finished (git_commit_push ran, Workflow.status == "completed"), but the
+    Feature row's own status stayed "active" forever, so the UI kept
+    showing the feature as still running.
+
+    Root cause: _run_one_feature sets feat_record.status = "active" right
+    before starting the pipeline (see the "Update status to active" write
+    above), then only flips it to "completed" via _update_feature_status at
+    the very end of a run that actually executes the pipeline. But if this
+    function is re-entered for the same feature after its workflow already
+    reached "completed" (e.g. a backend restart resumes the design and
+    walks the feature loop again), the existing_workflow_id fast path
+    returns "completed" immediately without ever calling
+    _update_feature_status -- leaving feat_record.status stuck at
+    whatever an earlier, now-superseded call last set it to."""
+
+    def test_feature_status_synced_when_workflow_already_completed(
+        self, orch_db_env, tmp_path
+    ):
+        from src.autopilot.orchestrator import (
+            DesignEntry,
+            OrchestratorLogger,
+            _run_one_feature,
+        )
+        from src.core.database import AutopilotDesign, AutopilotProject, Feature, Workflow
+
+        design_id = "design-1"
+        feature_key = "feat-a"
+        with orch_db_env.session_scope() as session:
+            session.add(AutopilotProject(id="proj-1", name="p", base_dir="/tmp/proj-1"))
+            session.add(
+                AutopilotDesign(id=design_id, project_id="proj-1", filename="d.md", name="D")
+            )
+            session.add(
+                Workflow(
+                    id="wf-done",
+                    name="feature pipeline",
+                    phases_folder_path="/tmp",
+                    status="completed",
+                    definition_id="feature_pipeline",
+                )
+            )
+            session.add(
+                Feature(
+                    id="feature-row-1",
+                    design_id=design_id,
+                    feature_key=feature_key,
+                    name="Feature A",
+                    scope="s",
+                    status="active",
+                    workflow_id="wf-done",
+                )
+            )
+
+        design_path = tmp_path / "design.md"
+        design_path.write_text("# Design\n")
+        design_entry = DesignEntry(
+            path=design_path, name="Test Design", content_hash="hash", db_id=design_id
+        )
+        feature = {"id": feature_key, "name": "Feature A"}
+        designs_folder = tmp_path / "designs"
+        (designs_folder / "features" / feature_key).mkdir(parents=True)
+        project_path = tmp_path / "project"
+        project_path.mkdir()
+
+        with patch(
+            "src.autopilot.orchestrator.run_single_workflow"
+        ) as mock_run, patch("src.autopilot.orchestrator._cleanup_worktree"):
+            status = _run_one_feature(
+                sdk=MagicMock(),
+                design_entry=design_entry,
+                feature=feature,
+                designs_folder=designs_folder,
+                project_path=project_path,
+                logger=OrchestratorLogger(tmp_path),
+                state=None,
+            )
+
+        assert status == "completed"
+        mock_run.assert_not_called()  # fast path never runs the pipeline again
+
+        with orch_db_env.session_scope() as session:
+            feat = session.query(Feature).filter_by(id="feature-row-1").first()
+            assert feat.status == "completed", (
+                "Feature.status must be synced to the workflow's real "
+                "outcome even on the already-completed fast path, not just "
+                "the run-it-yourself path further down this function"
+            )
+
+
 class TestWorkflowAppearsAbandoned:
     """_workflow_appears_abandoned: the signal _escalate_stale_active_
     workflows uses to decide whether a workflow stuck "active" is

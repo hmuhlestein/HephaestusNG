@@ -6300,6 +6300,18 @@ def _run_one_feature(
                         f"Feature {feature_key} already completed (workflow "
                         f"{wf.id[:8]}) — skipping"
                     )
+                    # feat_record.status may still be "active" from the run
+                    # that actually did the work, if this function returned
+                    # on that earlier call before reaching its own
+                    # _update_feature_status(..., "completed", ...) call
+                    # below (e.g. a backend restart re-entered this function
+                    # for the same feature after the workflow had already
+                    # finished) -- sync it here too, since this is also a
+                    # legitimate "the feature is done" exit path.
+                    if feat_record.status != "completed":
+                        feat_record.status = "completed"
+                        feat_record.completed_at = feat_record.completed_at or datetime.utcnow()
+                        db.commit()
                     return "completed"
                 if wf:
                     existing_workflow_id = wf.id
