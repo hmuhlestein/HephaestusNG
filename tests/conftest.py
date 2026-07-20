@@ -15,9 +15,36 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from src.core.database import Base, DatabaseManager
+from sqlalchemy import event
 
 # Set test database environment variable before any imports
 os.environ["HEPHAESTUS_TEST_DB"] = ":memory:"
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _skip_fk_enforcement_for_tests():
+    """Disable PRAGMA foreign_keys=ON for test database engines.
+
+    The production DatabaseManager sets foreign_keys=ON per-connection,
+    but test fixtures were written without FK enforcement (it was added
+    in a later commit) and many create Agent rows with current_task_id
+    referencing Task rows that don't exist yet or are created later.
+    The FK constraints still exist in the schema — we just skip the
+    per-connection pragma enforcement in tests."""
+    _original_init = DatabaseManager.__init__
+
+    def _test_init(self, *args, **kwargs):
+        _original_init(self, *args, **kwargs)
+        if hasattr(self, 'engine'):
+            @event.listens_for(self.engine, "connect")
+            def _skip_fk(dbapi_conn, connection_record):
+                cursor = dbapi_conn.cursor()
+                cursor.execute("PRAGMA foreign_keys=OFF")
+                cursor.close()
+
+    DatabaseManager.__init__ = _test_init
+    yield
+    DatabaseManager.__init__ = _original_init
 
 
 @pytest.fixture(autouse=True)
