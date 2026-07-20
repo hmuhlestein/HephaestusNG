@@ -1021,6 +1021,38 @@ class WorktreeManager:
             except GitCommandError:
                 pass
 
+            # Step 1b: null out Workflow.working_directory for any terminal
+            # (non-active/paused) workflow whose directory isn't a real git
+            # worktree anymore -- not just the ones removed by Step 1 just
+            # above. A worktree can also disappear via `git worktree remove`
+            # called directly (_cleanup_worktree in orchestrator.py, run at
+            # each feature pipeline's own completion) or by anything else
+            # outside this function entirely; once gone, it drops out of
+            # `git worktree list` and Step 1 never sees it again. Checking
+            # bare directory existence isn't enough: observed live, some
+            # code keeps appending tmux transcripts to a removed worktree's
+            # .hephaestus/tmux/ path after `git worktree remove` deletes
+            # everything, which resurrects an empty parent directory on
+            # disk -- .exists() then reports True for a worktree that's
+            # genuinely gone. `.git` is what `git worktree remove` actually
+            # controls (it's the one thing that distinguishes a real
+            # worktree from a plain directory), so its absence is the
+            # correct signal. Left stale, a terminal workflow's
+            # working_directory keeps pointing at a dead path forever --
+            # silently breaking any later lookup of that workflow's docs
+            # (_resolve_feature_docs_base trusted the stale path instead of
+            # falling back to project_path).
+            for wf in (
+                session.query(Workflow)
+                .filter(
+                    Workflow.working_directory.isnot(None),
+                    Workflow.status.notin_(["active", "paused"]),
+                )
+                .all()
+            ):
+                if not (Path(wf.working_directory) / ".git").exists():
+                    wf.working_directory = None
+
             # Step 2: merge + delete tracked active branches (skipping any
             # branch still checked out at an active workflow's worktree --
             # see active_branch_names above. Also skips AgentBranch rows:

@@ -29,9 +29,10 @@ class TestGetPhaseForTaskWithWorkflowId:
     """Test that get_phase_for_task correctly uses the workflow_id parameter."""
 
     @pytest.fixture
-    def db_manager(self):
+    def db_manager(self, tmp_path):
         """Create a fresh in-memory database manager for each test."""
-        manager = DatabaseManager(":memory:")
+        db_path = tmp_path / "test.db"
+        manager = DatabaseManager(str(db_path))
         manager.create_tables()
         yield manager
 
@@ -203,9 +204,10 @@ class TestMultipleWorkflowPhaseSeparation:
     """Test that phases from different workflows remain properly separated."""
 
     @pytest.fixture
-    def db_manager(self):
+    def db_manager(self, tmp_path):
         """Create a fresh in-memory database manager for each test."""
-        manager = DatabaseManager(":memory:")
+        db_path = tmp_path / "test.db"
+        manager = DatabaseManager(str(db_path))
         manager.create_tables()
         yield manager
 
@@ -288,9 +290,10 @@ class TestWorkflowIdSingletonBehavior:
     """Test the singleton workflow_id behavior and its interaction with multi-workflow."""
 
     @pytest.fixture
-    def db_manager(self):
+    def db_manager(self, tmp_path):
         """Create a fresh in-memory database manager for each test."""
-        manager = DatabaseManager(":memory:")
+        db_path = tmp_path / "test.db"
+        manager = DatabaseManager(str(db_path))
         manager.create_tables()
         yield manager
 

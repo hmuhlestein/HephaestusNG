@@ -115,9 +115,15 @@ def clean_db(temp_db):
 
 
 @pytest.fixture
-def db_manager():
-    """Create a fresh in-memory database manager for each test."""
-    manager = DatabaseManager(":memory:")
+def db_manager(tmp_path):
+    """Create a fresh file-based database manager for each test.
+
+    Uses tmp_path instead of :memory: because QueuePool (used by
+    DatabaseManager) creates separate in-memory databases per
+    connection, causing 'no such table' errors when the table
+    was created on a different pooled connection."""
+    db_path = tmp_path / "test.db"
+    manager = DatabaseManager(str(db_path))
     manager.create_tables()
     yield manager
 
