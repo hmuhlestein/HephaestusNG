@@ -2659,6 +2659,20 @@ async def get_project_design_status(project_id: str, filename: str):
             from src.core.status_derivation import derive_feature_status
             feat_status = derive_feature_status(db, feat.id, write_back=True)
 
+            # doc_review.yaml's feature_report.html shows up here as soon as
+            # that phase writes it -- PhaseManager._populate_feature_folder
+            # only archives a copy to the features gallery at FULL workflow
+            # completion (2 phases later), so checking the live worktree is
+            # what lets the report surface right after doc_review finishes
+            # instead of only once the whole 12-phase pipeline is done.
+            has_report = False
+            if feat_wf_id:
+                feat_wf = next((wf for wf in matching_workflows if wf.id == feat_wf_id), None)
+                if feat_wf and feat_wf.working_directory:
+                    has_report = (
+                        Path(feat_wf.working_directory) / "docs" / "feature_report.html"
+                    ).is_file()
+
             features.append({
                 "id": feat.id,
                 "name": feat.name,
@@ -2670,6 +2684,7 @@ async def get_project_design_status(project_id: str, filename: str):
                 "depends_on": feat.depends_on or [],
                 "created_at": feat.created_at.isoformat() if feat.created_at else None,
                 "completed_at": feat.completed_at.isoformat() if feat.completed_at else None,
+                "has_report": has_report,
             })
 
         # Feature Architect (Phase 0) pseudo-feature: it decomposes the design
@@ -2790,6 +2805,32 @@ async def get_project_design_status(project_id: str, filename: str):
             "feature_folder": feature_folder,
             "features": features,
         }
+
+
+@router.get("/workflows/{workflow_id}/feature_report")
+async def get_workflow_feature_report(workflow_id: str):
+    """Serve doc_review's HTML feature report straight from the workflow's
+    live worktree.
+
+    The features gallery's /features/{feature_id}/report only has a copy
+    once PhaseManager._populate_feature_folder archives it at FULL
+    workflow completion (2 phases after doc_review) -- this is what lets
+    the report show up on the feature row right after doc_review itself
+    finishes, matching the has_report flag computed in
+    get_project_design_status above.
+    """
+    from src.core.database import Workflow, get_db
+
+    with get_db() as db:
+        wf = db.query(Workflow).filter_by(id=workflow_id).first()
+        if not wf or not wf.working_directory:
+            raise HTTPException(404, "Workflow not found or has no working directory")
+        working_directory = wf.working_directory
+
+    report_path = Path(working_directory) / "docs" / "feature_report.html"
+    if not report_path.is_file():
+        raise HTTPException(404, "Report not found")
+    return HTMLResponse(content=report_path.read_text(errors="replace"))
 
 
 # ── Features Gallery ─────────────────────────────────────────────
@@ -3112,15 +3153,21 @@ async def get_feature_detail(feature_id: str):
 def _resolve_feature_docs_base(wf) -> Optional[str]:
     """Best-known directory to look for a feature's generated docs in.
 
-    working_directory is cleared once a feature's worktree is cleaned up
-    after a successful merge (see _cleanup_worktree in orchestrator.py) --
-    that's correct, the worktree is genuinely gone, but it means a
-    *completed* feature's docs are no longer reachable there. They were
-    merged into the project's main repo, so fall back to launch_params'
-    project_path (observed live: core-infrastructure showed an empty Docs
-    tab despite being done, purely because this fallback was missing).
+    working_directory is *supposed* to be cleared once a feature's
+    worktree is cleaned up after a successful merge (see _cleanup_worktree
+    in orchestrator.py) -- the worktree is genuinely gone, but its docs
+    were merged into the project's main repo, so this should fall back to
+    launch_params' project_path (observed live: core-infrastructure showed
+    an empty Docs tab despite being done, purely because this fallback was
+    missing). In practice working_directory isn't reliably cleared on
+    every cleanup path, so check the directory actually still exists
+    rather than trusting a merely-non-empty string -- otherwise a stale
+    path silently wins over the fallback and a completed feature's docs
+    stay unreachable the exact same way, just via a different cause
+    (observed live for a git_commit_push-completed feature: working_
+    directory still pointed at the already-removed worktree).
     """
-    if wf.working_directory:
+    if wf.working_directory and Path(wf.working_directory).is_dir():
         return wf.working_directory
     launch_params = wf.launch_params or {}
     if isinstance(launch_params, dict):
@@ -3237,6 +3284,34 @@ async def get_feature_record_doc(feature_id: str, doc_name: str):
     if not doc_path.exists():
         raise HTTPException(404, f"Document '{doc_name}' not found")
     return {"name": doc_name, "content": doc_path.read_text(errors="replace")}
+
+
+@router.get("/feature-records/{feature_id}/report")
+async def get_feature_record_report(feature_id: str):
+    """Serve feature_report.html as a real HTML response (not the {name,
+    content} JSON shape /docs/{doc_name} above returns) for direct browser
+    navigation -- the modal's header "Download Report" link needs raw
+    content, not a JSON wrapper. Same live-worktree source as the other
+    feature-records endpoints; same underlying file the report icon on
+    the feature row (workflow-scoped) also serves, just reachable by the
+    Feature DB row's own id instead of needing its workflow_id threaded
+    through as a separate prop.
+    """
+    from src.core.database import Feature, Workflow, get_db
+
+    with get_db() as db:
+        feat = db.query(Feature).filter_by(id=feature_id).first()
+        if not feat or not feat.workflow_id:
+            raise HTTPException(404, f"Feature '{feature_id}' not found")
+        wf = db.query(Workflow).filter_by(id=feat.workflow_id).first()
+        base_dir = _resolve_feature_docs_base(wf) if wf else None
+        if not base_dir:
+            raise HTTPException(404, "Feature's workflow has no known working directory")
+
+    report_path = Path(base_dir) / "docs" / "feature_report.html"
+    if not report_path.is_file():
+        raise HTTPException(404, "Report not found")
+    return HTMLResponse(content=report_path.read_text(errors="replace"))
 
 
 @router.get("/features/{feature_id}/report")

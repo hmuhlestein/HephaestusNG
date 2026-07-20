@@ -670,18 +670,6 @@ export const apiService = {
     return data;
   },
 
-  getAutopilotFeatureReport: async (featureId: string): Promise<string> => {
-    const { data } = await api.get(`/autopilot/features/${encodeURIComponent(featureId)}/report`, {
-      responseType: 'text',
-    });
-    return data;
-  },
-
-  getAutopilotFeatureDoc: async (featureId: string, docName: string): Promise<{ name: string; content: string }> => {
-    const { data } = await api.get(`/autopilot/features/${encodeURIComponent(featureId)}/docs/${encodeURIComponent(docName)}`);
-    return data;
-  },
-
   getAutopilotFeatureLogs: async (featureId: string): Promise<{ logs: Array<{ name: string; size_bytes: number; modified: string }> }> => {
     const { data } = await api.get(`/autopilot/features/${encodeURIComponent(featureId)}/logs`);
     return data;

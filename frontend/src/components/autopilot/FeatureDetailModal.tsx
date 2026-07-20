@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-  X, Download, ExternalLink, FileText, CheckCircle2, XCircle, AlertTriangle,
+  X, Download, FileText, FileBarChart2, CheckCircle2, XCircle, AlertTriangle,
   Clock, DollarSign, Layers, Shield, Beaker, BookOpen, Code, Microscope, Copy,
   Terminal
 } from 'lucide-react';
@@ -28,15 +28,35 @@ const FeatureDetailModal: React.FC<FeatureDetailModalProps> = ({ featureId, onCl
     enabled: !!featureId,
   });
 
+  // feature_report.html and the rest of a feature's generated docs live
+  // under its own workflow's working_directory, not the legacy
+  // FEATURES_DIR archival scan the old /features/{id}/report and
+  // /features/{id}/docs/{name} endpoints read from -- that scan only has
+  // an entry once the full 12-phase pipeline finishes and PhaseManager.
+  // _populate_feature_folder archives it, so both tabs were empty for
+  // every feature until then. feature-records reads the live worktree
+  // instead, same as the report icon on the feature row.
+  // Not gated to the docs/report tabs -- the header's "Download Report"
+  // link (visible from any tab, including the default Overview one) also
+  // needs to know whether feature_report.html exists.
+  const { data: featureDocs } = useQuery({
+    queryKey: ['autopilot-feature-docs', featureId],
+    queryFn: () => apiService.getFeatureRecordDocs(featureId!),
+    enabled: !!featureId,
+  });
+
+  const reportDoc = featureDocs?.docs.find((d) => d.name === 'feature_report.html');
+
   const { data: reportHtml } = useQuery({
     queryKey: ['autopilot-feature-report', featureId],
-    queryFn: () => apiService.getAutopilotFeatureReport(featureId!),
-    enabled: !!featureId && activeTab === 'report',
+    queryFn: () => apiService.getFeatureRecordDoc(featureId!, 'feature_report.html'),
+    enabled: !!featureId && activeTab === 'report' && !!reportDoc,
+    select: (data) => data.content,
   });
 
   const { data: doc } = useQuery({
     queryKey: ['autopilot-doc', featureId, selectedDoc],
-    queryFn: () => apiService.getAutopilotFeatureDoc(featureId!, selectedDoc!),
+    queryFn: () => apiService.getFeatureRecordDoc(featureId!, selectedDoc!),
     enabled: !!featureId && !!selectedDoc,
   });
 
@@ -107,11 +127,11 @@ const FeatureDetailModal: React.FC<FeatureDetailModalProps> = ({ featureId, onCl
                 </div>
               </div>
               <div className="flex items-center gap-2">
-                {detail?.has_report !== false && (
+                {reportDoc && (
                   <a
-                    href={`/api/autopilot/features/${encodeURIComponent(featureId)}/download`}
+                    href={`/api/autopilot/feature-records/${encodeURIComponent(featureId)}/report`}
                     className="p-2 rounded-lg hover:bg-gray-100 text-gray-500 hover:text-gray-700 transition-colors"
-                    title="Download Report"
+                    title="Open Report"
                     target="_blank"
                   >
                     <Download className="w-4 h-4" />
@@ -157,10 +177,10 @@ const FeatureDetailModal: React.FC<FeatureDetailModalProps> = ({ featureId, onCl
               ) : activeTab === 'overview' ? (
                 <OverviewTab detail={detail} phaseIcons={phaseIcons} phaseLabels={phaseLabels} />
               ) : activeTab === 'report' ? (
-                <ReportTab html={reportHtml} featureId={featureId} />
+                <ReportTab html={reportHtml} />
               ) : activeTab === 'docs' ? (
                 <DocsTab
-                  detail={detail}
+                  docs={featureDocs?.docs}
                   selectedDoc={selectedDoc}
                   docContent={doc}
                   onSelectDoc={setSelectedDoc}
@@ -276,7 +296,7 @@ const OverviewTab: React.FC<{
 
 // ── Report Tab ──────────────────────────────────────────────
 
-const ReportTab: React.FC<{ html: string | undefined; featureId: string }> = ({ html, featureId }) => (
+const ReportTab: React.FC<{ html: string | undefined }> = ({ html }) => (
   <div className="h-full">
     {html ? (
       <iframe
@@ -289,14 +309,8 @@ const ReportTab: React.FC<{ html: string | undefined; featureId: string }> = ({ 
       <div className="flex items-center justify-center h-64">
         <div className="text-center">
           <FileText className="w-12 h-12 text-gray-300 mx-auto mb-3" />
-          <p className="text-sm text-gray-500">No report available</p>
-          <a
-            href={`/api/autopilot/features/${encodeURIComponent(featureId)}/report`}
-            target="_blank"
-            className="text-xs text-violet-600 hover:text-violet-700 mt-2 inline-flex items-center gap-1"
-          >
-            Open in new tab <ExternalLink className="w-3 h-3" />
-          </a>
+          <p className="text-sm text-gray-500">No report available yet</p>
+          <p className="text-xs text-gray-400 mt-1">Generated by the doc_review phase</p>
         </div>
       </div>
     )}
@@ -305,18 +319,20 @@ const ReportTab: React.FC<{ html: string | undefined; featureId: string }> = ({ 
 
 // ── Docs Tab ───────────────────────────────────────────
 
+const isHtmlDoc = (name: string) => name.toLowerCase().endsWith('.html');
+
 const DocsTab: React.FC<{
-  detail: any;
+  docs: Array<{ name: string; type?: string }> | undefined;
   selectedDoc: string | null;
   docContent: any;
   onSelectDoc: (name: string) => void;
-}> = ({ detail, selectedDoc, docContent, onSelectDoc }) => (
+}> = ({ docs, selectedDoc, docContent, onSelectDoc }) => (
   <div className="flex h-[600px]">
     {/* File list */}
     <div className="w-64 border-r overflow-y-auto bg-gray-50">
       <div className="p-3">
         <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Docs</h4>
-        {(detail?.docs || []).map((d: any) => (
+        {(docs || []).map((d) => (
           <button
             key={d.name}
             onClick={() => onSelectDoc(d.name)}
@@ -326,30 +342,46 @@ const DocsTab: React.FC<{
                 : 'text-gray-600 hover:bg-gray-100'
             }`}
           >
-            <FileText className="w-3.5 h-3.5 flex-shrink-0" />
+            {isHtmlDoc(d.name) ? (
+              <FileBarChart2 className="w-3.5 h-3.5 flex-shrink-0 text-emerald-500" />
+            ) : (
+              <FileText className="w-3.5 h-3.5 flex-shrink-0" />
+            )}
             <span className="truncate">{d.name}</span>
           </button>
         ))}
+        {docs?.length === 0 && (
+          <p className="text-xs text-gray-400 px-3 py-2">No docs generated yet</p>
+        )}
       </div>
     </div>
 
     {/* Content */}
     <div className="flex-1 overflow-y-auto p-5">
       {selectedDoc && docContent ? (
-        <div>
-          <div className="flex items-center justify-between mb-3">
-            <h4 className="text-sm font-semibold text-gray-700">{docContent.name}</h4>
-            <button
-              onClick={() => navigator.clipboard.writeText(docContent.content)}
-              className="text-xs text-gray-500 hover:text-gray-700 flex items-center gap-1"
-            >
-              <Copy className="w-3 h-3" /> Copy
-            </button>
+        isHtmlDoc(selectedDoc) ? (
+          <iframe
+            srcDoc={docContent.content}
+            className="w-full h-[560px] border rounded-xl"
+            title={docContent.name}
+            sandbox="allow-scripts"
+          />
+        ) : (
+          <div>
+            <div className="flex items-center justify-between mb-3">
+              <h4 className="text-sm font-semibold text-gray-700">{docContent.name}</h4>
+              <button
+                onClick={() => navigator.clipboard.writeText(docContent.content)}
+                className="text-xs text-gray-500 hover:text-gray-700 flex items-center gap-1"
+              >
+                <Copy className="w-3 h-3" /> Copy
+              </button>
+            </div>
+            <div className="text-sm text-gray-700 prose prose-sm prose-violet max-w-none bg-gray-50 rounded-xl p-4 border">
+              <MarkdownRenderer content={docContent.content} />
+            </div>
           </div>
-          <div className="text-sm text-gray-700 prose prose-sm prose-violet max-w-none bg-gray-50 rounded-xl p-4 border">
-            <MarkdownRenderer content={docContent.content} />
-          </div>
-        </div>
+        )
       ) : (
         <div className="flex items-center justify-center h-full text-gray-400 text-sm">
           Select a document to view
