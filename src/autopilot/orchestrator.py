@@ -3812,12 +3812,51 @@ def _case_completed_with_successor(
     if completed and pending and not in_progress:
         completed.sort(key=lambda p: p["phase"].order)
         last_completed = completed[-1]
-        # Find the next pending phase by order (handles non-sequential orders)
-        successor = min(
-            (p for p in pending if p["phase"].order > last_completed["phase"].order),
-            key=lambda p: p["phase"].order,
-            default=None,
+
+        # If the phase that just completed recorded an explicit goto/retry
+        # target, honor that instead of blindly picking the lowest-order
+        # pending phase. A goto's own stale-reset resets EVERY phase at or
+        # after ITS target back to "pending" -- including ones the
+        # completing phase's own goto deliberately skips over. E.g.
+        # development, after fixing adversarial_review's BLOCKERs, goto's
+        # straight back to adversarial_review (its action_target_phase,
+        # set when development's own corrective task was created) --
+        # bypassing architectural_review on purpose, since nothing
+        # architectural changed. But architectural_review is still sitting
+        # "pending" from the earlier, broader reset when adversarial_review
+        # first sent things back to development. Blindly picking "next
+        # pending phase by order" finds architectural_review and dispatches
+        # a fresh, redundant run of it -- burning real agent/LLM cycles on
+        # a review that was never supposed to happen again this loop.
+        # Observed live: every adversarial_review-fix cycle re-triggered a
+        # full architectural_review pass in between.
+        last_task = (
+            db.query(Task)
+            .filter(
+                Task.phase_id == last_completed["phase"].id,
+                Task.status == "done",
+                ~Task.raw_description.like(f"{DIAGNOSTIC_TASK_PREFIX}%"),
+            )
+            .order_by(Task.completed_at.desc())
+            .first()
         )
+        successor = None
+        successor_action = "continue"
+        if last_task and last_task.action in ("goto", "retry") and last_task.action_target_phase:
+            successor = next(
+                (p for p in pending if p["phase"].name == last_task.action_target_phase),
+                None,
+            )
+            if successor:
+                successor_action = last_task.action
+
+        if successor is None:
+            # Find the next pending phase by order (handles non-sequential orders)
+            successor = min(
+                (p for p in pending if p["phase"].order > last_completed["phase"].order),
+                key=lambda p: p["phase"].order,
+                default=None,
+            )
         if successor:
             # Check if successor already has tasks (transition already fired)
             existing_tasks = (
@@ -3853,8 +3892,16 @@ def _case_completed_with_successor(
                 workflow_id,
                 successor["phase"].id,
                 successor["phase"].name,
-                "continue",
+                successor_action,
                 logger,
+                feedback=(
+                    last_task.completion_notes
+                    if successor_action != "continue" and last_task
+                    else None
+                ),
+                source_phase_name=(
+                    last_completed["phase"].name if successor_action != "continue" else None
+                ),
             )
     return None
 
