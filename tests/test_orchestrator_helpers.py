@@ -1567,6 +1567,65 @@ class TestResumeStuckWorkflowTasks:
             assert task.action == ""
             assert task.action_target_phase is None
 
+    @patch("src.autopilot.orchestrator.create_agent_for_task_direct")
+    def test_restarts_pending_task_with_dead_agent(self, mock_create_agent, orch_db_env, tmp_path):
+        """A task can end up 'pending' with a stale assigned_agent_id (e.g.
+        an agent manually terminated after the task was dispatched but
+        before it was reset) -- same 'genuinely stuck' check as
+        assigned/in_progress must apply, or the task is unrecoverable."""
+        from src.autopilot.orchestrator import OrchestratorLogger, _resume_stuck_workflow_tasks
+
+        self._make_agent(orch_db_env, "new-agent", "working")
+        mock_create_agent.return_value = {"agent_id": "new-agent"}
+        self._make_workflow(orch_db_env, "wf-1", "paused")
+        self._make_agent(orch_db_env, "dead-agent", "terminated")
+        self._make_task(orch_db_env, "task-1", "wf-1", "pending", agent_id="dead-agent")
+
+        restarted = _resume_stuck_workflow_tasks("wf-1", OrchestratorLogger(tmp_path))
+
+        assert restarted == 1
+        mock_create_agent.assert_called_once()
+
+    @patch("src.autopilot.orchestrator.create_agent_for_task_direct")
+    def test_restarts_stale_pending_task_with_no_agent(self, mock_create_agent, orch_db_env, tmp_path):
+        """A 'pending' task with no agent at all and no automatic pickup
+        anywhere else in the codebase (see PENDING_STUCK_MINUTES comment)
+        must still be recoverable once it's clearly been abandoned, not
+        just mid-dispatch."""
+        from datetime import datetime, timedelta
+
+        from src.autopilot.orchestrator import OrchestratorLogger, _resume_stuck_workflow_tasks
+        from src.core.database import Task
+
+        self._make_agent(orch_db_env, "new-agent", "working")
+        mock_create_agent.return_value = {"agent_id": "new-agent"}
+        self._make_workflow(orch_db_env, "wf-1", "paused")
+        self._make_task(orch_db_env, "task-1", "wf-1", "pending")
+        with orch_db_env.session_scope() as session:
+            task = session.query(Task).filter_by(id="task-1").first()
+            task.created_at = datetime.utcnow() - timedelta(minutes=10)
+
+        restarted = _resume_stuck_workflow_tasks("wf-1", OrchestratorLogger(tmp_path))
+
+        assert restarted == 1
+        mock_create_agent.assert_called_once()
+
+    @patch("src.autopilot.orchestrator.create_agent_for_task_direct")
+    def test_does_not_restart_freshly_created_pending_task(self, mock_create_agent, orch_db_env, tmp_path):
+        """A 'pending' task with no agent yet that was JUST created is
+        normal -- creation and first dispatch happen in the same
+        synchronous call elsewhere. Sweeping it up here would race that
+        dispatch instead of waiting for it."""
+        from src.autopilot.orchestrator import OrchestratorLogger, _resume_stuck_workflow_tasks
+
+        self._make_workflow(orch_db_env, "wf-1", "paused")
+        self._make_task(orch_db_env, "task-1", "wf-1", "pending")
+
+        restarted = _resume_stuck_workflow_tasks("wf-1", OrchestratorLogger(tmp_path))
+
+        assert restarted == 0
+        mock_create_agent.assert_not_called()
+
 
 class TestCreateAgentForTaskDirectAppStateGuard:
     """Regression: get_app_state() was called BEFORE create_agent_for_task_
