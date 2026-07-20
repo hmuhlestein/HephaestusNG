@@ -26,18 +26,18 @@ class TestTicketIDValidation:
     def setup_class(cls):
         """Setup - check if server is running and workflow exists."""
         try:
-            response = requests.get(f"{BASE_URL}/health", timeout=5)
+            response = requests.get(f"{BASE_URL}/health", timeout=2)
             assert response.status_code == 200, "Server not running"
             print("✓ Server is running")
         except Exception as e:
-            pytest.fail(f"Server not available: {e}")
+            pytest.skip(f"Server not available: {e}")
 
         # Check if ticket tracking workflow exists
         try:
             response = requests.get(
                 f"{BASE_URL}/api/workflows",
                 headers={"X-Agent-ID": "test-user"},
-                timeout=5,
+                timeout=2,
             )
             workflows = response.json()
             cls.workflow_id = None
@@ -48,7 +48,7 @@ class TestTicketIDValidation:
                     board_check = requests.get(
                         f"{BASE_URL}/tickets/stats/{wf['id']}",
                         headers={"X-Agent-ID": "test-user"},
-                        timeout=5,
+                        timeout=2,
                     )
                     if board_check.status_code == 200:
                         cls.workflow_id = wf["id"]

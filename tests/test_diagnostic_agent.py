@@ -331,8 +331,9 @@ class TestDiagnosticAgentTriggers:
 
         await monitoring_loop._check_workflow_stuck_state()
 
-        # Should create diagnostic agent
-        monitoring_loop.agent_manager.create_agent_for_task.assert_called_once()
+        # Diagnostic agent creation was removed — code now just logs
+        # and lets pipeline retry logic handle recovery
+        monitoring_loop.agent_manager.create_agent_for_task.assert_not_called()
 
 
 class TestDiagnosticContextGathering:

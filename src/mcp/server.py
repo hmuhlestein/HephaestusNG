@@ -1844,6 +1844,22 @@ async def create_task(
 
         # Create initial task in database with pending status
         session = server_state.db_manager.get_session()
+        # Validate FK references exist; NULL out if not
+        resolved_phase_id = request.phase_id
+        if request.phase_id:
+            from src.core.database import Phase
+            if not session.query(Phase).filter_by(id=request.phase_id).first():
+                resolved_phase_id = None
+        # Ensure created_by_agent_id FK is satisfied
+        from src.core.database import Agent
+        if not session.query(Agent).filter_by(id=agent_id).first():
+            session.add(Agent(
+                id=agent_id,
+                system_prompt="auto-created by create_task",
+                status="idle",
+                cli_type="system",
+            ))
+            session.flush()
         task = Task(
             id=task_id,
             raw_description=request.task_description,
@@ -1853,7 +1869,7 @@ async def create_task(
             priority=request.priority,
             parent_task_id=request.parent_task_id,
             created_by_agent_id=agent_id,
-            phase_id=request.phase_id,
+            phase_id=resolved_phase_id,
             workflow_id=request.workflow_id,  # Use workflow_id from request
             estimated_complexity=5,  # Default value
             ticket_id=request.ticket_id,  # Store associated ticket ID

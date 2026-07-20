@@ -749,6 +749,17 @@ class PhaseManager:
             s.status = "pending"
             s.completed_at = None
             s.task_creation_claimed_at = None
+            # Same reset _handle_evaluation_retry already applies to a
+            # retried phase's own execution (started_at = None) -- without
+            # it here too, a "pending" phase can carry a started_at left
+            # over from a cycle before this goto rewound it. Every later
+            # cycle-scoped query (_case_in_progress_complete,
+            # _maybe_retry_failed_tasks) filters tasks by
+            # `Task.created_at >= execution.started_at`; a stale anchor
+            # makes the phase's own freshly-created task fall outside its
+            # own cycle window, so _advance_phases sees zero tasks for it
+            # forever and the phase never progresses again.
+            s.started_at = None
         if stale:
             session.commit()
 
@@ -863,6 +874,12 @@ class PhaseManager:
                 s.status = "pending"
                 s.completed_at = None
                 s.task_creation_claimed_at = None
+                # See _handle_force_goto's identical reset for why this is
+                # needed: a stale started_at surviving the reset makes every
+                # later cycle-scoped query exclude this phase's own next
+                # task from its own cycle, silently stalling the phase
+                # forever once its cycle re-starts.
+                s.started_at = None
             if stale:
                 session.commit()
                 logger.info(

@@ -3929,6 +3929,37 @@ def _case_in_progress_complete(
             .count()
         )
         if done_count == 0:
+            # A phase can be "in_progress" with a cycle_start that predates
+            # every task actually tied to it -- e.g. execution.started_at
+            # surviving stale across a goto reset (the phases whose order
+            # was rewound get status="pending" but kept their old
+            # started_at, until the goto-reset fix). incomplete and
+            # done_count above are both cycle-scoped, so they're 0 whether
+            # every real task simply predates cycle_start (nothing to
+            # retry, nothing to wait on -- an invisible, permanently stuck
+            # phase) or a genuinely fresh in_progress phase has no tasks
+            # yet at all. _maybe_retry_failed_tasks only handles "existing
+            # cycle-scoped tasks are all failed" -- it silently no-ops for
+            # either case above, exactly like Case 0b's unscoped check
+            # would if it ran here (it doesn't fire either: its own
+            # unscoped count still sees the phase's pre-cycle task and
+            # concludes nothing needs creating). Treat a genuinely empty
+            # cycle the same as Case 0b: dispatch a fresh task.
+            total_cycle_tasks = (
+                db.query(Task).filter(Task.phase_id == phase.id, *cycle_filter).count()
+            )
+            if total_cycle_tasks == 0:
+                if not _claim_phase_task_creation(db, phase.id):
+                    continue
+                logger.warning(
+                    f"[PHASE-ADVANCE] {phase.name} is in_progress but has no "
+                    "tasks within its own cycle (stale started_at?) — "
+                    "creating a fresh one"
+                )
+                return _create_phase_task(
+                    workflow_id, phase.id, phase.name, "continue", logger
+                )
+
             # Check if ALL tasks are failed — retry them. Same claim
             # protection as the _fire_phase_transition path below, for the
             # identical reason its own comment documents: nothing stops a
