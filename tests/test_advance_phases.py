@@ -10,12 +10,53 @@ from unittest.mock import ANY, MagicMock, patch
 import pytest
 
 from src.core.database import (
+    Agent,
     DatabaseManager,
     Phase,
     PhaseExecution,
     Task,
     Workflow,
 )
+
+
+def _agent_row_side_effect(agent_id="new-agent-1"):
+    """Return a side_effect for create_agent_for_task_direct that also
+    inserts an Agent row into the DB, satisfying FK constraints.
+    Uses task_id as suffix for unique agent_id per call."""
+    def _side_effect(task_id, workflow_id, phase_id, **kwargs):
+        from src.core.database import get_db
+        # Use full task_id so multiple calls produce unique IDs/tmux names
+        aid = f"{agent_id}-{task_id}".replace(" ", "-")
+        with get_db() as db:
+            db.add(Agent(
+                id=aid,
+                system_prompt="test",
+                status="working",
+                cli_type="pi",
+                tmux_session_name=f"tmux-{aid[:32]}",
+                current_task_id=task_id,
+            ))
+            db.commit()
+        return {"agent_id": aid}
+    return _side_effect
+
+
+@pytest.fixture(autouse=True)
+def _seed_sentinel_agents(db_manager):
+    """Insert sentinel agent rows that the orchestrator references by
+    constant string (ARBITRATION_CREATED_BY, _orchestrator_agent_id).
+    Without these, any code path that sets
+    task.created_by_agent_id=ARBITRATION_CREATED_BY FK-fails."""
+    from src.autopilot.orchestrator import ARBITRATION_CREATED_BY
+    with db_manager.session_scope() as session:
+        for aid in (ARBITRATION_CREATED_BY, "orchestrator"):
+            if not session.query(Agent).filter_by(id=aid).first():
+                session.add(Agent(
+                    id=aid,
+                    system_prompt="sentinel",
+                    status="idle",
+                    cli_type="system",
+                ))
 
 
 @pytest.fixture
@@ -192,6 +233,47 @@ class TestReleasePhaseTaskCreationClaim:
             assert exec1.task_creation_claimed_at is None
             assert exec1.status == "in_progress"
             assert exec1.started_at == original_started_at
+
+    def test_clears_claim_when_execution_was_already_loaded_in_the_same_session(
+        self, db_manager, sample_workflow
+    ):
+        """Regression: found via test_maybe_retry_failed_tasks_is_claim_
+        protected. This project's sessions run expire_on_commit=False, and
+        _claim_phase_task_creation's own claiming UPDATE uses
+        synchronize_session=False -- so if the PhaseExecution row was
+        already loaded into the SAME session's identity map before the
+        claim was taken (exactly what every real caller does: _advance_
+        phases reads it via _get_phase_statuses, then later claims and
+        releases on that same session), a plain query in this function
+        returned that stale in-memory object, whose task_creation_
+        claimed_at still showed the pre-claim value -- writing None over
+        an attribute that already read as None isn't a change SQLAlchemy
+        persists, so the claim silently stayed held in the database
+        forever. Unlike the tests above, this one deliberately keeps
+        claim + release on ONE session with a pre-load in between, since
+        the bug only reproduces when they share a session."""
+        from src.autopilot.orchestrator import (
+            _claim_phase_task_creation,
+            _release_phase_task_creation_claim,
+        )
+
+        with db_manager.session_scope() as session:
+            # The pre-load every real caller does (e.g. _get_phase_statuses)
+            # before ever taking the claim.
+            preloaded = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            assert preloaded.task_creation_claimed_at is None
+
+            assert _claim_phase_task_creation(session, "phase-1") is True
+            _release_phase_task_creation_claim(session, "phase-1")
+
+            # Re-query within the SAME session -- must reflect the release,
+            # not the stale pre-loaded object's view.
+            refetched = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            assert refetched.task_creation_claimed_at is None
+
+        with db_manager.session_scope() as session:
+            exec1 = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            assert exec1.task_creation_claimed_at is None  # actually persisted to the DB
 
 
 class TestAdvancePhases:
@@ -413,7 +495,7 @@ class TestMaybeRetryFailedTasks:
         logger = MagicMock()
         with patch(
             "src.autopilot.orchestrator.create_agent_for_task_direct",
-            return_value={"agent_id": "new-agent-1"},
+            side_effect=_agent_row_side_effect("new-agent-1"),
         ):
             with db_manager.session_scope() as session:
                 phase = session.query(Phase).filter_by(id="phase-1").first()
@@ -424,7 +506,7 @@ class TestMaybeRetryFailedTasks:
             # Verify tasks were reset and re-dispatched, not left pending
             tasks = session.query(Task).filter_by(phase_id="phase-1", status="in_progress").all()
             assert len(tasks) == 3
-            assert all(t.assigned_agent_id == "new-agent-1" for t in tasks)
+            assert all(t.assigned_agent_id.startswith("new-agent-1") for t in tasks)
 
     def test_folds_failure_reason_into_description_before_clearing(
         self, db_manager, sample_workflow
@@ -454,7 +536,7 @@ class TestMaybeRetryFailedTasks:
         logger = MagicMock()
         with patch(
             "src.autopilot.orchestrator.create_agent_for_task_direct",
-            return_value={"agent_id": "new-agent-1"},
+            side_effect=_agent_row_side_effect("new-agent-1"),
         ):
             with db_manager.session_scope() as session:
                 phase = session.query(Phase).filter_by(id="phase-1").first()
@@ -489,7 +571,7 @@ class TestMaybeRetryFailedTasks:
         logger = MagicMock()
         with patch(
             "src.autopilot.orchestrator.create_agent_for_task_direct",
-            return_value={"agent_id": "new-agent-1"},
+            side_effect=_agent_row_side_effect("new-agent-1"),
         ):
             with db_manager.session_scope() as session:
                 phase = session.query(Phase).filter_by(id="phase-1").first()
@@ -536,6 +618,147 @@ class TestMaybeRetryFailedTasks:
             task = session.query(Task).filter_by(id="task-fail-0").first()
             assert task.status == "failed"
             assert task.assigned_agent_id is None
+
+    def test_ignores_older_cycles_done_task_when_scoped_to_current_cycle(
+        self, db_manager, sample_workflow
+    ):
+        """Regression: a phase revisited via goto reuses the same phase_id
+        -- an old 'done' task from a prior cycle must not make the current
+        cycle's failed task invisible to this retry path. Without
+        cycle_start scoping, total_count counted the old done task too, so
+        failed_count == total_count was never true once a phase had ever
+        succeeded before -- this retry never fired for a later failing
+        re-attempt, the exact live bug this covers."""
+        from datetime import timedelta
+
+        from src.autopilot.orchestrator import _maybe_retry_failed_tasks
+        from src.core.database import Agent
+
+        with db_manager.session_scope() as session:
+            session.add(
+                Agent(id="new-agent-1", system_prompt="p", status="working", cli_type="pi")
+            )
+            session.add(
+                Task(
+                    id="task-old-done",
+                    workflow_id="wf-1",
+                    phase_id="phase-1",
+                    raw_description="r",
+                    done_definition="d",
+                    status="done",
+                    created_at=datetime.utcnow() - timedelta(hours=2),
+                )
+            )
+            session.add(
+                Task(
+                    id="task-current-failed",
+                    workflow_id="wf-1",
+                    phase_id="phase-1",
+                    raw_description="r",
+                    done_definition="d",
+                    status="failed",
+                    failure_reason="boom",
+                    created_at=datetime.utcnow() - timedelta(minutes=4),
+                )
+            )
+
+        cycle_start = datetime.utcnow() - timedelta(minutes=5)
+        logger = MagicMock()
+        with patch(
+            "src.autopilot.orchestrator.create_agent_for_task_direct",
+            side_effect=_agent_row_side_effect("new-agent-1"),
+        ):
+            with db_manager.session_scope() as session:
+                phase = session.query(Phase).filter_by(id="phase-1").first()
+                result = _maybe_retry_failed_tasks(session, phase, logger, cycle_start=cycle_start)
+                assert result is True
+
+        with db_manager.session_scope() as session:
+            current_task = session.query(Task).filter_by(id="task-current-failed").first()
+            assert current_task.status == "in_progress"
+            # The prior cycle's task is untouched.
+            old_task = session.query(Task).filter_by(id="task-old-done").first()
+            assert old_task.status == "done"
+
+    def test_pauses_workflow_once_retry_cap_exhausted_instead_of_retrying_forever(
+        self, db_manager, sample_workflow
+    ):
+        """The exact live bug: a task whose failure is permanent (a deleted
+        git worktree raises instantly, no LLM call in between) got reset
+        and re-dispatched every single poll cycle forever -- burning a
+        cycle every few seconds indefinitely and starving every other
+        workflow's turn in the same poll loop, since nothing here ever
+        checked retry_count. Once every failed task in the phase is past
+        the cap, this must stop retrying and pause the workflow instead."""
+        from src.autopilot.orchestrator import _maybe_retry_failed_tasks
+
+        with db_manager.session_scope() as session:
+            session.add(
+                Task(
+                    id="task-exhausted",
+                    workflow_id="wf-1",
+                    phase_id="phase-1",
+                    raw_description="r",
+                    done_definition="d",
+                    status="failed",
+                    failure_reason="Workflow's shared worktree is missing",
+                    retry_count=2,
+                )
+            )
+
+        logger = MagicMock()
+        with patch(
+            "src.autopilot.orchestrator.create_agent_for_task_direct"
+        ) as mock_create_agent:
+            with db_manager.session_scope() as session:
+                phase = session.query(Phase).filter_by(id="phase-1").first()
+                result = _maybe_retry_failed_tasks(session, phase, logger)
+
+        assert result is None
+        mock_create_agent.assert_not_called()
+        with db_manager.session_scope() as session:
+            task = session.query(Task).filter_by(id="task-exhausted").first()
+            assert task.status == "failed"  # left alone, not reset to pending
+            wf = session.query(Workflow).filter_by(id="wf-1").first()
+            assert wf.status == "paused"
+            assert wf.paused_by == "system"
+            assert "worktree is missing" in wf.status_reason
+
+    def test_does_not_re_pause_or_touch_reason_if_already_paused(
+        self, db_manager, sample_workflow
+    ):
+        """A human may have already looked at this and left the workflow
+        paused with their own note -- don't clobber it on every poll."""
+        from src.autopilot.orchestrator import _maybe_retry_failed_tasks
+
+        with db_manager.session_scope() as session:
+            session.add(
+                Task(
+                    id="task-exhausted",
+                    workflow_id="wf-1",
+                    phase_id="phase-1",
+                    raw_description="r",
+                    done_definition="d",
+                    status="failed",
+                    failure_reason="boom",
+                    retry_count=2,
+                )
+            )
+            wf = session.query(Workflow).filter_by(id="wf-1").first()
+            wf.status = "paused"
+            wf.paused_by = "user"
+            wf.status_reason = "user's own note"
+
+        logger = MagicMock()
+        with patch("src.autopilot.orchestrator.create_agent_for_task_direct"):
+            with db_manager.session_scope() as session:
+                phase = session.query(Phase).filter_by(id="phase-1").first()
+                _maybe_retry_failed_tasks(session, phase, logger)
+
+        with db_manager.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-1").first()
+            assert wf.paused_by == "user"
+            assert wf.status_reason == "user's own note"
 
 
 class TestCaseInProgressComplete:
@@ -777,6 +1000,121 @@ class TestCaseInProgressComplete:
             task = session.query(Task).filter_by(id="failed-task-1").first()
             assert task.status == "failed"  # untouched, not reset to pending
 
+    @patch("src.autopilot.orchestrator._fire_phase_transition")
+    def test_old_cycles_done_task_does_not_mask_current_cycle_failure(
+        self, mock_fire, db_manager, sample_workflow
+    ):
+        """The exact live bug: phase-1 succeeded once already (an earlier
+        cycle, before a later goto sent the pipeline back to it), so a
+        'done' task from that old cycle exists. The CURRENT cycle's own
+        task then failed. Without scoping done_count/incomplete to the
+        current cycle (execution.started_at), that old done task alone
+        satisfied "phase complete" and fired the transition against
+        whatever -- usually nothing -- the failed current attempt left on
+        disk, producing a false goto-back with a "result not found"
+        reason instead of just retrying the failed attempt."""
+        from datetime import timedelta
+
+        from src.autopilot.orchestrator import (
+            PhaseExecution,
+            _case_in_progress_complete,
+            _get_phase_statuses,
+        )
+        from src.core.database import Agent
+
+        with db_manager.session_scope() as session:
+            session.add(
+                Agent(id="new-agent-1", system_prompt="p", status="working", cli_type="pi")
+            )
+            session.add(
+                Task(
+                    id="task-old-done",
+                    workflow_id="wf-1",
+                    phase_id="phase-1",
+                    raw_description="r",
+                    done_definition="d",
+                    status="done",
+                    created_at=datetime.utcnow() - timedelta(hours=2),
+                )
+            )
+            execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            execution.started_at = datetime.utcnow() - timedelta(minutes=5)
+            session.add(
+                Task(
+                    id="task-current-failed",
+                    workflow_id="wf-1",
+                    phase_id="phase-1",
+                    raw_description="r",
+                    done_definition="d",
+                    status="failed",
+                    failure_reason="boom",
+                    created_at=datetime.utcnow() - timedelta(minutes=4),
+                )
+            )
+
+        with patch(
+            "src.autopilot.orchestrator.create_agent_for_task_direct",
+            side_effect=_agent_row_side_effect("new-agent-1"),
+        ):
+            with db_manager.session_scope() as session:
+                phase_statuses = _get_phase_statuses(session, "wf-1")
+                in_progress = [p for p in phase_statuses if p["status"] == "in_progress"]
+                result = _case_in_progress_complete(session, "wf-1", in_progress, MagicMock())
+
+        mock_fire.assert_not_called()
+        assert result is True  # retried the failed task instead of transitioning
+        with db_manager.session_scope() as session:
+            current_task = session.query(Task).filter_by(id="task-current-failed").first()
+            assert current_task.status == "in_progress"
+            old_task = session.query(Task).filter_by(id="task-old-done").first()
+            assert old_task.status == "done"  # untouched
+
+    def test_maybe_retry_failed_tasks_is_claim_protected(self, db_manager, sample_workflow):
+        """Regression: _maybe_retry_failed_tasks used to run with zero
+        claim protection, unlike the sibling _fire_phase_transition path a
+        few lines below it -- whose own comment already documents the
+        exact race this class of gap causes (a concurrent poll re-entering
+        mid-dispatch, creating two agents for the same task). Verifies
+        both that the claim was actually taken during the retry (by
+        checking it isn't the reason nothing happened) and that it's
+        released afterward -- a bug in the release would strand the phase
+        behind a permanently-held claim, a worse outcome than the race
+        this fix closes."""
+        from src.autopilot.orchestrator import (
+            PhaseExecution,
+            _case_in_progress_complete,
+            _get_phase_statuses,
+        )
+
+        with db_manager.session_scope() as session:
+            session.add(
+                Task(
+                    id="task-fail-0",
+                    workflow_id="wf-1",
+                    phase_id="phase-1",
+                    raw_description="r",
+                    done_definition="d",
+                    status="failed",
+                    failure_reason="boom",
+                )
+            )
+
+        with patch(
+            "src.autopilot.orchestrator.create_agent_for_task_direct",
+            side_effect=_agent_row_side_effect("new-agent-1"),
+        ):
+            with db_manager.session_scope() as session:
+                phase_statuses = _get_phase_statuses(session, "wf-1")
+                in_progress = [p for p in phase_statuses if p["status"] == "in_progress"]
+                result = _case_in_progress_complete(session, "wf-1", in_progress, MagicMock())
+
+        assert result is True
+        with db_manager.session_scope() as session:
+            task = session.query(Task).filter_by(id="task-fail-0").first()
+            assert task.status == "in_progress"  # the retry actually ran
+            execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            assert execution.task_creation_claimed_at is None  # released, not stranded
+
 
 class TestReleaseStaleTaskCreationClaims:
     """Regression, found live: _case_in_progress_complete's own claim check
@@ -915,6 +1253,277 @@ class TestReleaseStaleTaskCreationClaims:
 
         assert result is True
         mock_fire.assert_called_once()
+
+
+class TestReleasePendingPhasesWithDoneTasks:
+    """Regression, found live: none of _advance_phases's four dispatch
+    cases recognize a PhaseExecution stuck "pending" despite already
+    having a "done" Task (Case 0/0b act on a lack of tasks, Case 1 needs
+    the *predecessor* completed, Case 2 only ever looks at phases already
+    "in_progress") -- so a phase in this state is invisible to every one
+    of them, forever. Several paths create/complete a task without
+    re-flipping PhaseExecution to "in_progress" the way _create_phase_task
+    does (e.g. _maybe_retry_failed_tasks's reset-and-redispatch loop never
+    touches PhaseExecution at all). Observed live: two workflows sat this
+    way for days, invisible to every self-heal path, while an unrelated
+    workflow's endlessly-retried task hogged every poll cycle so these
+    never got a design-queue turn to be noticed."""
+
+    def _seed_done_task(self, db_manager, phase_id="phase-1", workflow_id="wf-1"):
+        with db_manager.session_scope() as session:
+            session.add(
+                Task(
+                    id="task-done-1",
+                    workflow_id=workflow_id,
+                    phase_id=phase_id,
+                    raw_description="r",
+                    done_definition="d",
+                    status="done",
+                )
+            )
+
+    def test_pending_phase_with_done_task_flips_to_in_progress(
+        self, db_manager, sample_workflow
+    ):
+        from src.autopilot.orchestrator import (
+            PhaseExecution,
+            _release_pending_phases_with_done_tasks,
+        )
+
+        self._seed_done_task(db_manager)
+        with db_manager.session_scope() as session:
+            execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            # sample_workflow's fixture defaults phase-1 to "in_progress" --
+            # the actual live precondition is "pending".
+            execution.status = "pending"
+            execution.started_at = None
+
+        with db_manager.session_scope() as session:
+            _release_pending_phases_with_done_tasks(session, "wf-1", MagicMock())
+
+        with db_manager.session_scope() as session:
+            execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            assert execution.status == "in_progress"
+            assert execution.started_at is not None
+
+    def test_pending_phase_with_no_task_is_left_alone(self, db_manager, sample_workflow):
+        """No task exists yet -- don't fabricate progress that didn't
+        happen; Case 0/0b already own creating this phase's first task."""
+        from src.autopilot.orchestrator import (
+            PhaseExecution,
+            _release_pending_phases_with_done_tasks,
+        )
+
+        with db_manager.session_scope() as session:
+            execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            execution.status = "pending"
+
+        with db_manager.session_scope() as session:
+            _release_pending_phases_with_done_tasks(session, "wf-1", MagicMock())
+
+        with db_manager.session_scope() as session:
+            execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            assert execution.status == "pending"  # unchanged -- no task to justify the flip
+
+    def test_already_in_progress_phase_is_untouched(self, db_manager, sample_workflow):
+        """Only 'pending' is the broken state here -- don't touch a phase
+        that's already correctly flipped."""
+        from src.autopilot.orchestrator import (
+            PhaseExecution,
+            _release_pending_phases_with_done_tasks,
+        )
+
+        self._seed_done_task(db_manager)
+        with db_manager.session_scope() as session:
+            execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            fixed_started_at = datetime(2020, 1, 1)
+            execution.started_at = fixed_started_at
+
+        with db_manager.session_scope() as session:
+            _release_pending_phases_with_done_tasks(session, "wf-1", MagicMock())
+
+        with db_manager.session_scope() as session:
+            execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            assert execution.status == "in_progress"
+            assert execution.started_at == fixed_started_at  # untouched
+
+    @patch("src.autopilot.orchestrator._fire_phase_transition")
+    def test_advance_phases_end_to_end_fires_transition_for_stuck_pending_phase(
+        self, mock_fire, db_manager, sample_workflow
+    ):
+        """The exact live bug, end to end through the real dispatcher: a
+        "pending" phase with a done task and no claim at all (so
+        _release_stale_task_creation_claims alone can't catch it) must
+        still actually advance."""
+        from src.autopilot.orchestrator import PhaseExecution, _advance_phases
+
+        self._seed_done_task(db_manager)
+        with db_manager.session_scope() as session:
+            execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            execution.status = "pending"
+            execution.task_creation_claimed_at = None
+        mock_fire.return_value = True
+
+        result = _advance_phases("wf-1", MagicMock())
+
+        assert result is True
+        mock_fire.assert_called_once()
+
+    def test_only_flips_the_phase_with_the_most_recent_done_task(
+        self, db_manager, sample_workflow
+    ):
+        """Regression, found live: a workflow with any real goto history
+        has MANY pending phases each carrying SOME old done task from an
+        earlier cycle -- that's normal, not stuck. Flipping every one of
+        them in a single pass previously created several
+        simultaneously-active phases for the same workflow at once (5
+        concurrent agents on 3 different phases, confirmed live). Only the
+        phase matching the workflow's most recent completion -- whatever
+        it was actually working on right before getting stuck -- may be
+        repaired."""
+        from datetime import timedelta
+
+        from src.autopilot.orchestrator import (
+            PhaseExecution,
+            _release_pending_phases_with_done_tasks,
+        )
+
+        with db_manager.session_scope() as session:
+            # phase-1: an OLD completion from an earlier goto cycle.
+            exec1 = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            exec1.status = "pending"
+            session.add(
+                Task(
+                    id="task-old",
+                    workflow_id="wf-1",
+                    phase_id="phase-1",
+                    raw_description="r",
+                    done_definition="d",
+                    status="done",
+                    created_at=datetime.utcnow() - timedelta(hours=2),
+                )
+            )
+            # phase-2: what the workflow was actually doing most recently.
+            session.add(
+                PhaseExecution(
+                    id="exec-2", phase_id="phase-2", workflow_execution_id="wf-1",
+                    status="pending",
+                )
+            )
+            session.add(
+                Task(
+                    id="task-recent",
+                    workflow_id="wf-1",
+                    phase_id="phase-2",
+                    raw_description="r",
+                    done_definition="d",
+                    status="done",
+                    created_at=datetime.utcnow() - timedelta(minutes=5),
+                )
+            )
+
+        with db_manager.session_scope() as session:
+            _release_pending_phases_with_done_tasks(session, "wf-1", MagicMock())
+
+        with db_manager.session_scope() as session:
+            exec1 = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            exec2 = session.query(PhaseExecution).filter_by(phase_id="phase-2").first()
+            assert exec1.status == "pending"  # untouched -- old cycle, not the frontier
+            assert exec2.status == "in_progress"  # the actual frontier
+
+    def test_skips_entirely_if_any_phase_already_in_progress(
+        self, db_manager, sample_workflow
+    ):
+        """A workflow legitimately doing something must never gain a
+        second concurrent in-progress phase -- even if some OTHER pending
+        phase happens to carry an old done task from an earlier cycle."""
+        from src.autopilot.orchestrator import (
+            PhaseExecution,
+            _release_pending_phases_with_done_tasks,
+        )
+
+        with db_manager.session_scope() as session:
+            # phase-1 stays "in_progress" (sample_workflow's default) --
+            # genuinely active work.
+            session.add(
+                PhaseExecution(
+                    id="exec-2", phase_id="phase-2", workflow_execution_id="wf-1",
+                    status="pending",
+                )
+            )
+            session.add(
+                Task(
+                    id="task-done-2",
+                    workflow_id="wf-1",
+                    phase_id="phase-2",
+                    raw_description="r",
+                    done_definition="d",
+                    status="done",
+                )
+            )
+
+        with db_manager.session_scope() as session:
+            _release_pending_phases_with_done_tasks(session, "wf-1", MagicMock())
+
+        with db_manager.session_scope() as session:
+            exec2 = session.query(PhaseExecution).filter_by(phase_id="phase-2").first()
+            assert exec2.status == "pending"  # left alone -- phase-1 is already active
+
+    def test_ignores_diagnostic_tasks_when_finding_the_most_recent_completion(
+        self, db_manager, sample_workflow
+    ):
+        """A diagnostic task (created by the monitor against a stuck
+        phase's phase_id -- see _create_diagnostic_agent) completing its
+        investigation is not real phase progress. If it's the most RECENT
+        done task workflow-wide, it must not be mistaken for "what the
+        workflow was actually working on," matching the same exclusion
+        _case_in_progress_complete's own queries already apply."""
+        from datetime import timedelta
+
+        from src.core.constants import DIAGNOSTIC_TASK_PREFIX
+        from src.autopilot.orchestrator import (
+            PhaseExecution,
+            _release_pending_phases_with_done_tasks,
+        )
+
+        with db_manager.session_scope() as session:
+            exec1 = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            exec1.status = "pending"
+            # The real, earlier phase task.
+            session.add(
+                Task(
+                    id="task-real",
+                    workflow_id="wf-1",
+                    phase_id="phase-1",
+                    raw_description="r",
+                    done_definition="d",
+                    status="done",
+                    created_at=datetime.utcnow() - timedelta(minutes=10),
+                )
+            )
+            # A LATER diagnostic task against the same phase, also done.
+            session.add(
+                Task(
+                    id="task-diagnostic",
+                    workflow_id="wf-1",
+                    phase_id="phase-1",
+                    raw_description=f"{DIAGNOSTIC_TASK_PREFIX} investigate stuck phase",
+                    done_definition="d",
+                    status="done",
+                    created_at=datetime.utcnow(),
+                )
+            )
+
+        with db_manager.session_scope() as session:
+            _release_pending_phases_with_done_tasks(session, "wf-1", MagicMock())
+
+        with db_manager.session_scope() as session:
+            exec1 = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            # Still repaired -- via the real task, not skipped outright.
+            assert exec1.status == "in_progress"
+            assert exec1.started_at == session.query(Task).filter_by(
+                id="task-real"
+            ).first().created_at
 
 
 class TestCaseCompletedWithSuccessor:
@@ -1063,7 +1672,7 @@ class TestCreatePhaseTaskResetsClaim:
     def test_resets_stale_claim_on_reactivation(self, mock_create_agent, db_manager, sample_workflow):
         from src.autopilot.orchestrator import _create_phase_task
 
-        mock_create_agent.return_value = {"agent_id": "new-agent"}
+        mock_create_agent.side_effect = _agent_row_side_effect("new-agent")
 
         with db_manager.session_scope() as session:
             exec1 = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
@@ -1089,7 +1698,7 @@ class TestCreatePhaseTaskResetsClaim:
         isn't permanently blocked by the stale value from the prior cycle."""
         from src.autopilot.orchestrator import _claim_phase_task_creation, _create_phase_task
 
-        mock_create_agent.return_value = {"agent_id": "new-agent"}
+        mock_create_agent.side_effect = _agent_row_side_effect("new-agent")
 
         with db_manager.session_scope() as session:
             exec1 = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
@@ -1118,7 +1727,7 @@ class TestCreatePhaseTaskResetsClaim:
         spawning fresh replacement agents for it."""
         from src.autopilot.orchestrator import _claim_phase_task_creation, _create_phase_task
 
-        mock_create_agent.return_value = {"agent_id": "new-agent"}
+        mock_create_agent.side_effect = _agent_row_side_effect("new-agent")
 
         with db_manager.session_scope() as session:
             exec1 = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
@@ -1302,7 +1911,7 @@ class TestCreatePhaseTaskExhaustionArbitrates:
 
         with patch(
             "src.autopilot.orchestrator.create_agent_for_task_direct",
-            return_value={"agent_id": "a1"},
+            side_effect=_agent_row_side_effect("a1"),
         ):
             result = _create_phase_task(
                 "wf-1", "phase-1", "requirements", "goto", MagicMock()
@@ -1334,7 +1943,7 @@ class TestCreatePhaseTaskExhaustionArbitrates:
 
         with patch(
             "src.autopilot.orchestrator.create_agent_for_task_direct",
-            return_value={"agent_id": "a1"},
+            side_effect=_agent_row_side_effect("a1"),
         ):
             result = _create_phase_task(
                 "wf-1", "phase-1", "requirements", "goto", MagicMock(),
@@ -1365,7 +1974,7 @@ class TestCreatePhaseTaskExhaustionArbitrates:
 
         with patch(
             "src.autopilot.orchestrator.create_agent_for_task_direct",
-            return_value={"agent_id": "a1"},
+            side_effect=_agent_row_side_effect("a1"),
         ):
             result = _create_phase_task(
                 "wf-1", "phase-1", "requirements", "continue", MagicMock(),
@@ -1404,9 +2013,15 @@ class TestArbitrationDoesNotConfuseAdvancement:
         and completed (qa_validation is what fired the goto that triggered
         arbitration); product_validation (9) has never been touched."""
         with db_manager.session_scope() as session:
-            session.query(Phase).delete()
-            session.query(PhaseExecution).delete()
+            # Delete in FK-safe order
+            # Agent.current_task_id → Task.id: null out before deleting tasks
+            from src.core.database import Agent
+            for a in session.query(Agent).all():
+                a.current_task_id = None
+            session.flush()
             session.query(Task).delete()
+            session.query(PhaseExecution).delete()
+            session.query(Phase).delete()
 
             completed_orders = {1, 2, 3, 7, 8}
             names = [
@@ -1437,7 +2052,7 @@ class TestArbitrationDoesNotConfuseAdvancement:
         from src.autopilot.orchestrator import _advance_phases, _trigger_arbitration
 
         self._seed_realistic_pipeline(db_manager)
-        mock_create_agent.return_value = {"agent_id": "arb-agent"}
+        mock_create_agent.side_effect = _agent_row_side_effect("arb-agent")
         _trigger_arbitration(
             "wf-1", "phase-4", "development", "exhausted 5 attempts", MagicMock()
         )
@@ -1465,7 +2080,7 @@ class TestTriggerArbitration:
     ):
         from src.autopilot.orchestrator import ARBITRATION_CREATED_BY, _trigger_arbitration
 
-        mock_create_agent.return_value = {"agent_id": "arb-agent"}
+        mock_create_agent.side_effect = _agent_row_side_effect("arb-agent")
 
         result = _trigger_arbitration(
             "wf-1", "phase-1", "requirements", "exhausted 5 attempts", MagicMock()
@@ -1507,7 +2122,7 @@ class TestTriggerArbitration:
         prevention half of that defense, not just the fallback."""
         from src.autopilot.orchestrator import _trigger_arbitration
 
-        mock_create_agent.return_value = {"agent_id": "arb-agent"}
+        mock_create_agent.side_effect = _agent_row_side_effect("arb-agent")
 
         _trigger_arbitration(
             "wf-1", "phase-1", "requirements", "exhausted", MagicMock()
@@ -1530,7 +2145,7 @@ class TestTriggerArbitration:
         human" doesn't mean "never terminate"."""
         from src.autopilot.orchestrator import ARBITRATION_CREATED_BY, _trigger_arbitration
 
-        mock_create_agent.return_value = {"agent_id": "arb-agent"}
+        mock_create_agent.side_effect = _agent_row_side_effect("arb-agent")
 
         # 3 prior arbitration tasks already exist for this phase.
         with db_manager.session_scope() as session:
@@ -1605,7 +2220,7 @@ class TestTriggerArbitration:
         review/test cycle entirely."""
         from src.autopilot.orchestrator import _trigger_arbitration
 
-        mock_create_agent.return_value = {"agent_id": "arb-agent"}
+        mock_create_agent.side_effect = _agent_row_side_effect("arb-agent")
 
         _trigger_arbitration(
             "wf-1", "phase-1", "requirements", "exhausted", MagicMock()
