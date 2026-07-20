@@ -488,6 +488,7 @@ def mock_app(autopilot_dirs, mock_autopilot_service):
     api_mod.DESIGN_QUEUE_DIR = str(autopilot_dirs["queue"])
     api_mod.FEATURES_DIR = str(autopilot_dirs["features"])
     api_mod.STATE_DIR = str(autopilot_dirs["state"])
+    api_mod.AUTOPILOT_STATE_DIR = str(autopilot_dirs["state"])
 
     # Include the router
     app.include_router(api_mod.router)
@@ -509,6 +510,8 @@ def client(autopilot_dirs):
     api_mod.DESIGN_QUEUE_DIR = str(autopilot_dirs["queue"])
     api_mod.FEATURES_DIR = str(autopilot_dirs["features"])
     api_mod.STATE_DIR = str(autopilot_dirs["state"])
+    api_mod.AUTOPILOT_STATE_DIR = str(autopilot_dirs["state"])
+    api_mod._cache.clear()
 
     # Include the router
     app.include_router(api_mod.router)
@@ -520,6 +523,8 @@ def client(autopilot_dirs):
         mock_query.filter.return_value.first.return_value = None
         mock_query.filter.return_value.count.return_value = 0
         mock_query.filter.return_value.all.return_value = []
+        mock_query.filter_by.return_value.first.return_value = None
+        mock_query.filter_by.return_value.all.return_value = []
         mock_session.query.return_value = mock_query
         mock_get_db.return_value.__enter__ = Mock(return_value=mock_session)
         mock_get_db.return_value.__exit__ = Mock(return_value=False)
@@ -541,4 +546,6 @@ def client(autopilot_dirs):
             with patch(
                 "src.mcp.autopilot_api._get_active_project_id", return_value=None
             ):
-                yield TestClient(app)
+                with patch("src.autopilot.service.get_registry") as mock_reg:
+                    mock_reg.return_value.running.return_value = []
+                    yield TestClient(app)
