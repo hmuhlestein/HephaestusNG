@@ -13,9 +13,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-# Set test environment before imports
-os.environ["HEPHAESTUS_TEST_DB"] = ":memory:"
-
 from src.agents.manager import AgentManager
 from src.core.database import Task, Workflow
 

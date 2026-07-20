@@ -14,9 +14,6 @@ from datetime import datetime
 
 import pytest
 
-# Set test environment before imports
-os.environ["HEPHAESTUS_TEST_DB"] = ":memory:"
-
 from src.core.database import Task, Workflow
 from src.phases.phase_manager import PhaseManager
 from src.sdk.models import Phase as SDKPhase
