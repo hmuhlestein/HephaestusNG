@@ -39,6 +39,8 @@ def setup_test_database():
     from src.mcp.server import server_state
     
     server_state.db_manager = DatabaseManager(db_path)
+    # create_tables is idempotent — adds any new columns/tables
+    server_state.db_manager.create_tables()
 
     yield db_path
 

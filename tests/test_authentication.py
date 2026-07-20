@@ -22,6 +22,7 @@ from src.auth import (
 )
 from src.auth.auth_config import get_auth_config
 from src.core.database import Base, DatabaseManager
+from src.core.user_models import User  # ensure users table is registered with Base.metadata
 
 
 class TestPasswordHashing:

@@ -1069,6 +1069,74 @@ class TestCaseInProgressComplete:
             old_task = session.query(Task).filter_by(id="task-old-done").first()
             assert old_task.status == "done"  # untouched
 
+    def test_creates_fresh_task_when_cycle_has_zero_tasks_not_just_zero_failed(
+        self, db_manager, sample_workflow
+    ):
+        """The exact live bug: a goto resets a phase's PhaseExecution.status
+        back to "pending" for a fresh cycle, but (before the goto-reset fix
+        in phase_manager.py) never cleared started_at -- so a later flip
+        back to "in_progress" (e.g. _release_pending_phases_with_done_tasks
+        finding the phase's own now-ancient done task as "evidence" and
+        backfilling only if started_at was empty) can leave started_at
+        newer than every task the phase actually has. done_count and
+        incomplete are both cycle-scoped (Task.created_at >= started_at),
+        so both come back 0 -- indistinguishable, before this fix, from "0
+        active, 0 done, so check for all-failed" -- but _maybe_retry_failed_
+        tasks ALSO cycle-scopes and finds literally nothing to retry
+        (failed_count == total_count == 0 is never true), so it silently
+        no-ops forever. The phase is "in_progress" yet permanently invisible
+        to every dispatch case: Case 0b's own unscoped task-count check
+        sees the phase's stale task and doesn't fire either. Observed live
+        for a real feature: a completed predecessor phase never advanced
+        to its successor because the successor itself was stuck exactly
+        this way."""
+        from datetime import timedelta
+
+        from src.autopilot.orchestrator import (
+            PhaseExecution,
+            _case_in_progress_complete,
+            _get_phase_statuses,
+        )
+        from src.core.database import Agent
+
+        with db_manager.session_scope() as session:
+            session.add(
+                Agent(id="new-agent-1", system_prompt="p", status="working", cli_type="pi")
+            )
+            # The phase's only task, from a cycle now fully consumed
+            # (mirrors a goto-completed task -- old, "done", nothing left
+            # to do with it).
+            session.add(
+                Task(
+                    id="task-old-done",
+                    workflow_id="wf-1",
+                    phase_id="phase-1",
+                    raw_description="r",
+                    done_definition="d",
+                    status="done",
+                )
+            )
+            session.flush()
+            execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
+            # Stale anchor: newer than the only task tied to this phase.
+            execution.started_at = datetime.utcnow() + timedelta(minutes=5)
+
+        with patch(
+            "src.autopilot.orchestrator.create_agent_for_task_direct",
+            side_effect=_agent_row_side_effect("new-agent-1"),
+        ):
+            with db_manager.session_scope() as session:
+                phase_statuses = _get_phase_statuses(session, "wf-1")
+                in_progress = [p for p in phase_statuses if p["status"] == "in_progress"]
+                result = _case_in_progress_complete(session, "wf-1", in_progress, MagicMock())
+
+        assert result is True
+        with db_manager.session_scope() as session:
+            tasks = session.query(Task).filter_by(phase_id="phase-1").all()
+            assert len(tasks) == 2, "a fresh task must be created, not silently skipped"
+            fresh = [t for t in tasks if t.id != "task-old-done"][0]
+            assert fresh.status == "in_progress"
+
     def test_maybe_retry_failed_tasks_is_claim_protected(self, db_manager, sample_workflow):
         """Regression: _maybe_retry_failed_tasks used to run with zero
         claim protection, unlike the sibling _fire_phase_transition path a
