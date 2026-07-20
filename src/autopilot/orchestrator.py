@@ -3348,6 +3348,9 @@ def _advance_phases(workflow_id: str, logger: OrchestratorLogger) -> bool:
             # phase statuses below, so the dispatch that follows sees the
             # repaired state, not a claim-blocked snapshot.
             _release_stale_task_creation_claims(db, workflow_id, logger)
+            # Same reasoning: a phase stuck "pending" despite a done task
+            # is invisible to every dispatch case below otherwise.
+            _release_pending_phases_with_done_tasks(db, workflow_id, logger)
 
             # Get all phases and their statuses
             phase_statuses = _get_phase_statuses(db, workflow_id)
@@ -3459,20 +3462,118 @@ def _release_stale_task_creation_claims(
     )
     for execution in stale_executions:
         phase = db.query(Phase).filter_by(id=execution.phase_id).first()
-        has_task = (
-            db.query(Task).filter_by(phase_id=execution.phase_id).first() is not None
+        latest_task = (
+            db.query(Task)
+            .filter_by(phase_id=execution.phase_id)
+            .order_by(Task.created_at.desc())
+            .first()
         )
         logger.warning(
             f"[PHASE-ADVANCE] {phase.name if phase else execution.phase_id}: "
             "task_creation_claimed_at held with no release -- clearing "
-            f"stale claim ({'task exists' if has_task else 'no task yet'})"
+            f"stale claim ({'task exists' if latest_task else 'no task yet'})"
         )
-        if has_task and execution.status in ("pending", "completed"):
+        if latest_task and execution.status in ("pending", "completed"):
             execution.status = "in_progress"
-            execution.started_at = execution.started_at or datetime.utcnow()
+            # Backfill from the task that actually started this cycle, not
+            # "now" -- _fire_phase_transition's done_count/incomplete
+            # queries scope to Task.created_at >= started_at to ignore
+            # older cycles' completions, so a "now" value here (this repair
+            # can run long after the task was created) would wrongly
+            # exclude that same task from its own cycle.
+            execution.started_at = execution.started_at or latest_task.created_at
         execution.task_creation_claimed_at = None
     if stale_executions:
         db.commit()
+
+
+def _release_pending_phases_with_done_tasks(
+    db, workflow_id: str, logger: OrchestratorLogger
+) -> None:
+    """Self-heal for a PhaseExecution stuck at status="pending" despite
+    already having a "done" Task -- a state none of _advance_phases's four
+    dispatch cases recognize (Case 0/0b act on a *lack* of tasks, Case 1
+    needs the *predecessor* completed, Case 2 only ever looks at phases
+    already "in_progress"), so a phase in it is invisible to every one of
+    them, forever, no matter how many times its task actually finishes.
+
+    Several paths create/complete a task without re-flipping its phase to
+    "in_progress" the way _create_phase_task does (e.g.
+    _maybe_retry_failed_tasks's reset-and-redispatch loop never touches
+    PhaseExecution at all), and the broader "reset ALL executions with
+    order >= target back to pending" goto-reset can also revert a phase
+    that's since moved on. Observed live: two workflows' phases sat
+    "pending" with a done task for days, invisible to every self-heal
+    path, while an unrelated workflow's endlessly-retried task (see
+    _maybe_retry_failed_tasks's retry cap) hogged every poll cycle so this
+    one's design queue turn never came around to notice.
+
+    Repairs at most ONE phase per call -- the one whose done task is the
+    most recent for the whole workflow (i.e. whatever it was actually
+    working on right before getting stuck). A workflow with any real goto
+    history has MANY pending phases each carrying SOME old done task from
+    an earlier cycle -- that's normal, not stuck, and flipping every one
+    of them to "in_progress" in one pass previously created several
+    simultaneously-active phases for the same workflow (multiple agents
+    burning tokens on unrelated phases at once, confirmed live). Also
+    skips entirely if any phase is already "in_progress": a workflow
+    legitimately doing something must never gain a second concurrent one.
+
+    Must run before _get_phase_statuses is read for this cycle's dispatch,
+    same as _release_stale_task_creation_claims.
+    """
+    already_active = (
+        db.query(PhaseExecution)
+        .join(Phase, PhaseExecution.phase_id == Phase.id)
+        .filter(Phase.workflow_id == workflow_id, PhaseExecution.status == "in_progress")
+        .first()
+    )
+    if already_active:
+        return
+
+    most_recent_done_task = (
+        db.query(Task)
+        .join(Phase, Task.phase_id == Phase.id)
+        .filter(
+            Phase.workflow_id == workflow_id,
+            Task.status == "done",
+            # Same exclusion _case_in_progress_complete's own queries apply
+            # a few lines below -- a diagnostic task (created by the
+            # monitor against a stuck phase's phase_id, see
+            # _create_diagnostic_agent) completing its investigation isn't
+            # real phase progress and must not be mistaken for "what the
+            # workflow was actually working on most recently."
+            ~Task.raw_description.like(f"{DIAGNOSTIC_TASK_PREFIX}%"),
+        )
+        .order_by(Task.created_at.desc())
+        .first()
+    )
+    if not most_recent_done_task:
+        return
+
+    execution = (
+        db.query(PhaseExecution)
+        .filter_by(phase_id=most_recent_done_task.phase_id)
+        .first()
+    )
+    if not execution or execution.status != "pending":
+        return
+
+    phase = db.query(Phase).filter_by(id=execution.phase_id).first()
+    logger.warning(
+        f"[PHASE-ADVANCE] {phase.name if phase else execution.phase_id}: "
+        f"PhaseExecution stuck 'pending' despite done task "
+        f"{most_recent_done_task.id[:8]} -- flipping to in_progress so "
+        "dispatch can see it"
+    )
+    execution.status = "in_progress"
+    # Same rationale as _release_stale_task_creation_claims's backfill:
+    # scope from the task that actually ran, not "now" (this repair can
+    # run long after that task finished), or _fire_phase_transition's
+    # done_count/incomplete queries would wrongly exclude that same task
+    # from what they treat as its own cycle.
+    execution.started_at = execution.started_at or most_recent_done_task.created_at
+    db.commit()
 
 
 def _get_phase_statuses(db, workflow_id: str) -> list:
@@ -3545,8 +3646,26 @@ def _release_phase_task_creation_claim(db, phase_id: str) -> None:
     no matter how many times its task actually finishes. Observed live:
     phase 1's task completed successfully but the pipeline never advanced
     to phase 2, indefinitely, for every UI-launched workflow.
+
+    populate_existing() matters here, not just style: this project's
+    sessions run with expire_on_commit=False (StaticPool convention), and
+    _claim_phase_task_creation's own claiming UPDATE uses
+    synchronize_session=False -- so if this PhaseExecution was already
+    loaded into the session's identity map before the claim was taken
+    (e.g. via _get_phase_statuses, which every caller of this function
+    reads first), a plain query returns that same stale in-memory object
+    instead of a fresh one. Its task_creation_claimed_at attribute would
+    still show the pre-claim value; setting it to None here would be a
+    no-op write SQLAlchemy doesn't even consider dirty, silently leaving
+    the claim held in the database forever. Found by
+    test_maybe_retry_failed_tasks_is_claim_protected.
     """
-    execution = db.query(PhaseExecution).filter_by(phase_id=phase_id).first()
+    execution = (
+        db.query(PhaseExecution)
+        .filter_by(phase_id=phase_id)
+        .populate_existing()
+        .first()
+    )
     if not execution:
         return
     if execution.status in ("pending", "completed"):
@@ -3746,6 +3865,23 @@ def _case_in_progress_complete(
         # in_progress phase re-checking a stale existing one. Marking it
         # failed here lets it both drop out of the incomplete count and
         # become eligible for the all-failed retry path right below.
+        # A phase revisited via goto reuses the same phase_id across cycles
+        # -- every query below must be scoped to tasks from THIS cycle
+        # (execution.started_at, reset on each goto/retry) or a done_count
+        # from a cycle that succeeded hours ago makes a currently-failed
+        # re-attempt look like "phase complete" the moment it stops
+        # counting as incomplete, firing the transition against whatever
+        # (nothing, usually) the current attempt actually left on disk.
+        # Observed live: a gated phase's second pass produced a false
+        # "no <phase>_result.json found" goto while its own fresh task was
+        # sitting "failed" mid-retry, entirely because an earlier cycle's
+        # real completion still counted toward done_count. Falls back to
+        # unscoped (the prior behavior) if started_at was never set.
+        cycle_start = execution.started_at if execution else None
+        cycle_filter = (
+            (Task.created_at >= cycle_start,) if cycle_start else ()
+        )
+
         orphan_cutoff = datetime.utcnow() - timedelta(minutes=1)
         orphaned_pending = (
             db.query(Task)
@@ -3755,6 +3891,7 @@ def _case_in_progress_complete(
                 Task.assigned_agent_id.is_(None),
                 Task.created_at < orphan_cutoff,
                 ~Task.raw_description.like(f"{DIAGNOSTIC_TASK_PREFIX}%"),
+                *cycle_filter,
             )
             .all()
         )
@@ -3775,6 +3912,7 @@ def _case_in_progress_complete(
                 Task.phase_id == phase.id,
                 Task.status.in_(["pending", "assigned", "in_progress"]),
                 ~Task.raw_description.like(f"{DIAGNOSTIC_TASK_PREFIX}%"),
+                *cycle_filter,
             )
             .count()
         )
@@ -3783,12 +3921,32 @@ def _case_in_progress_complete(
 
         done_count = (
             db.query(Task)
-            .filter_by(phase_id=phase.id, status="done")
+            .filter(
+                Task.phase_id == phase.id,
+                Task.status == "done",
+                *cycle_filter,
+            )
             .count()
         )
         if done_count == 0:
-            # Check if ALL tasks are failed — retry them
-            result = _maybe_retry_failed_tasks(db, phase, logger)
+            # Check if ALL tasks are failed — retry them. Same claim
+            # protection as the _fire_phase_transition path below, for the
+            # identical reason its own comment documents: nothing stops a
+            # concurrent poll (this same orchestrator's next cycle, or
+            # monitor.py's separate stuck-check) from re-entering this
+            # branch while a first call's retry dispatch (a real
+            # create_agent_for_task_direct call, not instantaneous) is
+            # still in flight, creating two agents for the same failed
+            # task. That fix was only ever applied to the sibling path.
+            if not _claim_phase_task_creation(db, phase.id):
+                continue
+            try:
+                result = _maybe_retry_failed_tasks(db, phase, logger, cycle_start=cycle_start)
+            finally:
+                # Phase is already "in_progress" here (this whole function
+                # only iterates that bucket), so this only clears the
+                # claim -- its status-flip side effect is a no-op.
+                _release_phase_task_creation_claim(db, phase.id)
             if result is not None:
                 return result
             continue  # No completed tasks yet
@@ -3861,23 +4019,70 @@ def _case_in_progress_complete(
     return None
 
 
-def _maybe_retry_failed_tasks(db, phase, logger: OrchestratorLogger) -> Optional[bool]:
+def _maybe_retry_failed_tasks(
+    db, phase, logger: OrchestratorLogger, cycle_start: Optional[datetime] = None
+) -> Optional[bool]:
     """Retry all failed tasks in a phase if all tasks are failed.
-    
+
+    cycle_start: scopes both counts to the current PhaseExecution cycle
+    (its started_at, reset on each goto/retry) -- a phase revisited via
+    goto reuses the same phase_id, so an unscoped total_count includes
+    every task from every earlier cycle too. A phase that succeeded once
+    and is now failing on a later re-attempt would otherwise never satisfy
+    failed_count == total_count (the old "done" task keeps counting
+    forever), so this retry path would silently never fire for it.
+
     Returns None if no retry was needed, True if tasks were reset for retry.
     """
+    cycle_filter = (Task.created_at >= cycle_start,) if cycle_start else ()
     failed_count = (
         db.query(Task)
-        .filter_by(phase_id=phase.id, status="failed")
+        .filter(Task.phase_id == phase.id, Task.status == "failed", *cycle_filter)
         .count()
     )
-    total_count = db.query(Task).filter_by(phase_id=phase.id).count()
+    total_count = (
+        db.query(Task).filter(Task.phase_id == phase.id, *cycle_filter).count()
+    )
     if failed_count > 0 and failed_count == total_count:
+        # Same retry_count cap _retry_failed_tasks already enforces (that
+        # function's own comment names this one as sharing it, but it
+        # never actually checked it) -- without this, a task whose failure
+        # is permanent (e.g. a deleted git worktree, which raises
+        # instantly with no LLM call in between) gets reset and
+        # re-dispatched every single poll cycle forever, burning a cycle
+        # every few seconds indefinitely and starving every other
+        # workflow's turn in the same poll loop. Observed live.
+        MAX_RETRY_COUNT = 2
+        failed_tasks = (
+            db.query(Task)
+            .filter(Task.phase_id == phase.id, Task.status == "failed", *cycle_filter)
+            .all()
+        )
+        retryable_tasks = [t for t in failed_tasks if (t.retry_count or 0) < MAX_RETRY_COUNT]
+        if not retryable_tasks:
+            reasons = sorted(
+                {t.failure_reason for t in failed_tasks if t.failure_reason}
+            )
+            reason_text = "; ".join(reasons) if reasons else "no reason recorded"
+            logger.warning(
+                f"[PHASE-ADVANCE] Phase {phase.name} has {len(failed_tasks)} failed "
+                f"task(s), all past the retry cap ({MAX_RETRY_COUNT}) -- pausing "
+                f"the workflow instead of retrying forever: {reason_text}"
+            )
+            workflow = db.query(Workflow).filter_by(id=phase.workflow_id).first()
+            if workflow and workflow.status != "paused":
+                workflow.status = "paused"
+                workflow.paused_by = "system"
+                workflow.status_reason = f"{phase.name}: exhausted retries -- {reason_text}"
+                db.commit()
+            return None
+
         logger.info(
             f"[PHASE-ADVANCE] Phase {phase.name} has {failed_count} failed tasks "
-            f"and 0 done — retrying all"
+            f"and 0 done — retrying {len(retryable_tasks)} (of {len(failed_tasks)}, "
+            f"cap {MAX_RETRY_COUNT})"
         )
-        # Reset all failed tasks to pending for retry. Per-task (not a bulk
+        # Reset retryable failed tasks to pending. Per-task (not a bulk
         # .update()) so each one's own failure_reason -- e.g. a specific
         # "missing output artifact: X" from update_task_status's validation
         # gate, or a real error preserved by _clean_stale_assigned_tasks --
@@ -3885,13 +4090,8 @@ def _maybe_retry_failed_tasks(db, phase, logger: OrchestratorLogger) -> Optional
         # (enriched_description) before being cleared. A blind reset here
         # previously threw the reason away entirely, so the retried agent
         # got the same generic phase description and no idea what to fix.
-        failed_tasks = (
-            db.query(Task)
-            .filter(Task.phase_id == phase.id, Task.status == "failed")
-            .all()
-        )
         reset_task_ids = []
-        for task in failed_tasks:
+        for task in retryable_tasks:
             if task.failure_reason:
                 base = task.enriched_description or task.raw_description or ""
                 task.enriched_description = (
@@ -3901,6 +4101,11 @@ def _maybe_retry_failed_tasks(db, phase, logger: OrchestratorLogger) -> Optional
                 )
             task.status = "pending"
             task.failure_reason = None
+            # Persist the increment before attempting -- counting only
+            # successful dispatches would let a task that fails on every
+            # single retry (the exact scenario this cap exists for) never
+            # reach MAX_RETRY_COUNT at all.
+            task.retry_count = (task.retry_count or 0) + 1
             # This row is reused (not recreated) for the retry -- without
             # clearing these too, a task previously tagged action="goto"/
             # "retry" by _tag_completing_task keeps showing that stale
@@ -5017,14 +5222,35 @@ def _resume_stuck_workflow_tasks(workflow_id: str, logger: OrchestratorLogger) -
             db.query(Task)
             .filter(
                 Task.workflow_id == workflow_id,
-                Task.status.in_(["blocked", "failed", "assigned", "in_progress"]),
+                Task.status.in_(["blocked", "failed", "assigned", "in_progress", "pending"]),
             )
             .all()
         )
         restartable = []
+        # "pending" tasks are the odd one out here: unlike blocked/failed
+        # (always safe to retry) or assigned/in_progress (an agent was
+        # dispatched, so a dead agent means genuinely stuck), a task
+        # normally sits "pending" only briefly -- creation and first
+        # dispatch happen in the same synchronous call. A pending task
+        # with no agent at all is only actually stuck if it's sat well
+        # past how long that normally takes; otherwise this would sweep
+        # up tasks mid-dispatch and race the code that's about to assign
+        # them. See orchestrator's _create_phase_task orphan-detection
+        # comment and monitor.py's stuck-detection for the same 5-minute
+        # convention used elsewhere.
+        PENDING_STUCK_MINUTES = 5
         for t in candidates:
             if t.status in ("blocked", "failed"):
                 restartable.append(t)
+            elif t.status == "pending":
+                if t.assigned_agent_id:
+                    agent = db.query(Agent).filter_by(id=t.assigned_agent_id).first()
+                    if not agent or agent.status == "terminated":
+                        restartable.append(t)
+                elif t.created_at and (
+                    datetime.utcnow() - t.created_at
+                ) > timedelta(minutes=PENDING_STUCK_MINUTES):
+                    restartable.append(t)
             elif t.assigned_agent_id:
                 agent = db.query(Agent).filter_by(id=t.assigned_agent_id).first()
                 if not agent or agent.status == "terminated":

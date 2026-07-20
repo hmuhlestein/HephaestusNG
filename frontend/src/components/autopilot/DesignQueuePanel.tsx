@@ -21,7 +21,7 @@ import { CSS } from '@dnd-kit/utilities';
 import {
   Plus, Trash2, FileText, Clock, GripVertical, Search, ListOrdered, RefreshCw,
   CheckCircle2, XCircle, Loader2, Pause, Play, Upload, ChevronRight, ChevronDown, Layers,
-  PauseCircle, Square, RotateCcw
+  PauseCircle, Square, RotateCcw, FileBarChart2
 } from 'lucide-react';
 import { apiService, api } from '@/services/api';
 import { Button } from '@/components/ui/button';
@@ -874,6 +874,18 @@ const FeatureRow: React.FC<{
           >
             <FileText className="w-3.5 h-3.5" />
           </button>
+          {feature.has_report && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                window.open(`/api/autopilot/workflows/${feature.workflow_id}/feature_report`, '_blank');
+              }}
+              className="p-1.5 rounded-lg bg-gradient-to-br from-emerald-400 to-teal-500 hover:from-emerald-500 hover:to-teal-600 transition-colors text-white shadow-sm"
+              title="View feature report"
+            >
+              <FileBarChart2 className="w-3.5 h-3.5" />
+            </button>
+          )}
         </div>
       </div>
 
