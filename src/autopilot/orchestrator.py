@@ -4315,11 +4315,33 @@ def _fire_phase_transition(
         feedback = None
         if action in ("goto", "retry"):
             metadata = result.get("metadata") or {}
-            feedback = (
-                metadata.get("spec_gate", {}).get("reason")
-                or result.get("reason")
-                or None
-            )
+            spec_gate = metadata.get("spec_gate", {})
+            feedback = spec_gate.get("reason") or result.get("reason") or None
+
+            # A "result_missing" gate reason ("no <phase>_result.json
+            # found") only means build_phase_output's file read came up
+            # empty right at this evaluation instant -- it says nothing
+            # about whether the agent that just finished this phase
+            # actually did the work. If it wrote a real completion_notes
+            # summary, that's a strictly more accurate account of what
+            # happened than a generic "missing" message, and the next
+            # phase's corrective task should see THAT, not a reason that
+            # contradicts the real work already done (observed live: a
+            # developer task was told "WHY YOU'RE HERE: no
+            # adversarial_review_result.json found" while the adversarial
+            # review that sent it there had, per its own completion_notes,
+            # found and reported 3 concrete BLOCKERs -- the agent had to
+            # rediscover them itself instead of being told directly).
+            if spec_gate.get("result_missing"):
+                with get_db() as db:
+                    completing_task = (
+                        db.query(Task)
+                        .filter(Task.phase_id == phase_id, Task.status == "done")
+                        .order_by(Task.completed_at.desc())
+                        .first()
+                    )
+                if completing_task and completing_task.completion_notes:
+                    feedback = completing_task.completion_notes
 
         # Create task and agent for the next phase
         return _create_phase_task(

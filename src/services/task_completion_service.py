@@ -565,11 +565,21 @@ class TaskCompletionService:
             from src.core.database import Phase as _Phase, PhaseExecution as _PE
 
             metadata = result.get("metadata") or {}
-            feedback = (
-                metadata.get("spec_gate", {}).get("reason")
-                or result.get("reason")
-                or None
-            )
+            spec_gate = metadata.get("spec_gate", {})
+            feedback = spec_gate.get("reason") or result.get("reason") or None
+
+            # Same fix as _fire_phase_transition's identical block in
+            # orchestrator.py: a "result_missing" gate reason only means
+            # the file read came up empty at this evaluation instant, not
+            # that the agent didn't do the work -- if it left a real
+            # completion_notes summary, that's a more accurate account of
+            # what actually happened and the next phase's corrective task
+            # should see that instead of a "missing" message that
+            # contradicts the real work already done. `task` here is
+            # already the completing task itself (this function runs from
+            # its own update_task_status call), so no extra lookup needed.
+            if spec_gate.get("result_missing") and task.completion_notes:
+                feedback = task.completion_notes
 
             # Reset stale phase executions at/after the target phase.
             # Same fix as _handle_evaluation_goto in phase_manager.py:
