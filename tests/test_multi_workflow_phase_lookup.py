@@ -18,9 +18,6 @@ import os
 
 import pytest
 
-# Set test environment before imports
-os.environ["HEPHAESTUS_TEST_DB"] = ":memory:"
-
 from src.core.database import DatabaseManager, Phase
 from src.phases.phase_manager import PhaseManager
 

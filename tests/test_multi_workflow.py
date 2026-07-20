@@ -6,9 +6,6 @@ from datetime import datetime
 
 import pytest
 
-# Set test database before imports
-os.environ["HEPHAESTUS_TEST_DB"] = ":memory:"
-
 from src.core.database import DatabaseManager, Workflow
 from src.core.database import WorkflowDefinition as DBWorkflowDefinition
 from src.phases.phase_manager import PhaseManager
@@ -643,7 +640,7 @@ class TestSDKClientMultiWorkflow:
 class TestWorkflowConfigSerialization:
     """Test workflow config serialization for database storage."""
 
-    def test_phases_config_to_json(self):
+    def test_phases_config_to_json(self, db_manager):
         """Test that phases config can be serialized to JSON."""
         phases_config = [
             {
@@ -656,10 +653,6 @@ class TestWorkflowConfigSerialization:
                 "working_directory": "/project",
             },
         ]
-
-        # Verify it can round-trip through database
-        db_manager = DatabaseManager(":memory:")
-        db_manager.create_tables()
 
         session = db_manager.get_session()
         try:

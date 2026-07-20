@@ -10,15 +10,14 @@ from src.autopilot.orchestrator import _create_feature_records
 
 
 @pytest.fixture(autouse=True)
-def test_db(tmp_path):
+def test_db(tmp_path, monkeypatch):
     """Set up test database for all tests."""
     db_path = str(tmp_path / "test.db")
-    os.environ["HEPHAESTUS_TEST_DB"] = db_path
+    monkeypatch.setenv("HEPHAESTUS_TEST_DB", db_path)
     from src.core.database import DatabaseManager
     db = DatabaseManager(db_path)
     db.create_tables()
     yield db
-    os.environ["HEPHAESTUS_TEST_DB"] = ":memory:"
 
 
 @pytest.fixture

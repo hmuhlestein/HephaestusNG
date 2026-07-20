@@ -13,9 +13,6 @@ import uuid
 import pytest
 from pydantic import ValidationError
 
-# Set test environment before imports
-os.environ["HEPHAESTUS_TEST_DB"] = ":memory:"
-
 from fastapi.testclient import TestClient
 
 from src.mcp.server import (

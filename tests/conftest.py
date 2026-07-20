@@ -17,7 +17,10 @@ from sqlalchemy.pool import StaticPool
 from src.core.database import Base, DatabaseManager
 from sqlalchemy import event
 
-# Set test database environment variable before any imports
+# Set test database env var BEFORE any test module imports server.py,
+# which triggers ServerState() -> DatabaseManager(config.database_path)
+# at module level. Without this, importing server.py touches the
+# production database.
 os.environ["HEPHAESTUS_TEST_DB"] = ":memory:"
 
 
@@ -115,14 +118,19 @@ def clean_db(temp_db):
 
 
 @pytest.fixture
-def db_manager(tmp_path):
+def db_manager(tmp_path, monkeypatch):
     """Create a fresh file-based database manager for each test.
 
     Uses tmp_path instead of :memory: because QueuePool (used by
     DatabaseManager) creates separate in-memory databases per
     connection, causing 'no such table' errors when the table
-    was created on a different pooled connection."""
+    was created on a different pooled connection.
+
+    Also sets HEPHAESTUS_TEST_DB via monkeypatch so code that calls
+    get_db() directly (e.g. orchestrator, monitor) uses this test DB
+    instead of the production database."""
     db_path = tmp_path / "test.db"
+    monkeypatch.setenv("HEPHAESTUS_TEST_DB", str(db_path))
     manager = DatabaseManager(str(db_path))
     manager.create_tables()
     yield manager
