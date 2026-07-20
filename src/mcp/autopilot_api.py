@@ -3153,21 +3153,15 @@ async def get_feature_detail(feature_id: str):
 def _resolve_feature_docs_base(wf) -> Optional[str]:
     """Best-known directory to look for a feature's generated docs in.
 
-    working_directory is *supposed* to be cleared once a feature's
-    worktree is cleaned up after a successful merge (see _cleanup_worktree
-    in orchestrator.py) -- the worktree is genuinely gone, but its docs
-    were merged into the project's main repo, so this should fall back to
-    launch_params' project_path (observed live: core-infrastructure showed
-    an empty Docs tab despite being done, purely because this fallback was
-    missing). In practice working_directory isn't reliably cleared on
-    every cleanup path, so check the directory actually still exists
-    rather than trusting a merely-non-empty string -- otherwise a stale
-    path silently wins over the fallback and a completed feature's docs
-    stay unreachable the exact same way, just via a different cause
-    (observed live for a git_commit_push-completed feature: working_
-    directory still pointed at the already-removed worktree).
+    working_directory is cleared once a feature's worktree is cleaned up
+    after a successful merge (see _cleanup_worktree in orchestrator.py) --
+    that's correct, the worktree is genuinely gone, but it means a
+    *completed* feature's docs are no longer reachable there. They were
+    merged into the project's main repo, so fall back to launch_params'
+    project_path (observed live: core-infrastructure showed an empty Docs
+    tab despite being done, purely because this fallback was missing).
     """
-    if wf.working_directory and Path(wf.working_directory).is_dir():
+    if wf.working_directory:
         return wf.working_directory
     launch_params = wf.launch_params or {}
     if isinstance(launch_params, dict):

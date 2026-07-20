@@ -19,9 +19,11 @@ from src.sdk.models import WorkflowConfig, WorkflowDefinition, WorkflowExecution
 class TestDatabaseModels:
     """Test database models for multi-workflow support."""
 
-    def setup_method(self):
+    @pytest.fixture(autouse=True)
+    def _setup(self, tmp_path):
         """Set up test database."""
-        self.db_manager = DatabaseManager(":memory:")
+        db_path = tmp_path / "test.db"
+        self.db_manager = DatabaseManager(str(db_path))
         self.db_manager.create_tables()
 
     def test_workflow_definition_creation(self):
@@ -150,9 +152,11 @@ class TestDatabaseModels:
 class TestPhaseManager:
     """Test PhaseManager multi-workflow methods."""
 
-    def setup_method(self):
+    @pytest.fixture(autouse=True)
+    def _setup(self, tmp_path):
         """Set up test database and phase manager."""
-        self.db_manager = DatabaseManager(":memory:")
+        db_path = tmp_path / "test.db"
+        self.db_manager = DatabaseManager(str(db_path))
         self.db_manager.create_tables()
         self.phase_manager = PhaseManager(self.db_manager)
 
