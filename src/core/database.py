@@ -448,6 +448,9 @@ class Workflow(Base):
     # why it stopped. Cleared when the workflow becomes active/completed.
     status_reason = Column(String, nullable=True)
 
+    # Cost tracking - denormalized rollup (self-healed by cost_derivation.py)
+    cost_total_usd = Column(Float, default=0.0, nullable=False)
+
     # Relationships
     definition = relationship("WorkflowDefinition", back_populates="executions")
     design = relationship("AutopilotDesign", foreign_keys=[design_id], backref="workflows")
@@ -1919,6 +1922,18 @@ class DatabaseManager:
                 logger.info("Migrated autopilot_projects cost tracking columns")
         except Exception as e:
             logger.debug(f"autopilot_projects cost migration (may already exist): {e}")
+
+        # Add cost_total_usd to workflows
+        try:
+            with self.engine.connect() as conn:
+                try:
+                    conn.execute(text("ALTER TABLE workflows ADD COLUMN cost_total_usd REAL DEFAULT 0.0 NOT NULL"))
+                except Exception:
+                    pass  # Column already exists
+                conn.commit()
+                logger.info("Migrated workflows.cost_total_usd column")
+        except Exception as e:
+            logger.debug(f"workflows.cost_total_usd migration (may already exist): {e}")
 
         # Create cost_entries and session_cost_checkpoints tables
         try:

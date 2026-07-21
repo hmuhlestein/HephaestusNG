@@ -19,6 +19,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, List, Optional, Tuple
 
+from sqlalchemy.orm import Session
+
 logger = logging.getLogger(__name__)
 
 
@@ -337,10 +339,7 @@ class CodexStubCollector(CostCollector):
         checkpoint: int,
     ) -> Tuple[List[dict], int]:
         """Stub: Codex collection not supported."""
-        logger.warning(
-            f"Codex cost collection not supported for task {task_id[:8]} "
-            f"(session {session_id[:8]})"
-        )
+        logger.warning(f"Codex cost collection not supported for task {task_id[:8]} (session {session_id[:8]})")
         return [], checkpoint
 
 
@@ -416,15 +415,11 @@ def collect_task_cost(task_id: str) -> None:
         # or passed via --session-id flag
         session_id = _extract_session_id(agent, task)
         if not session_id:
-            logger.debug(
-                f"[COST-COLLECT] No session ID for task {task_id[:8]} agent {agent.id[:8]} — skipping"
-            )
+            logger.debug(f"[COST-COLLECT] No session ID for task {task_id[:8]} agent {agent.id[:8]} — skipping")
             return
 
         # Get or create checkpoint
-        checkpoint_row = (
-            db.query(SessionCostCheckpoint).filter_by(session_id=session_id).first()
-        )
+        checkpoint_row = db.query(SessionCostCheckpoint).filter_by(session_id=session_id).first()
         checkpoint = checkpoint_row.lines_processed if checkpoint_row else 0
 
         # Discover session file based on CLI type
@@ -433,12 +428,12 @@ def collect_task_cost(task_id: str) -> None:
 
         if cli_type == "pi":
             # Discover pi session file
-            cwd = _get_agent_cwd(agent, task)
+            cwd = _get_agent_cwd(db, agent, task)
             if cwd:
                 session_file = _discover_session_file(session_id, cwd)
         elif cli_type == "claude_code":
             # Claude Code session files in ~/.claude/projects/<sanitized_cwd>/
-            cwd = _get_agent_cwd(agent, task)
+            cwd = _get_agent_cwd(db, agent, task)
             if cwd:
                 sanitized = cwd.replace("/", "-")
                 claude_dir = Path.home() / ".claude" / "projects" / sanitized
@@ -454,10 +449,7 @@ def collect_task_cost(task_id: str) -> None:
             pass  # Stub
 
         if not session_file:
-            logger.debug(
-                f"[COST-COLLECT] No session file found for {cli_type} "
-                f"session {session_id[:8]} — skipping"
-            )
+            logger.debug(f"[COST-COLLECT] No session file found for {cli_type} session {session_id[:8]} — skipping")
             return
 
         # Select collector
@@ -516,10 +508,7 @@ def collect_task_cost(task_id: str) -> None:
 
         if entries:
             total_cost = sum(e["cost_usd"] for e in entries)
-            logger.info(
-                f"[COST-COLLECT] Collected {len(entries)} entries "
-                f"(${total_cost:.4f}) for task {task_id[:8]} from {cli_type}"
-            )
+            logger.info(f"[COST-COLLECT] Collected {len(entries)} entries (${total_cost:.4f}) for task {task_id[:8]} from {cli_type}")
 
 
 def _extract_session_id(agent: Any, task: Any) -> Optional[str]:
@@ -541,34 +530,32 @@ def _extract_session_id(agent: Any, task: Any) -> Optional[str]:
     # Try to reconstruct from task/workflow context
     # This would need access to get_session_id() logic
     # For now, return None and log
-    logger.debug(
-        f"Could not extract session ID from agent {agent.id[:8]} "
-        f"(tmux: {agent.tmux_session_name})"
-    )
+    logger.debug(f"Could not extract session ID from agent {agent.id[:8]} (tmux: {agent.tmux_session_name})")
     return None
 
 
-def _get_agent_cwd(agent: Any, task: Any) -> Optional[str]:
+def _get_agent_cwd(db: Session, agent: Any, task: Any) -> Optional[str]:
     """Get the agent's working directory.
 
     Uses the task's workflow's working directory, or falls back to
     the agent's worktree path.
+
+    Args:
+        db: Database session (reuses caller's session)
+        agent: The Agent object
+        task: The Task object
     """
     from src.core.database import AgentWorktree, Workflow
 
     # Try workflow's working directory
     if task.workflow_id:
-        from src.core.database import get_db
-        with get_db() as db:
-            wf = db.query(Workflow).filter_by(id=task.workflow_id).first()
-            if wf and wf.working_directory:
-                return wf.working_directory
+        wf = db.query(Workflow).filter_by(id=task.workflow_id).first()
+        if wf and wf.working_directory:
+            return wf.working_directory
 
     # Try agent's worktree
-    from src.core.database import get_db
-    with get_db() as db:
-        worktree = db.query(AgentWorktree).filter_by(agent_id=agent.id).first()
-        if worktree:
-            return worktree.worktree_path
+    worktree = db.query(AgentWorktree).filter_by(agent_id=agent.id).first()
+    if worktree:
+        return worktree.worktree_path
 
     return None

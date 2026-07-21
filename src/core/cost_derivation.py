@@ -131,11 +131,10 @@ def derive_task_cost(db: Session, task_id: str, write_back: bool = True) -> floa
     # Sum cost entries for this task
     total = db.query(func.sum(CostEntry.cost_usd)).filter(CostEntry.task_id == task_id).scalar() or 0.0
 
-    # Self-heal: write back to DB if cost disagrees
+    # Self-heal: write back to DB if cost disagrees (no commit — caller handles)
     if write_back and abs(total - task.cost_total_usd) > 0.0001:
         logger.info(f"[COST-HEAL] Task {task_id[:8]} cost: ${task.cost_total_usd:.4f} -> ${total:.4f}")
         task.cost_total_usd = total
-        db.commit()
 
     return total
 
@@ -146,7 +145,7 @@ def derive_workflow_cost(db: Session, workflow_id: str, write_back: bool = True)
     Args:
         db: Database session
         workflow_id: Workflow ID to derive cost for
-        write_back: If True, update related entities' cost_total_usd
+        write_back: If True, persist Workflow.cost_total_usd and roll up
 
     Returns:
         Derived cost in USD
@@ -159,15 +158,16 @@ def derive_workflow_cost(db: Session, workflow_id: str, write_back: bool = True)
     # Sum cost entries for this workflow
     total = db.query(func.sum(CostEntry.cost_usd)).filter(CostEntry.workflow_id == workflow_id).scalar() or 0.0
 
-    # If this workflow is associated with a feature, roll up to feature
+    # Self-heal: write back to DB if cost disagrees (no commit — caller handles)
+    if write_back and abs(total - workflow.cost_total_usd) > 0.0001:
+        logger.info(f"[COST-HEAL] Workflow {workflow_id[:8]} cost: ${workflow.cost_total_usd:.4f} -> ${total:.4f}")
+        workflow.cost_total_usd = total
+
+    # Roll up to feature/design/project
     if workflow.feature_id:
         derive_feature_cost(db, workflow.feature_id, write_back=write_back)
-
-    # If this workflow has a design_id, roll up to design
     if workflow.design_id:
         derive_design_cost(db, workflow.design_id, write_back=write_back)
-
-    # If this workflow has a project_id, roll up to project
     if workflow.project_id:
         derive_project_cost(db, workflow.project_id, write_back=write_back)
 
@@ -194,11 +194,10 @@ def derive_feature_cost(db: Session, feature_id: str, write_back: bool = True) -
     # via the workflow's feature_id
     total = db.query(func.sum(CostEntry.cost_usd)).join(Workflow, CostEntry.workflow_id == Workflow.id).filter(Workflow.feature_id == feature_id).scalar() or 0.0
 
-    # Self-heal: write back to DB if cost disagrees
+    # Self-heal: write back to DB if cost disagrees (no commit — caller handles)
     if write_back and abs(total - feature.cost_total_usd) > 0.0001:
         logger.info(f"[COST-HEAL] Feature {feature_id[:8]} cost: ${feature.cost_total_usd:.4f} -> ${total:.4f}")
         feature.cost_total_usd = total
-        db.commit()
 
     return total
 
@@ -225,11 +224,10 @@ def derive_design_cost(db: Session, design_id: str, write_back: bool = True) -> 
         or 0.0
     )
 
-    # Self-heal: write back to DB if cost disagrees
+    # Self-heal: write back to DB if cost disagrees (no commit — caller handles)
     if write_back and abs(total - design.cost_total_usd) > 0.0001:
         logger.info(f"[COST-HEAL] Design {design_id[:8]} cost: ${design.cost_total_usd:.4f} -> ${total:.4f}")
         design.cost_total_usd = total
-        db.commit()
 
     return total
 
@@ -263,13 +261,13 @@ def derive_project_cost(db: Session, project_id: str, write_back: bool = True) -
         or 0.0
     )
 
-    # Self-heal: write back to DB if cost disagrees
+    # Self-heal: write back to DB if cost disagrees (no commit — caller handles)
     if write_back and abs(total - project.cost_total_usd) > 0.0001:
         logger.info(f"[COST-HEAL] Project {project_id[:8]} cost: ${project.cost_total_usd:.4f} -> ${total:.4f}")
         project.cost_total_usd = total
-        db.commit()
 
-        # Check budget enforcement after updating
+    # Check budget enforcement (caller will commit)
+    if write_back:
         _check_budget_enforcement(db, project)
 
     return total
@@ -321,6 +319,7 @@ def _pause_project_workflows(db: Session, project_id: str, paused_by: str) -> in
     )
 
     paused_count = 0
+    workflow_ids = []
     for wf in active_workflows:
         wf.status = "paused"
         wf.paused_by = paused_by
@@ -328,29 +327,27 @@ def _pause_project_workflows(db: Session, project_id: str, paused_by: str) -> in
         if paused_by == "budget":
             wf.status_reason = "Budget limit reached"
         paused_count += 1
+        workflow_ids.append(wf.id)
 
-        # Terminate active agents on this workflow
-        active_agents = (
+    if paused_count > 0:
+        # Terminate active agents on these workflows (single query, not N+1)
+        from src.core.database import Agent, Task
+
+        agents_to_terminate = (
             db.query(Agent)
+            .join(Task, Agent.current_task_id == Task.id)
             .filter(
-                Agent.current_task_id.isnot(None),
+                Task.workflow_id.in_(workflow_ids),
                 Agent.status.in_(["working", "idle"]),
             )
             .all()
         )
-        for agent in active_agents:
-            # Check if this agent's current task belongs to this workflow
-            from src.core.database import Task
-            task = db.query(Task).filter_by(id=agent.current_task_id).first()
-            if task and task.workflow_id == wf.id:
-                agent.status = "terminated"
-                agent.terminated_at = datetime.utcnow()
-                agent.current_task_id = None
-                logger.info(
-                    f"[BUDGET] Terminated agent {agent.id[:8]} on workflow {wf.id[:8]}"
-                )
+        for agent in agents_to_terminate:
+            agent.status = "terminated"
+            agent.terminated_at = datetime.utcnow()
+            agent.current_task_id = None
+            logger.info(f"[BUDGET] Terminated agent {agent.id[:8]}")
 
-    if paused_count > 0:
         db.commit()
         logger.info(f"[BUDGET] Paused {paused_count} workflows for project {project_id[:8]}")
 
