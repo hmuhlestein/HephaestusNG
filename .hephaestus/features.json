@@ -4,7 +4,7 @@
     {
       "id": "cost-schema",
       "name": "Cost Tracking Database Schema",
-      "scope": "Create the foundational database schema for cost tracking: the cost_entries append-only ledger table (one row per LLM turn/call with task_id, source, model, token breakdowns, cost_usd, raw_usage), the session_cost_checkpoints table (keyed by session_id for incremental collection tracking), add cost_total_usd denormalized columns to Task/Feature/AutopilotDesign/AutopilotProject, and add cost_limit_usd to AutopilotProject. Follow the existing _migrate_*_column pattern in database.py for safe live-migration on existing databases. Also remove dead code files src/interfaces/cost_tracker.py and src/interfaces/openrouter_client.py which are orphaned remnants of a previous LiteLLM proxy-based approach and are no longer imported anywhere.",
+      "scope": "Create the foundational database schema for cost tracking: the cost_entries append-only ledger table (one row per LLM turn/call with task_id, source, model, token breakdowns including reasoning_tokens, cost_usd, raw_usage), the session_cost_checkpoints table (keyed by session_id for incremental collection tracking), add cost_total_usd denormalized columns to Task/Feature/AutopilotDesign/AutopilotProject, and add cost_limit_usd to AutopilotProject. Follow the existing _migrate_*_column pattern in database.py for safe live-migration on existing databases. Also remove dead code files src/interfaces/cost_tracker.py and src/interfaces/openrouter_client.py which are orphaned remnants of a previous LiteLLM proxy-based approach and are no longer imported anywhere.",
       "files": [
         "src/core/database.py",
         "src/interfaces/cost_tracker.py",
@@ -16,7 +16,7 @@
     {
       "id": "cost-derivation",
       "name": "Cost Derivation Engine",
-      "scope": "Build src/core/cost_derivation.py, mirroring the existing src/core/status_derivation.py pattern. This module provides derive_cost_totals(db, task_id) which reads SUM of cost_entries.cost_usd grouped by task_id and writes it to Task.cost_total_usd, then rolls up through Feature -> AutopilotDesign -> AutopilotProject using the existing entity hierarchy relationships. Called on every new CostEntry write so the denormalized totals are always current without a separate polling loop. After writing project.cost_total_usd, if the project has a cost_limit_usd set and the total crosses it, trigger budget enforcement by calling _pause_project_workflows(project.id, paused_by='budget') — this is the single integration point for budget enforcement, keeping the check colocated with the write that crosses the threshold.",
+      "scope": "Build src/core/cost_derivation.py, mirroring the existing src/core/status_derivation.py pattern. This module provides derive_cost_totals(db, task_id) which reads SUM of cost_entries.cost_usd grouped by task_id and writes it to Task.cost_total_usd, then rolls up through Feature -> AutopilotDesign -> AutopilotProject using the existing entity hierarchy relationships. Called on every new CostEntry write so the denormalized totals are always current without a separate polling loop. This module is pure derivation only: it computes and writes totals, then returns the new value. It performs no side effects (no workflow pausing, no enforcement checks). The budget enforcement hook is the responsibility of budget-enforcement's callers, not this module.",
       "files": [
         "src/core/cost_derivation.py"
       ],
@@ -28,7 +28,7 @@
     {
       "id": "cost-collectors",
       "name": "CLI Cost Collectors (Pi + Claude Code)",
-      "scope": "Build the Python cost collection infrastructure in src/services/cost_collection_service.py: an abstract CostCollector base class with collect_since(session_file, checkpoint) returning (list[CostEntry], new_checkpoint), plus PiCollector (reads pi JSONL transcripts, sums message.usage.cost.total from assistant turns since checkpoint) and ClaudeCodeCollector (uses a maintained per-model price table to convert raw token counts from Claude Code transcripts into dollar amounts, including two Anthropic cache-write tiers). Also includes: (1) the UUID5 deterministic session-ID fix in ClaudeCodeAgent.get_launch_command so Claude Code sessions are correlateable to tasks, (2) a cost-ingestion API endpoint in src/mcp/server.py for the pi extension to POST per-turn cost data, and (3) wiring collection into src/services/task_completion_service.py so cost is gathered when update_task_status(done) lands. The SessionCostCheckpoint table is used for incremental reads keyed by session_id (not Agent.id) to avoid double-counting on agent retries.",
+      "scope": "Build the Python cost collection infrastructure in src/services/cost_collection_service.py: an abstract CostCollector base class with collect_since(session_file, checkpoint) returning (list[CostEntry], new_checkpoint), plus PiCollector (reads pi JSONL transcripts, sums message.usage.cost.total from assistant turns since checkpoint, extracts reasoning_tokens) and ClaudeCodeCollector (uses a maintained per-model price table to convert raw token counts from Claude Code transcripts into dollar amounts, including two Anthropic cache-write tiers). Also includes: (1) the UUID5 deterministic session-ID fix in ClaudeCodeAgent.get_launch_command so Claude Code sessions are correlateable to tasks, (2) a cost-ingestion API endpoint in src/mcp/server.py for the pi extension to POST per-turn cost data, and (3) wiring collection into src/services/task_completion_service.py so cost is gathered when update_task_status(done) lands, with a call to _enforce_budget_limit after derivation. The SessionCostCheckpoint table is used for incremental reads keyed by session_id. Note: standalone tasks launched with --no-session have no session file to tail for CLI-sourced cost; only OpenRouter-direct and pi extension POSTs capture cost for those tasks.",
       "files": [
         "src/services/cost_collection_service.py",
         "src/interfaces/cli_interface.py",
@@ -40,6 +40,18 @@
         "cost-derivation"
       ],
       "execution": "parallel"
+    },
+    {
+      "id": "opencode-collector",
+      "name": "OpenCode Cost Collector",
+      "scope": "Implement cost collection for opencode CLI sessions. OpenCode uses one-shot invocation (opencode run, not persistent tmux), stores data in SQLite at ~/.local/share/opencode/opencode.db, and already provides real dollar cost in exported sessions. Cost is collected either by capturing --format json stdout (preferred) or querying the SQLite DB directly after the one-shot process exits. Gated on actual usage: before implementing, check config/workflows/autopilot/workflow.yaml for cli_type: opencode; if not in active use, log a warning and return empty rather than silently reporting zero. Requires a --session-id UUID5 fix in OpenCodeAgent.get_launch_command if opencode -s supports creating new sessions. No checkpoint table needed (one-shot per invocation). Adds reasoning_tokens from opencode's token.reasoning field.",
+      "files": [],
+      "depends_on": [
+        "cost-schema",
+        "cost-derivation",
+        "cost-collectors"
+      ],
+      "execution": "sequential"
     },
     {
       "id": "pi-extension",
@@ -57,20 +69,21 @@
     {
       "id": "openrouter-direct",
       "name": "Backend OpenRouter Direct Cost Capture",
-      "scope": "Refactor src/interfaces/langchain_llm_client.py to capture cost from the backend own direct OpenRouter calls (task enrichment, guardian, conductor, and ~6 other call sites). Build an _invoke_and_record helper that all ~9 model.ainvoke() sites route through, which adds usage include:true to extra_body so OpenRouter returns cost in the response, extracts usage from response.response_metadata, and writes a CostEntry with source=openrouter_direct. Thread task_id and workflow_id through method signatures that currently lack them so cost entries are correctly attributed.",
+      "scope": "Refactor src/interfaces/langchain_llm_client.py to capture cost from the backend's own direct OpenRouter calls (task enrichment, guardian, conductor, and ~6 other call sites). Build an _invoke_and_record helper that all ~9 model.ainvoke() sites route through, which adds usage include:true to extra_body so OpenRouter returns cost in the response, extracts usage from response.response_metadata, and writes a CostEntry with source=openrouter_direct. Thread task_id and workflow_id through method signatures that currently lack them so cost entries are correctly attributed. After writing entries, call derive_cost_totals then _enforce_budget_limit to ensure enforcement fires immediately on cost-limit-crossing writes.",
       "files": [
         "src/interfaces/langchain_llm_client.py"
       ],
       "depends_on": [
         "cost-schema",
-        "cost-derivation"
+        "cost-derivation",
+        "budget-enforcement"
       ],
       "execution": "parallel"
     },
     {
       "id": "budget-enforcement",
       "name": "Budget Enforcement and Pipeline Throttling",
-      "scope": "Implement spend-limit enforcement using AutopilotProject.cost_limit_usd and cost_total_usd. Extract _pause_project_workflows(project_id, paused_by) from the /autopilot/stop route handler in src/mcp/autopilot_api.py into a reusable function in src/autopilot/orchestrator.py that correctly filters definition_id in (autopilot, autopilot-phase0) (fixing an existing bug where Phase 0 workflows are missed). The budget enforcement check itself (triggering _pause_project_workflows when cost crosses limit) is owned by cost-derivation, which calls it after writing project.cost_total_usd. This feature focuses on: adding guards in pick_next_design and _run_one_feature to block new work for over-budget projects, generalizing every paused_by==user self-heal guard to paused_by is not None (except start() resume-on-play filter which stays paused_by==user), and adding limit-clearing logic to PUT /projects/{project_id} that auto-clears paused_by='budget' when the limit is raised.",
+      "scope": "Implement spend-limit enforcement using AutopilotProject.cost_limit_usd and cost_total_usd. Extract _pause_project_workflows(project_id, paused_by) from the /autopilot/stop route handler in src/mcp/autopilot_api.py into a reusable function in src/autopilot/orchestrator.py that correctly filters definition_id in (autopilot, autopilot-phase0) (fixing an existing bug where Phase 0 workflows are missed). Build _enforce_budget_limit(project_id) which calls derive_cost_totals (from cost-derivation) to update totals, then checks cost_limit_usd and triggers _pause_project_workflows with paused_by='budget' when the limit is crossed. Add cost_total_usd >= cost_limit_usd guards at the top of pick_next_design and in _run_one_feature before launching new work. Generalize every paused_by==user self-heal guard to paused_by is not None (including _create_corrective_task in orchestrator.py), except start() resume-on-play filter which stays paused_by==user so the play button cannot backdoor-clear a budget-pause. Add limit-clearing logic to PUT /projects/{project_id} that auto-clears paused_by='budget' when the limit is raised.",
       "files": [
         "src/autopilot/orchestrator.py",
         "src/mcp/autopilot_api.py"

@@ -9,6 +9,7 @@ Refactor `src/interfaces/langchain_llm_client.py` to capture cost from the backe
 ## Dependencies
 - `cost-schema` — writes to `cost_entries` table
 - `cost-derivation` — calls `derive_cost_totals()` after writing entries
+- `budget-enforcement` — calls `_enforce_budget_limit(project_id)` after derivation to trigger enforcement if limit crossed (one-directional: openrouter-direct → orchestrator.py, not the reverse)
 
 ## Implementation Notes
 
@@ -30,10 +31,11 @@ Steps inside the helper:
 1. Add `"usage": {"include": true}` to `extra_body` in `model_kwargs` if not already present
 2. Call `response = await model.ainvoke(messages)`
 3. Extract usage from `response.response_metadata` (LangChain preserves raw provider-specific fields here for ChatOpenAI)
-4. Create a `CostEntry` with `source="openrouter_direct"`, the extracted token counts, and cost_usd
+4. Create a `CostEntry` with `source="openrouter_direct"`, the extracted token counts, and cost_usd; capture `reasoning_tokens` if present in usage data
 5. Write to DB
 6. Call `derive_cost_totals(db, task_id)` if task_id is not None
-7. Return the response (callers continue using it as before)
+7. Call `_enforce_budget_limit(project_id)` if project_id is available — triggers enforcement check
+8. Return the response (callers continue using it as before)
 
 ### OpenRouter cost extraction
 OpenRouter returns `usage.cost` (dollar amounts) as a non-standard field when `usage: {include: true}` is in the request body. LangChain's `ChatOpenAI` normally drops non-standard fields, but `response.response_metadata["token_usage"]` preserves the raw dict. Verify this with a smoke test before relying on it:

@@ -22,6 +22,7 @@ One row per LLM turn/call. Key columns:
 - `source` (String, NOT NULL — `'pi'` | `'claude_code'` | `'opencode'` | `'codex'` | `'openrouter_direct'`)
 - `model` (String, nullable)
 - `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens` (Integer, default 0)
+- `reasoning_tokens` (Integer, default 0) — rolled into `output` cost for pricing but useful signal for identifying phases that burn the most reasoning
 - `cost_usd` (Float, NOT NULL)
 - `recorded_at` (DateTime, default utcnow)
 - `raw_usage` (JSON, nullable)
