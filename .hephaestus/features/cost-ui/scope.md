@@ -10,6 +10,7 @@ Add cost visibility and budget configuration to the frontend. In `ProjectSetting
 - `frontend/src/components/autopilot/FeatureGallery.tsx`
 - `frontend/src/components/autopilot/FeatureDetailModal.tsx`
 - `frontend/src/pages/Autopilot.tsx`
+- `frontend/src/types/index.ts`
 
 ## Dependencies
 - `cost-schema` — frontend types need `cost_total_usd`, `cost_limit_usd` fields
