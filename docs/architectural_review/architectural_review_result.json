@@ -1,5 +1,99 @@
 {
-  "blocker_count": 0,
-  "capped": true,
-  "capped_after_runs": 3
+  "verdict": "CONDITIONAL_PASS",
+  "phase": "architectural_review",
+  "reviewer": "Architecture Design Agent (Phase 5)",
+  "date": "2026-07-21",
+  "commit_reviewed": "da1da35",
+  "blocker_count": 1,
+  "fix_count": 4,
+  "defer_count": 4,
+  "blockers": [
+    {
+      "id": "B-1",
+      "title": "Frontend Cost Components Exist But Are Never Rendered",
+      "severity": "BLOCKER",
+      "location": "frontend/src/pages/ (all pages), frontend/src/components/ (parent components)",
+      "description": "Six well-structured cost components (CostDisplay, ProjectCostSummary, FeatureCostBadge, DesignCostRow, BudgetPausedLabel) were created but are not imported or rendered in any page. Users cannot see cost data in the UI.",
+      "recommended_fix": "Import and render ProjectCostSummary in Dashboard.tsx. Add BudgetPausedLabel for workflows with paused_by === 'budget'."
+    }
+  ],
+  "fixes": [
+    {
+      "id": "F-1",
+      "title": "paused_at Not Cleared in Budget Resume Flow",
+      "severity": "FIX",
+      "location": "src/mcp/autopilot_api.py:1861-1865",
+      "description": "PUT /projects/{id} clears paused_by, status, and status_reason but NOT paused_at when raising limit. Causes data inconsistency.",
+      "recommended_fix": "Add wf.paused_at = None to the budget resume loop."
+    },
+    {
+      "id": "F-2",
+      "title": "_run_one_feature Returns 'failed' for Budget-Blocked Features",
+      "severity": "FIX",
+      "location": "src/autopilot/orchestrator.py:7059",
+      "description": "Budget-blocked features return 'failed' status, which is semantically incorrect and may trigger incorrect state transitions.",
+      "recommended_fix": "Return 'skipped' or add a distinct 'budget_blocked' return value."
+    },
+    {
+      "id": "F-3",
+      "title": "task_id Not Threaded to System-Wide LLM Calls",
+      "severity": "FIX",
+      "location": "src/interfaces/langchain_llm_client.py",
+      "description": "enrich_task(), analyze_agent_state(), analyze_agent_trajectory(), and review_qa_report() have task context available but don't pass task_id to _invoke_and_record(). Costs go to overhead bucket.",
+      "recommended_fix": "Thread task_id through methods that receive task_info dict or have task context."
+    },
+    {
+      "id": "F-4",
+      "title": "pick_next_design Returns None Immediately on Budget Check",
+      "severity": "FIX",
+      "location": "src/autopilot/orchestrator.py:2019-2021",
+      "description": "Budget guard in pick_next_design() returns None immediately, blocking ALL designs including those from under-budget projects in multi-project setups.",
+      "recommended_fix": "Change return None to continue to allow checking other projects."
+    }
+  ],
+  "defers": [
+    {
+      "id": "D-1",
+      "title": "No Pagination on Cost Query Endpoints",
+      "severity": "DEFER",
+      "location": "src/mcp/autopilot_api.py (all /costs endpoints)",
+      "description": "Cost query endpoints return all data without pagination. Could produce large responses for projects with many designs."
+    },
+    {
+      "id": "D-2",
+      "title": "datetime.utcnow() Deprecation",
+      "severity": "DEFER",
+      "location": "src/core/cost_derivation.py:326",
+      "description": "datetime.utcnow() is deprecated in Python 3.12+. All 52 tests emit deprecation warnings."
+    },
+    {
+      "id": "D-3",
+      "title": "Test Coverage for Orchestrator Integration",
+      "severity": "DEFER",
+      "location": "tests/test_budget_enforcement_integration.py",
+      "description": "TestBudgetAutoResumeBlocked only asserts on state, doesn't call actual guard functions to verify behavior."
+    },
+    {
+      "id": "D-4",
+      "title": "LangChain Response Metadata Smoke Test",
+      "severity": "DEFER",
+      "location": "src/interfaces/langchain_llm_client.py:356-367",
+      "description": "usage.include=true path not smoke-tested against live OpenRouter. If field path doesn't match, all direct cost recording silently produces $0."
+    }
+  ],
+  "compliance_summary": {
+    "T1_paused_by_guards": "PASS",
+    "T2_budget_checks_orchestrator": "CONDITIONAL",
+    "T3_limit_raise_clears_pause": "CONDITIONAL",
+    "T4_wire_langchain_call_sites": "PASS",
+    "T5_thread_task_id": "FAIL",
+    "T6_api_cost_endpoints": "PASS",
+    "T7_frontend_cost_components": "CONDITIONAL",
+    "T8_frontend_budget_config": "PASS",
+    "T9_pi_extension": "PASS",
+    "T10_unit_tests_cost_derivation": "PASS",
+    "T11_integration_tests_collection": "PARTIAL",
+    "T12_integration_tests_budget": "PASS"
+  },
+  "overall_assessment": "Backend implementation is solid and architecturally compliant. Frontend integration gap is the primary blocker. Data integrity issue in budget resume flow needs fixing. Multi-project budget guard logic has an early-return bug."
 }
