@@ -6,8 +6,6 @@ Build the Python cost collection infrastructure in `src/services/cost_collection
 ## Files Owned
 - `src/services/cost_collection_service.py`
 - `src/interfaces/cli_interface.py`
-- `src/interfaces/cost_tracker.py`
-- `src/interfaces/openrouter_client.py`
 - `src/mcp/server.py`
 - `src/services/task_completion_service.py`
 
@@ -60,9 +58,8 @@ In `task_completion_service.py`, when `update_task_status(status="done")`:
 - Write resulting `CostEntry` rows
 - Call `derive_cost_totals(db, task_id)` → triggers total recalculation
 
-### Cleanup: repurpose orphaned files
-- `src/interfaces/cost_tracker.py` — currently dead (LiteLLM proxy-based, never imported). Repurpose as the module that holds `PRICING` table and the token→cost conversion logic, or replace with a cleaner implementation.
-- `src/interfaces/openrouter_client.py` — also dead/orphaned. Could be repurposed for the OpenRouter direct cost extraction logic, or removed.
+### Dead code removal
+The orphaned files `src/interfaces/cost_tracker.py` and `src/interfaces/openrouter_client.py` are handled by the `cost-schema` feature (deleted as part of schema setup). This feature builds fresh cost collection logic in `src/services/cost_collection_service.py`.
 
 ## Acceptance Criteria
 - [ ] `CostCollector` ABC exists in `src/services/cost_collection_service.py` with `collect_since()` interface

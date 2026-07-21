@@ -5,6 +5,7 @@ Build a pi extension at `extensions/hephaestus-cost-tracker/` (TypeScript) that 
 
 ## Files Owned
 - `extensions/hephaestus-cost-tracker/`
+- `scripts/install.sh`
 
 ## Dependencies
 - `cost-collectors` — requires the cost-ingestion API endpoint at `POST /api/cost`

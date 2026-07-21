@@ -1,7 +1,7 @@
 # Feature: Budget Enforcement and Pipeline Throttling
 
 ## Overview
-Implement spend-limit enforcement using `AutopilotProject.cost_limit_usd` and `cost_total_usd` (from cost-schema). Extract `_pause_project_workflows(project_id, paused_by)` from the `/autopilot/stop` route handler in `src/autopilot/orchestrator.py` into a reusable function that correctly filters `definition_id.in_(["autopilot", "autopilot-phase0"])` (fixing the existing bug where Phase 0 workflows are missed). Hook this into `cost_derivation.py`'s recompute path: after updating `cost_total_usd`, check the limit and call `_trigger_budget_pause` with `paused_by='budget'`. Add `cost_total_usd >= cost_limit_usd` guards at the top of `pick_next_design` and in `_run_one_feature` before launching new work. Generalize every `paused_by == 'user'` self-heal/auto-resume guard to `paused_by is not None` across orchestrator.py, autopilot_api.py, and server.py — but deliberately leave `AutopilotService.start()`'s resume-on-play filter as `paused_by == 'user'` so the play button cannot backdoor-clear a budget-pause.
+Implement spend-limit enforcement using `AutopilotProject.cost_limit_usd` and `cost_total_usd` (from cost-schema). Extract `_pause_project_workflows(project_id, paused_by)` from the `/autopilot/stop` route handler in `src/mcp/autopilot_api.py` into a reusable function that correctly filters `definition_id.in_(["autopilot", "autopilot-phase0"])` (fixing the existing bug where Phase 0 workflows are missed). Hook this into `cost_derivation.py`'s recompute path: after updating `cost_total_usd`, check the limit and call `_trigger_budget_pause` with `paused_by='budget'`. Add `cost_total_usd >= cost_limit_usd` guards at the top of `pick_next_design` and in `_run_one_feature` before launching new work. Generalize every `paused_by == 'user'` self-heal/auto-resume guard to `paused_by is not None` across orchestrator.py, autopilot_api.py, and server.py — but deliberately leave `AutopilotService.start()`'s resume-on-play filter as `paused_by == 'user'` so the play button cannot backdoor-clear a budget-pause.
 
 ## Files Owned
 - `src/autopilot/orchestrator.py`
@@ -23,13 +23,16 @@ Currently the `/autopilot/stop` endpoint in `src/mcp/autopilot_api.py` contains 
 
 **Critical bug fix**: The existing `/autopilot/stop` endpoint filters `definition_id == "autopilot"` only, missing `"autopilot-phase0"` (the Feature Architect workflow). Both must be included.
 
-### Integration point in `cost_derivation.py`
-After `derive_cost_totals` writes the updated `project.cost_total_usd`:
+### Integration point
+The budget enforcement check (calling `_pause_project_workflows` when cost crosses the limit) is owned by the `cost-derivation` feature and lives in `src/core/cost_derivation.py`. This feature provides the `_pause_project_workflows` function that `cost_derivation.py` calls. The separation keeps the enforcement trigger colocated with the cost write that crosses the threshold.
+
+After `derive_cost_totals` writes the updated `project.cost_total_usd`, `cost_derivation.py` checks:
 ```python
 if project.cost_limit_usd is not None and project.cost_total_usd >= project.cost_limit_usd:
     _pause_project_workflows(project.id, paused_by="budget")
 ```
-This runs synchronously as part of the derive flow, so enforcement is immediate on the CostEntry that crosses the threshold.
+
+This function must be importable from `src/autopilot/orchestrator.py` by `cost_derivation.py`.
 
 ### Guards for new work
 In `src/autopilot/orchestrator.py`:

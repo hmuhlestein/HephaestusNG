@@ -1,10 +1,12 @@
 # Feature: Cost Tracking Database Schema
 
 ## Overview
-Create the foundational database schema for cost tracking: the `cost_entries` append-only ledger table (one row per LLM turn/call with task_id, source, model, token breakdowns, cost_usd, raw_usage), the `session_cost_checkpoints` table (keyed by session_id for incremental collection tracking), add `cost_total_usd` denormalized columns to Task/Feature/AutopilotDesign/AutopilotProject, and add `cost_limit_usd` to AutopilotProject. Follow the existing `_migrate_*_column` pattern in `database.py` for safe live-migration on existing databases.
+Create the foundational database schema for cost tracking: the `cost_entries` append-only ledger table (one row per LLM turn/call with task_id, source, model, token breakdowns, cost_usd, raw_usage), the `session_cost_checkpoints` table (keyed by session_id for incremental collection tracking), add `cost_total_usd` denormalized columns to Task/Feature/AutopilotDesign/AutopilotProject, and add `cost_limit_usd` to AutopilotProject. Follow the existing `_migrate_*_column` pattern in `database.py` for safe live-migration on existing databases. Also remove dead code files `src/interfaces/cost_tracker.py` and `src/interfaces/openrouter_client.py` which are orphaned remnants of a previous LiteLLM proxy-based approach and are no longer imported anywhere.
 
 ## Files Owned
 - `src/core/database.py`
+- `src/interfaces/cost_tracker.py` (DELETE — dead code removal)
+- `src/interfaces/openrouter_client.py` (DELETE — dead code removal)
 
 ## Dependencies
 None — this is the foundational schema that all other cost-related features depend on.
@@ -47,3 +49,5 @@ Follow the existing `_migrate_workflow_paused_by_column` pattern: check for `Ope
 - [ ] `cost_total_usd` column exists on Task, Feature, AutopilotDesign, and AutopilotProject (default 0.0)
 - [ ] `cost_limit_usd` column exists on AutopilotProject (nullable, default None)
 - [ ] Migrations run safely against existing databases without data loss (follow `_migrate_*_column` pattern)
+- [ ] `src/interfaces/cost_tracker.py` deleted (dead code)
+- [ ] `src/interfaces/openrouter_client.py` deleted (dead code)
