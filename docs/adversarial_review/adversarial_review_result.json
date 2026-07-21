@@ -1,27 +1,101 @@
 {
-  "run": 3,
-  "timestamp": "2025-07-21T12:30:00Z",
-  "prior_blockers_fixed": 5,
-  "prior_blockers_partial": 0,
-  "prior_blockers_unfixed": 0,
-  "blocker_count": 0,
-  "warning_count": 0,
-  "nit_count": 1,
+  "phase": "adversarial_review",
+  "status": "done",
+  "blocker_count": 2,
+  "warning_count": 4,
+  "nit_count": 3,
   "findings": [
     {
-      "id": "N-1",
-      "severity": "NIT",
-      "title": "datetime.utcnow() deprecated in Python 3.12",
-      "files": [
-        "src/core/cost_derivation.py",
-        "src/services/cost_collection_service.py",
-        "src/core/database.py"
-      ],
-      "description": "Multiple uses of datetime.utcnow() which is deprecated. Should migrate to datetime.now(datetime.UTC)."
+      "id": "BLOCKER-1",
+      "severity": "blocker",
+      "title": "/autopilot/stop NOT Refactored — Phase 0 Workflows Survive User Stop",
+      "location": "src/mcp/autopilot_api.py, stop_pipeline(), line ~3670",
+      "requirement_violated": "FR-4",
+      "failure_sequence": "User starts pipeline -> Phase 0 launches with definition_id=autopilot-phase0 -> User clicks Stop -> stop_pipeline queries filter_by(definition_id=autopilot) -> Phase 0 NOT found -> Phase 0 continues running and spending tokens",
+      "fix": "Replace inline pause logic with _pause_project_workflows(db, project_id, paused_by='user')",
+      "impact": "Real financial loss. Phase 0 continues consuming LLM tokens after user clicks Stop."
+    },
+    {
+      "id": "BLOCKER-2",
+      "severity": "blocker",
+      "title": "_run_one_feature Budget Guard Uses Separate DB Session — Race Condition",
+      "location": "src/autopilot/orchestrator.py, _run_one_feature(), lines ~7119-7131",
+      "requirement_violated": "Architecture specified use existing DB session",
+      "failure_sequence": "_run_one_feature opens get_db() at line ~7020 -> Budget guard opens SECOND get_db() at line ~7119 -> Between sessions, another thread records costs and triggers budget enforcement -> Session B reads stale cost data -> Budget guard returns True -> New workflow launched despite over-budget project",
+      "fix": "Reuse the existing db session from the earlier context block",
+      "impact": "Under concurrent feature pipelines, new workflows can launch after budget is exceeded."
+    },
+    {
+      "id": "WARNING-1",
+      "severity": "warning",
+      "title": "_pause_project_workflows Missing 'starting' Agent Status",
+      "location": "src/core/cost_derivation.py, _pause_project_workflows(), line ~340",
+      "failure_sequence": "Agent spawned in starting state -> Budget exceeded -> _pause_project_workflows filters Agent.status.in_(['working', 'idle']) -> starting agent excluded -> Agent transitions to working -> Continues spending past budget",
+      "fix": "Add 'starting' to status filter: Agent.status.in_(['working', 'starting', 'idle'])"
+    },
+    {
+      "id": "WARNING-2",
+      "severity": "warning",
+      "title": "Misleading Log Messages for Generalized paused_by Guards",
+      "location": "src/autopilot/orchestrator.py, lines 5703 and 5884",
+      "failure_sequence": "Budget enforcement pauses workflow with paused_by=budget -> Self-heal guard correctly skips it -> Log says 'is user-paused' -> Operator confused about why pipeline stalled",
+      "fix": "Change log messages to include actual paused_by value"
+    },
+    {
+      "id": "WARNING-3",
+      "severity": "warning",
+      "title": "User-Paused Workflows Preserve Stale status_reason",
+      "location": "src/core/cost_derivation.py, _pause_project_workflows()",
+      "failure_sequence": "Project over budget -> status_reason set to 'Budget limit reached' -> User pauses via /autopilot/stop -> paused_by changes to 'user' -> status_reason remains 'Budget limit reached' -> UI shows misleading message",
+      "fix": "Clear status_reason when paused_by='user'"
+    },
+    {
+      "id": "WARNING-4",
+      "severity": "warning",
+      "title": "OpenRouter Direct Costs Without Entity Links Bypass Budget Enforcement",
+      "location": "src/core/cost_derivation.py, record_cost(); src/mcp/autopilot_api.py, POST /cost-entries",
+      "failure_sequence": "External caller posts cost with workflow_id=None and task_id=None -> CostEntry created in ledger -> No derivation rollup triggered -> No budget enforcement fires -> Actual spend exceeds reported cost_total_usd",
+      "fix": "Require at least one of task_id/workflow_id, or route unlinked costs through fallback derivation"
+    },
+    {
+      "id": "NIT-1",
+      "severity": "nit",
+      "title": "Tests Use Source Inspection Instead of Behavioral Assertions",
+      "location": "tests/test_budget_enforcement.py, TestPickNextDesignBudgetGuard",
+      "fix": "Replace source inspection tests with behavioral tests that verify actual blocking behavior"
+    },
+    {
+      "id": "NIT-2",
+      "severity": "nit",
+      "title": "_extract_session_id Fragile Tmux Name Parsing",
+      "location": "src/services/cost_collection_service.py, _extract_session_id()",
+      "fix": "Store session_id explicitly in Agent model rather than parsing from tmux name"
+    },
+    {
+      "id": "NIT-3",
+      "severity": "nit",
+      "title": "AgentStatus Constants Missing 'starting'",
+      "location": "src/core/database.py, AgentStatus class",
+      "fix": "Add STARTING = 'starting' to AgentStatus.ALL"
     }
   ],
-  "tests_passed": 31,
-  "tests_failed": 0,
-  "verdict": "PASS",
-  "notes": "All 5 prior BLOCKERs fully resolved. All 31 cost tracking tests pass. No new blockers or warnings."
+  "test_results": {
+    "test_budget_enforcement": "19 passed",
+    "test_cost_collection_service": "28 passed",
+    "test_cost_tracking": "31 passed",
+    "total_passed": 78,
+    "total_failed": 0
+  },
+  "files_reviewed": [
+    "src/autopilot/orchestrator.py",
+    "src/services/cost_collection_service.py",
+    "src/core/cost_derivation.py",
+    "src/core/database.py",
+    "src/mcp/autopilot_api.py",
+    "tests/test_budget_enforcement.py",
+    "tests/test_cost_collection_service.py",
+    "tests/test_cost_tracking.py",
+    "docs/requirements_analysis.md",
+    "docs/architectural_review/architectural_review_report.md"
+  ]
 }
