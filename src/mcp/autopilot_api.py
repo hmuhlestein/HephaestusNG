@@ -2571,7 +2571,19 @@ async def get_project_design_status(project_id: str, filename: str):
             if feat_wf_id:
                 feat_wf = next((wf for wf in matching_workflows if wf.id == feat_wf_id), None)
                 if feat_wf and feat_wf.working_directory:
-                    has_report = (Path(feat_wf.working_directory) / "docs" / "feature_report.html").is_file()
+                    # Only show report if doc_review phase has completed
+                    # (prevents showing stale reports from previous runs)
+                    from src.core.database import Phase as _Phase
+                    doc_review_phase = db.query(_Phase).filter_by(
+                        workflow_id=feat_wf_id, name="doc_review"
+                    ).first()
+                    if doc_review_phase:
+                        doc_review_done = db.query(Task).filter(
+                            Task.phase_id == doc_review_phase.id,
+                            Task.status == "done",
+                        ).first()
+                        if doc_review_done:
+                            has_report = (Path(feat_wf.working_directory) / "docs" / "feature_report.html").is_file()
 
             features.append(
                 {
