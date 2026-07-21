@@ -212,16 +212,27 @@ const RealTimeAgentOutput: React.FC<RealTimeAgentOutputProps> = ({
     return collapsed.join('\n');
   }, [output]);
 
-  // Filter output based on search and remove separator/spinner lines
+  // Filter output based on search and remove separator/spinner lines,
+  // but keep the last line if it's a Thinking/Working spinner.
   const filteredOutput = useMemo(() => {
     if (!processedOutput) return '';
-    const lines = processedOutput.split('\n');
-    const filtered = lines.filter(line => {
+    const lines = processedOutput.split('
+');
+    const filtered: string[] = [];
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
       const stripped = stripAnsiCodes(line).trim();
-      if (isNoiseLine(stripped)) return false;
-      if (searchTerm && !line.toLowerCase().includes(searchTerm.toLowerCase())) return false;
-      return true;
-    });
+      const isLast = i === lines.length - 1;
+      if (isNoiseLine(stripped)) {
+        // Keep spinner on last line so user sees the agent is thinking
+        if (isLast && /^(Thinking|Working)\.?$/.test(stripped)) {
+          filtered.push(line);
+        }
+        continue;
+      }
+      if (searchTerm && !line.toLowerCase().includes(searchTerm.toLowerCase())) continue;
+      filtered.push(line);
+    }
     return filtered.join('\n');
   }, [processedOutput, searchTerm]);
 
