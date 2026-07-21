@@ -122,6 +122,11 @@ autopilot:
   phase0_timeout_seconds: 3600
   # Max number of projects the autopilot pipeline can run concurrently
   max_concurrent_projects: 2
+  # Wait between auto-retry attempts on a workflow paused for exhausted
+  # retries (e.g. after topping up API credits)
+  paused_workflow_retry_cooldown_seconds: 300
+  # Give up permanently (requires manual resume) after this many auto-retry cycles
+  paused_workflow_max_retry_cycles: 10
 ticket_tracking:
   enabled: true
   default_human_review: false

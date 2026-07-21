@@ -3517,6 +3517,270 @@ class TestRecoverAbandonedWorkflowsMissingWorktree:
             assert old_task.retry_count == 2
 
 
+class TestRetryExhaustedPausedWorkflows:
+    """Regression: _maybe_retry_failed_tasks pauses a workflow
+    (paused_by="system") once every task in a phase has failed past its
+    retry cap -- e.g. every attempt failed the same way because an LLM
+    provider account ran out of credits. The only auto-resume path,
+    _try_auto_resume_paused_workflow, requires a Task.status=="done"
+    already sitting in the stalled phase -- a phase where literally every
+    attempt failed will never produce one on its own, so the workflow
+    stayed paused forever even after the user fixed the underlying cause
+    (e.g. topped up credits). _retry_exhausted_paused_workflows closes
+    that gap: after a cooldown, it resets retry_count on the stuck phase's
+    failed tasks and resumes the workflow, deferring the actual
+    reset-and-dispatch to _maybe_retry_failed_tasks' own already-tested
+    path. Capped at paused_workflow_max_retry_cycles so a genuinely
+    unrecoverable workflow doesn't retry forever."""
+
+    def _seed_paused_workflow(
+        self,
+        db,
+        paused_at,
+        paused_by="system",
+        paused_retry_count=0,
+        phase_execution_status="in_progress",
+        task_status="failed",
+        task_retry_count=2,
+    ):
+        from src.core.database import Phase, PhaseExecution, Task, Workflow
+
+        with db.session_scope() as session:
+            session.add(
+                Workflow(
+                    id="wf-paused",
+                    name="feature pipeline",
+                    phases_folder_path="/tmp",
+                    status="paused",
+                    paused_by=paused_by,
+                    paused_at=paused_at,
+                    paused_retry_count=paused_retry_count,
+                    status_reason="development: exhausted retries -- insufficient credits",
+                )
+            )
+            session.add(
+                Phase(
+                    id="phase-dev",
+                    workflow_id="wf-paused",
+                    name="development",
+                    order=1,
+                    description="d",
+                    done_definitions=["x"],
+                )
+            )
+            session.add(
+                PhaseExecution(
+                    id="exec-dev",
+                    phase_id="phase-dev",
+                    workflow_execution_id="wf-paused",
+                    status=phase_execution_status,
+                )
+            )
+            session.add(
+                Task(
+                    id="task-stuck",
+                    workflow_id="wf-paused",
+                    phase_id="phase-dev",
+                    raw_description="r",
+                    done_definition="d",
+                    status=task_status,
+                    failure_reason="insufficient credits",
+                    retry_count=task_retry_count,
+                )
+            )
+
+    def test_resets_retry_count_and_reactivates_past_cooldown(self, orch_db_env, tmp_path):
+        from src.autopilot.orchestrator import (
+            OrchestratorLogger,
+            _retry_exhausted_paused_workflows,
+        )
+        from src.core.database import Task, Workflow
+
+        self._seed_paused_workflow(
+            orch_db_env, paused_at=datetime.utcnow() - timedelta(seconds=999999)
+        )
+
+        recovered = _retry_exhausted_paused_workflows(OrchestratorLogger(tmp_path))
+
+        assert recovered == 1
+        with orch_db_env.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-paused").first()
+            assert wf.status == "active"
+            assert wf.paused_by is None
+            assert wf.status_reason is None
+            assert wf.paused_at is None
+            assert wf.paused_retry_count == 1
+            task = session.query(Task).filter_by(id="task-stuck").first()
+            assert task.retry_count == 0
+            # Deferred to _maybe_retry_failed_tasks -- untouched here.
+            assert task.status == "failed"
+            assert task.failure_reason == "insufficient credits"
+
+    def test_leaves_workflow_alone_within_cooldown(self, orch_db_env, tmp_path):
+        from src.autopilot.orchestrator import (
+            OrchestratorLogger,
+            _retry_exhausted_paused_workflows,
+        )
+        from src.core.database import Task, Workflow
+
+        self._seed_paused_workflow(orch_db_env, paused_at=datetime.utcnow() - timedelta(seconds=5))
+
+        recovered = _retry_exhausted_paused_workflows(OrchestratorLogger(tmp_path))
+
+        assert recovered == 0
+        with orch_db_env.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-paused").first()
+            assert wf.status == "paused"
+            task = session.query(Task).filter_by(id="task-stuck").first()
+            assert task.retry_count == 2
+
+    def test_treats_null_paused_at_as_eligible(self, orch_db_env, tmp_path):
+        from src.autopilot.orchestrator import (
+            OrchestratorLogger,
+            _retry_exhausted_paused_workflows,
+        )
+        from src.core.database import Workflow
+
+        self._seed_paused_workflow(orch_db_env, paused_at=None)
+
+        recovered = _retry_exhausted_paused_workflows(OrchestratorLogger(tmp_path))
+
+        assert recovered == 1
+        with orch_db_env.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-paused").first()
+            assert wf.status == "active"
+
+    def test_leaves_user_paused_workflows_alone(self, orch_db_env, tmp_path):
+        from src.autopilot.orchestrator import (
+            OrchestratorLogger,
+            _retry_exhausted_paused_workflows,
+        )
+        from src.core.database import Workflow
+
+        self._seed_paused_workflow(
+            orch_db_env, paused_by="user", paused_at=datetime.utcnow() - timedelta(seconds=999999)
+        )
+
+        recovered = _retry_exhausted_paused_workflows(OrchestratorLogger(tmp_path))
+
+        assert recovered == 0
+        with orch_db_env.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-paused").first()
+            assert wf.status == "paused"
+
+    def test_leaves_process_stop_pause_alone(self, orch_db_env, tmp_path):
+        """pause_workflow_direct (used for process/pipeline shutdown) pauses
+        without setting paused_by at all -- a real, separate "paused
+        forever, no auto-resume" gap, but not this bug's root cause, and
+        not safe to blindly auto-retry the same way (unlike an exhausted-
+        retry pause, nothing here confirms every task actually failed)."""
+        from src.autopilot.orchestrator import (
+            OrchestratorLogger,
+            _retry_exhausted_paused_workflows,
+        )
+        from src.core.database import Workflow
+
+        self._seed_paused_workflow(
+            orch_db_env, paused_by=None, paused_at=datetime.utcnow() - timedelta(seconds=999999)
+        )
+
+        recovered = _retry_exhausted_paused_workflows(OrchestratorLogger(tmp_path))
+
+        assert recovered == 0
+        with orch_db_env.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-paused").first()
+            assert wf.status == "paused"
+
+    def test_gives_up_permanently_after_max_retry_cycles(self, orch_db_env, tmp_path):
+        from src.autopilot.orchestrator import (
+            OrchestratorLogger,
+            _get_paused_workflow_max_retry_cycles,
+            _retry_exhausted_paused_workflows,
+        )
+        from src.core.database import Task, Workflow
+
+        self._seed_paused_workflow(
+            orch_db_env,
+            paused_at=datetime.utcnow() - timedelta(seconds=999999),
+            paused_retry_count=_get_paused_workflow_max_retry_cycles(),
+        )
+
+        recovered = _retry_exhausted_paused_workflows(OrchestratorLogger(tmp_path))
+
+        assert recovered == 1
+        with orch_db_env.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-paused").first()
+            # Still "paused", but no longer eligible for another cycle --
+            # paused_by no longer matches this function's own "system" filter.
+            assert wf.status == "paused"
+            assert wf.paused_by == "system-exhausted"
+            assert "manual resume required" in wf.status_reason
+            # Tasks left completely untouched -- this is a permanent give-up,
+            # not another retry attempt.
+            task = session.query(Task).filter_by(id="task-stuck").first()
+            assert task.retry_count == 2
+
+        # And it stays excluded on a subsequent pass.
+        recovered_again = _retry_exhausted_paused_workflows(OrchestratorLogger(tmp_path))
+        assert recovered_again == 0
+
+    def test_only_resets_failed_tasks_in_in_progress_phase(self, orch_db_env, tmp_path):
+        """Same scoping requirement _recover_abandoned_workflows_missing_worktree
+        already enforces: an old, already-superseded failed task from a
+        completed phase must not block or get swept up by recovery of the
+        actually-stuck phase."""
+        from src.core.database import Phase, PhaseExecution, Task
+
+        self._seed_paused_workflow(
+            orch_db_env, paused_at=datetime.utcnow() - timedelta(seconds=999999)
+        )
+        with orch_db_env.session_scope() as session:
+            session.add(
+                Phase(
+                    id="phase-old",
+                    workflow_id="wf-paused",
+                    name="architectural_review",
+                    order=0,
+                    description="d",
+                    done_definitions=["x"],
+                )
+            )
+            session.add(
+                PhaseExecution(
+                    id="exec-old",
+                    phase_id="phase-old",
+                    workflow_execution_id="wf-paused",
+                    status="completed",
+                )
+            )
+            session.add(
+                Task(
+                    id="task-old-capped",
+                    workflow_id="wf-paused",
+                    phase_id="phase-old",
+                    raw_description="r",
+                    done_definition="d",
+                    status="failed",
+                    failure_reason="unrelated old failure",
+                    retry_count=2,
+                )
+            )
+
+        from src.autopilot.orchestrator import (
+            OrchestratorLogger,
+            _retry_exhausted_paused_workflows,
+        )
+
+        recovered = _retry_exhausted_paused_workflows(OrchestratorLogger(tmp_path))
+
+        assert recovered == 1
+        with orch_db_env.session_scope() as session:
+            old_task = session.query(Task).filter_by(id="task-old-capped").first()
+            assert old_task.retry_count == 2  # untouched
+            stuck_task = session.query(Task).filter_by(id="task-stuck").first()
+            assert stuck_task.retry_count == 0  # reset
+
+
 class TestWorkflowAppearsAbandoned:
     """_workflow_appears_abandoned: the signal _escalate_stale_active_
     workflows uses to decide whether a workflow stuck "active" is

@@ -452,6 +452,20 @@ class Workflow(Base):
     # eligible for auto-resume; "user" -> left alone until manually resumed.
     paused_by = Column(String, nullable=True)
 
+    # When this workflow was last paused by _maybe_retry_failed_tasks
+    # exhausting its retry cap (paused_by="system"). Read by
+    # _retry_exhausted_paused_workflows's cooldown gate -- NULL (rows from
+    # before this column existed) is treated as immediately eligible, not
+    # skipped. Cleared whenever the workflow leaves "paused", by any path.
+    paused_at = Column(DateTime, nullable=True)
+
+    # How many times _retry_exhausted_paused_workflows has already given
+    # this workflow another shot after an exhausted-retry pause. Capped at
+    # paused_workflow_max_retry_cycles (hephaestus_config.yaml) -- once hit,
+    # paused_by flips to "system-exhausted" (excluded from further retries,
+    # same as an unrecoverable exception: a human has to look at it).
+    paused_retry_count = Column(Integer, default=0, nullable=False)
+
     # Human-readable explanation for the current status -- e.g. why the
     # workflow paused/failed, or that it's awaiting an arbiter decision.
     # Without this, a defensive pause/fail was only ever explained in a log
@@ -1394,6 +1408,8 @@ class DatabaseManager:
         self._migrate_autopilot_designs_error_column()
         self._migrate_workflow_paused_by_column()
         self._migrate_workflow_status_reason_column()
+        self._migrate_workflow_paused_at_column()
+        self._migrate_workflow_paused_retry_count_column()
         self._migrate_task_action_target_phase_column()
 
     def _create_fts5_tables(self):
@@ -1929,6 +1945,44 @@ class DatabaseManager:
                 logger.info("Migrated workflows.status_reason column")
         except Exception as e:
             logger.debug(f"workflows.status_reason migration (may already exist): {e}")
+
+    def _migrate_workflow_paused_at_column(self):
+        """Add workflows.paused_at for existing databases.
+
+        Idempotent - safe to call on every startup.
+        """
+        try:
+            with self.engine.connect() as conn:
+                try:
+                    conn.execute(
+                        text("ALTER TABLE workflows ADD COLUMN paused_at DATETIME")
+                    )
+                except Exception:
+                    pass  # Column already exists
+                conn.commit()
+                logger.info("Migrated workflows.paused_at column")
+        except Exception as e:
+            logger.debug(f"workflows.paused_at migration (may already exist): {e}")
+
+    def _migrate_workflow_paused_retry_count_column(self):
+        """Add workflows.paused_retry_count for existing databases.
+
+        Idempotent - safe to call on every startup.
+        """
+        try:
+            with self.engine.connect() as conn:
+                try:
+                    conn.execute(
+                        text(
+                            "ALTER TABLE workflows ADD COLUMN paused_retry_count INTEGER DEFAULT 0 NOT NULL"
+                        )
+                    )
+                except Exception:
+                    pass  # Column already exists
+                conn.commit()
+                logger.info("Migrated workflows.paused_retry_count column")
+        except Exception as e:
+            logger.debug(f"workflows.paused_retry_count migration (may already exist): {e}")
 
     def _migrate_task_action_target_phase_column(self):
         """Add tasks.action_target_phase for existing databases.

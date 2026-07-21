@@ -75,6 +75,22 @@ def _get_phase0_timeout() -> int:
     except Exception:
         return 3600  # 1 hour default
 
+def _get_paused_workflow_retry_cooldown_seconds() -> int:
+    """Get the exhausted-retry-pause cooldown from config, with fallback to default."""
+    try:
+        from src.core.simple_config import get_config
+        return get_config().paused_workflow_retry_cooldown_seconds
+    except Exception:
+        return 300  # 5 min default
+
+def _get_paused_workflow_max_retry_cycles() -> int:
+    """Get the exhausted-retry-pause retry cycle cap from config, with fallback to default."""
+    try:
+        from src.core.simple_config import get_config
+        return get_config().paused_workflow_max_retry_cycles
+    except Exception:
+        return 10  # default
+
 POLL_INTERVAL = 15
 STUCK_THRESHOLD = 3
 DESIGN_QUEUE_SCAN_INTERVAL = 60
@@ -2791,6 +2807,111 @@ def _recover_abandoned_workflows_missing_worktree(logger: OrchestratorLogger) ->
     return recovered
 
 
+def _retry_exhausted_paused_workflows(logger: OrchestratorLogger) -> int:
+    """Self-heal for a workflow _maybe_retry_failed_tasks paused after its
+    retry cap was exhausted (Workflow.paused_by == "system") -- e.g. every
+    task in a phase failed the same way because an LLM provider account ran
+    out of credits.
+
+    Without this, such a workflow has no automated path back: _advance_phases
+    only ever un-pauses via _try_auto_resume_paused_workflow, which requires
+    a Task.status == "done" already sitting in the stalled phase -- a phase
+    where literally every attempt (original + both retries) failed the same
+    way will never produce one on its own, so the workflow stays paused
+    forever, even after whatever broke it (e.g. the credits) gets fixed.
+
+    Recovers by resetting retry_count to 0 on the stuck phase's failed tasks
+    and flipping the workflow back to "active" -- deliberately not touching
+    task.status/failure_reason itself, so _maybe_retry_failed_tasks' own
+    already-tested reset-and-dispatch loop does that (and folds
+    failure_reason into the next attempt's prompt) on the very next
+    _advance_phases pass, instead of this function reimplementing it.
+
+    Gated two ways so this can't degrade into the exact tight-retry-loop
+    problem the retry cap exists to prevent:
+    - A cooldown (paused_workflow_retry_cooldown_seconds) since the workflow
+      was paused (Workflow.paused_at) -- NULL (rows paused before this
+      column existed) is treated as immediately eligible, not skipped.
+    - A hard cap on how many times a single workflow gets this second
+      chance (paused_workflow_max_retry_cycles, tracked via
+      Workflow.paused_retry_count). Once hit, this treats it like a genuine
+      unrecoverable failure -- paused_by flips to "system-exhausted" (no
+      longer matching this function's own "system" filter, so it's excluded
+      from every future pass) and status_reason is updated to say so. A
+      human has to look at it at that point, same as the credits scenario
+      would if it turned out to actually be permanently broken code instead.
+    """
+    from sqlalchemy import or_
+
+    max_cycles = _get_paused_workflow_max_retry_cycles()
+    cutoff = datetime.utcnow() - timedelta(
+        seconds=_get_paused_workflow_retry_cooldown_seconds()
+    )
+    recovered = 0
+    with get_db() as db:
+        candidates = (
+            db.query(Workflow)
+            .filter(
+                Workflow.status == "paused",
+                Workflow.paused_by == "system",
+                or_(Workflow.paused_at.is_(None), Workflow.paused_at < cutoff),
+            )
+            .all()
+        )
+        for wf in candidates:
+            if wf.paused_retry_count >= max_cycles:
+                logger.warning(
+                    f"[WORKFLOW-RECOVERY] Workflow {wf.id[:8]} exhausted "
+                    f"{max_cycles} auto-retry cycles -- giving up permanently, "
+                    "needs a manual resume"
+                )
+                wf.paused_by = "system-exhausted"
+                wf.status_reason = (
+                    f"{wf.status_reason or ''} (auto-retry gave up after "
+                    f"{max_cycles} attempts -- manual resume required)"
+                )
+                recovered += 1  # counts as "handled", not "retried"
+                continue
+
+            # Scoped to the CURRENTLY in_progress phase only -- see the
+            # identical reasoning in _recover_abandoned_workflows_missing_worktree.
+            in_progress_phase_ids = {
+                pid
+                for (pid,) in db.query(PhaseExecution.phase_id)
+                .join(Phase, PhaseExecution.phase_id == Phase.id)
+                .filter(Phase.workflow_id == wf.id, PhaseExecution.status == "in_progress")
+                .all()
+            }
+            failed_tasks = (
+                db.query(Task)
+                .filter(Task.workflow_id == wf.id, Task.status == "failed", Task.phase_id.in_(in_progress_phase_ids))
+                .all()
+                if in_progress_phase_ids
+                else []
+            )
+            if not failed_tasks:
+                continue
+
+            for task in failed_tasks:
+                task.retry_count = 0
+            wf.status = "active"
+            wf.paused_by = None
+            wf.status_reason = None
+            wf.paused_at = None
+            wf.paused_retry_count = (wf.paused_retry_count or 0) + 1
+            logger.warning(
+                f"[WORKFLOW-RECOVERY] Workflow {wf.id[:8]} past its exhausted-"
+                f"retry cooldown -- reset retry_count on {len(failed_tasks)} "
+                f"failed task(s) (cycle {wf.paused_retry_count}/{max_cycles}) "
+                "and resumed; _maybe_retry_failed_tasks picks it up on the "
+                "next pass"
+            )
+            recovered += 1
+        if recovered:
+            db.commit()
+    return recovered
+
+
 def _update_design_status(
     design_id: Optional[str],
     status: str,
@@ -4340,6 +4461,7 @@ def _maybe_retry_failed_tasks(
                 workflow.status = "paused"
                 workflow.paused_by = "system"
                 workflow.status_reason = f"{phase.name}: exhausted retries -- {reason_text}"
+                workflow.paused_at = datetime.utcnow()
                 db.commit()
             return None
 

@@ -195,6 +195,12 @@ class Config:
         self.workflow_timeout_seconds = autopilot.get("workflow_timeout_seconds", 7200)  # 2 hours
         self.phase0_timeout_seconds = autopilot.get("phase0_timeout_seconds", 3600)  # 1 hour
         self.max_concurrent_projects = autopilot.get("max_concurrent_projects", 2)
+        self.paused_workflow_retry_cooldown_seconds = autopilot.get(
+            "paused_workflow_retry_cooldown_seconds", 300
+        )  # 5 min between auto-retry attempts on an exhausted-retry pause
+        self.paused_workflow_max_retry_cycles = autopilot.get(
+            "paused_workflow_max_retry_cycles", 10
+        )  # give up permanently after this many auto-retry cycles
 
         # Ticket tracking settings
         ticket_tracking = config.get("ticket_tracking", {})
