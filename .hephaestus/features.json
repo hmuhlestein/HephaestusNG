@@ -1,0 +1,101 @@
+{
+  "design_name": "Cost Tracking",
+  "features": [
+    {
+      "id": "cost-schema",
+      "name": "Cost Tracking Database Schema",
+      "scope": "Create the foundational database schema for cost tracking: the cost_entries append-only ledger table (one row per LLM turn/call with task_id, source, model, token breakdowns, cost_usd, raw_usage), the session_cost_checkpoints table (keyed by session_id for incremental collection tracking), add cost_total_usd denormalized columns to Task/Feature/AutopilotDesign/AutopilotProject, and add cost_limit_usd to AutopilotProject. Follow the existing _migrate_*_column pattern in database.py for safe live-migration on existing databases.",
+      "files": [
+        "src/core/database.py"
+      ],
+      "depends_on": [],
+      "execution": "sequential"
+    },
+    {
+      "id": "cost-derivation",
+      "name": "Cost Derivation Engine",
+      "scope": "Build src/core/cost_derivation.py, mirroring the existing src/core/status_derivation.py pattern. This module provides derive_cost_totals(db, task_id) which reads SUM of cost_entries.cost_usd grouped by task_id and writes it to Task.cost_total_usd, then rolls up through Feature -> AutopilotDesign -> AutopilotProject using the existing entity hierarchy relationships. Called on every new CostEntry write so the denormalized totals are always current without a separate polling loop.",
+      "files": [
+        "src/core/cost_derivation.py"
+      ],
+      "depends_on": [
+        "cost-schema"
+      ],
+      "execution": "sequential"
+    },
+    {
+      "id": "cost-collectors",
+      "name": "CLI Cost Collectors (Pi + Claude Code)",
+      "scope": "Build the Python cost collection infrastructure in src/services/cost_collection_service.py: an abstract CostCollector base class with collect_since(session_file, checkpoint) returning (list[CostEntry], new_checkpoint), plus PiCollector (reads pi JSONL transcripts, sums message.usage.cost.total from assistant turns since checkpoint) and ClaudeCodeCollector (uses a maintained per-model price table to convert raw token counts from Claude Code transcripts into dollar amounts, including two Anthropic cache-write tiers). Also includes: (1) the UUID5 deterministic session-ID fix in ClaudeCodeAgent.get_launch_command so Claude Code sessions are correlateable to tasks, (2) a cost-ingestion API endpoint in src/mcp/server.py for the pi extension to POST per-turn cost data, and (3) wiring collection into src/services/task_completion_service.py so cost is gathered when update_task_status(done) lands. The SessionCostCheckpoint table is used for incremental reads keyed by session_id (not Agent.id) to avoid double-counting on agent retries.",
+      "files": [
+        "src/services/cost_collection_service.py",
+        "src/interfaces/cli_interface.py",
+        "src/interfaces/cost_tracker.py",
+        "src/mcp/server.py",
+        "src/services/task_completion_service.py"
+      ],
+      "depends_on": [
+        "cost-schema",
+        "cost-derivation"
+      ],
+      "execution": "parallel"
+    },
+    {
+      "id": "pi-extension",
+      "name": "Pi Cost Tracker Extension",
+      "scope": "Build a pi extension at extensions/hephaestus-cost-tracker/ (TypeScript) that hooks turn_end events to capture message.usage.cost.total in real-time from the provider response, POSTs each turn cost to Hephaestus cost-ingestion API endpoint, and optionally displays running cost in the pi TUI status bar via ctx.ui.setStatus(). The extension reads session_id from the pi session via ctx.sessionManager and includes it in the POST for correct task attribution. Installed globally by scripts/install.sh when pi is detected. This eliminates the need for the SessionCostCheckpoint mechanism for pi sessions (real-time POST means no file tailing), though the Python JSONL fallback remains for sessions without the extension.",
+      "files": [
+        "extensions/hephaestus-cost-tracker/"
+      ],
+      "depends_on": [
+        "cost-collectors"
+      ],
+      "execution": "sequential"
+    },
+    {
+      "id": "openrouter-direct",
+      "name": "Backend OpenRouter Direct Cost Capture",
+      "scope": "Refactor src/interfaces/langchain_llm_client.py to capture cost from the backend own direct OpenRouter calls (task enrichment, guardian, conductor, and ~6 other call sites). Build an _invoke_and_record helper that all ~9 model.ainvoke() sites route through, which adds usage include:true to extra_body so OpenRouter returns cost in the response, extracts usage from response.response_metadata, and writes a CostEntry with source=openrouter_direct. Thread task_id and workflow_id through method signatures that currently lack them so cost entries are correctly attributed.",
+      "files": [
+        "src/interfaces/langchain_llm_client.py"
+      ],
+      "depends_on": [
+        "cost-schema",
+        "cost-derivation"
+      ],
+      "execution": "parallel"
+    },
+    {
+      "id": "budget-enforcement",
+      "name": "Budget Enforcement and Pipeline Throttling",
+      "scope": "Implement spend-limit enforcement using AutopilotProject.cost_limit_usd and cost_total_usd. Extract _pause_project_workflows(project_id, paused_by) from the /autopilot/stop route handler in orchestrator.py into a reusable function that correctly filters definition_id in (autopilot, autopilot-phase0) (fixing an existing bug where Phase 0 workflows are missed). Hook into cost_derivation.py recompute path to trigger budget pause when cost crosses limit. Add guards in pick_next_design and _run_one_feature to block new work for over-budget projects. Generalize every paused_by==user self-heal guard to paused_by is not None, but deliberately leave start() resume-on-play filter as paused_by==user so the play button cannot clear a budget-pause.",
+      "files": [
+        "src/autopilot/orchestrator.py",
+        "src/mcp/autopilot_api.py"
+      ],
+      "depends_on": [
+        "cost-schema",
+        "cost-derivation"
+      ],
+      "execution": "parallel"
+    },
+    {
+      "id": "cost-ui",
+      "name": "Cost Tracking UI",
+      "scope": "Add cost visibility and budget configuration to the frontend. In ProjectSettingsModal.tsx add a cost_limit_usd number input (optional blank=no limit) wired to the existing PUT projects mutation. In the autopilot design screen add a cost-so-far indicator showing current spend with a link that opens ProjectSettingsModal for the active project. Surface paused_by==budget as a distinct badge (Paused: budget limit reached) in whatever status display already exists for paused workflows. Also display cost_total_usd on feature cards, design rows, and project-level summary in the autopilot dashboard -- the field already flows through autopilot_api.py existing report shape so this is additive plumbing to existing UI components that already read cost_total (confirmed in FeatureGallery.tsx and FeatureDetailModal.tsx).",
+      "files": [
+        "frontend/src/components/ProjectSettingsModal.tsx",
+        "frontend/src/components/autopilot/DesignQueuePanel.tsx",
+        "frontend/src/components/autopilot/PipelineStatusCard.tsx",
+        "frontend/src/components/autopilot/FeatureGallery.tsx",
+        "frontend/src/components/autopilot/FeatureDetailModal.tsx",
+        "frontend/src/pages/Autopilot.tsx"
+      ],
+      "depends_on": [
+        "cost-schema",
+        "budget-enforcement"
+      ],
+      "execution": "parallel"
+    }
+  ]
+}
