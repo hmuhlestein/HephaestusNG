@@ -719,6 +719,94 @@ class TaskCompletionService:
                 logger.error(f"Failed to trigger queue processing after validation failure: {qe}")
 
     @staticmethod
+    def verify_output_survived_commit(session, task, phase=None) -> Optional[Dict[str, Any]]:
+        """Second half of the output-existence hard floor: verify_output_artifact
+        confirms the declared file(s) are in the worktree BEFORE 'done' is
+        accepted; this re-checks the exact same worktree paths AFTER
+        commit_and_link_ticket runs, to catch the file having vanished in
+        between.
+
+        That gap is real, not theoretical: an agent whose shell cwd drifted
+        outside its worktree mid-task can still pass the first check (an
+        earlier pass genuinely wrote the file into the worktree) while its
+        LAST write -- the one actually on disk when the request completes --
+        landed somewhere else entirely (e.g. the main repo checkout).
+        commit_and_link_ticket's `git add -A` then finds nothing dirty and
+        silently commits nothing. Observed live: exactly this sequence let a
+        full security_review report and its code fixes complete as "done"
+        with zero trace in git history.
+
+        Only called after a successful commit_and_link_ticket, so a `None`
+        commit SHA there is the actual trigger for this to matter -- but the
+        check itself is a plain existence check, independent of whether a
+        commit was made (an unchanged-because-already-committed file is
+        exactly as fine as a freshly committed one).
+
+        Returns a rejection response dict (mirroring verify_output_artifact's
+        shape) if a required file is missing now, else None.
+        """
+        from pathlib import Path as _Path
+
+        from src.autopilot.spec import get_phase_required_files
+        from src.core.constants import CONTEXT_DIR_NAME
+        from src.core.database import Phase, Workflow
+
+        if phase is None:
+            phase = session.query(Phase).filter_by(id=task.phase_id).first()
+        if not phase:
+            return None
+
+        required_files = get_phase_required_files(phase, task.workflow_id)
+        if not required_files:
+            return None
+
+        wf = (
+            session.query(Workflow).filter_by(id=task.workflow_id).first()
+            if task.workflow_id
+            else None
+        )
+        if not (wf and wf.working_directory):
+            return None  # verify_output_artifact already surfaces this case.
+
+        missing = []
+        for declared_output in required_files:
+            found = False
+            for candidate in [
+                _Path(wf.working_directory) / "docs" / phase.name / declared_output,
+                _Path(wf.working_directory) / "docs" / declared_output,
+                _Path(wf.working_directory) / declared_output,
+                _Path(wf.working_directory) / CONTEXT_DIR_NAME / declared_output,
+            ]:
+                if candidate.exists():
+                    found = True
+                    break
+            if not found:
+                missing.append(declared_output)
+
+        if not missing:
+            return None
+
+        logger.error(
+            f"Task {task.id} (phase {phase.name}) claimed done and passed the "
+            f"pre-commit output check, but {missing} is gone from the worktree "
+            "after commit -- the agent's actual last write landed somewhere "
+            "else. Failing the task instead of letting the loss go silent."
+        )
+        task.status = "failed"
+        task.failure_reason = (
+            f"Output {', '.join(missing)} was present when checked but is "
+            "missing from the worktree after commit -- your last write to it "
+            "likely landed outside your assigned Working Directory (check "
+            "your shell's cwd). Redo the output inside your Working "
+            "Directory and mark done again."
+        )
+        session.commit()
+        return {
+            "status": "failed",
+            "message": task.failure_reason,
+        }
+
+    @staticmethod
     async def commit_and_link_ticket(session, agent_id: str, task, summary: str) -> Optional[str]:
         """Commit the agent's changes in the shared worktree, and if the
         task has a ticket_id, auto-link the resulting commit to it.

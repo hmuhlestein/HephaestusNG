@@ -246,6 +246,92 @@ class TestVerifyOutputArtifact:
             assert result is None
 
 
+class TestVerifyOutputSurvivedCommit:
+    """Regression: verify_output_artifact found the declared output in the
+    worktree BEFORE 'done' was accepted -- but a real incident showed the
+    file could still be gone from the worktree by the time
+    commit_and_link_ticket ran moments later (an agent whose actual last
+    write landed outside its assigned worktree). Nothing re-checked after
+    the commit, so a full report + code fix vanished with the task still
+    showing "done" and zero commit in git history. This is the re-check
+    that closes that gap."""
+
+    def test_returns_none_when_no_phase(self):
+        task = Mock(phase_id=None)
+        result = TaskCompletionService.verify_output_survived_commit(
+            session=Mock(), task=task, phase=None
+        )
+        assert result is None
+
+    def test_returns_none_when_no_required_files(self):
+        phase = Mock(name="development", id="phase-1")
+        task = Mock(phase_id="phase-1", workflow_id="wf-1")
+
+        with patch("src.autopilot.spec.get_phase_required_files", return_value=[]):
+            result = TaskCompletionService.verify_output_survived_commit(
+                session=Mock(), task=task, phase=phase
+            )
+            assert result is None
+
+    def test_returns_none_when_no_workflow_id(self):
+        phase = Mock(name="development", id="phase-1")
+        task = Mock(phase_id="phase-1", workflow_id=None)
+
+        with patch("src.autopilot.spec.get_phase_required_files", return_value=["docs/output.md"]):
+            result = TaskCompletionService.verify_output_survived_commit(
+                session=Mock(), task=task, phase=phase
+            )
+            assert result is None
+
+    def test_passes_when_output_file_exists(self, tmp_path):
+        phase = Mock(name="development", id="phase-1")
+        phase.name = "development"
+        task = Mock(phase_id="phase-1", workflow_id="wf-1", id="task-1", status="done")
+
+        docs = tmp_path / "docs"
+        docs.mkdir()
+        (docs / "output.md").write_text("content")
+
+        mock_session = Mock()
+        mock_session.query.return_value.filter_by.return_value.first.return_value = (
+            Mock(working_directory=str(tmp_path))
+        )
+
+        with patch("src.autopilot.spec.get_phase_required_files", return_value=["output.md"]):
+            result = TaskCompletionService.verify_output_survived_commit(
+                session=mock_session, task=task, phase=phase
+            )
+            assert result is None
+            assert task.status == "done"  # untouched
+
+    def test_fails_and_marks_task_failed_when_output_missing(self, tmp_path):
+        """The exact live incident: the pre-commit check saw the file (an
+        earlier pass genuinely wrote it into the worktree), but by the time
+        this runs -- right after commit_and_link_ticket -- it's gone."""
+        phase = Mock(name="security_review", id="phase-1")
+        phase.name = "security_review"
+        task = Mock(phase_id="phase-1", workflow_id="wf-1", id="task-1", status="done")
+
+        mock_session = Mock()
+        mock_session.query.return_value.filter_by.return_value.first.return_value = (
+            Mock(working_directory=str(tmp_path))  # empty -- no docs/ dir at all
+        )
+
+        with patch(
+            "src.autopilot.spec.get_phase_required_files",
+            return_value=["security_report.md"],
+        ):
+            result = TaskCompletionService.verify_output_survived_commit(
+                session=mock_session, task=task, phase=phase
+            )
+
+        assert result is not None
+        assert result["status"] == "failed"
+        assert "security_report.md" in result["message"]
+        assert task.status == "failed"
+        assert task.failure_reason == result["message"]
+
+
 class TestVerifyGateResultSchema:
     """Regression: a QA agent wrote its own nested JSON shape instead of
     the documented flat schema. verify_output_artifact only checks the
