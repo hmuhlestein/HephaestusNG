@@ -1221,11 +1221,12 @@ class AgentManager:
             try:
                 output = "\n".join(pane.cmd("capture-pane", "-p", "-S", "-50").stdout)
                 output_lower = output.lower()
+                # Only match the exact Claude session-limit message — generic
+                # fragments like "session limit" or "rate limit" false-positive
+                # on the prompt text itself (which discusses limits).
                 for indicator in (
                     "you've hit your session limit",
-                    "session limit",
-                    "rate limit",
-                    "too many requests",
+                    "too many requests, please slow down",
                 ):
                     if indicator in output_lower:
                         raise Exception(

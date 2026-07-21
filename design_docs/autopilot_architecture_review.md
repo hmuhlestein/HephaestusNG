@@ -476,9 +476,16 @@ These were open questions; now settled (2026-06-19):
    and makes deterministic floors more important, not less. *(When concurrency is
    eventually enabled, the git substrate is designed in §9.6 — per-design
    integration worktrees; the sequential default is the N=1 special case.)*
-2. **Single project at a time.** One active project. *Implication:* the
-   `autopilot_projects` multi-project machinery can be simplified to a single
-   active-project scope; the spec and queue are per-project.
+2. ~~**Single project at a time.** One active project.~~ **Superseded (2026-07).**
+   `AutopilotServiceRegistry` (`src/autopilot/service.py`) now runs one
+   `AutopilotService` per `project_id`, with a `max_concurrent_projects` cap
+   enforced in `POST /start`. Per-design concurrency (item 1) is still
+   sequential-only within a project, but multiple *projects* now run
+   concurrently against the same backend process. **This was not threaded
+   through the rest of the design** — see the new **B9** bug in §11.2: the
+   human-input mailbox is still a single global directory with no
+   project/design scoping, so it's now a cross-project collision risk, not
+   just a TOCTOU risk.
 3. **Engine is the driver.** Autopilot co-runs with / is driven by the engine —
    not a standalone subprocess phoning home. This confirms **Slice E** (in-process
    `AutopilotService`, direct service calls, no `requests`-to-self) and makes
@@ -894,6 +901,13 @@ actually execute. **Prove the engine, then layer the collaboration model.**
 This section is the actionable backlog (consolidated from the former
 `REMAINING_WORK.md`). Run tests with `.venv/bin/python -m pytest <file> -p no:libtmux`.
 
+**Refreshed 2026-07-21** against the current tree (doc last substantively
+updated 2026-06-20, then §11.2 findings added 2026-06-20; ~236 commits have
+touched `src/autopilot/`/`src/mcp/autopilot_api.py` since). Everything below
+in §11.1/§11.2 that was previously "remaining" and is now confirmed landed
+has been moved into the done table or marked resolved. §11.3 is pruned to
+what's actually still open.
+
 ### 11.1 Done (all on `main`)
 
 | Area | What landed |
@@ -911,10 +925,23 @@ This section is the actionable backlog (consolidated from the former
 | Tier 3 (partial) | DB queue: `pick_next_design` reads DB first; status updated; additive `autopilot_designs` migration (`_migrate_autopilot_designs_columns`). |
 | Tier 5.1 / 5.2 | Root `autopilot.py` deleted; HTML report → Jinja2 `templates/feature_report.html`. |
 | Bugs | **B1** (stop_pipeline scoped), **B2** (no 60s false-complete; `hard_error` after 5 min no-tasks), **B3** (credit detection tightened), DB migration on direct invocation, `DesignEntry.status` default, MockLogger. |
+| §11.2 fix #1 — spec gate output-existence floor | `get_phase_required_files` (`spec.py`) is enforced by `src/services/task_completion_service.py`: `done` is rejected when a phase's YAML-declared output file is missing, catching agent hallucination at the source (not just the QA-specific gate). |
+| §11.2 fix #2 — abandoned required phase → impasse, not silent skip | `monitor.py`'s frozen-agent path (`_mechanical_recovery_for_agent`) fails the task instead of letting the pipeline advance; escalation is via the `MAX_PHASE_ATTEMPTS` bound rather than a "9/10, 0 failures" false-success report. |
+| §9.6 — per-design integration worktree | `_create_integration_worktree` (`orchestrator.py`), 5 call sites; `run-<designId>` branch model as designed. |
+| §9.7 — Design is the top-level entity | `Workflow.design_id` FK landed (`database.py:388`) with a migration for existing rows. |
+| §10.1.1 — architect as adversarial reviewer | Done. The per-phase `phase_1..10_*.py` files were consolidated into one `phases.py`, which documents "architect re-invoked for adversarial review → architect session resumes" — the generic cold-context reviewer was replaced as designed. |
+| §11.3 self-review loop | Done. `tasks.self_review_done` column + one-shot completion gate in `server.py` (`update_task_status`) — first `done` on a `self_review`-scoped phase sends a checklist instead of completing; second `done` completes. |
+| Multi-project concurrency (not in original doc) | `AutopilotServiceRegistry` (`src/autopilot/service.py`) — one `AutopilotService` per `project_id`, `max_concurrent_projects` cap in `POST /start`. See the §9 item 2 update above and **B9** below for the gap this opened. |
 
-**Tests:** 74 passing.
+**Tests:** 74 passing as of the original review; well beyond that now (not re-counted here — see `tests/` directly).
 
 ### 11.2 Smoke run — Run A ✅ (goto proven); Run B ❌ (gate not firing + abandoned-phase skip)
+
+**Status: both fixes below have since landed** (see the §11.1 done table —
+output-existence floor via `task_completion_service.py`; abandoned-phase →
+`MAX_PHASE_ATTEMPTS` impasse via `monitor.py`). Kept verbatim below as the
+historical record of *why* — the reasoning is still the best explanation of
+the failure modes these fixes close.
 
 **Run A (2026-06-20) succeeded:** 9/10 phases, **goto reconvergence proven end-to-end**
 (`adversarial_review → goto development`), real code produced (`calculator.py` + 26
