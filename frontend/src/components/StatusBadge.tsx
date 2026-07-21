@@ -31,7 +31,7 @@ const STATUS_LABELS: Record<string, string> = {
   // Agent statuses
   working: 'Working',
   idle: 'Idle',
-  terminated: 'Terminated',
+  terminated: 'Done',
   starting: 'Starting',
   stuck: 'Stuck',
 
