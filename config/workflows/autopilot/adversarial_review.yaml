@@ -297,7 +297,6 @@ additional_notes: |
   without it.
 
   hephaestus_complete_my_task(
-    agent_id="<YOUR EXACT agent ID from the task assignment>",
     status="done",
     summary="<brief summary: N BLOCKERs found, M WARNINGs found — see adversarial_review_report.md>",
     key_learnings=["<specific failure modes found>"]
