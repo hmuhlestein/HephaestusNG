@@ -145,6 +145,16 @@ class CLIAgentInterface(ABC):
         override per CLI (polymorphic)."""
         return []
 
+    def mcp_reconnect_instructions(self, server_name: str) -> str:
+        """Chat-message instructions telling the agent how to reconnect a
+        dropped MCP server, in THIS CLI's own vocabulary (e.g. pi's
+        `mcp connect <server>` tool). Empty = no known reconnect mechanism
+        for this CLI -- the monitor should not nudge with a guess, since
+        wrong syntax for the wrong CLI just confuses the agent. Concrete
+        with a safe default so the monitor stays harness-agnostic; override
+        per CLI (polymorphic)."""
+        return ""
+
     # ── Shared helpers ───────────────────────────────────────────────────
 
     def _save_prompt_to_file(self, prompt: str, prefix: str, task_id: str) -> str:
@@ -764,6 +774,15 @@ class PiAgent(CLIAgentInterface):
         # pi (mimo) can fall into a thought loop that never exits; Esc interrupts the
         # current generation so a follow-up nudge message is actually read.
         return ["Escape"]
+
+    def mcp_reconnect_instructions(self, server_name: str) -> str:
+        # Confirmed live: pi exposes `mcp status` / `mcp connect <server>`
+        # as tools the agent itself can invoke to reconnect a dropped MCP
+        # server without losing session state.
+        return (
+            f"Run `mcp connect {server_name}` to reconnect before calling "
+            f"any {server_name}_* tool. Verify with `mcp status` afterward."
+        )
 
     def parse_output(self, output: str) -> Dict[str, Any]:
         lines = output.strip().split("\n")

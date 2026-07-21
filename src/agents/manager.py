@@ -1820,6 +1820,46 @@ class AgentManager:
         finally:
             session.close()
 
+    def get_agent_raw_pane(self, agent_id: str, lines: int = 50) -> str:
+        """Capture the agent's CURRENT tmux pane content directly, with none
+        of get_agent_output's chrome-stripping applied.
+
+        get_agent_output always strips TUI chrome (status bars, spinners,
+        the "MCP: N/M servers" line) before returning -- both via
+        _read_transcript_log's mcp_status_re filter and via
+        strip_tui_chrome on its own capture-pane fallback. That's correct
+        for callers that want clean, human/LLM-readable output (Guardian's
+        trajectory analysis, the frontend), but it means there is no way to
+        observe the MCP connection status line through that method at all.
+        This method exists for callers that specifically need current
+        chrome, not history -- a plain, unfiltered capture-pane snapshot.
+        """
+        session = self.db_manager.get_session()
+        try:
+            agent = session.query(Agent).filter_by(id=agent_id).first()
+            if not agent or not agent.tmux_session_name:
+                return ""
+            if not self.tmux_server.has_session(agent.tmux_session_name):
+                return ""
+            tmux_session = next(
+                (
+                    s
+                    for s in self.tmux_server.sessions
+                    if s.name == agent.tmux_session_name
+                ),
+                None,
+            )
+            if not tmux_session:
+                return ""
+            pane = tmux_session.attached_window.attached_pane
+            output = pane.cmd("capture-pane", "-p", "-S", f"-{lines}").stdout
+            return "\n".join(output) if output else ""
+        except Exception as e:
+            logger.warning(f"Failed to get raw pane for {agent_id}: {e}")
+            return ""
+        finally:
+            session.close()
+
     def _read_transcript_log(self, agent, lines: int) -> str:
         """Read output from the pipe-pane transcript log file.
         

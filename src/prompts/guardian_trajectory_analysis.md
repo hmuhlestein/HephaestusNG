@@ -160,6 +160,18 @@ This agent is operating within the context of the above workflow. All tasks and 
    - Check if agent created the continuation task
    - If not, and work is done → needs_steering: true
 
+5. **Don't interrupt legitimate in-progress work for a step whose turn hasn't come yet**:
+   - A step numbered "STEP 1" or listed first is not necessarily required to run
+     before all other work — many agents legitimately leave organizing/cleanup
+     steps for last. If the agent is actively doing OTHER in-scope task work
+     (e.g. fixing a documented inaccuracy, which is also part of the done
+     definition), a not-yet-done mandatory step elsewhere in the phase is NOT
+     `violating_constraints` or `drifting` by itself.
+   - Only flag a missed mandatory step once the agent is about to mark the task
+     done, or has otherwise clearly finished its other work, while still
+     skipping it — or if the agent is truly stuck/idle. When in doubt, wait for
+     the agent's current action to finish before steering.
+
 **Remember**: Phase instructions are as important as task goals. Agents must follow both!
 
 ## Your Thinking Process
