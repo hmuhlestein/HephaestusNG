@@ -5160,6 +5160,73 @@ def _run_ash_scan(worktree: Path, logger: OrchestratorLogger) -> None:
             pass
 
 
+def _cap_out_review_phase(
+    db,
+    workflow_id: str,
+    phase,
+    run_count: int,
+    max_runs: int,
+    logger: OrchestratorLogger,
+) -> bool:
+    """A review phase (architectural_review/adversarial_review, or any
+    other phase opted into workflow.yaml's max_review_runs) hit its run cap
+    without ever scoring clean -- stop looping instead of spawning yet
+    another fresh-session agent to re-review from scratch.
+
+    Writes a synthetic clean result (blocker_count=0) so the gate's own
+    scorer lets the pipeline continue past this phase, with the
+    accumulated findings history (see record_review_finding) appended to
+    the phase's own report as a real, visible "unresolved, capped" record
+    instead of silently dropping them. Then fires the same synthetic-
+    completion path _create_phase_task already uses to skip a clean
+    forensics_analysis run (_fire_phase_transition) -- no new completion
+    mechanism, just a different reason for using it.
+    """
+    from src.autopilot.spec import GATE_RESULT_ARTIFACTS, get_review_findings_history
+
+    workflow = db.query(Workflow).filter_by(id=workflow_id).first()
+    if not workflow or not workflow.working_directory:
+        return False
+
+    artifacts = GATE_RESULT_ARTIFACTS.get(phase.name, ())
+    if not artifacts:
+        return False
+
+    docs_dir = Path(workflow.working_directory) / "docs" / phase.name
+    docs_dir.mkdir(parents=True, exist_ok=True)
+
+    history = get_review_findings_history(workflow_id, phase.name)
+    caveats = (
+        "\n".join(
+            f"- Run {h['run_number']}: {h['blocker_count']} blocker(s) -- "
+            f"{h['summary'][:200]}"
+            for h in history
+        )
+        or "(no findings history recorded)"
+    )
+
+    (docs_dir / artifacts[0]).write_text(
+        json.dumps(
+            {"blocker_count": 0, "capped": True, "capped_after_runs": run_count},
+            indent=2,
+        )
+    )
+    if len(artifacts) > 1:
+        (docs_dir / artifacts[1]).write_text(
+            f"# {phase.name} -- capped after {run_count} runs\n\n"
+            f"Stopped re-reviewing after {max_runs} runs without a clean "
+            "pass (workflow.yaml's max_review_runs). Unresolved findings "
+            f"from prior runs:\n\n{caveats}\n"
+        )
+
+    logger.warning(
+        f"[PHASE-TASK] {phase.name} hit its review-run cap ({run_count}/"
+        f"{max_runs}) -- marking done with caveats instead of re-reviewing "
+        "again"
+    )
+    return _fire_phase_transition(workflow_id, phase.id, phase.name, logger)
+
+
 def _create_phase_task(
     workflow_id: str,
     phase_id: str,
@@ -6376,11 +6443,59 @@ def run_phase0(
                     "falling through to a full re-run"
                 )
         else:
-            logger.warning(
-                f"Phase 0 workflow {completion['workflow_id'][:8]} completed but "
-                f"no features.json found at {features_json_path} — falling "
-                "through to a full re-run"
-            )
+            # features.json not in designs_folder — the server may have
+            # crashed before the copy. Try extracting from the git branch
+            # (which survives worktree cleanup) before falling through to
+            # a full re-run.
+            branch = f"feature_architect/{design_entry.db_id or 'unknown'}"
+            try:
+                import subprocess
+                result = subprocess.run(
+                    ["git", "show", f"{branch}:.hephaestus/features.json"],
+                    cwd=str(project_path),
+                    capture_output=True, text=True, timeout=10,
+                )
+                if result.returncode == 0:
+                    features_json = json.loads(result.stdout)
+                    _validate_features_json(features_json)
+                    # Copy to designs_folder for future recovery
+                    features_json_path.parent.mkdir(parents=True, exist_ok=True)
+                    features_json_path.write_text(result.stdout)
+                    # Also restore scope.md files from the branch
+                    for feat in features_json.get("features", []):
+                        feat_id = feat.get("id", "")
+                        scope_result = subprocess.run(
+                            ["git", "show", f"{branch}:.hephaestus/features/{feat_id}/scope.md"],
+                            cwd=str(project_path),
+                            capture_output=True, text=True, timeout=10,
+                        )
+                        if scope_result.returncode == 0:
+                            scope_dest = designs_folder / "features" / feat_id / "scope.md"
+                            scope_dest.parent.mkdir(parents=True, exist_ok=True)
+                            scope_dest.write_text(scope_result.stdout)
+                    logger.info(
+                        f"Recovered features.json from git branch {branch} — "
+                        f"{len(features_json.get('features', []))} features"
+                    )
+                    feature_records = _create_feature_records(
+                        design_entry.db_id, features_json, designs_folder, logger
+                    )
+                    logger.info(
+                        f"Phase 0 resumed from branch: {len(feature_records)} features created"
+                    )
+                    return features_json, designs_folder
+                else:
+                    logger.warning(
+                        f"Phase 0 workflow {completion['workflow_id'][:8]} completed but "
+                        f"no features.json found at {features_json_path} or branch "
+                        f"{branch} — falling through to a full re-run"
+                    )
+            except Exception as branch_err:
+                logger.warning(
+                    f"Phase 0 workflow {completion['workflow_id'][:8]} completed but "
+                    f"no features.json found at {features_json_path} and branch "
+                    f"recovery failed ({branch_err}) — falling through to a full re-run"
+                )
 
     # Update design status to decomposing
     _update_design_status(design_entry.db_id, "decomposing", logger=logger)
