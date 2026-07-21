@@ -917,12 +917,49 @@ class PhaseManager:
         both close out a gated phase via a goto decision.
         """
         try:
-            from src.autopilot.spec import consume_gate_artifacts
+            from src.autopilot.spec import (
+                GATE_RESULT_ARTIFACTS,
+                consume_gate_artifacts,
+                get_max_review_runs,
+                read_report_text,
+                read_result,
+                record_review_finding,
+            )
 
             workflow = (
                 session.query(Workflow).filter_by(id=phase.workflow_id).first()
             )
             if workflow and workflow.working_directory:
+                # Snapshot this run's findings into persistent history BEFORE
+                # they're deleted below -- the next run of this phase is a
+                # fresh agent with zero memory of its own (see
+                # _create_phase_task), so without this every re-run
+                # re-reviews from scratch. Only for phases that opted into
+                # max_review_runs (workflow.yaml) -- skip the write entirely
+                # everywhere else, keeping this inert by default.
+                if get_max_review_runs(phase.workflow_id, phase.name) is not None:
+                    artifacts = GATE_RESULT_ARTIFACTS.get(phase.name, ())
+                    result = (
+                        read_result(
+                            workflow.working_directory, artifacts[0], phase_name=phase.name
+                        )
+                        if artifacts
+                        else None
+                    )
+                    report_text = (
+                        read_report_text(
+                            workflow.working_directory, artifacts[1], phase_name=phase.name
+                        )
+                        if len(artifacts) > 1
+                        else None
+                    )
+                    record_review_finding(
+                        phase.workflow_id,
+                        phase.name,
+                        blocker_count=(result or {}).get("blocker_count", 0),
+                        summary=report_text or (result or {}).get("reason", ""),
+                    )
+
                 consume_gate_artifacts(phase.name, workflow.working_directory)
         except Exception as e:
             logger.warning(f"Could not consume gate artifacts for {phase.name}: {e}")

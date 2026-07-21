@@ -84,6 +84,12 @@ class EvaluationPoint:
     max_retries: int = 2
     timeout_seconds: int = 300
     on_budget_exhausted: str = "continue"  # "continue" or "arbitrate"
+    # Opt-in cap on how many times THIS phase itself may re-run (distinct
+    # from max_retries, which bounds the GOTO TARGET's retries, e.g.
+    # development). None = uncapped (default for every phase that doesn't
+    # set it). See _get_max_review_runs/_create_phase_task's cap-enforcement
+    # block in src/autopilot/orchestrator.py.
+    max_review_runs: Optional[int] = None
 
 
 @dataclass
@@ -113,6 +119,7 @@ class OrchestratorConfig:
                     max_retries=ep.get("max_retries", 2),
                     timeout_seconds=ep.get("timeout_seconds", 300),
                     on_budget_exhausted=ep.get("on_budget_exhausted", "continue"),
+                    max_review_runs=ep.get("max_review_runs"),
                 )
             )
 
@@ -136,6 +143,7 @@ class OrchestratorConfig:
                     "conditions": ep.conditions,
                     "max_retries": ep.max_retries,
                     "timeout_seconds": ep.timeout_seconds,
+                    "max_review_runs": ep.max_review_runs,
                 }
                 for ep in self.evaluation_points
             ],

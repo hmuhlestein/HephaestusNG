@@ -88,6 +88,12 @@ orchestrator:
     - after_phase: architectural_review
       evaluator: heuristic
       max_retries: 10
+      # After this many runs of architectural_review itself (not
+      # development's retries -- see max_review_runs in EvaluationPoint),
+      # stop looping: mark the phase done with its unresolved findings
+      # documented instead of re-reviewing forever. See
+      # _create_phase_task's cap-enforcement block.
+      max_review_runs: 3
       conditions:
         - if: "score < 0.3"
           action: goto
@@ -104,6 +110,8 @@ orchestrator:
     - after_phase: adversarial_review
       evaluator: heuristic
       max_retries: 10
+      # See architectural_review's identical max_review_runs above.
+      max_review_runs: 3
       conditions:
         - if: "score < 0.3"
           action: goto
