@@ -1,10 +1,10 @@
-# Architectural Review Report (Re-run)
+# Architectural Review Report (Run 3 — Final)
 
 **Reviewer:** Architecture Design Agent (Phase 5)  
 **Date:** 2026-07-21  
-**Phase:** architectural_review (re-run)  
+**Phase:** architectural_review (run 3)  
 **Branch:** `feature/des-91c8-cost-derivation`  
-**Reviewed Commit:** `0a6d438` (architectural review fixes complete)  
+**Reviewed Commit:** `c938cbf` (adversarial review fixes complete)  
 **Architecture Reference:** `docs/architecture.md`  
 **Requirements Reference:** `docs/requirements_analysis.md`
 
@@ -12,80 +12,52 @@
 
 ## Executive Summary
 
-This is a re-run of Phase 5. The prior review (commit `da1da35`) found 1 BLOCKER, 4 FIX, and 4 DEFER issues. The developer addressed all BLOCKER and FIX findings in commit `0a6d438`. All 52 tests continue to pass.
+This is run 3 of Phase 5. Run 2 (commit `0a6d438`) verified all BLOCKER/FIX findings were fixed and issued PASS. Since then, Phase 6 (adversarial review) ran and applied additional fixes in commit `c938cbf`. I reviewed those changes for architectural compliance.
 
-**Verdict: PASS** — all architectural violations corrected.
+**Verdict: PASS** — adversarial fixes are architecturally compliant and strengthen the implementation.
 
-| Prior Finding | Status | Verification |
-|---------------|--------|--------------|
-| B-1: Frontend components not rendered | ✅ FIXED | `ProjectCostSummary` imported and rendered in `Dashboard.tsx` |
-| F-1: `paused_at` not cleared | ✅ FIXED | `wf.paused_at = None` added at `autopilot_api.py:1865` |
-| F-2: `_run_one_feature` returns "failed" | ✅ FIXED | Returns `"skipped"` (line 7059), a recognized status |
-| F-3: `task_id` not threaded | ✅ FIXED | `task_id` parameter added to 4 LLM methods, passed to `_invoke_and_record()` |
-| F-4: `pick_next_design` early return | ✅ FIXED | Changed `return None` to `continue` (line 2021) |
+| Category | Count |
+|----------|-------|
+| BLOCKER | 0 |
+| FIX | 0 |
+| DEFER | 4 (carried from prior runs) |
 
 ---
 
-## Finding Verification Details
+## Adversarial Review Changes Verified
 
-### B-1: Frontend Cost Components — FIXED ✅
+The adversarial review (Phase 6) made 3 changes. All are architecturally compliant:
 
-**Location:** `frontend/src/pages/Dashboard.tsx`
+### 1. Pi Extension Port & Path Fix
+**File:** `extensions/hephaestus-cost-tracker/src/index.ts`
 
-The developer:
-1. Imported `ProjectCostSummary` and `BudgetPausedLabel` from `@/components/cost`
-2. Added a `useQuery` hook to fetch `projectCosts` via `apiService.getProjectCosts()`
-3. Rendered `<ProjectCostSummary>` in the dashboard with full props (`projectId`, `projectName`, `costTotal`, `costLimit`, `isOverBudget`)
-4. Added auto-refresh with `refetchInterval: 30000`
+- Default port: `8000` → `8300` (matches actual Hephaestus server config)
+- API path: `/cost-entries` → `/api/autopilot/cost-entries` (matches actual route prefix)
 
-**Note:** `BudgetPausedLabel` is imported but not rendered yet. This is acceptable — the component exists for future use and the primary BLOCKER (cost data invisible to users) is resolved.
+**Assessment:** ✅ Bug fix — the original port and path were incorrect. No architecture violation.
 
-### F-1: `paused_at` Not Cleared — FIXED ✅
+### 2. Cost Derivation Hardening
+**File:** `src/core/cost_derivation.py`
 
-**Location:** `src/mcp/autopilot_api.py:1865`
+- Added input validation: reject negative costs, cap at $1000
+- Fixed `derive_design_cost()` to include workflows without features (Phase 0)
+- Fixed `derive_project_cost()` to include workflows without features (Phase 0)
 
-The budget resume loop now clears all pause-related fields:
-```python
-wf.paused_by = None
-wf.status = "active"
-wf.status_reason = None
-wf.paused_at = None  # ← ADDED
-```
+**Assessment:** ✅ Correct — Phase 0 workflows run under `definition_id="autopilot-phase0"` and may not have a `feature_id`. The original rollup chain missed these costs. This fix ensures the self-healing derivation is complete.
 
-### F-2: `_run_one_feature` Returns "failed" — FIXED ✅
+### 3. Budget Limit Clear API
+**File:** `src/mcp/autopilot_api.py`
 
-**Location:** `src/autopilot/orchestrator.py:7059`
+- Added `clear_cost_limit: bool = False` to `ProjectUpdate` model
+- Changed logic: explicit `clear_cost_limit=True` sets limit to `None`; omitting `cost_limit_usd` leaves it unchanged
 
-Now returns `"skipped"` instead of `"failed"`. This is a recognized status:
-- Line 170: `SKIPPED = "skipped"` enum value
-- Line 2059: Feature queries correctly exclude "skipped" from incomplete features
-- Line 7342: `all_skipped` check handles the case where all features in a group are skipped
-- Line 7476: Skipped features counted separately in summary
-
-### F-3: `task_id` Not Threaded — FIXED ✅
-
-**Location:** `src/interfaces/langchain_llm_client.py`
-
-Four methods now accept `task_id: Optional[str] = None` and pass it through:
-
-| Method | Line | Change |
-|--------|------|--------|
-| `enrich_task()` | 437 | Added `task_id` param, passed at line 466 |
-| `analyze_agent_state()` | 568 | Added `task_id` param, passed at line 592 |
-| `analyze_agent_trajectory()` | 652 | Added `task_id` param, passed at line 691 |
-| `review_qa_report()` | 774 | Added `task_id` param, passed at line 842 |
-
-### F-4: `pick_next_design` Early Return — FIXED ✅
-
-**Location:** `src/autopilot/orchestrator.py:2021`
-
-Changed from `return None` to `continue`. This allows the function to check other projects when one is over budget, which is correct for multi-project setups.
+**Assessment:** ✅ Improves API clarity — partial updates no longer accidentally wipe the budget limit. The `clear_cost_limit` flag provides an explicit mechanism for clearing.
 
 ---
 
 ## Remaining DEFER Items
 
-The 4 DEFER items from the prior review remain and are acceptable to defer:
+All 4 DEFER items from prior runs remain acceptable to defer:
 
 | ID | Issue | Impact |
 |----|-------|--------|
@@ -98,15 +70,14 @@ The 4 DEFER items from the prior review remain and are acceptable to defer:
 
 ## Test Results
 
-All 52 tests pass with no new warnings:
 ```
-================= 52 passed, 368 warnings in 8.01s =================
+================= 52 passed, 379 warnings in 8.23s =================
 ```
 
 ---
 
 ## Conclusion
 
-All prior BLOCKER and FIX findings have been correctly addressed. The implementation is architecturally compliant. The DEFER items are acceptable for deferral to future iterations. Phase 6 (adversarial review) can proceed.
+The adversarial review fixes are architecturally compliant. No new BLOCKER or FIX findings. The implementation correctly follows all design principles: append-only ledger, self-healing derivation, checkpoint by session_id, collection on completion, and idempotent budget pause. Phase 7 (security review) can proceed.
 
 *Report generated by Architecture Design Agent (Phase 5) on 2026-07-21*
