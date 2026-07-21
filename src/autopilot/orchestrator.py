@@ -5453,7 +5453,11 @@ def _create_phase_task(
                             f"RUN(S) OF THIS PHASE:\n{findings_lines}\n\n"
                             "Verify ONLY whether these specific findings are "
                             "now fixed. Do not re-review from scratch unless "
-                            "you find something genuinely new."
+                            "you find something genuinely new. The above is "
+                            "everything that survived from those earlier runs "
+                            "-- their original report/result files are gone "
+                            "(deleted after being read into this summary), so "
+                            "don't try to read them."
                         )
 
             # Create task
