@@ -371,9 +371,214 @@ class TestCreateAgentForTaskMissingSharedWorktree:
             assert "missing or not a valid git worktree" in (task.failure_reason or "")
 
 
+class TestCreateAgentForTaskFallback:
+    """When a phase configures fallback_cli_tool and the primary CLI fails,
+    create_agent_for_task retries with the fallback instead of failing the
+    task outright. The retry uses a fresh agent_id (create_agent_for_task
+    is re-entered from the top), so without explicit cleanup the primary
+    attempt's isolated worktree/branch is orphaned on disk forever."""
+
+    @pytest.mark.asyncio
+    async def test_discards_primary_worktree_on_fallback(
+        self, mock_agent_manager, db_manager
+    ):
+        with db_manager.session_scope() as session:
+            session.add(
+                Workflow(
+                    id="wf-fb",
+                    name="Fallback WF",
+                    status="active",
+                    working_directory="/tmp/test-project-fb",
+                    phases_folder_path="/tmp",
+                )
+            )
+            session.add(
+                Phase(
+                    id="phase-fb",
+                    workflow_id="wf-fb",
+                    name="implementation",
+                    order=1,
+                    description="d",
+                    done_definitions=["d"],
+                    cli_tool="claude",
+                    fallback_cli_tool="pi",
+                    fallback_cli_model="openrouter/some-model",
+                )
+            )
+            session.add(
+                Task(
+                    id="task-fb",
+                    workflow_id="wf-fb",
+                    phase_id="phase-fb",
+                    raw_description="r",
+                    enriched_description="r",
+                    done_definition="d",
+                    status="pending",
+                )
+            )
+
+        mock_agent_manager.branch_manager.create_agent_branch = MagicMock(
+            return_value={
+                "working_directory": "/tmp/test-project-fb-agent",
+                "branch_name": "agent-fb-branch",
+            }
+        )
+        mock_agent_manager.branch_manager.switch_to_branch = MagicMock()
+        mock_agent_manager.branch_manager.discard_agent = MagicMock()
+        mock_agent_manager.llm_provider.generate_agent_prompt = AsyncMock(
+            return_value="You are an AI agent."
+        )
+
+        mock_session = MagicMock()
+        mock_session.name = "agent-session-fb"
+        mock_agent_manager.tmux_server.new_session.return_value = mock_session
+        mock_session.attached_window.attached_pane = MagicMock()
+
+        with db_manager.session_scope() as session:
+            task = session.query(Task).filter_by(id="task-fb").first()
+
+            with patch("src.agents.manager.get_cli_agent") as mock_get_cli, patch(
+                "src.agents.manager.asyncio.sleep", new_callable=AsyncMock
+            ):
+                mock_cli = MagicMock()
+                mock_cli.get_launch_command.return_value = ["claude", "--task", "test"]
+                mock_cli.default_model = "test-model"
+                mock_get_cli.return_value = mock_cli
+
+                # Primary attempt fails; fallback attempt succeeds.
+                mock_agent_manager._send_initial_prompt_with_retry = AsyncMock(
+                    side_effect=[Exception("primary CLI unavailable"), None]
+                )
+
+                agent = await mock_agent_manager.create_agent_for_task(
+                    task=task,
+                    enriched_data={"description": "d"},
+                    memories=[],
+                    project_context="",
+                    working_directory="/tmp/test-project-fb",
+                )
+
+        assert agent is not None
+        mock_agent_manager.branch_manager.discard_agent.assert_called_once()
+        discarded_agent_id = (
+            mock_agent_manager.branch_manager.discard_agent.call_args[0][0]
+        )
+        # The discarded agent_id must be the failed primary attempt's, not
+        # the one that ultimately succeeded and was returned.
+        assert discarded_agent_id != agent.id
+
+
+class TestCreateAgentForTaskSessionLimitPause:
+    """A Claude session-limit rejection with no working fallback will keep
+    failing identically until the limit resets on its own -- retrying
+    burns 2 more cycles through _maybe_retry_failed_tasks for no benefit.
+    Must pause the workflow immediately instead, reusing the same
+    paused_by="system" convention _retry_exhausted_paused_workflows already
+    knows how to auto-resume from."""
+
+    @pytest.mark.asyncio
+    async def test_pauses_workflow_when_no_fallback_configured(
+        self, mock_agent_manager, db_manager
+    ):
+        with db_manager.session_scope() as session:
+            session.add(
+                Workflow(
+                    id="wf-sl",
+                    name="Session Limit WF",
+                    status="active",
+                    working_directory="/tmp/test-project-sl",
+                    phases_folder_path="/tmp",
+                )
+            )
+            session.add(
+                Phase(
+                    id="phase-sl",
+                    workflow_id="wf-sl",
+                    name="implementation",
+                    order=1,
+                    description="d",
+                    done_definitions=["d"],
+                    cli_tool="claude",
+                    # No fallback_cli_tool configured.
+                )
+            )
+            session.add(
+                Task(
+                    id="task-sl",
+                    workflow_id="wf-sl",
+                    phase_id="phase-sl",
+                    raw_description="r",
+                    enriched_description="r",
+                    done_definition="d",
+                    status="pending",
+                )
+            )
+
+        mock_agent_manager.branch_manager.create_agent_branch = MagicMock(
+            return_value={
+                "working_directory": "/tmp/test-project-sl-agent",
+                "branch_name": "agent-sl-branch",
+            }
+        )
+        mock_agent_manager.branch_manager.switch_to_branch = MagicMock()
+        mock_agent_manager.llm_provider.generate_agent_prompt = AsyncMock(
+            return_value="You are an AI agent."
+        )
+
+        mock_session = MagicMock()
+        mock_session.name = "agent-session-sl"
+        mock_agent_manager.tmux_server.new_session.return_value = mock_session
+        mock_session.attached_window.attached_pane = MagicMock()
+
+        # A plain get_session() (no autocommit-on-exit like session_scope)
+        # -- create_agent_for_task mutates this same task object in place
+        # (task.status = "in_progress") before its own internal cleanup
+        # session later re-queries and commits task.status = "failed" on a
+        # SEPARATE object. If this were session_scope, its commit-on-exit
+        # would flush this object's stale in-memory "in_progress" back over
+        # the real "failed" state the callee already committed.
+        session = db_manager.get_session()
+        task = session.query(Task).filter_by(id="task-sl").first()
+
+        with patch("src.agents.manager.get_cli_agent") as mock_get_cli, patch(
+            "src.agents.manager.asyncio.sleep", new_callable=AsyncMock
+        ):
+            mock_cli = MagicMock()
+            mock_cli.get_launch_command.return_value = ["claude", "--task", "test"]
+            mock_cli.default_model = "test-model"
+            mock_get_cli.return_value = mock_cli
+
+            mock_agent_manager._send_initial_prompt_with_retry = AsyncMock(
+                side_effect=Exception(
+                    "CLI session limit detected: \"you've hit your session "
+                    "limit\" found in output"
+                )
+            )
+
+            with pytest.raises(Exception, match="CLI session limit detected"):
+                await mock_agent_manager.create_agent_for_task(
+                    task=task,
+                    enriched_data={"description": "d"},
+                    memories=[],
+                    project_context="",
+                    working_directory="/tmp/test-project-sl",
+                )
+        session.close()
+
+        with db_manager.session_scope() as session:
+            task = session.query(Task).filter_by(id="task-sl").first()
+            assert task.status == "failed"
+            assert "CLI session limit detected" in task.failure_reason
+
+            workflow = session.query(Workflow).filter_by(id="wf-sl").first()
+            assert workflow.status == "paused"
+            assert workflow.paused_by == "system"
+            assert workflow.paused_at is not None
+
+
 class TestRestartAgent:
     """Tests for restart_agent method."""
-    
+
     @pytest.mark.asyncio
     async def test_raises_error_when_agent_not_found(self, mock_agent_manager, db_manager):
         """Should handle gracefully when agent doesn't exist."""
@@ -499,9 +704,81 @@ class TestRestartAgent:
         # Note: The old agent is terminated, new agent is created
 
 
+class TestSendInitialPromptSessionLimitCheck:
+    """verify_delivery defaults to False at both real call sites (line ~698
+    and ~1735 in manager.py), so the session-limit check must live in that
+    branch -- the verify_delivery=True retry loop is unreachable dead code
+    no caller ever enables."""
+
+    @pytest.mark.asyncio
+    async def test_raises_on_claude_session_limit_message(self, mock_agent_manager):
+        pane = MagicMock()
+        pane.cmd.return_value = MagicMock(
+            stdout=["some earlier output", "You've hit your session limit", "..."]
+        )
+        cli_agent = MagicMock()
+        cli_agent.needs_chunked_delivery = False
+        cli_agent.format_message = MagicMock(return_value="formatted prompt")
+
+        with patch("src.agents.manager.asyncio.sleep", new_callable=AsyncMock):
+            with pytest.raises(Exception, match="CLI session limit detected"):
+                await mock_agent_manager._send_initial_prompt_with_retry(
+                    pane=pane,
+                    cli_agent=cli_agent,
+                    cli_type="claude",
+                    initial_message="do the task",
+                    agent_id="a1",
+                    task_id="t1",
+                )
+
+    @pytest.mark.asyncio
+    async def test_no_raise_on_normal_output(self, mock_agent_manager):
+        pane = MagicMock()
+        pane.cmd.return_value = MagicMock(
+            stdout=["Reading files...", "Implementing feature..."]
+        )
+        cli_agent = MagicMock()
+        cli_agent.needs_chunked_delivery = False
+        cli_agent.format_message = MagicMock(return_value="formatted prompt")
+
+        with patch("src.agents.manager.asyncio.sleep", new_callable=AsyncMock):
+            await mock_agent_manager._send_initial_prompt_with_retry(
+                pane=pane,
+                cli_agent=cli_agent,
+                cli_type="claude",
+                initial_message="do the task",
+                agent_id="a1",
+                task_id="t1",
+            )
+
+    @pytest.mark.asyncio
+    async def test_does_not_false_positive_on_bare_429(self, mock_agent_manager):
+        """Regression: a bare 3-digit '429' is deliberately NOT checked --
+        it's too likely to appear incidentally in the freshly-echoed task
+        prompt (e.g. a task about handling HTTP 429 responses, which this
+        codebase's own tasks routinely discuss)."""
+        pane = MagicMock()
+        pane.cmd.return_value = MagicMock(
+            stdout=["Task: implement handling for HTTP 429 responses"]
+        )
+        cli_agent = MagicMock()
+        cli_agent.needs_chunked_delivery = False
+        cli_agent.format_message = MagicMock(return_value="formatted prompt")
+
+        with patch("src.agents.manager.asyncio.sleep", new_callable=AsyncMock):
+            await mock_agent_manager._send_initial_prompt_with_retry(
+                pane=pane,
+                cli_agent=cli_agent,
+                cli_type="claude",
+                initial_message="do the task",
+                agent_id="a1",
+                task_id="t1",
+            )
+
+
 class TestGetActiveAgents:
     """Tests for get_active_agents method."""
-    
+
     def test_returns_only_active_agents(self, mock_agent_manager, db_manager):
         """Should return only non-terminated agents."""
         with db_manager.session_scope() as session:

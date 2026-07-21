@@ -238,6 +238,8 @@ class AgentManager:
         # call site (create_task paths, recovery, API endpoint, monitor transitions)
         # gets the per-phase tool/model/glm/thinking_level without each having to
         # remember to fetch and forward it.
+        fallback_cli_tool = None
+        fallback_cli_model = None
         if task.phase_id and (
             phase_cli_tool is None
             and phase_cli_model is None
@@ -252,6 +254,8 @@ class AgentManager:
                     if _ph:
                         phase_cli_tool = _ph.cli_tool
                         phase_cli_model = _ph.cli_model
+                        fallback_cli_tool = getattr(_ph, 'fallback_cli_tool', None)
+                        fallback_cli_model = getattr(_ph, 'fallback_cli_model', None)
                         phase_glm_token_env = _ph.glm_api_token_env
                         phase_thinking_level = _ph.thinking_level
             except Exception as e:
@@ -711,7 +715,67 @@ class AgentManager:
             return AgentInfo(agent_id_to_return)
 
         except Exception as e:
-            logger.error(f"Failed to create agent: {e}")
+            logger.error(f"Failed to create agent with {cli_type}: {e}")
+
+            # Try fallback if configured
+            if fallback_cli_tool and fallback_cli_tool != cli_type:
+                logger.warning(
+                    f"Primary CLI tool '{cli_type}' failed, trying fallback: "
+                    f"{fallback_cli_tool}/{fallback_cli_model or 'default'}"
+                )
+                try:
+                    # Clean up the failed attempt
+                    if "tmux_session" in locals():
+                        try:
+                            tmux_session.kill_session()
+                        except Exception:
+                            pass
+                    if "agent_id" in locals():
+                        try:
+                            with self.db_manager.get_session() as _cs:
+                                _ar = _cs.query(Agent).filter_by(id=agent_id).first()
+                                if _ar:
+                                    _ar.status = "terminated"
+                                    _ar.current_task_id = None
+                                    _ar.terminated_at = datetime.utcnow()
+                                    _cs.commit()
+                        except Exception:
+                            pass
+                        # Discard any isolated worktree/branch the failed
+                        # primary attempt created for this agent_id -- a
+                        # no-op if it used the shared workflow worktree
+                        # instead (discard_agent looks up an AgentBranch
+                        # record by agent_id; a shared-worktree agent never
+                        # creates one). Without this, every fallback leaves
+                        # the primary's orphaned worktree on disk forever.
+                        try:
+                            self.branch_manager.discard_agent(agent_id)
+                        except Exception:
+                            pass
+
+                    # Retry with fallback
+                    return await self.create_agent_for_task(
+                        task=task,
+                        enriched_data=enriched_data,
+                        memories=memories,
+                        project_context=project_context,
+                        cli_type=fallback_cli_tool,
+                        working_directory=working_directory,
+                        agent_type=agent_type,
+                        use_existing_worktree=use_existing_worktree,
+                        commit_sha=commit_sha,
+                        phase_cli_tool=fallback_cli_tool,
+                        phase_cli_model=fallback_cli_model,
+                        phase_glm_token_env=phase_glm_token_env,
+                        phase_thinking_level=phase_thinking_level,
+                    )
+                except Exception as fallback_error:
+                    logger.error(
+                        f"Fallback '{fallback_cli_tool}' also failed: {fallback_error}"
+                    )
+                    # Fall through to the normal failure handling below
+                    e = fallback_error
+
             # Clean up on failure
             try:
                 # Kill tmux session if it exists
@@ -747,6 +811,43 @@ class AgentManager:
                         task_record.failure_reason = f"Agent creation failed: {str(e)}"
                         task_record.completed_at = datetime.utcnow()
                         logger.info(f"Marked task {task.id} as failed")
+
+                        # A CLI session-limit rejection (Claude's "You've hit
+                        # your session limit", surfaced here as a raised
+                        # "CLI session limit detected" exception) will keep
+                        # failing identically until the limit resets on its
+                        # own -- retrying is pointless, whether or not a
+                        # fallback was configured (no fallback: this is the
+                        # original error; fallback configured but it also
+                        # hit its own session/rate limit: same futility).
+                        # Pause immediately instead of burning 2 more retry
+                        # cycles through _maybe_retry_failed_tasks before it
+                        # eventually reaches the same conclusion. Reuses the
+                        # existing paused_by="system" convention so
+                        # _retry_exhausted_paused_workflows' cooldown-retry
+                        # picks it back up automatically once retried.
+                        if "CLI session limit detected" in str(e) and task_record.workflow_id:
+                            from src.core.database import Workflow as _Workflow
+
+                            workflow_record = (
+                                cleanup_session.query(_Workflow)
+                                .filter_by(id=task_record.workflow_id)
+                                .first()
+                            )
+                            if workflow_record and workflow_record.status != "paused":
+                                workflow_record.status = "paused"
+                                workflow_record.paused_by = "system"
+                                workflow_record.status_reason = (
+                                    f"CLI session limit hit ({cli_type}), no working "
+                                    "fallback -- will auto-resume on its own retry "
+                                    "cooldown once the limit resets"
+                                )
+                                workflow_record.paused_at = datetime.utcnow()
+                                logger.warning(
+                                    f"[SESSION-LIMIT] Pausing workflow "
+                                    f"{task_record.workflow_id[:8]} -- {cli_type} "
+                                    "session limit hit with no working fallback"
+                                )
 
                     cleanup_session.commit()
                 except Exception as db_error:
@@ -1100,6 +1201,41 @@ class AgentManager:
                 )
                 pane.send_keys(formatted_message, enter=True)
                 logger.info(f"Initial prompt sent to agent {agent_id}")
+
+            # Check for a CLI-level session/rate-limit rejection right after
+            # delivery. This is the only call path that actually runs
+            # (verify_delivery defaults to False at every real call site, so
+            # this same check placed in the verify_delivery=True branch
+            # below is unreachable dead code). Claude Code prints "You've
+            # hit your session limit" and otherwise just sits idle -- no
+            # exception, no non-zero exit -- so this pane-text check is the
+            # only way to notice at all. Anchored to that confirmed exact
+            # phrase (not the bare fragment "you've hit", which is generic
+            # enough to risk matching unrelated prose) plus a couple of
+            # other CLIs' likely wording; bare "429" is deliberately
+            # excluded -- a bare 3-digit number is too likely to appear
+            # incidentally in the freshly-echoed task prompt itself (this
+            # codebase's own task prompts routinely discuss HTTP status
+            # codes and rate limits).
+            await asyncio.sleep(3)  # let the CLI print any rejection message
+            try:
+                output = "\n".join(pane.cmd("capture-pane", "-p", "-S", "-50").stdout)
+                output_lower = output.lower()
+                for indicator in (
+                    "you've hit your session limit",
+                    "session limit",
+                    "rate limit",
+                    "too many requests",
+                ):
+                    if indicator in output_lower:
+                        raise Exception(
+                            f"CLI session limit detected: '{indicator}' found in output"
+                        )
+            except Exception as check_err:
+                if "CLI session limit detected" in str(check_err):
+                    raise
+                # Non-critical check failure (e.g. capture-pane raced the
+                # session closing) -- don't fail agent creation over it.
 
             return
 
