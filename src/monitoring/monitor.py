@@ -19,6 +19,7 @@ from src.core.database import (
     DetectedDuplicate,
     GuardianAnalysis,
     Task,
+    Workflow,
 )
 from src.core.simple_config import get_config
 from src.interfaces import LLMProviderInterface, get_cli_agent
@@ -50,12 +51,28 @@ _MAX_TOKEN_LIMIT_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Claude session limit detection -- "You've hit your session limit" or similar
+# messages that indicate the CLI agent can't actually do work.
+_SESSION_LIMIT_RE = re.compile(
+    r"(?:session limit|You've hit|rate limit|too many requests)",
+    re.IGNORECASE,
+)
+
 # pi's status-line MCP indicator, e.g. "MCP: 0/1 servers". The denominator
 # group excludes "0/0" (no servers configured at all -- not a failure) by
 # requiring at least one digit that isn't a leading zero. Only observable
 # via AgentManager.get_agent_raw_pane -- get_agent_output strips this line
 # as TUI chrome for every other caller.
 _MCP_DISCONNECTED_RE = re.compile(r"MCP:\s*0/[1-9]\d*\s*servers", re.IGNORECASE)
+
+# OpenRouter's exact 402 error phrasing when a key's credits/weekly limit
+# can't cover the requested max_tokens. Anchored to this specific phrase
+# (not a generic "credit"/"402" keyword match) to avoid false positives on
+# an agent's own reasoning text that happens to discuss billing or HTTP
+# codes -- same care check_api_credits already takes for the same reason.
+_CREDIT_EXHAUSTED_RE = re.compile(
+    r"requires more credits, or fewer max_tokens", re.IGNORECASE
+)
 
 
 def _strip_sgr(text: str) -> str:
@@ -647,6 +664,32 @@ class MonitoringLoop:
                     pass  # best-effort; the mechanical-recovery check itself must not fail
                 return
             frozen_for = now - st["since"] if st["since"] else 0
+
+            # Session limit: hard blocker — can't recover, fail immediately
+            if _SESSION_LIMIT_RE.search(_strip_sgr(out)):
+                logger.warning(
+                    f"[SESSION-LIMIT] Agent {agent.id[:8]} ({agent.cli_type}) hit session limit — "
+                    f"terminating immediately (not recoverable)"
+                )
+                with self.db_manager.session_scope() as session:
+                    from src.core.database import Task as _Task
+
+                    stuck_task = (
+                        session.query(_Task)
+                        .filter_by(assigned_agent_id=agent.id, status="in_progress")
+                        .first()
+                    )
+                    if stuck_task:
+                        stuck_task.status = "failed"
+                        stuck_task.failure_reason = "CLI session limit reached"
+                        logger.info(
+                            f"[SESSION-LIMIT] Task {stuck_task.id[:8]} marked failed; "
+                            f"phase will be retried"
+                        )
+                await self.agent_manager.terminate_agent(agent.id)
+                self._stuck_state.pop(agent.id, None)
+                return True
+
             # Fast-path: "Operation aborted" leaves the agent idle at the shell
             # prompt.  The output signature changed (so the 5-min clock reset),
             # but the agent won't self-rescue — 30 s is enough to be sure.
@@ -1038,6 +1081,72 @@ class MonitoringLoop:
             logger.warning(f"[MCP-DISCONNECTED] check failed for {agent.id[:8]}: {e}")
         return False
 
+    async def _detect_credit_exhausted(self, agent) -> bool:
+        """Detect OpenRouter's 402 "requires more credits" error and pause
+        the workflow immediately, instead of nudging/retrying a task that
+        is guaranteed to fail again until a human reloads credits.
+
+        Observed live: an agent hit this error and simply sat frozen --
+        unlike a generic provider error, pi did not auto-continue past it.
+        The generic frozen-output recovery (keystrokes + a "you seem
+        stuck" nudge) would just retry the same doomed LLM call forever.
+        This is external and human-actionable only (reload credits at
+        OpenRouter), so the correct response is the same one
+        _maybe_retry_failed_tasks already uses for exhausted retries:
+        pause the workflow (status="paused", paused_by="system") and let
+        _retry_exhausted_paused_workflows's existing cooldown-retry
+        mechanism pick it back up automatically once credits are
+        restored, rather than inventing a second resume path.
+
+        One-shot per agent (a set, not a time cooldown) since the action
+        here -- pause + terminate -- is terminal for this agent, not a
+        repeatable nudge.
+        """
+        try:
+            if not hasattr(self, "_paused_credit_exhausted"):
+                self._paused_credit_exhausted = set()
+            if agent.id in self._paused_credit_exhausted:
+                return False
+            out = self.agent_manager.get_agent_output(agent.id, lines=40)
+            if not out:
+                return False
+            if not _CREDIT_EXHAUSTED_RE.search(_strip_sgr(out)):
+                return False
+            self._paused_credit_exhausted.add(agent.id)
+
+            logger.warning(
+                f"[CREDIT-EXHAUSTED] Agent {agent.id[:8]} ({agent.cli_type}) hit "
+                "an OpenRouter 402 credit-exhaustion error — pausing workflow"
+            )
+
+            with self.db_manager.session_scope() as session:
+                task = (
+                    session.query(Task).filter_by(id=agent.current_task_id).first()
+                )
+                if not task:
+                    return False
+                task.status = "failed"
+                task.failure_reason = (
+                    "OpenRouter credit exhaustion (402: requires more credits)"
+                )
+                workflow = (
+                    session.query(Workflow).filter_by(id=task.workflow_id).first()
+                )
+                if workflow and workflow.status != "paused":
+                    workflow.status = "paused"
+                    workflow.paused_by = "system"
+                    workflow.status_reason = (
+                        "OpenRouter credit exhaustion (402) — reload credits at "
+                        "openrouter.ai, will auto-resume on its own retry cooldown"
+                    )
+                    workflow.paused_at = datetime.utcnow()
+
+            await self.agent_manager.terminate_agent(agent.id)
+            return True
+        except Exception as e:
+            logger.warning(f"[CREDIT-EXHAUSTED] check failed for {agent.id[:8]}: {e}")
+        return False
+
     async def _monitoring_cycle(self):
         """Execute one monitoring cycle with trajectory monitoring."""
         logger.debug("Starting trajectory monitoring cycle")
@@ -1057,15 +1166,21 @@ class MonitoringLoop:
         agents = self.agent_manager.get_active_agents()
         logger.info(f"Trajectory monitoring {len(agents)} active agents")
 
-        # Phase 0: cheap mechanical recovery (no LLM). Five complementary checks:
-        #   a) frozen output — same substantive 40-line sig for ≥5 min
-        #   b) repetition loop — output growing but same sentence repeats 5+ times
+        # Phase 0: cheap mechanical recovery (no LLM). Six complementary checks:
+        #   a) OpenRouter credits exhausted — pause workflow + terminate
+        #      immediately, before any other check wastes a recovery attempt
+        #      on an agent that's about to be torn down anyway
+        #   b) frozen output — same substantive 40-line sig for ≥5 min
+        #   c) repetition loop — output growing but same sentence repeats 5+ times
         #      in the last 80 lines (LLM cycling "Actually, let me try…")
-        #   c) pending rm confirmation — auto-deny immediately, don't wait for (a)
-        #   d) max output token limit hit — nudge immediately, don't wait for (a)
-        #   e) MCP server disconnected — nudge to `mcp connect`, don't wait for (a)
+        #   d) pending rm confirmation — auto-deny immediately, don't wait for (b)
+        #   e) max output token limit hit — nudge immediately, don't wait for (b)
+        #   f) MCP server disconnected — nudge to `mcp connect`, don't wait for (b)
         mechanically_intervened = set()
         for agent in agents:
+            if await self._detect_credit_exhausted(agent):
+                mechanically_intervened.add(agent.id)
+                continue
             if await self._mechanical_recovery_for_agent(agent):
                 mechanically_intervened.add(agent.id)
             if await self._detect_repetition_loop(agent):
