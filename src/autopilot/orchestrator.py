@@ -5700,8 +5700,8 @@ def _create_corrective_task(
             # spawn a live agent against it -- silently resuming real work
             # on something the user explicitly stopped.
             logger.info(
-                f"[CORRECTIVE-TASK] Workflow {workflow_id[:8]} is user-paused — "
-                "skipping corrective task"
+                f"[CORRECTIVE-TASK] Workflow {workflow_id[:8]} is deliberately paused "
+                f"(paused_by={wf.paused_by}) — skipping corrective task"
             )
             return None
         if wf.status != "active":
@@ -5881,7 +5881,8 @@ def _resume_stuck_workflow_tasks(workflow_id: str, logger: OrchestratorLogger) -
             # stopped this workflow intentionally. Don't silently un-pause and
             # restart work on it just because the queue loop cycled back.
             logger.info(
-                f"[RESUME-STUCK] Workflow {workflow_id[:8]} is user-paused — skipping"
+                f"[RESUME-STUCK] Workflow {workflow_id[:8]} is deliberately paused "
+                f"(paused_by={wf.paused_by}) — skipping"
             )
             return 0
         if wf.status in ("paused", "failed"):
@@ -7057,6 +7058,20 @@ def _run_one_feature(
                 if wf:
                     existing_workflow_id = wf.id
 
+            # Budget guard: block new workflow launches if project is over budget
+            # Uses same DB session to avoid stale reads under concurrent cost recording
+            if project_id:
+                from src.core.cost_derivation import check_budget_before_new_work
+
+                if not check_budget_before_new_work(db, project_id):
+                    logger.info(
+                        f"[BUDGET] Project over budget — blocking new workflow for feature {feature_key}"
+                    )
+                    _update_feature_status(
+                        feature_id, design_entry.db_id, "paused", "Budget limit reached", logger
+                    )
+                    return "budget_blocked"
+
             # Update status to active
             feat_record.status = "active"
             feat_record.started_at = feat_record.started_at or datetime.utcnow()
@@ -7116,20 +7131,6 @@ def _run_one_feature(
 
         # Set workflow type and link to feature
         # Note: We'll do this after workflow is created
-
-        # Budget guard: block new workflow launches if project is over budget
-        if project_id:
-            from src.core.cost_derivation import check_budget_before_new_work
-
-            with get_db() as budget_db:
-                if not check_budget_before_new_work(budget_db, project_id):
-                    logger.info(
-                        f"[BUDGET] Project over budget — blocking new workflow for feature {feature_key}"
-                    )
-                    _update_feature_status(
-                        feature_id, design_entry.db_id, "paused", "Budget limit reached", logger
-                    )
-                    return "budget_blocked"
 
         # run_single_workflow mutates state.current_workflow_id/_design_branch/
         # _design_worktree while it launches and polls the workflow. When

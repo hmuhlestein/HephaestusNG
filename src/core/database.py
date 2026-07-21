@@ -43,8 +43,9 @@ class AgentStatus:
     WORKING = "working"
     STUCK = "stuck"
     TERMINATED = "terminated"
+    STARTING = "starting"  # Initial state before tmux session confirmed
 
-    ALL = {IDLE, WORKING, STUCK, TERMINATED}
+    ALL = {IDLE, WORKING, STUCK, TERMINATED, STARTING}
 
 
 class TaskStatus:
@@ -132,7 +133,7 @@ class Agent(Base):
     system_prompt = Column(Text, nullable=False)
     status = Column(
         String,
-        CheckConstraint("status IN ('idle', 'working', 'stuck', 'terminated')"),
+        CheckConstraint("status IN ('idle', 'working', 'stuck', 'terminated', 'starting')"),
         default="idle",
         nullable=False,
     )
