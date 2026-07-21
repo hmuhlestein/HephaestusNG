@@ -27,7 +27,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import backref, relationship, sessionmaker
-from sqlalchemy.pool import QueuePool
+from sqlalchemy.pool import QueuePool, StaticPool
 from sqlalchemy.sql import text
 
 Base = declarative_base()
@@ -1347,22 +1347,58 @@ class DatabaseManager:
     _sessions: Dict[str, sessionmaker] = {}
     _lock = threading.Lock()
 
-    def __init__(self, database_path: str = "hephaestus.db"):
-        """Initialize database connection (reuses cached engine if available)."""
+    def __init__(self, database_path: Optional[str] = None):
+        """Initialize database connection (reuses cached engine if available).
+
+        database_path=None resolves the same way get_db() does: consult
+        HEPHAESTUS_TEST_DB, falling back to hephaestus.db. Without this, a
+        bare DatabaseManager() (unlike get_db()) always hit the real
+        production database file during tests, regardless of
+        HEPHAESTUS_TEST_DB -- silently, since sqlite happily opens/creates
+        whatever file it's pointed at.
+        """
+        if database_path is None:
+            database_path = os.environ.get("HEPHAESTUS_TEST_DB", "hephaestus.db")
         self.database_path = database_path
         
+        # ":memory:" means "give me a fresh, isolated in-memory database,"
+        # not "give me the shared one at this path" -- caching it by the
+        # literal string like every other path would make every caller
+        # process-wide (in practice, every test in a pytest session that
+        # doesn't pass an explicit tmp-file path) share ONE engine/
+        # connection pool forever, with one test's leftover rows bleeding
+        # into an unrelated later test purely because both happened to
+        # pass the same ":memory:" literal. Never cache or reuse it.
+        is_memory = database_path == ":memory:"
+
         with DatabaseManager._lock:
-            if database_path not in DatabaseManager._engines:
-                engine = create_engine(
-                    f"sqlite:///{database_path}",
-                    connect_args={"check_same_thread": False},
-                    poolclass=QueuePool,
-                    pool_size=5,
-                    max_overflow=10,
-                    pool_timeout=30,
-                    pool_recycle=300,
-                    echo=False,
-                )
+            if is_memory or database_path not in DatabaseManager._engines:
+                if is_memory:
+                    # StaticPool: a single connection, reused for every
+                    # checkout. QueuePool hands out whichever of its several
+                    # connections is free -- fine for a real file (they all
+                    # see the same on-disk data) but wrong for ":memory:",
+                    # where each connection IS its own separate database.
+                    # Without this, create_tables() and a later query could
+                    # land on different pooled connections and get "no such
+                    # table" even within a single DatabaseManager instance.
+                    engine = create_engine(
+                        f"sqlite:///{database_path}",
+                        connect_args={"check_same_thread": False},
+                        poolclass=StaticPool,
+                        echo=False,
+                    )
+                else:
+                    engine = create_engine(
+                        f"sqlite:///{database_path}",
+                        connect_args={"check_same_thread": False},
+                        poolclass=QueuePool,
+                        pool_size=5,
+                        max_overflow=10,
+                        pool_timeout=30,
+                        pool_recycle=300,
+                        echo=False,
+                    )
                 
                 # Set SQLite pragmas for concurrent access
                 # WAL mode allows concurrent readers alongside a single writer
@@ -1377,12 +1413,19 @@ class DatabaseManager:
                     cursor.execute("PRAGMA synchronous=NORMAL")
                     cursor.close()
                 
-                DatabaseManager._engines[database_path] = engine
-                DatabaseManager._sessions[database_path] = sessionmaker(
+                session_factory = sessionmaker(
                     autocommit=False, autoflush=False, bind=engine,
                     expire_on_commit=False  # Prevent DetachedInstanceError bugs (H-0*)
                 )
-            
+                if is_memory:
+                    # Deliberately not written into the class-level caches
+                    # above -- see the comment on is_memory.
+                    self.engine = engine
+                    self.SessionLocal = session_factory
+                    return
+                DatabaseManager._engines[database_path] = engine
+                DatabaseManager._sessions[database_path] = session_factory
+
             self.engine = DatabaseManager._engines[database_path]
             self.SessionLocal = DatabaseManager._sessions[database_path]
 
