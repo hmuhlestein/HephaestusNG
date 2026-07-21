@@ -666,7 +666,7 @@ async def requeue_design(request: dict):
             active_workflows = (
                 db.query(Workflow)
                 .filter(
-                    Workflow.definition_id == "autopilot",
+                    Workflow.definition_id.in_(DESIGN_WORKFLOW_DEFINITION_IDS),
                     Workflow.status.in_(["active", "running"]),
                 )
                 .all()
@@ -975,7 +975,7 @@ async def rerun_design(request: dict):
                     wf = (
                         db.query(Workflow)
                         .filter(
-                            Workflow.definition_id == "autopilot",
+                            Workflow.definition_id.in_(DESIGN_WORKFLOW_DEFINITION_IDS),
                             Workflow.status == "active",
                         )
                         .order_by(Workflow.created_at.desc())
@@ -1233,7 +1233,7 @@ def _run_repair(repair_id: str, filename: str, project: Path, logger):
         # 3. Find any existing workflows for context
         logger.info("[REPAIR] Step 3: Finding existing workflows for context")
         with get_db() as db:
-            workflows = db.query(Workflow).filter(Workflow.definition_id == "autopilot").all()
+            workflows = db.query(Workflow).filter(Workflow.definition_id.in_(DESIGN_WORKFLOW_DEFINITION_IDS)).all()
 
             existing_workflow_ids = []
             for wf in workflows:
@@ -1573,6 +1573,7 @@ class CostEntryCreate(BaseModel):
         """
         if v is not None:
             import sys as _sys
+
             size = _sys.getsizeof(json.dumps(v))
             if size > 10_000:  # 10KB limit
                 raise ValueError("raw_usage exceeds maximum size of 10KB")
@@ -4017,7 +4018,7 @@ async def stop_pipeline(clear_state: bool = False, project_id: Optional[str] = N
         with get_db() as db:
             from src.core.database import Workflow
 
-            query = db.query(Workflow).filter_by(definition_id="autopilot").filter(Workflow.status.in_(["active", "running"]))
+            query = db.query(Workflow).filter(Workflow.definition_id.in_(DESIGN_WORKFLOW_DEFINITION_IDS)).filter(Workflow.status.in_(["active", "running"]))
             if project_id:
                 query = query.filter(Workflow.project_id == project_id)
 
@@ -4211,7 +4212,7 @@ def run_health_audit(db_manager=None):
         autopilot_wfs = (
             session.query(Workflow)
             .filter(
-                Workflow.definition_id == "autopilot",
+                Workflow.definition_id.in_(DESIGN_WORKFLOW_DEFINITION_IDS),
                 Workflow.status.in_(["active", "running", "paused"]),
             )
             .all()
