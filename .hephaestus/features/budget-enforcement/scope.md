@@ -71,3 +71,4 @@ Cost is only knowable after the LLM call completes. The CostEntry that crosses t
 - [ ] All `paused_by == "user"` guards generalized to `paused_by is not None` — including `_create_corrective_task` — (except `start()`'s play-button resume)
 - [ ] Raising/ clearing the cost limit auto-clears `paused_by="budget"` on paused workflows
 - [ ] Enforcement is naturally-idempotent (concurrent CostEntry writes don't cause cascading pauses)
+- [ ] All `definition_id == "autopilot"` locations in `autopilot_api.py` (lines 713, 1078, 1329, 1361, 3849, 4065) reviewed; stop handler (~3849) uses extracted function, others documented as intentionally unchanged if read-only filters

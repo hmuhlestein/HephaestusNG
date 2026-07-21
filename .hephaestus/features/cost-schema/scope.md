@@ -46,9 +46,11 @@ Follow the existing `_migrate_workflow_paused_by_column` pattern: check for `Ope
 
 ## Acceptance Criteria
 - [ ] `cost_entries` table exists with all specified columns and indexes
+- [ ] `reasoning_tokens` column added to `cost_entries` — per design text guidance (“reasoning token count is worth capturing”), not the design's code block which omits it; this is an intentional deviation from the incomplete code block in the design document
 - [ ] `session_cost_checkpoints` table exists with `session_id` PK and `lines_processed`
 - [ ] `cost_total_usd` column exists on Task, Feature, AutopilotDesign, and AutopilotProject (default 0.0)
 - [ ] `cost_limit_usd` column exists on AutopilotProject (nullable, default None)
 - [ ] Migrations run safely against existing databases without data loss (follow `_migrate_*_column` pattern)
+- [ ] Verify no test files import `cost_tracker` or `openrouter_client` before deletion (grep `tests/` for both module names)
 - [ ] `src/interfaces/cost_tracker.py` deleted (dead code)
 - [ ] `src/interfaces/openrouter_client.py` deleted (dead code)

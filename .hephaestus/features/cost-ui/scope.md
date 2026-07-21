@@ -14,7 +14,7 @@ Add cost visibility and budget configuration to the frontend. In `ProjectSetting
 
 ## Dependencies
 - `cost-schema` — frontend types need `cost_total_usd`, `cost_limit_usd` fields
-- `budget-enforcement` — UI surfaces `paused_by == 'budget'` distinction from backend
+- `budget-enforcement` — UI surfaces `paused_by == 'budget'` distinction from backend (integration testing requires this backend feature to land first; frontend can be developed with mock data in parallel but cannot be fully tested until backend is ready)
 
 ## Implementation Notes
 

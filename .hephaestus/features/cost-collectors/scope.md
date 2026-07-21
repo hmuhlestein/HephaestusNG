@@ -12,7 +12,7 @@ Build the Python cost collection infrastructure in `src/services/cost_collection
 ## Dependencies
 - `cost-schema` — reads/writes `cost_entries`, `session_cost_checkpoints` (including `reasoning_tokens` field)
 - `cost-derivation` — calls `derive_cost_totals()` after new entries are written; `derive_cost_totals` is a pure derivation function with no budget enforcement side effects
-- `budget-enforcement` — after calling `derive_cost_totals()`, this feature calls `_enforce_budget_limit(project_id)` to trigger enforcement if the cost limit is crossed; this is a direct import dependency on `src/autopilot/orchestrator.py`
+- `budget-enforcement` — after calling `derive_cost_totals()`, this feature calls `_enforce_budget_limit(project_id)` to trigger enforcement if the cost limit is crossed; this is a direct import dependency on `src/autopilot/orchestrator.py` (note: implementation can proceed in parallel as collectors + API endpoint, with enforcement wiring added as final step after budget-enforcement completes)
 
 ## Implementation Notes
 
@@ -32,13 +32,21 @@ Build the Python cost collection infrastructure in `src/services/cost_collection
 4. For each assistant message: `(input_tokens / 1_000_000) * input_per_mtok + ...` etc., also extract `usage.reasoning_tokens` for the `reasoning_tokens` column
 5. Important: Anthropic has two cache-write tiers (`ephemeral_1h_input_tokens` and `ephemeral_5m_input_tokens`) at different rates
 
-### UUID5 session-ID fix for Claude Code
-In `src/interfaces/cli_interface.py`, modify `ClaudeCodeAgent.get_launch_command`:
+### UUID5 session-ID fix for Claude Code and OpenCode
+In `src/interfaces/cli_interface.py`:
+
+**ClaudeCodeAgent**:
 - Generate: `session_uuid = str(uuid.uuid5(uuid.NAMESPACE_URL, f"hephaestus:{project_id}:{design_slug}:{role}"))`
 - Add `--session-id {session_uuid}` to the launch command
 - Ensure `get_session_args` returns this UUID so callers can store it
 
-Also do the same UUID5 derivation in `PiAgent` — derive a valid UUID from the deterministic inputs, keeping backward compatibility with existing slug-format session IDs by using the same `--session-id` flag but with the UUID now valid for both pi and claude.
+**OpenCodeAgent** (UUID5 fix delegated from `opencode-collector` feature — that feature may add a collector class to `cost_collection_service.py` but cannot own `cli_interface.py` changes due to file ownership conflict):
+- Same UUID5 derivation pattern: `session_uuid = str(uuid.uuid5(uuid.NAMESPACE_URL, f"hephaestus:{project_id}:{design_slug}:{role}"))`
+- Add `-s {session_uuid}` to the launch command (pending verification that `opencode -s` can create new sessions, not just resume)
+- Return the UUID from `get_session_args`
+
+**PiAgent**:
+- Derive a valid UUID from the same deterministic inputs, keeping backward compatibility with existing slug-format session IDs by using the same `--session-id` flag but with the UUID now valid for both pi and claude.
 
 ### Codex stub
 In `cost_collection_service.py`, add a `CodexCollector` stub that:
@@ -51,6 +59,7 @@ Add to `src/mcp/server.py`:
 - `POST /api/cost` accepting `{session_id, source, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd, raw_usage}`
 - `task_id` is optional — if omitted, the endpoint resolves `task_id` by querying the Agent table for the most recent agent with a matching session_id (via `Agent.session_id`), extracting that agent's `task_id`. If no matching agent is found, the entry is written with `task_id=NULL` (it will roll up to the project-level overhead bucket)
 - Creates a `CostEntry` with the resolved or provided `task_id`, calls `derive_cost_totals(db, task_id)`
+- **CRITICAL**: After calling `derive_cost_totals`, must call `_enforce_budget_limit(project_id)` (from `src/autopilot/orchestrator.py`) to ensure budget enforcement fires for pi extension POSTs. Without this, cost entries from the extension path bypass enforcement entirely.
 - Used by the pi extension for real-time cost reporting (pi extension omits `task_id` since it doesn't know the task context)
 
 ### Budget enforcement hook (after derivation)
@@ -79,5 +88,7 @@ The orphaned files `src/interfaces/cost_tracker.py` and `src/interfaces/openrout
 - [ ] `ClaudeCodeCollector` correctly converts token counts to dollar amounts using the price table with cache tier support
 - [ ] `ClaudeCodeAgent.get_launch_command` passes `--session-id` with a valid UUID5 derived from deterministic inputs
 - [ ] Cost-ingestion API endpoint exists at `POST /api/cost` and creates CostEntry + triggers derivation
-- [ ] Task completion handler gathers cost from active collectors
+- [ ] `POST /api/cost` calls `_enforce_budget_limit(project_id)` after `derive_cost_totals()` — critical for enforcement on pi extension path
+- [ ] Task completion handler gathers cost from active collectors and calls `_enforce_budget_limit`
 - [ ] Codex collector stubs gracefully with a log warning, not silent zero
+- [ ] OpenCode UUID5 fix delegated from `opencode-collector` is implemented here (owns `cli_interface.py`)
