@@ -216,8 +216,7 @@ const RealTimeAgentOutput: React.FC<RealTimeAgentOutputProps> = ({
   // but keep the last line if it's a Thinking/Working spinner.
   const filteredOutput = useMemo(() => {
     if (!processedOutput) return '';
-    const lines = processedOutput.split('
-');
+    const lines = processedOutput.split('\n');
     const filtered: string[] = [];
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
