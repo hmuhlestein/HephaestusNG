@@ -1,0 +1,27 @@
+{
+  "feature_id": "cost-tracking-database-schema",
+  "phase": "architectural_review",
+  "run": 3,
+  "date": "2026-07-21",
+  "commit_reviewed": "b426b21",
+  "prior_findings_status": {
+    "run_1_blockers_fixed": 5,
+    "run_1_fixes_fixed": 4,
+    "run_2_blockers_fixed": 1,
+    "run_2_fixes_fixed": 2,
+    "total_resolved": 12
+  },
+  "blocker_count": 0,
+  "fix_count": 0,
+  "defer_count": 5,
+  "findings": [],
+  "deferred": [
+    "D-1: Collector-before-API ordering for next phase",
+    "D-2: reasoning_tokens addition to CostEntry (accepted)",
+    "D-3: Extra ix_cost_entries_recorded_at index (accepted)",
+    "D-4: spec.py context manager pattern change",
+    "D-5: Codex stub + OpenCode collector not implemented"
+  ],
+  "tests_passing": 73,
+  "recommendation": "APPROVE"
+}
