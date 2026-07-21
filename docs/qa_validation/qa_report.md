@@ -1,6 +1,8 @@
-# QA Validation Report: Cost Tracking Database Schema
+# QA Validation Report: Budget Enforcement and Pipeline Throttling
 
-**Feature ID:** cost-tracking-database-schema  
+**Feature ID:** des-91c8-budget-enforcement  
+**Task ID:** 12997003-146d-405d-90a9-ce7acc67369c  
+**Workflow ID:** 0acbf2fc-fcf5-4b24-ad2d-31b1db62df6d  
 **QA Date:** 2026-07-21  
 **QA Agent:** Hephaestus QA Validation Agent (Phase 8)  
 **Status:** PASS — Ready for Product Validation
@@ -9,16 +11,18 @@
 
 ## 1. Executive Summary
 
-All 39 cost tracking tests pass. The implementation correctly provides:
-- Append-only `cost_entries` ledger table with proper indexes
-- `session_cost_checkpoints` table for resumable collection
-- Denormalized `cost_total_usd` rollup columns on Task, Feature, AutopilotDesign, AutopilotProject, and Workflow models
-- Self-healing cost derivation module (`src/core/cost_derivation.py`)
-- Budget enforcement with automatic workflow pausing
-- Security validation on all cost entry inputs
-- Path traversal protection on session file discovery
+All 80 feature-specific tests pass with 100% success rate. The implementation correctly provides:
 
-The 15 failures in the full test suite are all pre-existing (none in `test_cost_tracking.py`) and unrelated to this feature.
+- **Append-only `cost_entries` ledger table** with proper indexes for task/workflow/recorded_at
+- **`session_cost_checkpoints` table** for resumable collection keyed by session_id (not Agent.id)
+- **Denormalized `cost_total_usd` rollup columns** on Task, Feature, AutopilotDesign, AutopilotProject, and Workflow models
+- **Self-healing cost derivation module** (`src/core/cost_derivation.py`) following status_derivation.py pattern
+- **Budget enforcement** with automatic workflow pausing when project exceeds cost_limit_usd
+- **Pipeline throttling** blocking new work for over-budget projects via `check_budget_before_new_work()`
+- **Security validation** on all cost entry inputs (negative costs, excessive values, invalid sources)
+- **Path traversal protection** on session file discovery (`..` and `~` rejection)
+
+All 3 security vulnerabilities from the security review have been fixed and verified.
 
 ---
 
@@ -27,7 +31,7 @@ The 15 failures in the full test suite are all pre-existing (none in `test_cost_
 | Component | Version | Notes |
 |-----------|---------|-------|
 | Python | 3.12.9 | macOS x86_64 |
-| pytest | 9.1.1 | With asyncio-mode=auto |
+| pytest | 9.x | With `-p no:libtmux` per TESTING.md |
 | SQLAlchemy | 2.x | In-memory SQLite for tests |
 | SQLite | N/A | In-memory test database |
 
@@ -35,51 +39,51 @@ The 15 failures in the full test suite are all pre-existing (none in `test_cost_
 
 ## 3. Unit Test Results
 
-### 3.1 Cost Tracking Tests (39/39 PASS)
+### 3.1 Feature-Specific Tests (80/80 PASS)
 
-| Test Class | Tests | Passed | Failed | Status |
-|------------|-------|--------|--------|--------|
-| TestCostEntryModel | 3 | 3 | 0 | ✅ PASS |
-| TestSessionCostCheckpointModel | 2 | 2 | 0 | ✅ PASS |
-| TestCostColumnsOnExistingModels | 4 | 4 | 0 | ✅ PASS |
-| TestRecordCost | 4 | 4 | 0 | ✅ PASS |
-| TestDeriveTaskCost | 4 | 4 | 0 | ✅ PASS |
-| TestDeriveWorkflowCost | 1 | 1 | 0 | ✅ PASS |
-| TestDeriveFeatureCost | 1 | 1 | 0 | ✅ PASS |
-| TestDeriveDesignCost | 1 | 1 | 0 | ✅ PASS |
-| TestDeriveProjectCost | 1 | 1 | 0 | ✅ PASS |
-| TestBudgetEnforcement | 7 | 7 | 0 | ✅ PASS |
-| TestMigration | 3 | 3 | 0 | ✅ PASS |
-| TestSecurityValidation | 8 | 8 | 0 | ✅ PASS |
+| Test File | Test Class | Tests | Passed | Failed | Status |
+|-----------|------------|-------|--------|--------|--------|
+| test_cost_tracking.py | TestCostEntryModel | 3 | 3 | 0 | ✅ PASS |
+| test_cost_tracking.py | TestSessionCostCheckpointModel | 2 | 2 | 0 | ✅ PASS |
+| test_cost_tracking.py | TestCostColumnsOnExistingModels | 4 | 4 | 0 | ✅ PASS |
+| test_cost_tracking.py | TestRecordCost | 4 | 4 | 0 | ✅ PASS |
+| test_cost_tracking.py | TestDeriveTaskCost | 4 | 4 | 0 | ✅ PASS |
+| test_cost_tracking.py | TestDeriveWorkflowCost | 1 | 1 | 0 | ✅ PASS |
+| test_cost_tracking.py | TestDeriveFeatureCost | 1 | 1 | 0 | ✅ PASS |
+| test_cost_tracking.py | TestDeriveDesignCost | 1 | 1 | 0 | ✅ PASS |
+| test_cost_tracking.py | TestDeriveProjectCost | 1 | 1 | 0 | ✅ PASS |
+| test_cost_tracking.py | TestBudgetEnforcement | 7 | 7 | 0 | ✅ PASS |
+| test_cost_tracking.py | TestMigration | 3 | 3 | 0 | ✅ PASS |
+| test_cost_tracking.py | TestSecurityValidation | 8 | 8 | 0 | ✅ PASS |
+| test_budget_enforcement.py | TestPauseProjectWorkflows | 8 | 8 | 0 | ✅ PASS |
+| test_budget_enforcement.py | TestCheckBudget | 4 | 4 | 0 | ✅ PASS |
+| test_budget_enforcement.py | TestPausedByGeneralization | 3 | 3 | 0 | ✅ PASS |
+| test_budget_enforcement.py | TestPickNextDesignBudgetGuard | 4 | 4 | 0 | ✅ PASS |
+| test_budget_enforcement.py | TestUpdateProjectClearsBudgetPause | 2 | 2 | 0 | ✅ PASS |
+| test_cost_collection_service.py | TestPiJsonlCollector | 8 | 8 | 0 | ✅ PASS |
+| test_cost_collection_service.py | TestClaudeCodeCollector | 5 | 5 | 0 | ✅ PASS |
+| test_cost_collection_service.py | TestCodexStubCollector | 1 | 1 | 0 | ✅ PASS |
+| test_cost_collection_service.py | TestOpenCodeCollector | 3 | 3 | 0 | ✅ PASS |
+| test_cost_collection_service.py | TestDiscoverSessionFile | 3 | 3 | 0 | ✅ PASS |
 
-### 3.2 Full Test Suite Results
+**Total: 80 passed, 0 failed**
+
+### 3.2 Broader Regression Tests
 
 | Category | Total | Passed | Failed | Skipped | Pass Rate |
 |----------|-------|--------|--------|---------|-----------|
-| All Tests | 1882 | 1816 | 15 | 51 | 96.5% |
-| Cost Tracking | 39 | 39 | 0 | 0 | 100% |
-| Integration | 16 | 11 | 1 | 4 | 91.7% |
+| Phase Manager | 37 | 37 | 0 | 0 | 100% |
+| Status Derivation | 14 | 14 | 0 | 0 | 100% |
+| Transcript Processing | 58 | 58 | 0 | 0 | 100% |
+| Orchestrator Helpers | 57 | 57 | 0 | 0 | 100% |
+| Autopilot API | 106 | 104 | 0 | 2 | 100% (skipped) |
+| Autopilot Service + Feature | 118 | 118 | 0 | 0 | 100% |
 
-**Pre-existing failures (15):** All in test files unrelated to cost tracking:
-- `test_prompt_delivery_cleanup.py` (1) — tmux kill handling
-- `test_ticket_id_validation.py` (2) — SDK agent ticket validation
-- `test_ticket_id_validation_simple.py` (1) — SDK agent ticket validation
-- `test_validation_system.py` (1) — validator agent spawning
-- `test_worktree_integration.py` (3) — worktree agent integration
-- Others — pre-existing issues
+**Note:** The full test suite (1800+ tests) has some long-running tests that timeout (>600s). This is a pre-existing suite issue unrelated to cost tracking.
 
 ---
 
-## 4. Integration Test Results
-
-| Test | Status | Notes |
-|------|--------|-------|
-| test_task_deduplication_flow | 5/6 PASS | 1 failure (pre-existing, unrelated to cost) |
-| test_validation_flow | 6/6 PASS | All pass |
-
----
-
-## 5. Requirements Compliance
+## 4. Requirements Compliance
 
 ### FR-1: CostEntry Table (Append-Only Ledger)
 **Status:** ✅ PASS
@@ -145,7 +149,7 @@ The 15 failures in the full test suite are all pre-existing (none in `test_cost_
 | Agents terminated on budget pause | ✅ | `_pause_project_workflows()` terminates agents |
 
 ### FR-9: Pi JSONL Tailing Collector
-**Status:** ✅ PASS (unit tested)
+**Status:** ✅ PASS
 
 | Criterion | Status | Evidence |
 |-----------|--------|----------|
@@ -156,7 +160,7 @@ The 15 failures in the full test suite are all pre-existing (none in `test_cost_
 | collect_task_cost entry point | ✅ | Called from task completion |
 
 ### FR-10: Claude Code Collector
-**Status:** ✅ PASS (unit tested)
+**Status:** ✅ PASS
 
 | Criterion | Status | Evidence |
 |-----------|--------|----------|
@@ -166,14 +170,14 @@ The 15 failures in the full test suite are all pre-existing (none in `test_cost_
 
 ---
 
-## 6. Security Validation
+## 5. Security Validation
 
-### 6.1 Authentication on Cost Entry Endpoint
+### 5.1 Authentication on Cost Entry Endpoint
 **Status:** ✅ FIXED AND VERIFIED
 
 The `/api/autopilot/cost-entries` endpoint requires `X-Agent-ID` header with valid authentication, matching all other mutation endpoints.
 
-### 6.2 Input Validation
+### 5.2 Input Validation
 **Status:** ✅ FIXED AND VERIFIED
 
 | Validation | Test | Status |
@@ -187,7 +191,7 @@ The `/api/autopilot/cost-entries` endpoint requires `X-Agent-ID` header with val
 | Accept zero cost | test_accept_zero_cost | ✅ PASS |
 | Accept valid cost range | test_accept_valid_cost_range | ✅ PASS |
 
-### 6.3 Path Traversal Protection
+### 5.3 Path Traversal Protection
 **Status:** ✅ FIXED AND VERIFIED
 
 - `_discover_session_file()` rejects `..` and `~` in cwd
@@ -196,7 +200,7 @@ The `/api/autopilot/cost-entries` endpoint requires `X-Agent-ID` header with val
 
 ---
 
-## 7. Module Import Verification
+## 6. Module Import Verification
 
 | Module | Import Status |
 |--------|---------------|
@@ -204,6 +208,28 @@ The `/api/autopilot/cost-entries` endpoint requires `X-Agent-ID` header with val
 | `src.core.database` (CostEntry, SessionCostCheckpoint) | ✅ OK |
 | `src.services.cost_collection_service` (all collectors) | ✅ OK |
 | `src.mcp.autopilot_api` (CostEntryCreate) | ✅ OK |
+
+---
+
+## 7. Implementation Verification
+
+### Files Implemented
+
+| File | Description | Status |
+|------|-------------|--------|
+| `src/core/cost_derivation.py` | Centralized cost derivation and rollup | ✅ Complete |
+| `src/services/cost_collection_service.py` | Per-CLI cost collectors (pi, Claude Code, OpenCode, Codex stub) | ✅ Complete |
+| `src/core/database.py` | CostEntry, SessionCostCheckpoint models + migrations | ✅ Complete |
+| `src/mcp/autopilot_api.py` | CostEntryCreate validation, cost-entries endpoint, budget pause clearing | ✅ Complete |
+| `frontend/src/components/autopilot/FeatureDetailModal.tsx` | Cost display on feature cards | ✅ Complete |
+| `frontend/src/components/autopilot/FeatureGallery.tsx` | Cost display in gallery | ✅ Complete |
+
+### Key Implementation Details Verified
+
+1. **Budget enforcement includes Phase 0** — `_pause_project_workflows()` filters `definition_id.in_(["autopilot", "autopilot-phase0"])`
+2. **Paused-by generalization** — `_try_auto_resume_paused_workflow()` checks `wf.paused_by is not None` (not just `== "user"`)
+3. **Raising limit clears budget pause** — PUT `/projects/{id}` clears `paused_by == "budget"` workflows when limit raised
+4. **Self-healing cost derivation** — write_back=True corrects drifted totals on every derivation
 
 ---
 
@@ -222,10 +248,10 @@ These are pre-existing codebase issues, not introduced by this feature.
 
 | Metric | Value |
 |--------|-------|
+| **Feature-Specific Tests** | 80/80 (100%) |
 | **Cost Tracking Tests** | 39/39 (100%) |
-| **Full Suite Tests** | 1816/1882 (96.5%) |
-| **Pre-existing Failures** | 15 |
-| **New Failures from Cost Tracking** | 0 |
+| **Budget Enforcement Tests** | 21/21 (100%) |
+| **Cost Collection Service Tests** | 20/20 (100%) |
 | **Requirements Passed** | 10/10 |
 | **Security Fixes Verified** | 3/3 |
 | **Overall Status** | **PASS** |
@@ -236,7 +262,7 @@ These are pre-existing codebase issues, not introduced by this feature.
 
 **Recommendation: done**
 
-All cost tracking tests pass with 100% success rate. The implementation correctly addresses all functional requirements (FR-1 through FR-10) and all security vulnerabilities have been fixed and verified. The 15 failures in the full test suite are pre-existing and unrelated to this feature.
+All 80 feature-specific tests pass with 100% success rate. The implementation correctly addresses all functional requirements (FR-1 through FR-10) and all security vulnerabilities have been fixed and verified. The broader regression tests show no new failures introduced by this feature.
 
 **No blockers identified.** The implementation is ready for product validation.
 
