@@ -1515,6 +1515,7 @@ def _run_phase_advancement_sweep_once(sweep_logger) -> None:
         _clean_stale_assigned_tasks,
         _maybe_resolve_arbitration,
         _recover_abandoned_workflows_missing_worktree,
+        _retry_exhausted_paused_workflows,
         _retry_failed_tasks,
         _sync_stale_feature_statuses,
     )
@@ -1534,6 +1535,11 @@ def _run_phase_advancement_sweep_once(sweep_logger) -> None:
         _recover_abandoned_workflows_missing_worktree(sweep_logger)
     except Exception as e:
         logger.error(f"[PHASE-SWEEP] Abandoned-workflow recovery error: {e}")
+
+    try:
+        _retry_exhausted_paused_workflows(sweep_logger)
+    except Exception as e:
+        logger.error(f"[PHASE-SWEEP] Paused-workflow retry error: {e}")
 
     session = server_state.db_manager.get_session()
     try:
