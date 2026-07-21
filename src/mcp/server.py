@@ -161,48 +161,32 @@ app.include_router(memory_router)
 class CreateTaskRequest(BaseModel):
     """Request model for creating a task."""
 
-    task_description: str = Field(
-        ..., description="Raw task description", max_length=50000
-    )
-    done_definition: str = Field(
-        ..., description="What constitutes completion", max_length=10000
-    )
+    task_description: str = Field(..., description="Raw task description", max_length=50000)
+    done_definition: str = Field(..., description="What constitutes completion", max_length=10000)
     ai_agent_id: str = Field(..., description="ID of requesting agent")
     workflow_id: Optional[str] = Field(default=None, description="ID of the workflow this task belongs to")
     priority: Optional[str] = Field(default="medium", pattern="^(low|medium|high)$")
-    parent_task_id: Optional[str] = Field(
-        default=None, description="Parent task ID for sub-tasks"
-    )
-    phase_id: Optional[str] = Field(
-        default=None, description="Phase ID for workflow-based tasks"
-    )
-    phase_order: Optional[int] = Field(
-        default=None, description="Phase order number (alternative to phase_id)"
-    )
-    cwd: Optional[str] = Field(
-        default=None, description="Working directory for the task"
-    )
+    parent_task_id: Optional[str] = Field(default=None, description="Parent task ID for sub-tasks")
+    phase_id: Optional[str] = Field(default=None, description="Phase ID for workflow-based tasks")
+    phase_order: Optional[int] = Field(default=None, description="Phase order number (alternative to phase_id)")
+    cwd: Optional[str] = Field(default=None, description="Working directory for the task")
     ticket_id: Optional[str] = Field(
         default=None,
         description="Associated ticket ID (required when ticket tracking enabled)",
     )
-    depends_on: Optional[List[str]] = Field(
-        default=None, description="List of task IDs that must complete before this one"
-    )
+    depends_on: Optional[List[str]] = Field(default=None, description="List of task IDs that must complete before this one")
     parallel_group: Optional[str] = Field(
         default=None,
         description="Tasks in same group can run in parallel; different groups are sequential",
     )
-    max_concurrent: Optional[int] = Field(
-        default=1, description="Max agents working on this task simultaneously"
-    )
+    max_concurrent: Optional[int] = Field(default=1, description="Max agents working on this task simultaneously")
     context: Optional[str] = Field(
         default=None,
         description="Additional context for the agent (e.g., design document content, requirements summary)",
         max_length=100000,
     )
 
-    @validator('ticket_id', pre=True, always=True)
+    @validator("ticket_id", pre=True, always=True)
     @classmethod
     def validate_ticket_id(cls, v):
         """Strip whitespace and reject whitespace-only ticket_id values."""
@@ -212,10 +196,7 @@ class CreateTaskRequest(BaseModel):
         stripped = v.strip()
         # Reject whitespace-only values (after stripping, result is empty)
         if v and not stripped:
-            raise ValueError(
-                "ticket_id cannot be whitespace-only. "
-                "Provide a valid ticket identifier or omit the field."
-            )
+            raise ValueError("ticket_id cannot be whitespace-only. Provide a valid ticket identifier or omit the field.")
         # Return the stripped value (trimmed)
         return stripped if stripped else v
 
@@ -237,12 +218,8 @@ class UpdateTaskStatusRequest(BaseModel):
     status: str = Field(..., pattern="^(done|failed)$")
     summary: str = Field(default="", description="What was accomplished")
     key_learnings: List[str] = Field(default=[], description="Important discoveries")
-    code_changes: Optional[List[str]] = Field(
-        default=None, description="Files modified/created"
-    )
-    failure_reason: Optional[str] = Field(
-        default=None, description="Required if status is 'failed'"
-    )
+    code_changes: Optional[List[str]] = Field(default=None, description="Files modified/created")
+    failure_reason: Optional[str] = Field(default=None, description="Required if status is 'failed'")
     metadata: Optional[Dict[str, Any]] = Field(
         default=None,
         description="Optional structured data (verdict, counts, etc.) — folded into summary",
@@ -269,23 +246,15 @@ class RegisterWorkflowDefinitionRequest(BaseModel):
     name: str = Field(..., description="Human-readable name")
     description: str = Field(default="", description="Description of the workflow")
     phases_config: List[Dict[str, Any]] = Field(..., description="Phase configurations")
-    workflow_config: Optional[Dict[str, Any]] = Field(
-        default=None, description="Workflow configuration"
-    )
+    workflow_config: Optional[Dict[str, Any]] = Field(default=None, description="Workflow configuration")
 
 
 class StartWorkflowRequest(BaseModel):
     """Request model for starting a workflow execution."""
 
-    definition_id: str = Field(
-        ..., description="ID of the workflow definition to execute"
-    )
-    description: str = Field(
-        ..., description="Description/name of this workflow execution"
-    )
-    working_directory: Optional[str] = Field(
-        default=None, description="Working directory for the workflow"
-    )
+    definition_id: str = Field(..., description="ID of the workflow definition to execute")
+    description: str = Field(..., description="Description/name of this workflow execution")
+    working_directory: Optional[str] = Field(default=None, description="Working directory for the workflow")
     launch_params: Optional[Dict[str, Any]] = Field(
         default=None,
         description="Parameters from launch template to substitute into phases",
@@ -379,16 +348,10 @@ class ServerState:
                 from src.memory.embedding_factory import create_embedding_provider
 
                 self.embedding_service = create_embedding_provider()
-                self.task_similarity_service = TaskSimilarityService(
-                    self.db_manager, self.embedding_service
-                )
-                logger.info(
-                    "Task deduplication service initialized (embedding via configurable provider)"
-                )
+                self.task_similarity_service = TaskSimilarityService(self.db_manager, self.embedding_service)
+                logger.info("Task deduplication service initialized (embedding via configurable provider)")
             except Exception as e:
-                logger.warning(
-                    f"Task deduplication disabled — embedding provider init failed: {e}"
-                )
+                logger.warning(f"Task deduplication disabled — embedding provider init failed: {e}")
         else:
             logger.info("Task deduplication disabled by configuration")
 
@@ -397,9 +360,7 @@ class ServerState:
             db_manager=self.db_manager,
             max_concurrent_agents=config.max_concurrent_agents,
         )
-        logger.info(
-            f"Queue service initialized with max_concurrent_agents={config.max_concurrent_agents}"
-        )
+        logger.info(f"Queue service initialized with max_concurrent_agents={config.max_concurrent_agents}")
 
         logger.info("Server state initialized successfully")
 
@@ -409,11 +370,7 @@ class ServerState:
 
         try:
             with self.db_manager.get_session() as session:
-                session.execute(
-                    sqlalchemy.text(
-                        "ALTER TABLE autopilot_projects ADD COLUMN is_active BOOLEAN DEFAULT 0"
-                    )
-                )
+                session.execute(sqlalchemy.text("ALTER TABLE autopilot_projects ADD COLUMN is_active BOOLEAN DEFAULT 0"))
                 session.commit()
                 logger.info("Migrated: added is_active column to autopilot_projects")
         except Exception:
@@ -425,24 +382,16 @@ class ServerState:
 
         try:
             with self.db_manager.get_session() as session:
-                active = (
-                    session.query(AutopilotProject).filter_by(is_active=True).first()
-                )
+                active = session.query(AutopilotProject).filter_by(is_active=True).first()
                 if active:
                     from pathlib import Path
 
                     config.main_repo_path = Path(active.base_dir)
                     config.project_root = Path(active.base_dir)
-                    logger.info(
-                        f"Active project loaded: {active.name} ({active.base_dir})"
-                    )
+                    logger.info(f"Active project loaded: {active.name} ({active.base_dir})")
                 else:
                     # Auto-activate the default or first project
-                    proj = (
-                        session.query(AutopilotProject)
-                        .filter_by(is_default=True)
-                        .first()
-                    )
+                    proj = session.query(AutopilotProject).filter_by(is_default=True).first()
                     if not proj:
                         proj = session.query(AutopilotProject).first()
                     if proj:
@@ -452,9 +401,7 @@ class ServerState:
 
                         config.main_repo_path = Path(proj.base_dir)
                         config.project_root = Path(proj.base_dir)
-                        logger.info(
-                            f"Auto-activated project: {proj.name} ({proj.base_dir})"
-                        )
+                        logger.info(f"Auto-activated project: {proj.name} ({proj.base_dir})")
         except Exception as e:
             logger.warning(f"Could not load active project: {e}")
 
@@ -572,17 +519,13 @@ def _tmux_session_alive(session_name: str) -> bool:
     try:
         import subprocess
 
-        r = subprocess.run(
-            ["tmux", "has-session", "-t", session_name], capture_output=True, timeout=3
-        )
+        r = subprocess.run(["tmux", "has-session", "-t", session_name], capture_output=True, timeout=3)
         return r.returncode == 0
     except Exception:
         return False
 
 
-async def _resume_interrupted_workflows(
-    workflow_id: Optional[str] = None, reactivate: bool = False
-):
+async def _resume_interrupted_workflows(workflow_id: Optional[str] = None, reactivate: bool = False):
     """Re-drive workflows that were mid-flight when the server last stopped.
 
     Completed phases are durable (committed to the integration branch) and the DB
@@ -635,11 +578,7 @@ async def _resume_interrupted_workflows(
             # failed task untouched — status derivation then flips it straight
             # back to "failed" and nothing appears to have happened.
             if reactivate:
-                failed_tasks = (
-                    session.query(Task)
-                    .filter(Task.workflow_id == wf.id, Task.status == "failed")
-                    .all()
-                )
+                failed_tasks = session.query(Task).filter(Task.workflow_id == wf.id, Task.status == "failed").all()
                 for t in failed_tasks:
                     t.status = "pending"
                     t.failure_reason = None
@@ -652,10 +591,7 @@ async def _resume_interrupted_workflows(
                     t.action_target_phase = None
                 if failed_tasks:
                     session.commit()
-                    logger.info(
-                        f"[RESUME] Workflow {wf.id[:8]}: resetting "
-                        f"{len(failed_tasks)} failed task(s) for on-demand retry"
-                    )
+                    logger.info(f"[RESUME] Workflow {wf.id[:8]}: resetting {len(failed_tasks)} failed task(s) for on-demand retry")
                 for t in failed_tasks:
                     try:
                         if server_state.queue_service.should_queue_task():
@@ -665,28 +601,19 @@ async def _resume_interrupted_workflows(
                                 AgentDispatchService,
                             )
 
-                            dispatch_context = (
-                                await AgentDispatchService.build_dispatch_context(
-                                    task_description_for_rag=t.enriched_description
-                                    or t.raw_description,
-                                    phase_id=t.phase_id,
-                                )
+                            dispatch_context = await AgentDispatchService.build_dispatch_context(
+                                task_description_for_rag=t.enriched_description or t.raw_description,
+                                phase_id=t.phase_id,
                             )
                             agent = await AgentDispatchService.dispatch(
                                 task=t,
-                                enriched_data={
-                                    "enriched_description": t.enriched_description
-                                },
+                                enriched_data={"enriched_description": t.enriched_description},
                                 dispatch_context=dispatch_context,
                             )
-                            AgentDispatchService.mark_assigned(
-                                t.id, agent.id, status="assigned"
-                            )
+                            AgentDispatchService.mark_assigned(t.id, agent.id, status="assigned")
                         resumed += 1
                     except Exception as e:
-                        logger.warning(
-                            f"[RESUME] Failed to restart failed task {t.id[:8]}: {e}"
-                        )
+                        logger.warning(f"[RESUME] Failed to restart failed task {t.id[:8]}: {e}")
 
             # Only tasks that still need work — a 'done' task advances via the
             # monitor's phase-completion check, not by restarting its old agent.
@@ -713,26 +640,16 @@ async def _resume_interrupted_workflows(
             for agent in orphans:
                 if _tmux_session_alive(agent.tmux_session_name):
                     continue  # still alive (e.g., only the monitor restarted) — leave it
-                logger.info(
-                    f"[RESUME] Workflow {wf.id[:8]}: restarting orphaned phase agent "
-                    f"{agent.id[:8]} (dead tmux session) to continue from committed state"
-                )
+                logger.info(f"[RESUME] Workflow {wf.id[:8]}: restarting orphaned phase agent {agent.id[:8]} (dead tmux session) to continue from committed state")
                 try:
-                    await server_state.agent_manager.restart_agent(
-                        agent.id, reason="server restarted — resuming interrupted work"
-                    )
+                    await server_state.agent_manager.restart_agent(agent.id, reason="server restarted — resuming interrupted work")
                     resumed += 1
                 except Exception as e:
-                    logger.warning(
-                        f"[RESUME] Failed to restart agent {agent.id[:8]}: {e}"
-                    )
+                    logger.warning(f"[RESUME] Failed to restart agent {agent.id[:8]}: {e}")
         result["resumed"] = resumed
         result["workflows"] = [wf.id for wf in active]
         if resumed:
-            logger.info(
-                f"[RESUME] Resumed {resumed} interrupted phase agent(s) across "
-                f"{len(active)} workflow(s)"
-            )
+            logger.info(f"[RESUME] Resumed {resumed} interrupted phase agent(s) across {len(active)} workflow(s)")
         return result
     finally:
         session.close()
@@ -758,9 +675,7 @@ async def startup_event():
     await server_state.initialize()
 
     # Add frontend API routes
-    api_router = create_frontend_routes(
-        server_state.db_manager, server_state.agent_manager, server_state.phase_manager
-    )
+    api_router = create_frontend_routes(server_state.db_manager, server_state.agent_manager, server_state.phase_manager)
     app.include_router(api_router)
 
     # Add authentication routes
@@ -791,9 +706,7 @@ async def startup_event():
 
     logger.info("=== PHASE LOADING DEBUG ===")
     logger.info(f"Current working directory: {os.getcwd()}")
-    logger.info(
-        f"Environment variables starting with HEPHAESTUS: {[k for k in os.environ.keys() if 'HEPHAESTUS' in k]}"
-    )
+    logger.info(f"Environment variables starting with HEPHAESTUS: {[k for k in os.environ.keys() if 'HEPHAESTUS' in k]}")
 
     phases_folder = os.environ.get("HEPHAESTUS_PHASES_FOLDER")
     logger.info(f"HEPHAESTUS_PHASES_FOLDER value: '{phases_folder}'")
@@ -808,9 +721,7 @@ async def startup_event():
 
         logger.info(f"Full path to phases folder: {full_path}")
         logger.info(f"Folder exists: {full_path.exists()}")
-        logger.info(
-            f"Is directory: {full_path.is_dir() if full_path.exists() else 'N/A'}"
-        )
+        logger.info(f"Is directory: {full_path.is_dir() if full_path.exists() else 'N/A'}")
 
         if full_path.exists() and full_path.is_dir():
             # List files in directory
@@ -825,35 +736,25 @@ async def startup_event():
             logger.info("PhaseLoader imported successfully")
 
             # Load phases from folder
-            logger.info(
-                f"Calling PhaseLoader.load_phases_from_folder('{phases_folder}')"
-            )
+            logger.info(f"Calling PhaseLoader.load_phases_from_folder('{phases_folder}')")
             workflow_def = PhaseLoader.load_phases_from_folder(phases_folder)
-            logger.info(
-                f"Loaded workflow '{workflow_def.name}' with {len(workflow_def.phases)} phases"
-            )
+            logger.info(f"Loaded workflow '{workflow_def.name}' with {len(workflow_def.phases)} phases")
 
             # Load phases configuration (for ticket tracking, result handling, etc.)
             logger.info(f"Loading phases_config.yaml from '{phases_folder}'")
             phases_config = PhaseLoader.load_phases_config(phases_folder)
-            logger.info(
-                f"Loaded phases config: enable_tickets={phases_config.enable_tickets}, has_result={phases_config.has_result}"
-            )
+            logger.info(f"Loaded phases config: enable_tickets={phases_config.enable_tickets}, has_result={phases_config.has_result}")
 
             # Workflow initialization is handled by SDK's start_workflow() call
             # The phase definitions are loaded but workflow execution is created on-demand
-            logger.info(
-                "Phases loaded successfully - workflow execution will be created via start_workflow() call"
-            )
+            logger.info("Phases loaded successfully - workflow execution will be created via start_workflow() call")
 
             # Log phase names
             logger.info("Loaded phases:")
             for phase in workflow_def.phases:
                 logger.info(f"  Phase {phase.id}: {phase.name}")
                 logger.info(f"    - Description: {phase.description[:100]}...")
-                logger.info(
-                    f"    - Done definitions: {len(phase.done_definitions)} items"
-                )
+                logger.info(f"    - Done definitions: {len(phase.done_definitions)} items")
 
         except ImportError as e:
             logger.error(f"Failed to import PhaseLoader: {e}")
@@ -925,9 +826,7 @@ async def startup_event():
                 # Get orchestrator_config if present
                 orchestrator_config = getattr(defn, "orchestrator_config", None)
 
-                existing = (
-                    session.query(DBWorkflowDefinition).filter_by(id=defn.id).first()
-                )
+                existing = session.query(DBWorkflowDefinition).filter_by(id=defn.id).first()
                 if existing:
                     # Update from source files (source of truth)
                     existing.name = defn.name
@@ -949,19 +848,13 @@ async def startup_event():
                     logger.info(f"Registered workflow: {defn.id}")
             # Remove stale definitions that no longer exist on disk
             loaded_ids = {d.id for d in all_definitions}
-            stale = (
-                session.query(DBWorkflowDefinition)
-                .filter(DBWorkflowDefinition.id.notin_(loaded_ids))
-                .all()
-            )
+            stale = session.query(DBWorkflowDefinition).filter(DBWorkflowDefinition.id.notin_(loaded_ids)).all()
             for stale_def in stale:
                 logger.info(f"Removing stale workflow definition: {stale_def.id}")
                 session.delete(stale_def)
 
             session.commit()
-        logger.info(
-            f"Workflow registration complete: {len(all_definitions)} definitions"
-        )
+        logger.info(f"Workflow registration complete: {len(all_definitions)} definitions")
     except Exception as e:
         logger.error(f"Failed to register workflows: {e}")
         import traceback
@@ -970,18 +863,14 @@ async def startup_event():
 
     # Start background queue processor
     logger.info("Starting background queue processor...")
-    server_state.background_queue_processor_task = asyncio.create_task(
-        background_queue_processor()
-    )
+    server_state.background_queue_processor_task = asyncio.create_task(background_queue_processor())
     logger.info("Background queue processor task created")
 
     # Start background phase advancement sweep — the generic, restart-safe
     # replacement for relying on a specific run's own polling loop (see its
     # docstring for why that's necessary).
     logger.info("Starting background phase advancement sweep...")
-    server_state.phase_advancement_sweep_task = asyncio.create_task(
-        background_phase_advancement_sweep()
-    )
+    server_state.phase_advancement_sweep_task = asyncio.create_task(background_phase_advancement_sweep())
     logger.info("Background phase advancement sweep task created")
 
     # Resume the autopilot pipeline driver itself if it was running when the
@@ -1033,17 +922,10 @@ async def startup_event():
             # finishes.
             can_start, cap_message = get_registry().try_reserve(resume_project_id)
             if not can_start:
-                logger.warning(
-                    f"[RESUME] Skipping auto-resume for project {resume_project_id}: "
-                    f"{cap_message}"
-                )
+                logger.warning(f"[RESUME] Skipping auto-resume for project {resume_project_id}: {cap_message}")
                 continue
 
-            logger.info(
-                f"[RESUME] Auto-resuming autopilot pipeline for project "
-                f"{resume_project_id} ({persisted['project_path']}) "
-                "(was running before restart)"
-            )
+            logger.info(f"[RESUME] Auto-resuming autopilot pipeline for project {resume_project_id} ({persisted['project_path']}) (was running before restart)")
             try:
                 await get_autopilot_service(resume_project_id).start(
                     project_path=persisted["project_path"],
@@ -1051,9 +933,7 @@ async def startup_event():
                     max_iterations=persisted.get("max_iterations", 10),
                 )
             except Exception as e:
-                logger.error(
-                    f"[RESUME] Failed to auto-resume project {resume_project_id}: {e}"
-                )
+                logger.error(f"[RESUME] Failed to auto-resume project {resume_project_id}: {e}")
             finally:
                 get_registry().release_reservation(resume_project_id)
     except Exception as e:
@@ -1079,14 +959,10 @@ async def shutdown_event():
     server_state.shutdown_event.set()
     if server_state.background_queue_processor_task:
         try:
-            await asyncio.wait_for(
-                server_state.background_queue_processor_task, timeout=5.0
-            )
+            await asyncio.wait_for(server_state.background_queue_processor_task, timeout=5.0)
             logger.info("Background queue processor stopped")
         except asyncio.TimeoutError:
-            logger.warning(
-                "Background queue processor did not stop gracefully, cancelling..."
-            )
+            logger.warning("Background queue processor did not stop gracefully, cancelling...")
             server_state.background_queue_processor_task.cancel()
 
     # Stop background phase advancement sweep (shares the same shutdown_event,
@@ -1094,14 +970,10 @@ async def shutdown_event():
     logger.info("Stopping background phase advancement sweep...")
     if server_state.phase_advancement_sweep_task:
         try:
-            await asyncio.wait_for(
-                server_state.phase_advancement_sweep_task, timeout=5.0
-            )
+            await asyncio.wait_for(server_state.phase_advancement_sweep_task, timeout=5.0)
             logger.info("Background phase advancement sweep stopped")
         except asyncio.TimeoutError:
-            logger.warning(
-                "Background phase advancement sweep did not stop gracefully, cancelling..."
-            )
+            logger.warning("Background phase advancement sweep did not stop gracefully, cancelling...")
             server_state.phase_advancement_sweep_task.cancel()
 
     # Close all WebSocket connections
@@ -1116,16 +988,12 @@ def verify_agent_id(agent_id: str = Header(None, alias="X-Agent-ID")) -> str:
     Rejects empty/malformed agent IDs.
     """
     if not agent_id:
-        raise HTTPException(
-            status_code=401, detail="Agent ID required in X-Agent-ID header"
-        )
+        raise HTTPException(status_code=401, detail="Agent ID required in X-Agent-ID header")
 
     # Validate format: must be UUID or known SDK/system identifier
     import re
 
-    uuid_pattern = re.compile(
-        r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE
-    )
+    uuid_pattern = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE)
     known_system_ids = {
         "main-session-agent",
         "sdk-agent",
@@ -1136,12 +1004,7 @@ def verify_agent_id(agent_id: str = Header(None, alias="X-Agent-ID")) -> str:
         "monitor",
     }
 
-    if not (
-        uuid_pattern.match(agent_id)
-        or agent_id in known_system_ids
-        or agent_id.startswith("sdk-")
-        or agent_id.startswith("mcp-")
-    ):
+    if not (uuid_pattern.match(agent_id) or agent_id in known_system_ids or agent_id.startswith("sdk-") or agent_id.startswith("mcp-")):
         raise HTTPException(
             status_code=401,
             detail=f"Invalid agent ID format: '{agent_id}'. Must be a UUID or known system identifier.",
@@ -1161,9 +1024,7 @@ def _check_rate_limit(key: str, max_requests: int = RATE_LIMIT_MAX) -> bool:
     """Check if request is within rate limit. Returns True if allowed."""
     now = time.time()
     # Clean old entries
-    _rate_limit_store[key] = [
-        t for t in _rate_limit_store[key] if now - t < RATE_LIMIT_WINDOW
-    ]
+    _rate_limit_store[key] = [t for t in _rate_limit_store[key] if now - t < RATE_LIMIT_WINDOW]
     if len(_rate_limit_store[key]) >= max_requests:
         return False
     _rate_limit_store[key].append(now)
@@ -1210,9 +1071,7 @@ async def process_queue():
             logger.debug("No queued tasks to process")
             return
 
-        logger.info(
-            f"Processing queued task {next_task.id} (priority={next_task.priority}, boosted={next_task.priority_boosted})"
-        )
+        logger.info(f"Processing queued task {next_task.id} (priority={next_task.priority}, boosted={next_task.priority_boosted})")
 
         # Dequeue the task
         server_state.queue_service.dequeue_task(next_task.id)
@@ -1234,18 +1093,11 @@ async def process_queue():
 
         # Tasks created with placeholder "[Processing] ..." (e.g. blocked on
         # creation and enrichment was skipped) need real LLM enrichment.
-        needs_enrichment = (
-            not next_task.enriched_description
-            or next_task.enriched_description.startswith("[Processing]")
-        )
-        logger.info(
-            f"[QUEUE_ENRICHMENT] Task {next_task.id} needs_enrichment={needs_enrichment}"
-        )
+        needs_enrichment = not next_task.enriched_description or next_task.enriched_description.startswith("[Processing]")
+        logger.info(f"[QUEUE_ENRICHMENT] Task {next_task.id} needs_enrichment={needs_enrichment}")
 
         if needs_enrichment:
-            phase_context_str, ctx_workflow_id = (
-                TaskEnrichmentService.get_phase_context_str(resolved_phase_id)
-            )
+            phase_context_str, ctx_workflow_id = TaskEnrichmentService.get_phase_context_str(resolved_phase_id)
             workflow_id = ctx_workflow_id or next_task.workflow_id
 
             enrichment_result = await TaskEnrichmentService.enrich(
@@ -1267,9 +1119,7 @@ async def process_queue():
                 task = session.query(Task).filter_by(id=next_task.id).first()
                 if task:
                     task.enriched_description = enriched_task["enriched_description"]
-                    task.estimated_complexity = enriched_task.get(
-                        "estimated_complexity", 5
-                    )
+                    task.estimated_complexity = enriched_task.get("estimated_complexity", 5)
                     if resolved_phase_id:
                         task.phase_id = resolved_phase_id
                     if workflow_id:
@@ -1279,31 +1129,19 @@ async def process_queue():
                     if resolved_phase_id:
                         from src.core.database import Phase
 
-                        phase = (
-                            session.query(Phase)
-                            .filter_by(id=resolved_phase_id)
-                            .first()
-                        )
-                        if phase and phase.validation and phase.validation.get(
-                            "enabled", True
-                        ):
+                        phase = session.query(Phase).filter_by(id=resolved_phase_id).first()
+                        if phase and phase.validation and phase.validation.get("enabled", True):
                             task.validation_enabled = True
 
                     session.commit()
                     next_task._enriched_task_dict = enriched_task  # for dispatch below
-                    logger.info(
-                        f"[QUEUE_ENRICHMENT] Enrichment complete for task {next_task.id}"
-                    )
+                    logger.info(f"[QUEUE_ENRICHMENT] Enrichment complete for task {next_task.id}")
                 else:
-                    logger.error(
-                        f"[QUEUE_ENRICHMENT] Task {next_task.id} not found in database!"
-                    )
+                    logger.error(f"[QUEUE_ENRICHMENT] Task {next_task.id} not found in database!")
             finally:
                 session.close()
         else:
-            logger.info(
-                f"[QUEUE_ENRICHMENT] Task {next_task.id} already enriched - skipping enrichment pipeline"
-            )
+            logger.info(f"[QUEUE_ENRICHMENT] Task {next_task.id} already enriched - skipping enrichment pipeline")
 
         # Refresh task from DB to get post-enrichment data, and build the
         # temp task object used for dispatch (mirrors create_task's pattern).
@@ -1320,18 +1158,11 @@ async def process_queue():
                     created_by_agent_id=refreshed_task.created_by_agent_id,
                     workflow_id=refreshed_task.workflow_id,
                 )
-                task_description_for_rag = (
-                    refreshed_task.enriched_description
-                    or refreshed_task.raw_description
-                )
+                task_description_for_rag = refreshed_task.enriched_description or refreshed_task.raw_description
             else:
-                logger.warning(
-                    "[QUEUE_AGENT_CREATE] Could not refresh task from DB - using stale task"
-                )
+                logger.warning("[QUEUE_AGENT_CREATE] Could not refresh task from DB - using stale task")
                 task_for_agent = next_task
-                task_description_for_rag = (
-                    next_task.enriched_description or next_task.raw_description
-                )
+                task_description_for_rag = next_task.enriched_description or next_task.raw_description
         finally:
             session.close()
 
@@ -1347,13 +1178,11 @@ async def process_queue():
 
         # FIX #7: Reuse enrichment context if available (avoid double-fetch).
         if hasattr(next_task, "_enrichment_context"):
-            dispatch_context = (
-                await AgentDispatchService.build_dispatch_context_from_existing(
-                    memories=next_task._enrichment_context["context_memories"],
-                    project_context=next_task._enrichment_context["project_context"],
-                    working_directory="",  # Will fall back to phase cwd
-                    phase_id=task_for_agent.phase_id,
-                )
+            dispatch_context = await AgentDispatchService.build_dispatch_context_from_existing(
+                memories=next_task._enrichment_context["context_memories"],
+                project_context=next_task._enrichment_context["project_context"],
+                working_directory="",  # Will fall back to phase cwd
+                phase_id=task_for_agent.phase_id,
             )
         else:
             dispatch_context = await AgentDispatchService.build_dispatch_context(
@@ -1379,9 +1208,7 @@ async def process_queue():
                 "type": "task_dequeued",
                 "task_id": next_task.id,
                 "agent_id": agent.id,
-                "description": (
-                    next_task.enriched_description or next_task.raw_description
-                )[:200],
+                "description": (next_task.enriched_description or next_task.raw_description)[:200],
             }
         )
 
@@ -1414,9 +1241,7 @@ async def background_queue_processor():
             queued_count = queue_status.get("queued_tasks_count", 0)
 
             if queued_count > 0:
-                logger.info(
-                    f"[BACKGROUND_QUEUE] Found {queued_count} queued task(s), processing queue..."
-                )
+                logger.info(f"[BACKGROUND_QUEUE] Found {queued_count} queued task(s), processing queue...")
                 await process_queue()
             else:
                 logger.debug("[BACKGROUND_QUEUE] No queued tasks, skipping")
@@ -1484,16 +1309,12 @@ async def background_phase_advancement_sweep():
     from src.core.constants import AUTOPILOT_STATE_DIR
 
     logger.info("Background phase advancement sweep started")
-    sweep_logger = OrchestratorLogger(
-        Path(AUTOPILOT_STATE_DIR) / "phase-advancement-sweep"
-    )
+    sweep_logger = OrchestratorLogger(Path(AUTOPILOT_STATE_DIR) / "phase-advancement-sweep")
     loop = asyncio.get_event_loop()
 
     while not server_state.shutdown_event.is_set():
         try:
-            await loop.run_in_executor(
-                None, _run_phase_advancement_sweep_once, sweep_logger
-            )
+            await loop.run_in_executor(None, _run_phase_advancement_sweep_once, sweep_logger)
         except Exception as e:
             logger.error(f"[PHASE-SWEEP] Error in phase advancement sweep: {e}")
 
@@ -1543,11 +1364,7 @@ def _run_phase_advancement_sweep_once(sweep_logger) -> None:
 
     session = server_state.db_manager.get_session()
     try:
-        workflows = (
-            session.query(Workflow.id, Workflow.status)
-            .filter(Workflow.status.in_(["active", "paused"]))
-            .all()
-        )
+        workflows = session.query(Workflow.id, Workflow.status).filter(Workflow.status.in_(["active", "paused"])).all()
     finally:
         session.close()
 
@@ -1594,19 +1411,19 @@ def _run_phase_advancement_sweep_once(sweep_logger) -> None:
 
 def _resolve_agent_current_phase(agent_id: str, workflow_id: str) -> Optional[str]:
     """Resolve the agent's current phase ID from their assigned task.
-    
+
     M-6 fix: Make phase context implicit for subtask creation.
     The server already knows the agent's current phase from its assigned task,
     so agents don't need to specify phase_id for subtasks within their own phase.
-    
+
     Returns:
         Phase ID string if found, None otherwise.
     """
     if not agent_id or not workflow_id:
         return None
-    
+
     from src.core.database import Task as TaskModel
-    
+
     session = server_state.db_manager.get_session()
     try:
         # Find the agent's most recent assigned task in this workflow
@@ -1643,9 +1460,7 @@ async def create_task(
         )
 
     _touch_agent_activity(agent_id)
-    logger.info(
-        f"Creating task from agent {agent_id}: {request.task_description[:100]}..."
-    )
+    logger.info(f"Creating task from agent {agent_id}: {request.task_description[:100]}...")
 
     try:
         # Check if ticket tracking is enabled and ticket_id is required
@@ -1663,11 +1478,7 @@ async def create_task(
             # If ticket tracking is enabled globally, require ticket_id from MCP agents
             if has_ticket_tracking and not request.ticket_id:
                 # Check if this is an SDK agent (allowed to create tasks without tickets)
-                is_sdk_agent = (
-                    agent_id == "main-session-agent"
-                    or "sdk" in agent_id.lower()
-                    or "main" in agent_id.lower()
-                )
+                is_sdk_agent = agent_id == "main-session-agent" or "sdk" in agent_id.lower() or "main" in agent_id.lower()
 
                 if not is_sdk_agent:
                     session.close()
@@ -1687,43 +1498,31 @@ async def create_task(
         # Validate phase_id for workflow tasks
         # M-6 fix: Auto-resolve agent's current phase if not provided for subtasks
         if request.workflow_id:
-            logger.info(
-                f"[CREATE_TASK] phase_id={repr(request.phase_id)}, phase_order={repr(request.phase_order)}"
-            )
-            
+            logger.info(f"[CREATE_TASK] phase_id={repr(request.phase_id)}, phase_order={repr(request.phase_order)}")
+
             # Auto-resolve phase_id from agent's current task if not provided
             if not request.phase_id and not request.phase_order:
                 resolved_phase = _resolve_agent_current_phase(agent_id, request.workflow_id)
                 if resolved_phase:
-                    logger.info(
-                        f"[CREATE_TASK] Auto-resolved phase_id for agent {agent_id[:8]}: {resolved_phase}"
-                    )
+                    logger.info(f"[CREATE_TASK] Auto-resolved phase_id for agent {agent_id[:8]}: {resolved_phase}")
                     request.phase_id = resolved_phase
                 else:
-                    logger.error(
-                        f"[CREATE_TASK] REJECTED: no phase_id for workflow {request.workflow_id}"
-                    )
+                    logger.error(f"[CREATE_TASK] REJECTED: no phase_id for workflow {request.workflow_id}")
                     raise HTTPException(
                         status_code=400,
-                        detail=f"phase_id or phase_order is REQUIRED for workflow tasks. "
-                        f"Agent {agent_id} must provide phase_id when workflow_id is set.",
+                        detail=f"phase_id or phase_order is REQUIRED for workflow tasks. Agent {agent_id} must provide phase_id when workflow_id is set.",
                     )
             if request.phase_id in ("None", "none", "null", ""):
                 # Try to auto-resolve before rejecting
                 resolved_phase = _resolve_agent_current_phase(agent_id, request.workflow_id)
                 if resolved_phase:
-                    logger.info(
-                        f"[CREATE_TASK] Auto-resolved invalid phase_id for agent {agent_id[:8]}: {resolved_phase}"
-                    )
+                    logger.info(f"[CREATE_TASK] Auto-resolved invalid phase_id for agent {agent_id[:8]}: {resolved_phase}")
                     request.phase_id = resolved_phase
                 else:
-                    logger.error(
-                        f"[CREATE_TASK] REJECTED: invalid phase_id={repr(request.phase_id)}"
-                    )
+                    logger.error(f"[CREATE_TASK] REJECTED: invalid phase_id={repr(request.phase_id)}")
                     raise HTTPException(
                         status_code=400,
-                        detail=f"phase_id cannot be None/null/empty string. "
-                        f"Agent {agent_id} must provide a valid phase_id.",
+                        detail=f"phase_id cannot be None/null/empty string. Agent {agent_id} must provide a valid phase_id.",
                     )
 
             # Dedup: don't create duplicate tasks for the same phase
@@ -1738,20 +1537,12 @@ async def create_task(
             phase_order_to_resolve = request.phase_order
             if not phase_order_to_resolve and dedup_phase_id and str(dedup_phase_id).isdigit():
                 phase_order_to_resolve = int(dedup_phase_id)
-            if phase_order_to_resolve and (
-                not dedup_phase_id or str(dedup_phase_id).isdigit()
-            ):
+            if phase_order_to_resolve and (not dedup_phase_id or str(dedup_phase_id).isdigit()):
                 from src.core.database import Phase as PhaseModel
 
                 _s = server_state.db_manager.get_session()
                 try:
-                    _phase = (
-                        _s.query(PhaseModel)
-                        .filter_by(
-                            workflow_id=request.workflow_id, order=phase_order_to_resolve
-                        )
-                        .first()
-                    )
+                    _phase = _s.query(PhaseModel).filter_by(workflow_id=request.workflow_id, order=phase_order_to_resolve).first()
                     if _phase:
                         dedup_phase_id = _phase.id
                 finally:
@@ -1766,9 +1557,7 @@ async def create_task(
                         .filter(
                             TaskModel.phase_id == dedup_phase_id,
                             TaskModel.workflow_id == request.workflow_id,
-                            TaskModel.status.in_(
-                                ["pending", "assigned", "in_progress", "queued"]
-                            ),
+                            TaskModel.status.in_(["pending", "assigned", "in_progress", "queued"]),
                         )
                         .first()
                     )
@@ -1790,25 +1579,16 @@ async def create_task(
                             request.task_description[:500],
                         ).ratio()
                         if similarity >= 0.85:
-                            logger.info(
-                                f"[CREATE_TASK] Dedup: phase already has near-identical "
-                                f"active task {existing.id[:8]} (similarity={similarity:.2f}), returning it"
-                            )
+                            logger.info(f"[CREATE_TASK] Dedup: phase already has near-identical active task {existing.id[:8]} (similarity={similarity:.2f}), returning it")
                             _s.close()
                             return CreateTaskResponse(
                                 task_id=existing.id,
-                                enriched_description=existing.enriched_description
-                                or existing.raw_description,
-                                assigned_agent_id=existing.assigned_agent_id
-                                or "unassigned",
+                                enriched_description=existing.enriched_description or existing.raw_description,
+                                assigned_agent_id=existing.assigned_agent_id or "unassigned",
                                 estimated_completion_time=30,
                                 status="queued",
                             )
-                        logger.info(
-                            f"[CREATE_TASK] Phase has active task {existing.id[:8]} but "
-                            f"new description differs (similarity={similarity:.2f}) — "
-                            "creating a new task rather than deduping"
-                        )
+                        logger.info(f"[CREATE_TASK] Phase has active task {existing.id[:8]} but new description differs (similarity={similarity:.2f}) — creating a new task rather than deduping")
                 finally:
                     if _s.is_active:
                         _s.close()
@@ -1839,17 +1619,9 @@ async def create_task(
                         .first()
                     )
                     if own_task and own_task.phase_id:
-                        own_phase = (
-                            _s.query(PhaseModel).filter_by(id=own_task.phase_id).first()
-                        )
-                        target_phase = (
-                            _s.query(PhaseModel).filter_by(id=dedup_phase_id).first()
-                        )
-                        if (
-                            own_phase
-                            and target_phase
-                            and own_phase.order != target_phase.order
-                        ):
+                        own_phase = _s.query(PhaseModel).filter_by(id=own_task.phase_id).first()
+                        target_phase = _s.query(PhaseModel).filter_by(id=dedup_phase_id).first()
+                        if own_phase and target_phase and own_phase.order != target_phase.order:
                             logger.error(
                                 f"[CREATE_TASK] REJECTED: agent {agent_id[:8]} (own phase "
                                 f"'{own_phase.name}', order {own_phase.order}) tried to seed "
@@ -1878,17 +1650,21 @@ async def create_task(
         resolved_phase_id = request.phase_id
         if request.phase_id:
             from src.core.database import Phase
+
             if not session.query(Phase).filter_by(id=request.phase_id).first():
                 resolved_phase_id = None
         # Ensure created_by_agent_id FK is satisfied
         from src.core.database import Agent
+
         if not session.query(Agent).filter_by(id=agent_id).first():
-            session.add(Agent(
-                id=agent_id,
-                system_prompt="auto-created by create_task",
-                status="idle",
-                cli_type="system",
-            ))
+            session.add(
+                Agent(
+                    id=agent_id,
+                    system_prompt="auto-created by create_task",
+                    status="idle",
+                    cli_type="system",
+                )
+            )
             session.flush()
         task = Task(
             id=task_id,
@@ -1919,10 +1695,7 @@ async def create_task(
 
             if blocking_info["is_blocked"]:
                 # Ticket is blocked - mark task as blocked immediately
-                logger.info(
-                    f"Task {task_id} associated with blocked ticket {request.ticket_id}. "
-                    f"Marking task as 'blocked'. Blocked by: {blocking_info['blocking_ticket_ids']}"
-                )
+                logger.info(f"Task {task_id} associated with blocked ticket {request.ticket_id}. Marking task as 'blocked'. Blocked by: {blocking_info['blocking_ticket_ids']}")
 
                 session = server_state.db_manager.get_session()
                 try:
@@ -1930,12 +1703,8 @@ async def create_task(
                     if task_obj:
                         task_obj.status = "blocked"
 
-                        blocker_titles = [
-                            t["title"] for t in blocking_info["blocking_tickets"]
-                        ]
-                        task_obj.completion_notes = (
-                            f"Blocked by tickets: {', '.join(blocker_titles)}"
-                        )
+                        blocker_titles = [t["title"] for t in blocking_info["blocking_tickets"]]
+                        task_obj.completion_notes = f"Blocked by tickets: {', '.join(blocker_titles)}"
 
                         session.commit()
                 finally:
@@ -1977,9 +1746,7 @@ async def create_task(
                 workflow_id = None
                 phase_context_str = ""
 
-                target_workflow_id = (
-                    request.workflow_id or server_state.phase_manager.workflow_id
-                )
+                target_workflow_id = request.workflow_id or server_state.phase_manager.workflow_id
                 if target_workflow_id:
                     phase_id = TaskEnrichmentService.resolve_phase_id(
                         phase_id_raw=request.phase_id,
@@ -1988,9 +1755,7 @@ async def create_task(
                         requesting_agent_id=agent_id,
                     )
                     if phase_id:
-                        phase_context_str, ctx_workflow_id = (
-                            TaskEnrichmentService.get_phase_context_str(phase_id)
-                        )
+                        phase_context_str, ctx_workflow_id = TaskEnrichmentService.get_phase_context_str(phase_id)
                         if ctx_workflow_id:
                             workflow_id = ctx_workflow_id
                     else:
@@ -2035,26 +1800,18 @@ async def create_task(
                     task.phase_id = phase_id
                     # Prioritize request.workflow_id for multi-workflow support, fallback to phase context
                     task.workflow_id = request.workflow_id or workflow_id
-                    task.estimated_complexity = enriched_task.get(
-                        "estimated_complexity", 5
-                    )
+                    task.estimated_complexity = enriched_task.get("estimated_complexity", 5)
 
                     # Check if phase has validation enabled and inherit it
                     if phase_id:
                         phase = session.query(Phase).filter_by(id=phase_id).first()
                         if phase and phase.validation:
                             # Check if validation is explicitly disabled
-                            if phase.validation.get(
-                                "enabled", True
-                            ):  # Default to True if not specified
+                            if phase.validation.get("enabled", True):  # Default to True if not specified
                                 task.validation_enabled = True
-                                logger.info(
-                                    f"Task {task_id} inheriting validation from phase {phase.name}"
-                                )
+                                logger.info(f"Task {task_id} inheriting validation from phase {phase.name}")
                             else:
-                                logger.info(
-                                    f"Task {task_id} validation explicitly disabled in phase {phase.name}"
-                                )
+                                logger.info(f"Task {task_id} validation explicitly disabled in phase {phase.name}")
 
                     session.commit()
 
@@ -2071,18 +1828,10 @@ async def create_task(
 
                     # 6.5 Check for duplicates if deduplication is enabled
                     duplicate_info = None
-                    if (
-                        server_state.embedding_service
-                        and server_state.task_similarity_service
-                        and get_config().task_dedup_enabled
-                    ):
+                    if server_state.embedding_service and server_state.task_similarity_service and get_config().task_dedup_enabled:
                         try:
                             # Generate embedding for enriched description
-                            task_embedding = (
-                                await server_state.embedding_service.generate_embedding(
-                                    enriched_task["enriched_description"]
-                                )
-                            )
+                            task_embedding = await server_state.embedding_service.generate_embedding(enriched_task["enriched_description"])
 
                             # Check for duplicates within the same phase
                             duplicate_info = await server_state.task_similarity_service.check_for_duplicates(
@@ -2097,20 +1846,13 @@ async def create_task(
                                 task = session.query(Task).filter_by(id=task_id).first()
                                 if task:
                                     task.status = "duplicated"
-                                    task.duplicate_of_task_id = duplicate_info[
-                                        "duplicate_of"
-                                    ]
-                                    task.similarity_score = duplicate_info[
-                                        "max_similarity"
-                                    ]
+                                    task.duplicate_of_task_id = duplicate_info["duplicate_of"]
+                                    task.similarity_score = duplicate_info["max_similarity"]
                                     session.commit()
                                 session.close()
 
                                 # Log the duplicate detection
-                                logger.warning(
-                                    f"Task {task_id} detected as duplicate of {duplicate_info['duplicate_of']} "
-                                    f"with similarity {duplicate_info['max_similarity']:.3f}"
-                                )
+                                logger.warning(f"Task {task_id} detected as duplicate of {duplicate_info['duplicate_of']} with similarity {duplicate_info['max_similarity']:.3f}")
 
                                 # Return early (don't create agent for duplicates)
                                 return
@@ -2119,15 +1861,11 @@ async def create_task(
                             await server_state.task_similarity_service.store_task_embedding(
                                 task_id,
                                 task_embedding,
-                                related_tasks_details=duplicate_info.get(
-                                    "related_tasks_details", []
-                                ),
+                                related_tasks_details=duplicate_info.get("related_tasks_details", []),
                             )
 
                             if duplicate_info.get("related_tasks"):
-                                logger.info(
-                                    f"Task {task_id} has {len(duplicate_info['related_tasks'])} related tasks"
-                                )
+                                logger.info(f"Task {task_id} has {len(duplicate_info['related_tasks'])} related tasks")
 
                         except Exception as e:
                             logger.error(f"Failed to check for duplicates: {e}")
@@ -2146,21 +1884,13 @@ async def create_task(
                             {
                                 "type": "task_queued",
                                 "task_id": task_id,
-                                "description": enriched_task["enriched_description"][
-                                    :200
-                                ],
-                                "queue_position": queue_status.get(
-                                    "queued_tasks_count", 0
-                                ),
-                                "slots_available": queue_status.get(
-                                    "slots_available", 0
-                                ),
+                                "description": enriched_task["enriched_description"][:200],
+                                "queue_position": queue_status.get("queued_tasks_count", 0),
+                                "slots_available": queue_status.get("slots_available", 0),
                             }
                         )
 
-                        logger.info(
-                            f"Task {task_id} queued (at capacity: {queue_status['active_agents']}/{queue_status['max_concurrent_agents']} agents)"
-                        )
+                        logger.info(f"Task {task_id} queued (at capacity: {queue_status['active_agents']}/{queue_status['max_concurrent_agents']} agents)")
                         return  # Don't create agent yet
 
                     # 7. Create agent for the task (using task data, not the ORM object)
@@ -2174,9 +1904,7 @@ async def create_task(
                         enriched_description=task_data["enriched_description"],
                         done_definition=task_data["done_definition"],
                         phase_id=task_data["phase_id"],
-                        workflow_id=task_data[
-                            "workflow_id"
-                        ],  # CRITICAL: Include workflow_id
+                        workflow_id=task_data["workflow_id"],  # CRITICAL: Include workflow_id
                         created_by_agent_id=agent_id,  # Important: Set the parent agent ID
                     )
 
@@ -2184,13 +1912,11 @@ async def create_task(
                     # fetched during enrichment above (unlike process_queue,
                     # which re-fetches post-enrichment) — only the phase CLI
                     # config lookup is added here.
-                    dispatch_context = (
-                        await AgentDispatchService.build_dispatch_context_from_existing(
-                            memories=context_memories,
-                            project_context=project_context,
-                            working_directory=working_directory,
-                            phase_id=temp_task.phase_id,
-                        )
+                    dispatch_context = await AgentDispatchService.build_dispatch_context_from_existing(
+                        memories=context_memories,
+                        project_context=project_context,
+                        working_directory=working_directory,
+                        phase_id=temp_task.phase_id,
                     )
 
                     agent = await AgentDispatchService.dispatch(
@@ -2203,9 +1929,7 @@ async def create_task(
                     agent_id_str = str(agent.id) if agent else None
 
                     # 8. Update task with assigned agent
-                    AgentDispatchService.mark_assigned(
-                        task_id, agent_id_str, status="assigned"
-                    )
+                    AgentDispatchService.mark_assigned(task_id, agent_id_str, status="assigned")
 
                     # 9. Broadcast update via WebSocket
                     await server_state.broadcast_update(
@@ -2262,9 +1986,7 @@ async def validate_agent_id(agent_id: str):
     """
     import re
 
-    uuid_pattern = re.compile(
-        r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE
-    )
+    uuid_pattern = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE)
 
     if uuid_pattern.match(agent_id):
         return {
@@ -2305,9 +2027,7 @@ async def update_task_status(
     # already flows (completion_notes, memories, etc.) instead of adding a
     # new storage path for what's still just descriptive detail.
     if request.metadata:
-        request.summary = (
-            f"{request.summary}\n\n[metadata] {json.dumps(request.metadata)}"
-        ).strip()
+        request.summary = (f"{request.summary}\n\n[metadata] {json.dumps(request.metadata)}").strip()
 
     from src.services.task_completion_service import TaskCompletionService
 
@@ -2325,37 +2045,44 @@ async def update_task_status(
         if not task:
             raise HTTPException(status_code=404, detail="Task not found")
 
-        is_current_assignee = (task.assigned_agent_id == agent_id)
+        is_current_assignee = task.assigned_agent_id == agent_id
         if not is_current_assignee:
             # Secondary check: does this agent have this task as its current_task_id?
             agent_record = session.query(Agent).filter_by(id=agent_id).first()
             if agent_record and agent_record.current_task_id == request.task_id:
                 logger.warning(
-                    f"Agent {agent_id[:8]} updating task {request.task_id[:8]} "
-                    f"but is not current assignee (current: {task.assigned_agent_id}). "
-                    f"Allowing because agent's current_task_id matches."
+                    f"Agent {agent_id[:8]} updating task {request.task_id[:8]} but is not current assignee (current: {task.assigned_agent_id}). Allowing because agent's current_task_id matches."
                 )
             else:
                 # Tertiary check: was this agent ever assigned to this task?
                 # This handles the case where an agent was terminated (current_task_id
                 # cleared) but its tmux session is still alive and trying to report.
                 from src.core.database import AgentLog
-                agent_was_assigned = session.query(AgentLog).filter(
-                    AgentLog.agent_id == agent_id,
-                    AgentLog.log_type == "created",
-                    AgentLog.details["task_id"].as_string() == request.task_id,
-                ).first()
-                if not agent_was_assigned:
-                    # Fallback: check if agent's details contain the task_id
-                    agent_logs = session.query(AgentLog).filter(
+
+                agent_was_assigned = (
+                    session.query(AgentLog)
+                    .filter(
                         AgentLog.agent_id == agent_id,
                         AgentLog.log_type == "created",
-                    ).all()
+                        AgentLog.details["task_id"].as_string() == request.task_id,
+                    )
+                    .first()
+                )
+                if not agent_was_assigned:
+                    # Fallback: check if agent's details contain the task_id
+                    agent_logs = (
+                        session.query(AgentLog)
+                        .filter(
+                            AgentLog.agent_id == agent_id,
+                            AgentLog.log_type == "created",
+                        )
+                        .all()
+                    )
                     for log in agent_logs:
                         if log.details and log.details.get("task_id") == request.task_id:
                             agent_was_assigned = log
                             break
-                
+
                 if agent_was_assigned:
                     logger.warning(
                         f"Agent {agent_id[:8]} updating task {request.task_id[:8]} "
@@ -2363,28 +2090,18 @@ async def update_task_status(
                         f"Allowing because agent was previously assigned to this task (terminated agent completing work)."
                     )
                 else:
-                    raise HTTPException(
-                        status_code=403, detail="Agent not authorized for this task"
-                    )
+                    raise HTTPException(status_code=403, detail="Agent not authorized for this task")
 
         # 2. Save learnings as memories
-        await TaskCompletionService.record_learnings(
-            session, agent_id, request.task_id, request.key_learnings, request.code_changes
-        )
+        await TaskCompletionService.record_learnings(session, agent_id, request.task_id, request.key_learnings, request.code_changes)
 
         # 3. Check if task has results reported
         if request.status == "done" and not task.has_results:
-            logger.warning(
-                f"Task {request.task_id} completed without formal results reported"
-            )
+            logger.warning(f"Task {request.task_id} completed without formal results reported")
 
         # Fetched once and reused below (self-review gate + the output-artifact
         # floor a few lines down both need this same task's Phase row).
-        phase = (
-            session.query(Phase).filter_by(id=task.phase_id).first()
-            if task.phase_id
-            else None
-        )
+        phase = session.query(Phase).filter_by(id=task.phase_id).first() if task.phase_id else None
 
         # 3a. One-shot self-review (docs/GAP_CHECK_SELF_LOOP_DESIGN.md) — the
         # first "done" from a phase with self_review enabled doesn't complete
@@ -2403,15 +2120,9 @@ async def update_task_status(
                 task.completion_notes = request.summary
                 session.commit()
 
-                logger.info(
-                    f"[SELF-REVIEW] Task {task.id[:8]} (phase {phase.name}) fired — "
-                    f"agent {agent_id[:8]}, worktree HEAD "
-                    f"{(task.self_review_started_commit or 'unknown')[:8]}"
-                )
+                logger.info(f"[SELF-REVIEW] Task {task.id[:8]} (phase {phase.name}) fired — agent {agent_id[:8]}, worktree HEAD {(task.self_review_started_commit or 'unknown')[:8]}")
 
-                await server_state.agent_manager.send_message_to_agent(
-                    agent_id, SELF_REVIEW_CHECKLIST_PROMPT
-                )
+                await server_state.agent_manager.send_message_to_agent(agent_id, SELF_REVIEW_CHECKLIST_PROMPT)
 
                 return UpdateTaskStatusResponse(
                     success=True,
@@ -2431,17 +2142,11 @@ async def update_task_status(
                 if worktree_path:
                     try:
                         repo = Repo(worktree_path)
-                        diff_stat = repo.git.diff(
-                            task.self_review_started_commit, "HEAD", stat=True
-                        )
+                        diff_stat = repo.git.diff(task.self_review_started_commit, "HEAD", stat=True)
                     except Exception as e:
-                        logger.debug(
-                            f"[SELF-REVIEW] Could not diff worktree for task {task.id[:8]}: {e}"
-                        )
+                        logger.debug(f"[SELF-REVIEW] Could not diff worktree for task {task.id[:8]}: {e}")
             logger.info(
-                f"[SELF-REVIEW] Task {task.id[:8]} completed {elapsed:.0f}s after "
-                f"self-review fired. Diff since review: "
-                f"{diff_stat.strip() if diff_stat else '(no changes / diff unavailable)'}"
+                f"[SELF-REVIEW] Task {task.id[:8]} completed {elapsed:.0f}s after self-review fired. Diff since review: {diff_stat.strip() if diff_stat else '(no changes / diff unavailable)'}"
             )
             # Clear so this doesn't re-log if 'done' is ever seen again for the
             # same task (shouldn't normally happen once status is terminal).
@@ -2518,9 +2223,7 @@ async def update_task_status(
         # thorough report with zero ticket calls). Best-effort side effect,
         # never blocks "done".
         if request.status == "done" and task.phase_id:
-            await TaskCompletionService.create_tickets_from_forensics_report(
-                session, task
-            )
+            await TaskCompletionService.create_tickets_from_forensics_report(session, task)
 
         # 4. Check if task has validation enabled
         validation_spawned = False
@@ -2567,18 +2270,12 @@ async def update_task_status(
 
             # Collect cost data for completed tasks
             if request.status == "done":
-                try:
-                    from src.services.cost_collection_service import collect_task_cost
-                    collect_task_cost(request.task_id)
-                except Exception as e:
-                    logger.warning(f"Cost collection failed for task {request.task_id[:8]}: {e}")
+                TaskCompletionService.collect_cost_on_completion(request.task_id)
 
             # Commit in the shared worktree when a task completes successfully,
             # and auto-link the resulting commit to the task's ticket if any.
             if request.status == "done":
-                await TaskCompletionService.commit_and_link_ticket(
-                    session, agent_id, task, request.summary
-                )
+                await TaskCompletionService.commit_and_link_ticket(session, agent_id, task, request.summary)
                 # Re-verify the declared output(s) are still there right after
                 # the commit -- catches the file having vanished between the
                 # pre-commit check (3b, above) and here, e.g. an agent whose
@@ -2586,9 +2283,7 @@ async def update_task_status(
                 # task back to "failed" instead of letting a real loss stand
                 # as a silent "done". See verify_output_survived_commit's
                 # docstring for the live incident this closes.
-                output_lost_rejection = TaskCompletionService.verify_output_survived_commit(
-                    session, task, phase=phase
-                )
+                output_lost_rejection = TaskCompletionService.verify_output_survived_commit(session, task, phase=phase)
 
             # 4. Schedule agent termination and queue processing (only if no validation)
             async def terminate_and_process_queue():
@@ -2654,7 +2349,6 @@ async def update_task_status(
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         session.close()
-
 
 
 @app.get("/api/workflows")
@@ -2727,9 +2421,7 @@ async def pause_task_endpoint(task_id: str):
         if agent_id:
             await server_state.agent_manager.terminate_agent(agent_id)
 
-        await server_state.broadcast_update(
-            {"type": "task_paused", "task_id": task_id}
-        )
+        await server_state.broadcast_update({"type": "task_paused", "task_id": task_id})
 
         return {"success": True, "task_id": task_id, "status": "blocked"}
 
@@ -2808,9 +2500,7 @@ async def bump_task_priority_endpoint(
             }
         )
 
-        logger.info(
-            f"Task {task_id} bumped and agent {agent.id} created (bypassing limit)"
-        )
+        logger.info(f"Task {task_id} bumped and agent {agent.id} created (bypassing limit)")
 
         return {
             "success": True,
@@ -2841,11 +2531,7 @@ async def cancel_task_endpoint(task_id: str):
             if not task:
                 # Try prefix match with escaped LIKE wildcards
                 escaped = task_id.replace("%", "\\%").replace("_", "\\_")
-                task = (
-                    session.query(Task)
-                    .filter(Task.id.like(f"{escaped}%", escape="\\"))
-                    .first()
-                )
+                task = session.query(Task).filter(Task.id.like(f"{escaped}%", escape="\\")).first()
             if not task:
                 raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
 
@@ -3010,11 +2696,7 @@ async def restart_task_endpoint(
                 if wf and wf.status != "active":
                     wf.status = "active"
                 if task.phase_id:
-                    execution = (
-                        session.query(PhaseExecution)
-                        .filter_by(phase_id=task.phase_id)
-                        .first()
-                    )
+                    execution = session.query(PhaseExecution).filter_by(phase_id=task.phase_id).first()
                     if execution and execution.status != "in_progress":
                         execution.status = "in_progress"
                         execution.task_creation_claimed_at = None
@@ -3031,14 +2713,10 @@ async def restart_task_endpoint(
                 from src.core.database import GuardianAnalysis, SteeringIntervention
 
                 # Delete guardian analyses
-                session.query(GuardianAnalysis).filter_by(
-                    agent_id=old_agent_id
-                ).delete()
+                session.query(GuardianAnalysis).filter_by(agent_id=old_agent_id).delete()
 
                 # Delete steering interventions
-                session.query(SteeringIntervention).filter_by(
-                    agent_id=old_agent_id
-                ).delete()
+                session.query(SteeringIntervention).filter_by(agent_id=old_agent_id).delete()
 
                 session.commit()
                 logger.info(f"Cleared trajectory data for agent {old_agent_id}")
@@ -3084,8 +2762,7 @@ async def restart_task_endpoint(
             # in docs/SOLID_OO_REVIEW.md finding 1.3 that this shared
             # dispatch-context helper fixes by construction.
             dispatch_context = await AgentDispatchService.build_dispatch_context(
-                task_description_for_rag=task.enriched_description
-                or task.raw_description,
+                task_description_for_rag=task.enriched_description or task.raw_description,
                 phase_id=task.phase_id,
             )
 
@@ -3224,9 +2901,7 @@ async def register_client(request: Dict[str, Any]):
         "client_id": client_id,
         "client_secret": client_secret,
         "client_name": request.get("client_name", "Claude"),
-        "redirect_uris": request.get(
-            "redirect_uris", ["https://claude.ai/api/mcp/auth_callback"]
-        ),
+        "redirect_uris": request.get("redirect_uris", ["https://claude.ai/api/mcp/auth_callback"]),
         "grant_types": request.get("grant_types", ["authorization_code"]),
         "response_types": request.get("response_types", ["code"]),
         "scope": request.get("scope", "openid profile email"),
@@ -3244,9 +2919,7 @@ async def register_client(request: Dict[str, Any]):
         "response_types": registered_clients[client_id]["response_types"],
         "client_name": registered_clients[client_id]["client_name"],
         "scope": registered_clients[client_id]["scope"],
-        "token_endpoint_auth_method": registered_clients[client_id][
-            "token_endpoint_auth_method"
-        ],
+        "token_endpoint_auth_method": registered_clients[client_id]["token_endpoint_auth_method"],
     }
 
 
@@ -3467,20 +3140,10 @@ async def list_tools():
                 "input_schema": {
                     "type": "object",
                     "properties": {
-                        "status": {
-                            "type": "string",
-                            "description": "Filter by task status (pending, assigned, in_progress, done, failed)",
-                            "default": "all"
-                        },
-                        "agent_id": {
-                            "type": "string",
-                            "description": "Filter tasks assigned to this agent"
-                        },
-                        "workflow_id": {
-                            "type": "string",
-                            "description": "Filter tasks belonging to this workflow"
-                        }
-                    }
+                        "status": {"type": "string", "description": "Filter by task status (pending, assigned, in_progress, done, failed)", "default": "all"},
+                        "agent_id": {"type": "string", "description": "Filter tasks assigned to this agent"},
+                        "workflow_id": {"type": "string", "description": "Filter tasks belonging to this workflow"},
+                    },
                 },
             },
             {
@@ -4012,9 +3675,7 @@ async def list_workflow_executions(status: str = "all"):
 @app.post("/api/workflow-executions")
 async def start_workflow_execution(request: StartWorkflowRequest):
     """Start a new workflow execution from a definition."""
-    logger.info(
-        f"Starting workflow execution: definition={request.definition_id}, desc={request.description}, launch_params={request.launch_params}"
-    )
+    logger.info(f"Starting workflow execution: definition={request.definition_id}, desc={request.description}, launch_params={request.launch_params}")
     try:
         # start_execution now returns (workflow_id, initial_task_info)
         result = server_state.phase_manager.start_execution(
@@ -4052,10 +3713,7 @@ async def start_workflow_execution(request: StartWorkflowRequest):
                 with _get_db_for_claim() as _claim_db:
                     won_claim = _claim_phase_task_creation(_claim_db, phase_uuid)
                 if not won_claim:
-                    logger.info(
-                        f"Phase 1 task for workflow {workflow_id} is already "
-                        "being created by another path -- skipping"
-                    )
+                    logger.info(f"Phase 1 task for workflow {workflow_id} is already being created by another path -- skipping")
                     initial_task_info = None
 
         if initial_task_info:
@@ -4074,12 +3732,8 @@ async def start_workflow_execution(request: StartWorkflowRequest):
 
                 # Call the create_task endpoint handler directly
                 # Use "main-session-agent" as the creator since this is a UI-launched task
-                task_response = await create_task(
-                    request=task_request, agent_id="main-session-agent"
-                )
-                logger.info(
-                    f"Created initial task {task_response.task_id} for workflow {workflow_id}"
-                )
+                task_response = await create_task(request=task_request, agent_id="main-session-agent")
+                logger.info(f"Created initial task {task_response.task_id} for workflow {workflow_id}")
 
                 # create_task (the generic /create_task handler) knows
                 # nothing about PhaseExecution bookkeeping -- see
@@ -4094,14 +3748,9 @@ async def start_workflow_execution(request: StartWorkflowRequest):
                     with _get_db_for_release() as _pdb:
                         _release_phase_task_creation_claim(_pdb, phase_uuid)
                 except Exception as claim_error:
-                    logger.error(
-                        f"Failed to release phase 1 task-creation claim for "
-                        f"workflow {workflow_id}: {claim_error}"
-                    )
+                    logger.error(f"Failed to release phase 1 task-creation claim for workflow {workflow_id}: {claim_error}")
             except Exception as task_error:
-                logger.error(
-                    f"Failed to create initial task for workflow {workflow_id}: {task_error}"
-                )
+                logger.error(f"Failed to create initial task for workflow {workflow_id}: {task_error}")
                 # Don't fail the whole workflow creation, just log the error
 
         return {
@@ -4136,27 +3785,12 @@ async def get_workflow_execution(workflow_id: str):
         for phase in phases:
             # Count tasks in this phase
             total_tasks = session.query(Task).filter_by(phase_id=phase.id).count()
-            completed_tasks = (
-                session.query(Task).filter_by(phase_id=phase.id, status="done").count()
-            )
-            active_tasks = (
-                session.query(Task)
-                .filter_by(phase_id=phase.id, status="in_progress")
-                .count()
-            )
-            pending_tasks = (
-                session.query(Task)
-                .filter_by(phase_id=phase.id, status="pending")
-                .count()
-            )
+            completed_tasks = session.query(Task).filter_by(phase_id=phase.id, status="done").count()
+            active_tasks = session.query(Task).filter_by(phase_id=phase.id, status="in_progress").count()
+            pending_tasks = session.query(Task).filter_by(phase_id=phase.id, status="pending").count()
 
             # Count active agents working on tasks in this phase
-            active_agents = (
-                session.query(Agent)
-                .join(Task, Agent.current_task_id == Task.id)
-                .filter(Task.phase_id == phase.id, Agent.status == "working")
-                .count()
-            )
+            active_agents = session.query(Agent).join(Task, Agent.current_task_id == Task.id).filter(Task.phase_id == phase.id, Agent.status == "working").count()
 
             phases_data.append(
                 {
@@ -4200,9 +3834,7 @@ async def complete_workflow_execution(workflow_id: str, request: Request):
     # Security: only allow localhost calls for this destructive operation
     client_host = request.client.host if request.client else None
     if client_host not in ("127.0.0.1", "::1", "localhost"):
-        raise HTTPException(
-            status_code=403, detail="Only localhost can force-complete workflows"
-        )
+        raise HTTPException(status_code=403, detail="Only localhost can force-complete workflows")
 
     session = server_state.db_manager.get_session()
     try:
@@ -4210,9 +3842,7 @@ async def complete_workflow_execution(workflow_id: str, request: Request):
 
         workflow = session.query(Workflow).filter_by(id=workflow_id).first()
         if not workflow:
-            raise HTTPException(
-                status_code=404, detail=f"Workflow {workflow_id} not found"
-            )
+            raise HTTPException(status_code=404, detail=f"Workflow {workflow_id} not found")
         if workflow.status in ("completed", "failed", "cancelled"):
             return {"status": workflow.status, "message": "Already terminal"}
         workflow.status = "completed"
@@ -4233,9 +3863,7 @@ async def stop_workflow(workflow_id: str, request: Request):
 
         workflow = session.query(Workflow).filter_by(id=workflow_id).first()
         if not workflow:
-            raise HTTPException(
-                status_code=404, detail=f"Workflow {workflow_id} not found"
-            )
+            raise HTTPException(status_code=404, detail=f"Workflow {workflow_id} not found")
         if workflow.status in ("completed", "failed", "paused"):
             return {"status": workflow.status, "message": "Already stopped"}
 
@@ -4246,12 +3874,7 @@ async def stop_workflow(workflow_id: str, request: Request):
         # Find and terminate all agents working on these tasks
         terminated_count = 0
         if task_ids:
-            agents = (
-                session.query(Agent)
-                .filter(Agent.current_task_id.in_(task_ids))
-                .filter(Agent.status.in_(["working", "starting", "idle"]))
-                .all()
-            )
+            agents = session.query(Agent).filter(Agent.current_task_id.in_(task_ids)).filter(Agent.status.in_(["working", "starting", "idle"])).all()
             for agent in agents:
                 try:
                     subprocess.run(
@@ -4295,9 +3918,7 @@ async def resume_workflow(workflow_id: str, request: Request):
 
         workflow = session.query(Workflow).filter_by(id=workflow_id).first()
         if not workflow:
-            raise HTTPException(
-                status_code=404, detail=f"Workflow {workflow_id} not found"
-            )
+            raise HTTPException(status_code=404, detail=f"Workflow {workflow_id} not found")
         if workflow.status != "paused":
             return {"status": workflow.status, "message": "Not paused"}
 
@@ -4321,9 +3942,7 @@ async def recover_workflows(workflow_id: Optional[str] = None):
     interrupted active/paused workflows.
     """
     try:
-        summary = await _resume_interrupted_workflows(
-            workflow_id=workflow_id, reactivate=bool(workflow_id)
-        )
+        summary = await _resume_interrupted_workflows(workflow_id=workflow_id, reactivate=bool(workflow_id))
         return {
             "recovered": True,
             "resumed_agents": summary.get("resumed", 0),
@@ -4345,21 +3964,14 @@ async def cancel_workflow(workflow_id: str, request: Request):
 
         workflow = session.query(Workflow).filter_by(id=workflow_id).first()
         if not workflow:
-            raise HTTPException(
-                status_code=404, detail=f"Workflow {workflow_id} not found"
-            )
+            raise HTTPException(status_code=404, detail=f"Workflow {workflow_id} not found")
 
         # Terminate agents
         tasks = session.query(Task).filter_by(workflow_id=workflow_id).all()
         task_ids = [t.id for t in tasks]
         terminated_count = 0
         if task_ids:
-            agents = (
-                session.query(Agent)
-                .filter(Agent.current_task_id.in_(task_ids))
-                .filter(Agent.status.in_(["working", "starting", "idle"]))
-                .all()
-            )
+            agents = session.query(Agent).filter(Agent.current_task_id.in_(task_ids)).filter(Agent.status.in_(["working", "starting", "idle"])).all()
             for agent in agents:
                 try:
                     subprocess.run(
@@ -4379,8 +3991,14 @@ async def cancel_workflow(workflow_id: str, request: Request):
         # status (e.g. still "in_progress") even though nothing is working
         # on it anymore. Mirrors what pause_feature does for its "blocked" case.
         non_terminal = {
-            "pending", "queued", "blocked", "assigned", "in_progress",
-            "under_review", "validation_in_progress", "needs_work",
+            "pending",
+            "queued",
+            "blocked",
+            "assigned",
+            "in_progress",
+            "under_review",
+            "validation_in_progress",
+            "needs_work",
         }
         for task in tasks:
             if task.status in non_terminal:
@@ -4402,9 +4020,7 @@ async def cancel_workflow(workflow_id: str, request: Request):
 async def _tool_create_task(arguments: Dict[str, Any]):
     workflow_id = arguments.get("workflow_id")
     if not workflow_id:
-        raise HTTPException(
-            status_code=400, detail="workflow_id is required for create_task"
-        )
+        raise HTTPException(status_code=400, detail="workflow_id is required for create_task")
 
     return await create_task(
         CreateTaskRequest(
@@ -4459,9 +4075,7 @@ async def _tool_get_task_status(arguments: Dict[str, Any]):
         if status_filter and status_filter != "all":
             query = query.filter(Task.status == status_filter)
         else:
-            query = query.filter(
-                Task.status.in_(["pending", "assigned", "in_progress", "done", "failed"])
-            )
+            query = query.filter(Task.status.in_(["pending", "assigned", "in_progress", "done", "failed"]))
         if workflow_id_filter:
             query = query.filter(Task.workflow_id == workflow_id_filter)
         if agent_id_filter:
@@ -4474,16 +4088,18 @@ async def _tool_get_task_status(arguments: Dict[str, Any]):
             if t.phase_id:
                 phase = session.query(Phase).filter_by(id=t.phase_id).first()
                 phase_name = phase.name if phase else None
-            results.append({
-                "id": t.id,
-                "status": t.status,
-                "description": (t.enriched_description or t.raw_description or "")[:200],
-                "phase_name": phase_name,
-                "workflow_id": t.workflow_id,
-                "assigned_agent_id": t.assigned_agent_id,
-                "created_at": t.created_at.isoformat() if t.created_at else None,
-                "completed_at": t.completed_at.isoformat() if t.completed_at else None,
-            })
+            results.append(
+                {
+                    "id": t.id,
+                    "status": t.status,
+                    "description": (t.enriched_description or t.raw_description or "")[:200],
+                    "phase_name": phase_name,
+                    "workflow_id": t.workflow_id,
+                    "assigned_agent_id": t.assigned_agent_id,
+                    "created_at": t.created_at.isoformat() if t.created_at else None,
+                    "completed_at": t.completed_at.isoformat() if t.completed_at else None,
+                }
+            )
         return {"tasks": results, "count": len(results)}
     finally:
         session.close()
@@ -4650,9 +4266,7 @@ async def _devtools_connect(arguments: Dict[str, Any], session_id: str):
     debug_url = arguments.get("debug_url", "http://localhost:9222")
     target_url = arguments.get("target_url")
     if target_url:
-        browser = await devtools_manager.connect_new_tab(
-            session_id, target_url, debug_url
-        )
+        browser = await devtools_manager.connect_new_tab(session_id, target_url, debug_url)
     else:
         browser = await devtools_manager.connect(session_id, debug_url)
     version = await browser.get_version()
@@ -4696,9 +4310,7 @@ async def _devtools_get_console_errors(browser, arguments):
 
 
 async def _devtools_get_failed_requests(browser, arguments):
-    logs = await browser.get_network_logs(
-        failed_only=True, status=arguments.get("status")
-    )
+    logs = await browser.get_network_logs(failed_only=True, status=arguments.get("status"))
     return {"success": True, "failed_requests": logs, "count": len(logs)}
 
 
@@ -4728,9 +4340,7 @@ async def _devtools_check_broken_images(browser, arguments):
 
 
 async def _devtools_wait_for_selector(browser, arguments):
-    found = await browser.wait_for_selector(
-        arguments["selector"], timeout_ms=arguments.get("timeout_ms", 5000)
-    )
+    found = await browser.wait_for_selector(arguments["selector"], timeout_ms=arguments.get("timeout_ms", 5000))
     return {"success": True, "found": found}
 
 
@@ -4772,16 +4382,12 @@ async def _handle_devtools_tool(tool_name: str, arguments: Dict[str, Any]):
 
     entry = _DEVTOOLS_TOOLS.get(tool_name)
     if entry is None:
-        raise HTTPException(
-            status_code=400, detail=f"Unknown devtools tool: {tool_name}"
-        )
+        raise HTTPException(status_code=400, detail=f"Unknown devtools tool: {tool_name}")
     required, handler = entry
 
     missing = [k for k in required if k not in arguments]
     if missing:
-        raise HTTPException(
-            status_code=400, detail=f"Missing required arguments: {', '.join(missing)}"
-        )
+        raise HTTPException(status_code=400, detail=f"Missing required arguments: {', '.join(missing)}")
 
     raw_session = arguments.get("session_id", "default")
     try:
@@ -4808,9 +4414,7 @@ async def _handle_devtools_tool(tool_name: str, arguments: Dict[str, Any]):
     except HTTPException:
         raise
     except (KeyError, TypeError) as e:
-        raise HTTPException(
-            status_code=400, detail=f"Invalid arguments for {tool_name}: {e}"
-        )
+        raise HTTPException(status_code=400, detail=f"Invalid arguments for {tool_name}: {e}")
     except Exception as e:
         logger.error(f"DevTools tool error: {tool_name}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"DevTools error: {str(e)}")
@@ -4827,9 +4431,7 @@ async def list_resources():
                 {
                     "uri": f"task://{task.id}",
                     "name": f"Task: {task.id[:8]}",
-                    "description": (task.enriched_description or task.raw_description)[
-                        :100
-                    ],
+                    "description": (task.enriched_description or task.raw_description)[:100],
                     "mimeType": "application/json",
                 }
                 for task in tasks
@@ -4852,13 +4454,10 @@ async def get_resource(resource_uri: str):
                     "uri": resource_uri,
                     "content": {
                         "id": task.id,
-                        "description": task.enriched_description
-                        or task.raw_description,
+                        "description": task.enriched_description or task.raw_description,
                         "status": task.status,
                         "assigned_agent": task.assigned_agent_id,
-                        "created_at": task.created_at.isoformat()
-                        if task.created_at
-                        else None,
+                        "created_at": task.created_at.isoformat() if task.created_at else None,
                     },
                 }
             else:

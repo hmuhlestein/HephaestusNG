@@ -121,9 +121,7 @@ class TaskCompletionService:
             return {
                 "status": "failed",
                 "message": (
-                    f"Cannot verify output artifacts: workflow {task.workflow_id} "
-                    "has no recorded working_directory. This is a system error, not "
-                    "something to fix by re-doing the task -- flag it."
+                    f"Cannot verify output artifacts: workflow {task.workflow_id} has no recorded working_directory. This is a system error, not something to fix by re-doing the task -- flag it."
                 ),
             }
 
@@ -172,18 +170,12 @@ class TaskCompletionService:
         # Optional phases may complete without their declared output(s).
         optional_phases = load_optional_phases(task.workflow_id)
         if phase.name in optional_phases:
-            logger.info(
-                f"Agent completed optional phase {phase.name} without {missing} — allowing"
-            )
+            logger.info(f"Agent completed optional phase {phase.name} without {missing} — allowing")
             return None
 
-        logger.warning(
-            f"Agent claimed done on {phase.name} but {missing} not found — rejecting"
-        )
+        logger.warning(f"Agent claimed done on {phase.name} but {missing} not found — rejecting")
         task.status = "failed"
-        task.failure_reason = (
-            f"Agent claimed completion but required output(s) missing: {', '.join(missing)}"
-        )
+        task.failure_reason = f"Agent claimed completion but required output(s) missing: {', '.join(missing)}"
         session.commit()
         return {
             "status": "failed",
@@ -242,10 +234,7 @@ class TaskCompletionService:
         if not error:
             return None
 
-        logger.warning(
-            f"Agent claimed done on {phase.name} but {json_filename} doesn't "
-            f"match the documented schema — rejecting: {error}"
-        )
+        logger.warning(f"Agent claimed done on {phase.name} but {json_filename} doesn't match the documented schema — rejecting: {error}")
         task.status = "failed"
         task.failure_reason = error
         session.commit()
@@ -302,15 +291,9 @@ class TaskCompletionService:
             return None
 
         titles = [f"{t.id[:8]}: {t.title}" for t in open_tickets[:5]]
-        logger.warning(
-            f"Agent claimed done on {phase.name} but {len(open_tickets)} bug "
-            f"ticket(s) remain unresolved — rejecting"
-        )
+        logger.warning(f"Agent claimed done on {phase.name} but {len(open_tickets)} bug ticket(s) remain unresolved — rejecting")
         task.status = "failed"
-        task.failure_reason = (
-            f"{len(open_tickets)} open bug ticket(s) not yet resolved: "
-            + "; ".join(titles)
-        )
+        task.failure_reason = f"{len(open_tickets)} open bug ticket(s) not yet resolved: " + "; ".join(titles)
         session.commit()
         # git_commit_push isn't the phase equipped to fix code — its own
         # retry loop would just hit this same rejection again. The message
@@ -319,22 +302,13 @@ class TaskCompletionService:
         # failed task) rather than assuming the rejected agent itself can act
         # on it.
         fix_instruction = (
-            "Fix the underlying issue for each, then call "
-            "change_ticket_status/resolve_ticket before retrying "
-            "update_task_status(done)."
+            "Fix the underlying issue for each, then call change_ticket_status/resolve_ticket before retrying update_task_status(done)."
             if phase.name == "development"
-            else (
-                "This phase cannot fix code itself — the workflow needs to "
-                "route back to development to resolve these before "
-                "git_commit_push can proceed."
-            )
+            else ("This phase cannot fix code itself — the workflow needs to route back to development to resolve these before git_commit_push can proceed.")
         )
         return {
             "status": "failed",
-            "message": (
-                f"Cannot mark done: {len(open_tickets)} open bug ticket(s) still "
-                f"unresolved — {'; '.join(titles)}. {fix_instruction}"
-            ),
+            "message": (f"Cannot mark done: {len(open_tickets)} open bug ticket(s) still unresolved — {'; '.join(titles)}. {fix_instruction}"),
         }
 
     @staticmethod
@@ -367,9 +341,7 @@ class TaskCompletionService:
             return []
         section = match.group(1)
 
-        item_re = re.compile(
-            r"^\s*\d+\.\s+\*\*(.+?)\*\*\s*-?\s*(.*)$", re.MULTILINE
-        )
+        item_re = re.compile(r"^\s*\d+\.\s+\*\*(.+?)\*\*\s*-?\s*(.*)$", re.MULTILINE)
 
         recommendations = []
         current_priority = "medium"
@@ -377,8 +349,7 @@ class TaskCompletionService:
         # Walk headings and items in document order so each item picks up
         # whichever priority heading most recently preceded it.
         markers = sorted(
-            [(m.start(), "heading", m.group(1)) for m in heading_re.finditer(section)]
-            + [(m.start(), "item", m) for m in item_re.finditer(section)],
+            [(m.start(), "heading", m.group(1)) for m in heading_re.finditer(section)] + [(m.start(), "item", m) for m in item_re.finditer(section)],
             key=lambda t: t[0],
         )
         for _, kind, payload in markers:
@@ -446,9 +417,7 @@ class TaskCompletionService:
             logger.warning(f"[FORENSICS_TICKETS] Could not read {report_path}: {e}")
             return 0
 
-        recommendations = TaskCompletionService._parse_forensics_recommendations(
-            report_text
-        )
+        recommendations = TaskCompletionService._parse_forensics_recommendations(report_text)
         if not recommendations:
             return 0
 
@@ -468,14 +437,8 @@ class TaskCompletionService:
                 )
                 created += 1
             except Exception as e:
-                logger.warning(
-                    f"[FORENSICS_TICKETS] Failed to create ticket for "
-                    f"'{rec['title']}': {e}"
-                )
-        logger.info(
-            f"[FORENSICS_TICKETS] Created {created}/{len(recommendations)} "
-            f"tickets from forensics_report.md"
-        )
+                logger.warning(f"[FORENSICS_TICKETS] Failed to create ticket for '{rec['title']}': {e}")
+        logger.info(f"[FORENSICS_TICKETS] Created {created}/{len(recommendations)} tickets from forensics_report.md")
         return created
 
     @staticmethod
@@ -501,12 +464,7 @@ class TaskCompletionService:
         if not phase or phase.name not in GATED_PHASES:
             return
 
-        incomplete = (
-            session.query(Task)
-            .filter_by(phase_id=phase.id)
-            .filter(Task.status.in_(["pending", "assigned", "in_progress", "failed"]))
-            .count()
-        )
+        incomplete = session.query(Task).filter_by(phase_id=phase.id).filter(Task.status.in_(["pending", "assigned", "in_progress", "failed"])).count()
         if incomplete != 0:
             return
 
@@ -526,9 +484,7 @@ class TaskCompletionService:
             None,
             functools.partial(build_phase_output, phase.name, Path(wf.working_directory)),
         )
-        logger.info(
-            f"[SPEC-GATE] {phase.name}: gate fired from completion path, phase_output={phase_output}"
-        )
+        logger.info(f"[SPEC-GATE] {phase.name}: gate fired from completion path, phase_output={phase_output}")
         pm = PhaseManager(_DbMgr())
         pm.workflow_id = task.workflow_id
         result = pm.mark_phase_complete(
@@ -539,9 +495,7 @@ class TaskCompletionService:
         if result.get("action") == "already_completed":
             logger.info(f"[SPEC-GATE] {phase.name}: already completed by another caller")
         elif result.get("action") == "goto" and result.get("target_phase_id"):
-            logger.info(
-                f"[SPEC-GATE] {phase.name}: GOTO {result.get('target_phase')} (score too low)"
-            )
+            logger.info(f"[SPEC-GATE] {phase.name}: GOTO {result.get('target_phase')} (score too low)")
             # task.action/action_target_phase already set by
             # mark_phase_complete's own _tag_completing_task -- only
             # has_results is this caller's own responsibility.
@@ -585,11 +539,7 @@ class TaskCompletionService:
             # Same fix as _handle_evaluation_goto in phase_manager.py:
             # without this, phases after the target keep their "completed"
             # status from a prior pass and get re-evaluated without running.
-            target_order = (
-                session.query(Phase.order)
-                .filter_by(id=result["target_phase_id"])
-                .scalar()
-            )
+            target_order = session.query(Phase.order).filter_by(id=result["target_phase_id"]).scalar()
             if target_order is not None:
                 stale = (
                     session.query(PhaseExecution)
@@ -675,9 +625,7 @@ class TaskCompletionService:
                 task = session.query(Task).filter_by(id=task_id).first()
                 if task:
                     task.status = "validation_in_progress"
-                    logger.info(
-                        f"Task {task_id} validation spawned successfully, validator: {validator_id}"
-                    )
+                    logger.info(f"Task {task_id} validation spawned successfully, validator: {validator_id}")
                 else:
                     logger.error(f"Task {task_id} not found during validation update")
 
@@ -706,9 +654,7 @@ class TaskCompletionService:
                 # FIX #17: Don't let task-update/termination errors propagate
                 # and lose the original validation failure context (session_scope
                 # already rolled back before re-raising here).
-                logger.error(
-                    f"Failed to update task/terminate agent after validation failure: {inner_e}"
-                )
+                logger.error(f"Failed to update task/terminate agent after validation failure: {inner_e}")
 
             # FIX #11/#17: Defer queue processing to avoid nested I/O in except block.
             try:
@@ -760,11 +706,7 @@ class TaskCompletionService:
         if not required_files:
             return None
 
-        wf = (
-            session.query(Workflow).filter_by(id=task.workflow_id).first()
-            if task.workflow_id
-            else None
-        )
+        wf = session.query(Workflow).filter_by(id=task.workflow_id).first() if task.workflow_id else None
         if not (wf and wf.working_directory):
             return None  # verify_output_artifact already surfaces this case.
 
@@ -842,34 +784,18 @@ class TaskCompletionService:
                     wt_path = record.worktree_path
 
             if wt_path and Path(wt_path).is_dir():
-                phase_obj = (
-                    session.query(Phase).filter_by(id=task.phase_id).first()
-                    if task.phase_id
-                    else None
-                )
-                phase_label = (
-                    phase_obj.name
-                    if phase_obj
-                    else (task.phase_id[:8] if task.phase_id else "unknown")
-                )
+                phase_obj = session.query(Phase).filter_by(id=task.phase_id).first() if task.phase_id else None
+                phase_label = phase_obj.name if phase_obj else (task.phase_id[:8] if task.phase_id else "unknown")
 
                 wt_repo = Repo(wt_path)
                 wt_repo.git.add("-A")
                 if wt_repo.is_dirty(index=True) or wt_repo.untracked_files:
                     summary_str = (summary or "").strip()
-                    subject = f"phase({phase_label}): " + (
-                        summary_str[:60] if summary_str else f"task {task.id[:8]} done"
-                    )
-                    msg = (
-                        subject
-                        if not summary_str or len(summary_str) <= 60
-                        else f"{subject}\n\n{summary_str}"
-                    )
+                    subject = f"phase({phase_label}): " + (summary_str[:60] if summary_str else f"task {task.id[:8]} done")
+                    msg = subject if not summary_str or len(summary_str) <= 60 else f"{subject}\n\n{summary_str}"
                     wt_repo.git.commit("-m", msg, "--no-verify")
                     merge_commit_sha = wt_repo.head.commit.hexsha
-                    logger.info(
-                        f"[COMMIT] phase({phase_label}) agent {agent_id[:8]}: {merge_commit_sha[:8]}"
-                    )
+                    logger.info(f"[COMMIT] phase({phase_label}) agent {agent_id[:8]}: {merge_commit_sha[:8]}")
                 else:
                     logger.debug(f"[COMMIT] phase agent {agent_id[:8]}: nothing to commit")
         except Exception as e:
@@ -877,9 +803,7 @@ class TaskCompletionService:
 
         if task.ticket_id and merge_commit_sha:
             try:
-                logger.info(
-                    f"Auto-linking commit {merge_commit_sha} to ticket {task.ticket_id}"
-                )
+                logger.info(f"Auto-linking commit {merge_commit_sha} to ticket {task.ticket_id}")
                 await TicketService.link_commit(
                     ticket_id=task.ticket_id,
                     agent_id=agent_id,
@@ -903,3 +827,21 @@ class TaskCompletionService:
                 # Don't fail the task if ticket operations fail
 
         return merge_commit_sha
+
+    @staticmethod
+    def collect_cost_on_completion(task_id: str) -> None:
+        """Collect cost data from CLI session when a task completes.
+
+        Called from update_task_status handler when task status is set to 'done'.
+        Reads the CLI session transcript (pi JSONL, Claude Code, etc.) and
+        writes CostEntry rows for any new usage since the last checkpoint.
+
+        Args:
+            task_id: The completed task's ID
+        """
+        try:
+            from src.services.cost_collection_service import collect_task_cost
+
+            collect_task_cost(task_id)
+        except Exception as e:
+            logger.warning(f"Cost collection failed for task {task_id[:8]}: {e}")

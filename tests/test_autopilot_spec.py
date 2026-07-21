@@ -91,6 +91,7 @@ def test_qa_failed_tests_reason_names_specific_tests(strict_spec):
     assert "test_anthropic_provider.py::test_stale_assertion" in meta["reason"]
     assert "pre-existing" in meta["reason"]
 
+
 def test_qa_failed_tests_without_names_still_gets_permission_language(strict_spec):
     """failed_test_names is optional (agents may not populate it) -- the
     permission to fix pre-existing failures must still reach development
@@ -107,6 +108,7 @@ def test_qa_failed_tests_without_names_still_gets_permission_language(strict_spe
     )
     assert meta["band"] == "development"
     assert "pre-existing" in meta["reason"]
+
 
 def test_qa_pass_reason_has_no_permission_language(strict_spec):
     """A clean pass must not carry "you may fix failing tests" noise --
@@ -201,16 +203,12 @@ def test_product_pass_with_unmet_reqs_is_overridden():
 
 
 def test_product_architecture_verdict_goto_architecture():
-    score, _ = S.score_product_validation(
-        {"verdict": "ARCHITECTURE", "unmet_requirements": []}, S.DEFAULT_SPEC
-    )
+    score, _ = S.score_product_validation({"verdict": "ARCHITECTURE", "unmet_requirements": []}, S.DEFAULT_SPEC)
     assert score < 0.3
 
 
 def test_product_needs_work_goto_development():
-    score, _ = S.score_product_validation(
-        {"verdict": "NEEDS_WORK", "unmet_requirements": []}, S.DEFAULT_SPEC
-    )
+    score, _ = S.score_product_validation({"verdict": "NEEDS_WORK", "unmet_requirements": []}, S.DEFAULT_SPEC)
     assert 0.3 <= score < 0.7
 
 
@@ -241,12 +239,8 @@ def test_build_phase_output_reads_docs_dir(tmp_path):
 
 
 def test_build_phase_output_root_fallback(tmp_path):
-    (tmp_path / "product_validation.json").write_text(
-        json.dumps({"verdict": "NEEDS_WORK", "unmet_requirements": ["x"]})
-    )
-    out = S.build_phase_output(
-        "product_validation", tmp_path, spec=dict(S.DEFAULT_SPEC)
-    )
+    (tmp_path / "product_validation.json").write_text(json.dumps({"verdict": "NEEDS_WORK", "unmet_requirements": ["x"]}))
+    out = S.build_phase_output("product_validation", tmp_path, spec=dict(S.DEFAULT_SPEC))
     assert 0.3 <= out["score"] < 0.7
 
 
@@ -373,22 +367,16 @@ class TestValidateGateResultSchema:
     def test_accepts_only_one_required_key_present(self):
         """Any one of the required keys is enough -- doesn't demand all of
         them, just evidence the agent used the right schema shape."""
-        assert S.validate_gate_result_schema(
-            "qa_validation", {"critical_issues": 2}
-        ) is None
+        assert S.validate_gate_result_schema("qa_validation", {"critical_issues": 2}) is None
 
     def test_scope_review_accepts_documented_nested_variant(self):
         """score_scope_review itself normalizes {"scope_review": {...}} --
         the schema check must not reject a shape the scorer already
         tolerates."""
-        assert S.validate_gate_result_schema(
-            "scope_review", {"scope_review": {"verdict": "PASS"}}
-        ) is None
+        assert S.validate_gate_result_schema("scope_review", {"scope_review": {"verdict": "PASS"}}) is None
 
     def test_architectural_review_rejects_missing_blocker_count(self):
-        error = S.validate_gate_result_schema(
-            "architectural_review", {"summary": "looks fine"}
-        )
+        error = S.validate_gate_result_schema("architectural_review", {"summary": "looks fine"})
         assert error is not None
 
     def test_unmapped_phase_is_a_noop(self):
@@ -404,6 +392,94 @@ class TestValidateGateResultSchema:
         check, or a newly-added gated phase silently skips this floor."""
         for phase_name in S.GATED_PHASES:
             assert phase_name in S.GATE_RESULT_REQUIRED_KEYS, phase_name
+
+
+class TestGetMaxReviewRuns:
+    def test_returns_none_without_workflow_id(self):
+        assert S.get_max_review_runs(None, "architectural_review") is None
+
+    def test_reads_configured_value_from_the_real_autopilot_workflow(self, db_manager):
+        """Integration-flavored on purpose: reads config/workflows/autopilot/
+        workflow.yaml for real, proving the eval_point's max_review_runs
+        key actually round-trips through this lookup, not just a mock."""
+        from src.core.database import Workflow
+
+        with db_manager.session_scope() as session:
+            session.add(
+                Workflow(
+                    id="wf-mrr-1",
+                    name="t",
+                    phases_folder_path="/tmp",
+                    status="active",
+                    definition_id="autopilot",
+                )
+            )
+
+        assert S.get_max_review_runs("wf-mrr-1", "architectural_review") == 3
+        assert S.get_max_review_runs("wf-mrr-1", "adversarial_review") == 3
+
+    def test_returns_none_for_a_phase_that_did_not_opt_in(self, db_manager):
+        from src.core.database import Workflow
+
+        with db_manager.session_scope() as session:
+            session.add(
+                Workflow(
+                    id="wf-mrr-2",
+                    name="t",
+                    phases_folder_path="/tmp",
+                    status="active",
+                    definition_id="autopilot",
+                )
+            )
+
+        assert S.get_max_review_runs("wf-mrr-2", "security_review") is None
+
+    def test_returns_none_for_unknown_definition_id(self, db_manager):
+        from src.core.database import Workflow
+
+        with db_manager.session_scope() as session:
+            session.add(
+                Workflow(
+                    id="wf-mrr-3",
+                    name="t",
+                    phases_folder_path="/tmp",
+                    status="active",
+                    definition_id="does-not-exist",
+                )
+            )
+
+        assert S.get_max_review_runs("wf-mrr-3", "architectural_review") is None
+
+
+class TestReviewFindingsHistory:
+    def test_empty_history_by_default(self, db_manager):
+        assert S.get_review_findings_history("wf-no-history", "architectural_review") == []
+
+    def test_record_then_read_back(self, db_manager):
+        S.record_review_finding("wf-history-1", "architectural_review", blocker_count=2, summary="B-1, B-2")
+        history = S.get_review_findings_history("wf-history-1", "architectural_review")
+        assert len(history) == 1
+        assert history[0]["run_number"] == 1
+        assert history[0]["blocker_count"] == 2
+        assert history[0]["summary"] == "B-1, B-2"
+
+    def test_appends_across_multiple_runs(self, db_manager):
+        S.record_review_finding("wf-history-2", "adversarial_review", 3, "B-1, B-2, B-3")
+        S.record_review_finding("wf-history-2", "adversarial_review", 1, "B-2 still open")
+        history = S.get_review_findings_history("wf-history-2", "adversarial_review")
+        assert [h["run_number"] for h in history] == [1, 2]
+        assert history[1]["blocker_count"] == 1
+
+    def test_history_is_isolated_per_phase(self, db_manager):
+        S.record_review_finding("wf-history-3", "architectural_review", 1, "arch finding")
+        S.record_review_finding("wf-history-3", "adversarial_review", 1, "adv finding")
+        assert len(S.get_review_findings_history("wf-history-3", "architectural_review")) == 1
+        assert len(S.get_review_findings_history("wf-history-3", "adversarial_review")) == 1
+
+    def test_summary_is_truncated(self, db_manager):
+        S.record_review_finding("wf-history-4", "architectural_review", 1, "x" * 1000)
+        history = S.get_review_findings_history("wf-history-4", "architectural_review")
+        assert len(history[0]["summary"]) == 500
 
 
 if __name__ == "__main__":
