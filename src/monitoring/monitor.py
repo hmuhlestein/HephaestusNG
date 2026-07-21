@@ -568,17 +568,17 @@ class MonitoringLoop:
 
     async def _mechanical_recovery_for_agent(self, agent) -> bool:
         """Cheap, no-LLM stuck detection + keystroke recovery (the CLI/keystroke-level
-        monitor). If an agent's substantive TUI output is frozen for FROZEN_SECONDS
+        monitor). If an agent's substantive TUI output is frozen for frozen_seconds
         (a pi/mimo thought-loop that never exits), send the CLI's recovery keystrokes
-        (Esc, polymorphic via CLIAgentInterface) + a short nudge. Bounded by MAX_RECOV;
+        (Esc, polymorphic via CLIAgentInterface) + a short nudge. Bounded by max_recov;
         beyond that the Guardian / restart path takes over.
 
         Returns True if a real intervention (nudge or termination) happened
         this call, so the caller can skip Guardian analysis for this agent
         this same cycle -- see _monitoring_cycle.
         """
-        FROZEN_SECONDS = 300  # >a normal turn; a real loop stays frozen indefinitely
-        MAX_RECOV = 2
+        frozen_seconds = 300  # >a normal turn; a real loop stays frozen indefinitely
+        max_recov = 2
         try:
             if not hasattr(self, "_stuck_state"):
                 self._stuck_state = {}
@@ -644,14 +644,14 @@ class MonitoringLoop:
             # prompt.  The output signature changed (so the 5-min clock reset),
             # but the agent won't self-rescue — 30 s is enough to be sure.
             abort_frozen = "Operation aborted" in sig and frozen_for >= 30
-            if (abort_frozen or frozen_for >= FROZEN_SECONDS) and st[
+            if (abort_frozen or frozen_for >= frozen_seconds) and st[
                 "recov"
-            ] < MAX_RECOV:
+            ] < max_recov:
                 st["recov"] += 1
                 st["since"] = now  # restart the window after an attempt
                 logger.warning(
                     f"[MECH-RECOVERY] Agent {agent.id[:8]} ({agent.cli_type}) output frozen "
-                    f"{int(frozen_for)}s — recovery attempt {st['recov']}/{MAX_RECOV} (keys + nudge)"
+                    f"{int(frozen_for)}s — recovery attempt {st['recov']}/{max_recov} (keys + nudge)"
                 )
                 # Reconnect MCP if disconnected before sending the nudge.
                 mcp_disconnected = bool(re.search(r"MCP:\s*0/", out))
@@ -704,13 +704,13 @@ class MonitoringLoop:
                         )
                     await self.agent_manager.send_message_to_agent(agent.id, msg)
                     return True
-            elif frozen_for >= FROZEN_SECONDS and st["recov"] >= MAX_RECOV:
+            elif frozen_for >= frozen_seconds and st["recov"] >= max_recov:
                 # All recovery attempts exhausted and agent is still frozen.
                 # Fail the task so the monitor's retry-bound path handles it
                 # (MAX_PHASE_ATTEMPTS → impasse if exceeded). §9.4 / §11.2 fix #2.
                 logger.warning(
                     f"[MECH-RECOVERY] Agent {agent.id[:8]} frozen {int(frozen_for)}s after "
-                    f"{MAX_RECOV} recovery attempts — abandoning: fail task, terminate agent"
+                    f"{max_recov} recovery attempts — abandoning: fail task, terminate agent"
                 )
                 with self.db_manager.session_scope() as session:
                     from src.core.database import Task as _Task
@@ -724,7 +724,7 @@ class MonitoringLoop:
                         stuck_task.status = "failed"
                         stuck_task.failure_reason = (
                             f"Agent output frozen {int(frozen_for)}s; "
-                            f"{MAX_RECOV} recovery attempts exhausted"
+                            f"{max_recov} recovery attempts exhausted"
                         )
                         logger.info(
                             f"[MECH-RECOVERY] Task {stuck_task.id[:8]} marked failed; "
@@ -749,20 +749,20 @@ class MonitoringLoop:
         lines of output. One recovery attempt is made (keys + targeted nudge); if the
         loop resumes it will be caught again on the next cycle.
         """
-        MIN_LINE_LEN = 30
-        WINDOW_LINES = 120
-        REPEAT_THRESHOLD = 12
+        min_line_len = 30
+        window_lines = 120
+        repeat_threshold = 12
         try:
             if not hasattr(self, "_rep_loop_state"):
                 self._rep_loop_state = {}
-            out = self.agent_manager.get_agent_output(agent.id, lines=WINDOW_LINES)
+            out = self.agent_manager.get_agent_output(agent.id, lines=window_lines)
             if not out:
                 return
             # Strip SGR color codes before comparing lines -- same gap as
             # _mechanical_recovery_for_agent's frozen-signature check (see
             # _strip_sgr's docstring): a repeated line wrapped in varying
             # color codes on each redraw would otherwise count as a distinct
-            # line every time, never reaching REPEAT_THRESHOLD.
+            # line every time, never reaching repeat_threshold.
             out = _strip_sgr(out)
             # Normalise: strip leading whitespace, drop blank/trivial lines.
             # Also exclude bare filesystem paths and shell prompts — these repeat
@@ -771,7 +771,7 @@ class MonitoringLoop:
             _fs_path = _re.compile(r"^[/~][\w./\-]+$")
             lines = [
                 ln.strip() for ln in out.splitlines()
-                if len(ln.strip()) >= MIN_LINE_LEN
+                if len(ln.strip()) >= min_line_len
                 and not _fs_path.match(ln.strip())
             ]
             if not lines:
@@ -781,7 +781,7 @@ class MonitoringLoop:
 
             counts = Counter(lines)
             top_line, top_count = counts.most_common(1)[0]
-            if top_count < REPEAT_THRESHOLD:
+            if top_count < repeat_threshold:
                 self._rep_loop_state.pop(agent.id, None)
                 return
             # Diversity guard: if the window contains many distinct lines, the
@@ -797,7 +797,7 @@ class MonitoringLoop:
             self._rep_loop_state[agent.id] = top_line
             logger.warning(
                 f"[REP-LOOP] Agent {agent.id[:8]} ({agent.cli_type}): "
-                f"line repeated {top_count}× in last {WINDOW_LINES} lines — "
+                f"line repeated {top_count}× in last {window_lines} lines — "
                 f"interrupting. Phrase: {top_line[:60]!r}"
             )
             from src.interfaces.cli_interface import get_cli_agent
@@ -831,7 +831,7 @@ class MonitoringLoop:
         a frozen "Thinking..." loop: it isn't reliably caught by
         _mechanical_recovery_for_agent's signature comparison (observed
         live: an agent sat on an unanswered rm -rf confirmation for 9+
-        minutes, well past FROZEN_SECONDS, with zero [MECH-RECOVERY] log
+        minutes, well past frozen_seconds, with zero [MECH-RECOVERY] log
         lines -- something elsewhere in that 40-line window kept the
         captured signature changing between polls). This check is narrowly
         scoped to rm specifically, matches immediately (no frozen-timer
@@ -1800,14 +1800,14 @@ class MonitoringLoop:
         ):
             return
         try:
-            from pathlib import Path as _P
+            from pathlib import Path
 
-            from src.core.database import Workflow as _Workflow
+            from src.core.database import Workflow
 
             session = self.db_manager.get_session()
             try:
                 wf = (
-                    session.query(_Workflow)
+                    session.query(Workflow)
                     .filter_by(id=self.phase_manager.workflow_id)
                     .first()
                 )
@@ -1821,7 +1821,7 @@ class MonitoringLoop:
             # Resolve to project root so logs survive worktree removal.
             # The working_directory may be a worktree (.worktrees/wt_*);
             # walk up past the .worktrees dir to get the stable project root.
-            wd_path = _P(wd)
+            wd_path = Path(wd)
             if WORKTREES_SUBDIR in wd_path.parts:
                 for parent in wd_path.parents:
                     if parent.name == WORKTREES_SUBDIR:
@@ -2130,9 +2130,9 @@ class MonitoringLoop:
                     return
 
             # Step 3: Check if workflow is already marked complete/failed
-            from src.core.database import Workflow as _WF
+            from src.core.database import Workflow
 
-            wf_row = session.query(_WF).filter_by(id=workflow_id).first()
+            wf_row = session.query(Workflow).filter_by(id=workflow_id).first()
             if wf_row and wf_row.status in ("completed", "failed", "cancelled"):
                 logger.info(
                     f"[DIAGNOSTIC MONITOR] ❌ Workflow is {wf_row.status} — no diagnostic needed"

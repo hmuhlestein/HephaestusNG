@@ -11,6 +11,7 @@ A continuous multi-agent workflow engine that:
 Designed to run for days/weeks, processing designs as they arrive.
 """
 
+import asyncio
 import copy
 import hashlib
 import json
@@ -35,7 +36,6 @@ from src.core.constants import (
     AUTOPILOT_STATE_DIR,
     CONTEXT_DIR_NAME,
     DESIGN_CONTEXT_SUBDIR,
-    DESIGN_SUBDIR,
     DIAGNOSTIC_TASK_PREFIX,
     GOTO_REASON_PREFIX,
 )
@@ -1939,7 +1939,13 @@ def pick_next_design(
     """
     # Try DB-based queue first
     try:
-        from src.core.database import AutopilotDesign, AutopilotProject, Feature, Workflow, get_db
+        from src.core.database import (
+            AutopilotDesign,
+            AutopilotProject,
+            Feature,
+            Workflow,
+            get_db,
+        )
 
         with get_db() as db:
             # Find the target project: by id when given (concurrent,
@@ -2207,11 +2213,11 @@ def _assess_run_health(
     if orchestrator_log_path and orchestrator_log_path.exists():
         try:
             lines = orchestrator_log_path.read_text(errors="replace").splitlines()
-            goto_lines = [l for l in lines if "[GOTO]" in l]
-            decision_lines = [l for l in lines if "DECISION POINT" in l]
+            goto_lines = [line for line in lines if "[GOTO]" in line]
+            decision_lines = [line for line in lines if "DECISION POINT" in line]
             health["goto_count"] = len(goto_lines)
             health["goto_events"] = goto_lines[-10:]
-            health["decision_points"] = [l.strip() for l in decision_lines]
+            health["decision_points"] = [line.strip() for line in decision_lines]
             # GOTOs are normal iteration — do NOT set clean=False for them
         except Exception as e:
             health["warnings"].append(f"Could not read orchestrator log: {e}")
@@ -2234,9 +2240,9 @@ def _assess_run_health(
             try:
                 text = log_file.read_text(errors="replace")
                 hits = [
-                    l.strip()
-                    for l in text.splitlines()
-                    if any(p in l for p in error_patterns)
+                    ln.strip()
+                    for ln in text.splitlines()
+                    if any(p in ln for p in error_patterns)
                 ]
                 if hits:
                     total_errors += len(hits)
@@ -2697,7 +2703,7 @@ def _recover_abandoned_workflows_missing_worktree(logger: OrchestratorLogger) ->
     """
     from src.core.database import AutopilotDesign, AutopilotProject, Feature, Task
 
-    MAX_RECOVERY_ATTEMPTS = 2
+    max_recovery_attempts = 2
     recovered = 0
     with get_db() as db:
         candidates = (
@@ -2753,7 +2759,7 @@ def _recover_abandoned_workflows_missing_worktree(logger: OrchestratorLogger) ->
             )
             if not stuck_tasks:
                 continue
-            if any((t.retry_count or 0) >= MAX_RECOVERY_ATTEMPTS for t in stuck_tasks):
+            if any((t.retry_count or 0) >= max_recovery_attempts for t in stuck_tasks):
                 continue
 
             branch = f"feature/{feature.design_id[:8]}/{feature.feature_key}"
@@ -4312,13 +4318,13 @@ def _maybe_retry_failed_tasks(
         # re-dispatched every single poll cycle forever, burning a cycle
         # every few seconds indefinitely and starving every other
         # workflow's turn in the same poll loop. Observed live.
-        MAX_RETRY_COUNT = 2
+        max_retry_count = 2
         failed_tasks = (
             db.query(Task)
             .filter(Task.phase_id == phase.id, Task.status == "failed", *cycle_filter)
             .all()
         )
-        retryable_tasks = [t for t in failed_tasks if (t.retry_count or 0) < MAX_RETRY_COUNT]
+        retryable_tasks = [t for t in failed_tasks if (t.retry_count or 0) < max_retry_count]
         if not retryable_tasks:
             reasons = sorted(
                 {t.failure_reason for t in failed_tasks if t.failure_reason}
@@ -4326,7 +4332,7 @@ def _maybe_retry_failed_tasks(
             reason_text = "; ".join(reasons) if reasons else "no reason recorded"
             logger.warning(
                 f"[PHASE-ADVANCE] Phase {phase.name} has {len(failed_tasks)} failed "
-                f"task(s), all past the retry cap ({MAX_RETRY_COUNT}) -- pausing "
+                f"task(s), all past the retry cap ({max_retry_count}) -- pausing "
                 f"the workflow instead of retrying forever: {reason_text}"
             )
             workflow = db.query(Workflow).filter_by(id=phase.workflow_id).first()
@@ -4340,7 +4346,7 @@ def _maybe_retry_failed_tasks(
         logger.info(
             f"[PHASE-ADVANCE] Phase {phase.name} has {failed_count} failed tasks "
             f"and 0 done — retrying {len(retryable_tasks)} (of {len(failed_tasks)}, "
-            f"cap {MAX_RETRY_COUNT})"
+            f"cap {max_retry_count})"
         )
         # Reset retryable failed tasks to pending. Per-task (not a bulk
         # .update()) so each one's own failure_reason -- e.g. a specific
@@ -4364,7 +4370,7 @@ def _maybe_retry_failed_tasks(
             # Persist the increment before attempting -- counting only
             # successful dispatches would let a task that fails on every
             # single retry (the exact scenario this cap exists for) never
-            # reach MAX_RETRY_COUNT at all.
+            # reach max_retry_count at all.
             task.retry_count = (task.retry_count or 0) + 1
             # This row is reused (not recreated) for the retry -- without
             # clearing these too, a task previously tagged action="goto"/
@@ -4672,7 +4678,7 @@ def _trigger_arbitration(
     import uuid
 
     with get_db() as db:
-        MAX_ARBITRATIONS_PER_PHASE = 3
+        max_arbitrations_per_phase = 3
         prior_arbitrations = (
             db.query(Task)
             .filter(
@@ -4681,7 +4687,7 @@ def _trigger_arbitration(
             )
             .count()
         )
-        if prior_arbitrations >= MAX_ARBITRATIONS_PER_PHASE:
+        if prior_arbitrations >= max_arbitrations_per_phase:
             logger.error(
                 f"[ARBITRATE] {phase_name} has already been arbitrated "
                 f"{prior_arbitrations} times without converging -- failing "
@@ -5141,7 +5147,7 @@ def _create_phase_task(
                 return False
 
             # Check retry/goto bounds
-            MAX_PHASE_ATTEMPTS = 5
+            max_phase_attempts = 5
             if action in ("retry", "goto"):
                 retries = (
                     db.query(Task)
@@ -5152,10 +5158,10 @@ def _create_phase_task(
                     )
                     .count()
                 )
-                if retries >= MAX_PHASE_ATTEMPTS:
+                if retries >= max_phase_attempts:
                     logger.warning(
                         f"[PHASE-TASK] {phase_name} hit retry bound "
-                        f"({retries}/{MAX_PHASE_ATTEMPTS}), triggering arbitration"
+                        f"({retries}/{max_phase_attempts}), triggering arbitration"
                     )
                     _trigger_arbitration(
                         workflow_id,
@@ -5520,7 +5526,7 @@ def _resume_stuck_workflow_tasks(workflow_id: str, logger: OrchestratorLogger) -
         # them. See orchestrator's _create_phase_task orphan-detection
         # comment and monitor.py's stuck-detection for the same 5-minute
         # convention used elsewhere.
-        PENDING_STUCK_MINUTES = 5
+        pending_stuck_minutes = 5
         for t in candidates:
             if t.status in ("blocked", "failed"):
                 restartable.append(t)
@@ -5531,7 +5537,7 @@ def _resume_stuck_workflow_tasks(workflow_id: str, logger: OrchestratorLogger) -
                         restartable.append(t)
                 elif t.created_at and (
                     datetime.utcnow() - t.created_at
-                ) > timedelta(minutes=PENDING_STUCK_MINUTES):
+                ) > timedelta(minutes=pending_stuck_minutes):
                     restartable.append(t)
             elif t.assigned_agent_id:
                 agent = db.query(Agent).filter_by(id=t.assigned_agent_id).first()
@@ -5930,7 +5936,7 @@ def run_single_workflow(
                     if output:
                         # Show last meaningful lines (skip blank)
                         lines = [
-                            l.strip() for l in output.strip().split("\n") if l.strip()
+                            ln.strip() for ln in output.strip().split("\n") if ln.strip()
                         ][-8:]
                         if lines:
                             preview = " | ".join(lines[-3:])  # last 3 lines
@@ -6477,12 +6483,12 @@ def run_phase0(
         # otherwise a resolved problem keeps showing up in the design modal
         # forever, since nothing else ever clears this column.
         update_kwargs = {"designs_folder": str(designs_folder), "error": None}
-        from src.core.database import Workflow as _WF
+        from src.core.database import Workflow
         with _get_db() as _db:
             phase0_wf = (
-                _db.query(_WF)
+                _db.query(Workflow)
                 .filter_by(design_id=design_entry.db_id, definition_id="feature_architect")
-                .order_by(_WF.created_at.desc())
+                .order_by(Workflow.created_at.desc())
                 .first()
             )
             phase0_wf_id = phase0_wf.id if phase0_wf else None

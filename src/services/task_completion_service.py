@@ -101,9 +101,9 @@ class TaskCompletionService:
 
         wf = None
         if task.workflow_id:
-            from src.core.database import Workflow as _WF
+            from src.core.database import Workflow
 
-            wf = session.query(_WF).filter_by(id=task.workflow_id).first()
+            wf = session.query(Workflow).filter_by(id=task.workflow_id).first()
 
         # wf.working_directory missing here is not "the agent didn't write the
         # file" -- it's a worktree-tracking bug (the workflow's shared worktree
@@ -226,9 +226,9 @@ class TaskCompletionService:
 
         wf = None
         if task.workflow_id:
-            from src.core.database import Workflow as _WF
+            from src.core.database import Workflow
 
-            wf = session.query(_WF).filter_by(id=task.workflow_id).first()
+            wf = session.query(Workflow).filter_by(id=task.workflow_id).first()
         if not (wf and wf.working_directory):
             return None  # verify_output_artifact already surfaces this case.
 
@@ -516,7 +516,7 @@ class TaskCompletionService:
             return
 
         import functools
-        from pathlib import Path as _P
+        from pathlib import Path
 
         # build_phase_output may run pytest (Enhancement 1: independent test
         # verification). Run it in a thread pool executor so the async event
@@ -524,7 +524,7 @@ class TaskCompletionService:
         loop = asyncio.get_event_loop()
         phase_output = await loop.run_in_executor(
             None,
-            functools.partial(build_phase_output, phase.name, _P(wf.working_directory)),
+            functools.partial(build_phase_output, phase.name, Path(wf.working_directory)),
         )
         logger.info(
             f"[SPEC-GATE] {phase.name}: gate fired from completion path, phase_output={phase_output}"
@@ -562,7 +562,7 @@ class TaskCompletionService:
             # the pipeline proceeded straight to security_review with the
             # blockers never addressed.
             from src.autopilot.orchestrator import _create_phase_task
-            from src.core.database import Phase as _Phase, PhaseExecution as _PE
+            from src.core.database import Phase, PhaseExecution
 
             metadata = result.get("metadata") or {}
             spec_gate = metadata.get("spec_gate", {})
@@ -586,18 +586,18 @@ class TaskCompletionService:
             # without this, phases after the target keep their "completed"
             # status from a prior pass and get re-evaluated without running.
             target_order = (
-                session.query(_Phase.order)
+                session.query(Phase.order)
                 .filter_by(id=result["target_phase_id"])
                 .scalar()
             )
             if target_order is not None:
                 stale = (
-                    session.query(_PE)
-                    .join(_Phase, _PE.phase_id == _Phase.id)
+                    session.query(PhaseExecution)
+                    .join(Phase, PhaseExecution.phase_id == Phase.id)
                     .filter(
-                        _Phase.workflow_id == task.workflow_id,
-                        _Phase.order >= target_order,
-                        _PE.status.in_(["in_progress", "completed"]),
+                        Phase.workflow_id == task.workflow_id,
+                        Phase.order >= target_order,
+                        PhaseExecution.status.in_(["in_progress", "completed"]),
                     )
                     .all()
                 )
@@ -735,15 +735,15 @@ class TaskCompletionService:
 
         merge_commit_sha = None
         try:
-            from pathlib import Path as _P
+            from pathlib import Path
 
             wt_path = None
 
             # Shared-worktree path (normal autopilot): use the workflow's directory.
             if task.workflow_id:
-                from src.core.database import Workflow as _WF
+                from src.core.database import Workflow
 
-                wf_row = session.query(_WF).filter_by(id=task.workflow_id).first()
+                wf_row = session.query(Workflow).filter_by(id=task.workflow_id).first()
                 if wf_row and wf_row.working_directory:
                     wt_path = wf_row.working_directory
 
@@ -753,7 +753,7 @@ class TaskCompletionService:
                 if record and record.worktree_path:
                     wt_path = record.worktree_path
 
-            if wt_path and _P(wt_path).is_dir():
+            if wt_path and Path(wt_path).is_dir():
                 phase_obj = (
                     session.query(Phase).filter_by(id=task.phase_id).first()
                     if task.phase_id

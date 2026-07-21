@@ -1391,14 +1391,14 @@ class PhaseManager:
         try:
             import shutil as _shutil
             from datetime import datetime as _dt
-            from pathlib import Path as _P
+            from pathlib import Path
 
             wt_path = workflow.working_directory if workflow.working_directory else None
             if not wt_path:
                 logger.debug("[FEATURE-FOLDER] No worktree path — skipping")
                 return
 
-            wt = _P(wt_path)
+            wt = Path(wt_path)
 
             # Derive the real project root for the features output dir.
             project_path = wt
@@ -1418,11 +1418,11 @@ class PhaseManager:
 
             # Prefer design name over workflow definition name so the folder reads
             # "add_calculator" not "Autopilot_Multi-Agent_Pipeline".
-            from src.core.database import AutopilotDesign as _AD2
+            from src.core.database import AutopilotDesign
 
             _design_label = None
             if workflow.design_id:
-                _d = session.query(_AD2).filter_by(id=workflow.design_id).first()
+                _d = session.query(AutopilotDesign).filter_by(id=workflow.design_id).first()
                 _design_label = _d.name if _d else None
             design_name = (
                 (_design_label or workflow.name or "feature")
@@ -1442,7 +1442,7 @@ class PhaseManager:
             docs_dir = feature_dir / "docs"
             docs_dir.mkdir(parents=True, exist_ok=True)
 
-            _DOC_EXTENSIONS = {".md", ".json", ".txt", ".log", ".csv", ".html"}
+            _doc_extensions = {".md", ".json", ".txt", ".log", ".csv", ".html"}
 
             # 1. Production artifacts from worktree's docs/ (merged to main but
             #    the worktree copy is canonical and complete here).
@@ -1451,7 +1451,7 @@ class PhaseManager:
                 for f in wt_docs.rglob("*"):
                     if (
                         f.is_file()
-                        and f.suffix in _DOC_EXTENSIONS
+                        and f.suffix in _doc_extensions
                         and "tmux" not in f.parts
                     ):
                         rel = f.relative_to(wt_docs)
@@ -1488,12 +1488,11 @@ class PhaseManager:
                             logger.info(f"[FEATURE-FOLDER] Copied tmux log {f.name}")
 
             # 4. Link design → feature folder in DB
-            from src.core.database import AutopilotDesign as _AD
             from src.core.status_derivation import derive_design_status
 
             _design_name_for_metrics = safe_name
             if workflow.design_id:
-                design = session.query(_AD).filter_by(id=workflow.design_id).first()
+                design = session.query(AutopilotDesign).filter_by(id=workflow.design_id).first()
                 if design:
                     design.feature_folder = str(feature_dir)
                     _design_name_for_metrics = design.name or safe_name

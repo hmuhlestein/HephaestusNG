@@ -87,3 +87,4 @@ frontend/node_modules/
 
 # Hephaestus local data
 .hephaestus/
+.pi-subagents/

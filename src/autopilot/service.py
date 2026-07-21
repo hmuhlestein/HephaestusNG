@@ -16,7 +16,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from src.core.constants import DESIGN_CONTEXT_SUBDIR, DESIGN_SUBDIR
+from src.core.constants import DESIGN_CONTEXT_SUBDIR
 
 logger = logging.getLogger(__name__)
 
@@ -168,8 +168,8 @@ class AutopilotService:
         """Remove the persisted run state (deliberate stop — don't auto-resume)."""
         try:
             from src.autopilot.orchestrator import (
-                _running_state_key,
                 _delete_project_context,
+                _running_state_key,
             )
             from src.core.database import get_db
 
@@ -182,8 +182,8 @@ class AutopilotService:
         """Read persisted run params, if any (used to auto-resume on startup)."""
         try:
             from src.autopilot.orchestrator import (
-                _running_state_key,
                 _get_project_context,
+                _running_state_key,
             )
             from src.core.database import get_db
 

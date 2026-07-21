@@ -24,8 +24,6 @@ import logging
 import sys
 from pathlib import Path
 
-from src.core.constants import HEPHAESTUS_LOGS_DIR
-
 from src.cli.commands import (
     agent,
     autopilot,
@@ -41,6 +39,7 @@ from src.cli.commands import (
     task,
     workflow,
 )
+from src.core.constants import HEPHAESTUS_LOGS_DIR
 
 BANNER = r"""
   _   _ _____ ____  _   _ ______   __

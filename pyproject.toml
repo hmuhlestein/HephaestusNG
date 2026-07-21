@@ -57,11 +57,12 @@ warn_unused_configs = true
 ignore_missing_imports = true
 
 [tool.ruff]
-line-length = 88
+line-length = 200
 target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "T20"]  # pycodestyle, pyflakes, isort, naming, print
+ignore = ["E501"]  # line length enforced by black/formatter
 
 [tool.ruff.lint.per-file-ignores]
 "src/cli/*" = ["T20"]   # CLI tools print to stdout intentionally

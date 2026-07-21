@@ -35,17 +35,21 @@ from src.core.database import (
 )
 from src.core.simple_config import get_config
 from src.core.worktree_manager import WorktreeManager
+from src.mcp.agents_api import router as agents_router
 from src.mcp.api import create_frontend_routes
+from src.mcp.memory_api import (
+    SaveMemoryRequest,
+    SearchMemoryRequest,
+    save_memory,
+    search_memory,
+)
+from src.mcp.memory_api import (
+    router as memory_router,
+)
+from src.mcp.messaging_api import router as messaging_router
 
 # Import routers at module level for test compatibility
 from src.mcp.tickets_api import router as tickets_router
-from src.mcp.agents_api import router as agents_router
-from src.mcp.messaging_api import router as messaging_router
-from src.mcp.memory_api import (
-    router as memory_router,
-    save_memory, search_memory,
-    SaveMemoryRequest, SearchMemoryRequest,
-)
 from src.memory.rag import RAGSystem
 from src.memory.store_factory import VectorStoreProtocol, create_vector_store
 from src.phases import PhaseManager
@@ -55,7 +59,6 @@ from src.services.result_validator_service import ResultValidatorService
 from src.services.task_similarity_service import TaskSimilarityService
 from src.services.ticket_search_service import TicketSearchService
 from src.services.ticket_service import TicketService
-from src.services.workflow_result_service import WorkflowResultService
 
 logger = logging.getLogger(__name__)
 
@@ -153,7 +156,6 @@ app.include_router(memory_router)
 
 
 # Request/Response Models
-from pydantic import BaseModel, Field, validator
 
 
 class CreateTaskRequest(BaseModel):
@@ -483,7 +485,7 @@ server_state = ServerState()
 # Register with app_context so other modules can reach shared state without
 # importing this route module (breaks the circular-import workaround used
 # throughout the service layer — see docs/SOLID_OO_REVIEW.md 1.6/3.11).
-from src.core.app_context import set_app_state as _set_app_state
+from src.core.app_context import set_app_state as _set_app_state  # noqa: E402
 
 _set_app_state(server_state)
 
@@ -1001,7 +1003,11 @@ async def startup_event():
     # logic) should see "active" for as much of the startup window as
     # possible instead of a transient "idle" read.
     try:
-        from src.autopilot.service import AutopilotService, get_autopilot_service, get_registry
+        from src.autopilot.service import (
+            AutopilotService,
+            get_autopilot_service,
+            get_registry,
+        )
 
         # Enumerate every project with a persisted "was running" marker, not
         # just one -- multiple projects can each have their own pipeline to
@@ -1388,7 +1394,7 @@ async def process_queue():
 
 # FIX #11: Register queue processor with app_context so services can
 # trigger queue processing without importing server.py directly.
-from src.core.app_context import set_queue_processor as _set_queue_processor
+from src.core.app_context import set_queue_processor as _set_queue_processor  # noqa: E402
 
 _set_queue_processor(process_queue)
 
@@ -4450,7 +4456,6 @@ async def _tool_get_task_status(arguments: Dict[str, Any]):
 
 
 async def _tool_create_ticket(arguments: Dict[str, Any]):
-    from src.services.ticket_service import TicketService
 
     workflow_id = arguments.get("workflow_id")
     if not workflow_id:
@@ -4485,7 +4490,6 @@ async def _tool_search_tickets(arguments: Dict[str, Any]):
 
 
 async def _tool_update_ticket_status(arguments: Dict[str, Any]):
-    from src.services.ticket_service import TicketService
 
     result = await TicketService.change_ticket_status(
         ticket_id=arguments.get("ticket_id"),

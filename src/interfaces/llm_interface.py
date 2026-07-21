@@ -574,8 +574,6 @@ Respond with JSON: {{"up_to_spec": true/false, "pass_rate": float, "failed_count
                 temperature=0.3,
                 response_format={"type": "json_object"},
             )
-            import json
-
             return json.loads(response.choices[0].message.content)
         except Exception as e:
             logger.error(f"review_qa_report failed: {e}")
