@@ -309,6 +309,67 @@ class TestDeriveFeatureStatus:
             feature = session.query(Feature).filter_by(id="feat-1").first()
             assert feature.status == "pending"
 
+    def test_completed_workflow_overrides_an_old_superseded_failed_task(
+        self, db_manager
+    ):
+        """Regression, observed live: a phase can genuinely fail on an
+        early attempt and succeed on a later retry within that same
+        phase, leaving an old, superseded "failed" Task row behind forever
+        -- real history, not evidence of unfinished work. Every branch
+        before this fix treated a mix of "done" and "failed" statuses as
+        proof the feature still had work to do, self-healing it back to
+        "active" on every single poll even though the workflow itself had
+        long since reached "completed" (all 12 phases done, merged to
+        main). The workflow's own status is the authoritative "did the
+        whole pipeline actually finish" signal and must win."""
+        with db_manager.session_scope() as session:
+            _create_design(session)
+            wf = Workflow(
+                id="wf-1", name="Test", status="completed", phases_folder_path="/tmp/phases"
+            )
+            session.add(wf)
+
+            feature = Feature(
+                id="feat-1",
+                design_id="design-1",
+                feature_key="test-feature",
+                name="Test Feature",
+                scope="Test scope",
+                workflow_id="wf-1",
+                status="active",  # stale -- should self-heal to completed
+            )
+            session.add(feature)
+
+            # 39 real "done" tasks plus one old, superseded "failed" one
+            # from an early attempt at a phase that later succeeded.
+            for i in range(3):
+                session.add(
+                    Task(
+                        id=f"task-done-{i}",
+                        workflow_id="wf-1",
+                        raw_description=f"Task {i}",
+                        done_definition="Done",
+                        status="done",
+                    )
+                )
+            session.add(
+                Task(
+                    id="task-old-failed",
+                    workflow_id="wf-1",
+                    raw_description="Early development attempt",
+                    done_definition="Done",
+                    status="failed",
+                )
+            )
+
+        with db_manager.session_scope() as session:
+            result = derive_feature_status(session, "feat-1", write_back=True)
+
+        assert result == "completed"
+        with db_manager.session_scope() as session:
+            feature = session.query(Feature).filter_by(id="feat-1").first()
+            assert feature.status == "completed"
+
 
 class TestDeriveWorkflowStatus:
     """Tests for derive_workflow_status function."""

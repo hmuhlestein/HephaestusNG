@@ -109,6 +109,21 @@ def derive_feature_status(db: Session, feature_id: str, write_back: bool = True)
         derived = FeatureStatus.ACTIVE
     elif task_statuses == {TaskStatus.DONE}:
         derived = FeatureStatus.COMPLETED
+    elif wf and wf.status == "completed":
+        # The workflow itself is the authoritative "did the whole 12-phase
+        # pipeline actually finish" signal -- a phase can genuinely fail on
+        # an early attempt and succeed on a later retry within that same
+        # phase, leaving an old, superseded "failed" Task row behind
+        # forever (nothing ever deletes it -- it's real history). Every
+        # branch below this point treats task_statuses as if failed/
+        # pending/in_progress entries always mean unfinished work, with no
+        # way to distinguish "genuinely stuck" from "already fully done,
+        # carrying old failure history." Observed live: a feature whose
+        # workflow had long since reached "completed" (all 12 phases done,
+        # merged to main) kept getting self-healed back to "active" on
+        # every UI poll, purely because one early "development" attempt
+        # had failed before a later retry succeeded.
+        derived = FeatureStatus.COMPLETED
     elif TaskStatus.IN_PROGRESS in task_statuses or TaskStatus.ASSIGNED in task_statuses:
         derived = FeatureStatus.ACTIVE
     elif TaskStatus.FAILED in task_statuses:
