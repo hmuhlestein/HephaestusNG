@@ -1,337 +1,294 @@
-# Forensics Report: Feature Model Implementation
+# Forensics Report: Cost Tracking Database Schema
 
-**Analysis Mode:** FULL MODE (run_health.json shows clean=false, error_count=15)
-**Date:** 2026-06-29
-**Workflow ID:** b6269d0e-7791-4abe-b11a-1b683b5b2079
-**Feature:** Feature Model Implementation
-**Pipeline Status:** Completed with hard_error (stop_reason)
-**Iterations:** 1
-**Total Time:** 1988 seconds (~33 minutes)
+**Date:** 2026-07-21
+**Workflow ID:** af451d18-d3c7-4a3e-9c58-9c1ed72fc0ad
+**Feature:** Cost Tracking Database Schema (feature/des-91c8/cost-schema)
+**Pipeline Status:** Completed — all phases passed
+**Total Agent Invocations:** 21 across 10 phases
+**Total Wall Time:** ~11.5 hours (00:09 to 11:40 CDT, includes 7.5h overnight gap)
+**Active Pipeline Time:** ~4 hours
 
 ---
 
-## Pipeline Metrics
+## 1. Pipeline Metrics
+
+| Phase | Runs | Agents | Duration | Verdict |
+|-------|------|--------|----------|---------|
+| product_requirements | 2 | 382dae99, 8814f569 | ~7 min | PASS |
+| scope_review | 1 | c07573ff | ~7 min | PASS |
+| architecture_design | 1 | f1ff3723 | ~13 min | PASS |
+| development | 6 | 1099b9f6, 0fbf885e, 693b21a7, bf7be014, 1838b5f7, f897a332 | ~15 min initial + fix cycles | NEEDS_WORK → PASS |
+| architectural_review | 4 | 4addea62, 9c8fc089, ee910346, 707dd71e | ~20 min total | NOT_READY → PASS (Run 3) |
+| adversarial_review | 3 | 8230b3e0, 9ac44855, aa109fb1 | ~19 min total | 5 BLOCKERs → PASS (Run 3) |
+| security_review | 1 | 9fc7bc2a | ~35 min | COMPLETE (3 vulns fixed) |
+| qa_validation | 1 | 57c5a7af | ~44 min | PASS (39/39) |
+| product_validation | 1 | 1ea6ca05 | ~21 min | NEEDS_WORK (3 unmet FRs) |
+| doc_review | 1 | a8c6a566 | ~30 min | COMPLETE |
+
+**Total invocations:** 21 (product_requirements ×2, scope_review ×1, architecture_design ×1, development ×6, architectural_review ×4, adversarial_review ×3, security_review ×1, qa_validation ×1, product_validation ×1, doc_review ×1)
+
+---
+
+## 2. Review-Fix-Verify Cycle Analysis
+
+The dominant pipeline pattern was the **review-fix-verify cycle**, consuming 13 of 21 invocations (62%):
+
+```
+development v1 → architectural_review v1 (5 BLOCKERs, 4 FIXes)
+  → development v2 (fix 5B + 4F) → architectural_review v2 (1B remaining)
+    → development v3 (fix remaining) → architectural_review v3 (CLEAN)
+      → adversarial_review v1 (5 NEW BLOCKERs)
+        → development v4 (fix 5B) → adversarial_review v2 (1B remaining)
+          → development v5 (fix residual) → adversarial_review v3 (CLEAN)
+```
+
+**Key insight:** Both review phases found distinct, non-overlapping bugs. The architectural review caught integration gaps (missing wiring, missing endpoints, missing guards) while the adversarial review caught correctness bugs (transaction boundaries, N+1 queries, falsy zero logic). This validates the two-pass review design.
+
+---
+
+## 3. Agent Performance Assessment
+
+### 3.1 Excellent Performance
+
+| Phase | Agent | Notes |
+|-------|-------|-------|
+| scope_review | c07573ff | Single-pass clean. Faithful comparison against design doc. |
+| architecture_design | f1ff3723 | Comprehensive 12-task breakdown with dependency graph. |
+| qa_validation | 57c5a7af | 39/39 tests pass. Structured qa_result.json on first attempt. |
+| security_review | 9fc7bc2a | Found and fixed 3 real vulnerabilities. Despite MCP issues. |
+
+### 3.2 Good Performance (needed review cycles, which is expected)
+
+| Phase | Agent | Notes |
+|-------|-------|-------|
+| development (all) | Various | Each fix cycle was targeted and correct. Tests stayed green. |
+| architectural_review | Various | Reviewers were thorough. Finding severity was appropriate. |
+| adversarial_review | Various | Found real bugs (transaction boundaries, N+1, falsy logic). |
+
+### 3.3 Issues Encountered
+
+| Phase | Agent | Issue | Impact |
+|-------|-------|-------|--------|
+| product_requirements | 382dae99 | First agent; 8814f569 was the retry | ~3 min delay |
+| security_review | 9fc7bc2a | MCP connection failures — fell back to curl for task update | No data loss, but fragile |
+| doc_review | a8c6a566 | Same MCP connection issue — fell back to curl | No data loss, but fragile |
+
+---
+
+## 4. Stuck/Crashed Agents
+
+**No stuck or crashed agents detected.** All 21 invocations completed and updated task status. The overnight gap (00:46 to 08:17) was a scheduled pipeline pause, not a stuck agent.
+
+**MCP Connection Degradation:** Security review and doc review agents experienced MCP server disconnection mid-run. Both recovered by falling back to direct HTTP calls. Root cause: long-running sessions may lose MCP websocket connection. The agents' self-healing fallback (curl to localhost:8300) worked but is brittle.
+
+---
+
+## 5. Common Issue Patterns Cataloged
+
+### 5.1 Transaction Boundary Violations (Found by: adversarial_review, 3 occurrences)
+
+**Pattern:** derive_* functions each calling `db.commit()` independently instead of letting the caller control the transaction boundary.
+
+**Root cause:** Development agent followed existing patterns in the codebase (status_derivation.py uses commits) without considering that cost derivation needs atomic multi-table updates.
+
+**Frequency:** This is a recurring pattern in SQLAlchemy codebases. The adversarial reviewer found it on Run 1, and a residual instance in `_pause_project_workflows` on Run 2.
+
+### 5.2 Missing Integration Wiring (Found by: architectural_review, 4 occurrences)
+
+**Pattern:** Core modules implemented in isolation but not connected to the rest of the system:
+- task_completion_service.py not calling collect_task_cost
+- langchain_llm_client.py not routing through _invoke_and_record
+- No POST /cost-entries endpoint
+- Missing budget guards on pick_next_design/_run_one_feature
+
+**Root cause:** Development focused on new files (cost_derivation.py, cost_collection_service.py) but under-invested in modifying existing integration points.
+
+### 5.3 Falsy Zero Bugs (Found by: adversarial_review, 1 occurrence)
+
+**Pattern:** `if proj.cost_total_usd and proj.cost_total_usd < proj.cost_limit_usd` — the first condition is falsy when cost is 0.0, permanently locking zero-spend projects.
+
+**Root cause:** Python truthiness gotcha. Common mistake when guarding against None vs 0.
+
+### 5.4 N+1 Query Patterns (Found by: adversarial_review, 1 occurrence)
+
+**Pattern:** `_pause_project_workflows` querying ALL agents globally then filtering in Python instead of using a JOIN.
+
+**Root cause:** Developer wrote the simplest working code first without considering scale.
+
+### 5.5 Missing Authentication on New Endpoints (Found by: security_review, 1 occurrence)
+
+**Pattern:** New `/cost-entries` endpoint created without `verify_agent_authentication()` check.
+
+**Root cause:** Existing endpoints all had auth, but the development prompt didn't explicitly call out "every new endpoint must have auth."
+
+### 5.6 Nested Session Leaks (Found by: adversarial_review, 1 occurrence)
+
+**Pattern:** `_get_agent_cwd` opening its own `get_db()` session inside a caller that already has one, leaking connections and reading inconsistent snapshots.
+
+**Root cause:** Utility function written in isolation without considering its call context.
+
+---
+
+## 6. Prompt Improvement Proposals
+
+### 6.1 Development Prompt — Transaction Boundary Guidance
+
+**Before (current prompt excerpt):**
+```
+Implement all components according to the architecture.
+Reads architecture.md from Phase 2, implements each component following
+the task breakdown, writes tests, and creates working software.
+```
+
+**After (proposed):**
+```
+Implement all components according to the architecture.
+
+CRITICAL PATTERN — TRANSACTION BOUNDARIES:
+When modifying multiple tables in a single operation (e.g., cost derivation
+that writes to cost_entries AND updates task/feature/project rollups), the
+CALLER must control the transaction. Do NOT put db.commit() inside individual
+derive/helper functions. The pattern is:
+  1. Caller opens session via get_db()
+  2. Caller passes session to all helper functions
+  3. Caller calls db.commit() once at the end
+  4. On any exception, the entire operation rolls back atomically
+
+This follows the existing pattern in status_derivation.py — study it before implementing.
+```
+
+**Rationale:** Would have prevented 3 of 5 adversarial BLOCKERs (cascading commits, nested sessions, residual commit in _pause_project_workflows).
+
+### 6.2 Development Prompt — Integration Wiring Checklist
+
+**Before:** No explicit instruction about wiring new modules.
+
+**After (proposed addition):**
+```
+INTEGRATION WIRING CHECKLIST (verify before marking done):
+- [ ] Every new endpoint has authentication (verify_agent_authentication or equivalent)
+- [ ] Every new module is called from the appropriate lifecycle hook (task completion, workflow start, etc.)
+- [ ] Every new Pydantic model has input validation (ranges, enums, non-negative checks)
+- [ ] Budget/cost guard functions are called BEFORE dispatching new work, not just after
+```
+
+**Rationale:** Would have prevented missing auth on /cost-entries, missing task_completion wiring, and missing budget guards.
+
+### 6.3 Security Review Prompt — New Endpoint Checklist
+
+**Before (current prompt):**
+```
+Perform focused security review and fix vulnerabilities found.
+Analyzes the codebase for security vulnerabilities, authentication issues,
+authorization bypasses, data handling problems, and FIXES critical security
+issues before they ship.
+```
+
+**After (proposed):**
+```
+Perform focused security review and fix vulnerabilities found.
+
+MANDATORY FIRST STEP — NEW ENDPOINT AUDIT:
+Before running any automated scans, grep for new route definitions added in
+this feature. For EACH new endpoint, verify:
+  1. Authentication check exists (verify_agent_authentication or equivalent)
+  2. Input validation via Pydantic model with appropriate constraints
+  3. No raw SQL or string interpolation in queries
+  4. Rate limiting considered (at minimum, document if omitted)
+If any endpoint lacks auth, FIX IT — this is a CRITICAL finding.
+```
+
+**Rationale:** The security agent found the missing auth, but a more structured checklist would make this faster and more reliable.
+
+### 6.4 Adversarial Review Prompt — Already Excellent
+
+The adversarial review prompt is already well-calibrated. No changes proposed. It found real, non-trivial bugs that the developer and architectural reviewer both missed. The "assume the code is broken" framing is effective.
+
+### 6.5 Product Requirements Prompt — Duplicate Agent Prevention
+
+**Before:** No instruction about checking if work was already done.
+
+**After (proposed addition):**
+```
+FIRST STEP: Check if requirements_analysis.md already exists in docs/.
+If it does and appears complete (>500 lines, has FR-1 through FR-N),
+read it and verify completeness rather than regenerating from scratch.
+```
+
+**Rationale:** Product requirements ran twice (agents 382dae99 and 8814f569). The second agent appears to be a retry. Checking for existing work first would save time.
+
+---
+
+## 7. Methodology Refinements
+
+### 7.1 Review-Fix-Verify Cycle Efficiency
+
+The architectural review took 3 runs and adversarial review took 3 runs. Each run found new issues because the fix cycle introduced new code. This is **expected and healthy** — it's the purpose of iterative review.
+
+**Improvement:** Consider running adversarial review immediately after architectural review passes, before the developer marks done on the full feature. Currently, the developer fixes arch review findings, then adversarial review finds different bugs. Running both reviewers in parallel on the initial implementation would reduce total cycles from 6 to 3-4.
+
+### 7.2 MCP Connection Resilience
+
+Two agents (security_review, doc_review) lost MCP connection mid-task. Both recovered via curl fallback, but this is fragile. 
+
+**Recommendation:** Add a "MCP health check" at the start of each phase, and if connection fails, automatically fall back to HTTP API calls. Or, implement automatic MCP reconnection in the agent harness.
+
+### 7.3 Overnight Gap
+
+The 7.5-hour gap between architectural review v1 (00:46) and development v2 (08:17) suggests the pipeline paused overnight. This is fine for cost optimization but means the total wall time is misleading. Active time was ~4 hours.
+
+**Recommendation:** Track active vs. idle time separately in pipeline_metrics.json (which was not generated for this run).
+
+### 7.4 pipeline_metrics.json Not Generated
+
+The forensics phase expects `pipeline_metrics.json` but it was not created. This means timing data had to be reconstructed from git log timestamps and tmux file modification times.
+
+**Recommendation:** The orchestrator should generate pipeline_metrics.json automatically when each phase completes, recording: phase name, agent ID, start time, end time, and verdict.
+
+### 7.5 QA Result JSON Schema Mismatch
+
+The QA agent initially wrote qa_result.json in a non-standard schema. The pipeline flagged this and the agent rewrote it in the documented shape. The prompt should include the expected JSON schema inline to prevent this.
+
+---
+
+## 8. Positive Patterns Worth Preserving
+
+1. **Self-healing derivation pattern:** cost_derivation.py mirrors status_derivation.py exactly. The architecture agent correctly identified this pattern and the developer implemented it faithfully.
+
+2. **Session-id keyed checkpoints:** SessionCostCheckpoint uses session_id (not Agent.id) to prevent double-counting on retries. This was identified in requirements and preserved through all phases.
+
+3. **Paused-by generalization:** The nuanced rule (is_not_none everywhere EXCEPT start() keeps ==user) was correctly specified, implemented, and verified across all review cycles.
+
+4. **Two-pass review design:** Architectural review catches integration gaps; adversarial review catches correctness bugs. They found non-overlapping issues. This is the right design.
+
+5. **Security agent self-healing:** When MCP failed, the security agent fell back to curl and still completed its task. Good resilience pattern, though it should be formalized.
+
+---
+
+## 9. Actionable Findings Summary
+
+| # | Finding | Severity | Proposed Fix | Phase |
+|---|---------|----------|--------------|-------|
+| 1 | Transaction boundary violations in derive functions | HIGH | Add explicit guidance to development prompt | development |
+| 2 | Missing integration wiring (auth, task hooks, guards) | HIGH | Add integration checklist to development prompt | development |
+| 3 | MCP connection loss in long-running agents | MEDIUM | Add MCP health check + auto-reconnect | infrastructure |
+| 4 | pipeline_metrics.json not generated | MEDIUM | Orchestrator should auto-generate on phase completion | orchestrator |
+| 5 | QA result JSON schema mismatch | LOW | Include expected schema in qa_validation.yaml prompt | qa_validation |
+| 6 | Duplicate product_requirements agent | LOW | Check for existing work before regenerating | product_requirements |
+| 7 | No rate limiting on new endpoints | LOW | Document in security review findings | security_review |
+
+---
+
+## 10. Pipeline Efficiency Summary
 
 | Metric | Value |
 |--------|-------|
-| Design Name | Feature Model Implementation |
-| Iterations | 1 |
-| Total Time | 1988s (33 min) |
-| Stop Reason | hard_error |
-| QA Passed | false |
-| Product Validated | false |
-| Files Created | 2028 |
-
----
-
-## Findings
-
-### Finding 1: Context Contamination in Requirements Phase
-
-**What happened:** The initial product_requirements agent (agent_id: afca55f5) extracted requirements for a "Simple Calculator Module" instead of the Feature Model Implementation. The scope_review agent correctly detected this mismatch and returned FAIL verdict. A second attempt (agent_id: 47b69ad6) also appears to have been in a different worktree context with calculator files.
-
-**Root cause:** The product_requirements prompt instructs agents to "Read AGENTS.md for repository guidelines" and "Check for existing project docs" - but in a fresh worktree, these may contain context from previous pipeline runs or the main project. The agent found calculator-related files and assumed that was the current project.
-
-**Evidence:** From tmux logs:
-- `scope_review_193fe03a.log`: "The requirements_analysis.md contains requirements for a 'Simple Calculator Module' (add_calculator feature) but the design.md describes the 'Feature Model Implementation' for HephaestusNG."
-- `product_requirements_afca55f5.log`: Agent completed with "Extracted structured product requirements for Simple Calculator Module"
-
-**Recommendation:** The product_requirements prompt must emphasize that .hephaestus/design.md is the PRIMARY source of truth, not existing project files. Add explicit instruction to read design.md FIRST before any context gathering.
-
-**Proposed Prompt Rewrite:**
-
-BEFORE (product_requirements.yaml, Step 0):
-```
-Before reading the design document, understand the LARGER PROJECT:
-1. Read AGENTS.md for repository guidelines
-2. Check for existing project docs
-```
-
-AFTER:
-```
-STEP 0: READ THE DESIGN DOCUMENT FIRST (CRITICAL - DO THIS BEFORE ANYTHING ELSE)
-The design document at ./.hephaestus/design.md is the AUTHORITATIVE source of truth.
-Read it completely before doing ANY context gathering. The design doc tells you WHAT
-to build. Existing project files tell you HOW to build it within the existing codebase.
-
-After reading the design doc, THEN gather context:
-1. Read AGENTS.md for repository guidelines (to understand coding conventions)
-2. Check for existing project docs (to understand integration points)
-```
-
----
-
-### Finding 2: Architecture Agent Thought Loop
-
-**What happened:** The architecture_design agent (agent_id: d286a985) entered a thought loop, repeating the same reasoning pattern 5-8 times before Guardian steering intervention.
-
-**Root cause:** The architecture prompt is extremely detailed (24KB, 588+ lines). The agent appears to have gotten stuck trying to navigate between reading existing code and writing the architecture document. The "STEP 0: RIGHT-SIZE YOUR DESIGN" section may be causing analysis paralysis for complex features.
-
-**Evidence:** From `architecture_design_d286a985.log`:
-- "You are in a thought loop — the phrase 'hmuhlestein@Herricks-MacBook-Pro wt_feature-feature-model-im' has appeared 5 times."
-- "You are in a thought loop — the phrase '/Users/hmuhlestein/code/HephaestusNG/.worktrees/wt_feature-f' has appeared 8 times."
-
-**Recommendation:** 
-1. Add explicit anti-loop instruction at the top of the architecture prompt
-2. Consider breaking the architecture phase into smaller sub-phases for complex features
-3. Add a "max_read_operations" guidance to prevent excessive file reading
-
-**Proposed Prompt Addition:**
-
-Add to architecture_design.yaml, before STEP 0:
-```
-ANTI-LOOP RULE: If you find yourself reading the same file or reasoning about
-the same decision more than twice, STOP. Write what you know to architecture.md
-and continue. Perfect is the enemy of done. You can always revise later.
-```
-
----
-
-### Finding 3: MCP Tool Name Mismatch (search_memory)
-
-**What happened:** Multiple agents (at least 5 different agents across phases) attempted to call `hephaestus_search_memory` but the tool was not available on the MCP server. The actual tool name is different.
-
-**Root cause:** The phase prompts instruct agents to use `mcp__hephaestus__search_memory` but this tool doesn't exist on the hephaestus MCP server. The available tools are listed in the error message but agents often continue without adapting.
-
-**Evidence:** From multiple tmux logs:
-- `product_requirements_afca55f5.log`: "Tool 'hephaestus_search_memory' not found."
-- `scope_review_193fe03a.log`: "Tool 'qdrant-find' not found."
-- `security_review_fe323567.log`: "Tool 'hephaestus_search_memory' not found."
-
-**Recommendation:** Update all phase prompts to use the correct tool names, or add a note explaining that search_memory may not be available and agents should proceed without it.
-
-**Proposed Prompt Rewrite (all phases):**
-
-BEFORE:
-```python
-# Search the vector database for existing knowledge using search_memory():
-mcp__hephaestus__search_memory({
-    "query": "technology stack decisions framework language",
-    "limit": 10
-})
-```
-
-AFTER:
-```python
-# OPTIONAL: Search the vector database for existing knowledge
-# Note: search_memory may not be available in all environments.
-# If the tool is not found, skip this step and continue.
-try:
-    mcp__hephaestus__search_memory({
-        "query": "technology stack decisions framework language",
-        "limit": 10
-    })
-except ToolNotFound:
-    pass  # Continue without memory search
-```
-
----
-
-### Finding 4: MCP Server Internal Error on Task Status Update
-
-**What happened:** The adversarial_review agent (agent_id: 148fa725) completed all implementation work but received "Internal Server Error" when trying to mark the task as done. The agent had to fallback to marking the task as "failed" with an explanation.
-
-**Root cause:** MCP server instability under load or during high-concurrency phases. The server appears to have transient failures when multiple agents are completing simultaneously.
-
-**Evidence:** From `adversarial_review_bf77a821.log`:
-```
-mcp call hephaestus_update_task_status
-{
-  "task_id": "bc03c4e6-0b6d-4dac-b530-c71398f49359",
-  "status": "done",
-  "summary": "Task 0: Run B Fixes complete..."
-}
-❌ Failed to update task status: Internal Server Error
-```
-
-**Recommendation:** 
-1. Add retry logic to the update_task_status call in agent prompts
-2. Consider rate-limiting task completions when multiple phases finish simultaneously
-3. The prompt should instruct agents to retry once before falling back to "failed"
-
-**Proposed Prompt Addition (all phases):**
-
-Add after "WHEN YOU ARE DONE" section:
-```
-RETRY LOGIC: If update_task_status returns an error:
-1. Wait 5 seconds
-2. Retry once with the same call
-3. If still failing, call with status="failed" and explanation
-4. Do NOT retry more than once - move on
-```
-
----
-
-### Finding 5: QA Agent Session Restart
-
-**What happened:** The qa_validation agent (agent_id: 8ef47ee0) was restarted mid-execution because the tmux session was missing. The agent had to rediscover context and re-read files.
-
-**Root cause:** Tmux session management issues - sessions can be lost during long-running pipelines. The agent was restarted with a message indicating prior work was committed.
-
-**Evidence:** From `qa_validation_8ef47ee0.log`:
-```
-⚠️ You were restarted (Tmux session agent_8ef47ee0 was missing, recreating).
-Your prior work is committed in this worktree — do NOT redo it; run git log /
-git status and inspect existing files first, then continue toward completion.
-```
-
-**Recommendation:** The QA prompt should explicitly handle restart scenarios by:
-1. Checking git log first to see what was already done
-2. Not re-running tests that already passed
-3. Continuing from where the previous session left off
-
-**Proposed Prompt Addition (qa_validation.yaml):**
-
-Add after STEP 0:
-```
-RESTART HANDLING: If you see "You were restarted" at the top of your assignment:
-1. Run `git log --oneline -5` to see what was committed
-2. Check if qa_report.md or qa_result.json already exist in docs/
-3. If they exist and look complete, verify they are correct and mark done
-4. Only re-run tests if the previous run was incomplete
-```
-
----
-
-### Finding 6: Scope Review Agent Confusion with Previous Run Artifacts
-
-**What happened:** The scope_review agent found requirements_analysis.md that was from a previous pipeline run (calculator module) rather than the current Feature Model Implementation. This was from a different workflow run (f973f1ce) that had contaminated the worktree.
-
-**Root cause:** Worktrees can accumulate artifacts from multiple pipeline runs. The scope_review prompt doesn't explicitly handle the case where stale artifacts exist from previous runs.
-
-**Evidence:** From `scope_review_193fe03a.log`:
-- Agent found requirements_analysis.md containing calculator requirements
-- Correctly identified this as scope drift from the Feature Model Implementation design
-
-**Recommendation:** Add a timestamp or workflow_id check to requirements_analysis.md to help agents identify stale artifacts.
-
-**Proposed Prompt Addition (scope_review.yaml):**
-
-Add to STEP 1:
-```
-STALE ARTIFACT CHECK: Before comparing, verify the requirements_analysis.md
-header contains the current workflow context. If it references a different
-workflow_id or feature name, it may be stale from a previous run. In that
-case, report it as a blocking issue.
-```
-
----
-
-### Finding 7: Development Phase Complexity
-
-**What happened:** The development agent had to implement across 6 major areas: DB schema, Phase 0 workflow, orchestrator refactor (10 helper functions + 3 main functions), CLI changes, API endpoint, and design report template. This is a very large implementation scope for a single agent.
-
-**Root cause:** The architecture phase created a comprehensive task breakdown, but all tasks were assigned to a single development agent rather than being parallelized.
-
-**Evidence:** From `development_8f25038d.log`:
-- Agent implemented Feature class, migration function, Phase 0 workflow YAML
-- Agent implemented all 10 helper functions
-- Agent implemented run_phase0, run_feature_pipelines, run_design_aggregate
-- Agent implemented CLI and API changes
-- Agent implemented design report template
-
-**Recommendation:** For complex features, consider:
-1. Breaking development into multiple parallel agents (one per major component)
-2. Using the task dependency graph from architecture to enable parallel execution
-3. Limiting each agent's scope to 2-3 related components
-
----
-
-### Finding 8: Security Review Adapted Well
-
-**What happened:** The security_review agent successfully completed its review despite the missing search_memory tool. The agent adapted by using grep/find commands to search the codebase directly.
-
-**Root cause:** N/A - this is a positive finding showing agent resilience.
-
-**Evidence:** From `security_review_fe323565.log`:
-- Agent used `grep -rn` to search for security patterns
-- Agent used `find` to locate source files
-- Agent found and fixed 5 vulnerabilities
-
-**Recommendation:** Document this adaptation pattern as a best practice for other agents.
-
----
-
-## Patterns
-
-### Pattern 1: Context Contamination
-- **Frequency:** 2 occurrences (requirements phase)
-- **Impact:** Required scope_review to detect and trigger re-extraction
-- **Fix:** Emphasize design.md as primary source in all prompts
-
-### Pattern 2: Tool Name Mismatches
-- **Frequency:** 5+ occurrences across phases
-- **Impact:** Agents waste time trying non-existent tools
-- **Fix:** Update prompts with correct tool names or graceful degradation
-
-### Pattern 3: Thought Loops
-- **Frequency:** 1 occurrence (architecture phase)
-- **Impact:** Required Guardian intervention, delayed pipeline
-- **Fix:** Add anti-loop instructions and complexity assessment
-
-### Pattern 4: MCP Server Instability
-- **Frequency:** 1 occurrence (adversarial review)
-- **Impact:** Agent had to mark as "failed" despite completing work
-- **Fix:** Add retry logic to task completion calls
-
-### Pattern 5: Session Restarts
-- **Frequency:** 1 occurrence (QA validation)
-- **Impact:** Agent had to rediscover context
-- **Fix:** Add restart handling instructions to prompts
-
----
-
-## Prompt Rewrites Summary
-
-### Phase 1: product_requirements.yaml
-**Priority:** HIGH
-**Change:** Reorder Step 0 to read design.md FIRST before context gathering
-**Impact:** Prevents context contamination from existing project files
-
-### Phase 3: architecture_design.yaml
-**Priority:** MEDIUM
-**Change:** Add anti-loop instruction before Step 0
-**Impact:** Prevents thought loops in complex features
-
-### All Phases: search_memory references
-**Priority:** HIGH
-**Change:** Make search_memory calls optional with try/except pattern
-**Impact:** Prevents agents from getting stuck on missing tools
-
-### All Phases: update_task_status calls
-**Priority:** MEDIUM
-**Change:** Add retry logic instruction
-**Impact:** Handles transient MCP server errors
-
-### Phase 8: qa_validation.yaml
-**Priority:** LOW
-**Change:** Add restart handling section
-**Impact:** Improves recovery from session loss
-
-### Phase 2: scope_review.yaml
-**Priority:** LOW
-**Change:** Add stale artifact check
-**Impact:** Helps detect artifacts from previous runs
-
----
-
-## Summary
-
-**High-Impact Improvements:**
-1. Fix product_requirements prompt to read design.md FIRST (prevents scope contamination)
-2. Update all prompts to make search_memory optional (prevents tool-not-found errors)
-3. Add retry logic to update_task_status calls (handles MCP server instability)
-
-**Medium-Impact Improvements:**
-1. Add anti-loop instructions to architecture_design prompt
-2. Consider parallelizing development for complex features
-3. Add restart handling to QA validation prompt
-
-**Positive Observations:**
-- Scope review agent correctly detected and flagged scope drift
-- Security review agent adapted well to missing tools
-- All agents eventually completed their tasks despite issues
-- Product validation confirmed all 15 functional requirements implemented
-- Documentation review found and fixed 3 critical issues
-
-**Overall Assessment:** The pipeline completed successfully despite several operational issues. The main risk is context contamination in the requirements phase, which was caught by the scope review gate. Tool name mismatches and MCP server instability caused delays but did not prevent completion.
+| Total phases | 10 (of 12, excluding forensics and git_commit_push) |
+| Total agent invocations | 21 |
+| Average invocations per phase | 2.1 |
+| Most iterated phase | development (6 runs) |
+| Least iterated phase | scope_review, architecture_design, security_review, qa_validation, product_validation, doc_review (1 run each) |
+| Review-fix-verify cycles | 6 (3 architectural + 3 adversarial) |
+| Bugs found by review | 10 BLOCKERs + 4 FIXes (architectural) + 5 BLOCKERs (adversarial) + 3 vulnerabilities (security) |
+| Active pipeline time | ~4 hours |
+| Wall time (including overnight gap) | ~11.5 hours |
