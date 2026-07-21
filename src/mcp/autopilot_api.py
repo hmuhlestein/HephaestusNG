@@ -16,7 +16,7 @@ from typing import Any, Dict, List, Optional, Tuple, TypeVar
 
 from fastapi import APIRouter, Header, HTTPException, Query
 from fastapi.responses import FileResponse, HTMLResponse
-from pydantic import BaseModel, validator
+from pydantic import BaseModel, field_validator
 
 from src.core.constants import (
     AUTOPILOT_STATE_DIR,
@@ -1535,7 +1535,8 @@ class CostEntryCreate(BaseModel):
     cost_usd: float
     raw_usage: Optional[dict] = None
 
-    @validator("source")
+    @field_validator("source")
+    @classmethod
     def validate_source(cls, v: str) -> str:
         """Validate source is a known cost collection source."""
         valid_sources = {"pi", "claude_code", "opencode", "codex", "openrouter_direct"}
@@ -1543,7 +1544,8 @@ class CostEntryCreate(BaseModel):
             raise ValueError(f"source must be one of {valid_sources}, got '{v}'")
         return v
 
-    @validator("cost_usd")
+    @field_validator("cost_usd")
+    @classmethod
     def validate_cost_usd(cls, v: float) -> float:
         """Validate cost_usd is a reasonable positive value."""
         if v < 0:
@@ -1552,7 +1554,8 @@ class CostEntryCreate(BaseModel):
             raise ValueError("cost_usd exceeds maximum allowed value of $1000")
         return v
 
-    @validator("input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens", "reasoning_tokens")
+    @field_validator("input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens", "reasoning_tokens")
+    @classmethod
     def validate_token_counts(cls, v: int) -> int:
         """Validate token counts are non-negative."""
         if v < 0:

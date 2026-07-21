@@ -1349,8 +1349,10 @@ class DatabaseManager:
                     cursor.close()
 
                 session_factory = sessionmaker(
-                    autocommit=False, autoflush=False, bind=engine,
-                    expire_on_commit=False  # Prevent DetachedInstanceError bugs (H-0*)
+                    autocommit=False,
+                    autoflush=False,
+                    bind=engine,
+                    expire_on_commit=False,  # Prevent DetachedInstanceError bugs (H-0*)
                 )
                 if is_memory:
                     # Deliberately not written into the class-level caches
