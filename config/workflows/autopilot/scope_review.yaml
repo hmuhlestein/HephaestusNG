@@ -127,8 +127,8 @@ additional_notes: |
   WHEN YOU ARE DONE - MARK YOUR TASK AS COMPLETE (DO NOT SKIP THIS)
   ═══════════════════════════════════════════════════════════════════════
 
-  hephaestus_update_task_status({
-    "task_id": "<your task id>",
+  hephaestus_complete_my_task({
+    "agent_id": "<your agent id from the task assignment>",
     "status": "done",
     "summary": "SCOPE_PASS: ..." or "SCOPE_FAIL: ...",
     "key_learnings": ["<list of in-scope, out-of-scope, missing items>"]

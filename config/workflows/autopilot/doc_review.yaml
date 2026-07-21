@@ -235,11 +235,11 @@ additional_notes: |
   WHEN YOU ARE DONE - MARK YOUR TASK AS COMPLETE (DO NOT SKIP THIS)
   ═══════════════════════════════════════════════════════════════════════
 
-  CRITICAL: You MUST call the update_task_status tool. The pipeline WILL
+  CRITICAL: You MUST call the complete_my_task tool. The pipeline WILL
   get stuck without this call. Do NOT just print a summary and stop.
 
-  hephaestus_update_task_status({
-    "task_id": "<your task id>",
+  hephaestus_complete_my_task({
+    "agent_id": "<your agent id from the task assignment>",
     "status": "done",
     "summary": "<brief summary>",
     "key_learnings": ["<key findings>"]

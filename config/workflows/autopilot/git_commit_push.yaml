@@ -188,13 +188,13 @@ additional_notes: |
   ═══════════════════════════════════════════════════════════════════════
   
   CRITICAL: Do NOT just print a summary and stop. Do NOT exit to the command line.
-  You MUST call the update_task_status tool. The system CANNOT detect you finished
+  You MUST call the complete_my_task tool. The system CANNOT detect you finished
   without this call. The pipeline WILL get stuck.
   
   After all git operations complete, call:
   
-  hephaestus_update_task_status({
-    "task_id": "<your task id>",
+  hephaestus_complete_my_task({
+    "agent_id": "<your agent id from the task assignment>",
     "status": "done",
     "summary": "<brief summary of what was committed and merged>",
     "key_learnings": ["<commit hash>", "<PR URL if created>"]
