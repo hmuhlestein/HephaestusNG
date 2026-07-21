@@ -236,16 +236,21 @@ const RealTimeAgentOutput: React.FC<RealTimeAgentOutputProps> = ({
     if (!processedOutput) return '';
     const lines = processedOutput.split('\n');
     const filtered: string[] = [];
-    // Find the last non-empty line index for spinner detection
-    let lastNonEmpty = lines.length - 1;
-    while (lastNonEmpty > 0 && !lines[lastNonEmpty].trim()) lastNonEmpty--;
+    // Find the last Thinking/Working line index for spinner display
+    let lastSpinnerIdx = -1;
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const s = stripAnsiCodes(lines[i]).trim();
+      if (/^(Thinking|Working)\.\.?\.?$/.test(s)) {
+        lastSpinnerIdx = i;
+        break;
+      }
+    }
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
       const stripped = stripAnsiCodes(line).trim();
-      const isLast = i === lastNonEmpty;
       if (isNoiseLine(stripped)) {
-        // Keep spinner on last non-empty line so user sees the agent is thinking
-        if (isLast && /^(Thinking|Working)\.\.?\.?$/.test(stripped)) {
+        // Keep only the last Thinking/Working spinner
+        if (i === lastSpinnerIdx) {
           filtered.push(line);
         }
         continue;

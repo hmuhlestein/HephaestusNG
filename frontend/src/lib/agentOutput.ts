@@ -23,5 +23,7 @@ export function isNoiseLine(stripped: string): boolean {
   if (/^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s*[0-9;]+\s*$/.test(stripped)) return true;
   // Bare terminal escape sequence residue (e.g. "2;138;190;1")
   if (/^[0-9;]+$/.test(stripped) && stripped.includes(';')) return true;
+  // Separator lines with trailing escape sequence residue
+  if (/^[─━═▬▪▫\-=\s]+[0-9;]*$/.test(stripped) && stripped.length > 10) return true;
   return false;
 }
