@@ -435,6 +435,7 @@ class TestDeriveTaskCost:
         db_session.commit()
 
         cost = derive_task_cost(db_session, sample_task.id, write_back=True)
+        db_session.commit()  # Caller must commit
 
         # Verify cost was derived correctly
         assert abs(cost - 0.05) < 0.0001
@@ -487,6 +488,7 @@ class TestDeriveFeatureCost:
         db_session.commit()
 
         cost = derive_feature_cost(db_session, sample_feature.id)
+        db_session.commit()  # Caller must commit
         assert abs(cost - 0.15) < 0.0001
 
         # Verify feature was updated
@@ -511,6 +513,7 @@ class TestDeriveDesignCost:
         db_session.commit()
 
         cost = derive_design_cost(db_session, sample_design.id)
+        db_session.commit()  # Caller must commit
         assert abs(cost - 0.25) < 0.0001
 
         # Verify design was updated
@@ -535,6 +538,7 @@ class TestDeriveProjectCost:
         db_session.commit()
 
         cost = derive_project_cost(db_session, sample_project.id)
+        db_session.commit()  # Caller must commit
         assert abs(cost - 0.50) < 0.0001
 
         # Verify project was updated
