@@ -41,6 +41,24 @@ const RealTimeAgentOutput: React.FC<RealTimeAgentOutputProps> = ({
   const [searchTerm, setSearchTerm] = useState('');
   const [isPaused, setIsPaused] = useState(false);
   const [autoScroll, setAutoScroll] = useState(true);
+  const [currentStatus, setCurrentStatus] = useState(agent?.status || 'working');
+
+  // Poll agent status every 3 seconds
+  useEffect(() => {
+    if (!agent?.id) return;
+    const interval = setInterval(async () => {
+      try {
+        const updated = await apiService.getAgent(agent.id);
+        if (updated) setCurrentStatus(updated.status);
+      } catch {}
+    }, 3000);
+    return () => clearInterval(interval);
+  }, [agent?.id]);
+
+  // Update status when agent prop changes
+  useEffect(() => {
+    if (agent?.status) setCurrentStatus(agent.status);
+  }, [agent?.status]);
 
   // Message input state
   const [messageText, setMessageText] = useState('');
@@ -151,7 +169,7 @@ const RealTimeAgentOutput: React.FC<RealTimeAgentOutputProps> = ({
   const handleSendMessage = async () => {
     if (!messageText.trim() || !agent || isSending) return;
 
-    if (agent.status === 'terminated') {
+    if (currentStatus === 'terminated') {
       setSendStatus('error');
       setSendErrorMessage('Cannot send message to terminated agent');
       setTimeout(() => {
@@ -326,7 +344,7 @@ const RealTimeAgentOutput: React.FC<RealTimeAgentOutputProps> = ({
                   <WifiOff className="w-4 h-4 text-red-500" />
                 )}
 
-                <StatusBadge status={agent.status} size="sm" />
+                <StatusBadge status={currentStatus} size="sm" />
               </div>
 
               {lastUpdateTime && (
@@ -457,7 +475,7 @@ const RealTimeAgentOutput: React.FC<RealTimeAgentOutputProps> = ({
           </div>
 
           {/* Message Input */}
-          {agent.status !== 'terminated' && (
+          {currentStatus !== 'terminated' && (
             <div className="px-6 py-3 border-t border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900">
               <div className="flex items-start space-x-3">
                 <MessageCircle className="w-5 h-5 text-gray-400 mt-2 flex-shrink-0" />
