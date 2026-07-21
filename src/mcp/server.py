@@ -201,6 +201,7 @@ class CreateTaskRequest(BaseModel):
     )
 
     @validator('ticket_id', pre=True, always=True)
+    @classmethod
     def validate_ticket_id(cls, v):
         """Strip whitespace and reject whitespace-only ticket_id values."""
         if v is None:
