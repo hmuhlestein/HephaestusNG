@@ -1,27 +1,166 @@
 {
-  "run": 3,
-  "timestamp": "2025-07-21T12:30:00Z",
-  "prior_blockers_fixed": 5,
-  "prior_blockers_partial": 0,
-  "prior_blockers_unfixed": 0,
-  "blocker_count": 0,
-  "warning_count": 0,
-  "nit_count": 1,
-  "findings": [
+  "verdict": "BLOCK",
+  "blocker_count": 5,
+  "warning_count": 6,
+  "nit_count": 3,
+  "total_findings": 14,
+  "files_reviewed": [
+    "src/core/cost_derivation.py",
+    "src/services/cost_collection_service.py",
+    "src/mcp/autopilot_api.py",
+    "src/autopilot/orchestrator.py",
+    "src/interfaces/cost_tracker.py",
+    "src/interfaces/langchain_llm_client.py",
+    "extensions/hephaestus-cost-tracker/src/index.ts",
+    "extensions/hephaestus-cost-tracker/package.json",
+    "extensions/hephaestus-cost-tracker/README.md",
+    "extensions/hephaestus-cost-tracker/tsconfig.json",
+    "frontend/src/components/cost/CostDisplay.tsx",
+    "frontend/src/components/cost/FeatureCostBadge.tsx",
+    "frontend/src/components/cost/DesignCostRow.tsx",
+    "frontend/src/components/cost/ProjectCostSummary.tsx",
+    "frontend/src/components/cost/BudgetPausedLabel.tsx",
+    "frontend/src/components/cost/index.ts",
+    "frontend/src/components/ProjectSettingsModal.tsx",
+    "frontend/src/pages/Dashboard.tsx",
+    "frontend/src/services/api.ts",
+    "tests/test_cost_tracking.py",
+    "tests/test_budget_enforcement_integration.py",
+    "src/core/database.py"
+  ],
+  "blockers": [
     {
-      "id": "N-1",
-      "severity": "NIT",
-      "title": "datetime.utcnow() deprecated in Python 3.12",
-      "files": [
-        "src/core/cost_derivation.py",
-        "src/services/cost_collection_service.py",
-        "src/core/database.py"
-      ],
-      "description": "Multiple uses of datetime.utcnow() which is deprecated. Should migrate to datetime.now(datetime.UTC)."
+      "id": "B-1",
+      "title": "update_project silently wipes cost_limit_usd on ANY partial update",
+      "file": "src/mcp/autopilot_api.py",
+      "line": 1838,
+      "severity": "BLOCKER",
+      "category": "data_poisoning",
+      "description": "When PUT /projects/{id} is called without cost_limit_usd (e.g. just updating the name), the Optional[float] field defaults to None, which the handler interprets as 'clear the budget'. This wipes cost_limit_usd and resumes all budget-paused workflows.",
+      "failure_sequence": "1. Set budget to $50 via API\n2. Rename project via API (name update only)\n3. cost_limit_usd silently set to None\n4. All budget-paused workflows resumed\n5. Unlimited spending resumes",
+      "recommended_fix": "Use exclude_unset=True on the Pydantic model or add an explicit clear_cost_limit boolean sentinel to distinguish 'not sent' from 'sent as null'."
+    },
+    {
+      "id": "B-2",
+      "title": "Pi extension posts to wrong URL and wrong port — cost entries never arrive",
+      "file": "extensions/hephaestus-cost-tracker/src/index.ts",
+      "line": 101,
+      "severity": "BLOCKER",
+      "category": "silent_failure",
+      "description": "Extension posts to http://localhost:8000/cost-entries but server runs on port 8300 and route is /api/autopilot/cost-entries. All real-time cost posts fail silently.",
+      "failure_sequence": "1. Extension initializes with apiUrl=http://localhost:8000\n2. turn_end fires and calls postCost()\n3. POST to http://localhost:8000/cost-entries\n4. Connection refused (wrong port) or 404 (wrong path)\n5. catch handler logs warning, turn continues\n6. Zero cost entries recorded",
+      "recommended_fix": "Fix default URL to http://localhost:8300 and path to /api/autopilot/cost-entries."
+    },
+    {
+      "id": "B-3",
+      "title": "derive_project_cost and derive_design_cost miss costs on workflows without feature_id",
+      "file": "src/core/cost_derivation.py",
+      "line": 178,
+      "severity": "BLOCKER",
+      "category": "silent_undercounting",
+      "description": "The join chain CostEntry->Workflow->Feature->AutopilotDesign->project_id excludes any workflow where feature_id is NULL (Phase 0, undecomposed workflows). These costs are invisible to project and design cost derivation, causing systematic undercounting.",
+      "failure_sequence": "1. Phase 0 workflow runs and accumulates $20 in costs\n2. Phase 0 workflow has feature_id=NULL\n3. derive_project_cost joins through Feature table\n4. Phase 0 costs excluded from SUM\n5. project.cost_total_usd shows $0 despite $20 spent\n6. Budget enforcement never triggers",
+      "recommended_fix": "Add a second query path: SUM costs from workflows directly linked to project_id where feature_id IS NULL."
+    },
+    {
+      "id": "B-4",
+      "title": "CostEntryCreate missing token count validators — tests claim validation that doesn't exist",
+      "file": "src/mcp/autopilot_api.py",
+      "line": 1523,
+      "severity": "BLOCKER",
+      "category": "test_failure",
+      "description": "test_reject_negative_token_counts and test_reject_excessive_token_counts expect ValidationError from CostEntryCreate, but the model has no token count validators. These tests WILL fail when run.",
+      "failure_sequence": "1. Run test suite\n2. test_reject_negative_token_counts sends input_tokens=-100\n3. Expected: ValidationError raised\n4. Actual: Pydantic accepts -100 (no validator exists)\n5. Test fails with AssertionError",
+      "recommended_fix": "Add @validator for all token count fields with non-negative and max-bound checks."
+    },
+    {
+      "id": "B-5",
+      "title": "record_cost bypasses the $1000 cost cap — direct callers can write unbounded values",
+      "file": "src/core/cost_derivation.py",
+      "line": 31,
+      "severity": "BLOCKER",
+      "category": "data_integrity",
+      "description": "The CostEntryCreate Pydantic model caps cost_usd at $1000, but record_cost() is called directly from cost_collection_service with no validation. Corrupt session data can write arbitrary cost values.",
+      "failure_sequence": "1. Session JSONL has cost.total=999999.0 (corrupt)\n2. PiJsonlCollector reads it with no validation\n3. collect_task_cost calls record_cost(cost_usd=999999.0)\n4. record_cost writes to DB with no cap check\n5. project.cost_total_usd shows $999K\n6. Budget enforcement fires incorrectly",
+      "recommended_fix": "Add validation inside record_cost() — the single source of truth for all cost writes."
     }
   ],
-  "tests_passed": 31,
-  "tests_failed": 0,
-  "verdict": "PASS",
-  "notes": "All 5 prior BLOCKERs fully resolved. All 31 cost tracking tests pass. No new blockers or warnings."
+  "warnings": [
+    {
+      "id": "W-1",
+      "title": "_extract_session_id is unreliable heuristic — silently skips cost collection",
+      "file": "src/services/cost_collection_service.py",
+      "line": 426,
+      "severity": "WARNING"
+    },
+    {
+      "id": "W-2",
+      "title": "ClaudeCodeCollector hardcoded prices with no staleness detection",
+      "file": "src/services/cost_collection_service.py",
+      "line": 108,
+      "severity": "WARNING"
+    },
+    {
+      "id": "W-3",
+      "title": "collect_task_cost error handling silently swallows all failures",
+      "file": "src/services/task_completion_service.py",
+      "line": 842,
+      "severity": "WARNING"
+    },
+    {
+      "id": "W-4",
+      "title": "BudgetPausedLabel component exists but is never rendered",
+      "file": "frontend/src/components/cost/BudgetPausedLabel.tsx",
+      "line": 1,
+      "severity": "WARNING"
+    },
+    {
+      "id": "W-5",
+      "title": "Dashboard ProjectCostSummary has no onConfigureBudget handler",
+      "file": "frontend/src/pages/Dashboard.tsx",
+      "line": 280,
+      "severity": "WARNING"
+    },
+    {
+      "id": "W-6",
+      "title": "derive_workflow_cost rollup triggers 5 redundant SUM queries per record_cost call",
+      "file": "src/core/cost_derivation.py",
+      "line": 125,
+      "severity": "WARNING"
+    }
+  ],
+  "nits": [
+    {
+      "id": "N-1",
+      "title": "CostEntry.id uses 32-bit random suffix — collision risk at scale",
+      "file": "src/core/cost_derivation.py",
+      "line": 68,
+      "severity": "NIT"
+    },
+    {
+      "id": "N-2",
+      "title": "FeatureCostBadge threshold ($5) is arbitrary and hardcoded",
+      "file": "frontend/src/components/cost/FeatureCostBadge.tsx",
+      "line": 28,
+      "severity": "NIT"
+    },
+    {
+      "id": "N-3",
+      "title": "Inconsistent cost formatting across frontend components",
+      "file": "frontend/src/components/cost/",
+      "line": 0,
+      "severity": "NIT"
+    }
+  ],
+  "review_criteria_coverage": {
+    "exception_propagation": "Covered — checked all public functions for silent exception swallowing (found W-3, W-1)",
+    "race_conditions": "Covered — checked concurrent cost writes, TOCTOU in update_project (found B-1), session management in get_db",
+    "error_handling": "Covered — checked all except blocks for silent swallows (found W-3, WARNING in orchestrator repair path)",
+    "defaults_and_constants": "Covered — checked hardcoded prices (W-2), cost cap (B-5), URL defaults (B-2), port defaults (B-2)",
+    "db_operations": "Covered — checked connection leaks in get_db context manager, missing rollup paths (B-3)",
+    "cascade_invariants": "Covered — checked cost derivation rollup chain, found missing join paths (B-3)",
+    "code_composition": "Covered — checked separation of concerns between record_cost/derive_*/collect_task_cost, found validation bypass (B-5)",
+    "polymorphism_vs_conditionals": "Covered — cost collectors use proper ABC/polymorphism pattern (PiJsonlCollector, ClaudeCodeCollector, etc.)",
+    "complex_logic_location": "Covered — cost derivation logic properly pushed to cost_derivation.py module"
+  }
 }
