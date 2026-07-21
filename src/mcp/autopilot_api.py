@@ -478,8 +478,11 @@ async def get_pipeline_status(
         from src.core.database import AutopilotDesign, get_db
         try:
             with get_db() as db:
-                queue_depth = db.query(AutopilotDesign).filter_by(
-                    project_id=project_id, status="pending"
+                queue_depth = db.query(AutopilotDesign).filter(
+                    AutopilotDesign.project_id == project_id,
+                    AutopilotDesign.status.notin_([
+                        "completed", "failed", "skipped"
+                    ])
                 ).count()
         except Exception:
             pass
