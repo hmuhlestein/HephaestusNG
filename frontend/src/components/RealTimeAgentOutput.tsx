@@ -224,7 +224,7 @@ const RealTimeAgentOutput: React.FC<RealTimeAgentOutputProps> = ({
       const isLast = i === lines.length - 1;
       if (isNoiseLine(stripped)) {
         // Keep spinner on last line so user sees the agent is thinking
-        if (isLast && /^(Thinking|Working)\.?$/.test(stripped)) {
+        if (isLast && /^(Thinking|Working)\.\.?\.?$/.test(stripped)) {
           filtered.push(line);
         }
         continue;
