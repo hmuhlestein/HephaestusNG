@@ -3639,7 +3639,7 @@ async def stop_pipeline(clear_state: bool = False, project_id: Optional[str] = N
         project_id: If provided, only stop workflows for this project
     """
     from src.autopilot.service import get_autopilot_service, get_registry
-    from src.core.database import Agent, Task, get_db
+    from src.core.database import get_db
 
     # Stop the service(s) (this stops the pipeline task). With project_id,
     # stop just that project's service; without one, preserve the old
@@ -3664,65 +3664,17 @@ async def stop_pipeline(clear_state: bool = False, project_id: Optional[str] = N
         result = {"stopped": stopped_any, **aggregate} if stopped_any else {"stopped": True, "message": "Pipeline was not running"}
 
     # Terminate autopilot agents and pause workflows
+    # Uses shared _pause_project_workflows which includes Phase 0 workflows
+    # (definition_id in ["autopilot", "autopilot-phase0"]).
     terminated_count = 0
     try:
+        from src.core.cost_derivation import _pause_project_workflows
+
         with get_db() as db:
-            from src.core.database import Workflow
-
-            query = db.query(Workflow).filter_by(definition_id="autopilot").filter(Workflow.status.in_(["active", "running"]))
-            if project_id:
-                query = query.filter(Workflow.project_id == project_id)
-
-            autopilot_wf_ids = [wf.id for wf in query.all()]
-
-            if autopilot_wf_ids:
-                task_ids = [t.id for t in db.query(Task).filter(Task.workflow_id.in_(autopilot_wf_ids)).filter(Task.status.in_(["pending", "queued", "assigned", "in_progress"])).all()]
-
-                if task_ids:
-                    agents = db.query(Agent).filter(Agent.current_task_id.in_(task_ids)).filter(Agent.status.in_(["working", "starting", "idle"])).all()
-                    for agent in agents:
-                        try:
-                            agent.status = "terminated"
-                            agent.current_task_id = None  # Clear stale reference
-                            agent.terminated_at = datetime.utcnow()
-                            terminated_count += 1
-                        except Exception:
-                            pass
-
-                # Also terminate agents that are still "working" but whose
-                # tasks are already done/failed -- stale agents that weren't
-                # cleaned up properly (e.g. task completed while agent was
-                # still processing, or agent didn't get the termination signal)
-                stale_agents = (
-                    db.query(Agent)
-                    .join(Task, Agent.current_task_id == Task.id)
-                    .filter(
-                        Task.workflow_id.in_(autopilot_wf_ids),
-                        Agent.status.in_(["working", "starting", "idle"]),
-                        Task.status.in_(["done", "failed"]),
-                    )
-                    .all()
-                )
-                for agent in stale_agents:
-                    try:
-                        logger.info(f"Terminating stale agent {agent.id[:8]} (task {agent.current_task_id[:8]} is {agent.current_task_id and 'done'})")
-                        agent.status = "terminated"
-                        agent.current_task_id = None
-                        agent.terminated_at = datetime.utcnow()
-                        terminated_count += 1
-                    except Exception:
-                        pass
-
-                # paused_by="user" is what every self-heal/retry path (e.g.
-                # _create_corrective_task, the stuck-workflow restart in
-                # attempt_recovery) actually checks before auto-resuming a
-                # paused workflow -- setting only status="paused" here left
-                # it invisible to those checks, so the very next phase-
-                # advancement sweep would recreate a task/agent and silently
-                # un-pause the pipeline within seconds of the user clicking
-                # pause.
-                db.query(Workflow).filter(Workflow.id.in_(autopilot_wf_ids)).update({Workflow.status: "paused", Workflow.paused_by: "user"})
-                db.commit()
+            for pid in stopped_project_ids:
+                paused = _pause_project_workflows(db, pid, paused_by="user")
+                terminated_count += paused
+            db.commit()
     except Exception as e:
         logger.error(f"Error cleaning up autopilot agents: {e}")
 

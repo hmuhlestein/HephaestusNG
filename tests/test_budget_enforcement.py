@@ -192,8 +192,52 @@ class TestPauseProjectWorkflows:
         db_session.commit()
         db_session.refresh(active_autopilot_workflow)
         assert active_autopilot_workflow.paused_by == "user"
-        # User-paused does NOT set status_reason
         assert active_autopilot_workflow.status_reason is None
+
+    def test_user_pause_clears_stale_budget_reason(self, db_session, active_autopilot_workflow):
+        """User pause should clear any stale budget status_reason (WARNING-3)."""
+        # Simulate a workflow that had a stale budget status_reason
+        # (e.g., from a previous budget pause that was partially cleared)
+        active_autopilot_workflow.status_reason = "Budget limit reached"
+        db_session.commit()
+
+        # Now pause by user (simulating /autopilot/stop)
+        _pause_project_workflows(
+            db_session, active_autopilot_workflow.project_id, paused_by="user"
+        )
+        db_session.commit()
+        db_session.refresh(active_autopilot_workflow)
+        assert active_autopilot_workflow.paused_by == "user"
+        assert active_autopilot_workflow.status_reason is None  # Cleared!
+
+    def test_terminates_starting_agents(self, db_session, active_autopilot_workflow):
+        """Agents with status='starting' should be terminated (WARNING-1)."""
+        # Create a starting agent
+        starting_agent = Agent(
+            id=f"agent-{uuid.uuid4().hex[:8]}",
+            system_prompt="Test prompt",
+            cli_type="pi",
+            status="starting",
+        )
+        db_session.add(starting_agent)
+        task = Task(
+            id=f"task-{uuid.uuid4().hex[:8]}",
+            raw_description="Test task",
+            done_definition="Done",
+            workflow_id=active_autopilot_workflow.id,
+            assigned_agent_id=starting_agent.id,
+        )
+        db_session.add(task)
+        db_session.commit()
+        starting_agent.current_task_id = task.id
+        db_session.commit()
+
+        _pause_project_workflows(
+            db_session, active_autopilot_workflow.project_id, paused_by="budget"
+        )
+        db_session.commit()
+        db_session.refresh(starting_agent)
+        assert starting_agent.status == "terminated"  # Starting agents must be terminated
 
 
 # ── Test: check_budget_before_new_work ──────────────────────────
@@ -306,6 +350,8 @@ class TestPausedByGeneralization:
 
 
 class TestPickNextDesignBudgetGuard:
+    """Behavioral tests for budget guards (replaces source inspection - NIT-1)."""
+
     def test_check_budget_blocks_over_budget_project(self, db_session, project, workflow_def):
         """check_budget_before_new_work returns False when over budget."""
         project.cost_limit_usd = 10.0
@@ -322,27 +368,21 @@ class TestPickNextDesignBudgetGuard:
 
         assert check_budget_before_new_work(db_session, project.id) is True
 
-    def test_budget_guard_is_wired_into_pick_next_design(self):
-        """pick_next_design contains check_budget_before_new_work call."""
-        import inspect
+    def test_check_budget_allows_no_limit_set(self, db_session, project, workflow_def):
+        """check_budget_before_new_work returns True when no limit is set."""
+        project.cost_limit_usd = None
+        project.cost_total_usd = 9999.0
+        db_session.commit()
 
-        from src.autopilot.orchestrator import pick_next_design
+        assert check_budget_before_new_work(db_session, project.id) is True
 
-        src = inspect.getsource(pick_next_design)
-        assert "check_budget_before_new_work" in src, (
-            "pick_next_design should call check_budget_before_new_work"
-        )
+    def test_budget_guard_blocks_at_exact_limit(self, db_session, project, workflow_def):
+        """Budget guard blocks when cost equals limit."""
+        project.cost_limit_usd = 100.0
+        project.cost_total_usd = 100.0
+        db_session.commit()
 
-    def test_budget_guard_is_wired_into_run_one_feature(self):
-        """_run_one_feature contains check_budget_before_new_work call."""
-        import inspect
-
-        from src.autopilot.orchestrator import _run_one_feature
-
-        src = inspect.getsource(_run_one_feature)
-        assert "check_budget_before_new_work" in src, (
-            "_run_one_feature should call check_budget_before_new_work"
-        )
+        assert check_budget_before_new_work(db_session, project.id) is False
 
 
 # ── Test: PUT /projects/{id} clears budget-paused workflows ────
