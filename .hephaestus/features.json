@@ -37,7 +37,8 @@
       ],
       "depends_on": [
         "cost-schema",
-        "cost-derivation"
+        "cost-derivation",
+        "budget-enforcement"
       ],
       "execution": "parallel"
     },
