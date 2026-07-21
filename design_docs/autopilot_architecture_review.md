@@ -982,73 +982,43 @@ the seeded test drives `failed_tests ≥ 1` → `goto development` → reconverg
 **and** an abandoned required phase escalates to impasse rather than skipping. Do not
 start the Tier 2/3 remainder until then.
 
-### 11.3 Remaining (prioritized, after the smoke run)
+### 11.3 Remaining (prioritized, current as of 2026-07-21)
+
+Everything previously listed here that has landed — self-review loop,
+architect-as-adversarial-reviewer, spec-gate/abandoned-phase fixes — has been
+moved to the §11.1 done table. What's actually still open:
+
+**B9 (new, 2026-07) — human-input mailbox is not project/design scoped.**
+`AUTOPILOT_STATE_DIR` (`~/.hephaestus/autopilot`) is a single global
+directory; `prompt_human()` (`orchestrator.py:1782`) and the
+`HumanInputRequest`/`HumanInputResponse` models (`autopilot_api.py:3415`)
+carry no `project_id`/`design_id`/`workflow_id`. `_find_pending_input()`
+(`autopilot_api.py:3429`) just returns the first non-stale
+`input_request_*.json` in glob-sort order (effectively random — filenames
+are `uuid4()[:8]`). Since multi-project concurrency shipped (§9 item 2,
+above), **two concurrent projects' orchestrators can each be blocked on
+`prompt_human()` at once**, and the UI/API have no way to tell the requests
+apart — answering "the" pending request can resolve the wrong project's
+prompt. This is strictly worse than the original **B4** TOCTOU finding, not
+just a duplicate of it, and raises the priority of Tier 2 item 1 below.
 
 **Tier 2 — finish in-process service + events (P3/P5/P6):**
-1. Human-input → `autopilot_interventions` DB table + `asyncio.Condition`; UI submits via REST (fixes **B4** TOCTOU, **B7** option-vocab; removes `input_request_*.json`).
-2. `/api/autopilot/stream` (WS/SSE); move UI off interval polling.
-3. Persist `PipelineState`/messages/events to DB (not `pipeline_state.json` / `events.jsonl`); register the service with backend startup/shutdown hooks (closes the module-singleton, state-lost-on-restart gap).
-4. **Split `OrchestratorLogger`** (`orchestrator.py:259`) — conflates logging (138 sites), an event sink (`event()`→`events.jsonl`), and state (`save_state()`→`state.json`). Logging → stdlib `logging.getLogger("autopilot.orchestrator")` with a **per-run `FileHandler` only** (the in-process `print(...)` currently double-logs); `event()`/`save_state()` → DB/event stream (item 3). Migrate the only consumers: `autopilot_api.py` `_get_latest_run_dir`/`_read_jsonl_tail` + status/logs/messages endpoints, and CLI status. *Don't remove the files standalone.* Only instance of the pattern in `src/`.
+1. **Human-input → `autopilot_interventions` DB table + `asyncio.Condition`**; UI submits via REST (fixes **B4** TOCTOU, **B7** option-vocab — now consistent, `c`/`s`/`q`/`m` on both sides — and **B9** above by construction, since a DB row naturally carries `design_id`/`workflow_id`). Removes `input_request_*.json`/`input_response_*.json`. **Still not started** — see the companion spec, `design_docs/human_input_intervention_system.md`, written to be handed to the pipeline as the next self-hosted feature.
+2. `/api/autopilot/stream` (WS/SSE); move UI off interval polling. Still not started — no WebSocket/SSE endpoint exists in `autopilot_api.py`.
+3. Persist `PipelineState`/messages/events to DB (not `pipeline_state.json` / `events.jsonl`); register the service with backend startup/shutdown hooks (closes the module-singleton, state-lost-on-restart gap). Still not started — both files are still actively read/written in `orchestrator.py` and `autopilot_api.py`.
+4. **Split `OrchestratorLogger`** (`orchestrator.py:630`, was `:259` when this doc was written — the file has grown) — still one class conflating logging, an event sink (`event()`→`events.jsonl`), and state (`save_state()`→`state.json`). Not started.
 
-**Tier 3 — unify the queue / design intake (P4):** see **§9.3** — DB-authoritative; kill the forced `<project>/docs/design-queue`; file-drop becomes one optional config-located importer; merge `/queue/*` + `/projects/{id}/designs/*`; retire frontend file-queue calls; drop the `queue_order` sidecar.
+**Tier 3 — unify the queue / design intake (P4):** see **§9.3** — DB-authoritative; kill the forced `<project>/docs/design-queue`; file-drop becomes one optional config-located importer; merge `/queue/*` + `/projects/{id}/designs/*`; retire frontend file-queue calls; drop the `queue_order` sidecar. **Still not done** — `_get_queue_order_path`/`_load_queue_order`/`_save_queue_order` (`autopilot_api.py:545-568`, called from 5 route handlers) still maintain `.queue_order.json` alongside the DB `autopilot_designs` table.
 
-**Tier 4 — C4.4:** ensure `prompt_human` has no blocking `input()` under API spawn (moot once Tier 2 #1 lands).
+**Tier 4 — C4.4:** ensure `prompt_human` has no blocking `input()` under API spawn (moot once Tier 2 #1 lands — still open since #1 hasn't landed; the terminal-input branch at `orchestrator.py:1864` is still live).
 
-**Tier 5.3 — decomposition:** split `autopilot_api.py` (~2560), `orchestrator.py` (~2300), `Autopilot.tsx` (~3200).
+**Tier 5.3 — decomposition:** split `autopilot_api.py` and `orchestrator.py`. **Status: went the wrong direction.** `autopilot_api.py` is now **3968 lines** (52 route handlers, still one file; was ~2560), `orchestrator.py` is now **8361 lines** (was ~2300) — both roughly grew instead of splitting as new features (multi-project, worktree isolation, spec gate, credit/session-limit handling) landed inside them rather than in new modules. **The frontend half of this item is done**, though: `Autopilot.tsx` is down to **413 lines** (was ~3200), with 11 components extracted to `frontend/src/components/autopilot/` (`PipelineStatusCard`, `DesignQueuePanel`, `FeatureGallery`, `HumanInputBanner`, `MessageCenter`, etc.) — the proposed frontend split happened even though the backend one didn't. **Backend split now specced:** `design_docs/backend_module_decomposition.md` — a grounded, line-range-mapped extraction plan for both files, sequenced to not collide with the human-input intervention spec below.
 
-**Spec-gate follow-ups (§9.1):** real-run validation (phases 7/8 actually emit the JSON; `[SPEC-GATE]` scores sane); per-project spec in DB + UI (`spec.py:load_spec` already takes a path); optional Conductor judgement instead of agent self-grading; verify the autopilot definition keeps `orchestrator_config.type == "evaluating"`.
+**Spec-gate follow-ups (§9.1):** real-run validation (phases 7/8 actually emit the JSON; `[SPEC-GATE]` scores sane) — done implicitly by the output-existence floor, but a live multi-run confirmation hasn't been recorded here; per-project spec in DB + UI (`spec.py:load_spec` already takes a path) — not done; optional Conductor judgement instead of agent self-grading — not done; verify the autopilot definition keeps `orchestrator_config.type == "evaluating"` — not re-verified.
 
-**Worktree follow-ups (small):** verify validators get a correct worktree/commit (`validator_agent` + `create_agent_for_task(use_existing_worktree=…, commit_sha=…)`); first-run smoke on a repo with legacy `agent-*` branches.
+**Worktree follow-ups (small):** verify validators get a correct worktree/commit (`validator_agent` + `create_agent_for_task(use_existing_worktree=…, commit_sha=…)`); first-run smoke on a repo with legacy `agent-*` branches. Not re-verified this pass.
 
-**Architect-as-adversarial-reviewer (§10.1.1):** replace the generic adversarial
-review phase (phase 4) with the architect agent re-invoked after development.
-The architect has warm design context (`architecture.md` + `requirements_analysis.md`)
-and can catch design violations, architecture deviations, and over-engineering that
-a cold generic reviewer misses. Implementation:
-- Update `phase_4_adversarial_review.py` prompt to instruct the agent to act as the
-  architect reviewing implementation against the design.
-- Agent spawning for phase 4 should pass `architecture.md` and `requirements_analysis.md`
-  as context (read from `.hephaestus/` in the shared worktree).
-- Update evaluation points: `score < 0.3 → goto architecture_design`,
-  `score < 0.7 → goto development`, `score >= 0.7 → continue`.
-- Zero additional LLM calls (replaces the generic reviewer 1:1).
-
-**Near-term enhancement — one-shot intra-agent self-review at completion.**
-See `docs/GAP_CHECK_SELF_LOOP_DESIGN.md` for the full design (verified against
-current code: exact hook-point line numbers, the `Task.review_done` vs.
-`self_review_done` column conflict, the `kept_alive_for_validation` dead-flag
-precedent to avoid repeating, and confirmation via `git show cc35043` that the
-removed Tier-1 nudge block was an unrelated stuck-agent mechanism, not this
-same idea under an old name). Empirically,
-a dev agent asked to "find your own gaps and fix them" right after it thinks it's done
-catches a lot, because it has *peak, warm context* — cheaper and higher-yield than a cold
-review agent rebuilding context. Implement as a deterministic, bounded self-review gate at
-the agent's own completion moment:
-- **Hook the completion signal**, not `send_message`: in the `/update_task_status` handler
-  (`server.py:1794`), when a change-producing phase's agent first sets `status="done"`.
-- **One-shot flag (mandatory), set *before* the message** so a crash can't re-trigger:
-  reuse the existing `tasks.review_done` (or add `self_review_done`). On first `done`: set
-  the flag, *don't* complete, `send_message_to_agent` a focused checklist, return
-  "not done yet — do this, then mark done again." Second `done` → complete normally.
-- **Checklist, not "review for gaps"**: re-read design/requirements; every requirement
-  implemented; edge cases + error handling; tests exist for new code and pass; no
-  TODOs/stubs/dead code; record changes in `completion_notes`.
-- **Scope via phase config (`self_review: true`)** — development and the "fix" phases
-  (adversarial/security/doc review); skip pure-reporting phases (requirements, qa,
-  product-validation, forensics). Opt-in, not hardcoded.
-- **Distinct from, and complementary to, the two review mechanisms** — it is *not* §10.1's
-  reviewer evaluation point (a separate critic at phase boundaries, cold context) and *not*
-  the §9.1 spec gate (the independent hard-floor at QA). Self-review is a cheap warm-context
-  *pre-filter* that reduces how often the gate sends work back (fewer `goto development`
-  round-trips → less of the cost/latency Run A exposed); the gate stays as the independent
-  floor. Do **not** let self-review replace it. Also **not** the removed Tier-1 nudge loop
-  (that was real-time output parsing; this is one deterministic message at one event).
-- **Add telemetry**: log when self-review fires and diff the tree before/after the second
-  `done`, to measure whether one pass is the right number.
-- **Sequencing:** after the SPEC-GATE fix + Run B (a self-review pass on a pipeline that
-  can't reach the gate doesn't help). Small; the phase-config toggle makes per-phase rollout safe.
-
-**Defer (v2-horizon):** §10 (collaborative review + GitHub-as-projection); module splits; Conductor judgement; per-project spec UI.
+**Defer (v2-horizon):** §10 (collaborative review + GitHub-as-projection); backend module splits (Tier 5.3, backend half); Conductor judgement; per-project spec UI.
 
 ### 11.4 Test / infra notes
 - `.venv` lacked pytest; `pytest` 9.x is incompatible with the `libtmux` plugin → always `-p no:libtmux`. Consider pinning `pytest<9` or disabling the plugin in `pyproject.toml`/`conftest.py`.
