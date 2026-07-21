@@ -15,6 +15,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
@@ -37,16 +38,18 @@ logger = logging.getLogger(__name__)
 # Status enums - use these instead of string literals for type safety (L-1)
 class AgentStatus:
     """Valid agent status values."""
+
     IDLE = "idle"
     WORKING = "working"
     STUCK = "stuck"
     TERMINATED = "terminated"
-    
+
     ALL = {IDLE, WORKING, STUCK, TERMINATED}
 
 
 class TaskStatus:
     """Valid task status values."""
+
     PENDING = "pending"
     QUEUED = "queued"
     BLOCKED = "blocked"
@@ -58,29 +61,30 @@ class TaskStatus:
     DONE = "done"
     FAILED = "failed"
     DUPLICATED = "duplicated"
-    
-    ALL = {PENDING, QUEUED, BLOCKED, ASSIGNED, IN_PROGRESS, UNDER_REVIEW,
-           VALIDATION_IN_PROGRESS, NEEDS_WORK, DONE, FAILED, DUPLICATED}
-    
+
+    ALL = {PENDING, QUEUED, BLOCKED, ASSIGNED, IN_PROGRESS, UNDER_REVIEW, VALIDATION_IN_PROGRESS, NEEDS_WORK, DONE, FAILED, DUPLICATED}
+
     # Terminal states (no further transitions expected)
     TERMINAL = {DONE, FAILED, DUPLICATED}
-    
+
     # Active states (work in progress)
     ACTIVE = {ASSIGNED, IN_PROGRESS, UNDER_REVIEW, VALIDATION_IN_PROGRESS, NEEDS_WORK}
 
 
 class WorkflowStatus:
     """Valid workflow status values."""
+
     ACTIVE = "active"
     PAUSED = "paused"
     COMPLETED = "completed"
     FAILED = "failed"
-    
+
     ALL = {ACTIVE, PAUSED, COMPLETED, FAILED}
 
 
 class FeatureStatus:
     """Valid feature status values."""
+
     PENDING = "pending"
     ACTIVE = "active"
     PAUSED = "paused"
@@ -88,23 +92,25 @@ class FeatureStatus:
     FAILED = "failed"
     SKIPPED = "skipped"
     VALIDATED = "validated"
-    
+
     ALL = {PENDING, ACTIVE, PAUSED, COMPLETED, FAILED, SKIPPED, VALIDATED}
 
 
 class PhaseExecutionStatus:
     """Valid phase execution status values."""
+
     PENDING = "pending"
     IN_PROGRESS = "in_progress"
     COMPLETED = "completed"
     FAILED = "failed"
     SKIPPED = "skipped"
-    
+
     ALL = {PENDING, IN_PROGRESS, COMPLETED, FAILED, SKIPPED}
 
 
 class DesignStatus:
     """Valid autopilot design status values."""
+
     PENDING = "pending"
     QUEUED = "queued"
     ACTIVE = "active"
@@ -112,7 +118,7 @@ class DesignStatus:
     COMPLETED = "completed"
     FAILED = "failed"
     VALIDATED = "validated"
-    
+
     ALL = {PENDING, QUEUED, ACTIVE, PAUSED, COMPLETED, FAILED, VALIDATED}
 
 
@@ -162,9 +168,7 @@ class Agent(Base):
     # Validation-related fields
     agent_type = Column(
         String,
-        CheckConstraint(
-            "agent_type IN ('phase', 'validator', 'result_validator', 'monitor', 'diagnostic', 'orchestrator')"
-        ),
+        CheckConstraint("agent_type IN ('phase', 'validator', 'result_validator', 'monitor', 'diagnostic', 'orchestrator')"),
         default="phase",
         nullable=False,
     )
@@ -194,9 +198,7 @@ class Task(Base):
     done_definition = Column(Text, nullable=False)
     status = Column(
         String,
-        CheckConstraint(
-            "status IN ('pending', 'queued', 'blocked', 'assigned', 'in_progress', 'under_review', 'validation_in_progress', 'needs_work', 'done', 'failed', 'duplicated')"
-        ),
+        CheckConstraint("status IN ('pending', 'queued', 'blocked', 'assigned', 'in_progress', 'under_review', 'validation_in_progress', 'needs_work', 'done', 'failed', 'duplicated')"),
         default="pending",
         nullable=False,
     )
@@ -209,9 +211,7 @@ class Task(Base):
     parent_task_id = Column(String, ForeignKey("tasks.id"))
     created_by_agent_id = Column(String, ForeignKey("agents.id"))
     phase_id = Column(String, ForeignKey("phases.id"))  # Phase this task belongs to
-    workflow_id = Column(
-        String, ForeignKey("workflows.id")
-    )  # Workflow this task is part of
+    workflow_id = Column(String, ForeignKey("workflows.id"))  # Workflow this task is part of
     started_at = Column(DateTime)
     completed_at = Column(DateTime)
     completion_notes = Column(Text)
@@ -264,36 +264,25 @@ class Task(Base):
     # Queue management fields
     queued_at = Column(DateTime)  # When task was queued
     queue_position = Column(Integer)  # Position in queue (for UI display)
-    priority_boosted = Column(
-        Boolean, default=False
-    )  # If manually boosted to bypass queue
+    priority_boosted = Column(Boolean, default=False)  # If manually boosted to bypass queue
 
     # Task dependency and concurrency fields
     depends_on = Column(JSON)  # List of task IDs that must complete before this one
-    parallel_group = Column(
-        String
-    )  # Tasks in same group can run in parallel; different groups are sequential
-    max_concurrent = Column(
-        Integer, default=1
-    )  # Max agents working on this task simultaneously
+    parallel_group = Column(String)  # Tasks in same group can run in parallel; different groups are sequential
+    max_concurrent = Column(Integer, default=1)  # Max agents working on this task simultaneously
 
     # Ticket tracking integration
-    ticket_id = Column(
-        String, ForeignKey("tickets.id")
-    )  # Associated ticket (required when ticket tracking enabled)
+    ticket_id = Column(String, ForeignKey("tickets.id"))  # Associated ticket (required when ticket tracking enabled)
     related_ticket_ids = Column(JSON)  # List of related ticket IDs for context
+
+    # Cost tracking - denormalized rollup (self-healed by cost_derivation.py)
+    cost_total_usd = Column(Float, default=0.0, nullable=False)
 
     # Relationships
     assigned_agent = relationship("Agent", foreign_keys=[assigned_agent_id])
-    duplicate_of = relationship(
-        "Task", remote_side=[id], foreign_keys=[duplicate_of_task_id], post_update=True
-    )
-    parent_task = relationship(
-        "Task", remote_side=[id], foreign_keys=[parent_task_id], backref="subtasks"
-    )
-    created_by_agent = relationship(
-        "Agent", back_populates="created_tasks", foreign_keys=[created_by_agent_id]
-    )
+    duplicate_of = relationship("Task", remote_side=[id], foreign_keys=[duplicate_of_task_id], post_update=True)
+    parent_task = relationship("Task", remote_side=[id], foreign_keys=[parent_task_id], backref="subtasks")
+    created_by_agent = relationship("Agent", back_populates="created_tasks", foreign_keys=[created_by_agent_id])
     memories = relationship("Memory", back_populates="task")
     phase = relationship("Phase", back_populates="tasks")
     workflow = relationship("Workflow", backref="tasks")
@@ -312,9 +301,7 @@ class Memory(Base):
     content = Column(Text, nullable=False)
     memory_type = Column(
         String,
-        CheckConstraint(
-            "memory_type IN ('error_fix', 'discovery', 'decision', 'learning', 'warning', 'codebase_knowledge')"
-        ),
+        CheckConstraint("memory_type IN ('error_fix', 'discovery', 'decision', 'learning', 'warning', 'codebase_knowledge')"),
         nullable=False,
     )
     embedding_id = Column(String)  # Reference to vector store
@@ -335,12 +322,8 @@ class AgentLog(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     timestamp = Column(DateTime, default=datetime.utcnow, nullable=False)
-    created_at = Column(
-        DateTime, default=datetime.utcnow, nullable=False
-    )  # Added for compatibility
-    agent_id = Column(
-        String, ForeignKey("agents.id"), nullable=True
-    )  # Made nullable for conductor logs
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)  # Added for compatibility
+    agent_id = Column(String, ForeignKey("agents.id"), nullable=True)  # Made nullable for conductor logs
     log_type = Column(
         String,
         nullable=False,
@@ -373,12 +356,8 @@ class WorkflowDefinition(Base):
     name = Column(String, nullable=False)  # "PRD to Software Builder"
     description = Column(String)
     phases_config = Column(JSON)  # Serialized phase definitions
-    workflow_config = Column(
-        JSON
-    )  # has_result, result_criteria, on_result_found, launch_template, etc.
-    orchestrator_config = Column(
-        JSON
-    )  # Orchestrator config for phase evaluation and flow control
+    workflow_config = Column(JSON)  # has_result, result_criteria, on_result_found, launch_template, etc.
+    orchestrator_config = Column(JSON)  # Orchestrator config for phase evaluation and flow control
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     # Relationships
@@ -392,9 +371,7 @@ class Workflow(Base):
 
     id = Column(String, primary_key=True)
     name = Column(String, nullable=False)
-    description = Column(
-        String
-    )  # User-provided name/description for this execution (e.g., "My URL Shortener")
+    description = Column(String)  # User-provided name/description for this execution (e.g., "My URL Shortener")
     phases_folder_path = Column(String, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     status = Column(
@@ -411,9 +388,7 @@ class Workflow(Base):
     design_id = Column(String, ForeignKey("autopilot_designs.id"), nullable=True)
 
     # Denormalized project_id for direct filtering (set from design.project_id)
-    project_id = Column(
-        String, ForeignKey("autopilot_projects.id", ondelete="SET NULL"), nullable=True
-    )
+    project_id = Column(String, ForeignKey("autopilot_projects.id", ondelete="SET NULL"), nullable=True)
 
     # Working directory for this execution (can override default)
     working_directory = Column(String)
@@ -473,19 +448,16 @@ class Workflow(Base):
     # why it stopped. Cleared when the workflow becomes active/completed.
     status_reason = Column(String, nullable=True)
 
+    # Cost tracking - denormalized rollup (self-healed by cost_derivation.py)
+    cost_total_usd = Column(Float, default=0.0, nullable=False)
+
     # Relationships
     definition = relationship("WorkflowDefinition", back_populates="executions")
-    design = relationship(
-        "AutopilotDesign", foreign_keys=[design_id], backref="workflows"
-    )
-    project = relationship(
-        "AutopilotProject", foreign_keys=[project_id], backref="workflows"
-    )
+    design = relationship("AutopilotDesign", foreign_keys=[design_id], backref="workflows")
+    project = relationship("AutopilotProject", foreign_keys=[project_id], backref="workflows")
     phases = relationship("Phase", back_populates="workflow", order_by="Phase.order")
     result = relationship("WorkflowResult", foreign_keys=[result_id])
-    all_results = relationship(
-        "WorkflowResult", foreign_keys="WorkflowResult.workflow_id"
-    )
+    all_results = relationship("WorkflowResult", foreign_keys="WorkflowResult.workflow_id")
     feature = relationship("Feature", foreign_keys=[feature_id])
 
 
@@ -503,9 +475,7 @@ class Phase(Base):
     additional_notes = Column(Text)
     outputs = Column(Text)  # Expected outputs description
     next_steps = Column(Text)  # Instructions for next phase
-    working_directory = Column(
-        String
-    )  # Default working directory for agents in this phase
+    working_directory = Column(String)  # Default working directory for agents in this phase
 
     # Validation configuration
     validation = Column(JSON)  # Stores validation criteria and settings
@@ -516,18 +486,10 @@ class Phase(Base):
     self_review = Column(JSON)
 
     # Per-phase CLI configuration (optional - falls back to global defaults)
-    cli_tool = Column(
-        String, nullable=True
-    )  # "claude", "opencode", "droid", "codex", "pi", "swarm"
-    cli_model = Column(
-        String, nullable=True
-    )  # "sonnet", "opus", "haiku", "GLM-4.6", etc.
-    glm_api_token_env = Column(
-        String, nullable=True
-    )  # Environment variable name for GLM token
-    thinking_level = Column(
-        String, nullable=True
-    )  # pi reasoning budget: off|minimal|low|medium|high|xhigh
+    cli_tool = Column(String, nullable=True)  # "claude", "opencode", "droid", "codex", "pi", "swarm"
+    cli_model = Column(String, nullable=True)  # "sonnet", "opus", "haiku", "GLM-4.6", etc.
+    glm_api_token_env = Column(String, nullable=True)  # Environment variable name for GLM token
+    thinking_level = Column(String, nullable=True)  # pi reasoning budget: off|minimal|low|medium|high|xhigh
 
     # Persisted count of WorkflowOrchestrator's per-phase RETRY evaluations
     # (eval_point.max_retries). Same architectural issue as
@@ -554,9 +516,7 @@ class PhaseExecution(Base):
     workflow_execution_id = Column(String)  # For tracking multiple workflow runs
     status = Column(
         String,
-        CheckConstraint(
-            "status IN ('pending', 'in_progress', 'completed', 'failed', 'skipped')"
-        ),
+        CheckConstraint("status IN ('pending', 'in_progress', 'completed', 'failed', 'skipped')"),
         default="pending",
         nullable=False,
     )
@@ -633,9 +593,7 @@ class WorktreeCommit(Base):
     commit_sha = Column(String, unique=True, nullable=False)
     commit_type = Column(
         String,
-        CheckConstraint(
-            "commit_type IN ('parent_checkpoint', 'validation_ready', 'final', 'auto_save', 'conflict_resolution')"
-        ),
+        CheckConstraint("commit_type IN ('parent_checkpoint', 'validation_ready', 'final', 'auto_save', 'conflict_resolution')"),
         nullable=False,
     )
     commit_message = Column(Text, nullable=False)
@@ -694,9 +652,7 @@ class MergeConflictResolution(Base):
     commit_sha = Column(String, ForeignKey("worktree_commits.commit_sha"))
 
     # Relationships
-    agent = relationship(
-        "Agent", backref="conflict_resolutions", overlaps="conflict_resolutions"
-    )
+    agent = relationship("Agent", backref="conflict_resolutions", overlaps="conflict_resolutions")
     worktree = relationship(
         "AgentWorktree",
         back_populates="conflict_resolutions",
@@ -719,17 +675,13 @@ class AgentResult(Base):
     markdown_file_path = Column(Text, nullable=False)
     result_type = Column(
         String,
-        CheckConstraint(
-            "result_type IN ('implementation', 'analysis', 'fix', 'design', 'test', 'documentation')"
-        ),
+        CheckConstraint("result_type IN ('implementation', 'analysis', 'fix', 'design', 'test', 'documentation')"),
         nullable=False,
     )
     summary = Column(Text, nullable=False)
     verification_status = Column(
         String,
-        CheckConstraint(
-            "verification_status IN ('unverified', 'verified', 'disputed')"
-        ),
+        CheckConstraint("verification_status IN ('unverified', 'verified', 'disputed')"),
         default="unverified",
         nullable=False,
     )
@@ -753,9 +705,7 @@ class WorkflowResult(Base):
     agent_id = Column(String, ForeignKey("agents.id"), nullable=False)
     result_file_path = Column(Text, nullable=False)
     result_content = Column(Text, nullable=False)
-    extra_files = Column(
-        JSON, nullable=True, default=list
-    )  # List of additional file paths (e.g., patches, reproduction scripts)
+    extra_files = Column(JSON, nullable=True, default=list)  # List of additional file paths (e.g., patches, reproduction scripts)
     status = Column(
         String,
         CheckConstraint("status IN ('pending_validation', 'validated', 'rejected')"),
@@ -769,9 +719,7 @@ class WorkflowResult(Base):
     validated_at = Column(DateTime)
 
     # Relationships
-    workflow = relationship(
-        "Workflow", foreign_keys=[workflow_id], back_populates="all_results"
-    )
+    workflow = relationship("Workflow", foreign_keys=[workflow_id], back_populates="all_results")
     agent = relationship("Agent", foreign_keys=[agent_id], backref="workflow_results")
     validator_agent = relationship("Agent", foreign_keys=[validated_by_agent_id])
 
@@ -793,9 +741,7 @@ class GuardianAnalysis(Base):
     steering_type = Column(String)
     steering_recommendation = Column(Text)
     trajectory_summary = Column(Text)
-    last_claude_message_marker = Column(
-        String(100)
-    )  # NEW: Marker for next cycle to identify new content
+    last_claude_message_marker = Column(String(100))  # NEW: Marker for next cycle to identify new content
 
     # Accumulated context fields
     accumulated_goal = Column(Text)
@@ -849,12 +795,8 @@ class DetectedDuplicate(Base):
 
     # Relationships
     conductor_analysis = relationship("ConductorAnalysis", backref="duplicates")
-    agent1 = relationship(
-        "Agent", foreign_keys=[agent1_id], backref="duplicates_as_agent1"
-    )
-    agent2 = relationship(
-        "Agent", foreign_keys=[agent2_id], backref="duplicates_as_agent2"
-    )
+    agent1 = relationship("Agent", foreign_keys=[agent1_id], backref="duplicates_as_agent1")
+    agent2 = relationship("Agent", foreign_keys=[agent2_id], backref="duplicates_as_agent2")
 
 
 class SteeringIntervention(Base):
@@ -911,12 +853,8 @@ class DiagnosticRun(Base):
 
     # Relationships
     workflow = relationship("Workflow", backref="diagnostic_runs")
-    agent = relationship(
-        "Agent", foreign_keys=[diagnostic_agent_id], backref="diagnostic_runs"
-    )
-    task = relationship(
-        "Task", foreign_keys=[diagnostic_task_id], backref="diagnostic_runs"
-    )
+    agent = relationship("Agent", foreign_keys=[diagnostic_agent_id], backref="diagnostic_runs")
+    task = relationship("Task", foreign_keys=[diagnostic_task_id], backref="diagnostic_runs")
 
 
 class Ticket(Base):
@@ -932,30 +870,20 @@ class Ticket(Base):
     # Core Fields
     title = Column(String(500), nullable=False)
     description = Column(Text, nullable=False)
-    ticket_type = Column(
-        String(50), nullable=False
-    )  # bug, feature, improvement, task, spike, etc.
+    ticket_type = Column(String(50), nullable=False)  # bug, feature, improvement, task, spike, etc.
     priority = Column(String(20), nullable=False)  # low, medium, high, critical
-    status = Column(
-        String(50), nullable=False
-    )  # Based on board_config columns (fully configurable)
+    status = Column(String(50), nullable=False)  # Based on board_config columns (fully configurable)
 
     # Metadata
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at = Column(
-        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
-    )
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
     started_at = Column(DateTime)  # When work begins
     completed_at = Column(DateTime)  # When marked complete
 
     # Links & References
     parent_ticket_id = Column(String, ForeignKey("tickets.id"))
-    task_id = Column(
-        String, ForeignKey("tasks.id")
-    )  # Primary task this ticket relates to
-    phase_id = Column(
-        String, ForeignKey("phases.id")
-    )  # Phase where this ticket was created
+    task_id = Column(String, ForeignKey("tasks.id"))  # Primary task this ticket relates to
+    phase_id = Column(String, ForeignKey("phases.id"))  # Phase where this ticket was created
     related_task_ids = Column(JSON)  # List of related task IDs
     related_ticket_ids = Column(JSON)  # List of related ticket IDs for context
     tags = Column(JSON)  # List of tags
@@ -970,9 +898,7 @@ class Ticket(Base):
     resolved_at = Column(DateTime)  # When ticket was resolved
 
     # Human Approval
-    approval_status = Column(
-        String(20), default="auto_approved", nullable=False
-    )  # auto_approved, pending_review, approved, rejected
+    approval_status = Column(String(20), default="auto_approved", nullable=False)  # auto_approved, pending_review, approved, rejected
     approval_requested_at = Column(DateTime)  # When approval was requested
     approval_decided_at = Column(DateTime)  # When human made decision
     approval_decided_by = Column(String)  # User/agent who approved/rejected
@@ -980,12 +906,8 @@ class Ticket(Base):
 
     # Relationships
     workflow = relationship("Workflow", backref="tickets")
-    created_by_agent = relationship(
-        "Agent", foreign_keys=[created_by_agent_id], backref="created_tickets"
-    )
-    assigned_agent = relationship(
-        "Agent", foreign_keys=[assigned_agent_id], backref="assigned_tickets"
-    )
+    created_by_agent = relationship("Agent", foreign_keys=[created_by_agent_id], backref="created_tickets")
+    assigned_agent = relationship("Agent", foreign_keys=[assigned_agent_id], backref="assigned_tickets")
     parent_ticket = relationship(
         "Ticket",
         remote_side=[id],
@@ -1010,16 +932,12 @@ class TicketComment(Base):
     __tablename__ = "ticket_comments"
 
     id = Column(String, primary_key=True)  # Format: comment-{uuid}
-    ticket_id = Column(
-        String, ForeignKey("tickets.id", ondelete="CASCADE"), nullable=False
-    )
+    ticket_id = Column(String, ForeignKey("tickets.id", ondelete="CASCADE"), nullable=False)
     agent_id = Column(String, ForeignKey("agents.id"), nullable=False)
 
     # Content
     comment_text = Column(Text, nullable=False)
-    comment_type = Column(
-        String(50), default="general"
-    )  # general, status_change, assignment, blocker, resolution
+    comment_type = Column(String(50), default="general")  # general, status_change, assignment, blocker, resolution
 
     # Metadata
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
@@ -1041,15 +959,11 @@ class TicketHistory(Base):
     __tablename__ = "ticket_history"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    ticket_id = Column(
-        String, ForeignKey("tickets.id", ondelete="CASCADE"), nullable=False
-    )
+    ticket_id = Column(String, ForeignKey("tickets.id", ondelete="CASCADE"), nullable=False)
     agent_id = Column(String, ForeignKey("agents.id"), nullable=False)
 
     # Change Information
-    change_type = Column(
-        String(50), nullable=False
-    )  # created, status_changed, assigned, commented, field_updated, commit_linked, reopened, blocked, unblocked
+    change_type = Column(String(50), nullable=False)  # created, status_changed, assigned, commented, field_updated, commit_linked, reopened, blocked, unblocked
     field_name = Column(String(100))  # Which field changed (if applicable)
     old_value = Column(Text)  # Previous value (JSON for complex types)
     new_value = Column(Text)  # New value (JSON for complex types)
@@ -1072,9 +986,7 @@ class TicketCommit(Base):
     __tablename__ = "ticket_commits"
 
     id = Column(String, primary_key=True)  # Format: tc-{uuid}
-    ticket_id = Column(
-        String, ForeignKey("tickets.id", ondelete="CASCADE"), nullable=False
-    )
+    ticket_id = Column(String, ForeignKey("tickets.id", ondelete="CASCADE"), nullable=False)
     agent_id = Column(String, ForeignKey("agents.id"), nullable=False)
 
     # Commit Information
@@ -1090,9 +1002,7 @@ class TicketCommit(Base):
 
     # Linking
     linked_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    link_method = Column(
-        String(50), default="manual"
-    )  # manual, auto_detected, worktree
+    link_method = Column(String(50), default="manual")  # manual, auto_detected, worktree
 
     # Relationships
     ticket = relationship("Ticket", back_populates="commits")
@@ -1117,9 +1027,7 @@ class BoardConfig(Base):
     columns = Column(JSON, nullable=False)  # Array of {id, name, order, color}
     ticket_types = Column(JSON, nullable=False)  # Array of allowed ticket types
     default_ticket_type = Column(String(50))
-    initial_status = Column(
-        String(50), nullable=False
-    )  # Default status for new tickets
+    initial_status = Column(String(50), nullable=False)  # Default status for new tickets
 
     # Settings
     auto_assign = Column(Boolean, default=False)
@@ -1128,16 +1036,12 @@ class BoardConfig(Base):
     track_time = Column(Boolean, default=False)
 
     # Human Review Settings
-    ticket_human_review = Column(
-        Boolean, default=False
-    )  # Enable human approval for tickets
+    ticket_human_review = Column(Boolean, default=False)  # Enable human approval for tickets
     approval_timeout_seconds = Column(Integer, default=1800)  # 30 minutes default
 
     # Metadata
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at = Column(
-        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
-    )
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
     # Relationships
     workflow = relationship("Workflow", backref="board_config")
@@ -1154,13 +1058,14 @@ class AutopilotProject(Base):
     is_default = Column(Boolean, default=False)
     is_active = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at = Column(
-        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
-    )
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
-    designs = relationship(
-        "AutopilotDesign", back_populates="project", cascade="all, delete-orphan"
-    )
+    # Cost tracking - denormalized rollup (self-healed by cost_derivation.py)
+    cost_total_usd = Column(Float, default=0.0, nullable=False)
+    # Budget limit - None means no limit
+    cost_limit_usd = Column(Float, nullable=True)
+
+    designs = relationship("AutopilotDesign", back_populates="project", cascade="all, delete-orphan")
 
 
 class Feature(Base):
@@ -1170,9 +1075,7 @@ class Feature(Base):
 
     id = Column(String, primary_key=True)  # feat-<uuid8>
     design_id = Column(String, ForeignKey("autopilot_designs.id"), nullable=False)
-    feature_key = Column(
-        String(100), nullable=False
-    )  # slug from features.json "id" field
+    feature_key = Column(String(100), nullable=False)  # slug from features.json "id" field
     name = Column(String, nullable=False)
     scope = Column(Text, nullable=False)  # one-paragraph summary
     files = Column(JSON, nullable=True)  # list of file paths owned
@@ -1185,23 +1088,20 @@ class Feature(Base):
     )
     status = Column(
         String,
-        CheckConstraint(
-            "status IN ('pending', 'active', 'completed', 'failed', 'skipped', 'paused')"
-        ),
+        CheckConstraint("status IN ('pending', 'active', 'completed', 'failed', 'skipped', 'paused')"),
         nullable=False,
         default="pending",
     )
     workflow_id = Column(String, ForeignKey("workflows.id"), nullable=True)
-    scope_doc_path = Column(
-        Text, nullable=True
-    )  # abs path to scope.md in permanent record
-    feature_record_path = Column(
-        Text, nullable=True
-    )  # abs path to designs/.../features/<key>/
+    scope_doc_path = Column(Text, nullable=True)  # abs path to scope.md in permanent record
+    feature_record_path = Column(Text, nullable=True)  # abs path to designs/.../features/<key>/
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     started_at = Column(DateTime, nullable=True)
     completed_at = Column(DateTime, nullable=True)
     error = Column(Text, nullable=True)
+
+    # Cost tracking - denormalized rollup (self-healed by cost_derivation.py)
+    cost_total_usd = Column(Float, default=0.0, nullable=False)
 
     # Relationships
     design = relationship("AutopilotDesign", back_populates="features")
@@ -1214,21 +1114,15 @@ class AutopilotDesign(Base):
     __tablename__ = "autopilot_designs"
 
     id = Column(String, primary_key=True)  # Format: des-{uuid}
-    project_id = Column(
-        String, ForeignKey("autopilot_projects.id", ondelete="CASCADE"), nullable=False
-    )
+    project_id = Column(String, ForeignKey("autopilot_projects.id", ondelete="CASCADE"), nullable=False)
     filename = Column(String(500), nullable=False)
     name = Column(String(500), nullable=False)
     ordinal = Column(Integer, nullable=False, default=0)
     size_bytes = Column(Integer, nullable=False, default=0)
     extension = Column(String(10), nullable=False, default=".md")
     content_hash = Column(String(64), nullable=True)  # SHA-256 for dedup
-    status = Column(
-        String(20), nullable=False, default="pending"
-    )  # pending, processing, decomposing, active, completed, failed, skipped
-    feature_folder = Column(
-        Text, nullable=True
-    )  # Path to feature folder after processing
+    status = Column(String(20), nullable=False, default="pending")  # pending, processing, decomposing, active, completed, failed, skipped
+    feature_folder = Column(Text, nullable=True)  # Path to feature folder after processing
     completed_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     modified_at = Column(DateTime, default=datetime.utcnow)
@@ -1245,15 +1139,14 @@ class AutopilotDesign(Base):
     # features array must have 1-5 entries, got 6".
     error = Column(Text, nullable=True)
 
+    # Cost tracking - denormalized rollup (self-healed by cost_derivation.py)
+    cost_total_usd = Column(Float, default=0.0, nullable=False)
+
     # Relationships
     project = relationship("AutopilotProject", back_populates="designs")
-    features = relationship(
-        "Feature", back_populates="design", cascade="all, delete-orphan"
-    )
+    features = relationship("Feature", back_populates="design", cascade="all, delete-orphan")
 
-    __table_args__ = (
-        UniqueConstraint("project_id", "filename", name="uq_design_project_filename"),
-    )
+    __table_args__ = (UniqueConstraint("project_id", "filename", name="uq_design_project_filename"),)
 
 
 class PhasePromptVersion(Base):
@@ -1306,9 +1199,7 @@ class TaskPromptOverride(Base):
     task_id = Column(String, ForeignKey("tasks.id"), primary_key=True)
     system_prompt = Column(Text)  # NULL = use phase default
     user_prompt = Column(Text)  # NULL = use phase default
-    updated_at = Column(
-        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
-    )
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
     updated_by = Column(String, nullable=False, default="ui-user")
 
     # Relationships
@@ -1328,47 +1219,91 @@ class PhasePromptTemplate(Base):
     name = Column(String, nullable=False, unique=True)  # e.g. "project_name"
     description = Column(Text, nullable=False)
     example_value = Column(Text)  # e.g. "hephaestus"
-    resolver = Column(
-        String, nullable=False
-    )  # Python path, e.g. "src.prompts.resolvers.project_name"
+    resolver = Column(String, nullable=False)  # Python path, e.g. "src.prompts.resolvers.project_name"
     category = Column(String, default="general")  # general, workflow, phase, task
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 
+class CostEntry(Base):
+    """Append-only ledger of LLM costs. One row per turn/call.
+
+    Source of truth for all cost data. Aggregates are derived from this
+    table via cost_derivation.py, not hand-maintained.
+    """
+
+    __tablename__ = "cost_entries"
+
+    id = Column(String, primary_key=True)  # cost-<uuid8>
+    task_id = Column(String, ForeignKey("tasks.id"), nullable=True)
+    agent_id = Column(String, ForeignKey("agents.id"), nullable=True)
+    workflow_id = Column(String, ForeignKey("workflows.id"), nullable=True)
+
+    # 'pi' | 'claude_code' | 'opencode' | 'codex' | 'openrouter_direct'
+    source = Column(String, nullable=False)
+    model = Column(String, nullable=True)  # e.g. "anthropic/claude-sonnet-4"
+
+    input_tokens = Column(Integer, default=0)
+    output_tokens = Column(Integer, default=0)
+    cache_read_tokens = Column(Integer, default=0)
+    cache_write_tokens = Column(Integer, default=0)
+    reasoning_tokens = Column(Integer, default=0)
+    cost_usd = Column(Float, nullable=False)
+
+    recorded_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    # Raw source line/turn for debugging discrepancies
+    raw_usage = Column(JSON, nullable=True)
+
+    # Relationships
+    task = relationship("Task", foreign_keys=[task_id], backref="cost_entries")
+    agent = relationship("Agent", foreign_keys=[agent_id], backref="cost_entries")
+    workflow = relationship("Workflow", foreign_keys=[workflow_id], backref="cost_entries")
+
+    __table_args__ = (
+        Index("ix_cost_entries_task_id", "task_id"),
+        Index("ix_cost_entries_workflow_id", "workflow_id"),
+        Index("ix_cost_entries_recorded_at", "recorded_at"),
+    )
+
+
+class SessionCostCheckpoint(Base):
+    """Checkpoint for transcript-tailing cost collectors.
+
+    Keyed by session_id (not Agent.id) because the session outlives any
+    single agent row -- an agent retry reuses the same session file,
+    and a checkpoint on the new agent would re-read dead agent's turns.
+    """
+
+    __tablename__ = "session_cost_checkpoints"
+
+    session_id = Column(String, primary_key=True)
+    lines_processed = Column(Integer, default=0, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 class DatabaseManager:
     """Manager for database operations.
-    
+
     Uses engine caching to avoid creating duplicate engines for the same
     database path. Each engine uses QueuePool for connection pooling,
     allowing concurrent reads alongside writes (SQLite WAL mode).
     """
-    
+
     _engines: Dict[str, Any] = {}
     _sessions: Dict[str, sessionmaker] = {}
     _lock = threading.Lock()
 
-    def __init__(self, database_path: Optional[str] = None):
-        """Initialize database connection (reuses cached engine if available).
-
-        database_path=None resolves the same way get_db() does: consult
-        HEPHAESTUS_TEST_DB, falling back to hephaestus.db. Without this, a
-        bare DatabaseManager() (unlike get_db()) always hit the real
-        production database file during tests, regardless of
-        HEPHAESTUS_TEST_DB -- silently, since sqlite happily opens/creates
-        whatever file it's pointed at.
-        """
+    def __init__(self, database_path: str = "hephaestus.db"):
+        """Initialize database connection (reuses cached engine if available)."""
         if database_path is None:
             database_path = os.environ.get("HEPHAESTUS_TEST_DB", "hephaestus.db")
         self.database_path = database_path
-        
+
         # ":memory:" means "give me a fresh, isolated in-memory database,"
         # not "give me the shared one at this path" -- caching it by the
         # literal string like every other path would make every caller
-        # process-wide (in practice, every test in a pytest session that
-        # doesn't pass an explicit tmp-file path) share ONE engine/
-        # connection pool forever, with one test's leftover rows bleeding
-        # into an unrelated later test purely because both happened to
-        # pass the same ":memory:" literal. Never cache or reuse it.
+        # process-wide share ONE engine/connection pool forever, with one
+        # test's leftover rows bleeding into an unrelated later test.
+        # Never cache or reuse it.
         is_memory = database_path == ":memory:"
 
         with DatabaseManager._lock:
@@ -1379,9 +1314,6 @@ class DatabaseManager:
                     # connections is free -- fine for a real file (they all
                     # see the same on-disk data) but wrong for ":memory:",
                     # where each connection IS its own separate database.
-                    # Without this, create_tables() and a later query could
-                    # land on different pooled connections and get "no such
-                    # table" even within a single DatabaseManager instance.
                     engine = create_engine(
                         f"sqlite:///{database_path}",
                         connect_args={"check_same_thread": False},
@@ -1399,7 +1331,7 @@ class DatabaseManager:
                         pool_recycle=300,
                         echo=False,
                     )
-                
+
                 # Set SQLite pragmas for concurrent access
                 # WAL mode allows concurrent readers alongside a single writer
                 # busy_timeout makes writers block-and-retry instead of failing
@@ -1412,7 +1344,7 @@ class DatabaseManager:
                     cursor.execute("PRAGMA busy_timeout=30000")  # 30s
                     cursor.execute("PRAGMA synchronous=NORMAL")
                     cursor.close()
-                
+
                 session_factory = sessionmaker(
                     autocommit=False, autoflush=False, bind=engine,
                     expire_on_commit=False  # Prevent DetachedInstanceError bugs (H-0*)
@@ -1454,6 +1386,7 @@ class DatabaseManager:
         self._migrate_workflow_paused_at_column()
         self._migrate_workflow_paused_retry_count_column()
         self._migrate_task_action_target_phase_column()
+        self._migrate_cost_tracking_columns()
 
     def _create_fts5_tables(self):
         """Create FTS5 virtual tables and triggers for ticket search."""
@@ -1624,19 +1557,13 @@ class DatabaseManager:
 
                 # Add parallel_group column
                 try:
-                    conn.execute(
-                        text("ALTER TABLE tasks ADD COLUMN parallel_group TEXT")
-                    )
+                    conn.execute(text("ALTER TABLE tasks ADD COLUMN parallel_group TEXT"))
                 except Exception:
                     pass  # Column already exists
 
                 # Add max_concurrent column
                 try:
-                    conn.execute(
-                        text(
-                            "ALTER TABLE tasks ADD COLUMN max_concurrent INTEGER DEFAULT 1"
-                        )
-                    )
+                    conn.execute(text("ALTER TABLE tasks ADD COLUMN max_concurrent INTEGER DEFAULT 1"))
                 except Exception:
                     pass  # Column already exists
 
@@ -1651,41 +1578,25 @@ class DatabaseManager:
             with self.engine.connect() as conn:
                 # Add content_hash column
                 try:
-                    conn.execute(
-                        text(
-                            "ALTER TABLE autopilot_designs ADD COLUMN content_hash VARCHAR(64)"
-                        )
-                    )
+                    conn.execute(text("ALTER TABLE autopilot_designs ADD COLUMN content_hash VARCHAR(64)"))
                 except Exception:
                     pass  # Column already exists
 
                 # Add status column
                 try:
-                    conn.execute(
-                        text(
-                            "ALTER TABLE autopilot_designs ADD COLUMN status VARCHAR(20) NOT NULL DEFAULT 'pending'"
-                        )
-                    )
+                    conn.execute(text("ALTER TABLE autopilot_designs ADD COLUMN status VARCHAR(20) NOT NULL DEFAULT 'pending'"))
                 except Exception:
                     pass  # Column already exists
 
                 # Add feature_folder column
                 try:
-                    conn.execute(
-                        text(
-                            "ALTER TABLE autopilot_designs ADD COLUMN feature_folder TEXT"
-                        )
-                    )
+                    conn.execute(text("ALTER TABLE autopilot_designs ADD COLUMN feature_folder TEXT"))
                 except Exception:
                     pass  # Column already exists
 
                 # Add completed_at column
                 try:
-                    conn.execute(
-                        text(
-                            "ALTER TABLE autopilot_designs ADD COLUMN completed_at DATETIME"
-                        )
-                    )
+                    conn.execute(text("ALTER TABLE autopilot_designs ADD COLUMN completed_at DATETIME"))
                 except Exception:
                     pass  # Column already exists
 
@@ -1698,9 +1609,7 @@ class DatabaseManager:
         try:
             with self.engine.connect() as conn:
                 try:
-                    conn.execute(
-                        text("ALTER TABLE phases ADD COLUMN thinking_level VARCHAR")
-                    )
+                    conn.execute(text("ALTER TABLE phases ADD COLUMN thinking_level VARCHAR"))
                 except Exception:
                     pass  # Column already exists
                 conn.commit()
@@ -1711,11 +1620,7 @@ class DatabaseManager:
         try:
             with self.engine.connect() as conn:
                 try:
-                    conn.execute(
-                        text(
-                            "ALTER TABLE workflows ADD COLUMN design_id VARCHAR REFERENCES autopilot_designs(id)"
-                        )
-                    )
+                    conn.execute(text("ALTER TABLE workflows ADD COLUMN design_id VARCHAR REFERENCES autopilot_designs(id)"))
                 except Exception:
                     pass  # Column already exists
                 conn.commit()
@@ -1744,49 +1649,33 @@ class DatabaseManager:
             with self.engine.connect() as conn:
                 # Add file_path column
                 try:
-                    conn.execute(
-                        text("ALTER TABLE autopilot_designs ADD COLUMN file_path TEXT")
-                    )
+                    conn.execute(text("ALTER TABLE autopilot_designs ADD COLUMN file_path TEXT"))
                 except Exception:
                     pass  # Column already exists
 
                 # Add designs_folder column
                 try:
-                    conn.execute(
-                        text(
-                            "ALTER TABLE autopilot_designs ADD COLUMN designs_folder TEXT"
-                        )
-                    )
+                    conn.execute(text("ALTER TABLE autopilot_designs ADD COLUMN designs_folder TEXT"))
                 except Exception:
                     pass  # Column already exists
 
                 # Add phase0_workflow_id column
                 try:
-                    conn.execute(
-                        text(
-                            "ALTER TABLE autopilot_designs ADD COLUMN phase0_workflow_id VARCHAR REFERENCES workflows(id)"
-                        )
-                    )
+                    conn.execute(text("ALTER TABLE autopilot_designs ADD COLUMN phase0_workflow_id VARCHAR REFERENCES workflows(id)"))
                 except Exception:
                     pass  # Column already exists
 
                 conn.commit()
                 logger.info("Migrated autopilot_designs feature model columns")
         except Exception as e:
-            logger.debug(
-                f"autopilot_designs feature model migration (may already exist): {e}"
-            )
+            logger.debug(f"autopilot_designs feature model migration (may already exist): {e}")
 
         # Add new columns to workflows
         try:
             with self.engine.connect() as conn:
                 # Add workflow_type column
                 try:
-                    conn.execute(
-                        text(
-                            "ALTER TABLE workflows ADD COLUMN workflow_type VARCHAR DEFAULT NULL"
-                        )
-                    )
+                    conn.execute(text("ALTER TABLE workflows ADD COLUMN workflow_type VARCHAR DEFAULT NULL"))
                 except Exception:
                     pass  # Column already exists
 
@@ -1795,11 +1684,7 @@ class DatabaseManager:
                 # the REFERENCES clause is documentation only — cascade deletes and
                 # constraint checks are enforced by the ORM layer, not the DB engine.
                 try:
-                    conn.execute(
-                        text(
-                            "ALTER TABLE workflows ADD COLUMN feature_id VARCHAR REFERENCES features(id)"
-                        )
-                    )
+                    conn.execute(text("ALTER TABLE workflows ADD COLUMN feature_id VARCHAR REFERENCES features(id)"))
                 except Exception:
                     pass  # Column already exists
 
@@ -1810,9 +1695,7 @@ class DatabaseManager:
 
         # Create features table if it doesn't exist
         try:
-            Base.metadata.create_all(
-                self.engine, tables=[Feature.__table__], checkfirst=True
-            )
+            Base.metadata.create_all(self.engine, tables=[Feature.__table__], checkfirst=True)
             logger.info("Ensured features table exists")
         except Exception as e:
             logger.debug(f"features table creation (may already exist): {e}")
@@ -1825,11 +1708,7 @@ class DatabaseManager:
         try:
             with self.engine.connect() as conn:
                 try:
-                    conn.execute(
-                        text(
-                            "ALTER TABLE workflows ADD COLUMN total_gotos INTEGER DEFAULT 0 NOT NULL"
-                        )
-                    )
+                    conn.execute(text("ALTER TABLE workflows ADD COLUMN total_gotos INTEGER DEFAULT 0 NOT NULL"))
                 except Exception:
                     pass  # Column already exists
                 conn.commit()
@@ -1845,11 +1724,7 @@ class DatabaseManager:
         try:
             with self.engine.connect() as conn:
                 try:
-                    conn.execute(
-                        text(
-                            "ALTER TABLE tasks ADD COLUMN retry_count INTEGER DEFAULT 0 NOT NULL"
-                        )
-                    )
+                    conn.execute(text("ALTER TABLE tasks ADD COLUMN retry_count INTEGER DEFAULT 0 NOT NULL"))
                 except Exception:
                     pass  # Column already exists
                 conn.commit()
@@ -1865,11 +1740,7 @@ class DatabaseManager:
         try:
             with self.engine.connect() as conn:
                 try:
-                    conn.execute(
-                        text(
-                            "ALTER TABLE phases ADD COLUMN retry_count INTEGER DEFAULT 0 NOT NULL"
-                        )
-                    )
+                    conn.execute(text("ALTER TABLE phases ADD COLUMN retry_count INTEGER DEFAULT 0 NOT NULL"))
                 except Exception:
                     pass  # Column already exists
                 conn.commit()
@@ -1885,29 +1756,19 @@ class DatabaseManager:
         try:
             with self.engine.connect() as conn:
                 try:
-                    conn.execute(
-                        text(
-                            "ALTER TABLE tasks ADD COLUMN self_review_done BOOLEAN DEFAULT 0 NOT NULL"
-                        )
-                    )
+                    conn.execute(text("ALTER TABLE tasks ADD COLUMN self_review_done BOOLEAN DEFAULT 0 NOT NULL"))
                 except Exception:
                     pass  # Column already exists
                 try:
-                    conn.execute(
-                        text("ALTER TABLE phases ADD COLUMN self_review JSON")
-                    )
+                    conn.execute(text("ALTER TABLE phases ADD COLUMN self_review JSON"))
                 except Exception:
                     pass  # Column already exists
                 try:
-                    conn.execute(
-                        text("ALTER TABLE tasks ADD COLUMN self_review_started_at DATETIME")
-                    )
+                    conn.execute(text("ALTER TABLE tasks ADD COLUMN self_review_started_at DATETIME"))
                 except Exception:
                     pass  # Column already exists
                 try:
-                    conn.execute(
-                        text("ALTER TABLE tasks ADD COLUMN self_review_started_commit VARCHAR")
-                    )
+                    conn.execute(text("ALTER TABLE tasks ADD COLUMN self_review_started_commit VARCHAR"))
                 except Exception:
                     pass  # Column already exists
                 conn.commit()
@@ -1923,11 +1784,7 @@ class DatabaseManager:
         try:
             with self.engine.connect() as conn:
                 try:
-                    conn.execute(
-                        text(
-                            "ALTER TABLE phase_executions ADD COLUMN task_creation_claimed_at DATETIME"
-                        )
-                    )
+                    conn.execute(text("ALTER TABLE phase_executions ADD COLUMN task_creation_claimed_at DATETIME"))
                 except Exception:
                     pass  # Column already exists
                 conn.commit()
@@ -1943,9 +1800,7 @@ class DatabaseManager:
         try:
             with self.engine.connect() as conn:
                 try:
-                    conn.execute(
-                        text("ALTER TABLE autopilot_designs ADD COLUMN error TEXT")
-                    )
+                    conn.execute(text("ALTER TABLE autopilot_designs ADD COLUMN error TEXT"))
                 except Exception:
                     pass  # Column already exists
                 conn.commit()
@@ -1961,9 +1816,7 @@ class DatabaseManager:
         try:
             with self.engine.connect() as conn:
                 try:
-                    conn.execute(
-                        text("ALTER TABLE workflows ADD COLUMN paused_by VARCHAR")
-                    )
+                    conn.execute(text("ALTER TABLE workflows ADD COLUMN paused_by VARCHAR"))
                 except Exception:
                     pass  # Column already exists
                 conn.commit()
@@ -1979,9 +1832,7 @@ class DatabaseManager:
         try:
             with self.engine.connect() as conn:
                 try:
-                    conn.execute(
-                        text("ALTER TABLE workflows ADD COLUMN status_reason VARCHAR")
-                    )
+                    conn.execute(text("ALTER TABLE workflows ADD COLUMN status_reason VARCHAR"))
                 except Exception:
                     pass  # Column already exists
                 conn.commit()
@@ -1997,9 +1848,7 @@ class DatabaseManager:
         try:
             with self.engine.connect() as conn:
                 try:
-                    conn.execute(
-                        text("ALTER TABLE workflows ADD COLUMN paused_at DATETIME")
-                    )
+                    conn.execute(text("ALTER TABLE workflows ADD COLUMN paused_at DATETIME"))
                 except Exception:
                     pass  # Column already exists
                 conn.commit()
@@ -2015,11 +1864,7 @@ class DatabaseManager:
         try:
             with self.engine.connect() as conn:
                 try:
-                    conn.execute(
-                        text(
-                            "ALTER TABLE workflows ADD COLUMN paused_retry_count INTEGER DEFAULT 0 NOT NULL"
-                        )
-                    )
+                    conn.execute(text("ALTER TABLE workflows ADD COLUMN paused_retry_count INTEGER DEFAULT 0 NOT NULL"))
                 except Exception:
                     pass  # Column already exists
                 conn.commit()
@@ -2035,15 +1880,134 @@ class DatabaseManager:
         try:
             with self.engine.connect() as conn:
                 try:
-                    conn.execute(
-                        text("ALTER TABLE tasks ADD COLUMN action_target_phase VARCHAR")
-                    )
+                    conn.execute(text("ALTER TABLE tasks ADD COLUMN action_target_phase VARCHAR"))
                 except Exception:
                     pass  # Column already exists
                 conn.commit()
                 logger.info("Migrated tasks.action_target_phase column")
         except Exception as e:
             logger.debug(f"tasks.action_target_phase migration (may already exist): {e}")
+
+    def _migrate_cost_tracking_columns(self):
+        """Add cost tracking columns and tables for existing databases.
+
+        Adds:
+        - cost_total_usd to tasks, features, autopilot_designs, autopilot_projects
+        - cost_limit_usd to autopilot_projects
+        - cost_entries table (append-only ledger)
+        - session_cost_checkpoints table
+
+        Idempotent - safe to call on every startup.
+        """
+        # Add cost_total_usd to tasks
+        try:
+            with self.engine.connect() as conn:
+                try:
+                    conn.execute(text("ALTER TABLE tasks ADD COLUMN cost_total_usd REAL DEFAULT 0.0 NOT NULL"))
+                except Exception:
+                    pass  # Column already exists
+                conn.commit()
+                logger.info("Migrated tasks.cost_total_usd column")
+        except Exception as e:
+            logger.debug(f"tasks.cost_total_usd migration (may already exist): {e}")
+
+        # Add cost_total_usd to features
+        try:
+            with self.engine.connect() as conn:
+                try:
+                    conn.execute(text("ALTER TABLE features ADD COLUMN cost_total_usd REAL DEFAULT 0.0 NOT NULL"))
+                except Exception:
+                    pass  # Column already exists
+                conn.commit()
+                logger.info("Migrated features.cost_total_usd column")
+        except Exception as e:
+            logger.debug(f"features.cost_total_usd migration (may already exist): {e}")
+
+        # Add cost_total_usd to autopilot_designs
+        try:
+            with self.engine.connect() as conn:
+                try:
+                    conn.execute(text("ALTER TABLE autopilot_designs ADD COLUMN cost_total_usd REAL DEFAULT 0.0 NOT NULL"))
+                except Exception:
+                    pass  # Column already exists
+                conn.commit()
+                logger.info("Migrated autopilot_designs.cost_total_usd column")
+        except Exception as e:
+            logger.debug(f"autopilot_designs.cost_total_usd migration (may already exist): {e}")
+
+        # Add cost_total_usd and cost_limit_usd to autopilot_projects
+        try:
+            with self.engine.connect() as conn:
+                try:
+                    conn.execute(text("ALTER TABLE autopilot_projects ADD COLUMN cost_total_usd REAL DEFAULT 0.0 NOT NULL"))
+                except Exception:
+                    pass  # Column already exists
+                try:
+                    conn.execute(text("ALTER TABLE autopilot_projects ADD COLUMN cost_limit_usd REAL"))
+                except Exception:
+                    pass  # Column already exists
+                conn.commit()
+                logger.info("Migrated autopilot_projects cost tracking columns")
+        except Exception as e:
+            logger.debug(f"autopilot_projects cost migration (may already exist): {e}")
+
+        # Add cost_total_usd to workflows
+        try:
+            with self.engine.connect() as conn:
+                try:
+                    conn.execute(text("ALTER TABLE workflows ADD COLUMN cost_total_usd REAL DEFAULT 0.0 NOT NULL"))
+                except Exception:
+                    pass  # Column already exists
+                conn.commit()
+                logger.info("Migrated workflows.cost_total_usd column")
+        except Exception as e:
+            logger.debug(f"workflows.cost_total_usd migration (may already exist): {e}")
+
+        # Create cost_entries and session_cost_checkpoints tables
+        try:
+            Base.metadata.create_all(
+                self.engine,
+                tables=[
+                    CostEntry.__table__,
+                    SessionCostCheckpoint.__table__,
+                ],
+                checkfirst=True,
+            )
+            logger.info("Ensured cost_entries and session_cost_checkpoints tables exist")
+        except Exception as e:
+            logger.debug(f"Cost tracking tables creation (may already exist): {e}")
+
+        # Create indexes for cost_entries
+        try:
+            with self.engine.connect() as conn:
+                conn.execute(
+                    text(
+                        """
+                    CREATE INDEX IF NOT EXISTS ix_cost_entries_task_id
+                    ON cost_entries(task_id)
+                    """
+                    )
+                )
+                conn.execute(
+                    text(
+                        """
+                    CREATE INDEX IF NOT EXISTS ix_cost_entries_workflow_id
+                    ON cost_entries(workflow_id)
+                    """
+                    )
+                )
+                conn.execute(
+                    text(
+                        """
+                    CREATE INDEX IF NOT EXISTS ix_cost_entries_recorded_at
+                    ON cost_entries(recorded_at)
+                    """
+                    )
+                )
+                conn.commit()
+                logger.info("Created cost_entries indexes")
+        except Exception as e:
+            logger.debug(f"Cost entries indexes (may already exist): {e}")
 
     def get_session(self):
         """Get a database session."""
@@ -2052,7 +2016,7 @@ class DatabaseManager:
     @contextmanager
     def session_scope(self):
         """Provide a transactional scope around a series of operations.
-        
+
         Use this instead of raw get_session() to ensure proper
         commit/rollback/close handling (H-1 fix).
         """
