@@ -2322,6 +2322,25 @@ async def update_task_status(
         #   same task but the old agent (still running) tries to report its status.
         #   The old agent's current_task_id still points to this task.
         task = session.query(Task).filter_by(id=request.task_id).first()
+        if not task and len(request.task_id) < 36:
+            # Agents sometimes pass the short 8-char form this codebase's
+            # own logs/transcripts display everywhere (task.id[:8]) instead
+            # of the full UUID -- observed live, repeatedly, from an agent
+            # that never once used the full ID despite having it in its own
+            # task assignment message. Resolve an unambiguous prefix rather
+            # than hard-failing "Task not found" for something that isn't
+            # actually ambiguous.
+            candidates = (
+                session.query(Task)
+                .filter(Task.id.like(f"{request.task_id}%"))
+                .all()
+            )
+            if len(candidates) == 1:
+                task = candidates[0]
+                logger.warning(
+                    f"Agent {agent_id[:8]} used truncated task_id "
+                    f"'{request.task_id}' -- resolved unambiguously to {task.id}"
+                )
         if not task:
             raise HTTPException(status_code=404, detail="Task not found")
 
