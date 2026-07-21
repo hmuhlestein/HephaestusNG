@@ -191,7 +191,12 @@ class TestValidatorAgent:
         """Create mock database manager."""
         manager = Mock(spec=DatabaseManager)
         session = Mock()
+        session.__enter__ = Mock(return_value=session)
+        session.__exit__ = Mock(return_value=False)
         manager.get_session.return_value = session
+        manager.session_scope = Mock(
+            return_value=session
+        )  # validator uses session_scope()
         return manager
 
     def test_build_validator_prompt(self):
