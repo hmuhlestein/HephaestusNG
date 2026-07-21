@@ -27,10 +27,9 @@ const ClickableAgentCard: React.FC<ClickableAgentCardProps> = ({
 
     const fetchAgent = async () => {
       try {
-        const res = await apiService.getAgents('all');
-        const foundAgent = res.agents.find((a: any) => a.id === agentId);
+        const foundAgent = await apiService.getAgent(agentId);
         if (mounted) {
-          setAgent(foundAgent || null);
+          setAgent(foundAgent);
           setLoading(false);
         }
       } catch (error) {
