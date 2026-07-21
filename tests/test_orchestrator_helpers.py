@@ -3170,6 +3170,8 @@ class TestRecoverAbandonedWorkflowsMissingWorktree:
             AutopilotDesign,
             AutopilotProject,
             Feature,
+            Phase,
+            PhaseExecution,
             Task,
             Workflow,
         )
@@ -3222,6 +3224,24 @@ class TestRecoverAbandonedWorkflowsMissingWorktree:
                 )
             )
             session.add(
+                Phase(
+                    id="phase-security-review",
+                    workflow_id="wf-lost",
+                    name="security_review",
+                    order=7,
+                    description="d",
+                    done_definitions=["x"],
+                )
+            )
+            session.add(
+                PhaseExecution(
+                    id="exec-security-review",
+                    phase_id="phase-security-review",
+                    workflow_execution_id="wf-lost",
+                    status="in_progress",
+                )
+            )
+            session.add(
                 Task(
                     id="task-stuck",
                     workflow_id="wf-lost",
@@ -3269,6 +3289,8 @@ class TestRecoverAbandonedWorkflowsMissingWorktree:
             AutopilotDesign,
             AutopilotProject,
             Feature,
+            Phase,
+            PhaseExecution,
             Task,
             Workflow,
         )
@@ -3318,6 +3340,24 @@ class TestRecoverAbandonedWorkflowsMissingWorktree:
                 )
             )
             session.add(
+                Phase(
+                    id="phase-security-review",
+                    workflow_id="wf-lost",
+                    name="security_review",
+                    order=7,
+                    description="d",
+                    done_definitions=["x"],
+                )
+            )
+            session.add(
+                PhaseExecution(
+                    id="exec-security-review",
+                    phase_id="phase-security-review",
+                    workflow_execution_id="wf-lost",
+                    status="in_progress",
+                )
+            )
+            session.add(
                 Task(
                     id="task-stuck",
                     workflow_id="wf-lost",
@@ -3337,6 +3377,144 @@ class TestRecoverAbandonedWorkflowsMissingWorktree:
             wf = session.query(Workflow).filter_by(id="wf-lost").first()
             assert wf.status == "failed"
             assert wf.working_directory is None
+
+    def test_old_capped_out_task_in_a_different_completed_phase_does_not_block_recovery(
+        self, orch_db_env, tmp_path, monkeypatch
+    ):
+        """Regression, observed live: a workflow that had already been
+        through several goto cycles carried an old "failed" task from an
+        early development-phase attempt that hit its own retry cap, from
+        long before a later retry of that same phase succeeded and the
+        pipeline moved on for real (development's own PhaseExecution had
+        long since gone "completed"). The real, current blocker was a
+        security_review task that had never been retried at all
+        (retry_count=0). Checking retry_count across every failed task
+        ever recorded for the whole workflow -- instead of just the phase
+        actually stuck right now -- refused to recover a workflow whose
+        real blocker was still fully eligible, purely because of this
+        unrelated, ancient, already-superseded history."""
+        from src.autopilot.orchestrator import (
+            OrchestratorLogger,
+            _recover_abandoned_workflows_missing_worktree,
+        )
+        from src.core.database import (
+            AutopilotDesign,
+            AutopilotProject,
+            Feature,
+            Phase,
+            PhaseExecution,
+            Task,
+            Workflow,
+        )
+
+        design_id = "des-73b1ced0"
+        feature_key = "gateway-router-metrics"
+        repo_path, branch = self._make_repo_with_feature_branch(
+            tmp_path, design_id, feature_key
+        )
+
+        import src.core.simple_config
+
+        cfg = src.core.simple_config.Config()
+        cfg.database_path = orch_db_env.engine.url.database
+        cfg.main_repo_path = repo_path
+        cfg.worktree_base_path = tmp_path / ".worktrees"
+        monkeypatch.setattr("src.core.simple_config.get_config", lambda: cfg)
+
+        with orch_db_env.session_scope() as session:
+            session.add(AutopilotProject(id="proj-1", name="p", base_dir=str(repo_path)))
+            session.add(
+                AutopilotDesign(id=design_id, project_id="proj-1", filename="d.md", name="D")
+            )
+            session.add(
+                Workflow(
+                    id="wf-lost",
+                    name="feature pipeline",
+                    phases_folder_path="/tmp",
+                    status="failed",
+                    status_reason=(
+                        "Abandoned: no agent/task activity for 10 consecutive "
+                        "scans -- likely lost mid-flight across a backend restart"
+                    ),
+                    working_directory=None,
+                    definition_id="autopilot",
+                )
+            )
+            session.add(
+                Feature(
+                    id="feature-row-1",
+                    design_id=design_id,
+                    feature_key=feature_key,
+                    name="Gateway Router Metrics",
+                    scope="s",
+                    status="active",
+                    workflow_id="wf-lost",
+                )
+            )
+            # Old, superseded development-phase attempt: already completed
+            # for real (a later retry succeeded), carrying an old capped-out
+            # failed task as harmless history.
+            session.add(
+                Phase(
+                    id="phase-development", workflow_id="wf-lost", name="development",
+                    order=4, description="d", done_definitions=["x"],
+                )
+            )
+            session.add(
+                PhaseExecution(
+                    id="exec-development", phase_id="phase-development",
+                    workflow_execution_id="wf-lost", status="completed",
+                )
+            )
+            session.add(
+                Task(
+                    id="task-old-capped",
+                    workflow_id="wf-lost",
+                    phase_id="phase-development",
+                    raw_description="r",
+                    done_definition="d",
+                    status="failed",
+                    failure_reason="Orphaned: never dispatched to an agent",
+                    retry_count=2,
+                )
+            )
+            # The real, current blocker -- never retried.
+            session.add(
+                Phase(
+                    id="phase-security-review", workflow_id="wf-lost", name="security_review",
+                    order=7, description="d", done_definitions=["x"],
+                )
+            )
+            session.add(
+                PhaseExecution(
+                    id="exec-security-review", phase_id="phase-security-review",
+                    workflow_execution_id="wf-lost", status="in_progress",
+                )
+            )
+            session.add(
+                Task(
+                    id="task-stuck",
+                    workflow_id="wf-lost",
+                    phase_id="phase-security-review",
+                    raw_description="r",
+                    done_definition="d",
+                    status="failed",
+                    failure_reason="Task stuck: no agent activity for >5 minutes",
+                    retry_count=0,
+                )
+            )
+
+        recovered = _recover_abandoned_workflows_missing_worktree(OrchestratorLogger(tmp_path))
+
+        assert recovered == 1
+        with orch_db_env.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-lost").first()
+            assert wf.status == "active"
+            assert wf.working_directory is not None
+            # The old, unrelated task must be left completely untouched.
+            old_task = session.query(Task).filter_by(id="task-old-capped").first()
+            assert old_task.status == "failed"
+            assert old_task.retry_count == 2
 
 
 class TestWorkflowAppearsAbandoned:
