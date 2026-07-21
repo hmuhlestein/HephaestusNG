@@ -1899,7 +1899,38 @@ def scan_design_queue(queue_dir: Path, processed_hashes: Set[str]) -> List[Desig
                 continue
             content_hash = file_hash(filepath)
             if content_hash in processed_hashes:
-                continue
+                # Self-heal: if the design is marked processed but its
+                # features are all pending (e.g. server crashed between
+                # marking processed and creating features), re-queue it.
+                try:
+                    from src.core.database import (
+                        AutopilotDesign as _AD,
+                        Feature as _Feat,
+                        get_db as _gdb,
+                    )
+                    with _gdb() as _db:
+                        _des = _db.query(_AD).filter_by(
+                            content_hash=content_hash
+                        ).first()
+                        if _des:
+                            _feats = _db.query(_Feat).filter_by(
+                                design_id=_des.id
+                            ).all()
+                            if not _feats or all(
+                                f.status == "pending" for f in _feats
+                            ):
+                                logger.warning(
+                                    f"[SELF-HEAL] Design {_des.name} is in "
+                                    f"processed_hashes but has no features "
+                                    f"or all pending — re-queuing"
+                                )
+                                processed_hashes.discard(content_hash)
+                            else:
+                                continue
+                        else:
+                            continue
+                except Exception:
+                    continue
             name = filepath.stem.replace("_", " ").replace("-", " ").title()
             designs.append(
                 DesignEntry(
@@ -5167,7 +5198,7 @@ def _cap_out_review_phase(
     run_count: int,
     max_runs: int,
     logger: OrchestratorLogger,
-) -> bool:
+) -> Optional[bool]:
     """A review phase (architectural_review/adversarial_review, or any
     other phase opted into workflow.yaml's max_review_runs) hit its run cap
     without ever scoring clean -- stop looping instead of spawning yet
@@ -5181,16 +5212,36 @@ def _cap_out_review_phase(
     completion path _create_phase_task already uses to skip a clean
     forensics_analysis run (_fire_phase_transition) -- no new completion
     mechanism, just a different reason for using it.
+
+    Returns True/False (the outcome of firing the transition) once capped
+    out successfully. Returns None if it couldn't safely cap out at all
+    (no working_directory, or this isn't a known gated phase) -- callers
+    must treat None as "fall through and create a normal task instead,"
+    not as a completed action: silently returning False here would strand
+    the phase with no task, no synthetic completion, and no forward
+    progress, forever, with nothing but a debug-level log to explain why.
     """
     from src.autopilot.spec import GATE_RESULT_ARTIFACTS, get_review_findings_history
 
     workflow = db.query(Workflow).filter_by(id=workflow_id).first()
     if not workflow or not workflow.working_directory:
-        return False
+        logger.warning(
+            f"[PHASE-TASK] {phase.name} hit its review-run cap ({run_count}/"
+            f"{max_runs}) but has no working_directory to write a synthetic "
+            "completion to -- falling through to a normal task instead of "
+            "stranding the phase silently"
+        )
+        return None
 
     artifacts = GATE_RESULT_ARTIFACTS.get(phase.name, ())
     if not artifacts:
-        return False
+        logger.warning(
+            f"[PHASE-TASK] {phase.name} hit its review-run cap ({run_count}/"
+            f"{max_runs}) but isn't a known gated phase (no "
+            "GATE_RESULT_ARTIFACTS entry) -- falling through to a normal "
+            "task instead of stranding the phase silently"
+        )
+        return None
 
     docs_dir = Path(workflow.working_directory) / "docs" / phase.name
     docs_dir.mkdir(parents=True, exist_ok=True)
