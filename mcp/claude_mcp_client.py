@@ -312,7 +312,15 @@ async def update_task_status(
     DO NOT use 'agent-mcp' or any placeholder - it will cause "Agent not authorized" errors!
     """
     # Same fallback as save_memory -- models occasionally omit these even
-    # when the rendered prompt example shows them filled in.
+    # when the rendered prompt example shows them filled in. Note this only
+    # helps when the model OMITS the param entirely: `x or env` still keeps
+    # a WRONG-but-non-empty value the model supplied, since a truthy string
+    # always wins over the fallback. Observed live: a model that
+    # consistently passed a truncated 8-char task_id (this codebase's own
+    # logs display them that way everywhere) never triggered this fallback
+    # even once, because it always supplied *something*. complete_my_task
+    # below closes that gap by not accepting task_id/agent_id as parameters
+    # at all.
     agent_id = agent_id or os.environ.get("HEPHAESTUS_AGENT_ID")
     task_id = task_id or os.environ.get("HEPHAESTUS_TASK_ID")
     if not agent_id:
@@ -321,6 +329,20 @@ async def update_task_status(
         return "❌ Failed to update task status: task_id was not provided and HEPHAESTUS_TASK_ID is not set in the environment"
     if not status:
         return "❌ Failed to update task status: status is required (done/failed/in_progress)"
+    return await _post_task_status(task_id, agent_id, status, summary, failure_reason, key_learnings)
+
+
+async def _post_task_status(
+    task_id: str,
+    agent_id: str,
+    status: str,
+    summary: str,
+    failure_reason: str,
+    key_learnings: list,
+) -> str:
+    """Shared HTTP call + response formatting for update_task_status and
+    complete_my_task -- the only difference between them is how task_id/
+    agent_id get resolved before reaching here."""
     try:
         async with httpx.AsyncClient() as client:
             payload = {
@@ -361,6 +383,50 @@ async def update_task_status(
                 return f"❌ Failed to update task status: {response.text}"
     except Exception as e:
         return f"❌ Error updating task status: {str(e)}"
+
+
+@mcp.tool()
+async def complete_my_task(
+    status: str = None,
+    summary: str = "",
+    failure_reason: str = "",
+    key_learnings: list = None,
+) -> str:
+    """Mark YOUR OWN currently-assigned task done or failed.
+
+    No task_id or agent_id needed -- unlike update_task_status, this tool
+    doesn't even accept them as parameters, so there's nothing to mistype
+    or truncate. Both are read directly from this session's own
+    environment (HEPHAESTUS_AGENT_ID / HEPHAESTUS_TASK_ID, set when this
+    agent was created) -- the same values update_task_status falls back to
+    when they're omitted, except here that's the ONLY path, not a fallback
+    a wrong-but-present value can silently bypass.
+
+    Use this for the normal case of finishing your own work.
+    update_task_status still exists for the rare case of updating a task
+    that isn't your current one.
+
+    Args:
+        status: New status (done/failed/in_progress)
+        summary: Summary of what was accomplished (for done status)
+        failure_reason: Reason for failure (for failed status)
+        key_learnings: List of key learnings from the task
+
+    Example:
+        complete_my_task(status="done", summary="Fixed 3 vulnerabilities...")
+    """
+    agent_id = os.environ.get("HEPHAESTUS_AGENT_ID")
+    task_id = os.environ.get("HEPHAESTUS_TASK_ID")
+    if not agent_id or not task_id:
+        return (
+            "❌ Failed to complete task: HEPHAESTUS_AGENT_ID/HEPHAESTUS_TASK_ID "
+            "are not set in this session's environment. Use "
+            "update_task_status with the explicit task_id/agent_id from "
+            "your initial prompt instead."
+        )
+    if not status:
+        return "❌ Failed to complete task: status is required (done/failed/in_progress)"
+    return await _post_task_status(task_id, agent_id, status, summary, failure_reason, key_learnings)
 
 
 @mcp.tool()

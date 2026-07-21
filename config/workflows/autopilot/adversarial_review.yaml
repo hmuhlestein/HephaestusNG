@@ -293,11 +293,10 @@ additional_notes: |
   WHEN YOU ARE DONE - MARK YOUR TASK AS COMPLETE (DO NOT SKIP THIS)
   ═══════════════════════════════════════════════════════════════════════
 
-  CRITICAL: You MUST call the update_task_status tool. The pipeline will stall
+  CRITICAL: You MUST call the complete_my_task tool. The pipeline will stall
   without it.
 
-  hephaestus_update_task_status(
-    task_id="<your task id>",
+  hephaestus_complete_my_task(
     agent_id="<YOUR EXACT agent ID from the task assignment>",
     status="done",
     summary="<brief summary: N BLOCKERs found, M WARNINGs found — see adversarial_review_report.md>",

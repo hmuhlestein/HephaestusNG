@@ -3533,6 +3533,51 @@ async def list_tools():
                 },
             },
             {
+                "name": "complete_my_task",
+                "description": (
+                    "Mark YOUR OWN currently-assigned task done or failed -- "
+                    "no task_id needed, the server already knows which task "
+                    "you're working on. Use this instead of "
+                    "update_task_status for the normal case of finishing "
+                    "your own work; update_task_status still exists for the "
+                    "rare case of updating a task that isn't your current one."
+                ),
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "agent_id": {
+                            "type": "string",
+                            "description": "Your agent ID",
+                        },
+                        "status": {
+                            "type": "string",
+                            "enum": ["done", "failed", "in_progress", "blocked"],
+                            "description": "New status for your current task",
+                        },
+                        "summary": {
+                            "type": "string",
+                            "description": "Summary of what was done or why it failed",
+                            "default": "",
+                        },
+                        "failure_reason": {
+                            "type": "string",
+                            "description": "Reason for failure (if status is failed)",
+                            "default": "",
+                        },
+                        "key_learnings": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Key learnings to save as memories",
+                        },
+                        "metadata": {
+                            "type": "object",
+                            "description": "Optional structured data (e.g. verdict, issue counts) — folded into summary",
+                        },
+                    },
+                    "required": ["agent_id", "status"],
+                },
+            },
+            {
                 "name": "create_ticket",
                 "description": "Create a new ticket in the Kanban board",
                 "input_schema": {
@@ -4616,6 +4661,55 @@ async def _tool_update_task_status(arguments: Dict[str, Any]):
     return await update_task_status(request, agent_id=agent_id)
 
 
+async def _tool_complete_my_task(arguments: Dict[str, Any]):
+    """Mark the calling agent's own current task done/failed -- no task_id
+    needed. Resolves it from Agent.current_task_id (the server already
+    knows this; it's set when the task's agent was created) and delegates
+    to the same update_task_status handler update_task_status's own tool
+    bridge uses, so both paths share identical validation/commit/gate
+    logic.
+
+    Exists because agents kept passing a mangled task_id to
+    update_task_status -- observed live, repeatedly, an agent using the
+    8-char short form this codebase's own logs display everywhere
+    (task.id[:8]) instead of the full UUID, hard-failing every retry on a
+    task that had actually already finished its real work.
+    """
+    status = arguments.get("status")
+    summary = arguments.get("summary", "")
+    failure_reason = arguments.get("failure_reason")
+    key_learnings = arguments.get("key_learnings", [])
+    metadata = arguments.get("metadata")
+    agent_id = arguments.get("agent_id")
+
+    if not agent_id or not status:
+        raise HTTPException(status_code=400, detail="agent_id and status are required")
+
+    session = server_state.db_manager.get_session()
+    try:
+        agent = session.query(Agent).filter_by(id=agent_id).first()
+        task_id = agent.current_task_id if agent else None
+    finally:
+        session.close()
+
+    if not task_id:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Agent {agent_id} has no current task on record -- "
+            "nothing to mark complete.",
+        )
+
+    request = UpdateTaskStatusRequest(
+        task_id=task_id,
+        status=status,
+        summary=summary or "Task completed",
+        key_learnings=key_learnings or [],
+        failure_reason=failure_reason,
+        metadata=metadata,
+    )
+    return await update_task_status(request, agent_id=agent_id)
+
+
 # Registry for non-devtools MCP tools: name -> async handler(arguments).
 # Replaces a 9-branch if/elif chain (SOLID review 1.5) — a new tool is added
 # by defining one handler and registering it here, instead of editing this
@@ -4628,6 +4722,7 @@ _MCP_TOOLS: Dict[str, Any] = {
     "search_memory": _tool_search_memory,
     "get_task_status": _tool_get_task_status,
     "update_task_status": _tool_update_task_status,
+    "complete_my_task": _tool_complete_my_task,
     "create_ticket": _tool_create_ticket,
     "search_tickets": _tool_search_tickets,
     "update_ticket_status": _tool_update_ticket_status,
