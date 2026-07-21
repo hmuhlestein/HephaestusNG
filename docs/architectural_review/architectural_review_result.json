@@ -1,40 +1,5 @@
 {
-  "verdict": "PASS",
-  "phase": "architectural_review",
-  "reviewer": "Architecture Design Agent (Phase 5)",
-  "date": "2026-07-21",
-  "run": 3,
-  "commit_reviewed": "c938cbf",
   "blocker_count": 0,
-  "fix_count": 0,
-  "defer_count": 4,
-  "adversarial_changes_verified": {
-    "pi_extension_port_fix": "COMPLIANT - bug fix, no architecture violation",
-    "cost_derivation_hardening": "COMPLIANT - Phase 0 workflow inclusion strengthens rollup chain",
-    "budget_limit_clear_api": "COMPLIANT - explicit clear mechanism improves API clarity"
-  },
-  "defers": [
-    {
-      "id": "D-1",
-      "title": "No pagination on cost query endpoints",
-      "severity": "DEFER"
-    },
-    {
-      "id": "D-2",
-      "title": "datetime.utcnow() deprecation",
-      "severity": "DEFER"
-    },
-    {
-      "id": "D-3",
-      "title": "Test coverage for orchestrator guard functions",
-      "severity": "DEFER"
-    },
-    {
-      "id": "D-4",
-      "title": "LangChain usage.include=true smoke test",
-      "severity": "DEFER"
-    }
-  ],
-  "test_results": "52 passed, 0 failed",
-  "overall_assessment": "Adversarial review fixes are architecturally compliant. No new findings. Phase 7 can proceed."
+  "capped": true,
+  "capped_after_runs": 3
 }
