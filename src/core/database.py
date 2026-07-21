@@ -488,6 +488,8 @@ class Phase(Base):
     # Per-phase CLI configuration (optional - falls back to global defaults)
     cli_tool = Column(String, nullable=True)  # "claude", "opencode", "droid", "codex", "pi", "swarm"
     cli_model = Column(String, nullable=True)  # "sonnet", "opus", "haiku", "GLM-4.6", etc.
+    fallback_cli_tool = Column(String, nullable=True)  # Fallback CLI tool when primary fails
+    fallback_cli_model = Column(String, nullable=True)  # Fallback model when primary fails
     glm_api_token_env = Column(String, nullable=True)  # Environment variable name for GLM token
     thinking_level = Column(String, nullable=True)  # pi reasoning budget: off|minimal|low|medium|high|xhigh
 
@@ -1387,6 +1389,7 @@ class DatabaseManager:
         self._migrate_workflow_paused_retry_count_column()
         self._migrate_task_action_target_phase_column()
         self._migrate_cost_tracking_columns()
+        self._migrate_phase_fallback_columns()
 
     def _create_fts5_tables(self):
         """Create FTS5 virtual tables and triggers for ticket search."""
@@ -2008,6 +2011,23 @@ class DatabaseManager:
                 logger.info("Created cost_entries indexes")
         except Exception as e:
             logger.debug(f"Cost entries indexes (may already exist): {e}")
+
+    def _migrate_phase_fallback_columns(self):
+        """Add fallback_cli_tool and fallback_cli_model columns to phases table."""
+        try:
+            with self.engine.connect() as conn:
+                try:
+                    conn.execute(text("ALTER TABLE phases ADD COLUMN fallback_cli_tool VARCHAR"))
+                except Exception:
+                    pass  # Column already exists
+                try:
+                    conn.execute(text("ALTER TABLE phases ADD COLUMN fallback_cli_model VARCHAR"))
+                except Exception:
+                    pass  # Column already exists
+                conn.commit()
+                logger.info("Migrated phases fallback_cli_tool/fallback_cli_model columns")
+        except Exception as e:
+            logger.debug(f"Phases fallback columns migration (may already exist): {e}")
 
     def get_session(self):
         """Get a database session."""
