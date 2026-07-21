@@ -134,9 +134,7 @@ def agent_on_workflow(db_session, active_autopilot_workflow):
 
 class TestPauseProjectWorkflows:
     def test_pauses_autopilot_workflow(self, db_session, active_autopilot_workflow):
-        count = _pause_project_workflows(
-            db_session, active_autopilot_workflow.project_id, paused_by="budget"
-        )
+        count = _pause_project_workflows(db_session, active_autopilot_workflow.project_id, paused_by="budget")
         db_session.commit()
         assert count == 1
         db_session.refresh(active_autopilot_workflow)
@@ -145,9 +143,7 @@ class TestPauseProjectWorkflows:
         assert active_autopilot_workflow.status_reason == "Budget limit reached"
 
     def test_pauses_phase0_workflow(self, db_session, active_phase0_workflow):
-        count = _pause_project_workflows(
-            db_session, active_phase0_workflow.project_id, paused_by="budget"
-        )
+        count = _pause_project_workflows(db_session, active_phase0_workflow.project_id, paused_by="budget")
         db_session.commit()
         assert count == 1
         db_session.refresh(active_phase0_workflow)
@@ -155,9 +151,7 @@ class TestPauseProjectWorkflows:
         assert active_phase0_workflow.paused_by == "budget"
 
     def test_pauses_both_simultaneously(self, db_session, active_autopilot_workflow, active_phase0_workflow):
-        count = _pause_project_workflows(
-            db_session, active_autopilot_workflow.project_id, paused_by="budget"
-        )
+        count = _pause_project_workflows(db_session, active_autopilot_workflow.project_id, paused_by="budget")
         db_session.commit()
         assert count == 2
         db_session.refresh(active_autopilot_workflow)
@@ -166,29 +160,21 @@ class TestPauseProjectWorkflows:
         assert active_phase0_workflow.paused_by == "budget"
 
     def test_terminates_active_agents(self, db_session, active_autopilot_workflow, agent_on_workflow):
-        _pause_project_workflows(
-            db_session, active_autopilot_workflow.project_id, paused_by="budget"
-        )
+        _pause_project_workflows(db_session, active_autopilot_workflow.project_id, paused_by="budget")
         db_session.commit()
         db_session.refresh(agent_on_workflow)
         assert agent_on_workflow.status == "terminated"
         assert agent_on_workflow.terminated_at is not None
 
     def test_idempotent(self, db_session, active_autopilot_workflow):
-        c1 = _pause_project_workflows(
-            db_session, active_autopilot_workflow.project_id, paused_by="budget"
-        )
+        c1 = _pause_project_workflows(db_session, active_autopilot_workflow.project_id, paused_by="budget")
         db_session.commit()
-        c2 = _pause_project_workflows(
-            db_session, active_autopilot_workflow.project_id, paused_by="budget"
-        )
+        c2 = _pause_project_workflows(db_session, active_autopilot_workflow.project_id, paused_by="budget")
         assert c1 == 1
         assert c2 == 0  # Already paused — no-op
 
     def test_user_pause_also_works(self, db_session, active_autopilot_workflow):
-        _pause_project_workflows(
-            db_session, active_autopilot_workflow.project_id, paused_by="user"
-        )
+        _pause_project_workflows(db_session, active_autopilot_workflow.project_id, paused_by="user")
         db_session.commit()
         db_session.refresh(active_autopilot_workflow)
         assert active_autopilot_workflow.paused_by == "user"
@@ -202,9 +188,7 @@ class TestPauseProjectWorkflows:
         db_session.commit()
 
         # Now pause by user (simulating /autopilot/stop)
-        _pause_project_workflows(
-            db_session, active_autopilot_workflow.project_id, paused_by="user"
-        )
+        _pause_project_workflows(db_session, active_autopilot_workflow.project_id, paused_by="user")
         db_session.commit()
         db_session.refresh(active_autopilot_workflow)
         assert active_autopilot_workflow.paused_by == "user"
@@ -232,9 +216,7 @@ class TestPauseProjectWorkflows:
         starting_agent.current_task_id = task.id
         db_session.commit()
 
-        _pause_project_workflows(
-            db_session, active_autopilot_workflow.project_id, paused_by="budget"
-        )
+        _pause_project_workflows(db_session, active_autopilot_workflow.project_id, paused_by="budget")
         db_session.commit()
         db_session.refresh(starting_agent)
         assert starting_agent.status == "terminated"  # Starting agents must be terminated
@@ -313,6 +295,7 @@ class TestPausedByGeneralization:
 
         # Need at least one phase with a done task for the auto-resume to trigger
         from src.core.database import Phase, PhaseExecution
+
         phase = Phase(
             id=f"phase-{uuid.uuid4().hex[:8]}",
             workflow_id=active_autopilot_workflow.id,
@@ -438,11 +421,7 @@ class TestUpdateProjectClearsBudgetPause:
         db_session.commit()
 
         if project.cost_limit_usd is None or project.cost_total_usd < project.cost_limit_usd:
-            budget_paused = (
-                db_session.query(Workflow)
-                .filter(Workflow.project_id == project.id, Workflow.paused_by == "budget")
-                .all()
-            )
+            budget_paused = db_session.query(Workflow).filter(Workflow.project_id == project.id, Workflow.paused_by == "budget").all()
             for wf in budget_paused:
                 wf.paused_by = None
                 wf.status = "active"

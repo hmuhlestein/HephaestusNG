@@ -364,11 +364,11 @@ def _discover_session_file(session_id: str, cwd: str) -> Optional[Path]:
         return None
 
     # Sanitize: replace slashes and special chars
-    sanitized = re.sub(r'[^a-zA-Z0-9_.\-]', '-', cwd)
+    sanitized = re.sub(r"[^a-zA-Z0-9_.\-]", "-", cwd)
     # Collapse multiple dashes
-    sanitized = re.sub(r'-+', '-', sanitized)
+    sanitized = re.sub(r"-+", "-", sanitized)
     # Remove leading/trailing dashes
-    sanitized = sanitized.strip('-')
+    sanitized = sanitized.strip("-")
 
     sessions_dir = Path.home() / ".pi" / "agent" / "sessions" / f"--{sanitized}--"
 
@@ -462,8 +462,8 @@ def collect_task_cost(task_id: str) -> None:
                 if ".." in cwd or "~" in cwd:
                     logger.warning(f"Rejected Claude Code session discovery with suspicious cwd: {cwd}")
                 else:
-                    sanitized = re.sub(r'[^a-zA-Z0-9_.\-]', '-', cwd)
-                    sanitized = re.sub(r'-+', '-', sanitized).strip('-')
+                    sanitized = re.sub(r"[^a-zA-Z0-9_.\-]", "-", cwd)
+                    sanitized = re.sub(r"-+", "-", sanitized).strip("-")
                     claude_dir = Path.home() / ".claude" / "projects" / sanitized
 
                     # SECURITY: Verify the resolved path is within expected directory

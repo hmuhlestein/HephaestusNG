@@ -19,32 +19,34 @@ from src.services.cost_collection_service import (
 
 def _make_assistant_message(cost_total: float, model: str = "anthropic/claude-sonnet-4") -> str:
     """Build a realistic pi session JSONL line with usage."""
-    return json.dumps({
-        "type": "message",
-        "id": uuid.uuid4().hex[:8],
-        "timestamp": "2026-07-21T12:00:00.000Z",
-        "message": {
-            "role": "assistant",
-            "api": "openai-completions",
-            "provider": "openrouter",
-            "model": model,
-            "usage": {
-                "input": 5000,
-                "output": 200,
-                "cacheRead": 100,
-                "cacheWrite": 0,
-                "reasoning": 50,
-                "totalTokens": 5350,
-                "cost": {
-                    "input": 0.005,
-                    "output": 0.0003,
-                    "cacheRead": 0.00001,
+    return json.dumps(
+        {
+            "type": "message",
+            "id": uuid.uuid4().hex[:8],
+            "timestamp": "2026-07-21T12:00:00.000Z",
+            "message": {
+                "role": "assistant",
+                "api": "openai-completions",
+                "provider": "openrouter",
+                "model": model,
+                "usage": {
+                    "input": 5000,
+                    "output": 200,
+                    "cacheRead": 100,
                     "cacheWrite": 0,
-                    "total": cost_total,
+                    "reasoning": 50,
+                    "totalTokens": 5350,
+                    "cost": {
+                        "input": 0.005,
+                        "output": 0.0003,
+                        "cacheRead": 0.00001,
+                        "cacheWrite": 0,
+                        "total": cost_total,
+                    },
                 },
             },
-        },
-    })
+        }
+    )
 
 
 def _make_temp_jsonl(lines: list[str]) -> Path:
@@ -153,22 +155,24 @@ class TestPiJsonlCollector:
 
     def test_token_extraction(self):
         """Token counts are extracted from usage data."""
-        line = json.dumps({
-            "type": "message",
-            "id": "abc",
-            "message": {
-                "role": "assistant",
-                "model": "openai/gpt-4o",
-                "usage": {
-                    "input": 9430,
-                    "output": 222,
-                    "cacheRead": 512,
-                    "cacheWrite": 0,
-                    "reasoning": 99,
-                    "cost": {"total": 0.005},
+        line = json.dumps(
+            {
+                "type": "message",
+                "id": "abc",
+                "message": {
+                    "role": "assistant",
+                    "model": "openai/gpt-4o",
+                    "usage": {
+                        "input": 9430,
+                        "output": 222,
+                        "cacheRead": 512,
+                        "cacheWrite": 0,
+                        "reasoning": 99,
+                        "cost": {"total": 0.005},
+                    },
                 },
-            },
-        })
+            }
+        )
         f = _make_temp_jsonl([line])
         collector = PiJsonlCollector()
         entries, _ = collector.collect("s", "t", "w", "a", f, checkpoint=0)
@@ -202,9 +206,7 @@ class TestPiJsonlCollector:
     def test_missing_file(self):
         """Missing session file returns empty entries."""
         collector = PiJsonlCollector()
-        entries, checkpoint = collector.collect(
-            "s", "t", "w", "a", Path("/nonexistent/file.jsonl"), checkpoint=0
-        )
+        entries, checkpoint = collector.collect("s", "t", "w", "a", Path("/nonexistent/file.jsonl"), checkpoint=0)
         assert len(entries) == 0
         assert checkpoint == 0
 
@@ -215,24 +217,26 @@ class TestPiJsonlCollector:
 class TestClaudeCodeCollector:
     def test_token_pricing(self):
         """Claude Code collector converts tokens to dollars via price table."""
-        line = json.dumps({
-            "type": "message",
-            "id": "cc1",
-            "message": {
-                "role": "assistant",
-                "model": "claude-sonnet-4",
-                "usage": {
-                    "input_tokens": 1_000_000,  # 1M input tokens
-                    "output_tokens": 100_000,   # 100k output tokens
-                    "cache_creation_input_tokens": 0,
-                    "cache_read_input_tokens": 0,
-                    "cache_creation": {
-                        "ephemeral_1h_input_tokens": 0,
-                        "ephemeral_5m_input_tokens": 0,
+        line = json.dumps(
+            {
+                "type": "message",
+                "id": "cc1",
+                "message": {
+                    "role": "assistant",
+                    "model": "claude-sonnet-4",
+                    "usage": {
+                        "input_tokens": 1_000_000,  # 1M input tokens
+                        "output_tokens": 100_000,  # 100k output tokens
+                        "cache_creation_input_tokens": 0,
+                        "cache_read_input_tokens": 0,
+                        "cache_creation": {
+                            "ephemeral_1h_input_tokens": 0,
+                            "ephemeral_5m_input_tokens": 0,
+                        },
                     },
                 },
-            },
-        })
+            }
+        )
         f = _make_temp_jsonl([line])
         collector = ClaudeCodeCollector()
         entries, _ = collector.collect("s", "t", "w", "a", f, checkpoint=0)
@@ -244,24 +248,26 @@ class TestClaudeCodeCollector:
 
     def test_cache_1h_cost(self):
         """Cache 1h tokens use the correct (higher) cache-write rate."""
-        line = json.dumps({
-            "type": "message",
-            "id": "cc2",
-            "message": {
-                "role": "assistant",
-                "model": "claude-sonnet-4",
-                "usage": {
-                    "input_tokens": 0,
-                    "output_tokens": 0,
-                    "cache_creation_input_tokens": 0,
-                    "cache_read_input_tokens": 0,
-                    "cache_creation": {
-                        "ephemeral_1h_input_tokens": 1_000_000,
-                        "ephemeral_5m_input_tokens": 0,
+        line = json.dumps(
+            {
+                "type": "message",
+                "id": "cc2",
+                "message": {
+                    "role": "assistant",
+                    "model": "claude-sonnet-4",
+                    "usage": {
+                        "input_tokens": 0,
+                        "output_tokens": 0,
+                        "cache_creation_input_tokens": 0,
+                        "cache_read_input_tokens": 0,
+                        "cache_creation": {
+                            "ephemeral_1h_input_tokens": 1_000_000,
+                            "ephemeral_5m_input_tokens": 0,
+                        },
                     },
                 },
-            },
-        })
+            }
+        )
         f = _make_temp_jsonl([line])
         collector = ClaudeCodeCollector()
         entries, _ = collector.collect("s", "t", "w", "a", f, checkpoint=0)
@@ -272,21 +278,23 @@ class TestClaudeCodeCollector:
 
     def test_cache_read_cost(self):
         """Cache-read tokens use the cheapest rate."""
-        line = json.dumps({
-            "type": "message",
-            "id": "cc3",
-            "message": {
-                "role": "assistant",
-                "model": "claude-sonnet-4",
-                "usage": {
-                    "input_tokens": 0,
-                    "output_tokens": 0,
-                    "cache_creation_input_tokens": 0,
-                    "cache_read_input_tokens": 1_000_000,
-                    "cache_creation": {"ephemeral_1h_input_tokens": 0, "ephemeral_5m_input_tokens": 0},
+        line = json.dumps(
+            {
+                "type": "message",
+                "id": "cc3",
+                "message": {
+                    "role": "assistant",
+                    "model": "claude-sonnet-4",
+                    "usage": {
+                        "input_tokens": 0,
+                        "output_tokens": 0,
+                        "cache_creation_input_tokens": 0,
+                        "cache_read_input_tokens": 1_000_000,
+                        "cache_creation": {"ephemeral_1h_input_tokens": 0, "ephemeral_5m_input_tokens": 0},
+                    },
                 },
-            },
-        })
+            }
+        )
         f = _make_temp_jsonl([line])
         collector = ClaudeCodeCollector()
         entries, _ = collector.collect("s", "t", "w", "a", f, checkpoint=0)
@@ -297,21 +305,23 @@ class TestClaudeCodeCollector:
 
     def test_unknown_model_defaults_to_sonnet(self):
         """Unknown model defaults to claude-sonnet-4 pricing."""
-        line = json.dumps({
-            "type": "message",
-            "id": "cc4",
-            "message": {
-                "role": "assistant",
-                "model": "unknown-model-xyz",
-                "usage": {
-                    "input_tokens": 1_000_000,
-                    "output_tokens": 0,
-                    "cache_creation_input_tokens": 0,
-                    "cache_read_input_tokens": 0,
-                    "cache_creation": {"ephemeral_1h_input_tokens": 0, "ephemeral_5m_input_tokens": 0},
+        line = json.dumps(
+            {
+                "type": "message",
+                "id": "cc4",
+                "message": {
+                    "role": "assistant",
+                    "model": "unknown-model-xyz",
+                    "usage": {
+                        "input_tokens": 1_000_000,
+                        "output_tokens": 0,
+                        "cache_creation_input_tokens": 0,
+                        "cache_read_input_tokens": 0,
+                        "cache_creation": {"ephemeral_1h_input_tokens": 0, "ephemeral_5m_input_tokens": 0},
+                    },
                 },
-            },
-        })
+            }
+        )
         f = _make_temp_jsonl([line])
         collector = ClaudeCodeCollector()
         entries, _ = collector.collect("s", "t", "w", "a", f, checkpoint=0)
@@ -322,16 +332,17 @@ class TestClaudeCodeCollector:
 
     def test_skip_zero_cost(self):
         """Zero-cost entries are skipped."""
-        line = json.dumps({
-            "type": "message",
-            "id": "cc5",
-            "message": {
-                "role": "assistant",
-                "model": "claude-sonnet-4",
-                "usage": {"input_tokens": 0, "output_tokens": 0, "cache_creation_input_tokens": 0,
-                          "cache_read_input_tokens": 0, "cache_creation": {}},
-            },
-        })
+        line = json.dumps(
+            {
+                "type": "message",
+                "id": "cc5",
+                "message": {
+                    "role": "assistant",
+                    "model": "claude-sonnet-4",
+                    "usage": {"input_tokens": 0, "output_tokens": 0, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0, "cache_creation": {}},
+                },
+            }
+        )
         f = _make_temp_jsonl([line])
         collector = ClaudeCodeCollector()
         entries, _ = collector.collect("s", "t", "w", "a", f, checkpoint=0)
@@ -345,9 +356,7 @@ class TestCodexStubCollector:
     def test_returns_empty(self):
         """Stub collector always returns empty."""
         collector = CodexStubCollector()
-        entries, checkpoint = collector.collect(
-            "s", "t", "w", "a", Path("/fake"), checkpoint=10
-        )
+        entries, checkpoint = collector.collect("s", "t", "w", "a", Path("/fake"), checkpoint=10)
         assert entries == []
         assert checkpoint == 10
 
@@ -374,9 +383,7 @@ class TestOpenCodeCollector:
             json.dump(data, f)
 
         collector = OpenCodeCollector()
-        entries, checkpoint = collector.collect(
-            "s", "t", "w", "a", Path(path), checkpoint=0
-        )
+        entries, checkpoint = collector.collect("s", "t", "w", "a", Path(path), checkpoint=0)
 
         assert len(entries) == 1
         assert entries[0]["cost_usd"] == 0.25
