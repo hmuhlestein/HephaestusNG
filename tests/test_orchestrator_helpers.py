@@ -3,7 +3,7 @@
 import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import ANY, MagicMock, Mock, patch
 
 import pytest
 
@@ -4225,3 +4225,223 @@ class TestGetProjectContextsByPrefix:
             "autopilot_running_pipeline_proj-a",
             "autopilot_running_pipeline_proj-b",
         }
+
+
+class TestCreatePhaseTaskReviewCap:
+    """_create_phase_task's opt-in review-run cap + prior-findings
+    injection (workflow.yaml's max_review_runs) -- closes the review-fix-
+    review loop a forensics_analysis report found (architectural_review
+    ran 19 times, adversarial_review 14 times on one feature): each re-run
+    is a fresh agent session with zero memory of its own findings."""
+
+    def _seed(self, db, phase_name="architectural_review", existing_task_count=0):
+        from src.core.database import Phase, PhaseExecution, Task, Workflow
+
+        with db.session_scope() as session:
+            session.add(
+                Workflow(
+                    id="wf-cap",
+                    name="t",
+                    phases_folder_path="/tmp",
+                    status="active",
+                    working_directory="/tmp/wf-cap",
+                )
+            )
+            session.add(
+                Phase(
+                    id="phase-cap",
+                    workflow_id="wf-cap",
+                    name=phase_name,
+                    order=5,
+                    description="d",
+                    done_definitions=["x"],
+                )
+            )
+            session.add(
+                PhaseExecution(
+                    id="exec-cap",
+                    phase_id="phase-cap",
+                    workflow_execution_id="wf-cap",
+                    status="pending",
+                )
+            )
+            for i in range(existing_task_count):
+                session.add(
+                    Task(
+                        id=f"prior-task-{i}",
+                        workflow_id="wf-cap",
+                        phase_id="phase-cap",
+                        raw_description="r",
+                        done_definition="d",
+                        status="done",
+                    )
+                )
+
+    @patch("src.autopilot.orchestrator.create_agent_for_task_direct")
+    def test_no_injection_or_cap_when_max_review_runs_unset(
+        self, mock_create_agent, orch_db_env, tmp_path
+    ):
+        from src.autopilot.orchestrator import OrchestratorLogger, _create_phase_task
+        from src.core.database import Task
+
+        self._seed(orch_db_env, phase_name="security_review", existing_task_count=5)
+        mock_create_agent.return_value = {"agent_id": "agent-x"}
+
+        with patch("src.autopilot.spec.get_max_review_runs", return_value=None):
+            result = _create_phase_task(
+                "wf-cap", "phase-cap", "security_review", "continue",
+                OrchestratorLogger(tmp_path),
+            )
+
+        assert result is True
+        with orch_db_env.session_scope() as session:
+            new_task = (
+                session.query(Task)
+                .filter(Task.phase_id == "phase-cap", Task.status == "in_progress")
+                .first()
+            )
+            assert new_task is not None
+            assert "PRIOR FINDINGS" not in new_task.raw_description
+
+    @patch("src.autopilot.orchestrator.create_agent_for_task_direct")
+    def test_no_injection_on_first_run(self, mock_create_agent, orch_db_env, tmp_path):
+        from src.autopilot.orchestrator import OrchestratorLogger, _create_phase_task
+        from src.core.database import Task
+
+        self._seed(orch_db_env, existing_task_count=0)
+        mock_create_agent.return_value = {"agent_id": "agent-x"}
+
+        with patch("src.autopilot.spec.get_max_review_runs", return_value=3):
+            result = _create_phase_task(
+                "wf-cap", "phase-cap", "architectural_review", "continue",
+                OrchestratorLogger(tmp_path),
+            )
+
+        assert result is True
+        with orch_db_env.session_scope() as session:
+            new_task = (
+                session.query(Task)
+                .filter(Task.phase_id == "phase-cap", Task.status == "in_progress")
+                .first()
+            )
+            assert "PRIOR FINDINGS" not in new_task.raw_description
+
+    @patch("src.autopilot.orchestrator.create_agent_for_task_direct")
+    def test_injects_prior_findings_on_re_entry_under_cap(
+        self, mock_create_agent, orch_db_env, tmp_path
+    ):
+        from src.autopilot.orchestrator import OrchestratorLogger, _create_phase_task
+        from src.core.database import Task
+
+        self._seed(orch_db_env, existing_task_count=1)  # run_count=1, under cap of 3
+        mock_create_agent.return_value = {"agent_id": "agent-x"}
+        history = [
+            {"run_number": 1, "blocker_count": 2, "summary": "B-1 and B-2", "timestamp": "t"}
+        ]
+
+        with patch("src.autopilot.spec.get_max_review_runs", return_value=3), patch(
+            "src.autopilot.spec.get_review_findings_history", return_value=history
+        ):
+            result = _create_phase_task(
+                "wf-cap", "phase-cap", "architectural_review", "continue",
+                OrchestratorLogger(tmp_path),
+            )
+
+        assert result is True
+        with orch_db_env.session_scope() as session:
+            new_task = (
+                session.query(Task)
+                .filter(Task.phase_id == "phase-cap", Task.status == "in_progress")
+                .first()
+            )
+            assert "PRIOR FINDINGS FROM 1 EARLIER RUN(S)" in new_task.raw_description
+            assert "B-1 and B-2" in new_task.raw_description
+            assert "Verify ONLY whether" in new_task.raw_description
+
+    @patch("src.autopilot.orchestrator._fire_phase_transition")
+    @patch("src.autopilot.orchestrator.create_agent_for_task_direct")
+    def test_caps_out_instead_of_creating_another_task(
+        self, mock_create_agent, mock_fire_transition, orch_db_env, tmp_path
+    ):
+        from src.autopilot.orchestrator import OrchestratorLogger, _create_phase_task
+        from src.core.database import Task, Workflow
+
+        self._seed(orch_db_env, existing_task_count=3)  # run_count=3, AT cap of 3
+        mock_fire_transition.return_value = True
+
+        # Point the workflow's working_directory at a real tmp dir so
+        # _cap_out_review_phase can actually write the synthetic artifacts.
+        with orch_db_env.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-cap").first()
+            wf.working_directory = str(tmp_path)
+
+        with patch("src.autopilot.spec.get_max_review_runs", return_value=3), patch(
+            "src.autopilot.spec.get_review_findings_history", return_value=[]
+        ):
+            result = _create_phase_task(
+                "wf-cap", "phase-cap", "architectural_review", "continue",
+                OrchestratorLogger(tmp_path),
+            )
+
+        assert result is True
+        mock_fire_transition.assert_called_once_with(
+            "wf-cap", "phase-cap", "architectural_review", ANY
+        )
+        mock_create_agent.assert_not_called()
+        with orch_db_env.session_scope() as session:
+            # No NEW task created -- still exactly the 3 seeded ones.
+            count = session.query(Task).filter(Task.phase_id == "phase-cap").count()
+            assert count == 3
+
+        result_json = tmp_path / "docs" / "architectural_review" / "architectural_review_result.json"
+        assert result_json.exists()
+        assert json.loads(result_json.read_text())["blocker_count"] == 0
+
+    def test_cap_out_review_phase_writes_caveats_from_history(self, orch_db_env, tmp_path):
+        from src.autopilot.orchestrator import OrchestratorLogger, _cap_out_review_phase
+        from src.core.database import Phase, Workflow
+
+        with orch_db_env.session_scope() as session:
+            session.add(
+                Workflow(
+                    id="wf-caveats",
+                    name="t",
+                    phases_folder_path="/tmp",
+                    status="active",
+                    working_directory=str(tmp_path),
+                )
+            )
+            phase = Phase(
+                id="phase-caveats",
+                workflow_id="wf-caveats",
+                name="adversarial_review",
+                order=6,
+                description="d",
+                done_definitions=["x"],
+            )
+            session.add(phase)
+
+        history = [
+            {"run_number": 1, "blocker_count": 3, "summary": "B-1, B-2, B-3", "timestamp": "t"},
+            {"run_number": 2, "blocker_count": 1, "summary": "B-2 still open", "timestamp": "t"},
+        ]
+
+        with patch(
+            "src.autopilot.spec.get_review_findings_history", return_value=history
+        ), patch(
+            "src.autopilot.orchestrator._fire_phase_transition", return_value=True
+        ) as mock_fire:
+            with orch_db_env.session_scope() as session:
+                phase = session.query(Phase).filter_by(id="phase-caveats").first()
+                result = _cap_out_review_phase(
+                    session, "wf-caveats", phase, run_count=3, max_runs=3,
+                    logger=OrchestratorLogger(tmp_path),
+                )
+
+        assert result is True
+        mock_fire.assert_called_once()
+        report = tmp_path / "docs" / "adversarial_review" / "adversarial_review_report.md"
+        assert report.exists()
+        text = report.read_text()
+        assert "capped after 3 runs" in text
+        assert "B-2 still open" in text

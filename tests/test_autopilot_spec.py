@@ -406,5 +406,106 @@ class TestValidateGateResultSchema:
             assert phase_name in S.GATE_RESULT_REQUIRED_KEYS, phase_name
 
 
+# ── max_review_runs + review-findings history ──────────────────────────
+# Closes the review-fix-review loop a forensics_analysis report found
+# (architectural_review ran 19 times, adversarial_review 14 times on one
+# feature): opt-in per-phase cap + a persisted findings history so a
+# re-run's fresh agent session can verify prior findings instead of
+# re-reviewing from scratch. See _create_phase_task's cap/injection block
+# and _cap_out_review_phase.
+
+
+class TestGetMaxReviewRuns:
+    def test_returns_none_without_workflow_id(self):
+        assert S.get_max_review_runs(None, "architectural_review") is None
+
+    def test_reads_configured_value_from_the_real_autopilot_workflow(self, db_manager):
+        """Integration-flavored on purpose: reads config/workflows/autopilot/
+        workflow.yaml for real, proving the eval_point's max_review_runs
+        key actually round-trips through this lookup, not just a mock."""
+        from src.core.database import Workflow
+
+        with db_manager.session_scope() as session:
+            session.add(
+                Workflow(
+                    id="wf-mrr-1",
+                    name="t",
+                    phases_folder_path="/tmp",
+                    status="active",
+                    definition_id="autopilot",
+                )
+            )
+
+        assert S.get_max_review_runs("wf-mrr-1", "architectural_review") == 3
+        assert S.get_max_review_runs("wf-mrr-1", "adversarial_review") == 3
+
+    def test_returns_none_for_a_phase_that_did_not_opt_in(self, db_manager):
+        from src.core.database import Workflow
+
+        with db_manager.session_scope() as session:
+            session.add(
+                Workflow(
+                    id="wf-mrr-2",
+                    name="t",
+                    phases_folder_path="/tmp",
+                    status="active",
+                    definition_id="autopilot",
+                )
+            )
+
+        assert S.get_max_review_runs("wf-mrr-2", "security_review") is None
+
+    def test_returns_none_for_unknown_definition_id(self, db_manager):
+        from src.core.database import Workflow
+
+        with db_manager.session_scope() as session:
+            session.add(
+                Workflow(
+                    id="wf-mrr-3",
+                    name="t",
+                    phases_folder_path="/tmp",
+                    status="active",
+                    definition_id="does-not-exist",
+                )
+            )
+
+        assert S.get_max_review_runs("wf-mrr-3", "architectural_review") is None
+
+
+class TestReviewFindingsHistory:
+    def test_empty_history_by_default(self, db_manager):
+        assert S.get_review_findings_history("wf-no-history", "architectural_review") == []
+
+    def test_record_then_read_back(self, db_manager):
+        S.record_review_finding(
+            "wf-history-1", "architectural_review", blocker_count=2, summary="B-1, B-2"
+        )
+        history = S.get_review_findings_history("wf-history-1", "architectural_review")
+        assert len(history) == 1
+        assert history[0]["run_number"] == 1
+        assert history[0]["blocker_count"] == 2
+        assert history[0]["summary"] == "B-1, B-2"
+
+    def test_appends_across_multiple_runs(self, db_manager):
+        S.record_review_finding("wf-history-2", "adversarial_review", 3, "B-1, B-2, B-3")
+        S.record_review_finding("wf-history-2", "adversarial_review", 1, "B-2 still open")
+        history = S.get_review_findings_history("wf-history-2", "adversarial_review")
+        assert [h["run_number"] for h in history] == [1, 2]
+        assert history[1]["blocker_count"] == 1
+
+    def test_history_is_isolated_per_phase(self, db_manager):
+        S.record_review_finding("wf-history-3", "architectural_review", 1, "arch finding")
+        S.record_review_finding("wf-history-3", "adversarial_review", 1, "adv finding")
+        assert len(S.get_review_findings_history("wf-history-3", "architectural_review")) == 1
+        assert len(S.get_review_findings_history("wf-history-3", "adversarial_review")) == 1
+
+    def test_summary_is_truncated(self, db_manager):
+        S.record_review_finding(
+            "wf-history-4", "architectural_review", 1, "x" * 1000
+        )
+        history = S.get_review_findings_history("wf-history-4", "architectural_review")
+        assert len(history[0]["summary"]) == 500
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "-p", "no:libtmux"])
