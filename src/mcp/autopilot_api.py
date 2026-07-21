@@ -1518,6 +1518,7 @@ class ProjectUpdate(BaseModel):
     base_dir: Optional[str] = None
     is_default: Optional[bool] = None
     cost_limit_usd: Optional[float] = None
+    clear_cost_limit: bool = False  # Explicit signal to clear the budget
 
 
 class CostEntryCreate(BaseModel):
@@ -1840,11 +1841,11 @@ async def update_project(project_id: str, req: ProjectUpdate):
             proj.is_default = req.is_default
 
         # Handle cost_limit_usd update
-        if req.cost_limit_usd is not None:
-            proj.cost_limit_usd = req.cost_limit_usd
-        elif hasattr(req, "cost_limit_usd") and req.cost_limit_usd is None:
-            # Explicitly clearing the limit
+        if req.clear_cost_limit:
             proj.cost_limit_usd = None
+        elif req.cost_limit_usd is not None:
+            proj.cost_limit_usd = req.cost_limit_usd
+        # else: leave unchanged (don't wipe on partial updates)
 
         db.flush()
 

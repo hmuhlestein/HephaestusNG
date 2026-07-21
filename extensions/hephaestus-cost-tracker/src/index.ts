@@ -5,7 +5,7 @@
  * Posts costs to Hephaestus API and shows running cost in TUI.
  * 
  * Environment Variables:
- * - HEPHAESTUS_API_URL: Base URL for Hephaestus API (default: http://localhost:8000)
+ * - HEPHAESTUS_API_URL: Base URL for Hephaestus API (default: http://localhost:8300)
  */
 
 // Pi extension API types (simplified)
@@ -55,7 +55,7 @@ class HephaestusCostTracker {
   private workflowId?: string;
 
   constructor() {
-    this.apiUrl = process.env.HEPHAESTUS_API_URL || 'http://localhost:8000';
+    this.apiUrl = process.env.HEPHAESTUS_API_URL || 'http://localhost:8300';
   }
 
   /**
@@ -120,7 +120,7 @@ class HephaestusCostTracker {
    * Post cost entry to Hephaestus API.
    */
   private async postCost(entry: CostEntry): Promise<void> {
-    const url = `${this.apiUrl}/cost-entries`;
+    const url = `${this.apiUrl}/api/autopilot/cost-entries`;
     
     const response = await fetch(url, {
       method: 'POST',
