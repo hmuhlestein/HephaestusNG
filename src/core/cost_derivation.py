@@ -73,6 +73,13 @@ def record_cost(
     Returns:
         The created CostEntry
     """
+    # Validate cost_usd
+    if cost_usd < 0:
+        raise ValueError("cost_usd must be non-negative")
+    if cost_usd > 1000.0:
+        logger.warning(f"[COST] Capping unusually high cost ${cost_usd:.2f} to $1000")
+        cost_usd = 1000.0
+
     # Auto-derive workflow_id from task if not provided
     if workflow_id is None and task_id is not None:
         task = db.query(Task).filter_by(id=task_id).first()
@@ -219,10 +226,14 @@ def derive_design_cost(db: Session, design_id: str, write_back: bool = True) -> 
         return 0.0
 
     # Sum cost entries for all features' workflows associated with this design
-    total = (
+    # Primary path: through Feature
+    via_feature = (
         db.query(func.sum(CostEntry.cost_usd)).join(Workflow, CostEntry.workflow_id == Workflow.id).join(Feature, Workflow.feature_id == Feature.id).filter(Feature.design_id == design_id).scalar()
         or 0.0
     )
+    # Direct path: workflows linked to design without feature (Phase 0, etc.)
+    direct = db.query(func.sum(CostEntry.cost_usd)).join(Workflow, CostEntry.workflow_id == Workflow.id).filter(Workflow.design_id == design_id, Workflow.feature_id.is_(None)).scalar() or 0.0
+    total = via_feature + direct
 
     # Self-heal: write back to DB if cost disagrees (no commit — caller handles)
     if write_back and abs(total - design.cost_total_usd) > 0.0001:
@@ -251,7 +262,8 @@ def derive_project_cost(db: Session, project_id: str, write_back: bool = True) -
         return 0.0
 
     # Sum cost entries for all designs' features' workflows associated with this project
-    total = (
+    # Primary path: through Feature -> Design
+    via_feature = (
         db.query(func.sum(CostEntry.cost_usd))
         .join(Workflow, CostEntry.workflow_id == Workflow.id)
         .join(Feature, Workflow.feature_id == Feature.id)
@@ -260,6 +272,9 @@ def derive_project_cost(db: Session, project_id: str, write_back: bool = True) -
         .scalar()
         or 0.0
     )
+    # Direct path: workflows linked to project without feature (Phase 0, etc.)
+    direct = db.query(func.sum(CostEntry.cost_usd)).join(Workflow, CostEntry.workflow_id == Workflow.id).filter(Workflow.project_id == project_id, Workflow.feature_id.is_(None)).scalar() or 0.0
+    total = via_feature + direct
 
     # Self-heal: write back to DB if cost disagrees (no commit — caller handles)
     if write_back and abs(total - project.cost_total_usd) > 0.0001:
