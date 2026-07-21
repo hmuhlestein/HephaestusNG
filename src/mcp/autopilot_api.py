@@ -1862,6 +1862,7 @@ async def update_project(project_id: str, req: ProjectUpdate):
                 wf.paused_by = None
                 wf.status = "active"
                 wf.status_reason = None
+                wf.paused_at = None
             if budget_paused:
                 db.flush()
                 logger.info(f"Cleared budget pause on {len(budget_paused)} workflow(s) for project {project_id[:8]}")
@@ -1974,6 +1975,7 @@ async def create_cost_entry(
 
 class CostEntrySummary(BaseModel):
     """Summary of a single cost entry."""
+
     id: str
     task_id: Optional[str] = None
     agent_id: Optional[str] = None
@@ -1988,6 +1990,7 @@ class CostEntrySummary(BaseModel):
 
 class TaskCostSummary(BaseModel):
     """Cost summary for a task."""
+
     task_id: str
     task_description: str
     cost_total_usd: float
@@ -1996,6 +1999,7 @@ class TaskCostSummary(BaseModel):
 
 class WorkflowCostSummary(BaseModel):
     """Cost summary for a workflow."""
+
     workflow_id: str
     workflow_name: str
     cost_total_usd: float
@@ -2004,6 +2008,7 @@ class WorkflowCostSummary(BaseModel):
 
 class FeatureCostSummary(BaseModel):
     """Cost summary for a feature."""
+
     feature_id: str
     feature_name: str
     cost_total_usd: float
@@ -2012,6 +2017,7 @@ class FeatureCostSummary(BaseModel):
 
 class DesignCostSummary(BaseModel):
     """Cost summary for a design."""
+
     design_id: str
     design_name: str
     cost_total_usd: float
@@ -2020,6 +2026,7 @@ class DesignCostSummary(BaseModel):
 
 class ProjectCostSummary(BaseModel):
     """Cost summary for a project."""
+
     project_id: str
     project_name: str
     cost_total_usd: float
@@ -2041,13 +2048,7 @@ async def get_task_costs(task_id: str):
             raise HTTPException(404, "Task not found")
 
         cost = derive_task_cost(db, task_id, write_back=False)
-        entries = (
-            db.query(CostEntry)
-            .filter(CostEntry.task_id == task_id)
-            .order_by(CostEntry.recorded_at.desc())
-            .limit(100)
-            .all()
-        )
+        entries = db.query(CostEntry).filter(CostEntry.task_id == task_id).order_by(CostEntry.recorded_at.desc()).limit(100).all()
 
         return TaskCostSummary(
             task_id=task.id,

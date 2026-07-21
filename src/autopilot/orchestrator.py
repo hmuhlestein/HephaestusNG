@@ -2018,7 +2018,7 @@ def pick_next_design(
             from src.core.cost_derivation import check_budget_before_new_work
             if not check_budget_before_new_work(db, project.id):
                 logger.info(f"[BUDGET] pick_next_design: project {project.id[:8]} over budget — skipping")
-                return None
+                continue  # Check next project
             
             logger.info(
                 f"pick_next_design: searching project '{project.name}' ({project.id[:8]})"
@@ -7056,7 +7056,7 @@ def _run_one_feature(
         with get_db() as budget_db:
             if not check_budget_before_new_work(budget_db, project_id):
                 logger.warning(f"[BUDGET] Cannot launch feature {feature_key} — project {project_id[:8]} over budget")
-                return "failed"
+                return "skipped"
 
     # Create feature record folder
     feature_record_path = designs_folder / "features" / feature_key
