@@ -2720,10 +2720,36 @@ def _recover_abandoned_workflows_missing_worktree(logger: OrchestratorLogger) ->
             if not project or not project.base_dir:
                 continue
 
+            # Scoped to the CURRENTLY in_progress phase only -- a workflow
+            # that's been through several goto cycles can carry old,
+            # already-superseded "failed" tasks from phases that long since
+            # completed on a later attempt (e.g. an early "development"
+            # attempt that failed and hit its own retry cap, before a much
+            # later retry succeeded and the pipeline moved on for real).
+            # Those are harmless history, not evidence recovery is unsafe --
+            # checking retry_count across every failed task ever recorded
+            # for this workflow, instead of just the phase actually stuck
+            # right now, refused to recover a workflow whose real blocker
+            # (security_review, retry_count=0) had never been retried at
+            # all, purely because an unrelated, ancient development-phase
+            # task happened to already be at the cap.
+            in_progress_phase_ids = {
+                pid
+                for (pid,) in db.query(PhaseExecution.phase_id)
+                .join(Phase, PhaseExecution.phase_id == Phase.id)
+                .filter(Phase.workflow_id == wf.id, PhaseExecution.status == "in_progress")
+                .all()
+            }
             stuck_tasks = (
                 db.query(Task)
-                .filter(Task.workflow_id == wf.id, Task.status == "failed")
+                .filter(
+                    Task.workflow_id == wf.id,
+                    Task.status == "failed",
+                    Task.phase_id.in_(in_progress_phase_ids),
+                )
                 .all()
+                if in_progress_phase_ids
+                else []
             )
             if not stuck_tasks:
                 continue
