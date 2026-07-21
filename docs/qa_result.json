@@ -1,105 +1,28 @@
 {
-  "phase": "qa_validation",
-  "date": "2026-06-29",
-  "task_id": "97160177-c4db-45e4-a131-8e7f24336145",
-  "branch": "feature/feature-model-implementation",
-  "commit": "e4d2ad1",
-  "overall_status": "needs_work",
-  "testing_md": {
-    "exists": false,
-    "approach_used": "fallback_unit_tests_only"
-  },
-  "test_results": {
-    "unit_tests": {
-      "feature_model": {
-        "total": 33,
-        "passed": 29,
-        "failed": 4,
-        "pass_rate": 0.879,
-        "files": {
-          "test_resolve_execution_order": {"total": 8, "passed": 8, "failed": 0},
-          "test_validate_features_json": {"total": 13, "passed": 13, "failed": 0},
-          "test_should_skip": {"total": 8, "passed": 8, "failed": 0},
-          "test_create_feature_records": {"total": 4, "passed": 0, "failed": 4, "failure_reason": "DB fixture missing Base.metadata.create_all()"}
-        }
-      },
-      "orchestrator": {
-        "total": 107,
-        "passed": 102,
-        "failed": 5,
-        "pass_rate": 0.953,
-        "failures": [
-          {"test": "test_queue_order", "reason": "pre-existing ordering assertion"},
-          {"test": "test_moves_root_files", "reason": "stray-file sweep behavior changed"},
-          {"test": "test_moves_feature_files", "reason": "stray-file sweep behavior changed"},
-          {"test": "test_moves_stray_dirs", "reason": "stray-file sweep behavior changed"},
-          {"test": "test_copies_report_docs", "reason": "sweep behavior changed, qa_result.json not swept"}
-        ]
-      }
-    },
-    "integration_tests": {
-      "status": "not_executed",
-      "reason": "timeout constraints in QA phase"
-    },
-    "e2e_validation": {
-      "status": "not_executed",
-      "reason": "requires running backend + tmux"
-    }
-  },
-  "requirements_compliance": {
-    "total": 19,
-    "passed": 18,
-    "failed": 0,
-    "partial": 1,
-    "details": {
-      "database_schema": {"total": 7, "passed": 7},
-      "phase0_workflow": {"total": 3, "passed": 2, "partial": 1},
-      "orchestrator_refactor": {"total": 5, "passed": 5},
-      "cli_api_updates": {"total": 3, "passed": 3},
-      "design_report_template": {"total": 1, "passed": 1}
-    }
-  },
-  "security_fixes": {
-    "total": 5,
-    "fixed": 5,
-    "validated": true
-  },
-  "aggregate": {
-    "total_tests": 140,
-    "total_passed": 131,
-    "total_failed": 9,
-    "pass_rate": 0.936,
-    "requirements_total": 19,
-    "requirements_passed": 18,
-    "requirements_partial": 1,
-    "security_total": 5,
-    "security_passed": 5
-  },
-  "iteration_recommendation": "needs_work",
-  "blockers": [
-    {
-      "id": "B1",
-      "description": "test_create_feature_records.py: DB fixture missing Base.metadata.create_all()",
-      "impact": "4 tests blocked",
-      "fix": "Add Base.metadata.create_all(engine) to test fixture setup"
-    },
-    {
-      "id": "B2",
-      "description": "Phase 0 registration in workflow_registry.py needs verification",
-      "impact": "Phase 0 may not be discoverable",
-      "fix": "Verify registration pattern matches existing workflow registrations"
-    }
+  "failed_tests": 13,
+  "failed_test_names": [
+    "tests/test_phase_manager.py::TestPhaseRolePreviouslyCompleted::test_false_for_first_occurrence_with_no_earlier_phase_run",
+    "tests/test_phase_manager.py::TestPhaseRolePreviouslyCompleted::test_false_when_earlier_same_role_phase_exists_but_not_completed",
+    "tests/test_phase_manager.py::TestPhaseRolePreviouslyCompleted::test_true_when_earlier_same_role_phase_completed",
+    "tests/test_phase_manager.py::TestPhaseRolePreviouslyCompleted::test_false_for_a_completed_phase_that_is_not_earlier",
+    "tests/test_phase_manager.py::TestEvaluationGotoConsumesGateArtifacts::test_goto_deletes_the_gate_phases_result_files",
+    "tests/test_phase_manager.py::TestForceGotoConsumesGateArtifacts::test_force_goto_deletes_the_gate_phases_result_files",
+    "tests/integration/test_task_deduplication_flow.py::TestTaskDeduplicationFlow::test_create_duplicate_task_rejected [collection error]",
+    "tests/integration/test_task_deduplication_flow.py::TestTaskDeduplicationFlow::test_create_related_task_accepted [collection error]",
+    "tests/integration/test_task_deduplication_flow.py::TestTaskDeduplicationFlow::test_create_unrelated_task_accepted [collection error]",
+    "tests/integration/test_task_deduplication_flow.py::TestTaskDeduplicationFlow::test_deduplication_disabled [collection error]",
+    "tests/integration/test_task_deduplication_flow.py::TestTaskDeduplicationFlow::test_deduplication_performance [collection error]",
+    "tests/integration/test_task_deduplication_flow.py::TestTaskDeduplicationFlow::test_concurrent_duplicate_creation [collection error]",
+    "tests/integration/test_task_deduplication_flow.py::TestTaskDeduplicationFlow::test_embedding_service_failure_handling [collection error]"
   ],
-  "non_blockers": [
-    {
-      "id": "NB1",
-      "description": "5 test_orchestrator_helpers.py tests failing due to stray-file sweep behavior change",
-      "impact": "Pre-existing tests outdated after security hardening"
-    },
-    {
-      "id": "NB2",
-      "description": "ORM relationship overlap warnings in multiple test files",
-      "impact": "Noise in test output, not functional"
-    }
-  ]
+  "passed_tests": 160,
+  "total_tests": 173,
+  "pass_rate": 93,
+  "critical_issues": 0,
+  "major_issues": 0,
+  "requirements_total": 13,
+  "requirements_met": 13,
+  "agent_score": 0.92,
+  "verdict": "PASS",
+  "summary": "All 52 feature-specific cost tracking tests pass. 13 pre-existing failures in unrelated test files (phase_manager role tests, deduplication flow collection errors). Zero critical/major issues. All 13 requirements met. Security fixes validated."
 }
