@@ -238,6 +238,8 @@ class AgentManager:
         # call site (create_task paths, recovery, API endpoint, monitor transitions)
         # gets the per-phase tool/model/glm/thinking_level without each having to
         # remember to fetch and forward it.
+        fallback_cli_tool = None
+        fallback_cli_model = None
         if task.phase_id and (
             phase_cli_tool is None
             and phase_cli_model is None
@@ -252,6 +254,8 @@ class AgentManager:
                     if _ph:
                         phase_cli_tool = _ph.cli_tool
                         phase_cli_model = _ph.cli_model
+                        fallback_cli_tool = getattr(_ph, 'fallback_cli_tool', None)
+                        fallback_cli_model = getattr(_ph, 'fallback_cli_model', None)
                         phase_glm_token_env = _ph.glm_api_token_env
                         phase_thinking_level = _ph.thinking_level
             except Exception as e:
@@ -711,7 +715,56 @@ class AgentManager:
             return AgentInfo(agent_id_to_return)
 
         except Exception as e:
-            logger.error(f"Failed to create agent: {e}")
+            logger.error(f"Failed to create agent with {cli_type}: {e}")
+
+            # Try fallback if configured
+            if fallback_cli_tool and fallback_cli_tool != cli_type:
+                logger.warning(
+                    f"Primary CLI tool '{cli_type}' failed, trying fallback: "
+                    f"{fallback_cli_tool}/{fallback_cli_model or 'default'}"
+                )
+                try:
+                    # Clean up the failed attempt
+                    if "tmux_session" in locals():
+                        try:
+                            tmux_session.kill_session()
+                        except Exception:
+                            pass
+                    if "agent_id" in locals():
+                        try:
+                            with self.db_manager.get_session() as _cs:
+                                _ar = _cs.query(Agent).filter_by(id=agent_id).first()
+                                if _ar:
+                                    _ar.status = "terminated"
+                                    _ar.current_task_id = None
+                                    _ar.terminated_at = datetime.utcnow()
+                                    _cs.commit()
+                        except Exception:
+                            pass
+
+                    # Retry with fallback
+                    return await self.create_agent_for_task(
+                        task=task,
+                        enriched_data=enriched_data,
+                        memories=memories,
+                        project_context=project_context,
+                        cli_type=fallback_cli_tool,
+                        working_directory=working_directory,
+                        agent_type=agent_type,
+                        use_existing_worktree=use_existing_worktree,
+                        commit_sha=commit_sha,
+                        phase_cli_tool=fallback_cli_tool,
+                        phase_cli_model=fallback_cli_model,
+                        phase_glm_token_env=phase_glm_token_env,
+                        phase_thinking_level=phase_thinking_level,
+                    )
+                except Exception as fallback_error:
+                    logger.error(
+                        f"Fallback '{fallback_cli_tool}' also failed: {fallback_error}"
+                    )
+                    # Fall through to the normal failure handling below
+                    e = fallback_error
+
             # Clean up on failure
             try:
                 # Kill tmux session if it exists
@@ -1155,6 +1208,32 @@ class AgentManager:
                 logger.info(
                     f"✓ Initial prompt verified for agent {agent_id} on attempt {attempt}"
                 )
+
+                # Check for session limit messages after successful delivery
+                await asyncio.sleep(3)  # Wait for CLI to process
+                try:
+                    output = "\n".join(
+                        pane.cmd("capture-pane", "-p", "-S", "-50").stdout
+                    )
+                    session_limit_indicators = [
+                        "session limit",
+                        "You've hit",
+                        "rate limit",
+                        "too many requests",
+                        "429",
+                    ]
+                    output_lower = output.lower()
+                    for indicator in session_limit_indicators:
+                        if indicator.lower() in output_lower:
+                            raise Exception(
+                                f"CLI session limit detected: '{indicator}' found in output"
+                            )
+                except Exception as check_err:
+                    if "CLI session limit detected" in str(check_err):
+                        raise
+                    # Non-critical check failure, continue
+                    pass
+
                 return
 
             logger.warning(

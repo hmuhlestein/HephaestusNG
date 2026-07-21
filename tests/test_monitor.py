@@ -969,6 +969,123 @@ class TestDetectMcpDisconnected:
         mock_agent_manager.send_message_to_agent.assert_not_called()
 
 
+# ── _detect_credit_exhausted ──────────────────────────────────────
+
+
+class TestDetectCreditExhausted:
+    CREDIT_ERROR_OUTPUT = (
+        ' Error: 402: {"message":"This request requires more credits, or fewer '
+        'max_tokens. You requested up to 106804 tokens, but can only afford 11823. '
+        'To increase, visit https://openrouter.ai/...","code":402}\n'
+    )
+
+    def _make_session(self, task=None, workflow=None):
+        from contextlib import contextmanager
+
+        session = Mock()
+
+        def query_side_effect(model):
+            m = Mock()
+            if model.__name__ == "Task":
+                m.filter_by.return_value.first.return_value = task
+            elif model.__name__ == "Workflow":
+                m.filter_by.return_value.first.return_value = workflow
+            return m
+
+        session.query.side_effect = query_side_effect
+
+        @contextmanager
+        def mock_session_scope():
+            yield session
+
+        return session, mock_session_scope
+
+    @pytest.mark.asyncio
+    async def test_no_output(self, make_monitoring_loop, mock_agent_manager, mock_db):
+        agent = Agent(id="a1", cli_type="pi", current_task_id="t1")
+        mock_agent_manager.get_agent_output.return_value = ""
+        mock_agent_manager.terminate_agent = AsyncMock()
+
+        await make_monitoring_loop._detect_credit_exhausted(agent)
+
+        mock_agent_manager.terminate_agent.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_normal_output_ignored(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        agent = Agent(id="a1", cli_type="pi", current_task_id="t1")
+        mock_agent_manager.get_agent_output.return_value = "Reading design.md..."
+        mock_agent_manager.terminate_agent = AsyncMock()
+
+        await make_monitoring_loop._detect_credit_exhausted(agent)
+
+        mock_agent_manager.terminate_agent.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_pauses_workflow_fails_task_and_terminates(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        agent = Agent(id="a1", cli_type="pi", current_task_id="t1")
+        mock_agent_manager.get_agent_output.return_value = self.CREDIT_ERROR_OUTPUT
+        mock_agent_manager.terminate_agent = AsyncMock()
+
+        task = Mock(workflow_id="wf1", status="in_progress", failure_reason=None)
+        workflow = Mock(status="active", paused_by=None, paused_at=None)
+        session, mock_session_scope = self._make_session(task=task, workflow=workflow)
+        mock_db.session_scope = mock_session_scope
+
+        result = await make_monitoring_loop._detect_credit_exhausted(agent)
+
+        assert result is True
+        assert task.status == "failed"
+        assert "402" in task.failure_reason
+        assert workflow.status == "paused"
+        assert workflow.paused_by == "system"
+        assert workflow.paused_at is not None
+        mock_agent_manager.terminate_agent.assert_called_once_with("a1")
+
+    @pytest.mark.asyncio
+    async def test_already_paused_workflow_not_overwritten(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        """A workflow already paused for a different reason (e.g. a human
+        pause) must not have its reason/timestamp stomped by this check."""
+        agent = Agent(id="a1", cli_type="pi", current_task_id="t1")
+        mock_agent_manager.get_agent_output.return_value = self.CREDIT_ERROR_OUTPUT
+        mock_agent_manager.terminate_agent = AsyncMock()
+
+        task = Mock(workflow_id="wf1", status="in_progress", failure_reason=None)
+        workflow = Mock(
+            status="paused", paused_by="user", paused_at="original-timestamp"
+        )
+        session, mock_session_scope = self._make_session(task=task, workflow=workflow)
+        mock_db.session_scope = mock_session_scope
+
+        await make_monitoring_loop._detect_credit_exhausted(agent)
+
+        assert workflow.paused_by == "user"
+        assert workflow.paused_at == "original-timestamp"
+
+    @pytest.mark.asyncio
+    async def test_one_shot_no_repeat(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        agent = Agent(id="a1", cli_type="pi", current_task_id="t1")
+        mock_agent_manager.get_agent_output.return_value = self.CREDIT_ERROR_OUTPUT
+        mock_agent_manager.terminate_agent = AsyncMock()
+
+        task = Mock(workflow_id="wf1", status="in_progress", failure_reason=None)
+        workflow = Mock(status="active", paused_by=None, paused_at=None)
+        session, mock_session_scope = self._make_session(task=task, workflow=workflow)
+        mock_db.session_scope = mock_session_scope
+
+        await make_monitoring_loop._detect_credit_exhausted(agent)
+        await make_monitoring_loop._detect_credit_exhausted(agent)
+
+        mock_agent_manager.terminate_agent.assert_called_once()
+
+
 # ── _update_agent_health_from_trajectory ─────────────────────────
 
 
@@ -1652,6 +1769,7 @@ class TestMonitoringCycleGuardianSkip:
             []
         )
 
+        make_monitoring_loop._detect_credit_exhausted = AsyncMock(return_value=False)
         make_monitoring_loop._mechanical_recovery_for_agent = AsyncMock(return_value=True)
         make_monitoring_loop._detect_repetition_loop = AsyncMock(return_value=False)
         make_monitoring_loop._detect_dangerous_command_confirmation = AsyncMock(
@@ -1675,6 +1793,7 @@ class TestMonitoringCycleGuardianSkip:
             []
         )
 
+        make_monitoring_loop._detect_credit_exhausted = AsyncMock(return_value=False)
         make_monitoring_loop._mechanical_recovery_for_agent = AsyncMock(return_value=False)
         make_monitoring_loop._detect_repetition_loop = AsyncMock(return_value=False)
         make_monitoring_loop._detect_dangerous_command_confirmation = AsyncMock(
