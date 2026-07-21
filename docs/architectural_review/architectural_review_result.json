@@ -1,0 +1,47 @@
+{
+  "feature_id": "cost-tracking-database-schema",
+  "phase": "architectural_review",
+  "run": 2,
+  "date": "2026-07-21",
+  "commit_reviewed": "2f23625",
+  "prior_findings_status": {
+    "blockers_fixed": 4,
+    "blockers_remaining": 1,
+    "fixes_fixed": 2,
+    "fixes_remaining": 2,
+    "defer_unchanged": 5
+  },
+  "blocker_count": 1,
+  "fix_count": 2,
+  "defer_count": 5,
+  "findings": [
+    {
+      "id": "B-4",
+      "severity": "BLOCKER",
+      "component": "task_completion_service.py",
+      "brief": "No cost collection trigger on task completion — collector module exists but is never called from the done-handler path",
+      "status": "carried_over_from_run_1",
+      "files": ["src/services/task_completion_service.py"],
+      "lines": []
+    },
+    {
+      "id": "F-2",
+      "severity": "FIX",
+      "component": "langchain_llm_client.py",
+      "brief": "No OpenRouter direct cost collection (_invoke_and_record helper not created)",
+      "status": "carried_over_from_run_1",
+      "files": ["src/interfaces/langchain_llm_client.py"],
+      "lines": []
+    },
+    {
+      "id": "F-4",
+      "severity": "FIX",
+      "component": "tests",
+      "brief": "13 tests remain deleted: TestGetMaxReviewRuns (4), TestReviewFindingsHistory (5), TestCreatePhaseTaskReviewCap (~5)",
+      "status": "partially_fixed_from_run_1",
+      "files": ["tests/test_autopilot_spec.py", "tests/test_orchestrator_helpers.py"],
+      "lines": []
+    }
+  ],
+  "recommendation": "NEEDS_WORK"
+}
