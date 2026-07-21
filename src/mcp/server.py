@@ -448,6 +448,7 @@ KNOWN_SYSTEM_AGENTS = {
     "sdk-repair-agent",
     "orchestrator",
     "monitor",
+    "pi-extension",
 }
 
 
@@ -1002,6 +1003,7 @@ def verify_agent_id(agent_id: str = Header(None, alias="X-Agent-ID")) -> str:
         "sdk-repair-agent",
         "orchestrator",
         "monitor",
+        "pi-extension",
     }
 
     if not (uuid_pattern.match(agent_id) or agent_id in known_system_ids or agent_id.startswith("sdk-") or agent_id.startswith("mcp-")):
