@@ -1364,7 +1364,16 @@ def _run_phase_advancement_sweep_once(sweep_logger) -> None:
 
     session = server_state.db_manager.get_session()
     try:
-        workflows = session.query(Workflow.id, Workflow.status).filter(Workflow.status.in_(["active", "paused"])).all()
+        # Scope sweep to the active project to avoid processing stale
+        # workflows from other projects (e.g. applitnator) that are
+        # constantly failing and retrying, starving the current project.
+        from src.core.database import AutopilotProject
+        active_proj = session.query(AutopilotProject).filter_by(is_active=True).first()
+        proj_id = active_proj.id if active_proj else None
+        query = session.query(Workflow.id, Workflow.status).filter(Workflow.status.in_(["active", "paused"]))
+        if proj_id:
+            query = query.filter(Workflow.project_id == proj_id)
+        workflows = query.all()
     finally:
         session.close()
 
