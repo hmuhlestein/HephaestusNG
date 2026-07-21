@@ -280,7 +280,7 @@ const RealTimeAgentOutput: React.FC<RealTimeAgentOutputProps> = ({
 
   const contentClass = isFullscreen
     ? 'w-full h-full flex flex-col'
-    : 'bg-white dark:bg-gray-900 rounded-lg shadow-xl w-full max-w-6xl h-[80vh] flex flex-col';
+    : 'bg-white dark:bg-gray-900 rounded-lg shadow-xl w-full max-w-[95vw] h-[90vh] flex flex-col';
 
   return (
     <AnimatePresence>
