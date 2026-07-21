@@ -20,8 +20,8 @@
       "title": "OpenRouter Direct Costs Without Entity Links Bypass Budget Enforcement",
       "location": "src/core/cost_derivation.py, record_cost(); src/mcp/autopilot_api.py, POST /cost-entries",
       "description": "record_cost() accepts workflow_id=None and task_id=None. When both are None, no derivation rollup occurs and no budget enforcement fires. The POST /cost-entries API allows this.",
-      "impact": "Low — Pi extension always provides entity links. Risk limited to direct API callers.",
-      "fix": "Require at least one of task_id/workflow_id, or route unlinked costs through fallback derivation"
+      "impact": "Low — Pi extension always provides entity links. Risk limited to direct API callers. Confirmed by security review as SEC-04 (MEDIUM).",
+      "fix": "Add cross-field validator to CostEntryCreate requiring at least one of task_id/workflow_id"
     },
     {
       "id": "NIT-2-CARRIED",
@@ -30,7 +30,7 @@
       "title": "Fragile _extract_session_id Tmux Name Parsing",
       "location": "src/services/cost_collection_service.py, _extract_session_id()",
       "description": "Parses session ID by splitting tmux name on hyphens. If naming convention changes, extraction fails silently and cost collection is skipped.",
-      "impact": "Low — silent cost data loss only if tmux naming convention changes.",
+      "impact": "Low — silent cost data loss only if tmux naming convention changes. Confirmed by security review as SEC-08 (LOW).",
       "fix": "Store session_id explicitly in Agent model rather than parsing from tmux name"
     }
   ],
@@ -43,12 +43,18 @@
     "NIT-1: Source inspection tests — replaced with behavioral tests"
   ],
   "new_findings": [],
+  "security_review_cross_reference": {
+    "SEC-04_MEDIUM_OPEN": "Confirmed WARNING-4 (unlinked costs bypass enforcement)",
+    "SEC-05_LOW_FIXED": "Confirmed BLOCKER-1 (Phase 0 gap)",
+    "SEC-06_LOW_FIXED": "Confirmed WARNING-1 (starting agent status)",
+    "SEC-08_LOW_OPEN": "Confirmed NIT-2 (fragile session ID parsing)"
+  },
   "test_results": {
     "test_budget_enforcement": "21 passed",
     "test_cost_tracking": "31 passed",
-    "test_cost_collection_service": "26 passed",
-    "total_passed": 78,
+    "test_cost_collection_service": "28 passed",
+    "total_passed": 80,
     "total_failed": 0
   },
-  "verdict": "APPROVED — Both BLOCKERs resolved. 2 remaining findings are low-risk design limitations, not merge blockers."
+  "verdict": "APPROVED — 0 BLOCKERs. Both prior BLOCKERs verified fixed. 2 remaining findings are low-risk design limitations confirmed by security review. No regressions from intervening commits. 80/80 tests pass."
 }
