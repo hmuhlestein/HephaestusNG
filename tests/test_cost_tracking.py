@@ -587,6 +587,7 @@ class TestBudgetEnforcement:
         db_session.commit()
 
         paused = _pause_project_workflows(db_session, sample_workflow.project_id, paused_by="budget")
+        db_session.commit()  # Caller must commit
 
         assert paused == 1
 
@@ -601,8 +602,8 @@ class TestBudgetEnforcement:
         db_session.commit()
 
         # First pause
-        paused1 = _pause_project_workflows(db_session, sample_workflow.project_id, paused_by="budget")
-        assert paused1 == 1
+        _pause_project_workflows(db_session, sample_workflow.project_id, paused_by="budget")
+        db_session.commit()  # Caller must commit
 
         # Second pause (should be no-op)
         paused2 = _pause_project_workflows(db_session, sample_workflow.project_id, paused_by="budget")

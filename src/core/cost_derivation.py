@@ -348,8 +348,8 @@ def _pause_project_workflows(db: Session, project_id: str, paused_by: str) -> in
             agent.current_task_id = None
             logger.info(f"[BUDGET] Terminated agent {agent.id[:8]}")
 
-        db.commit()
         logger.info(f"[BUDGET] Paused {paused_count} workflows for project {project_id[:8]}")
+    # No db.commit() here — caller handles transaction boundary
 
     return paused_count
 
