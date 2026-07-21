@@ -144,10 +144,8 @@ export const apiService = {
 
   getAgent: async (agentId: string): Promise<Agent | null> => {
     try {
-      // Try fetching from all agents (most agents fit in one page)
-      const { data } = await api.get(`/agents?status=all&page=1&per_page=200`);
-      const agents = data?.agents || [];
-      return agents.find((a: Agent) => a.id === agentId) || null;
+      const { data } = await api.get(`/agents/${agentId}`);
+      return data;
     } catch {
       return null;
     }

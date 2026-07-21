@@ -23,6 +23,150 @@ def _get_server_state():
     return get_app_state()
 
 
+def _serialize_agent(session, a) -> dict:
+    """Build the API representation of a single agent, including its current
+    (or, if terminated, most recent) task and workflow."""
+    from src.core.database import Phase, Workflow
+
+    agent_data = {
+        "id": a.id,
+        "status": a.status,
+        "agent_type": getattr(a, "agent_type", "phase"),
+        "current_task_id": a.current_task_id,
+        "health_check_failures": a.health_check_failures,
+        "last_activity": a.last_activity.isoformat()
+        if a.last_activity
+        else None,
+        "created_at": a.created_at.isoformat() if a.created_at else None,
+        "terminated_at": getattr(a, 'terminated_at', None).isoformat() if getattr(a, 'terminated_at', None) else None,
+        "tmux_session_name": a.tmux_session_name,
+        "cli_type": getattr(a, "cli_type", None),
+        "current_task": None,
+        "workflow": None,
+    }
+    if a.current_task_id:
+        task = session.query(Task).filter_by(id=a.current_task_id).first()
+        if task:
+            task_data = {
+                "id": task.id,
+                "description": (
+                    task.enriched_description or task.raw_description or ""
+                )[:200],
+                "status": task.status,
+                "priority": task.priority,
+                "started_at": task.started_at.isoformat() if task.started_at else None,
+                "completed_at": task.completed_at.isoformat() if task.completed_at else None,
+                "runtime_seconds": int(
+                    (datetime.utcnow() - task.started_at).total_seconds()
+                )
+                if task.started_at
+                else 0,
+                "phase_info": None,
+            }
+            if task.phase_id:
+                if task.phase_id.isdigit():
+                    phase = (
+                        session.query(Phase)
+                        .filter_by(
+                            order=int(task.phase_id),
+                            workflow_id=task.workflow_id,
+                        )
+                        .first()
+                    )
+                    if not phase:
+                        phase = (
+                            session.query(Phase)
+                            .filter_by(order=int(task.phase_id))
+                            .first()
+                        )
+                else:
+                    phase = (
+                        session.query(Phase).filter_by(id=task.phase_id).first()
+                    )
+                if phase:
+                    task_data["phase_info"] = {
+                        "id": phase.id,
+                        "name": phase.name,
+                        "order": phase.order,
+                    }
+            elif task.workflow_id:
+                logger.warning(
+                    f"Task {task.id} has workflow_id={task.workflow_id} but no phase_id — agent failed to provide it"
+                )
+            agent_data["current_task"] = task_data
+
+            if task.workflow_id:
+                wf = (
+                    session.query(Workflow)
+                    .filter_by(id=task.workflow_id)
+                    .first()
+                )
+                if wf:
+                    agent_data["workflow"] = {
+                        "id": wf.id,
+                        "name": wf.name,
+                        "status": wf.status,
+                        "description": (wf.description or "")[:100],
+                    }
+
+    # Fallback for terminated agents: look up their last task
+    if not agent_data["current_task"] and a.status == "terminated":
+        last_task = (
+            session.query(Task)
+            .filter_by(assigned_agent_id=a.id)
+            .order_by(Task.completed_at.desc().nullslast(), Task.created_at.desc())
+            .first()
+        )
+        if last_task:
+            task_data = {
+                "id": last_task.id,
+                "description": (
+                    last_task.enriched_description or last_task.raw_description or ""
+                )[:200],
+                "status": last_task.status,
+                "priority": last_task.priority,
+                "started_at": last_task.started_at.isoformat() if last_task.started_at else None,
+                "completed_at": last_task.completed_at.isoformat() if last_task.completed_at else None,
+                "runtime_seconds": int(
+                    (last_task.completed_at - last_task.started_at).total_seconds()
+                )
+                if last_task.started_at and last_task.completed_at
+                else 0,
+                "phase_info": None,
+            }
+            if last_task.phase_id:
+                if last_task.phase_id.isdigit():
+                    phase = (
+                        session.query(Phase)
+                        .filter_by(
+                            order=int(last_task.phase_id),
+                            workflow_id=last_task.workflow_id,
+                        )
+                        .first()
+                    )
+                else:
+                    phase = session.query(Phase).filter_by(id=last_task.phase_id).first()
+                if phase:
+                    task_data["phase_info"] = {
+                        "id": phase.id,
+                        "name": phase.name,
+                        "order": phase.order,
+                    }
+            agent_data["current_task"] = task_data
+
+            if last_task.workflow_id:
+                wf = session.query(Workflow).filter_by(id=last_task.workflow_id).first()
+                if wf:
+                    agent_data["workflow"] = {
+                        "id": wf.id,
+                        "name": wf.name,
+                        "status": wf.status,
+                        "description": (wf.description or "")[:100],
+                    }
+
+    return agent_data
+
+
 def _require_localhost(request: Request):
     """Guard that only localhost can access the endpoint."""
     client_host = request.client.host if request.client else None
@@ -43,15 +187,14 @@ async def list_agents(
     """List agents with pagination. status='active' excludes terminated, 'all' includes everything."""
     server_state = _get_server_state()
     _require_localhost(request)
-    from src.core.database import Workflow
+    from src.core.database import Task, Workflow
 
     with server_state.db_manager.session_scope() as session:
         query = session.query(Agent)
         if status == "active":
             query = query.filter(Agent.status.notin_(["terminated", "idle"]))
-        
+
         if project_id:
-            from src.core.database import Task
             project_workflow_ids = session.query(Workflow.id).filter(
                 Workflow.project_id == project_id
             ).subquery()
@@ -71,147 +214,7 @@ async def list_agents(
             .all()
         )
 
-        result = []
-        for a in agents:
-            agent_data = {
-                "id": a.id,
-                "status": a.status,
-                "agent_type": getattr(a, "agent_type", "phase"),
-                "current_task_id": a.current_task_id,
-                "health_check_failures": a.health_check_failures,
-                "last_activity": a.last_activity.isoformat()
-                if a.last_activity
-                else None,
-                "created_at": a.created_at.isoformat() if a.created_at else None,
-                "terminated_at": getattr(a, 'terminated_at', None).isoformat() if getattr(a, 'terminated_at', None) else None,
-                "tmux_session_name": a.tmux_session_name,
-                "cli_type": getattr(a, "cli_type", None),
-                "current_task": None,
-                "workflow": None,
-            }
-            if a.current_task_id:
-                task = session.query(Task).filter_by(id=a.current_task_id).first()
-                if task:
-                    task_data = {
-                        "id": task.id,
-                        "description": (
-                            task.enriched_description or task.raw_description or ""
-                        )[:200],
-                        "status": task.status,
-                        "priority": task.priority,
-                        "started_at": task.started_at.isoformat() if task.started_at else None,
-                        "completed_at": task.completed_at.isoformat() if task.completed_at else None,
-                        "runtime_seconds": int(
-                            (datetime.utcnow() - task.started_at).total_seconds()
-                        )
-                        if task.started_at
-                        else 0,
-                        "phase_info": None,
-                    }
-                    if task.phase_id:
-                        from src.core.database import Phase
-
-                        if task.phase_id.isdigit():
-                            phase = (
-                                session.query(Phase)
-                                .filter_by(
-                                    order=int(task.phase_id),
-                                    workflow_id=task.workflow_id,
-                                )
-                                .first()
-                            )
-                            if not phase:
-                                phase = (
-                                    session.query(Phase)
-                                    .filter_by(order=int(task.phase_id))
-                                    .first()
-                                )
-                        else:
-                            phase = (
-                                session.query(Phase).filter_by(id=task.phase_id).first()
-                            )
-                        if phase:
-                            task_data["phase_info"] = {
-                                "id": phase.id,
-                                "name": phase.name,
-                                "order": phase.order,
-                            }
-                    elif task.workflow_id:
-                        logger.warning(
-                            f"Task {task.id} has workflow_id={task.workflow_id} but no phase_id — agent failed to provide it"
-                        )
-                    agent_data["current_task"] = task_data
-
-                    if task.workflow_id:
-                        wf = (
-                            session.query(Workflow)
-                            .filter_by(id=task.workflow_id)
-                            .first()
-                        )
-                        if wf:
-                            agent_data["workflow"] = {
-                                "id": wf.id,
-                                "name": wf.name,
-                                "status": wf.status,
-                                "description": (wf.description or "")[:100],
-                            }
-
-            # Fallback for terminated agents: look up their last task
-            if not agent_data["current_task"] and a.status == "terminated":
-                last_task = (
-                    session.query(Task)
-                    .filter_by(assigned_agent_id=a.id)
-                    .order_by(Task.completed_at.desc().nullslast(), Task.created_at.desc())
-                    .first()
-                )
-                if last_task:
-                    task_data = {
-                        "id": last_task.id,
-                        "description": (
-                            last_task.enriched_description or last_task.raw_description or ""
-                        )[:200],
-                        "status": last_task.status,
-                        "priority": last_task.priority,
-                        "started_at": last_task.started_at.isoformat() if last_task.started_at else None,
-                        "completed_at": last_task.completed_at.isoformat() if last_task.completed_at else None,
-                        "runtime_seconds": int(
-                            (last_task.completed_at - last_task.started_at).total_seconds()
-                        )
-                        if last_task.started_at and last_task.completed_at
-                        else 0,
-                        "phase_info": None,
-                    }
-                    if last_task.phase_id:
-                        from src.core.database import Phase
-                        if last_task.phase_id.isdigit():
-                            phase = (
-                                session.query(Phase)
-                                .filter_by(
-                                    order=int(last_task.phase_id),
-                                    workflow_id=last_task.workflow_id,
-                                )
-                                .first()
-                            )
-                        else:
-                            phase = session.query(Phase).filter_by(id=last_task.phase_id).first()
-                        if phase:
-                            task_data["phase_info"] = {
-                                "id": phase.id,
-                                "name": phase.name,
-                                "order": phase.order,
-                            }
-                    agent_data["current_task"] = task_data
-                    if last_task.workflow_id:
-                        wf = session.query(Workflow).filter_by(id=last_task.workflow_id).first()
-                        if wf:
-                            agent_data["workflow"] = {
-                                "id": wf.id,
-                                "name": wf.name,
-                                "status": wf.status,
-                                "description": (wf.description or "")[:100],
-                            }
-
-            result.append(agent_data)
+        result = [_serialize_agent(session, a) for a in agents]
 
         return {
             "agents": result,
@@ -220,6 +223,19 @@ async def list_agents(
             "per_page": per_page,
             "pages": (total + per_page - 1) // per_page,
         }
+
+
+@router.get("/api/agents/{agent_id}")
+async def get_agent(agent_id: str, request: Request):
+    """Fetch a single agent by id."""
+    server_state = _get_server_state()
+    _require_localhost(request)
+
+    with server_state.db_manager.session_scope() as session:
+        a = session.query(Agent).filter_by(id=agent_id).first()
+        if not a:
+            raise HTTPException(status_code=404, detail="Agent not found")
+        return _serialize_agent(session, a)
 
 
 @router.post("/api/agents/{agent_id}/message")

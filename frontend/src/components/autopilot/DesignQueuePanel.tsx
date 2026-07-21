@@ -30,6 +30,8 @@ import toast from 'react-hot-toast';
 import DesignDetailModal from './DesignDetailModal';
 import TaskDetailModal from '../TaskDetailModal';
 import FeatureRecordDetailModal from './FeatureRecordDetailModal';
+import RealTimeAgentOutput from '../RealTimeAgentOutput';
+import { Agent } from '@/types';
 
 interface DesignQueuePanelProps {
   projectId: string | null;
@@ -910,6 +912,14 @@ const TaskRow: React.FC<{
   onTaskUpdate?: () => void;
 }> = ({ task, onTaskClick, onTaskUpdate }) => {
   const [actionPending, setActionPending] = useState<{ pause?: boolean; stop?: boolean; resume?: boolean; rerun?: boolean }>({});
+  const [tmuxAgent, setTmuxAgent] = useState<Agent | null>(null);
+
+  const openTmuxView = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!task.agent_id) return;
+    const agent = await apiService.getAgent(task.agent_id);
+    if (agent) setTmuxAgent(agent);
+  };
 
   // Once the task is finished, its own outcome is more useful than why it
   // was dispatched -- show completion_notes/failure_reason instead of
@@ -959,7 +969,11 @@ const TaskRow: React.FC<{
   const activeStatuses = ['pending', 'queued', 'assigned', 'in_progress', 'under_review', 'validation_in_progress', 'needs_work'];
 
   return (
-    <div className="flex items-center gap-2 px-2 py-1.5 bg-white rounded border border-gray-100 hover:bg-gray-50 hover:border-gray-200 transition-colors">
+    <div className={`flex items-center gap-2 px-2 py-1.5 rounded border transition-colors ${
+      task.status === 'done'
+        ? 'bg-gray-100 border-gray-200 hover:bg-gray-200'
+        : 'bg-white border-gray-100 hover:bg-gray-50 hover:border-gray-200'
+    }`}>
       <TaskStatusIcon status={task.status} />
       <div
         className="flex-1 min-w-0 cursor-pointer"
@@ -1002,14 +1016,14 @@ const TaskRow: React.FC<{
         </p>
       </div>
       {task.agent_id && (
-        <a
-          href={`/agents/${task.agent_id}`}
+        <button
+          onClick={openTmuxView}
           className="flex items-center gap-1 px-1.5 py-0.5 text-[10px] bg-violet-100 text-violet-700 rounded hover:bg-violet-200 transition-colors"
-          onClick={(e) => e.stopPropagation()}
+          title="View live tmux output"
         >
           <span className={task.agent_status === 'working' ? 'w-1 h-1 rounded-full bg-green-500' : 'w-1 h-1 rounded-full bg-gray-400'}></span>
           {task.agent_id.substring(0, 6)}
-        </a>
+        </button>
       )}
       <RowActionIcons
         size="sm"
@@ -1023,6 +1037,9 @@ const TaskRow: React.FC<{
         onRerun={() => runTaskAction('rerun')}
         pending={actionPending}
       />
+      {tmuxAgent && (
+        <RealTimeAgentOutput agent={tmuxAgent} onClose={() => setTmuxAgent(null)} />
+      )}
     </div>
   );
 };
