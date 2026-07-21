@@ -1899,7 +1899,42 @@ def scan_design_queue(queue_dir: Path, processed_hashes: Set[str]) -> List[Desig
                 continue
             content_hash = file_hash(filepath)
             if content_hash in processed_hashes:
-                continue
+                # Self-heal: if the design is marked processed but its
+                # features are all pending (e.g. server crashed between
+                # marking processed and creating features), re-queue it.
+                try:
+                    from src.core.database import (
+                        AutopilotDesign as _AD,
+                    )
+                    from src.core.database import (
+                        Feature as _Feat,
+                    )
+                    from src.core.database import (
+                        get_db as _gdb,
+                    )
+                    with _gdb() as _db:
+                        _des = _db.query(_AD).filter_by(
+                            content_hash=content_hash
+                        ).first()
+                        if _des:
+                            _feats = _db.query(_Feat).filter_by(
+                                design_id=_des.id
+                            ).all()
+                            if not _feats or all(
+                                f.status == "pending" for f in _feats
+                            ):
+                                logger.warning(
+                                    f"[SELF-HEAL] Design {_des.name} is in "
+                                    f"processed_hashes but has no features "
+                                    f"or all pending — re-queuing"
+                                )
+                                processed_hashes.discard(content_hash)
+                            else:
+                                continue
+                        else:
+                            continue
+                except Exception:
+                    continue
             name = filepath.stem.replace("_", " ").replace("-", " ").title()
             designs.append(
                 DesignEntry(
@@ -1978,6 +2013,14 @@ def pick_next_design(
             logger.info(
                 f"pick_next_design: searching project '{project.name}' ({project.id[:8]})"
             )
+
+            # Budget enforcement: skip over-budget projects
+            from src.core.cost_derivation import check_budget_before_new_work
+            if not check_budget_before_new_work(db, project.id):
+                logger.info(
+                    f"pick_next_design: project '{project.name}' over budget — skipping"
+                )
+                return None
             
             # Get next pending design ordered by ordinal
             design = (
@@ -3698,16 +3741,10 @@ def _try_auto_resume_paused_workflow(db, workflow_id: str, wf, logger: Orchestra
 
     Skips workflows the user explicitly paused (wf.paused_by == "user", set
     by the /workflow-executions/{id}/stop endpoint). Without this check, a
-    deliberate pause could get silently reverted within one sweep tick
-    (~20s) whenever the paused workflow's in-progress phase happens to have
-    a done task sitting in it -- a state pausing itself commonly produces
-    (the running task finishes right after being told to stop). Observed
-    live: a user's pause click appeared to do nothing for a long time,
-    because this function kept flipping the workflow back to "active"
-    every cycle until whatever made the phase look stalled resolved on its
-    own.
+    deliberately paused this and no automated path should silently revert it,
+    regardless of which specific reason triggered it.
     """
-    if wf.paused_by == "user":
+    if wf.paused_by is not None:
         return
     phases = (
         db.query(Phase)
@@ -5167,7 +5204,7 @@ def _cap_out_review_phase(
     run_count: int,
     max_runs: int,
     logger: OrchestratorLogger,
-) -> bool:
+) -> Optional[bool]:
     """A review phase (architectural_review/adversarial_review, or any
     other phase opted into workflow.yaml's max_review_runs) hit its run cap
     without ever scoring clean -- stop looping instead of spawning yet
@@ -5181,16 +5218,36 @@ def _cap_out_review_phase(
     completion path _create_phase_task already uses to skip a clean
     forensics_analysis run (_fire_phase_transition) -- no new completion
     mechanism, just a different reason for using it.
+
+    Returns True/False (the outcome of firing the transition) once capped
+    out successfully. Returns None if it couldn't safely cap out at all
+    (no working_directory, or this isn't a known gated phase) -- callers
+    must treat None as "fall through and create a normal task instead,"
+    not as a completed action: silently returning False here would strand
+    the phase with no task, no synthetic completion, and no forward
+    progress, forever, with nothing but a debug-level log to explain why.
     """
     from src.autopilot.spec import GATE_RESULT_ARTIFACTS, get_review_findings_history
 
     workflow = db.query(Workflow).filter_by(id=workflow_id).first()
     if not workflow or not workflow.working_directory:
-        return False
+        logger.warning(
+            f"[PHASE-TASK] {phase.name} hit its review-run cap ({run_count}/"
+            f"{max_runs}) but has no working_directory to write a synthetic "
+            "completion to -- falling through to a normal task instead of "
+            "stranding the phase silently"
+        )
+        return None
 
     artifacts = GATE_RESULT_ARTIFACTS.get(phase.name, ())
     if not artifacts:
-        return False
+        logger.warning(
+            f"[PHASE-TASK] {phase.name} hit its review-run cap ({run_count}/"
+            f"{max_runs}) but isn't a known gated phase (no "
+            "GATE_RESULT_ARTIFACTS entry) -- falling through to a normal "
+            "task instead of stranding the phase silently"
+        )
+        return None
 
     docs_dir = Path(workflow.working_directory) / "docs" / phase.name
     docs_dir.mkdir(parents=True, exist_ok=True)
@@ -5381,9 +5438,14 @@ def _create_phase_task(
             if max_review_runs is not None:
                 run_count = db.query(Task).filter(Task.phase_id == phase_id).count()
                 if run_count >= max_review_runs:
-                    return _cap_out_review_phase(
+                    capped = _cap_out_review_phase(
                         db, workflow_id, phase, run_count, max_review_runs, logger
                     )
+                    if capped is not None:
+                        return capped
+                    # None: couldn't safely cap out (see its own docstring)
+                    # -- fall through to a normal task rather than
+                    # stranding the phase with no forward progress.
                 if run_count > 0:
                     history = get_review_findings_history(workflow_id, phase.name)
                     if history:
@@ -5531,16 +5593,13 @@ def _create_corrective_task(
         if not wf:
             logger.warning(f"[CORRECTIVE-TASK] Workflow {workflow_id[:8]} not found")
             return None
-        if wf.paused_by == "user":
-            # Same class of bug _try_auto_resume_paused_workflow was fixed
-            # for: don't override a deliberate pause. Unlike that function
-            # (which just skips and leaves the workflow alone), this one
-            # would otherwise both reactivate the workflow AND immediately
-            # spawn a live agent against it -- silently resuming real work
-            # on something the user explicitly stopped.
+        if wf.paused_by is not None:
+            # Don't override a deliberate pause (user or budget). Unlike
+            # _try_auto_resume_paused_workflow (which just skips), this one
+            # would both reactivate the workflow AND spawn a live agent.
             logger.info(
-                f"[CORRECTIVE-TASK] Workflow {workflow_id[:8]} is user-paused — "
-                "skipping corrective task"
+                f"[CORRECTIVE-TASK] Workflow {workflow_id[:8]} is paused "
+                f"(by={wf.paused_by}) — skipping corrective task"
             )
             return None
         if wf.status != "active":
@@ -5715,14 +5774,12 @@ def _resume_stuck_workflow_tasks(workflow_id: str, logger: OrchestratorLogger) -
         wf = db.query(Workflow).filter_by(id=workflow_id).first()
         if not wf:
             return 0
-        if wf.status == "paused" and wf.paused_by == "user":
-            # Same class of bug _try_auto_resume_paused_workflow was fixed
-            # for: this runs whenever the design/feature queue loop cycles
-            # back to a workflow it already has an id for, which can
-            # include one the user deliberately paused -- don't silently
-            # un-pause and restart work on it.
+        if wf.status == "paused" and wf.paused_by is not None:
+            # Don't silently un-pause a deliberately paused workflow
+            # (user pause, budget pause, etc.).
             logger.info(
-                f"[RESUME-STUCK] Workflow {workflow_id[:8]} is user-paused — skipping"
+                f"[RESUME-STUCK] Workflow {workflow_id[:8]} is paused "
+                f"(by={wf.paused_by}) — skipping"
             )
             return 0
         if wf.status in ("paused", "failed"):
@@ -6601,7 +6658,8 @@ def run_phase0(
         # before any post-processing that could fail or crash. This ensures
         # _get_phase0_completion can find the completed workflow for recovery
         # even if the server crashes before _create_feature_records runs.
-        from src.core.database import AutopilotDesign as _ADModel, Workflow as _WfModel
+        from src.core.database import AutopilotDesign as _ADModel
+        from src.core.database import Workflow as _WfModel
         with _get_db() as _db:
             _phase0_wf = (
                 _db.query(_WfModel)
@@ -6946,6 +7004,17 @@ def _run_one_feature(
 
         # Set workflow type and link to feature
         # Note: We'll do this after workflow is created
+
+        # Budget enforcement: block new workflow launches for over-budget projects
+        if project_id:
+            from src.core.cost_derivation import check_budget_before_new_work
+            with get_db() as budget_db:
+                if not check_budget_before_new_work(budget_db, project_id):
+                    logger.info(
+                        f"[BUDGET] Project over budget — blocking new workflow "
+                        f"for feature {feature_key}"
+                    )
+                    return "budget_blocked"
 
         # run_single_workflow mutates state.current_workflow_id/_design_branch/
         # _design_worktree while it launches and polls the workflow. When
