@@ -72,8 +72,22 @@ def run(args):
     # Workflows
     wf_defs = api_get(args, "/api/workflow-definitions")
     wf_execs = api_get(args, "/api/workflow-executions")
-    data["workflow_definitions"] = len(wf_defs) if isinstance(wf_defs, list) else 0
-    data["workflow_executions"] = len(wf_execs) if isinstance(wf_execs, list) else 0
+    wf_def_list = (
+        wf_defs
+        if isinstance(wf_defs, list)
+        else wf_defs.get("definitions", [])
+        if wf_defs
+        else []
+    )
+    wf_exec_list = (
+        wf_execs
+        if isinstance(wf_execs, list)
+        else wf_execs.get("executions", [])
+        if wf_execs
+        else []
+    )
+    data["workflow_definitions"] = len(wf_def_list)
+    data["workflow_executions"] = len(wf_exec_list)
 
     # Queue
     queue = api_get(args, "/api/queue_status")
@@ -132,7 +146,14 @@ def run(args):
         r = httpx.get(f"{args.api_base}/tools", timeout=timeout)
         elapsed = time.time() - start
         tools = r.json() if r.status_code == 200 else []
-        tool_count = len(tools) if isinstance(tools, list) else 0
+        tool_list = (
+            tools
+            if isinstance(tools, list)
+            else tools.get("tools", [])
+            if tools
+            else []
+        )
+        tool_count = len(tool_list)
         services.append(
             {
                 "name": "MCP Tools",
