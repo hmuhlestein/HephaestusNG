@@ -1,0 +1,54 @@
+{
+  "phase": "adversarial_review",
+  "status": "done",
+  "blocker_count": 0,
+  "warning_count": 1,
+  "nit_count": 1,
+  "prior_findings_status": {
+    "blockers_fixed": 2,
+    "blockers_total": 2,
+    "warnings_fixed": 3,
+    "warnings_total": 4,
+    "nits_fixed": 1,
+    "nits_total": 2
+  },
+  "findings": [
+    {
+      "id": "WARNING-4-CARRIED",
+      "severity": "warning",
+      "status": "still_open",
+      "title": "OpenRouter Direct Costs Without Entity Links Bypass Budget Enforcement",
+      "location": "src/core/cost_derivation.py, record_cost(); src/mcp/autopilot_api.py, POST /cost-entries",
+      "description": "record_cost() accepts workflow_id=None and task_id=None. When both are None, no derivation rollup occurs and no budget enforcement fires. The POST /cost-entries API allows this.",
+      "impact": "Low — Pi extension always provides entity links. Risk limited to direct API callers.",
+      "fix": "Require at least one of task_id/workflow_id, or route unlinked costs through fallback derivation"
+    },
+    {
+      "id": "NIT-2-CARRIED",
+      "severity": "nit",
+      "status": "still_open",
+      "title": "Fragile _extract_session_id Tmux Name Parsing",
+      "location": "src/services/cost_collection_service.py, _extract_session_id()",
+      "description": "Parses session ID by splitting tmux name on hyphens. If naming convention changes, extraction fails silently and cost collection is skipped.",
+      "impact": "Low — silent cost data loss only if tmux naming convention changes.",
+      "fix": "Store session_id explicitly in Agent model rather than parsing from tmux name"
+    }
+  ],
+  "prior_findings_fixed": [
+    "BLOCKER-1: /autopilot/stop Phase 0 gap — now uses shared _pause_project_workflows",
+    "BLOCKER-2: _run_one_feature stale DB session — now reuses existing session",
+    "WARNING-1: Missing 'starting' agent status — added to filter and AgentStatus constants",
+    "WARNING-2: Misleading log messages — now shows actual paused_by value",
+    "WARNING-3: Stale status_reason on user pause — cleared on user pause",
+    "NIT-1: Source inspection tests — replaced with behavioral tests"
+  ],
+  "new_findings": [],
+  "test_results": {
+    "test_budget_enforcement": "21 passed",
+    "test_cost_tracking": "31 passed",
+    "test_cost_collection_service": "26 passed",
+    "total_passed": 78,
+    "total_failed": 0
+  },
+  "verdict": "APPROVED — Both BLOCKERs resolved. 2 remaining findings are low-risk design limitations, not merge blockers."
+}
