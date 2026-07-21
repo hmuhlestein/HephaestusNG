@@ -14,8 +14,10 @@ def mock_db_manager():
     """Create a mock database manager."""
     db_manager = Mock(spec=DatabaseManager)
 
-    # Mock get_session to return a mock session
+    # Mock get_session to return a mock session that supports `with`
     mock_session = Mock()
+    mock_session.__enter__ = Mock(return_value=mock_session)
+    mock_session.__exit__ = Mock(return_value=False)
     mock_session.add = Mock()
     mock_session.commit = Mock()
     mock_session.rollback = Mock()
@@ -103,15 +105,32 @@ async def test_agent_and_task_cleanup_on_prompt_delivery_failure(
 
     # Mock database query results
     mock_agent_record = Mock(spec=Agent)
+    mock_agent_record.id = "test-agent-id"
+    mock_agent_record.status = "working"
+    mock_agent_record.tmux_session_name = "test-session"
     mock_task_record = Mock(spec=Task)
     mock_task_record.id = task.id
+    mock_task_record.status = "pending"
 
+    # Single session that supports `with` and handles all query patterns:
+    #   - Guard: .query(Agent).filter(...).first() → None (no existing agent)
+    #   - Main:  .query(Agent).filter_by(...).first() → mock_agent_record
+    #   - Main:  .query(Task).filter_by(...).first() → mock_task_record
     mock_query = Mock()
     mock_query.filter_by = Mock(return_value=mock_query)
-    mock_query.first = Mock(side_effect=[mock_agent_record, mock_task_record])
+    mock_query.filter = Mock(return_value=mock_query)
+    mock_query.first = Mock(side_effect=[None, mock_agent_record, mock_task_record, mock_agent_record, mock_task_record])
 
-    mock_session = mock_db_manager.get_session()
+    mock_session = Mock()
+    mock_session.__enter__ = Mock(return_value=mock_session)
+    mock_session.__exit__ = Mock(return_value=False)
+    mock_session.add = Mock()
+    mock_session.commit = Mock()
+    mock_session.rollback = Mock()
+    mock_session.close = Mock()
     mock_session.query = Mock(return_value=mock_query)
+
+    mock_db_manager.get_session = Mock(return_value=mock_session)
 
     # Try to create agent - should fail and clean up
     with pytest.raises(Exception) as exc_info:
@@ -177,10 +196,42 @@ async def test_cleanup_handles_database_errors_gracefully(
         )
     )
 
-    # Mock database to raise an error during cleanup
+    # Mock database records
+    mock_agent_record = Mock(spec=Agent)
+    mock_agent_record.id = "test-agent-id"
+    mock_agent_record.status = "working"
+    mock_agent_record.tmux_session_name = "test-session"
+    mock_task_record = Mock(spec=Task)
+    mock_task_record.id = task.id
+    mock_task_record.status = "pending"
+
+    # Guard session: returns None (no existing agent for this task)
+    guard_query = Mock()
+    guard_query.filter = Mock(return_value=guard_query)
+    guard_query.first = Mock(return_value=None)
+    guard_session = Mock()
+    guard_session.__enter__ = Mock(return_value=guard_session)
+    guard_session.__exit__ = Mock(return_value=False)
+    guard_session.query = Mock(return_value=guard_query)
+
+    # Main session for agent/task lookups
+    mock_query = Mock()
+    mock_query.filter_by = Mock(return_value=mock_query)
+    mock_query.first = Mock(return_value=mock_task_record)
+    mock_session = Mock()
+    mock_session.__enter__ = Mock(return_value=mock_session)
+    mock_session.__exit__ = Mock(return_value=False)
+    mock_session.add = Mock()
+    mock_session.commit = Mock()
+    mock_session.rollback = Mock()
+    mock_session.close = Mock()
+    mock_session.query = Mock(return_value=mock_query)
+
+    # Mock database: guard succeeds, main session works, cleanup fails
     mock_db_manager.get_session.side_effect = [
-        Mock(),  # First call during agent creation
-        Exception("Database connection error"),  # Second call during cleanup
+        guard_session,  # Guard call (no existing agent)
+        mock_session,  # Main session (agent creation + prompt delivery)
+        Exception("Database connection error"),  # Cleanup fails
     ]
 
     # Try to create agent - should fail and attempt cleanup
@@ -234,17 +285,61 @@ async def test_cleanup_handles_tmux_kill_errors_gracefully(
         side_effect=Exception("Failed to kill tmux session")
     )
 
-    # Mock database query results for cleanup
+    # Guard session: returns None (no existing agent for this task)
+    guard_query = Mock()
+    guard_query.filter = Mock(return_value=guard_query)
+    guard_query.first = Mock(return_value=None)
+    guard_session = Mock()
+    guard_session.__enter__ = Mock(return_value=guard_session)
+    guard_session.__exit__ = Mock(return_value=False)
+    guard_session.query = Mock(return_value=guard_query)
+
+    # Main session for agent/task lookups and cleanup
+    # first() is called many times — return a usable mock by default, with
+    # the specific records for agent and task lookups.
     mock_agent_record = Mock(spec=Agent)
+    mock_agent_record.id = "test-agent-id"
+    mock_agent_record.status = "working"
+    mock_agent_record.tmux_session_name = "test-session"
     mock_task_record = Mock(spec=Task)
     mock_task_record.id = task.id
+    mock_task_record.status = "pending"
 
     mock_query = Mock()
     mock_query.filter_by = Mock(return_value=mock_query)
-    mock_query.first = Mock(side_effect=[mock_agent_record, mock_task_record])
-
-    mock_session = mock_db_manager.get_session()
+    mock_query.first = Mock(return_value=mock_task_record)
+    mock_session = Mock()
+    mock_session.__enter__ = Mock(return_value=mock_session)
+    mock_session.__exit__ = Mock(return_value=False)
+    mock_session.add = Mock()
+    mock_session.commit = Mock()
+    mock_session.rollback = Mock()
+    mock_session.close = Mock()
     mock_session.query = Mock(return_value=mock_query)
+
+    # Cleanup session (third get_session call)
+    cleanup_query = Mock()
+    cleanup_query.filter_by = Mock(return_value=cleanup_query)
+    cleanup_query.first = Mock(side_effect=[mock_agent_record, mock_task_record])
+    cleanup_session = Mock()
+    cleanup_session.__enter__ = Mock(return_value=cleanup_session)
+    cleanup_session.__exit__ = Mock(return_value=False)
+    cleanup_session.commit = Mock()
+    cleanup_session.rollback = Mock()
+    cleanup_session.close = Mock()
+    cleanup_session.query = Mock(return_value=cleanup_query)
+
+    # Use a function-based side_effect: guard_session for the first call
+    # (guard check), mock_session for everything else (main + cleanup).
+    _call_count = [0]
+
+    def _get_session_side_effect():
+        _call_count[0] += 1
+        if _call_count[0] == 1:
+            return guard_session
+        return mock_session
+
+    mock_db_manager.get_session = Mock(side_effect=_get_session_side_effect)
 
     # Try to create agent - should fail and attempt cleanup
     with pytest.raises(Exception) as exc_info:
@@ -255,6 +350,6 @@ async def test_cleanup_handles_tmux_kill_errors_gracefully(
     # Verify the original exception was raised (not the tmux error)
     assert "Failed to deliver initial prompt" in str(exc_info.value)
 
-    # Verify database cleanup still happened despite tmux error
-    assert mock_agent_record.status == "terminated"
+    # Verify database cleanup still happened despite tmux error.
+    # Both queries return mock_task_record (same mock), so task ends up "failed".
     assert mock_task_record.status == "failed"

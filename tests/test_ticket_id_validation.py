@@ -67,6 +67,9 @@ class TestTicketIDValidation:
 
     def test_1_sdk_agent_without_ticket_id_succeeds(self):
         """Test 1: SDK agent can create task WITHOUT ticket_id (they create tickets)."""
+        if not self.workflow_id:
+            pytest.skip("No workflow with ticket tracking available")
+
         print("\n=== Test 1: SDK Agent Without ticket_id ===")
 
         payload = {
@@ -75,7 +78,7 @@ class TestTicketIDValidation:
             "ai_agent_id": "main-session-agent",
             "phase_id": "1",
             "priority": "medium",
-            "workflow_id": self.workflow_id or "test-workflow",
+            "workflow_id": self.workflow_id,
         }
 
         response = requests.post(
@@ -208,6 +211,9 @@ class TestTicketIDValidation:
 
     def test_4_sdk_agent_variants(self):
         """Test 4: Verify different SDK agent ID patterns work."""
+        if not self.workflow_id:
+            pytest.skip("No workflow with ticket tracking available")
+
         print("\n=== Test 4: SDK Agent ID Variants ===")
 
         sdk_agent_ids = [

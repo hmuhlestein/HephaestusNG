@@ -36,6 +36,21 @@ class TestTicketIDValidationSimple:
 
     def test_1_sdk_agent_can_create_task_without_ticket_id(self):
         """Test 1: SDK agents (main-session-agent, *sdk*, *main*) can create tasks without ticket_id."""
+        # Need a real workflow_id — fetch the first available
+        try:
+            resp = requests.get(
+                f"{BASE_URL}/api/workflows",
+                headers={"X-Agent-ID": "test-user"},
+                timeout=2,
+            )
+            workflows = resp.json() if resp.status_code == 200 else []
+            workflow_id = workflows[0]["id"] if workflows else None
+        except Exception:
+            workflow_id = None
+
+        if not workflow_id:
+            pytest.skip("No workflows available on server")
+
         print("\n=== Test 1: SDK Agent Without ticket_id ===")
 
         payload = {
@@ -44,7 +59,7 @@ class TestTicketIDValidationSimple:
             "ai_agent_id": "main-session-agent",
             "phase_id": "1",
             "priority": "medium",
-            "workflow_id": "test-workflow",
+            "workflow_id": workflow_id,
         }
 
         response = requests.post(
