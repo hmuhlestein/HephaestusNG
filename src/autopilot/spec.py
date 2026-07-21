@@ -802,7 +802,7 @@ def score_qa(
 
 
 def score_product_validation(
-    result: Optional[Dict[str, Any]], spec: Dict[str, Any], report_text: str = ""
+    result: Optional[Dict[str, Any]], spec: Dict[str, Any]
 ) -> Tuple[float, Dict[str, Any]]:
     """Score a structured product-validation result (verdict + unmet reqs + floors).
 
@@ -810,17 +810,6 @@ def score_product_validation(
         unmet_requirements (list), agent_score (0-1).
     """
     if not result:
-        # Fallback: check report text for PASS verdict when JSON is missing.
-        # Agents sometimes write the .md report but not the .json gate input.
-        if report_text:
-            upper = report_text.upper()
-            if "PASS" in upper and "FAIL" not in upper and "NEEDS_WORK" not in upper:
-                return _PASS_FLOOR, {
-                    "gate": "product",
-                    "verdict": "PASS",
-                    "reason": "verdict extracted from report text (no product_validation.json)",
-                    "unmet_count": 0,
-                }
         return _DEV, {
             "gate": "product",
             "reason": "no product_validation.json found",
@@ -1313,9 +1302,6 @@ def build_phase_output(
         result = read_result(
             working_directory, "product_validation.json", phase_name=phase_name
         )
-        report_text = read_report_text(
-            working_directory, "product_validation.md", phase_name=phase_name
-        )
-        score, meta = score_product_validation(result, spec, report_text=report_text)
+        score, meta = score_product_validation(result, spec)
 
     return {"score": score, "spec_gate": meta}
