@@ -1,256 +1,541 @@
-# Product Requirements Analysis: Feature Model Implementation
+# Product Requirements Analysis: Cost Tracking Database Schema
 
-**Feature ID:** feature-model-implementation  
-**Feature Name:** Feature Model Implementation  
+**Feature ID:** cost-tracking-database-schema  
+**Feature Name:** Cost Tracking Database Schema  
 **Status:** Requirements Extracted  
-**Date:** 2026-06-29  
-**Design Document:** `.hephaestus/design.md`
+**Date:** 2026-07-21  
+**Design Document:** `.hephaestus/design.md`  
+**Related Design Docs:** `design_docs/per_task_cost_tracking.md`, `design_docs/budget_tracking_approval_system.md`
 
 ---
 
 ## 1. Executive Summary
 
-Implement the Feature model for HephaestusNG's autopilot pipeline. Decomposes complex designs into independently shippable slices (Features) before code is written. Each Feature runs its own 12-phase pipeline in its own git worktree with controlled parallelism. Addresses context window overflow, agent scope loss, and failure isolation issues in the current flat pipeline.
+Implement a comprehensive cost tracking system for HephaestusNG's autopilot pipeline. Currently, cost is tracked at the design/feature level only via dead/unpopulated fields (`pipeline_metrics.json`, `cost_total: float = 0.0`). There is no per-task visibility into LLM token usage and dollar costs, making it impossible to identify expensive phases or optimize spend.
 
-**Current State:** Single flat Design → 11-phase workflow → feature report  
-**Target State:** Design → Phase 0 (Feature Architect) → features.json → Per-feature pipelines (parallel/sequential) → Design Aggregate → design_report.html + design_metrics.json
+**Current State:** No real cost tracking. OpenRouter calls happen constantly but cost data is not captured. Dead code exists in `src/interfaces/cost_tracker.py` and `src/interfaces/openrouter_client.py` but is not imported anywhere.
+
+**Target State:** Append-only `cost_entries` ledger table (source of truth), denormalized `cost_total_usd` rollup columns on Task/Feature/AutopilotDesign/AutopilotProject (self-healing derivation), per-project budget enforcement with automatic pipeline pause, and collection from multiple CLI agent sources (pi, Claude Code, OpenCode, backend's own OpenRouter calls).
 
 ---
 
-## 2. Prerequisites (Run B Fixes)
+## 2. Problem Statement
 
-### PR-1: Spec Gate Must Fire on QA Completion
-- **Problem:** `_build_spec_phase_output` not called when `qa_validation` completes
-- **Fix A:** Instrument task completion paths in `src/monitoring/monitor.py`
-- **Fix B:** Output-existence completion floor in `update_task_status` handler (`src/mcp/server.py` ~line 1794)
-- **Output artifact declarations required per phase:**
-  - `qa_result.json` (qa_validation)
-  - `product_validation.json` (product_validation)
-  - `architecture.md` (architecture_design)
-  - `requirements_analysis.md` (product_requirements)
-  - `scope_review_result.json` (scope_review)
+LLM API calls happen across multiple independent channels:
 
-### PR-2: Abandoned Required Phase Must Escalate to Impasse
-- **Problem:** `security_review` abandoned after 6 attempts, pipeline continued silently
-- **Fix:** In `src/monitoring/monitor.py`, set phase status to `failed`, workflow to `impasse`, trigger human intervention
-- **Optional phases (can fail without blocking):** `forensics_analysis`, `git_commit_push`
+1. **pi CLI agent sessions** — persistent interactive tmux sessions with cost data in JSONL transcripts
+2. **Claude Code sessions** — persistent tmux sessions, tokens-only in transcripts (no dollar cost)
+3. **OpenCode sessions** — one-shot invocations with real dollar cost available via stdout/SQLite
+4. **Backend's own OpenRouter calls** — task enrichment, Guardian, Conductor (~9 call sites in `LangChainLLMClient`)
+
+None of these channels currently record cost data. The existing `cost_total: float = 0.0` field on reports is never populated. There is no way to answer: "Which tasks consume the most tokens?", "What is the total spend per design?", or "Has this project exceeded its budget?"
 
 ---
 
 ## 3. Functional Requirements
 
-### FR-1: Feature Database Table
-- **Requirement:** New `Feature` SQLAlchemy table
-- **Columns:** id (PK), design_id (FK), feature_key, name, scope, files (JSON), depends_on (JSON), execution, status, workflow_id (FK), scope_doc_path, feature_record_path, created_at, started_at, completed_at, error
-- **Check Constraints:** execution IN ('parallel', 'sequential'), status IN ('pending', 'active', 'completed', 'failed', 'skipped')
-- **Relationships:** belongs_to AutopilotDesign, has_one Workflow
-- **Acceptance:** `from src.core.database import Feature` succeeds; table created on startup
+### FR-1: CostEntry Table (Append-Only Ledger)
 
-### FR-2: AutopilotDesign Table Modifications
-- **Requirement:** Add columns: file_path (Text), designs_folder (Text), phase0_workflow_id (FK to workflows)
-- **Requirement:** Extend status constraint: `pending | processing | decomposing | active | completed | failed | skipped`
-- **Acceptance:** New columns exist; design status transitions work
+**Requirement:** New `CostEntry` SQLAlchemy table — one row per LLM turn/call, not per task.
 
-### FR-3: Workflow Table Modifications
-- **Requirement:** Add columns: workflow_type (design/feature), feature_id (FK to features)
-- **Acceptance:** Workflow type tracking works; feature linkage established
+**Schema:**
+```python
+class CostEntry(Base):
+    __tablename__ = "cost_entries"
 
-### FR-4: Database Migration
-- **Requirement:** Idempotent `_migrate_feature_model_columns()` in `src/core/database.py`
-- **Call location:** `DatabaseManager.__init__`
-- **Acceptance:** Safe to call on every startup; creates Feature table and adds columns
+    id = Column(String, primary_key=True)  # cost-<uuid8>
+    task_id = Column(String, ForeignKey("tasks.id"), nullable=True)
+    agent_id = Column(String, ForeignKey("agents.id"), nullable=True)
+    workflow_id = Column(String, ForeignKey("workflows.id"), nullable=True)
 
-### FR-5: Phase 0 Workflow Definition
-- **Requirement:** New `config/workflows/autopilot-phase0/` directory with:
-  - `workflow.yaml`: default_model (xiaomi/mimo-v2.5), execution_order, orchestrator config, launch_template
-  - `01_feature_architect.yaml`: phase definition with done_definitions, outputs, instructions
-- **Agent role:** feature_architect
-- **Acceptance:** Phase 0 runs standalone; produces valid features.json and scope.md files
+    source = Column(String, nullable=False)  # 'pi' | 'claude_code' | 'opencode' | 'codex' | 'openrouter_direct'
+    model = Column(String, nullable=True)  # e.g. "anthropic/claude-sonnet-4"
 
-### FR-6: Workflow Registry Update
-- **Requirement:** Register `autopilot-phase0` in `src/workflow_registry.py`
-- **Acceptance:** Phase 0 workflow launchable via SDK
+    input_tokens = Column(Integer, default=0)
+    output_tokens = Column(Integer, default=0)
+    cache_read_tokens = Column(Integer, default=0)
+    cache_write_tokens = Column(Integer, default=0)
+    cost_usd = Column(Float, nullable=False)
 
-### FR-7: Orchestrator - run_phase0 (Stage 1)
-- **Requirement:** Create integration worktree, copy design.md, launch Phase 0, poll until complete, validate features.json, create permanent designs/ folder, copy outputs, create Feature DB records
-- **Constants:** MAX_PHASE0_TIME = 3600, MAX_PARALLEL_FEATURES = 4
-- **Acceptance:** Phase 0 completes; features.json valid; Feature records created
+    recorded_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    raw_usage = Column(JSON, nullable=True)  # Raw source line/turn for debugging
+```
 
-### FR-8: Orchestrator - run_feature_pipelines (Stage 2)
-- **Requirement:** Resolve execution order via topological sort (Kahn's algorithm), run features in parallel groups or sequential based on depends_on and execution fields
-- **Algorithm:** Build dependency graph, process in layers, separate parallel from sequential features
-- **Acceptance:** Parallel features run concurrently; sequential features respect ordering
+**Indexes:** `ix_cost_entries_task_id`, `ix_cost_entries_workflow_id`
 
-### FR-9: Orchestrator - run_design_aggregate (Stage 3)
-- **Requirement:** Aggregate results, generate design_metrics.json, generate design_report.html via Jinja2, update final design status
-- **Acceptance:** design_report.html written; final status correct
+**Acceptance Criteria:**
+- Table created on startup via `Base.metadata.create_all`
+- `task_id` is nullable for non-task-scoped calls (guardian, conductor overhead)
+- `source` values are constrained to known sources
+- `raw_usage` preserves original transcript data for debugging
 
-### FR-10: Helper Functions
-- **Requirement:** Implement helpers:
-  - `_create_integration_worktree`: Create git worktree for feature isolation
-  - `_cleanup_worktree`: Remove worktree after feature completes
-  - `_create_designs_folder`: Create permanent record folder with timestamp
-  - `_create_feature_records`: Create Feature DB records from features.json
-  - `_update_feature_status`: Update Feature status in DB
-  - `_update_design_status`: Update AutopilotDesign status in DB
-  - `_set_workflow_type`: Mark workflow as design or feature type
-  - `_link_workflow_to_feature`: Associate workflow with Feature
-  - `_validate_features_json`: Validate features.json schema
-  - `_should_skip`: Check if feature dependency failed
-- **Acceptance:** All helpers functional; orchestrator uses them
+**Rationale for append-only ledger:** Aggregates are derived from this table, not hand-maintained. This mirrors the codebase's existing self-healing derivation pattern (`src/core/status_derivation.py`) rather than trusting a single mutable running-total column that can drift under concurrent writes.
 
-### FR-11: CLI Changes - add_to_queue
-- **Requirement:** Store file_path in DB, do not copy file. Resolve absolute path, create AutopilotDesign record with file_path = str(abs_path)
-- **Acceptance:** `heph autopilot add <path>` registers design without copying
+---
 
-### FR-12: API Endpoint - POST /api/autopilot/designs/add
-- **Requirement:** Accept file_path and project_path, find/create project, check duplicates, create design record
-- **Acceptance:** API returns design id, name, status
+### FR-2: SessionCostCheckpoint Table
 
-### FR-13: pick_next_design Update
-- **Requirement:** Prefer file_path column over filename; fallback to filename relative to project base dir + DESIGN_SUBDIR
-- **Acceptance:** Designs with file_path work; fallback works for legacy
+**Requirement:** New table to track progress through CLI session transcript files, keyed by `session_id` (not `Agent.id`).
 
-### FR-14: Phase YAML Updates
-- **Requirement:** Update workflow.yaml launch_template to pass feature_scope and feature_id; update phase YAMLs to reference scope.md as primary input
-- **Acceptance:** Phase 1 receives feature_scope; reads scope.md first
+**Schema:**
+```python
+class SessionCostCheckpoint(Base):
+    __tablename__ = "session_cost_checkpoints"
 
-### FR-15: Design Report Template
-- **Requirement:** Create `src/autopilot/templates/design_report.html` using Jinja2
-- **Content:** Summary table, aggregate metrics, PRs merged, forensics highlights
-- **Acceptance:** HTML generated with all required sections
+    session_id = Column(String, primary_key=True)
+    lines_processed = Column(Integer, default=0, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+```
+
+**Critical Design Decision:** Checkpoint is keyed by `session_id`, NOT by `Agent.id`. Reason: `get_session_id(project_id, design_slug, phase_name)` is a pure function — it has no dependency on which `Agent` row is currently driving it. When an agent dies mid-phase and a retry creates a new `Agent` row, that new agent gets the exact same session ID and resumes the exact same session file. A checkpoint stored on the `Agent` row would start at 0 and double-count every turn the dead agent already ran.
+
+**Acceptance Criteria:**
+- Table created on startup
+- Checkpoint advances correctly across agent retries
+- No double-counting when agent rows change but session_id stays the same
+
+---
+
+### FR-3: Denormalized Rollup Columns
+
+**Requirement:** Add `cost_total_usd = Column(Float, default=0.0, nullable=False)` to:
+- `Task` model
+- `Feature` model
+- `AutopilotDesign` model
+- `AutopilotProject` model
+
+**Acceptance Criteria:**
+- All four models have the column
+- Column populated by `cost_derivation.py` on every new `CostEntry` write
+- Rollup chain: `SUM(cost_entries.cost_usd)` grouped by `task_id` → `Feature.workflow_id == Task.workflow_id` → `Feature.design_id` → `AutopilotDesign.project_id`
+- Recomputed on write (not independently maintained) so missed updates never permanently desync
+
+---
+
+### FR-4: Cost Derivation Module
+
+**Requirement:** New module `src/core/cost_derivation.py` following the pattern of `src/core/status_derivation.py`.
+
+**Functions:**
+- `derive_task_cost(task_id)` — SUM cost_entries for task
+- `derive_feature_cost(feature_id)` — SUM costs for all tasks in feature's workflow
+- `derive_design_cost(design_id)` — SUM costs for all features in design
+- `derive_project_cost(project_id)` — SUM costs for all designs in project
+- `derive_cost_totals(cost_entry)` — Full rollup triggered on every new CostEntry write
+
+**Acceptance Criteria:**
+- Self-healing: missed updates never permanently desync displayed totals
+- Called on every new CostEntry insertion
+- Thread-safe for concurrent writes (up to MAX_PARALLEL_FEATURES = 4)
+
+---
+
+### FR-5: Budget Enforcement Schema
+
+**Requirement:** Add `cost_limit_usd = Column(Float, nullable=True)` to `AutopilotProject` model.
+
+- `None` = no limit
+- `cost_total_usd` (from FR-3) is what gets compared against it
+
+**Acceptance Criteria:**
+- Column exists on AutopilotProject
+- Nullable (no limit when None)
+- Computed cost_total_usd used for comparison (no redundant "current spend" field)
+
+---
+
+### FR-6: Budget Enforcement Logic
+
+**Requirement:** When `project.cost_total_usd >= project.cost_limit_usd`:
+
+1. **Pause active workflows** — terminate active agents (with `terminated_at` set) and mark active workflows `paused` with `paused_by = "budget"`
+2. **Block new work** — guard at top of `pick_next_design` and in `_run_one_feature` before calling `run_single_workflow`
+3. **Idempotent pause** — `_pause_project_workflows` is naturally idempotent (only matches `status.in_(["active", "running"])` — second call finds nothing left to pause)
+
+**Critical Gap Fix:** Don't reuse `/autopilot/stop` endpoint query as-is — it misses Phase 0. That endpoint filters `Workflow.definition_id == "autopilot"` but Phase 0 launches under `definition_id == "autopilot-phase0"`. Extract pause logic into shared `_pause_project_workflows(project_id, paused_by)` function that filters `Workflow.definition_id.in_(["autopilot", "autopilot-phase0"])`.
+
+**Acceptance Criteria:**
+- Pipeline pauses when budget exceeded
+- Phase 0 workflows included in pause
+- No new work starts for over-budget project
+- Concurrent CostEntry writes don't cause redundant pauses
+- Spend always lands at-or-slightly-over limit (cost only knowable after the fact)
+
+---
+
+### FR-7: Generalize `paused_by` Guards
+
+**Requirement:** Change all self-heal/auto-resume guards from `== "user"` to `is not None`:
+- `_try_auto_resume_paused_workflow`
+- `_create_corrective_task`
+- stuck-workflow restart in `attempt_recovery`
+- `AutopilotService.start()`'s resume-on-play logic (EXCEPTION: keep `== "user"` here — clicking play should resume user-paused but NOT budget-paused)
+
+**When limit raised or cleared:** If new limit is null or higher than `cost_total_usd`, clear `paused_by` on that project's `"budget"`-paused workflows.
+
+**Acceptance Criteria:**
+- Budget-paused workflows don't auto-resume through self-heal paths
+- User-paused workflows still don't auto-resume
+- Play button resumes user-paused but NOT budget-paused
+- Raising limit clears budget pause
+
+---
+
+### FR-8: Pi Extension Collector
+
+**Requirement:** Create pi extension (`extensions/hephaestus-cost-tracker.ts`) that hooks `turn_end` events to capture `message.usage.cost.total` in real-time.
+
+**Data source verified:** Pi session files at `~/.pi/agent/sessions/` contain JSONL with:
+```json
+{
+  "type": "message",
+  "message": {
+    "role": "assistant",
+    "model": "xiaomi/mimo-v2.5",
+    "usage": {
+      "input": 9430, "output": 222, "cacheRead": 512, "cacheWrite": 0,
+      "reasoning": 99, "totalTokens": 10164,
+      "cost": {
+        "input": 0.00099015, "output": 0.00006216,
+        "cacheRead": 0, "cacheWrite": 0, "total": 0.0010523099999999999
+      }
+    }
+  }
+}
+```
+
+**Session file discovery:**
+- Directory key: sanitized `cwd` (slashes → dashes, wrapped in `--`)
+- Filename: `<ISO-creation-timestamp>_<session-id>.jsonl`
+- Verify by reading first line's `{"type": "session", "id": "<session-id>", "cwd": "..."}`
+
+**Acceptance Criteria:**
+- Extension installed globally at `~/.pi/agent/extensions/hephaestus-cost-tracker/`
+- POSTs each turn's cost to Hephaestus API immediately (no checkpoint table needed for pi)
+- Reads `session_id` from pi session context
+- Shows running cost in pi TUI via `ctx.ui.setStatus()`
+- Fallback: JSONL tailing still works when extension not loaded
+
+---
+
+### FR-9: Pi JSONL Tailing Collector (Fallback)
+
+**Requirement:** New module `src/services/cost_collection_service.py` with `CostCollector` ABC.
+
+**Checkpoint mechanism:** Read `lines_processed` for session ID, sum `message.usage.cost.total` from `type: "message"` lines after that count where `message.role == "assistant"`, write new `CostEntry` rows, advance `lines_processed`.
+
+**Acceptance Criteria:**
+- Collector discovers session file via glob `*_<session_id>.jsonl` in cwd-keyed directory
+- Correctly handles shared sessions (SESSION_ROLES maps multiple tasks to one session)
+- No double-counting across agent retries (checkpoint keyed by session_id, not agent_id)
+- Collection triggered on task completion (`update_task_status` handler), not on timer
+
+---
+
+### FR-10: Claude Code Collector
+
+**Requirement:** Token-to-dollar conversion collector for Claude Code sessions.
+
+**Data source verified:** Claude Code transcripts have `message.usage` with:
+```json
+{
+  "input_tokens": 4736,
+  "cache_creation_input_tokens": 2976,
+  "cache_read_input_tokens": 8118,
+  "output_tokens": 560
+}
+```
+No dollar cost in transcript — only raw tokens. Requires maintained per-model price table.
+
+**Session ID fix required:** `ClaudeCodeAgent.get_launch_command` currently passes no session flag. Must:
+1. Derive valid UUID from deterministic inputs: `uuid.uuid5(NAMESPACE, f"{project_id}:{design_slug}:{role}")`
+2. Add `--session-id {uuid}` to launch command
+
+**Acceptance Criteria:**
+- Price table maintained for all Claude models (input/output/cache rates)
+- Two cache-write tiers handled (`ephemeral_1h` vs `ephemeral_5m`)
+- Session ID correlation works via UUID5
+- Collector falls back to heuristic if session ID unavailable
+
+---
+
+### FR-11: OpenCode Collector
+
+**Requirement:** Capture cost from one-shot `opencode run` invocations.
+
+**Data source verified:** OpenCode runs one-shot (not persistent tmux). Real dollar cost available via `opencode export <sessionID>` with `cost` field, `tokens` breakdown, `modelID`, `providerID`. Storage is SQLite at `~/.local/share/opencode/opencode.db`.
+
+**Two mechanisms (in order of preference):**
+1. **Stdout capture:** Add `--format json` to `OpenCodeAgent.get_launch_command`, parse JSON from tmux pane output
+2. **Fallback: read opencode.db** after process exits
+
+**Gate on actual usage:** Before building, check `config/workflows/autopilot/workflow.yaml` and `phase_cli_tool` overrides for whether `cli_type: opencode` is set on any live phase.
+
+**Acceptance Criteria:**
+- Smoke test `opencode run --format json "..."` to verify payload shape
+- Cost captured from stdout or DB
+- Collection happens once after process exits (no timer)
+- If not in active use, stub as "unsupported"
+
+---
+
+### FR-12: OpenRouter Direct Collector
+
+**Requirement:** Capture cost from backend's own direct OpenRouter calls (~9 call sites in `LangChainLLMClient`).
+
+**Mechanism:** Add `usage: {include: true}` to `extra_body` in `ChatOpenAI` construction. OpenRouter returns non-standard `usage.cost` field.
+
+**Refactor:** Add `_invoke_and_record(model, messages, component, task_id)` helper to avoid duplicating extraction logic across 9 call sites.
+
+**Call sites to wire:**
+- `enrich_task`
+- `resolve_ticket_clarification`
+- `analyze_agent_state`
+- `analyze_agent_trajectory`
+- `analyze_system_coherence`
+- `review_qa_report`
+- `generate_agent_prompt` (if exists)
+- `generate_embedding` (if applicable)
+- Others found via grep
+
+**task_id threading required:** Most methods don't currently have `task_id` parameter — callers know the ID but don't pass it down.
+
+**Acceptance Criteria:**
+- `usage.include=true` confirmed working via smoke test
+- `_invoke_and_record` helper wraps all call sites
+- `task_id` threaded into all methods that are task-scoped
+- Non-task-scoped calls (conductor) roll up to workflow or "overhead" bucket
+
+---
+
+### FR-13: Codex Collector Stub
+
+**Requirement:** Stub collector that logs "unsupported" rather than silently reporting zero cost.
+
+**Status:** `codex` not installed on this machine. Need to check if actually used in practice.
+
+**Acceptance Criteria:**
+- Stub implemented
+- Logs "unsupported" message
+- Does not report zero (which would be misleading)
+
+---
+
+### FR-14: UI — Budget Configuration
+
+**Requirement:** Add `cost_limit_usd` number input to `ProjectSettingsModal.tsx`.
+
+**Wiring:** Extend existing `PUT /projects/{project_id}` mutation.
+
+**Acceptance Criteria:**
+- Number input per project (optional — blank = no limit)
+- Wired to existing mutation pattern
+- Backend `ProjectUpdate` model extended
+
+---
+
+### FR-15: UI — Cost Display
+
+**Requirement:** Display cost data in multiple UI locations.
+
+**Autopilot design screen:** "$current / $limit" indicator (or just "$current spent" when no limit) with link to ProjectSettingsModal.
+
+**Paused status distinction:** When workflow shows `paused_by == "budget"`, surface "Paused: budget limit reached" instead of generic "Paused".
+
+**Acceptance Criteria:**
+- Design screen shows current spend
+- Link to settings for limit configuration
+- Budget-paused workflows clearly labeled
 
 ---
 
 ## 4. Non-Functional Requirements
 
 ### NFR-1: Backward Compatibility
-- **Requirement:** Existing autopilot workflow continues for designs without Feature model
-- **Acceptance:** Old flow still runs; feature_scope and feature_id parameters optional
+- Existing autopilot pipeline continues without cost tracking enabled
+- No breaking changes to existing database schema
+- Budget enforcement is opt-in (disabled by default)
 
 ### NFR-2: Performance
-- **Requirement:** MAX_PARALLEL_FEATURES = 4 concurrent feature pipelines
-- **Acceptance:** System doesn't exceed resource limits
+- `CostEntry` writes are < 1ms (SQLite insert)
+- Cost derivation rollup on write path must not block pipeline
+- Up to MAX_PARALLEL_FEATURES (4) concurrent CostEntry writers
 
 ### NFR-3: Reliability
-- **Requirement:** MAX_PHASE0_TIME = 3600 seconds timeout
-- **Acceptance:** Long-running Phase 0 doesn't block indefinitely
+- Append-only ledger is the source of truth (no mutable running totals)
+- Self-healing derivation ensures consistency after missed updates
+- Budget pause is idempotent (concurrent calls don't cause issues)
 
-### NFR-4: Idempotency
-- **Requirement:** Database migrations safe to call on every startup
-- **Acceptance:** No errors on repeated startup
+### NFR-4: Data Accuracy
+- pi collector: exact cost from `message.usage.cost.total`
+- Claude Code collector: estimated from token counts × price table
+- OpenCode collector: exact cost from stdout or DB
+- OpenRouter direct: exact cost from `usage.include=true` response
 
----
-
-## 5. Integration Points
-
-| Component | Type | Description |
-|-----------|------|-------------|
-| `src/core/database.py` | Modify | Add Feature class, new columns, migration function |
-| `src/autopilot/orchestrator.py` | Modify | Refactor run_single_design to three-stage coordinator |
-| `src/cli/commands/autopilot.py` | Modify | Rewrite add_to_queue |
-| `src/mcp/autopilot_api.py` | Modify | Add POST /api/autopilot/designs/add |
-| `src/mcp/server.py` | Modify | Output-existence completion floor (PR-1 Fix B) |
-| `src/monitoring/monitor.py` | Modify | Spec gate firing + impasse handling (PR-1, PR-2) |
-| `src/workflow_registry.py` | Modify | Register autopilot-phase0 |
-| `config/workflows/autopilot-phase0/` | New | workflow.yaml + 01_feature_architect.yaml |
-| `src/autopilot/templates/` | New | design_report.html (Jinja2) |
-
-**No new external dependencies required.** All changes use existing stack.
+### NFR-5: Maintenance
+- Claude Code price table needs updating when Anthropic reprices
+- Codex collector stub logs "unsupported" (not zero)
+- Historical backfill NOT supported (rollups start from zero at deploy time)
 
 ---
 
-## 6. Technology Constraints
+## 5. Technology Constraints
 
-1. **Language:** Python 3 (existing HephaestusNG stack)
-2. **ORM:** SQLAlchemy (existing)
-3. **Template Engine:** Jinja2 (existing)
-4. **Testing:** pytest with `-p no:libtmux` flag (broken plugin)
-5. **Version Control:** Git worktrees for feature isolation
-6. **No new dependencies:** Pure extensions of existing patterns
-
----
-
-## 7. File Structure (Permanent Storage)
-
-```
-<project>/
-  designs/
-    <timestamp>_<name>_<design-id>/
-      design.md
-      features.json
-      design_report.html
-      design_metrics.json
-      features/
-        <feature-id>/
-          scope.md
-          feature_report.html
-          docs/
-            requirements_analysis.md
-            architecture.md
-            review_report.md
-            doc_review_report.md
-            security_report.md
-            qa_report.md
-            qa_result.json
-            product_validation.md
-            product_validation.json
-            forensics_report.md
-            pipeline_metrics.json
-            phase_prompts/
-```
+| Constraint | Detail |
+|-----------|--------|
+| Language | Python 3.12 (existing stack) |
+| ORM | SQLAlchemy with StaticPool, expire_on_commit=False |
+| Database | SQLite with WAL mode (existing) |
+| Migrations | Follow `_migrate_*_column` pattern in `database.py` |
+| Frontend | React 18, TypeScript, Tailwind CSS (existing) |
+| No new dependencies | Pure extensions of existing patterns |
 
 ---
 
-## 8. Acceptance Criteria Summary
+## 6. Integration Points
+
+### 6.1 Existing Code (Modify)
+
+| File | Change |
+|------|--------|
+| `src/core/database.py` | Add CostEntry, SessionCostCheckpoint tables; add cost_total_usd columns to Task/Feature/AutopilotDesign/AutopilotProject; add cost_limit_usd to AutopilotProject; add migration functions |
+| `src/core/status_derivation.py` | Reference pattern for cost_derivation.py |
+| `src/autopilot/orchestrator.py` | Extract `_pause_project_workflows` from `/autopilot/stop` handler; add budget checks in `pick_next_design` and `_run_one_feature` |
+| `src/mcp/autopilot_api.py` | Extend `PUT /projects/{project_id}` for cost_limit_usd |
+| `src/interfaces/langchain_llm_client.py` | Add `_invoke_and_record` helper; wire all 9 call sites; add `usage.include=true` |
+| `src/agents/manager.py` | Propagate cost data from CLI agent sessions to CostEntry |
+| `src/services/task_completion_service.py` | Trigger cost collection on task done |
+| `src/interfaces/cli_interface.py` | Add `--session-id` to ClaudeCodeAgent; fix UUID derivation |
+| `frontend/src/components/ProjectSettingsModal.tsx` | Add cost_limit_usd input |
+| `frontend/src/components/autopilot/DesignQueuePanel.tsx` | Add cost display |
+
+### 6.2 Existing Code (Reference Only)
+
+| File | Why |
+|------|-----|
+| `src/core/status_derivation.py` | Pattern for self-healing derivation |
+| `src/interfaces/cost_tracker.py` | Dead code — shows what was previously attempted |
+| `src/monitoring/guardian.py` | LLM call site for cost tracking |
+| `src/monitoring/conductor.py` | LLM call site for cost tracking |
+
+### 6.3 New Files
+
+| File | Purpose |
+|------|---------|
+| `src/core/cost_derivation.py` | Self-healing cost rollup module |
+| `src/services/cost_collection_service.py` | Per-CLI transcript tailing collectors |
+| `extensions/hephaestus-cost-tracker.ts` | Pi extension for real-time cost capture |
+
+---
+
+## 7. Implementation Phases
+
+### Phase 1: Schema
+- `cost_entries` and `session_cost_checkpoints` tables
+- `cost_total_usd` columns on Task/Feature/AutopilotDesign/AutopilotProject
+- `cost_limit_usd` on AutopilotProject
+- Migration following existing `_migrate_*_column` pattern
+
+### Phase 2: Pi Collector
+- JSONL tailing collector + checkpoint mechanism
+- `cost_derivation.py` rollup
+- Wire into task completion handler
+- Verify against real running pipeline
+
+### Phase 3: Budget Enforcement
+- `_pause_project_workflows` extraction (fixing `/autopilot/stop` gap)
+- Enforcement check in `cost_derivation.py` rollup path
+- `is not None` generalization of `paused_by` guards
+- Budget checks in `pick_next_design` and `_run_one_feature`
+- Land after pi collector (earliest real cost data)
+
+### Phase 4: Claude Code Collector
+- UUID5 session-ID fix
+- Price-table-based collector
+- Verify against real Claude Code sessions
+
+### Phase 5: OpenRouter Direct
+- Confirm `usage.include=true` works
+- Wire `_invoke_and_record` across all 9 call sites
+- Thread `task_id` into methods
+
+### Phase 6: OpenCode Collector
+- Gate on actual usage in workflow.yaml
+- Smoke test `opencode run --format json`
+- Implement stdout capture or DB read
+
+### Phase 7: UI
+- Budget config input
+- Cost display on design screen
+- Budget-paused status label
+
+### Phase 8: Codex Collector
+- Stub implementation (logs "unsupported")
+- Full implementation when CLI available to inspect
+
+---
+
+## 8. Critical Design Decisions
+
+### D-1: Append-Only Ledger vs Mutable Totals
+**Decision:** Append-only `cost_entries` table as source of truth; denormalized `cost_total_usd` columns are derived, not maintained independently.
+**Rationale:** Matches existing self-healing pattern in `status_derivation.py`. A missed update never permanently desyncs the displayed total from the ledger.
+
+### D-2: Checkpoint by Session ID vs Agent ID
+**Decision:** `SessionCostCheckpoint` keyed by `session_id`, NOT `Agent.id`.
+**Rationale:** When an agent dies and retries, the new agent gets the same session ID and resumes the same file. A checkpoint on the agent row would double-count.
+
+### D-3: Collection on Task Completion vs Timer
+**Decision:** Collect cost on task completion (`update_task_status` handler), not on a timer.
+**Rationale:** Session activity is fully written to disk by the time done lands. No torn-read risk. Avoids separate polling loop.
+
+### D-4: Pi Extension vs Raw JSONL Tailing
+**Decision:** Pi extension preferred over raw JSONL tailing for pi sessions.
+**Rationale:** No file-system access needed. Real-time TUI display. No checkpoint table needed for pi. JSONL tailing remains as fallback.
+
+### D-5: Single Shared Pause Function
+**Decision:** Extract `_pause_project_workflows(project_id, paused_by)` from `/autopilot/stop` route handler.
+**Rationale:** Current endpoint misses Phase 0 (only matches `"autopilot"`, not `"autopilot-phase0"`). Shared function fixes both.
+
+### D-6: `paused_by` Generalization
+**Decision:** Change guards from `== "user"` to `is not None`, EXCEPT in `AutopilotService.start()`.
+**Rationale:** Any non-null paused_by means something deliberately paused this. Start() keeps `== "user"` because clicking play should resume user-paused but NOT budget-paused.
+
+---
+
+## 9. Open Questions
+
+| # | Question | Status |
+|---|----------|--------|
+| Q1 | Should we track cost for non-LLM operations (tool calls, etc.)? | Deferred to future |
+| Q2 | Should cost be rounded or stored with full precision? | Store full precision |
+| Q3 | Do we need a cost budget/alert system per design (not just per project)? | Per-project only for now |
+| Q4 | Is OpenCode actually used in any live phase? | Check workflow.yaml before building |
+| Q5 | Does OpenCode's `-s` flag accept caller-chosen new session IDs? | Needs live test |
+| Q6 | Does `usage.include=true` survive LangChain's response parsing? | Needs smoke test |
+| Q7 | Should standalone tasks (no session_id) be forced to always pass a session ID? | Flagged, not resolved |
+
+---
+
+## 10. Acceptance Criteria Summary
 
 | ID | Criterion | Verification |
 |----|-----------|--------------|
-| AC-1 | Feature table created | `from src.core.database import Feature` |
-| AC-2 | Phase 0 workflow registered | Workflow launchable via SDK |
-| AC-3 | Phase 0 produces valid features.json | JSON schema validation |
-| AC-4 | Phase 0 produces scope.md per feature | File existence check |
-| AC-5 | Parallel features execute concurrently | ThreadPoolExecutor with MAX_PARALLEL_FEATURES |
-| AC-6 | Sequential features respect depends_on | Topological sort ordering |
-| AC-7 | design_report.html generated | HTML file written to designs_folder |
-| AC-8 | CLI add_to_queue stores file_path | DB record has file_path column |
-| AC-9 | API endpoint works | POST /api/autopilot/designs/add returns 200 |
-| AC-10 | Backward compatible | Old flow runs without feature_scope |
-| AC-11 | Existing tests pass | All 74 tests green |
-| AC-12 | Spec gate fires | Seeded failing test triggers GOTO |
-| AC-13 | Impasse on abandoned phase | Abandoned required phase escalates to human |
-
----
-
-## 9. Implementation Order
-
-1. **Step 0:** Run B fixes (spec gate + abandoned phase impasse) - MUST be green first
-2. **Step 1:** DB schema (Feature table + column additions + migration)
-3. **Step 2:** Phase 0 YAML and workflow registration
-4. **Step 3:** Orchestrator refactor (three-stage coordinator)
-5. **Step 4:** CLI and API changes
-6. **Step 5:** Phase YAML updates (scope.md references)
-7. **Step 6:** Feature report (Jinja2 template)
-
----
-
-## 10. Testing Requirements
-
-### Unit Tests
-- `test_resolve_execution_order.py`: parallel, sequential, depends_on DAG, cycles
-- `test_validate_features_json.py`: valid JSON, missing fields, duplicate IDs, cycles, overlapping files
-- `test_create_feature_records.py`: DB records created, status starts pending
-
-### Integration Tests
-- `test_phase0_workflow.py`: Phase 0 runs against real design doc
-- `test_feature_model_single.py`: Single-feature design end-to-end
-- `test_feature_model_parallel.py`: Two-feature parallel design
-- `test_feature_model_sequential.py`: Feature A → Feature B sequential
-- `test_feature_dependency_failed.py`: Dependency failure propagation
-
-### Regression
-- All existing 74 tests must pass
-- Smoke test with calculator project (single-feature design)
+| AC-1 | CostEntry table created | `from src.core.database import CostEntry` succeeds |
+| AC-2 | SessionCostCheckpoint table created | Table exists in DB |
+| AC-3 | cost_total_usd on Task/Feature/Design/Project | All four models have column |
+| AC-4 | cost_limit_usd on AutopilotProject | Column exists, nullable |
+| AC-5 | Pi collector captures real cost | CostEntry rows populated after pi agent task |
+| AC-6 | Cost derivation self-heals | Missing updates recovered on next write |
+| AC-7 | Budget pauses pipeline | Workflows paused when limit exceeded |
+| AC-8 | Phase 0 included in budget pause | `_pause_project_workflows` matches both definition_ids |
+| AC-9 | Budget-paused doesn't auto-resume | Self-heal guards use `is not None` |
+| AC-10 | Play button doesn't clear budget pause | `start()` keeps `== "user"` filter |
+| AC-11 | Raising limit clears budget pause | `PUT /projects/{id}` clears `"budget"`-paused |
+| AC-12 | UI shows cost data | Design screen displays spend |
+| AC-13 | Budget config works | ProjectSettingsModal has limit input |
+| AC-14 | Existing tests pass | All tests green |
+| AC-15 | No new dependencies | Pure SQLAlchemy/stdlib |
 
 ---
 
@@ -258,11 +543,21 @@ Implement the Feature model for HephaestusNG's autopilot pipeline. Decomposes co
 
 | Risk | Likelihood | Impact | Mitigation |
 |------|-----------|--------|------------|
-| Run B not green | High | Blocker | Must fix spec gate + impasse first |
-| Context overflow in Phase 0 | Low | High | Design doc size; may need chunking |
-| Worktree cleanup failures | Medium | Medium | Robust cleanup helpers with error handling |
-| Backward compatibility break | Medium | High | Optional parameters; fallback logic |
+| Claude Code price table goes stale | Medium | Medium | Document update process; fallback to zero |
+| Concurrent CostEntry writes cause contention | Low | Medium | WAL mode + QueuePool handle this |
+| Pi extension not loaded | Medium | Low | JSONL tailing fallback still works |
+| Budget enforcement misses edge case | Medium | High | Comprehensive testing of pause/resume paths |
+| Historical data unavailable | N/A | Low | Noted in Non-Goals; rollups start from deploy |
 
 ---
 
-**Requirements extracted. Ready for Scope Review and Architecture.**
+## 12. Non-Goals (Explicitly Deferred)
+
+- **Real-time streaming cost display mid-task for non-pi CLIs.** Pi extension provides real-time cost. Claude Code and OpenCode collection at task completion.
+- **Codex collector implementation.** Stubbed only; needs CLI installed to inspect transcript format.
+- **Historical backfill.** No cost data exists for tasks that already ran before this lands; rollups start from zero at deploy time.
+- **Per-design budget limits.** Per-project only for now.
+
+---
+
+**Requirements extracted. Ready for Scope Review and Architecture Design.**
