@@ -127,8 +127,9 @@ class TaskCompletionService:
 
         feature_dir = _Path(config.project_root) / CONTEXT_DIR_NAME / "features"
         missing = []
+        invalid_json = []
         for declared_output in required_files:
-            found = False
+            found_path = None
             # 1. Check the workflow's shared worktree (task.workflow_id can
             # legitimately be unset for tasks not tied to any workflow --
             # only the "has a workflow_id but no working_directory" case
@@ -152,34 +153,57 @@ class TaskCompletionService:
                     _Path(wf.working_directory) / CONTEXT_DIR_NAME / declared_output,
                 ]:
                     if candidate.exists():
-                        found = True
+                        found_path = candidate
                         break
             # 2. Check feature folder
-            if not found and feature_dir.exists():
+            if found_path is None and feature_dir.exists():
                 for d in sorted(feature_dir.iterdir(), reverse=True):
                     candidate = d / "docs" / declared_output
                     if candidate.exists():
-                        found = True
+                        found_path = candidate
                         break
-            if not found:
+            if found_path is None:
                 missing.append(declared_output)
+                continue
 
-        if not missing:
+            # Existence alone isn't enough for a declared .json output: a
+            # truncated/malformed write passes this check, then silently
+            # reads back as None everywhere downstream (read_result's bare
+            # except-return-None) -- indistinguishable from never having
+            # been written at all, surfacing much later as a confusing
+            # "not found" at gate-scoring time instead of a clear rejection
+            # here, at the one place that actually knows the file exists.
+            if declared_output.endswith(".json"):
+                try:
+                    import json as _json
+
+                    _json.loads(found_path.read_text())
+                except Exception as e:
+                    invalid_json.append(f"{declared_output} ({e})")
+
+        if not missing and not invalid_json:
             return None
 
         # Optional phases may complete without their declared output(s).
         optional_phases = load_optional_phases(task.workflow_id)
         if phase.name in optional_phases:
-            logger.info(f"Agent completed optional phase {phase.name} without {missing} — allowing")
+            logger.info(f"Agent completed optional phase {phase.name} without {missing or invalid_json} — allowing")
             return None
 
-        logger.warning(f"Agent claimed done on {phase.name} but {missing} not found — rejecting")
+        problems = []
+        if missing:
+            problems.append(f"missing: {', '.join(missing)}")
+        if invalid_json:
+            problems.append(f"not valid JSON: {', '.join(invalid_json)}")
+        summary = "; ".join(problems)
+
+        logger.warning(f"Agent claimed done on {phase.name} but {summary} — rejecting")
         task.status = "failed"
-        task.failure_reason = f"Agent claimed completion but required output(s) missing: {', '.join(missing)}"
+        task.failure_reason = f"Agent claimed completion but required output(s) invalid: {summary}"
         session.commit()
         return {
             "status": "failed",
-            "message": f"Output validation failed: missing {', '.join(missing)}",
+            "message": f"Output validation failed: {summary}",
         }
 
     @staticmethod
@@ -573,6 +597,32 @@ class TaskCompletionService:
             )
         elif result.get("action") == "continue":
             logger.info(f"[SPEC-GATE] {phase.name}: PASSED (score >= 0.7)")
+            # _start_next_phase (called by mark_phase_complete's
+            # _advance_or_complete_with_phase_info) flips the next phase's
+            # PhaseExecution to "in_progress" but does NOT create its Task.
+            # The sweep's _advance_phases would pick that up on its next
+            # tick via Case 0b (in_progress with no tasks) or Case 1
+            # (completed + pending successor), but if a concurrent sweep
+            # tick already iterated and acted on a stale view it won't
+            # re-read the snapshot. Same as the goto path above (which
+            # always calls _create_phase_task directly): create the task
+            # here so the spec gate doesn't depend on a lucky sweep tick.
+            target_phase_id = result.get("target_phase_id")
+            target_phase_name = result.get("target_phase")
+            if target_phase_id:
+                from src.autopilot.orchestrator import _create_phase_task
+                await loop.run_in_executor(
+                    None,
+                    functools.partial(
+                        _create_phase_task,
+                        task.workflow_id,
+                        target_phase_id,
+                        target_phase_name,
+                        "continue",
+                        logger,
+                        source_phase_name=phase.name,
+                    ),
+                )
 
     @staticmethod
     async def spawn_validation(
