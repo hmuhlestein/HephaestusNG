@@ -88,10 +88,3 @@ frontend/node_modules/
 # Hephaestus local data
 .hephaestus/
 .pi-subagents/
-
-# AWS Automated Security Helper's own scan working directory (raw
-# per-scanner output, converted files, aggregated SARIF JSON) -- dropped
-# in the worktree root by security_review's mandatory scan. Belt-and-
-# suspenders alongside _run_ash_scan's own cleanup: catches any project
-# whose scan runs outside that cleanup path.
-.ash/
