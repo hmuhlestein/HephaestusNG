@@ -95,6 +95,7 @@ class CostEntry(Base):
     output_tokens = Column(Integer, default=0)
     cache_read_tokens = Column(Integer, default=0)
     cache_write_tokens = Column(Integer, default=0)
+    reasoning_tokens = Column(Integer, default=0)
     cost_usd = Column(Float, nullable=False)
 
     recorded_at = Column(DateTime, default=datetime.utcnow, nullable=False)
@@ -118,6 +119,7 @@ class SessionCostCheckpoint(Base):
 |-------------------|-------------------------------------------|
 | `Task`            | `cost_total_usd = Column(Float, default=0.0, nullable=False)` |
 | `Feature`         | `cost_total_usd = Column(Float, default=0.0, nullable=False)` |
+| `Workflow`        | `cost_total_usd = Column(Float, default=0.0, nullable=False)` |
 | `AutopilotDesign` | `cost_total_usd = Column(Float, default=0.0, nullable=False)` |
 | `AutopilotProject`| `cost_total_usd = Column(Float, default=0.0, nullable=False)` |
 | `AutopilotProject`| `cost_limit_usd = Column(Float, nullable=True)`  — `None` = no limit |
@@ -127,27 +129,47 @@ class SessionCostCheckpoint(Base):
 Mirrors `src/core/status_derivation.py` pattern exactly.
 
 ```python
-def derive_task_cost(db: Session, task_id: str) -> float:
+def record_cost(
+    db: Session,
+    cost_usd: float,
+    source: str,
+    task_id: Optional[str] = None,
+    agent_id: Optional[str] = None,
+    workflow_id: Optional[str] = None,
+    model: Optional[str] = None,
+    input_tokens: int = 0,
+    output_tokens: int = 0,
+    cache_read_tokens: int = 0,
+    cache_write_tokens: int = 0,
+    reasoning_tokens: int = 0,
+    raw_usage: Optional[dict] = None,
+) -> CostEntry:
+    """Primary entry point: creates CostEntry AND triggers rollup.
+    
+    1. Auto-derives workflow_id from task if not provided
+    2. Creates CostEntry row
+    3. Calls derive_task_cost() and derive_workflow_cost() to roll up
+    """
+
+def derive_task_cost(db: Session, task_id: str, write_back: bool = True) -> float:
     """SUM(cost_entries.cost_usd) WHERE task_id = this task."""
 
-def derive_feature_cost(db: Session, feature_id: str) -> float:
-    """SUM task costs where Task.workflow_id == Feature.workflow_id."""
+def derive_workflow_cost(db: Session, workflow_id: str, write_back: bool = True) -> float:
+    """SUM(cost_entries.cost_usd) WHERE workflow_id = this workflow.
+    Then rolls up to feature → design → project."""
 
-def derive_design_cost(db: Session, design_id: str) -> float:
-    """SUM feature costs where Feature.design_id = this design."""
+def derive_feature_cost(db: Session, feature_id: str, write_back: bool = True) -> float:
+    """SUM costs via Workflow join where Workflow.feature_id = this feature."""
 
-def derive_project_cost(db: Session, project_id: str) -> float:
-    """SUM design costs where AutopilotDesign.project_id = this project."""
+def derive_design_cost(db: Session, design_id: str, write_back: bool = True) -> float:
+    """SUM costs via Feature→Workflow join where Feature.design_id = this design."""
 
-def derive_cost_totals(db: Session, cost_entry: CostEntry) -> None:
-    """Full rollup triggered on every new CostEntry write.
-    
-    1. Recompute task-level cost (or use entry.cost_usd directly if task_id set)
-    2. Roll up to feature → design → project
-    3. Write back all denormalized cost_total_usd columns
-    4. Check budget enforcement: if project.cost_total_usd >= project.cost_limit_usd,
-       call _pause_project_workflows(project_id, "budget")
-    """
+def derive_project_cost(db: Session, project_id: str, write_back: bool = True) -> float:
+    """SUM costs via Design→Feature→Workflow join.
+    Also checks budget enforcement after updating."""
+
+def check_budget_before_new_work(db: Session, project_id: str) -> bool:
+    """Returns True if under budget (safe to proceed), False if over budget."""
 ```
 
 ### 2.5 Budget Enforcement (`src/autopilot/orchestrator.py`)
@@ -243,20 +265,18 @@ async def update_project(project_id: str, req: ProjectUpdate):
 
 ## 3. File Change Map
 
-| File | Action | Summary |
-|------|--------|---------|
-| `src/core/database.py` | MODIFY | Add `CostEntry`, `SessionCostCheckpoint` tables. Add `cost_total_usd` to Task/Feature/AutopilotDesign/AutopilotProject. Add `cost_limit_usd` to AutopilotProject. Add 5 migration functions. |
-| `src/core/cost_derivation.py` | CREATE | Self-healing cost rollup module (mirror `status_derivation.py` pattern). Budget enforcement check. |
-| `src/services/cost_collection_service.py` | CREATE | `CostCollector` ABC + `PiJsonlCollector` + `ClaudeCodeCollector` + `OpenCodeCollector` + `CodexStubCollector` + `collect_task_cost()` entry point. |
-| `src/autopilot/orchestrator.py` | MODIFY | Extract `_pause_project_workflows`. Generalize `paused_by` guards (`== "user"` → `is not None`). Add budget guards to `pick_next_design` and `_run_one_feature`. |
-| `src/mcp/autopilot_api.py` | MODIFY | Add `POST /cost-entries`. Extend `PUT /projects/{id}` for `cost_limit_usd` + budget-pause clearing. |
-| `src/interfaces/langchain_llm_client.py` | MODIFY | Add `_invoke_and_record` helper. Wire all 9 call sites. Add `usage.include=true` to `extra_body`. Thread `task_id` through methods. |
-| `src/services/task_completion_service.py` | MODIFY | Call `collect_task_cost(task_id)` on task completion. |
-| `src/interfaces/cli_interface.py` | MODIFY | ClaudeCodeAgent already has UUID5 session-id fix. No change needed (verified). |
-| `extensions/hephaestus-cost-tracker/` | CREATE | Pi extension: `package.json`, `index.ts`, `tsconfig.json`. |
-| `frontend/src/components/ProjectSettingsModal.tsx` | MODIFY | Add `cost_limit_usd` number input. |
-| `frontend/src/components/autopilot/DesignQueuePanel.tsx` | MODIFY | Add cost display indicator. |
-| `src/interfaces/cost_tracker.py` | KEEP | Dead code — leave as-is for now (no import changes needed). |
+| File | Action | Summary | Status |
+|------|--------|---------|--------|
+| `src/core/database.py` | MODIFY | Add `CostEntry`, `SessionCostCheckpoint` tables. Add `cost_total_usd` to Task/Feature/Workflow/AutopilotDesign/AutopilotProject. Add `cost_limit_usd` to AutopilotProject. Add migration functions. | ✅ DONE |
+| `src/core/cost_derivation.py` | CREATE | Self-healing cost rollup module (mirror `status_derivation.py` pattern). Budget enforcement check. `record_cost()` primary entry point. | ✅ DONE |
+| `src/services/cost_collection_service.py` | CREATE | `CostCollector` ABC + `PiJsonlCollector` + `ClaudeCodeCollector` + `OpenCodeCollector` + `CodexStubCollector` + `collect_task_cost()` entry point. | ✅ DONE |
+| `src/autopilot/orchestrator.py` | MODIFY | Budget guards to `pick_next_design` and `_run_one_feature`. Generalize `paused_by` guards (`== "user"` → `is not None`). | ✅ DONE |
+| `src/mcp/autopilot_api.py` | MODIFY | Add `POST /cost-entries`. Extend `PUT /projects/{id}` for `cost_limit_usd` + budget-pause clearing. Add input validation. | ✅ DONE |
+| `src/services/task_completion_service.py` | MODIFY | Call `collect_task_cost(task_id)` on task completion. | ✅ DONE |
+| `src/interfaces/langchain_llm_client.py` | MODIFY | Add `_invoke_and_record` helper. Wire all 9 call sites. Add `usage.include=true` to `extra_body`. Thread `task_id` through methods. | ❌ DEFERRED |
+| `extensions/hephaestus-cost-tracker/` | CREATE | Pi extension: `package.json`, `index.ts`, `tsconfig.json`. | ❌ DEFERRED |
+| `frontend/src/components/ProjectSettingsModal.tsx` | MODIFY | Add `cost_limit_usd` number input. | ❌ DEFERRED |
+| `frontend/src/components/autopilot/DesignQueuePanel.tsx` | MODIFY | Add cost display indicator. | ❌ DEFERRED |
 
 ---
 

@@ -55,13 +55,14 @@ class CostEntry(Base):
     output_tokens = Column(Integer, default=0)
     cache_read_tokens = Column(Integer, default=0)
     cache_write_tokens = Column(Integer, default=0)
+    reasoning_tokens = Column(Integer, default=0)
     cost_usd = Column(Float, nullable=False)
 
     recorded_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     raw_usage = Column(JSON, nullable=True)  # Raw source line/turn for debugging
 ```
 
-**Indexes:** `ix_cost_entries_task_id`, `ix_cost_entries_workflow_id`
+**Indexes:** `ix_cost_entries_task_id`, `ix_cost_entries_workflow_id`, `ix_cost_entries_recorded_at`
 
 **Acceptance Criteria:**
 - Table created on startup via `Base.metadata.create_all`
@@ -101,11 +102,12 @@ class SessionCostCheckpoint(Base):
 **Requirement:** Add `cost_total_usd = Column(Float, default=0.0, nullable=False)` to:
 - `Task` model
 - `Feature` model
+- `Workflow` model
 - `AutopilotDesign` model
 - `AutopilotProject` model
 
 **Acceptance Criteria:**
-- All four models have the column
+- All five models have the column (Task, Feature, Workflow, AutopilotDesign, AutopilotProject)
 - Column populated by `cost_derivation.py` on every new `CostEntry` write
 - Rollup chain: `SUM(cost_entries.cost_usd)` grouped by `task_id` → `Feature.workflow_id == Task.workflow_id` → `Feature.design_id` → `AutopilotDesign.project_id`
 - Recomputed on write (not independently maintained) so missed updates never permanently desync
@@ -117,11 +119,13 @@ class SessionCostCheckpoint(Base):
 **Requirement:** New module `src/core/cost_derivation.py` following the pattern of `src/core/status_derivation.py`.
 
 **Functions:**
-- `derive_task_cost(task_id)` — SUM cost_entries for task
-- `derive_feature_cost(feature_id)` — SUM costs for all tasks in feature's workflow
-- `derive_design_cost(design_id)` — SUM costs for all features in design
-- `derive_project_cost(project_id)` — SUM costs for all designs in project
-- `derive_cost_totals(cost_entry)` — Full rollup triggered on every new CostEntry write
+- `record_cost(db, cost_usd, source, ...)` — Primary entry point: creates CostEntry AND triggers rollup
+- `derive_task_cost(db, task_id, write_back=True)` — SUM cost_entries for task
+- `derive_workflow_cost(db, workflow_id, write_back=True)` — SUM cost_entries for workflow, rolls up to feature/design/project
+- `derive_feature_cost(db, feature_id, write_back=True)` — SUM costs for all workflows in feature
+- `derive_design_cost(db, design_id, write_back=True)` — SUM costs for all features in design
+- `derive_project_cost(db, project_id, write_back=True)` — SUM costs for all designs in project, checks budget enforcement
+- `check_budget_before_new_work(db, project_id)` — Returns True if under budget (safe to proceed)
 
 **Acceptance Criteria:**
 - Self-healing: missed updates never permanently desync displayed totals
