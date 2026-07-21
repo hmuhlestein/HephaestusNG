@@ -1,0 +1,38 @@
+{
+  "run": 2,
+  "timestamp": "2025-07-21T12:00:00Z",
+  "prior_blockers_fixed": 4,
+  "prior_blockers_partial": 1,
+  "prior_blockers_unfixed": 0,
+  "blocker_count": 1,
+  "warning_count": 2,
+  "nit_count": 0,
+  "findings": [
+    {
+      "id": "B-1-residual",
+      "severity": "BLOCKER",
+      "title": "_pause_project_workflows still has db.commit() inside derive chain",
+      "file": "src/core/cost_derivation.py",
+      "line": 351,
+      "description": "Residual from prior B-1. _pause_project_workflows() is called from derive_project_cost() via _check_budget_enforcement(), and still commits the transaction. This breaks the caller's transaction boundary — if the caller expects to roll back on failure, the pause is already committed.",
+      "fix": "Remove db.commit() from _pause_project_workflows(). Let the caller's get_db() context manager handle the commit."
+    },
+    {
+      "id": "W-1-carried",
+      "severity": "WARNING",
+      "title": "Budget enforcement TOCTOU race condition (carried from Run 1)",
+      "file": "src/core/cost_derivation.py",
+      "description": "check_budget_before_new_work() is advisory — no locking mechanism. Costs can increase between check and launch."
+    },
+    {
+      "id": "W-2-carried",
+      "severity": "WARNING",
+      "title": "collect_task_cost silently swallows all failures (carried from Run 1)",
+      "file": "src/services/task_completion_service.py",
+      "line": 847,
+      "description": "All exceptions caught and logged as warnings. No alerting or metrics for persistent cost collection failures."
+    }
+  ],
+  "verdict": "PASS_WITH_RESERVATIONS",
+  "notes": "4 of 5 prior BLOCKERs fully fixed. 1 residual BLOCKER (db.commit in _pause_project_workflows). 2 WARNINGs carried forward unchanged."
+}
