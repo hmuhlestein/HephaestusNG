@@ -250,10 +250,10 @@ Replace `/path/to/qdrant_mcp_openai.py` with the actual path to the script in yo
 This gives agents access to task management, phase information, and workflow coordination:
 
 ```bash
-claude mcp add -s user hephaestus python /path/to/claude_mcp_client.py
+claude mcp add -s user hephaestus python /path/to/mcp_client.py
 ```
 
-Replace `/path/to/claude_mcp_client.py` with the actual path to the script in your Hephaestus installation.
+Replace `/path/to/mcp_client.py` with the actual path to the script in your Hephaestus installation.
 
 **What these MCP servers provide:**
 

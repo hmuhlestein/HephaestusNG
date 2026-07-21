@@ -381,7 +381,7 @@ class AgentManager:
             # Fallback for MCP tool calls that omit required ID params —
             # models frequently drop them (e.g. hephaestus_save_memory's
             # agent_id) even when the prompt's own example shows them filled
-            # in. mcp/claude_mcp_client.py falls back to these env vars
+            # in. mcp/mcp_client.py falls back to these env vars
             # instead of hard-failing the call. workflow_id/phase_id are
             # only set when this task actually has one (standalone tasks
             # have neither).

@@ -353,7 +353,7 @@ claude mcp add -s user qdrant python /path/to/qdrant_mcp_openai.py \
   -e OPENAI_API_KEY=$OPENAI_API_KEY
 
 # Hephaestus MCP (for task management)
-claude mcp add -s user hephaestus python /path/to/claude_mcp_client.py
+claude mcp add -s user hephaestus python /path/to/mcp_client.py
 ```
 
 **4. Start Required Services**
