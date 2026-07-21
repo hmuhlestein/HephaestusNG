@@ -618,12 +618,39 @@ After the `usage.include=true` opt-in is confirmed working (§ above), wire
 directly — no transcript-tailing needed here, this path already has the
 response object in hand.
 
+## Pi Extension Collector (preferred over raw JSONL tailing for pi sessions)
+
+A pi extension (`extensions/hephaestus-cost-tracker.ts`) hooks `turn_end`
+events to capture `message.usage.cost.total` in real-time as each pi turn
+completes. This is cleaner than the raw JSONL tailing approach described in
+the Collection Architecture section because:
+
+1. **No file-system access needed** — the extension runs inside the pi process
+   and sees usage data directly from the provider response.
+2. **Real-time TUI display** — the extension can show running cost in the pi
+   status bar via `ctx.ui.setStatus()`, turning the previously-deferred
+   "real-time streaming cost display" into a free side-effect.
+3. **No checkpoint table needed for pi** — the extension POSTs each turn's
+   cost to Hephaestus's API immediately, so there's no byte-offset to track.
+   The `SessionCostCheckpoint` table is still needed for Claude Code's
+   file-tailing collector.
+
+The extension reads `session_id` from the pi session (available via
+`ctx.sessionManager`), and includes it in the POST so Hephaestus can attribute
+cost to the correct task/workflow. When the extension is not loaded (e.g.
+standalone pi sessions outside Hephaestus), the JSONL tailing fallback still
+works — the two mechanisms are complementary, not exclusive.
+
+The extension is installed globally at `~/.pi/agent/extensions/hephaestus-cost-tracker/`
+by `scripts/install.sh` when pi is detected. It connects to Hephaestus's API
+at `http://localhost:8080` (configurable via `HEPHAESTUS_API_URL` env var).
+
 ## Non-Goals (explicitly deferred)
 
-- **Real-time streaming cost display mid-task.** Collection happens at task
-  completion, not live — a running task's in-progress cost isn't reflected
-  until it finishes. Fine for the stated goal (rollup reporting); revisit if
-  a live "$ spent so far" ticker is wanted later.
+- **Real-time streaming cost display mid-task for non-pi CLIs.** The pi
+  extension provides real-time cost display in the pi TUI. For Claude Code
+  and OpenCode, collection still happens at task completion — no live ticker
+  for those sources.
 - **Codex collector implementation.** Stubbed only; needs the CLI installed
   somewhere to inspect its actual transcript format first.
 - **Historical backfill.** No cost data exists for tasks that already ran
@@ -655,20 +682,13 @@ response object in hand.
    new-work guards. Land right after the `pi` collector (phase 2) since
    that's the earliest point real, non-zero cost data exists to actually test
    enforcement against — doesn't need to wait for Claude Code/OpenCode/Codex.
-4. **Claude Code — session-ID correlation first, then the collector.** Two
-   sub-steps, in order, since the collector is useless without the first:
-   - 4a. Switch `get_session_id` to emit a valid UUID (`uuid.uuid5`) instead
-     of the current slug-hash string, and add `--session-id` to
-     `ClaudeCodeAgent.get_launch_command`, matching `PiAgent`. Verify this
-     doesn't break `pi`'s own usage of the same function (pi's session ID
-     format is unconstrained, so a UUID string works fine there too — but
-     confirm nothing else parses the current human-readable slug format
-     expecting role names to be visible in it, e.g. any log line or debug
-     tooling that greps session IDs for a phase name).
-   - 4b. Build the price-table-based collector (`$/M` rates per model,
-     including the two cache-write tiers), mirroring `pi`'s collector
-     structure but converting tokens → dollars instead of reading a
-     pre-computed total.
+4. **Claude Code — session-ID correlation already done, build the collector.**
+   The UUID5 session-ID fix is already landed (`cli_interface.py:393-403` —
+   `ClaudeCodeAgent.get_launch_command` passes `--session-id` with a UUID5
+   derived from the same deterministic inputs as pi). Remaining work:
+   build the price-table-based collector (`$/M` rates per model, including
+   the two cache-write tiers), mirroring `pi`'s collector structure but
+   converting tokens → dollars instead of reading a pre-computed total.
 5. **OpenRouter direct** — confirm `usage.include=true` surfaces in
    `response_metadata` via one live smoke-test call, then wire the
    enrichment/guardian/conductor call sites.
