@@ -150,6 +150,12 @@ phase_agent_instructions: |
     outputs. Scratch/exploratory output that isn't part of the deliverable goes under
     `.hephaestus/scratch/` — never the project root. Stuck on something unrelated to your
     task? Don't write reports about it — work around it or fail the task with a reason.
+  - ⚠️  STAY IN YOUR WORKING DIRECTORY (shown above): every file write, edit, and git command
+    for this task MUST run inside it. If you `cd` elsewhere for any reason (e.g. checking
+    something in the main repo), `cd` straight back before your very next command — do not
+    let a later command run from the wrong directory. Work saved outside your Working
+    Directory is not on your branch and will be lost; it will not be committed, reviewed, or
+    merged, no matter how the task itself is marked.
   {phase_context_section}
   Begin now.
 
@@ -183,6 +189,10 @@ non_phase_agent_instructions: |
      output that isn't part of the deliverable goes under `.hephaestus/scratch/` — never the
      project root. Stuck on something unrelated to your task? Don't write reports about it —
      work around it or fail the task with a reason.
+  10. ⚠️  STAY IN YOUR WORKING DIRECTORY (shown above): every file write, edit, and git command
+     for this task MUST run inside it. If you `cd` elsewhere for any reason, `cd` straight
+     back before your very next command. Work saved outside your Working Directory is not on
+     your branch and will be lost, no matter how the task itself is marked.
   {phase_context_section}
   Begin now.
 
