@@ -1,0 +1,91 @@
+{
+  "verdict": "PASS",
+  "run": 2,
+  "prior_run_blockers": 5,
+  "prior_run_blockers_resolved": 5,
+  "blocker_count": 0,
+  "warning_count": 6,
+  "nit_count": 3,
+  "total_findings": 9,
+  "files_reviewed": [
+    "src/core/cost_derivation.py",
+    "src/mcp/autopilot_api.py",
+    "extensions/hephaestus-cost-tracker/src/index.ts"
+  ],
+  "blocker_verification": [
+    {
+      "id": "B-1",
+      "title": "update_project silently wipes cost_limit_usd on ANY partial update",
+      "status": "FIXED",
+      "fix": "Added clear_cost_limit sentinel field; handler uses if/elif/else to distinguish 'not sent' from 'clear'",
+      "verified_by": "Runtime test: ProjectUpdate(name='New Name') correctly leaves cost_limit_usd unchanged"
+    },
+    {
+      "id": "B-2",
+      "title": "Pi extension posts to wrong URL and wrong port",
+      "status": "FIXED",
+      "fix": "Default port 8000->8300; path /cost-entries -> /api/autopilot/cost-entries",
+      "verified_by": "Code inspection: URL matches server config (port 8300, prefix /api/autopilot)"
+    },
+    {
+      "id": "B-3",
+      "title": "derive_project_cost and derive_design_cost miss costs without feature_id",
+      "status": "FIXED",
+      "fix": "Dual-path query: via_feature (join through Feature) + direct (Workflows with feature_id IS NULL)",
+      "verified_by": "Code inspection: direct path correctly filters Workflow.feature_id.is_(None)"
+    },
+    {
+      "id": "B-4",
+      "title": "CostEntryCreate missing token count validators",
+      "status": "FIXED",
+      "fix": "Added @validator for all token count fields with non-negative and 10M max checks",
+      "verified_by": "Runtime test: input_tokens=-100 and 100_000_000 both raise ValidationError"
+    },
+    {
+      "id": "B-5",
+      "title": "record_cost bypasses the $1000 cost cap",
+      "status": "FIXED",
+      "fix": "Added validation at top of record_cost(): rejects negative, caps at $1000 with warning",
+      "verified_by": "Code inspection: validation runs before any DB write"
+    }
+  ],
+  "warnings_remaining": [
+    {
+      "id": "W-1",
+      "title": "_extract_session_id is unreliable heuristic",
+      "status": "UNCHANGED"
+    },
+    {
+      "id": "W-2",
+      "title": "ClaudeCodeCollector hardcoded prices with no staleness detection",
+      "status": "UNCHANGED"
+    },
+    {
+      "id": "W-3",
+      "title": "collect_task_cost error handling silently swallows all failures",
+      "status": "UNCHANGED"
+    },
+    {
+      "id": "W-4",
+      "title": "BudgetPausedLabel component exists but is never rendered",
+      "status": "UNCHANGED"
+    },
+    {
+      "id": "W-5",
+      "title": "Dashboard ProjectCostSummary has no onConfigureBudget handler",
+      "status": "UNCHANGED"
+    },
+    {
+      "id": "W-6",
+      "title": "derive_workflow_cost rollup triggers 5 redundant SUM queries per record_cost call",
+      "status": "UNCHANGED"
+    }
+  ],
+  "new_blockers_found": 0,
+  "new_warnings_found": 0,
+  "review_criteria_coverage": {
+    "blocker_verification": "All 5 BLOCKERs verified via code inspection and runtime testing",
+    "fix_quality": "Fixes are minimal and targeted; no regressions introduced",
+    "remaining_risk": "6 WARNINGs remain (non-blocking quality improvements)"
+  }
+}
