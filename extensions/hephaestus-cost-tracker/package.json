@@ -1,0 +1,14 @@
+{
+  "name": "hephaestus-cost-tracker",
+  "version": "1.0.0",
+  "description": "Real-time cost tracking for Hephaestus pi agents",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "typescript": "^5.0.0"
+  }
+}

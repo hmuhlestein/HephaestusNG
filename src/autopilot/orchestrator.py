@@ -2013,6 +2013,12 @@ def pick_next_design(
             if not project:
                 logger.info("pick_next_design: no active project found")
                 return None
+
+            # Budget guard: skip this project if over budget
+            from src.core.cost_derivation import check_budget_before_new_work
+            if not check_budget_before_new_work(db, project.id):
+                logger.info(f"[BUDGET] pick_next_design: project {project.id[:8]} over budget — skipping")
+                return None
             
             logger.info(
                 f"pick_next_design: searching project '{project.name}' ({project.id[:8]})"
@@ -3746,7 +3752,7 @@ def _try_auto_resume_paused_workflow(db, workflow_id: str, wf, logger: Orchestra
     every cycle until whatever made the phase look stalled resolved on its
     own.
     """
-    if wf.paused_by == "user":
+    if wf.paused_by is not None:
         return
     phases = (
         db.query(Phase)
@@ -5677,15 +5683,16 @@ def _create_corrective_task(
         if not wf:
             logger.warning(f"[CORRECTIVE-TASK] Workflow {workflow_id[:8]} not found")
             return None
-        if wf.paused_by == "user":
+        if wf.paused_by is not None:
             # Same class of bug _try_auto_resume_paused_workflow was fixed
             # for: don't override a deliberate pause. Unlike that function
             # (which just skips and leaves the workflow alone), this one
             # would otherwise both reactivate the workflow AND immediately
             # spawn a live agent against it -- silently resuming real work
-            # on something the user explicitly stopped.
+            # on something the user or budget explicitly stopped.
+            pause_reason = wf.paused_by
             logger.info(
-                f"[CORRECTIVE-TASK] Workflow {workflow_id[:8]} is user-paused — "
+                f"[CORRECTIVE-TASK] Workflow {workflow_id[:8]} is {pause_reason}-paused — "
                 "skipping corrective task"
             )
             return None
@@ -5861,14 +5868,15 @@ def _resume_stuck_workflow_tasks(workflow_id: str, logger: OrchestratorLogger) -
         wf = db.query(Workflow).filter_by(id=workflow_id).first()
         if not wf:
             return 0
-        if wf.status == "paused" and wf.paused_by == "user":
+        if wf.status == "paused" and wf.paused_by is not None:
             # Same class of bug _try_auto_resume_paused_workflow was fixed
             # for: this runs whenever the design/feature queue loop cycles
             # back to a workflow it already has an id for, which can
-            # include one the user deliberately paused -- don't silently
-            # un-pause and restart work on it.
+            # include one the user or budget deliberately paused -- don't
+            # silently un-pause and restart work on it.
+            pause_reason = wf.paused_by
             logger.info(
-                f"[RESUME-STUCK] Workflow {workflow_id[:8]} is user-paused — skipping"
+                f"[RESUME-STUCK] Workflow {workflow_id[:8]} is {pause_reason}-paused — skipping"
             )
             return 0
         if wf.status in ("paused", "failed"):
@@ -7041,6 +7049,14 @@ def _run_one_feature(
     if not feature_id:
         logger.error(f"Feature record not found for {feature_key}")
         return "failed"
+
+    # Budget guard: refuse to launch features for over-budget projects
+    from src.core.cost_derivation import check_budget_before_new_work
+    if project_id:
+        with get_db() as budget_db:
+            if not check_budget_before_new_work(budget_db, project_id):
+                logger.warning(f"[BUDGET] Cannot launch feature {feature_key} — project {project_id[:8]} over budget")
+                return "failed"
 
     # Create feature record folder
     feature_record_path = designs_folder / "features" / feature_key
