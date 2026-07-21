@@ -2524,6 +2524,7 @@ async def update_task_status(
 
         # 4. Check if task has validation enabled
         validation_spawned = False
+        output_lost_rejection = None
         if request.status == "done" and task.validation_enabled:
             # Agent claims done but needs validation
             task.status = "under_review"
@@ -2570,6 +2571,16 @@ async def update_task_status(
                 await TaskCompletionService.commit_and_link_ticket(
                     session, agent_id, task, request.summary
                 )
+                # Re-verify the declared output(s) are still there right after
+                # the commit -- catches the file having vanished between the
+                # pre-commit check (3b, above) and here, e.g. an agent whose
+                # last actual write landed outside its worktree. Flips the
+                # task back to "failed" instead of letting a real loss stand
+                # as a silent "done". See verify_output_survived_commit's
+                # docstring for the live incident this closes.
+                output_lost_rejection = TaskCompletionService.verify_output_survived_commit(
+                    session, task, phase=phase
+                )
 
             # 4. Schedule agent termination and queue processing (only if no validation)
             async def terminate_and_process_queue():
@@ -2591,7 +2602,10 @@ async def update_task_status(
         # before it was ever captured in git history -- the file (and its
         # findings, beyond what's threaded into the corrective task's
         # description) would be lost outright instead of preserved in a commit.
-        if request.status == "done" and task.phase_id:
+        #
+        # Skipped entirely if output_lost_rejection fired above -- the task is
+        # "failed" now, not "done", so the phase isn't actually complete.
+        if request.status == "done" and task.phase_id and not output_lost_rejection:
             await TaskCompletionService.fire_spec_gate_if_ready(session, task)
 
         # 5. Broadcast update
@@ -2600,13 +2614,19 @@ async def update_task_status(
                 "type": "task_completed",
                 "task_id": request.task_id,
                 "agent_id": agent_id,
-                "status": request.status,
+                "status": "failed" if output_lost_rejection else request.status,
                 "summary": request.summary[:200],
             }
         )
 
         # Return appropriate response based on whether validation was spawned
-        if validation_spawned:
+        if output_lost_rejection:
+            return UpdateTaskStatusResponse(
+                success=False,
+                message=output_lost_rejection["message"],
+                termination_scheduled=True,
+            )
+        elif validation_spawned:
             return UpdateTaskStatusResponse(
                 success=True,
                 message="Task submitted for validation. A validation agent has been spawned - please wait for validation results.",
