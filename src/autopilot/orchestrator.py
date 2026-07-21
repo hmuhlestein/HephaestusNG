@@ -6449,6 +6449,25 @@ def run_phase0(
             )
             return None, None
 
+        # Persist phase0_workflow_id IMMEDIATELY after workflow completes,
+        # before any post-processing that could fail or crash. This ensures
+        # _get_phase0_completion can find the completed workflow for recovery
+        # even if the server crashes before _create_feature_records runs.
+        from src.core.database import AutopilotDesign as _ADModel, Workflow as _WfModel
+        with _get_db() as _db:
+            _phase0_wf = (
+                _db.query(_WfModel)
+                .filter_by(design_id=design_entry.db_id, definition_id="feature_architect")
+                .order_by(_WfModel.created_at.desc())
+                .first()
+            )
+            if _phase0_wf:
+                _db.query(_ADModel).filter_by(id=design_entry.db_id).update(
+                    {_ADModel.phase0_workflow_id: _phase0_wf.id}
+                )
+                _db.flush()
+                logger.info(f"Persisted phase0_workflow_id={_phase0_wf.id[:8]} for {design_entry.name}")
+
         # Read and validate features.json
         features_json_path = worktree / CONTEXT_DIR_NAME / "features.json"
         if not features_json_path.exists():
@@ -6604,6 +6623,9 @@ def run_phase0(
         # an earlier run that failed before a later retry succeeded) --
         # otherwise a resolved problem keeps showing up in the design modal
         # forever, since nothing else ever clears this column.
+        # phase0_workflow_id was already persisted immediately after
+        # run_single_workflow returned (see above). Now update the remaining
+        # fields: designs_folder, error, status.
         update_kwargs = {"designs_folder": str(designs_folder), "error": None}
         from src.core.database import Workflow
         with _get_db() as _db:
@@ -6615,16 +6637,7 @@ def run_phase0(
             )
             phase0_wf_id = phase0_wf.id if phase0_wf else None
         if phase0_wf_id:
-            update_kwargs["phase0_workflow_id"] = phase0_wf_id
             _set_workflow_type(phase0_wf_id, "design")
-        else:
-            logger.warning(
-                f"Could not find the just-created Phase 0 workflow for design "
-                f"{design_entry.db_id} — phase0_workflow_id will not be set, "
-                "so a future crash-recovery re-entrant call will re-run the "
-                "full agent instead of resuming (correctness is unaffected, "
-                "only the recovery optimization is skipped)"
-            )
         _update_design_status(
             design_entry.db_id,
             "active",

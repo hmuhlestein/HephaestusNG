@@ -696,6 +696,15 @@ class MonitoringLoop:
                             "update_task_status with status='done'. If you are genuinely "
                             f"blocked, call it with status='failed' and explain why.{mcp_note}"
                         )
+                    elif _MAX_TOKEN_LIMIT_RE.search(_strip_sgr(sig)):
+                        msg = (
+                            "You hit the model's output token limit. Do NOT redo work that "
+                            "already succeeded — check what was actually written before "
+                            "continuing. Break remaining work into smaller chunks: one file "
+                            "read or one write per turn. If the task is done, call "
+                            "update_task_status with status='done'."
+                            f"{mcp_note}"
+                        )
                     else:
                         msg = (
                             "You appear stuck or looping. Stop, state your single next concrete "
