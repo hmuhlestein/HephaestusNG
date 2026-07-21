@@ -21,5 +21,7 @@ export function isNoiseLine(stripped: string): boolean {
   if (/^[AGBCD\s]+$/.test(stripped) && stripped.length < 10) return true;
   // Spinner character followed by terminal escape sequence residue (e.g. "⠸ 2;128;128;1")
   if (/^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s*[0-9;]+\s*$/.test(stripped)) return true;
+  // Bare terminal escape sequence residue (e.g. "2;138;190;1")
+  if (/^[0-9;]+$/.test(stripped) && stripped.includes(';')) return true;
   return false;
 }
