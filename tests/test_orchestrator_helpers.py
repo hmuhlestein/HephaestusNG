@@ -3133,6 +3133,212 @@ class TestSyncStaleFeatureStatuses:
         assert repaired == 0
 
 
+class TestRecoverAbandonedWorkflowsMissingWorktree:
+    """_recover_abandoned_workflows_missing_worktree: automated recovery for
+    a workflow _escalate_stale_active_workflows marked "failed" as a false
+    positive (its own message hedges: "likely lost mid-flight across a
+    backend restart") whose shared worktree is now gone. Without this,
+    such a workflow has no automated path back to progress -- every
+    _advance_phases case requires status in ("active", "paused"), so a
+    "failed" workflow is invisible to all of them forever."""
+
+    def _make_repo_with_feature_branch(self, tmp_path, design_id, feature_key):
+        import git as _git
+
+        repo_path = tmp_path / "repo"
+        repo_path.mkdir()
+        repo = _git.Repo.init(repo_path)
+        (repo_path / "README.md").write_text("# Test\n")
+        repo.index.add(["README.md"])
+        repo.index.commit("Initial commit")
+        default_branch = repo.active_branch.name
+        branch = f"feature/{design_id[:8]}/{feature_key}"
+        repo.git.branch(branch)
+        repo.git.checkout(branch)
+        (repo_path / "phase_work.md").write_text("# Real prior-phase work\n")
+        repo.index.add(["phase_work.md"])
+        repo.index.commit("phase(development): did real work")
+        repo.git.checkout(default_branch)
+        return repo_path, branch
+
+    def test_rebuilds_worktree_from_branch_and_resumes(self, orch_db_env, tmp_path, monkeypatch):
+        from src.autopilot.orchestrator import (
+            OrchestratorLogger,
+            _recover_abandoned_workflows_missing_worktree,
+        )
+        from src.core.database import (
+            AutopilotDesign,
+            AutopilotProject,
+            Feature,
+            Task,
+            Workflow,
+        )
+
+        design_id = "des-73b1ced0"
+        feature_key = "gateway-router-metrics"
+        repo_path, branch = self._make_repo_with_feature_branch(
+            tmp_path, design_id, feature_key
+        )
+
+        # _create_integration_worktree resolves its own DatabaseManager and
+        # WorktreeManager config independently of orch_db_env's env var --
+        # point both at the same test DB/repo.
+        import src.core.simple_config
+
+        cfg = src.core.simple_config.Config()
+        cfg.database_path = orch_db_env.engine.url.database
+        cfg.main_repo_path = repo_path
+        cfg.worktree_base_path = tmp_path / ".worktrees"
+        monkeypatch.setattr("src.core.simple_config.get_config", lambda: cfg)
+
+        with orch_db_env.session_scope() as session:
+            session.add(AutopilotProject(id="proj-1", name="p", base_dir=str(repo_path)))
+            session.add(
+                AutopilotDesign(id=design_id, project_id="proj-1", filename="d.md", name="D")
+            )
+            session.add(
+                Workflow(
+                    id="wf-lost",
+                    name="feature pipeline",
+                    phases_folder_path="/tmp",
+                    status="failed",
+                    status_reason=(
+                        "Abandoned: no agent/task activity for 10 consecutive "
+                        "scans -- likely lost mid-flight across a backend restart"
+                    ),
+                    working_directory=None,
+                    definition_id="autopilot",
+                )
+            )
+            session.add(
+                Feature(
+                    id="feature-row-1",
+                    design_id=design_id,
+                    feature_key=feature_key,
+                    name="Gateway Router Metrics",
+                    scope="s",
+                    status="active",
+                    workflow_id="wf-lost",
+                )
+            )
+            session.add(
+                Task(
+                    id="task-stuck",
+                    workflow_id="wf-lost",
+                    phase_id="phase-security-review",
+                    raw_description="r",
+                    done_definition="d",
+                    status="failed",
+                    failure_reason="Task stuck: no agent activity for >5 minutes",
+                    retry_count=0,
+                )
+            )
+
+        recovered = _recover_abandoned_workflows_missing_worktree(OrchestratorLogger(tmp_path))
+
+        assert recovered == 1
+        with orch_db_env.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-lost").first()
+            assert wf.status == "active"
+            assert wf.status_reason is None
+            assert wf.working_directory is not None
+            wt_path = Path(wf.working_directory)
+            assert wt_path.is_dir()
+            assert (wt_path / ".git").exists()
+            # Rebuilt from the branch -- prior phase work must be present.
+            assert (wt_path / "phase_work.md").exists()
+
+            # The stuck task is left for _maybe_retry_failed_tasks' own
+            # already-tested path to pick up -- untouched here.
+            task = session.query(Task).filter_by(id="task-stuck").first()
+            assert task.status == "failed"
+            assert task.retry_count == 0
+
+    def test_leaves_workflow_alone_when_retry_cap_already_reached(
+        self, orch_db_env, tmp_path, monkeypatch
+    ):
+        """Sanity check the fix isn't overbroad: a workflow whose stuck task
+        already hit the retry cap must not be recovered again -- something
+        is genuinely, persistently broken and needs a human, not another
+        automated attempt."""
+        from src.autopilot.orchestrator import (
+            OrchestratorLogger,
+            _recover_abandoned_workflows_missing_worktree,
+        )
+        from src.core.database import (
+            AutopilotDesign,
+            AutopilotProject,
+            Feature,
+            Task,
+            Workflow,
+        )
+
+        design_id = "des-73b1ced0"
+        feature_key = "gateway-router-metrics"
+        repo_path, branch = self._make_repo_with_feature_branch(
+            tmp_path, design_id, feature_key
+        )
+
+        import src.core.simple_config
+
+        cfg = src.core.simple_config.Config()
+        cfg.database_path = orch_db_env.engine.url.database
+        cfg.main_repo_path = repo_path
+        cfg.worktree_base_path = tmp_path / ".worktrees"
+        monkeypatch.setattr("src.core.simple_config.get_config", lambda: cfg)
+
+        with orch_db_env.session_scope() as session:
+            session.add(AutopilotProject(id="proj-1", name="p", base_dir=str(repo_path)))
+            session.add(
+                AutopilotDesign(id=design_id, project_id="proj-1", filename="d.md", name="D")
+            )
+            session.add(
+                Workflow(
+                    id="wf-lost",
+                    name="feature pipeline",
+                    phases_folder_path="/tmp",
+                    status="failed",
+                    status_reason=(
+                        "Abandoned: no agent/task activity for 10 consecutive "
+                        "scans -- likely lost mid-flight across a backend restart"
+                    ),
+                    working_directory=None,
+                    definition_id="autopilot",
+                )
+            )
+            session.add(
+                Feature(
+                    id="feature-row-1",
+                    design_id=design_id,
+                    feature_key=feature_key,
+                    name="Gateway Router Metrics",
+                    scope="s",
+                    status="active",
+                    workflow_id="wf-lost",
+                )
+            )
+            session.add(
+                Task(
+                    id="task-stuck",
+                    workflow_id="wf-lost",
+                    phase_id="phase-security-review",
+                    raw_description="r",
+                    done_definition="d",
+                    status="failed",
+                    failure_reason="Retry agent creation failed",
+                    retry_count=2,
+                )
+            )
+
+        recovered = _recover_abandoned_workflows_missing_worktree(OrchestratorLogger(tmp_path))
+
+        assert recovered == 0
+        with orch_db_env.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-lost").first()
+            assert wf.status == "failed"
+            assert wf.working_directory is None
+
+
 class TestWorkflowAppearsAbandoned:
     """_workflow_appears_abandoned: the signal _escalate_stale_active_
     workflows uses to decide whether a workflow stuck "active" is
