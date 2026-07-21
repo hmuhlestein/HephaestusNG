@@ -534,9 +534,9 @@ fi
 
 # Determine script path
 if [ "$LOCAL_MODE" = true ]; then
-    MCP_SCRIPT="$REPO_DIR/mcp/claude_mcp_client.py"
+    MCP_SCRIPT="$REPO_DIR/mcp/mcp_client.py"
 else
-    MCP_SCRIPT="$PREFIX/mcp/claude_mcp_client.py"
+    MCP_SCRIPT="$PREFIX/mcp/mcp_client.py"
 fi
 
 # Write opencode config if it doesn't exist or is outdated
@@ -618,9 +618,9 @@ if command -v pi >/dev/null 2>&1 || [ -d "$HOME/.pi" ]; then
     
     # Determine MCP script path
     if [ "$LOCAL_MODE" = true ]; then
-        MCP_SCRIPT_PATH="$PREFIX/mcp/claude_mcp_client.py"
+        MCP_SCRIPT_PATH="$PREFIX/mcp/mcp_client.py"
     else
-        MCP_SCRIPT_PATH="$PREFIX/mcp/claude_mcp_client.py"
+        MCP_SCRIPT_PATH="$PREFIX/mcp/mcp_client.py"
     fi
     
     # Verify MCP script exists

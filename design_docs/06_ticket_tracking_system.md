@@ -2084,7 +2084,7 @@ This configures the embedding model used for semantic ticket search. The default
 5. Related ticket suggestions
 
 **Phase 3 - MCP Client Integration (Critical):**
-1. **Add all 9 ticket endpoints to claude_mcp_client.py**:
+1. **Add all 9 ticket endpoints to mcp_client.py**:
    - `create_ticket` - Create with blocking, tags, duplicate detection
    - `update_ticket` - Update fields (title, description, priority, tags, blocked_by_ticket_ids)
    - `change_ticket_status` - Move ticket to different status (checks blockers)
@@ -2117,7 +2117,7 @@ This configures the embedding model used for semantic ticket search. The default
 
 ### MCP Client Endpoints to Implement
 
-**File:** `claude_mcp_client.py`
+**File:** `mcp_client.py`
 
 All 9 ticket tracking endpoints must be added as MCP tools:
 
