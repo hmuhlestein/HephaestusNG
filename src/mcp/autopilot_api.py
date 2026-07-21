@@ -16,7 +16,7 @@ from typing import Any, Dict, List, Optional, Tuple, TypeVar
 
 from fastapi import APIRouter, Header, HTTPException, Query
 from fastapi.responses import FileResponse, HTMLResponse
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, field_validator, model_validator
 
 from src.core.constants import (
     AUTOPILOT_STATE_DIR,
@@ -1563,6 +1563,18 @@ class CostEntryCreate(BaseModel):
         if v > 10_000_000:  # 10M tokens max per call
             raise ValueError("token count exceeds maximum allowed value")
         return v
+
+    @model_validator(mode="after")
+    def validate_entity_link(self) -> "CostEntryCreate":
+        """Require at least one of task_id or workflow_id for cost attribution.
+
+        Without an entity link, the cost entry bypasses budget enforcement
+        because no derivation rollup occurs (record_cost skips derive_task_cost
+        and derive_workflow_cost when both are None).
+        """
+        if self.task_id is None and self.workflow_id is None:
+            raise ValueError("At least one of task_id or workflow_id must be provided for cost attribution and budget enforcement")
+        return self
 
 
 class DesignItem(BaseModel):
