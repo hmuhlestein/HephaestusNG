@@ -89,7 +89,7 @@ class AgentPromptBuilder:
         base_message = f"""
 === TASK ASSIGNMENT ===
 🔑 Your Agent ID: {agent_id}
-   ⚠️  CRITICAL: Use this EXACT ID when calling MCP tools (hephaestus_update_task_status, hephaestus_create_task, etc.)
+   ⚠️  CRITICAL: Use this EXACT ID when calling MCP tools that require it (e.g. hephaestus_save_memory) — hephaestus_complete_my_task and hephaestus_create_task do NOT take an agent_id, omit it there
    ⚠️  DO NOT use 'agent-mcp' or any other placeholder - it will fail authorization!
 
 📋 Task ID: {task.id}
@@ -290,7 +290,7 @@ COMPLETION CRITERIA:
                                 + "\n\nFor each: fix the underlying issue, then call "
                                 'hephaestus_resolve_ticket(ticket_id="...", '
                                 'resolution_comment="...", commit_sha="<sha>") to mark '
-                                "it resolved. update_task_status(done) will be "
+                                "it resolved. complete_my_task(status=\"done\") will be "
                                 "REJECTED while any remain unresolved."
                             )
             except Exception as e:

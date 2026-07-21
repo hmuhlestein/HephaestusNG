@@ -128,7 +128,6 @@ additional_notes: |
   ═══════════════════════════════════════════════════════════════════════
 
   hephaestus_complete_my_task({
-    "agent_id": "<your agent id from the task assignment>",
     "status": "done",
     "summary": "SCOPE_PASS: ..." or "SCOPE_FAIL: ...",
     "key_learnings": ["<list of in-scope, out-of-scope, missing items>"]

@@ -239,7 +239,6 @@ additional_notes: |
   get stuck without this call. Do NOT just print a summary and stop.
 
   hephaestus_complete_my_task({
-    "agent_id": "<your agent id from the task assignment>",
     "status": "done",
     "summary": "<brief summary>",
     "key_learnings": ["<key findings>"]

@@ -47,8 +47,8 @@ base_system_prompt: |
   ═══ AVAILABLE TOOLS ═══
 
   Hephaestus MCP (task management):
-  • create_task - Create sub-tasks (MUST set parent_task_id="{task_id}")
-  • update_task_status - Mark done/failed when complete (REQUIRED)
+  • create_task - Create sub-tasks within YOUR OWN current phase (no parent_task_id — phase_id/workflow_id/agent_id all default from your environment, omit them)
+  • complete_my_task - Mark done/failed when complete (REQUIRED) — no task_id needed
   • save_memory - Save discoveries for other agents
 
   Memory search:
@@ -61,7 +61,7 @@ base_system_prompt: |
   1. Work on your task using pre-loaded context
   2. Use vector search if you need specific information (errors, patterns, implementations)
   3. Save important discoveries via save_memory (error fixes, decisions, warnings)
-  4. Call update_task_status when done (status='done') or failed (status='failed')
+  4. Call complete_my_task when done (status='done') or failed (status='failed')
 
   IDs: Agent={agent_id} | Task={task_id}
 
@@ -104,7 +104,7 @@ feature_architect_system_prompt: |
   ═══ AVAILABLE TOOLS ═══
 
   Hephaestus MCP (task management):
-  • create_task - Create sub-tasks (MUST set parent_task_id="{task_id}")
+  • create_task - Create sub-tasks within YOUR OWN current phase (no parent_task_id — phase_id/workflow_id/agent_id all default from your environment, omit them)
   • complete_my_task - Mark YOUR task done/failed when complete (REQUIRED) — no task_id needed
   • save_memory - Save discoveries for other agents
 
@@ -132,12 +132,12 @@ feature_architect_system_prompt: |
 
 # Phase agent instructions template
 phase_agent_instructions: |
-  INSTRUCTIONS (always pass agent_id="{agent_id}"; pass workflow_id="{workflow_id}" only for tools that accept it — save_memory and validate_my_agent_id do NOT take workflow_id, don't pass it to those):
+  INSTRUCTIONS (pass agent_id="{agent_id}" only to tools that accept it — save_memory does, complete_my_task and create_task do NOT, don't pass it to those; pass workflow_id="{workflow_id}" only for tools that accept it — save_memory and validate_my_agent_id do NOT take workflow_id, don't pass it to those):
   - Consider searching memories first for related work: hephaestus_search_memory(query="...")
   - Complete the task described above
-  - hephaestus_complete_my_task(agent_id="{agent_id}", status="done") — REQUIRED when done. No task_id
+  - hephaestus_complete_my_task(status="done") — REQUIRED when done. No task_id
     needed — this marks YOUR OWN current task, the server already knows which one that is.
-  - hephaestus_complete_my_task(agent_id="{agent_id}", status="failed", failure_reason="...") — on unrecoverable error
+  - hephaestus_complete_my_task(status="failed", failure_reason="...") — on unrecoverable error
   - hephaestus_save_memory(content="...", agent_id="{agent_id}", memory_type="<type>"): save as you go, not just at end
     types: error_fix | discovery | decision | learning | warning | codebase_knowledge
   - hephaestus_search_memory(query="..."): search before reinventing
@@ -168,8 +168,8 @@ phase_agent_instructions: |
 # them on every subsequent phase just bloats context for no new information.
 phase_agent_resumed_instructions: |
   Reminder (agent_id="{agent_id}"): this is a NEW task assignment in your existing session, not a new agent.
-  - hephaestus_complete_my_task(agent_id="{agent_id}", status="done") — REQUIRED when done. No task_id needed.
-  - hephaestus_complete_my_task(agent_id="{agent_id}", status="failed", failure_reason="...") — on unrecoverable error
+  - hephaestus_complete_my_task(status="done") — REQUIRED when done. No task_id needed.
+  - hephaestus_complete_my_task(status="failed", failure_reason="...") — on unrecoverable error
   Everything else about the tools (create_task, save_memory, search_memory, file placement, ticket rules if any) is unchanged from earlier in this session.
   {phase_context_section}
   Begin now.
@@ -178,8 +178,8 @@ phase_agent_resumed_instructions: |
 non_phase_agent_instructions: |
   INSTRUCTIONS (agent_id="{agent_id}"):
   1. Complete the task per COMPLETION CRITERIA above
-  2. Task done (REQUIRED): hephaestus_complete_my_task(agent_id="{agent_id}", status="done") — no task_id needed
-  3. On failure: hephaestus_complete_my_task(agent_id="{agent_id}", status="failed", failure_reason="...")
+  2. Task done (REQUIRED): hephaestus_complete_my_task(status="done") — no task_id needed
+  3. On failure: hephaestus_complete_my_task(status="failed", failure_reason="...")
   4. Solved entire workflow? Also: hephaestus_submit_result(agent_id="{agent_id}", ...)
   5. Save memories throughout: hephaestus_save_memory(content="...", agent_id="{agent_id}", memory_type="<type>")
      Types: error_fix | discovery | decision | learning | warning | codebase_knowledge
@@ -204,7 +204,7 @@ workflow_result_criteria: |
 
   This is the final deliverable this entire workflow is working toward. All phases and tasks should contribute to achieving this goal.
 
-  NOTE: Having a workflow-level goal does NOT mean you skip hephaestus_update_task_status. You must still mark your individual task as done when you complete it. The workflow result submission is ONLY for when someone achieves the final goal.
+  NOTE: Having a workflow-level goal does NOT mean you skip hephaestus_complete_my_task. You must still mark your individual task as done when you complete it. The workflow result submission is ONLY for when someone achieves the final goal.
 
 # Ticket tracking note
 ticket_note: |
