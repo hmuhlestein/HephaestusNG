@@ -1,0 +1,198 @@
+{
+  "verdict": "PASS",
+  "date": "2026-07-21",
+  "feature_id": "cost-tracking-database-schema",
+  "design_doc": ".hephaestus/design.md",
+  "requirements_doc": "docs/requirements_analysis.md",
+  "summary": "Requirements analysis faithfully captures the design doc scope with high fidelity. All functional requirements (FR-1 through FR-15), non-functional requirements, design decisions, and implementation phases trace directly to the design document. No requirements are missing. Two minor observations flagged as advisory items (not blockers).",
+  "findings": {
+    "missing_from_requirements": [],
+    "added_beyond_design_doc": [
+      {
+        "id": "ADD-1",
+        "severity": "advisory",
+        "location": "Section 9, Open Question Q1",
+        "finding": "Q1 asks 'Should we track cost for non-LLM operations (tool calls, etc.)?'. The design doc makes no mention of non-LLM cost tracking — it is explicitly scoped to LLM API calls only. This question is exploratory and not a requirement, but it represents new content not derived from the design doc.",
+        "recommendation": "Acceptable as-is. Marking it 'Deferred to future' is appropriate. No action needed unless it becomes a requirement."
+      },
+      {
+        "id": "ADD-2",
+        "severity": "advisory",
+        "location": "Section 9, Open Questions Q6-Q7",
+        "finding": "Q6 references generate_agent_prompt and generate_embedding as potential call sites. These specific methods are not mentioned in the design doc (the design doc says 'plus 2 more' without naming them). Q7 (standalone task session IDs) is flagged in the design doc but the framing as an open question is new.",
+        "recommendation": "Acceptable. These are implementation questions that naturally arise from the design doc's language ('~9 separate call sites'). No action needed."
+      }
+    ],
+    "potential_omissions": [
+      {
+        "id": "OMIT-1",
+        "severity": "advisory",
+        "location": "FR-1 (CostEntry schema)",
+        "finding": "The design doc states: 'reasoning token count is worth capturing alongside input/output even though it has no separate cost line item (rolled into output cost) — useful signal for which phases burn the most reasoning later.' The CostEntry schema in the requirements does not include a reasoning_tokens column. However, the raw_usage JSON column preserves this data, and the design doc's wording ('worth capturing alongside') is a recommendation, not a firm schema requirement.",
+        "recommendation": "Optional: add reasoning_tokens column to CostEntry schema if the team wants this as a first-class queryable field. Not a blocker — raw_usage preserves it either way."
+      }
+    ],
+    "design_decisions_verified": [
+      {
+        "id": "DD-1",
+        "decision": "Append-only ledger vs mutable totals",
+        "design_doc_reference": "Data Model section",
+        "requirements_match": true
+      },
+      {
+        "id": "DD-2",
+        "decision": "Checkpoint keyed by session_id, not Agent.id",
+        "design_doc_reference": "Collection Architecture — Gap review section",
+        "requirements_match": true
+      },
+      {
+        "id": "DD-3",
+        "decision": "Collection on task completion, not timer",
+        "design_doc_reference": "Collection Architecture — 'When to collect' section",
+        "requirements_match": true
+      },
+      {
+        "id": "DD-4",
+        "decision": "Pi extension preferred over raw JSONL tailing",
+        "design_doc_reference": "Pi Extension Collector section",
+        "requirements_match": true
+      },
+      {
+        "id": "DD-5",
+        "decision": "Extract _pause_project_workflows shared function",
+        "design_doc_reference": "Budget Enforcement — Enforcement trigger section",
+        "requirements_match": true
+      },
+      {
+        "id": "DD-6",
+        "decision": "Generalize paused_by guards, EXCEPT AutopilotService.start()",
+        "design_doc_reference": "Budget Enforcement — Generalizing paused_by guard section",
+        "requirements_match": true
+      }
+    ],
+    "non_goals_verified": [
+      "Real-time streaming for non-pi CLIs — present in both docs",
+      "Codex collector (stub only) — present in both docs",
+      "Historical backfill — present in both docs",
+      "Per-design budget limits — present in both docs (requirements adds this as explicit non-goal, design doc implies it by scoping to per-project only)"
+    ],
+    "implementation_phases_verified": {
+      "design_doc_phases": 8,
+      "requirements_phases": 8,
+      "alignment": "All 8 phases present and correctly ordered. Phase descriptions match."
+    },
+    "open_questions_coverage": {
+      "design_doc_open_questions": [
+        "OpenCode actual usage check (workflow.yaml)",
+        "OpenCode -s flag behavior for new sessions",
+        "usage.include=true surviving LangChain parsing",
+        "Standalone tasks with no session_id"
+      ],
+      "requirements_open_questions": [
+        "Q1: Non-LLM operations (NEW — not in design doc)",
+        "Q2: Cost rounding precision (implementation detail)",
+        "Q3: Per-design budgets (covered in non-goals)",
+        "Q4: OpenCode actual usage (from design doc)",
+        "Q5: OpenCode -s flag behavior (from design doc)",
+        "Q6: usage.include=true LangChain parsing (from design doc)",
+        "Q7: Standalone task session IDs (from design doc)"
+      ],
+      "gap": "Q1-Q3 are new questions. Q4-Q7 correctly trace to design doc."
+    }
+  },
+  "requirement_traceability": {
+    "FR-1_CostEntry_Table": {
+      "design_doc_reference": "Data Model — cost_entries table",
+      "status": "complete",
+      "notes": "Schema, indexes, nullable task_id, source enum, raw_usage — all captured"
+    },
+    "FR-2_SessionCostCheckpoint": {
+      "design_doc_reference": "Collection Architecture — SessionCostCheckpoint table",
+      "status": "complete",
+      "notes": "Session_id keying, double-count prevention rationale — all captured"
+    },
+    "FR-3_Denormalized_Rollups": {
+      "design_doc_reference": "Data Model — Denormalized rollup columns",
+      "status": "complete",
+      "notes": "cost_total_usd on all four models, derivation chain — all captured"
+    },
+    "FR-4_Cost_Derivation_Module": {
+      "design_doc_reference": "Data Model — derive_cost_totals module",
+      "status": "complete",
+      "notes": "New module src/core/cost_derivation.py — all captured"
+    },
+    "FR-5_Budget_Schema": {
+      "design_doc_reference": "Budget Enforcement — Schema",
+      "status": "complete",
+      "notes": "cost_limit_usd on AutopilotProject, nullable — all captured"
+    },
+    "FR-6_Budget_Enforcement_Logic": {
+      "design_doc_reference": "Budget Enforcement — Enforcement trigger, Blocking new work",
+      "status": "complete",
+      "notes": "Phase 0 gap fix, pick_next_design guard, _run_one_feature guard — all captured"
+    },
+    "FR-7_Paused_By_Generalization": {
+      "design_doc_reference": "Budget Enforcement — Generalizing paused_by guard",
+      "status": "complete",
+      "notes": "is not None generalization, AutopilotService.start() exception, limit-raising clears budget pause — all captured"
+    },
+    "FR-8_Pi_Extension_Collector": {
+      "design_doc_reference": "Pi Extension Collector section",
+      "status": "complete",
+      "notes": "turn_end hook, session_id from context, TUI status, POST to API — all captured"
+    },
+    "FR-9_Pi_JSONL_Tailing": {
+      "design_doc_reference": "Collection Architecture — Per-CLI transcript tailing, pi confirmed section",
+      "status": "complete",
+      "notes": "Checkpoint mechanism, session file discovery, shared session handling — all captured"
+    },
+    "FR-10_Claude_Code_Collector": {
+      "design_doc_reference": "Claude Code — verified section",
+      "status": "complete",
+      "notes": "No dollar cost, price table needed, two cache-write tiers, UUID5 fix — all captured"
+    },
+    "FR-11_OpenCode_Collector": {
+      "design_doc_reference": "OpenCode — different shape section",
+      "status": "complete",
+      "notes": "One-shot invocation, stdout capture vs DB read, gate on usage — all captured"
+    },
+    "FR-12_OpenRouter_Direct": {
+      "design_doc_reference": "Backend's own direct OpenRouter calls section",
+      "status": "complete",
+      "notes": "usage.include=true, _invoke_and_record helper, task_id threading — all captured"
+    },
+    "FR-13_Codex_Stub": {
+      "design_doc_reference": "Codex — unresolved section",
+      "status": "complete",
+      "notes": "Stub logs unsupported — all captured"
+    },
+    "FR-14_UI_Budget_Config": {
+      "design_doc_reference": "Budget Enforcement — UI section",
+      "status": "complete",
+      "notes": "ProjectSettingsModal input — all captured"
+    },
+    "FR-15_UI_Cost_Display": {
+      "design_doc_reference": "Budget Enforcement — UI section",
+      "status": "complete",
+      "notes": "Design screen indicator, budget-paused label distinction — all captured"
+    }
+  },
+  "critical_design_gaps_verified": [
+    {
+      "gap": "Phase 0 missed by /autopilot/stop endpoint",
+      "design_doc_reference": "Budget Enforcement — Enforcement trigger",
+      "requirements_capture": "FR-6 explicitly documents this gap and the fix"
+    },
+    {
+      "gap": "Checkpoint must be keyed by session_id not Agent.id",
+      "design_doc_reference": "Collection Architecture — Gap review caught a real bug",
+      "requirements_capture": "FR-2 explicitly documents this with rationale"
+    },
+    {
+      "gap": "paused_by == 'user' guards miss budget-paused workflows",
+      "design_doc_reference": "Budget Enforcement — Generalizing paused_by guard",
+      "requirements_capture": "FR-7 explicitly documents this with exception for start()"
+    }
+  ],
+  "conclusion": "The requirements analysis is a faithful, complete extraction of the design document. All 15 functional requirements trace to specific sections of the design doc. All 6 critical design decisions are captured. All 3 critical gap fixes from the design doc are documented. The only new content added by the requirements analysis are (1) three open questions (Q1-Q3) that are reasonable exploratory items, (2) a risk assessment table, and (3) an acceptance criteria summary — all of which are standard requirements document sections that don't represent scope creep. No design doc requirements are missing. Ready to proceed to architecture design."
+}

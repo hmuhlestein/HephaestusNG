@@ -14,9 +14,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, TypeVar
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Header, HTTPException, Query
 from fastapi.responses import FileResponse, HTMLResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, validator
 
 from src.core.constants import (
     AUTOPILOT_STATE_DIR,
@@ -25,15 +25,16 @@ from src.core.constants import (
     GOTO_REASON_PREFIX,
 )
 
+# Import authentication function from server module
+from src.mcp.server import verify_agent_authentication
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/autopilot", tags=["Autopilot"])
 
 DESIGN_QUEUE_DIR = ""
 FEATURES_DIR = ""
-_active_project_id_cache: Optional[str] = (
-    None  # Track which project the cached dirs belong to
-)
+_active_project_id_cache: Optional[str] = None  # Track which project the cached dirs belong to
 
 ALLOWED_EXTENSIONS = {".md", ".txt"}
 
@@ -89,9 +90,7 @@ def _get_effective_queue_dir() -> str:
 
     if DESIGN_QUEUE_DIR:
         if not Path(DESIGN_QUEUE_DIR).exists():
-            raise FileNotFoundError(
-                f"Design queue directory does not exist: {DESIGN_QUEUE_DIR}"
-            )
+            raise FileNotFoundError(f"Design queue directory does not exist: {DESIGN_QUEUE_DIR}")
         return DESIGN_QUEUE_DIR
 
     # Get from active project
@@ -100,9 +99,7 @@ def _get_effective_queue_dir() -> str:
     with get_db() as db:
         proj = db.query(AutopilotProject).filter_by(is_active=True).first()
         if not proj or not proj.base_dir:
-            raise RuntimeError(
-                "No active project configured. Set DESIGN_QUEUE_DIR or activate a project."
-            )
+            raise RuntimeError("No active project configured. Set DESIGN_QUEUE_DIR or activate a project.")
 
         queue_dir = Path(proj.base_dir) / DESIGN_CONTEXT_SUBDIR
         queue_dir.mkdir(parents=True, exist_ok=True)
@@ -131,9 +128,7 @@ def _get_effective_features_dir() -> str:
 
     if FEATURES_DIR:
         if not Path(FEATURES_DIR).exists():
-            raise FileNotFoundError(
-                f"Features directory does not exist: {FEATURES_DIR}"
-            )
+            raise FileNotFoundError(f"Features directory does not exist: {FEATURES_DIR}")
         return FEATURES_DIR
 
     # Get from active project
@@ -142,15 +137,11 @@ def _get_effective_features_dir() -> str:
     with get_db() as db:
         proj = db.query(AutopilotProject).filter_by(is_active=True).first()
         if not proj or not proj.base_dir:
-            raise RuntimeError(
-                "No active project configured. Set FEATURES_DIR or activate a project."
-            )
+            raise RuntimeError("No active project configured. Set FEATURES_DIR or activate a project.")
 
         features_dir = Path(proj.base_dir) / CONTEXT_DIR_NAME / "features"
         if not features_dir.exists():
-            raise FileNotFoundError(
-                f"Features directory does not exist: {features_dir}. Run the autopilot pipeline first."
-            )
+            raise FileNotFoundError(f"Features directory does not exist: {features_dir}. Run the autopilot pipeline first.")
 
         FEATURES_DIR = str(features_dir)
         return FEATURES_DIR
@@ -198,10 +189,7 @@ def _safe_path(base: str, *parts: str) -> Path:
         raise HTTPException(500, "Directory not configured")
     base_resolved = Path(base).resolve()
     resolved = (Path(base) / Path(*parts)).resolve()
-    if not (
-        resolved == base_resolved
-        or str(resolved).startswith(str(base_resolved) + os.sep)
-    ):
+    if not (resolved == base_resolved or str(resolved).startswith(str(base_resolved) + os.sep)):
         raise HTTPException(400, "Invalid path")
     return resolved
 
@@ -398,29 +386,20 @@ async def get_pipeline_status(
     if project_id:
         try:
             from src.core.database import Agent, Task, Workflow, get_db
+
             with get_db() as db:
-                has_active = db.query(Workflow).filter(
-                    Workflow.project_id == project_id,
-                    Workflow.status.in_(["active", "running"])
-                ).first()
+                has_active = db.query(Workflow).filter(Workflow.project_id == project_id, Workflow.status.in_(["active", "running"])).first()
                 if has_active:
                     running = True
                 else:
                     # Also check: are any agents working on tasks in this
                     # project's workflows? A workflow can be "failed" while
                     # an agent is still actively working on it.
-                    project_wf_ids = [
-                        w.id for w in db.query(Workflow)
-                        .filter(Workflow.project_id == project_id)
-                        .all()
-                    ]
+                    project_wf_ids = [w.id for w in db.query(Workflow).filter(Workflow.project_id == project_id).all()]
                     if project_wf_ids:
-                        active_agent = db.query(Agent).join(
-                            Task, Agent.current_task_id == Task.id
-                        ).filter(
-                            Task.workflow_id.in_(project_wf_ids),
-                            Agent.status.in_(["working", "starting", "idle"])
-                        ).first()
+                        active_agent = (
+                            db.query(Agent).join(Task, Agent.current_task_id == Task.id).filter(Task.workflow_id.in_(project_wf_ids), Agent.status.in_(["working", "starting", "idle"])).first()
+                        )
                         running = active_agent is not None
         except Exception:
             pass
@@ -430,11 +409,7 @@ async def get_pipeline_status(
             from src.core.database import Agent, Workflow, get_db
 
             with get_db() as db:
-                active_wf = (
-                    db.query(Workflow)
-                    .filter(Workflow.status.in_(["active", "paused"]))
-                    .first()
-                )
+                active_wf = db.query(Workflow).filter(Workflow.status.in_(["active", "paused"])).first()
                 if active_wf:
                     active_agents = (
                         db.query(Agent)
@@ -460,9 +435,7 @@ async def get_pipeline_status(
             try:
                 from src.autopilot.orchestrator import PersistentPipelineState
 
-                state_obj, _processed = PersistentPipelineState(
-                    project_id=project_id
-                ).load()
+                state_obj, _processed = PersistentPipelineState(project_id=project_id).load()
                 state = state_obj.to_dict()
             except Exception:
                 state = {}
@@ -476,14 +449,10 @@ async def get_pipeline_status(
     queue_depth = 0
     if project_id:
         from src.core.database import AutopilotDesign, get_db
+
         try:
             with get_db() as db:
-                queue_depth = db.query(AutopilotDesign).filter(
-                    AutopilotDesign.project_id == project_id,
-                    AutopilotDesign.status.notin_([
-                        "completed", "failed", "skipped"
-                    ])
-                ).count()
+                queue_depth = db.query(AutopilotDesign).filter(AutopilotDesign.project_id == project_id, AutopilotDesign.status.notin_(["completed", "failed", "skipped"])).count()
         except Exception:
             pass
     else:
@@ -508,11 +477,10 @@ async def get_pipeline_status(
 
     try:
         with _get_db() as _db:
-            agent_query = _db.query(Agent).filter(
-                Agent.status.in_(["working", "starting", "idle"])
-            )
+            agent_query = _db.query(Agent).filter(Agent.status.in_(["working", "starting", "idle"]))
             if project_id:
                 from src.core.database import Task, Workflow
+
                 wf_ids = [wf.id for wf in _db.query(Workflow).filter_by(project_id=project_id).all()]
                 task_ids = [t.id for t in _db.query(Task).filter(Task.workflow_id.in_(wf_ids)).all()]
                 agent_query = agent_query.filter(Agent.current_task_id.in_(task_ids))
@@ -532,11 +500,7 @@ async def get_pipeline_status(
             from src.core.database import get_db as _get_db
 
             with _get_db() as _db:
-                _rp = (
-                    _db.query(AutopilotProject)
-                    .filter_by(base_dir=running_project_path)
-                    .first()
-                )
+                _rp = _db.query(AutopilotProject).filter_by(base_dir=running_project_path).first()
                 running_project_name = _rp.name if _rp else Path(running_project_path).name
         except Exception:
             running_project_name = Path(running_project_path).name
@@ -556,16 +520,12 @@ async def get_pipeline_status(
 
     result = PipelineStatus(
         running=running,
-        current_design=service_status.get("current_design")
-        or state.get("current_design"),
+        current_design=service_status.get("current_design") or state.get("current_design"),
         current_workflow_id=state.get("current_workflow_id"),
-        designs_processed=service_status.get("designs_processed", 0)
-        or state.get("designs_processed", 0),
-        designs_succeeded=service_status.get("designs_succeeded", 0)
-        or state.get("designs_succeeded", 0),
+        designs_processed=service_status.get("designs_processed", 0) or state.get("designs_processed", 0),
+        designs_succeeded=service_status.get("designs_succeeded", 0) or state.get("designs_succeeded", 0),
         designs_failed=designs_failed,
-        total_elapsed=service_status.get("elapsed_seconds", 0)
-        or state.get("total_elapsed", 0),
+        total_elapsed=service_status.get("elapsed_seconds", 0) or state.get("total_elapsed", 0),
         queue_depth=queue_depth,
         last_event=last_event,
         last_error=last_error,
@@ -574,11 +534,7 @@ async def get_pipeline_status(
         running_project_name=running_project_name,
         # Compute self-conflict server-side using realpath to handle
         # symlink resolution (/tmp -> /private/tmp on macOS).
-        is_self_conflict=(
-            running_project_path is not None
-            and project_path is not None
-            and os.path.realpath(running_project_path) == os.path.realpath(project_path)
-        ),
+        is_self_conflict=(running_project_path is not None and project_path is not None and os.path.realpath(running_project_path) == os.path.realpath(project_path)),
     )
     return _store(cache_key, result)
 
@@ -636,9 +592,7 @@ async def list_design_queue():
 
     ordered_names = [n for n in saved_order if n in files_by_name]
     unordered = [n for n in files_by_name if n not in saved_order]
-    all_names = ordered_names + sorted(
-        unordered, key=lambda n: files_by_name[n].stat().st_mtime
-    )
+    all_names = ordered_names + sorted(unordered, key=lambda n: files_by_name[n].stat().st_mtime)
 
     items = []
     for fname in all_names:
@@ -650,9 +604,7 @@ async def list_design_queue():
                 filename=f.name,
                 name=name,
                 size_bytes=stat.st_size,
-                modified=datetime.fromtimestamp(
-                    stat.st_mtime, tz=timezone.utc
-                ).isoformat(),
+                modified=datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
                 extension=f.suffix,
             )
         )
@@ -721,11 +673,7 @@ async def requeue_design(request: dict):
 
             for wf in active_workflows:
                 if wf.launch_params:
-                    params = (
-                        json.loads(wf.launch_params)
-                        if isinstance(wf.launch_params, str)
-                        else wf.launch_params
-                    )
+                    params = json.loads(wf.launch_params) if isinstance(wf.launch_params, str) else wf.launch_params
                     design_doc = params.get("design_document", "")
                     if filename in str(design_doc):
                         # Terminate agents for this workflow
@@ -734,9 +682,7 @@ async def requeue_design(request: dict):
                             for t in db.query(Task)
                             .filter(
                                 Task.workflow_id == wf.id,
-                                Task.status.in_(
-                                    ["pending", "queued", "assigned", "in_progress"]
-                                ),
+                                Task.status.in_(["pending", "queued", "assigned", "in_progress"]),
                             )
                             .all()
                         ]
@@ -861,22 +807,14 @@ async def rerun_design(request: dict):
     try:
         with get_db() as db:
             # Terminate all active agents
-            active_agents = (
-                db.query(Agent)
-                .filter(Agent.status.in_(["working", "starting", "idle"]))
-                .all()
-            )
+            active_agents = db.query(Agent).filter(Agent.status.in_(["working", "starting", "idle"])).all()
             for agent in active_agents:
                 agent.status = "terminated"
                 agent.current_task_id = None  # Clear stale reference
                 agent.terminated_at = datetime.utcnow()
 
             # Mark all active workflows as paused (not active/running)
-            active_workflows = (
-                db.query(Workflow)
-                .filter(Workflow.status.in_(["active", "running"]))
-                .all()
-            )
+            active_workflows = db.query(Workflow).filter(Workflow.status.in_(["active", "running"])).all()
             for wf in active_workflows:
                 wf.status = "paused"
 
@@ -912,88 +850,48 @@ async def rerun_design(request: dict):
             wf_ids = [wf.id for wf in matching_wfs]
 
             # Get design to find features
-            proj = (
-                db.query(AutopilotProject)
-                .filter_by(base_dir=str(project))
-                .first()
-            )
-            design = (
-                db.query(AutopilotDesign)
-                .filter_by(project_id=proj.id, filename=filename)
-                .first()
-                if proj
-                else None
-            )
+            proj = db.query(AutopilotProject).filter_by(base_dir=str(project)).first()
+            design = db.query(AutopilotDesign).filter_by(project_id=proj.id, filename=filename).first() if proj else None
 
             if wf_ids:
                 # Get task IDs for dependent record cleanup
-                task_ids = [
-                    t.id for t in db.query(Task).filter(Task.workflow_id.in_(wf_ids)).all()
-                ]
+                task_ids = [t.id for t in db.query(Task).filter(Task.workflow_id.in_(wf_ids)).all()]
 
                 # Delete dependent records (order matters for FK constraints)
                 if task_ids:
-                    db.query(TaskPromptOverride).filter(
-                        TaskPromptOverride.task_id.in_(task_ids)
-                    ).delete(synchronize_session=False)
-                    db.query(ValidationReview).filter(
-                        ValidationReview.task_id.in_(task_ids)
-                    ).delete(synchronize_session=False)
-                    db.query(AgentResult).filter(
-                        AgentResult.task_id.in_(task_ids)
-                    ).delete(synchronize_session=False)
-                    db.query(Memory).filter(
-                        Memory.related_task_id.in_(task_ids)
-                    ).delete(synchronize_session=False)
-                    db.query(Ticket).filter(
-                        Ticket.task_id.in_(task_ids)
-                    ).delete(synchronize_session=False)
+                    db.query(TaskPromptOverride).filter(TaskPromptOverride.task_id.in_(task_ids)).delete(synchronize_session=False)
+                    db.query(ValidationReview).filter(ValidationReview.task_id.in_(task_ids)).delete(synchronize_session=False)
+                    db.query(AgentResult).filter(AgentResult.task_id.in_(task_ids)).delete(synchronize_session=False)
+                    db.query(Memory).filter(Memory.related_task_id.in_(task_ids)).delete(synchronize_session=False)
+                    db.query(Ticket).filter(Ticket.task_id.in_(task_ids)).delete(synchronize_session=False)
 
                 # Delete workflow-level dependents
-                db.query(DiagnosticRun).filter(
-                    DiagnosticRun.workflow_id.in_(wf_ids)
-                ).delete(synchronize_session=False)
-                db.query(WorkflowResult).filter(
-                    WorkflowResult.workflow_id.in_(wf_ids)
-                ).delete(synchronize_session=False)
-                db.query(BoardConfig).filter(
-                    BoardConfig.workflow_id.in_(wf_ids)
-                ).delete(synchronize_session=False)
-                db.query(Ticket).filter(
-                    Ticket.workflow_id.in_(wf_ids)
-                ).delete(synchronize_session=False)
+                db.query(DiagnosticRun).filter(DiagnosticRun.workflow_id.in_(wf_ids)).delete(synchronize_session=False)
+                db.query(WorkflowResult).filter(WorkflowResult.workflow_id.in_(wf_ids)).delete(synchronize_session=False)
+                db.query(BoardConfig).filter(BoardConfig.workflow_id.in_(wf_ids)).delete(synchronize_session=False)
+                db.query(Ticket).filter(Ticket.workflow_id.in_(wf_ids)).delete(synchronize_session=False)
 
                 # Delete phase executions
-                db.query(PhaseExecution).filter(
-                    PhaseExecution.workflow_execution_id.in_(wf_ids)
-                ).delete(synchronize_session=False)
+                db.query(PhaseExecution).filter(PhaseExecution.workflow_execution_id.in_(wf_ids)).delete(synchronize_session=False)
 
                 # Delete tasks
-                db.query(Task).filter(Task.workflow_id.in_(wf_ids)).delete(
-                    synchronize_session=False
-                )
+                db.query(Task).filter(Task.workflow_id.in_(wf_ids)).delete(synchronize_session=False)
 
                 # Delete workflows
-                db.query(Workflow).filter(Workflow.id.in_(wf_ids)).delete(
-                    synchronize_session=False
-                )
+                db.query(Workflow).filter(Workflow.id.in_(wf_ids)).delete(synchronize_session=False)
 
             # Delete features for this design
             if design:
-                db.query(Feature).filter_by(design_id=design.id).delete(
-                    synchronize_session=False
-                )
+                db.query(Feature).filter_by(design_id=design.id).delete(synchronize_session=False)
                 # Reset design status so orchestrator picks it up fresh
                 design.status = "pending"
                 # Clear retry counter so fresh retry starts at 0
                 from src.autopilot.orchestrator import _delete_project_context
+
                 _delete_project_context(db, f"autopilot_retry_{design.id}")
 
             db.commit()
-            logger.info(
-                f"[RERUN] Cleaned up {len(wf_ids)} workflows and features "
-                f"for {filename}"
-            )
+            logger.info(f"[RERUN] Cleaned up {len(wf_ids)} workflows and features for {filename}")
     except Exception as e:
         logger.error(f"Error cleaning up design state for rerun: {e}")
 
@@ -1007,9 +905,7 @@ async def rerun_design(request: dict):
         # Run cleanup in background thread to not block pipeline start
         import threading
 
-        thread = threading.Thread(
-            target=lambda: bm.cleanup_all_stale_branches(), daemon=True
-        )
+        thread = threading.Thread(target=lambda: bm.cleanup_all_stale_branches(), daemon=True)
         thread.start()
     except Exception as e:
         logger.error(f"Error starting branch cleanup: {e}")
@@ -1156,16 +1052,12 @@ async def repair_design(request: dict):
     }
 
 
-def spawn_repair_review_agent(
-    wf_id: str, filename: str, project: Path, reason: str, logger, actions_taken: list
-):
+def spawn_repair_review_agent(wf_id: str, filename: str, project: Path, reason: str, logger, actions_taken: list):
     """Spawn a review agent that checks each task, acts, and monitors completion."""
     from src.autopilot.orchestrator import api_post, get_tasks
 
     try:
-        logger.info(
-            f"[REPAIR-AGENT] Starting for workflow {wf_id[:8]}, design={filename}"
-        )
+        logger.info(f"[REPAIR-AGENT] Starting for workflow {wf_id[:8]}, design={filename}")
 
         # Get tasks for this workflow
         failed_tasks = get_tasks(status="failed", workflow_id=wf_id)
@@ -1173,26 +1065,18 @@ def spawn_repair_review_agent(
         in_progress_tasks = get_tasks(status="in_progress", workflow_id=wf_id)
         done_tasks = get_tasks(status="done", workflow_id=wf_id)
 
-        logger.info(
-            f"[REPAIR-AGENT] Task counts: done={len(done_tasks)}, failed={len(failed_tasks)}, pending={len(pending_tasks)}, in_progress={len(in_progress_tasks)}"
-        )
+        logger.info(f"[REPAIR-AGENT] Task counts: done={len(done_tasks)}, failed={len(failed_tasks)}, pending={len(pending_tasks)}, in_progress={len(in_progress_tasks)}")
 
         # Build task summary for instructions
         task_summary = []
         for t in failed_tasks[:5]:
-            desc = (t.get("enriched_description") or t.get("raw_description") or "")[
-                :80
-            ]
+            desc = (t.get("enriched_description") or t.get("raw_description") or "")[:80]
             task_summary.append(f"  FAILED: {t.get('id', '')[:8]} - {desc}")
         for t in pending_tasks[:5]:
-            desc = (t.get("enriched_description") or t.get("raw_description") or "")[
-                :80
-            ]
+            desc = (t.get("enriched_description") or t.get("raw_description") or "")[:80]
             task_summary.append(f"  PENDING: {t.get('id', '')[:8]} - {desc}")
         for t in in_progress_tasks[:5]:
-            desc = (t.get("enriched_description") or t.get("raw_description") or "")[
-                :80
-            ]
+            desc = (t.get("enriched_description") or t.get("raw_description") or "")[:80]
             task_summary.append(f"  IN_PROGRESS: {t.get('id', '')[:8]} - {desc}")
 
         review_instructions = f"""REPAIR AGENT: Design '{filename}' needs systematic repair.
@@ -1262,9 +1146,7 @@ YOUR JOB:
 
         task_id = task_data.get("task_id")
         if not task_id:
-            logger.error(
-                f"[REPAIR-AGENT] /create_task returned no task_id: {task_data}"
-            )
+            logger.error(f"[REPAIR-AGENT] /create_task returned no task_id: {task_data}")
             return
 
         logger.info(f"[REPAIR-AGENT] Task created: {task_id[:8]}")
@@ -1287,22 +1169,16 @@ YOUR JOB:
             return
 
         if "detail" in agent_data:
-            logger.error(
-                f"[REPAIR-AGENT] /create_agent_for_task error: {agent_data['detail']}"
-            )
+            logger.error(f"[REPAIR-AGENT] /create_agent_for_task error: {agent_data['detail']}")
             return
 
         agent_id = agent_data.get("agent_id")
         if not agent_id:
-            logger.error(
-                f"[REPAIR-AGENT] /create_agent_for_task returned no agent_id: {agent_data}"
-            )
+            logger.error(f"[REPAIR-AGENT] /create_agent_for_task returned no agent_id: {agent_data}")
             return
 
         logger.info(f"[REPAIR-AGENT] Agent created: {agent_id[:8]}")
-        actions_taken.append(
-            f"Spawned review agent {agent_id[:8]} for workflow {wf_id[:8]}"
-        )
+        actions_taken.append(f"Spawned review agent {agent_id[:8]} for workflow {wf_id[:8]}")
 
     except Exception as e:
         logger.error(f"[REPAIR-AGENT] Exception: {e}", exc_info=True)
@@ -1346,42 +1222,30 @@ def _run_repair(repair_id: str, filename: str, project: Path, logger):
             logger.info(f"[REPAIR] Workflow created: {wf_id}")
 
         actions_taken.append(f"Created repair workflow {wf_id[:8]}")
-        findings.append(
-            {"type": "info", "message": f"Created repair workflow {wf_id[:8]}"}
-        )
+        findings.append({"type": "info", "message": f"Created repair workflow {wf_id[:8]}"})
 
         # 2. Spawn review agent on the new workflow
         logger.info("[REPAIR] Step 2: Spawning review agent")
-        spawn_repair_review_agent(
-            wf_id, filename, project, "Repair initiated", logger, actions_taken
-        )
+        spawn_repair_review_agent(wf_id, filename, project, "Repair initiated", logger, actions_taken)
         logger.info("[REPAIR] Step 2 complete: spawn_repair_review_agent returned")
 
         # 3. Find any existing workflows for context
         logger.info("[REPAIR] Step 3: Finding existing workflows for context")
         with get_db() as db:
-            workflows = (
-                db.query(Workflow).filter(Workflow.definition_id == "autopilot").all()
-            )
+            workflows = db.query(Workflow).filter(Workflow.definition_id == "autopilot").all()
 
             existing_workflow_ids = []
             for wf in workflows:
                 if wf.launch_params:
                     try:
-                        params = (
-                            json.loads(wf.launch_params)
-                            if isinstance(wf.launch_params, str)
-                            else wf.launch_params
-                        )
+                        params = json.loads(wf.launch_params) if isinstance(wf.launch_params, str) else wf.launch_params
                         doc = params.get("design_document", "")
                         if filename in doc:
                             existing_workflow_ids.append(wf.id)
                     except Exception:
                         pass
 
-            logger.info(
-                f"[REPAIR] Found {len(existing_workflow_ids)} existing workflow(s)"
-            )
+            logger.info(f"[REPAIR] Found {len(existing_workflow_ids)} existing workflow(s)")
             if existing_workflow_ids:
                 findings.append(
                     {
@@ -1411,9 +1275,7 @@ def _run_repair(repair_id: str, filename: str, project: Path, logger):
 
         result_file = Path(AUTOPILOT_STATE_DIR) / f"repair_{repair_id}.json"
         result_file.write_text(json.dumps(result, indent=2))
-        logger.info(
-            f"[REPAIR] Repair {repair_id} complete. Actions: {len(actions_taken)}, Findings: {len(findings)}"
-        )
+        logger.info(f"[REPAIR] Repair {repair_id} complete. Actions: {len(actions_taken)}, Findings: {len(findings)}")
 
     except Exception as e:
         logger.error(f"[REPAIR] Exception during repair: {e}", exc_info=True)
@@ -1497,9 +1359,7 @@ async def add_design_by_path(req: DesignAddByPath):
 
     with get_db() as db:
         # Find or create project
-        project = (
-            db.query(AutopilotProject).filter_by(base_dir=str(project_path)).first()
-        )
+        project = db.query(AutopilotProject).filter_by(base_dir=str(project_path)).first()
         if not project:
             # Create new project
             project = AutopilotProject(
@@ -1642,6 +1502,8 @@ class ProjectItem(BaseModel):
     design_count: int
     created_at: str
     updated_at: str
+    cost_total_usd: float = 0.0
+    cost_limit_usd: Optional[float] = None
 
 
 class ProjectCreate(BaseModel):
@@ -1654,6 +1516,50 @@ class ProjectUpdate(BaseModel):
     name: Optional[str] = None
     base_dir: Optional[str] = None
     is_default: Optional[bool] = None
+    cost_limit_usd: Optional[float] = None
+
+
+class CostEntryCreate(BaseModel):
+    """Request model for creating a cost entry."""
+
+    task_id: Optional[str] = None
+    agent_id: Optional[str] = None
+    workflow_id: Optional[str] = None
+    source: str
+    model: Optional[str] = None
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
+    reasoning_tokens: int = 0
+    cost_usd: float
+    raw_usage: Optional[dict] = None
+
+    @validator("source")
+    def validate_source(cls, v: str) -> str:
+        """Validate source is a known cost collection source."""
+        valid_sources = {"pi", "claude_code", "opencode", "codex", "openrouter_direct"}
+        if v not in valid_sources:
+            raise ValueError(f"source must be one of {valid_sources}, got '{v}'")
+        return v
+
+    @validator("cost_usd")
+    def validate_cost_usd(cls, v: float) -> float:
+        """Validate cost_usd is a reasonable positive value."""
+        if v < 0:
+            raise ValueError("cost_usd must be non-negative")
+        if v > 1000.0:  # Cap at $1000 per single LLM call
+            raise ValueError("cost_usd exceeds maximum allowed value of $1000")
+        return v
+
+    @validator("input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens", "reasoning_tokens")
+    def validate_token_counts(cls, v: int) -> int:
+        """Validate token counts are non-negative."""
+        if v < 0:
+            raise ValueError("token counts must be non-negative")
+        if v > 10_000_000:  # 10M tokens max per call
+            raise ValueError("token count exceeds maximum allowed value")
+        return v
 
 
 class DesignItem(BaseModel):
@@ -1689,7 +1595,7 @@ async def _get_project_lock(project_id: str) -> asyncio.Lock:
 
 def _get_design_queue_dir(project_base: str) -> Path:
     """Return the design queue directory (.hephaestus/designs/).
-    
+
     Designs are stored outside the git repo so commits don't delete them.
     """
     return Path(project_base) / DESIGN_CONTEXT_SUBDIR
@@ -1706,9 +1612,7 @@ def _extract_ordinal(filename: str) -> Optional[int]:
     return int(m.group(1)) if m else None
 
 
-def _sync_project_designs(
-    project_id: str, project_base: str, db
-) -> List[Dict[str, Any]]:
+def _sync_project_designs(project_id: str, project_base: str, db) -> List[Dict[str, Any]]:
     """Scan filesystem and sync designs with DB using the provided session.
 
     MUST be called within an active DB session (the `db` parameter).
@@ -1724,10 +1628,7 @@ def _sync_project_designs(
         for f in design_dir.glob(f"*{ext}"):
             fs_files[f.name] = f
 
-    existing = {
-        d.filename: d
-        for d in db.query(AutopilotDesign).filter_by(project_id=project_id).all()
-    }
+    existing = {d.filename: d for d in db.query(AutopilotDesign).filter_by(project_id=project_id).all()}
 
     fs_filenames = set(fs_files.keys())
     db_filenames = set(existing.keys())
@@ -1802,12 +1703,7 @@ def _sync_project_designs(
     db.flush()
 
     # Re-read to return fresh state (same session, post-flush)
-    designs = (
-        db.query(AutopilotDesign)
-        .filter_by(project_id=project_id)
-        .order_by(AutopilotDesign.ordinal)
-        .all()
-    )
+    designs = db.query(AutopilotDesign).filter_by(project_id=project_id).order_by(AutopilotDesign.ordinal).all()
     return [
         {
             "id": d.id,
@@ -1853,6 +1749,8 @@ async def list_projects():
                     design_count=count,
                     created_at=p.created_at.isoformat() if p.created_at else "",
                     updated_at=p.updated_at.isoformat() if p.updated_at else "",
+                    cost_total_usd=p.cost_total_usd or 0.0,
+                    cost_limit_usd=p.cost_limit_usd,
                 )
             )
         return result
@@ -1867,9 +1765,7 @@ async def create_project(req: ProjectCreate):
     with get_db() as db:
         existing_proj = db.query(AutopilotProject).filter_by(base_dir=resolved).first()
         if existing_proj:
-            raise HTTPException(
-                409, f"Project already exists for directory: {resolved}"
-            )
+            raise HTTPException(409, f"Project already exists for directory: {resolved}")
 
         if req.is_default:
             db.query(AutopilotProject).update({"is_default": False})
@@ -1918,12 +1814,14 @@ async def get_project(project_id: str):
             design_count=count,
             created_at=proj.created_at.isoformat() if proj.created_at else "",
             updated_at=proj.updated_at.isoformat() if proj.updated_at else "",
+            cost_total_usd=proj.cost_total_usd or 0.0,
+            cost_limit_usd=proj.cost_limit_usd,
         )
 
 
 @router.put("/projects/{project_id}", response_model=ProjectItem)
 async def update_project(project_id: str, req: ProjectUpdate):
-    from src.core.database import AutopilotDesign, AutopilotProject, get_db
+    from src.core.database import AutopilotDesign, AutopilotProject, Workflow, get_db
 
     with get_db() as db:
         proj = db.query(AutopilotProject).get(project_id)
@@ -1940,7 +1838,32 @@ async def update_project(project_id: str, req: ProjectUpdate):
                 db.query(AutopilotProject).update({"is_default": False})
             proj.is_default = req.is_default
 
+        # Handle cost_limit_usd update
+        if req.cost_limit_usd is not None:
+            proj.cost_limit_usd = req.cost_limit_usd
+        elif hasattr(req, "cost_limit_usd") and req.cost_limit_usd is None:
+            # Explicitly clearing the limit
+            proj.cost_limit_usd = None
+
         db.flush()
+
+        # Clear budget-paused workflows if limit raised or cleared
+        if proj.cost_limit_usd is None or proj.cost_total_usd < proj.cost_limit_usd:
+            budget_paused = (
+                db.query(Workflow)
+                .filter(
+                    Workflow.project_id == project_id,
+                    Workflow.paused_by == "budget",
+                )
+                .all()
+            )
+            for wf in budget_paused:
+                wf.paused_by = None
+                wf.status = "active"
+                wf.status_reason = None
+            if budget_paused:
+                db.flush()
+                logger.info(f"Cleared budget pause on {len(budget_paused)} workflow(s) for project {project_id[:8]}")
 
         # Re-sync if base_dir changed (same session)
         if req.base_dir is not None:
@@ -1958,6 +1881,8 @@ async def update_project(project_id: str, req: ProjectUpdate):
             design_count=count,
             created_at=proj.created_at.isoformat() if proj.created_at else "",
             updated_at=proj.updated_at.isoformat() if proj.updated_at else "",
+            cost_total_usd=proj.cost_total_usd or 0.0,
+            cost_limit_usd=proj.cost_limit_usd,
         )
 
 
@@ -1977,9 +1902,7 @@ async def delete_project(project_id: str):
         db.flush()
 
         if was_active:
-            next_proj = (
-                db.query(AutopilotProject).order_by(AutopilotProject.name).first()
-            )
+            next_proj = db.query(AutopilotProject).order_by(AutopilotProject.name).first()
             if next_proj:
                 next_proj.is_active = True
                 replacement_base_dir = next_proj.base_dir
@@ -1999,6 +1922,50 @@ async def delete_project(project_id: str):
 
     _invalidate("queue", "status", f"project_designs:{project_id}")
     return {"deleted": project_id}
+
+
+# ── Cost Entries ───────────────────────────────────────────────
+
+
+@router.post("/cost-entries")
+async def create_cost_entry(
+    req: CostEntryCreate,
+    agent_id: str = Header(..., alias="X-Agent-ID"),
+):
+    """Create a cost entry and trigger cost derivation rollup.
+
+    Used by Pi extension (real-time) and external callers.
+    Requires valid agent authentication via X-Agent-ID header.
+    """
+    # SECURITY: Verify agent authentication before allowing cost entry creation
+    if not await verify_agent_authentication(agent_id):
+        logger.warning(f"Unauthenticated cost entry attempt from agent {agent_id}")
+        raise HTTPException(
+            status_code=401,
+            detail="Agent not authenticated. Provide valid X-Agent-ID header.",
+        )
+
+    from src.core.cost_derivation import record_cost
+    from src.core.database import get_db
+
+    with get_db() as db:
+        entry = record_cost(
+            db=db,
+            cost_usd=req.cost_usd,
+            source=req.source,
+            task_id=req.task_id,
+            agent_id=req.agent_id,
+            workflow_id=req.workflow_id,
+            model=req.model,
+            input_tokens=req.input_tokens,
+            output_tokens=req.output_tokens,
+            cache_read_tokens=req.cache_read_tokens,
+            cache_write_tokens=req.cache_write_tokens,
+            reasoning_tokens=req.reasoning_tokens,
+            raw_usage=req.raw_usage,
+        )
+
+        return {"id": entry.id, "cost_usd": entry.cost_usd}
 
 
 # ── Project Designs (sync + CRUD) ──────────────────────────────
@@ -2051,12 +2018,7 @@ async def list_project_designs(project_id: str):
         if not proj:
             raise HTTPException(404, "Project not found")
 
-        designs = (
-            db.query(AutopilotDesign)
-            .filter_by(project_id=project_id)
-            .order_by(AutopilotDesign.ordinal)
-            .all()
-        )
+        designs = db.query(AutopilotDesign).filter_by(project_id=project_id).order_by(AutopilotDesign.ordinal).all()
         result = [
             DesignItem(
                 id=d.id,
@@ -2186,11 +2148,7 @@ async def remove_project_design(project_id: str, filename: str):
             raise HTTPException(404, "Project not found")
         base_dir = proj.base_dir
 
-        d = (
-            db.query(AutopilotDesign)
-            .filter_by(project_id=project_id, filename=filename)
-            .first()
-        )
+        d = db.query(AutopilotDesign).filter_by(project_id=project_id, filename=filename).first()
         if d:
             # Cascade: terminate agents, delete tasks, workflows, features
             design_features = db.query(Feature).filter_by(design_id=d.id).all()
@@ -2223,16 +2181,10 @@ async def remove_project_design(project_id: str, filename: str):
                 if wf.id in wf_ids:
                     continue
                 try:
-                    params = (
-                        wf.launch_params
-                        if isinstance(wf.launch_params, dict)
-                        else json.loads(wf.launch_params or "{}")
-                    )
+                    params = wf.launch_params if isinstance(wf.launch_params, dict) else json.loads(wf.launch_params or "{}")
                 except Exception:
                     continue
-                if params.get("design_id") == d.id or Path(
-                    params.get("design_document", "")
-                ).name == filename:
+                if params.get("design_id") == d.id or Path(params.get("design_document", "")).name == filename:
                     wf_ids.append(wf.id)
 
             if wf_ids:
@@ -2240,12 +2192,7 @@ async def remove_project_design(project_id: str, filename: str):
                 tasks = db.query(Task).filter(Task.workflow_id.in_(wf_ids)).all()
                 task_ids = [t.id for t in tasks]
                 if task_ids:
-                    agents = (
-                        db.query(Agent)
-                        .filter(Agent.current_task_id.in_(task_ids))
-                        .filter(Agent.status.in_(["working", "starting", "idle"]))
-                        .all()
-                    )
+                    agents = db.query(Agent).filter(Agent.current_task_id.in_(task_ids)).filter(Agent.status.in_(["working", "starting", "idle"])).all()
                     for agent in agents:
                         try:
                             subprocess.run(
@@ -2261,55 +2208,29 @@ async def remove_project_design(project_id: str, filename: str):
 
                 # Delete dependent records (order matters for FK constraints)
                 if task_ids:
-                    db.query(TaskPromptOverride).filter(
-                        TaskPromptOverride.task_id.in_(task_ids)
-                    ).delete(synchronize_session=False)
-                    db.query(ValidationReview).filter(
-                        ValidationReview.task_id.in_(task_ids)
-                    ).delete(synchronize_session=False)
-                    db.query(AgentResult).filter(
-                        AgentResult.task_id.in_(task_ids)
-                    ).delete(synchronize_session=False)
-                    db.query(Memory).filter(
-                        Memory.related_task_id.in_(task_ids)
-                    ).delete(synchronize_session=False)
-                    db.query(Ticket).filter(
-                        Ticket.task_id.in_(task_ids)
-                    ).delete(synchronize_session=False)
+                    db.query(TaskPromptOverride).filter(TaskPromptOverride.task_id.in_(task_ids)).delete(synchronize_session=False)
+                    db.query(ValidationReview).filter(ValidationReview.task_id.in_(task_ids)).delete(synchronize_session=False)
+                    db.query(AgentResult).filter(AgentResult.task_id.in_(task_ids)).delete(synchronize_session=False)
+                    db.query(Memory).filter(Memory.related_task_id.in_(task_ids)).delete(synchronize_session=False)
+                    db.query(Ticket).filter(Ticket.task_id.in_(task_ids)).delete(synchronize_session=False)
 
                 # Delete workflow-level dependents
-                db.query(DiagnosticRun).filter(
-                    DiagnosticRun.workflow_id.in_(wf_ids)
-                ).delete(synchronize_session=False)
-                db.query(WorkflowResult).filter(
-                    WorkflowResult.workflow_id.in_(wf_ids)
-                ).delete(synchronize_session=False)
-                db.query(BoardConfig).filter(
-                    BoardConfig.workflow_id.in_(wf_ids)
-                ).delete(synchronize_session=False)
-                db.query(Ticket).filter(
-                    Ticket.workflow_id.in_(wf_ids)
-                ).delete(synchronize_session=False)
+                db.query(DiagnosticRun).filter(DiagnosticRun.workflow_id.in_(wf_ids)).delete(synchronize_session=False)
+                db.query(WorkflowResult).filter(WorkflowResult.workflow_id.in_(wf_ids)).delete(synchronize_session=False)
+                db.query(BoardConfig).filter(BoardConfig.workflow_id.in_(wf_ids)).delete(synchronize_session=False)
+                db.query(Ticket).filter(Ticket.workflow_id.in_(wf_ids)).delete(synchronize_session=False)
 
                 # Delete phase executions
-                db.query(PhaseExecution).filter(
-                    PhaseExecution.workflow_execution_id.in_(wf_ids)
-                ).delete(synchronize_session=False)
+                db.query(PhaseExecution).filter(PhaseExecution.workflow_execution_id.in_(wf_ids)).delete(synchronize_session=False)
 
                 # Delete tasks
-                db.query(Task).filter(Task.workflow_id.in_(wf_ids)).delete(
-                    synchronize_session=False
-                )
+                db.query(Task).filter(Task.workflow_id.in_(wf_ids)).delete(synchronize_session=False)
 
                 # Delete workflows
-                db.query(Workflow).filter(Workflow.id.in_(wf_ids)).delete(
-                    synchronize_session=False
-                )
+                db.query(Workflow).filter(Workflow.id.in_(wf_ids)).delete(synchronize_session=False)
 
             # Delete features
-            db.query(Feature).filter_by(design_id=d.id).delete(
-                synchronize_session=False
-            )
+            db.query(Feature).filter_by(design_id=d.id).delete(synchronize_session=False)
 
             # Delete the design itself
             db.delete(d)
@@ -2424,68 +2345,45 @@ async def get_project_design_status(project_id: str, filename: str):
             phase_map = {p.id: p.name for p in phases}
 
         if workflow_ids:
-            tasks = (
-                db.query(Task)
-                .filter(Task.workflow_id.in_(workflow_ids))
-                .order_by(Task.created_at)
-                .all()
-            )
+            tasks = db.query(Task).filter(Task.workflow_id.in_(workflow_ids)).order_by(Task.created_at).all()
 
             # Bulk-fetch agents to avoid N+1
-            agent_ids = list(
-                set(t.assigned_agent_id for t in tasks if t.assigned_agent_id)
-            )
+            agent_ids = list(set(t.assigned_agent_id for t in tasks if t.assigned_agent_id))
             agents_map = {}
             if agent_ids:
                 agents_list = db.query(Agent).filter(Agent.id.in_(agent_ids)).all()
                 agents_map = {a.id: a for a in agents_list}
 
             for t in tasks:
-                agent = (
-                    agents_map.get(t.assigned_agent_id) if t.assigned_agent_id else None
-                )
+                agent = agents_map.get(t.assigned_agent_id) if t.assigned_agent_id else None
                 all_tasks.append(
                     {
                         "id": t.id,
-                        "description": (
-                            t.enriched_description or t.raw_description or ""
-                        )[:200],
+                        "description": (t.enriched_description or t.raw_description or "")[:200],
                         "status": t.status,
                         "priority": t.priority,
                         "phase_id": t.phase_id,
                         "phase_name": phase_map.get(t.phase_id),
                         "workflow_id": t.workflow_id,
-                        "created_at": t.created_at.isoformat()
-                        if t.created_at
-                        else None,
-                        "completed_at": t.completed_at.isoformat()
-                        if t.completed_at
-                        else None,
+                        "created_at": t.created_at.isoformat() if t.created_at else None,
+                        "completed_at": t.completed_at.isoformat() if t.completed_at else None,
                         "agent_id": t.assigned_agent_id,
                         "agent_status": agent.status if agent else None,
                     }
                 )
 
             # Get agent IDs for branch info - check both task.assigned_agent_id and agents.current_task_id
-            agent_ids = list(
-                set(t.assigned_agent_id for t in tasks if t.assigned_agent_id)
-            )
+            agent_ids = list(set(t.assigned_agent_id for t in tasks if t.assigned_agent_id))
             # Also get agents assigned to these tasks via agents.current_task_id
             task_ids = [t.id for t in tasks]
             if task_ids:
-                assigned_agents = (
-                    db.query(Agent).filter(Agent.current_task_id.in_(task_ids)).all()
-                )
+                assigned_agents = db.query(Agent).filter(Agent.current_task_id.in_(task_ids)).all()
                 for a in assigned_agents:
                     if a.id not in agent_ids:
                         agent_ids.append(a.id)
 
             if agent_ids:
-                worktrees = (
-                    db.query(AgentBranch)
-                    .filter(AgentBranch.agent_id.in_(agent_ids))
-                    .all()
-                )
+                worktrees = db.query(AgentBranch).filter(AgentBranch.agent_id.in_(agent_ids)).all()
                 for wt in worktrees:
                     all_agents.append(
                         {
@@ -2501,14 +2399,16 @@ async def get_project_design_status(project_id: str, filename: str):
                 if agent:
                     # Avoid duplicates
                     if not any(a.get("agent_id") == agent.id for a in all_agents):
-                        all_agents.append({
-                            "agent_id": agent.id,
-                            "status": agent.status,
-                            "current_task_id": agent.current_task_id,
-                            "last_activity": agent.last_activity.isoformat() if agent.last_activity else None,
-                            "cli_model": agent.cli_model,
-                            "agent_type": agent.agent_type,
-                        })
+                        all_agents.append(
+                            {
+                                "agent_id": agent.id,
+                                "status": agent.status,
+                                "current_task_id": agent.current_task_id,
+                                "last_activity": agent.last_activity.isoformat() if agent.last_activity else None,
+                                "cli_model": agent.cli_model,
+                                "agent_type": agent.agent_type,
+                            }
+                        )
 
         # Determine overall status — prefer the design-level status from
         # autopilot_designs (set by run_design_aggregate / continuous pipeline)
@@ -2517,11 +2417,7 @@ async def get_project_design_status(project_id: str, filename: str):
         _design_id = None
         _design_raw_error = None
         with get_db() as _db:
-            _design = (
-                _db.query(AutopilotDesign)
-                .filter_by(project_id=project_id, filename=filename)
-                .first()
-            )
+            _design = _db.query(AutopilotDesign).filter_by(project_id=project_id, filename=filename).first()
             if _design:
                 from src.core.status_derivation import derive_design_status
 
@@ -2568,52 +2464,46 @@ async def get_project_design_status(project_id: str, filename: str):
         feature_folder = None
         for wf in matching_workflows:
             if wf.working_directory:
-                features_dir = (
-                    Path(wf.working_directory) / CONTEXT_DIR_NAME / "features"
-                )
+                features_dir = Path(wf.working_directory) / CONTEXT_DIR_NAME / "features"
                 if features_dir.exists():
                     for d in sorted(features_dir.iterdir(), reverse=True):
-                        if (
-                            d.is_dir()
-                            and filename.replace(".md", "").lower() in d.name.lower()
-                        ):
+                        if d.is_dir() and filename.replace(".md", "").lower() in d.name.lower():
                             feature_folder = str(d)
                             break
                 if feature_folder:
                     break
 
         # Get branch names
-        branch_names = list(
-            set(a["branch_name"] for a in all_agents if a.get("branch_name"))
-        )
+        branch_names = list(set(a["branch_name"] for a in all_agents if a.get("branch_name")))
 
         # Get features linked to this design's workflows
         workflow_ids = [wf.id for wf in matching_workflows]
         features = []
-        
+
         # Query decomposed features from the DB (created by Phase 0)
         if _design_id:
             db_features = db.query(Feature).filter_by(design_id=_design_id).all()
         else:
             db_features = []
-        
+
         for feat in db_features:
             # Get tasks for this feature's workflow
             feat_tasks = []
             feat_wf_id = feat.workflow_id
-            
+
             # If no workflow_id, try to match by feature_key in launch_params
             if not feat_wf_id and matching_workflows:
                 import json as _json
+
                 for wf in matching_workflows:
                     try:
-                        params = wf.launch_params if isinstance(wf.launch_params, dict) else _json.loads(wf.launch_params or '{}')
+                        params = wf.launch_params if isinstance(wf.launch_params, dict) else _json.loads(wf.launch_params or "{}")
                     except Exception:
                         continue
-                    if params.get('feature_id') == feat.feature_key:
+                    if params.get("feature_id") == feat.feature_key:
                         feat_wf_id = wf.id
                         break
-            
+
             if feat_wf_id:
                 wf_tasks = db.query(Task).filter_by(workflow_id=feat_wf_id).all()
                 phase_ids = set(t.phase_id for t in wf_tasks if t.phase_id)
@@ -2640,32 +2530,35 @@ async def get_project_design_status(project_id: str, filename: str):
                     goto_reason = None
                     if GOTO_REASON_PREFIX in full_description:
                         goto_reason = full_description.split(GOTO_REASON_PREFIX, 1)[1].split("\n", 1)[0].strip()
-                    feat_tasks.append({
-                        "id": t.id,
-                        "description": full_description[:200],
-                        "phase_description": phase_description_map.get(t.phase_id),
-                        "goto_reason": goto_reason,
-                        # Once the task is finished, its own outcome is more
-                        # useful to show than goto_reason/phase_description
-                        # (both describe why the task was dispatched, not
-                        # what it actually did) -- the frontend prefers
-                        # these when status is done/failed.
-                        "completion_notes": t.completion_notes,
-                        "failure_reason": t.failure_reason,
-                        "status": t.status,
-                        "action": t.action or "",
-                        "action_target_phase": t.action_target_phase or None,
-                        "phase_id": t.phase_id,
-                        "phase_name": phase_map.get(t.phase_id),
-                        "workflow_id": t.workflow_id,
-                        "created_at": t.created_at.isoformat() if t.created_at else None,
-                        "completed_at": t.completed_at.isoformat() if t.completed_at else None,
-                        "agent_id": t.assigned_agent_id,
-                        "agent_status": agent_status,
-                    })
-            
+                    feat_tasks.append(
+                        {
+                            "id": t.id,
+                            "description": full_description[:200],
+                            "phase_description": phase_description_map.get(t.phase_id),
+                            "goto_reason": goto_reason,
+                            # Once the task is finished, its own outcome is more
+                            # useful to show than goto_reason/phase_description
+                            # (both describe why the task was dispatched, not
+                            # what it actually did) -- the frontend prefers
+                            # these when status is done/failed.
+                            "completion_notes": t.completion_notes,
+                            "failure_reason": t.failure_reason,
+                            "status": t.status,
+                            "action": t.action or "",
+                            "action_target_phase": t.action_target_phase or None,
+                            "phase_id": t.phase_id,
+                            "phase_name": phase_map.get(t.phase_id),
+                            "workflow_id": t.workflow_id,
+                            "created_at": t.created_at.isoformat() if t.created_at else None,
+                            "completed_at": t.completed_at.isoformat() if t.completed_at else None,
+                            "agent_id": t.assigned_agent_id,
+                            "agent_status": agent_status,
+                        }
+                    )
+
             # Use centralized status derivation (H-3 fix)
             from src.core.status_derivation import derive_feature_status
+
             feat_status = derive_feature_status(db, feat.id, write_back=True)
 
             # doc_review.yaml's feature_report.html shows up here as soon as
@@ -2678,23 +2571,23 @@ async def get_project_design_status(project_id: str, filename: str):
             if feat_wf_id:
                 feat_wf = next((wf for wf in matching_workflows if wf.id == feat_wf_id), None)
                 if feat_wf and feat_wf.working_directory:
-                    has_report = (
-                        Path(feat_wf.working_directory) / "docs" / "feature_report.html"
-                    ).is_file()
+                    has_report = (Path(feat_wf.working_directory) / "docs" / "feature_report.html").is_file()
 
-            features.append({
-                "id": feat.id,
-                "name": feat.name,
-                "feature_key": feat.feature_key,
-                "workflow_id": feat.workflow_id,
-                "status": feat_status,
-                "scope": feat.scope or "",
-                "tasks": feat_tasks,
-                "depends_on": feat.depends_on or [],
-                "created_at": feat.created_at.isoformat() if feat.created_at else None,
-                "completed_at": feat.completed_at.isoformat() if feat.completed_at else None,
-                "has_report": has_report,
-            })
+            features.append(
+                {
+                    "id": feat.id,
+                    "name": feat.name,
+                    "feature_key": feat.feature_key,
+                    "workflow_id": feat.workflow_id,
+                    "status": feat_status,
+                    "scope": feat.scope or "",
+                    "tasks": feat_tasks,
+                    "depends_on": feat.depends_on or [],
+                    "created_at": feat.created_at.isoformat() if feat.created_at else None,
+                    "completed_at": feat.completed_at.isoformat() if feat.completed_at else None,
+                    "has_report": has_report,
+                }
+            )
 
         # Feature Architect (Phase 0) pseudo-feature: it decomposes the design
         # into the Feature rows above, but is itself a separate Workflow (see
@@ -2707,9 +2600,7 @@ async def get_project_design_status(project_id: str, filename: str):
         # Build a feature-shaped entry from its actual task/agent data (using
         # the same shape as real features above) so FeatureRow renders it
         # identically -- including the clickable agent-id link per task.
-        phase0_workflows = [
-            wf for wf in matching_workflows if wf.definition_id in PHASE0_DEFINITION_IDS
-        ]
+        phase0_workflows = [wf for wf in matching_workflows if wf.definition_id in PHASE0_DEFINITION_IDS]
         if phase0_workflows:
             phase0_wf = phase0_workflows[0]  # most recent (matching_workflows is desc-ordered)
             phase0_tasks = [t for t in all_tasks if t["workflow_id"] == phase0_wf.id]
@@ -2733,9 +2624,7 @@ async def get_project_design_status(project_id: str, filename: str):
                         "status": phase0_status,
                         "scope": "Decomposes the design into the feature(s) below",
                         "tasks": phase0_tasks,
-                        "created_at": phase0_wf.created_at.isoformat()
-                        if phase0_wf.created_at
-                        else None,
+                        "created_at": phase0_wf.created_at.isoformat() if phase0_wf.created_at else None,
                         "completed_at": None,
                     },
                 )
@@ -2744,16 +2633,18 @@ async def get_project_design_status(project_id: str, filename: str):
         # either), show a single pending feature so the UI has something to
         # display while waiting for Phase 0 to even start.
         if not features:
-            features.append({
-                "id": f"placeholder-{filename}",
-                "name": design_name or filename.replace(".md", ""),
-                "feature_key": "pending-decomposition",
-                "status": "pending",
-                "scope": "Awaiting Phase 0 decomposition",
-                "tasks": [],
-                "created_at": None,
-                "completed_at": None,
-            })
+            features.append(
+                {
+                    "id": f"placeholder-{filename}",
+                    "name": design_name or filename.replace(".md", ""),
+                    "feature_key": "pending-decomposition",
+                    "status": "pending",
+                    "scope": "Awaiting Phase 0 decomposition",
+                    "tasks": [],
+                    "created_at": None,
+                    "completed_at": None,
+                }
+            )
 
         # Collect workflow-level errors for failed workflows
         workflow_errors = []
@@ -2761,34 +2652,19 @@ async def get_project_design_status(project_id: str, filename: str):
             if wf.status == "failed":
                 wf_tasks = [t for t in all_tasks if t.get("workflow_id") == wf.id]
                 failed_tasks = [t for t in wf_tasks if t.get("status") == "failed"]
-                diag_failed = [
-                    t for t in failed_tasks
-                    if t.get("description", "").startswith("DIAGNOSTIC:")
-                ]
-                real_failed = [
-                    t for t in failed_tasks
-                    if not t.get("description", "").startswith("DIAGNOSTIC:")
-                ]
+                diag_failed = [t for t in failed_tasks if t.get("description", "").startswith("DIAGNOSTIC:")]
+                real_failed = [t for t in failed_tasks if not t.get("description", "").startswith("DIAGNOSTIC:")]
                 if real_failed:
-                    workflow_errors.append(
-                        f"Workflow {wf.id[:8]}: {len(real_failed)} task(s) failed"
-                    )
+                    workflow_errors.append(f"Workflow {wf.id[:8]}: {len(real_failed)} task(s) failed")
                 elif diag_failed:
-                    workflow_errors.append(
-                        f"Workflow {wf.id[:8]}: diagnostic task failed (all feature work completed)"
-                    )
+                    workflow_errors.append(f"Workflow {wf.id[:8]}: diagnostic task failed (all feature work completed)")
                 else:
-                    workflow_errors.append(
-                        f"Workflow {wf.id[:8]}: marked failed"
-                    )
+                    workflow_errors.append(f"Workflow {wf.id[:8]}: marked failed")
 
         # Build warning message for completed designs with failed workflows
         warning = None
         if overall_status == "completed" and workflow_errors:
-            warning = (
-                f"Design completed but {len(workflow_errors)} workflow(s) had issues. "
-                + "; ".join(workflow_errors)
-            )
+            warning = f"Design completed but {len(workflow_errors)} workflow(s) had issues. " + "; ".join(workflow_errors)
 
         return {
             "filename": filename,
@@ -2802,9 +2678,7 @@ async def get_project_design_status(project_id: str, filename: str):
                     "id": wf.id,
                     "status": wf.status,
                     "created_at": wf.created_at.isoformat() if wf.created_at else None,
-                    "error": next(
-                        (e for e in workflow_errors if wf.id[:8] in e), None
-                    ) if wf.status == "failed" else None,
+                    "error": next((e for e in workflow_errors if wf.id[:8] in e), None) if wf.status == "failed" else None,
                 }
                 for wf in matching_workflows
             ],
@@ -2864,9 +2738,7 @@ def _scan_features() -> List[Dict[str, Any]]:
         metrics = _read_json(metrics_path) or {}
 
         report_path = feature_dir / "feature_report.html"
-        created_at = datetime.fromtimestamp(
-            feature_dir.stat().st_mtime, tz=timezone.utc
-        ).isoformat()
+        created_at = datetime.fromtimestamp(feature_dir.stat().st_mtime, tz=timezone.utc).isoformat()
 
         dir_name = feature_dir.name
         if "_" in dir_name:
@@ -3089,16 +2961,8 @@ async def get_feature_detail(feature_id: str):
                     {
                         "name": f.name,
                         "size_bytes": stat.st_size,
-                        "modified": datetime.fromtimestamp(
-                            stat.st_mtime, tz=timezone.utc
-                        ).isoformat(),
-                        "type": "markdown"
-                        if f.suffix == ".md"
-                        else "json"
-                        if f.suffix == ".json"
-                        else "text"
-                        if f.suffix == ".txt"
-                        else "other",
+                        "modified": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
+                        "type": "markdown" if f.suffix == ".md" else "json" if f.suffix == ".json" else "text" if f.suffix == ".txt" else "other",
                     }
                 )
 
@@ -3118,15 +2982,9 @@ async def get_feature_detail(feature_id: str):
             summaries[key] = content[:500] + ("..." if len(content) > 500 else "")
 
     dir_name = feature_dir.name
-    name = (
-        dir_name.split("_", 1)[1].replace("_", " ").replace("-", " ").title()
-        if "_" in dir_name
-        else dir_name
-    )
+    name = dir_name.split("_", 1)[1].replace("_", " ").replace("-", " ").title() if "_" in dir_name else dir_name
 
-    created_at = datetime.fromtimestamp(
-        feature_dir.stat().st_mtime, tz=timezone.utc
-    ).isoformat()
+    created_at = datetime.fromtimestamp(feature_dir.stat().st_mtime, tz=timezone.utc).isoformat()
 
     result = FeatureDetail(
         id=feature_dir.name,
@@ -3213,9 +3071,7 @@ async def list_feature_record_docs(feature_id: str):
                     {
                         "name": "architect-scope.md",
                         "size_bytes": stat.st_size,
-                        "modified": datetime.fromtimestamp(
-                            stat.st_mtime, tz=timezone.utc
-                        ).isoformat(),
+                        "modified": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
                         "type": "markdown",
                     }
                 )
@@ -3240,16 +3096,8 @@ async def list_feature_record_docs(feature_id: str):
                 {
                     "name": f.name,
                     "size_bytes": stat.st_size,
-                    "modified": datetime.fromtimestamp(
-                        stat.st_mtime, tz=timezone.utc
-                    ).isoformat(),
-                    "type": "markdown"
-                    if f.suffix == ".md"
-                    else "json"
-                    if f.suffix == ".json"
-                    else "text"
-                    if f.suffix == ".txt"
-                    else "other",
+                    "modified": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
+                    "type": "markdown" if f.suffix == ".md" else "json" if f.suffix == ".json" else "text" if f.suffix == ".txt" else "other",
                 }
             )
     return {"docs": docs}
@@ -3343,9 +3191,7 @@ async def get_feature_doc(feature_id: str, doc_name: str):
     doc_path = _safe_path(effective_dir, feature_id, "docs", doc_name)
     if not doc_path.exists():
         raise HTTPException(404, f"Document '{doc_name}' not found")
-    return _store(
-        cache_key, {"name": doc_name, "content": doc_path.read_text(errors="replace")}
-    )
+    return _store(cache_key, {"name": doc_name, "content": doc_path.read_text(errors="replace")})
 
 
 @router.get("/features/{feature_id}/download")
@@ -3381,9 +3227,7 @@ async def list_feature_logs(feature_id: str):
             {
                 "name": f.name,
                 "size_bytes": stat.st_size,
-                "modified": datetime.fromtimestamp(
-                    stat.st_mtime, tz=timezone.utc
-                ).isoformat(),
+                "modified": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
             }
         )
     return {"logs": logs}
@@ -3482,9 +3326,7 @@ async def archive_message(request: dict):
             db.commit()
 
         db.execute(
-            text(
-                "INSERT OR IGNORE INTO archived_events (id, message_type, timestamp) VALUES (:id, :type, :ts)"
-            ),
+            text("INSERT OR IGNORE INTO archived_events (id, message_type, timestamp) VALUES (:id, :type, :ts)"),
             {"id": msg_id, "type": msg_type, "ts": timestamp},
         )
         db.commit()
@@ -3504,9 +3346,7 @@ async def unarchive_message(request: dict):
 
     with get_db() as db:
         try:
-            db.execute(
-                text("DELETE FROM archived_events WHERE id = :id"), {"id": msg_id}
-            )
+            db.execute(text("DELETE FROM archived_events WHERE id = :id"), {"id": msg_id})
             db.commit()
         except Exception:
             pass
@@ -3538,11 +3378,7 @@ async def cleanup_old_archives():
 
     with get_db() as db:
         try:
-            db.execute(
-                text(
-                    "DELETE FROM archived_events WHERE archived_at < datetime('now', '-30 days')"
-                )
-            )
+            db.execute(text("DELETE FROM archived_events WHERE archived_at < datetime('now', '-30 days')"))
             db.commit()
         except Exception:
             pass
@@ -3675,9 +3511,7 @@ async def dismiss_human_input(request_id: str):
 
 
 @router.post("/start")
-async def start_pipeline(
-    project_path: str, design_queue: str = "", max_iterations: int = 3
-):
+async def start_pipeline(project_path: str, design_queue: str = "", max_iterations: int = 3):
     """Start the autopilot pipeline."""
     from src.autopilot.orchestrator import _get_or_create_project_id
     from src.autopilot.service import get_registry
@@ -3699,16 +3533,12 @@ async def start_pipeline(
         raise HTTPException(409, cap_message)
 
     try:
-        return await _start_pipeline_reserved(
-            project_id, project_path, design_queue, max_iterations
-        )
+        return await _start_pipeline_reserved(project_id, project_path, design_queue, max_iterations)
     finally:
         get_registry().release_reservation(project_id)
 
 
-async def _start_pipeline_reserved(
-    project_id: str, project_path: str, design_queue: str, max_iterations: int
-):
+async def _start_pipeline_reserved(project_id: str, project_path: str, design_queue: str, max_iterations: int):
     """Body of start_pipeline() that runs after the concurrency-cap slot for
     project_id has been reserved -- split out so the reservation can be
     released in a finally regardless of which of the several early-return/
@@ -3725,12 +3555,8 @@ async def _start_pipeline_reserved(
     # trapping a genuinely in-progress workflow in a stop/restart loop that
     # could never escalate past its own recovery counter.
     zombie_check_grace_seconds = 45
-    time_since_start = (
-        time.time() - service._start_time if service._start_time else None
-    )
-    if service.running and (
-        time_since_start is None or time_since_start >= zombie_check_grace_seconds
-    ):
+    time_since_start = time.time() - service._start_time if service._start_time else None
+    if service.running and (time_since_start is None or time_since_start >= zombie_check_grace_seconds):
         # Check for zombie state: service says running but no active agents/workflows.
         # This happens when the pipeline task gets stuck. Auto-stop and restart.
         # BUT: if the queue is legitimately empty (all designs done), the pipeline
@@ -3741,11 +3567,7 @@ async def _start_pipeline_reserved(
             from src.core.database import Agent, AutopilotDesign, Task, Workflow, get_db
 
             with get_db() as db:
-                project_wf_ids = [
-                    w.id for w in db.query(Workflow)
-                    .filter(Workflow.project_id == project_id)
-                    .all()
-                ]
+                project_wf_ids = [w.id for w in db.query(Workflow).filter(Workflow.project_id == project_id).all()]
                 active_agents = (
                     db.query(Agent)
                     .join(Task, Agent.current_task_id == Task.id)
@@ -3757,29 +3579,31 @@ async def _start_pipeline_reserved(
                     if project_wf_ids
                     else 0
                 )
-                active_wfs = db.query(Workflow).filter(
-                    Workflow.project_id == project_id,
-                    Workflow.status == "active",
-                ).count()
+                active_wfs = (
+                    db.query(Workflow)
+                    .filter(
+                        Workflow.project_id == project_id,
+                        Workflow.status == "active",
+                    )
+                    .count()
+                )
 
                 # Only zombie-detect if there are pending designs that
                 # should be getting processed. Empty queue = legitimate idle.
-                pending_designs = db.query(AutopilotDesign).filter(
-                    AutopilotDesign.project_id == project_id,
-                    AutopilotDesign.status.in_(["pending", "active"]),
-                ).count()
+                pending_designs = (
+                    db.query(AutopilotDesign)
+                    .filter(
+                        AutopilotDesign.project_id == project_id,
+                        AutopilotDesign.status.in_(["pending", "active"]),
+                    )
+                    .count()
+                )
 
             if active_agents == 0 and active_wfs == 0 and pending_designs > 0:
-                logger.warning(
-                    f"[START] Zombie pipeline detected (running=True but {pending_designs} "
-                    f"pending/active designs and no agents/workflows) — auto-stopping"
-                )
+                logger.warning(f"[START] Zombie pipeline detected (running=True but {pending_designs} pending/active designs and no agents/workflows) — auto-stopping")
                 await service.stop()
             elif active_agents == 0 and active_wfs == 0 and pending_designs == 0:
-                logger.info(
-                    "[START] Pipeline is running but all designs are done — "
-                    "stopping cleanly and restarting"
-                )
+                logger.info("[START] Pipeline is running but all designs are done — stopping cleanly and restarting")
                 await service.stop()
             else:
                 raise HTTPException(409, "Pipeline is already running.")
@@ -3837,9 +3661,7 @@ async def stop_pipeline(clear_state: bool = False, project_id: Optional[str] = N
             stopped_project_ids.append(running_service.project_id)
             for key in aggregate:
                 aggregate[key] += r.get(key, 0)
-        result = {"stopped": stopped_any, **aggregate} if stopped_any else {
-            "stopped": True, "message": "Pipeline was not running"
-        }
+        result = {"stopped": stopped_any, **aggregate} if stopped_any else {"stopped": True, "message": "Pipeline was not running"}
 
     # Terminate autopilot agents and pause workflows
     terminated_count = 0
@@ -3847,36 +3669,17 @@ async def stop_pipeline(clear_state: bool = False, project_id: Optional[str] = N
         with get_db() as db:
             from src.core.database import Workflow
 
-            query = (
-                db.query(Workflow)
-                .filter_by(definition_id="autopilot")
-                .filter(Workflow.status.in_(["active", "running"]))
-            )
+            query = db.query(Workflow).filter_by(definition_id="autopilot").filter(Workflow.status.in_(["active", "running"]))
             if project_id:
                 query = query.filter(Workflow.project_id == project_id)
 
             autopilot_wf_ids = [wf.id for wf in query.all()]
 
             if autopilot_wf_ids:
-                task_ids = [
-                    t.id
-                    for t in db.query(Task)
-                    .filter(Task.workflow_id.in_(autopilot_wf_ids))
-                    .filter(
-                        Task.status.in_(
-                            ["pending", "queued", "assigned", "in_progress"]
-                        )
-                    )
-                    .all()
-                ]
+                task_ids = [t.id for t in db.query(Task).filter(Task.workflow_id.in_(autopilot_wf_ids)).filter(Task.status.in_(["pending", "queued", "assigned", "in_progress"])).all()]
 
                 if task_ids:
-                    agents = (
-                        db.query(Agent)
-                        .filter(Agent.current_task_id.in_(task_ids))
-                        .filter(Agent.status.in_(["working", "starting", "idle"]))
-                        .all()
-                    )
+                    agents = db.query(Agent).filter(Agent.current_task_id.in_(task_ids)).filter(Agent.status.in_(["working", "starting", "idle"])).all()
                     for agent in agents:
                         try:
                             agent.status = "terminated"
@@ -3918,9 +3721,7 @@ async def stop_pipeline(clear_state: bool = False, project_id: Optional[str] = N
                 # advancement sweep would recreate a task/agent and silently
                 # un-pause the pipeline within seconds of the user clicking
                 # pause.
-                db.query(Workflow).filter(Workflow.id.in_(autopilot_wf_ids)).update(
-                    {Workflow.status: "paused", Workflow.paused_by: "user"}
-                )
+                db.query(Workflow).filter(Workflow.id.in_(autopilot_wf_ids)).update({Workflow.status: "paused", Workflow.paused_by: "user"})
                 db.commit()
     except Exception as e:
         logger.error(f"Error cleaning up autopilot agents: {e}")
@@ -4028,6 +3829,7 @@ def run_health_audit(db_manager=None):
         # Get project path from active autopilot project
         with get_db() as _db:
             from src.core.database import AutopilotProject
+
             _proj = _db.query(AutopilotProject).filter_by(is_active=True).first()
             project_path = _proj.base_dir if _proj else os.getenv("PROJECT_PATH")
         if not project_path:
@@ -4040,11 +3842,7 @@ def run_health_audit(db_manager=None):
             cwd=project_path,
         )
         if result.returncode == 0:
-            branches = [
-                b.strip().lstrip("* ")
-                for b in result.stdout.strip().split("\n")
-                if b.strip()
-            ]
+            branches = [b.strip().lstrip("* ") for b in result.stdout.strip().split("\n") if b.strip()]
             if branches:
                 findings.append(
                     {
@@ -4075,17 +3873,9 @@ def run_health_audit(db_manager=None):
             design_name = "unknown"
             if wf.launch_params:
                 try:
-                    params = (
-                        json.loads(wf.launch_params)
-                        if isinstance(wf.launch_params, str)
-                        else wf.launch_params
-                    )
+                    params = json.loads(wf.launch_params) if isinstance(wf.launch_params, str) else wf.launch_params
                     doc = params.get("design_document", "")
-                    design_name = (
-                        Path(doc).stem.replace("_", " ").replace("-", " ")
-                        if doc
-                        else "unknown"
-                    )
+                    design_name = Path(doc).stem.replace("_", " ").replace("-", " ") if doc else "unknown"
                 except Exception:
                     pass
 
@@ -4112,12 +3902,7 @@ def run_health_audit(db_manager=None):
                 "progress_pct": round(done / total * 100) if total > 0 else 0,
             }
 
-            if (
-                in_progress == 0
-                and pending > 0
-                and done < total
-                and wf.status == "active"
-            ):
+            if in_progress == 0 and pending > 0 and done < total and wf.status == "active":
                 progress["stuck"] = True
                 findings.append(
                     {
@@ -4148,11 +3933,7 @@ def run_health_audit(db_manager=None):
     # 4. Active agents
     try:
         with get_db() as db:
-            active = (
-                db.query(Agent)
-                .filter(Agent.status.in_(["working", "starting", "idle"]))
-                .count()
-            )
+            active = db.query(Agent).filter(Agent.status.in_(["working", "starting", "idle"])).count()
             terminated = db.query(Agent).filter(Agent.status == "terminated").count()
     except Exception:
         active = 0
@@ -4184,6 +3965,4 @@ def configure_autopilot_api(
     FEATURES_DIR = features_dir or os.getenv("FEATURES_DIR", "")
     _active_project_id_cache = None  # Reset so next request rechecks active project
     _invalidate("queue", "features", "status")
-    logger.info(
-        f"Autopilot API configured: queue={DESIGN_QUEUE_DIR}, features={FEATURES_DIR}"
-    )
+    logger.info(f"Autopilot API configured: queue={DESIGN_QUEUE_DIR}, features={FEATURES_DIR}")
