@@ -371,6 +371,14 @@ def _get_or_create_project_id(project_path: str) -> str:
                 proj = db.query(AutopilotProject).filter_by(base_dir=str(project)).first()
             else:
                 logger.info(f"Auto-created project '{proj.name}' for {project} (none registered)")
+            _ensure_git_excluded(
+                project,
+                {
+                    ".worktrees/": "Hephaestus's per-feature worktrees for this project --",
+                    ".hephaestus/": "Hephaestus's own orchestration/scratch state for this project --",
+                },
+                logger,
+            )
 
         if not proj.is_active:
             current = db.query(AutopilotProject).filter_by(is_active=True).first()
@@ -5145,6 +5153,57 @@ def _resolve_arbitration_outcome(
             )
 
 
+def _ensure_git_excluded(
+    repo_path: Path, patterns: Dict[str, str], logger: Any
+) -> None:
+    """logger: OrchestratorLogger or the plain module-level logging.Logger --
+    called from both. Only uses .warning(), which both support.
+
+    Add `patterns` (path -> one-line comment explaining it) to this
+    repo's local, untracked .git/info/exclude, idempotently.
+
+    Not the project's own tracked .gitignore: these are all Hephaestus
+    tooling artifacts (worktrees, orchestration state, the ash scanner's
+    working directory) -- not something the project itself produces, so
+    they have no business in a file the project's real contributors
+    maintain. info/exclude is the correct, local-only, per-checkout place
+    for exactly this category of thing.
+
+    `repo_path` may be a worktree, not just a repo root -- worktrees don't
+    have their own info/exclude, it lives in the shared ("common") git
+    dir, so `git rev-parse --git-common-dir` (resolves correctly from a
+    worktree, unlike a hardcoded ".git/") is required rather than assuming
+    `repo_path / ".git" / "info" / "exclude"`.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--git-common-dir"],
+            cwd=str(repo_path),
+            capture_output=True,
+            timeout=10,
+            text=True,
+        )
+        if result.returncode != 0:
+            return
+        common_dir = Path(result.stdout.strip())
+        if not common_dir.is_absolute():
+            common_dir = repo_path / common_dir
+        exclude_path = common_dir / "info" / "exclude"
+        exclude_path.parent.mkdir(parents=True, exist_ok=True)
+        existing = exclude_path.read_text() if exclude_path.exists() else ""
+        existing_lines = {line.strip() for line in existing.splitlines()}
+        to_add = {p: c for p, c in patterns.items() if p not in existing_lines}
+        if not to_add:
+            return
+        with exclude_path.open("a") as f:
+            if existing and not existing.endswith("\n"):
+                f.write("\n")
+            for pattern, comment in to_add.items():
+                f.write(f"# {comment} Added automatically by Hephaestus.\n{pattern}\n")
+    except Exception as e:
+        logger.warning(f"Could not update git exclude at {repo_path}: {e}")
+
+
 def _run_ash_scan(worktree: Path, logger: OrchestratorLogger) -> None:
     """Run the AWS Automated Security Helper against a feature's worktree.
 
@@ -5159,6 +5218,16 @@ def _run_ash_scan(worktree: Path, logger: OrchestratorLogger) -> None:
     scan happened at all, regardless of what the agent does with the results.
     """
     results_path = worktree / CONTEXT_DIR_NAME / "ash_results.txt"
+    _ensure_git_excluded(
+        worktree,
+        {
+            ".ash/": (
+                "AWS Automated Security Helper's own scan working "
+                "directory (security_review's mandatory ash scan) --"
+            )
+        },
+        logger,
+    )
     try:
         heph_repo = Path(__file__).resolve().parents[2]
         ash_script = heph_repo / "scripts" / "ash"
