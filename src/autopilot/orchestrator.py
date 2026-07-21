@@ -7029,6 +7029,16 @@ def _run_one_feature(
                         feat_record.status = "completed"
                         feat_record.completed_at = feat_record.completed_at or datetime.utcnow()
                         db.commit()
+                    # Clean up worktree — branch and path are deterministic
+                    # from design_id + feature_key, same as _run_one_feature's
+                    # normal completion path.
+                    _design_slug = (design_entry.db_id or "unknown")[:8]
+                    _branch = f"feature/{_design_slug}/{feature_key}"
+                    _wt = _create_integration_worktree(
+                        project_path, feature_key, _branch, logger
+                    )
+                    if _wt:
+                        _cleanup_worktree(_wt, _branch, project_path, logger)
                     return "completed"
                 if wf:
                     existing_workflow_id = wf.id
