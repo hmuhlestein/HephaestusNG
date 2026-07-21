@@ -14,9 +14,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, TypeVar
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Header, HTTPException, Query
 from fastapi.responses import FileResponse, HTMLResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, validator
 
 from src.core.constants import (
     AUTOPILOT_STATE_DIR,
@@ -24,6 +24,9 @@ from src.core.constants import (
     DESIGN_CONTEXT_SUBDIR,
     GOTO_REASON_PREFIX,
 )
+
+# Import authentication function from server module
+from src.mcp.server import verify_agent_authentication
 
 logger = logging.getLogger(__name__)
 
@@ -1532,6 +1535,32 @@ class CostEntryCreate(BaseModel):
     cost_usd: float
     raw_usage: Optional[dict] = None
 
+    @validator("source")
+    def validate_source(cls, v: str) -> str:
+        """Validate source is a known cost collection source."""
+        valid_sources = {"pi", "claude_code", "opencode", "codex", "openrouter_direct"}
+        if v not in valid_sources:
+            raise ValueError(f"source must be one of {valid_sources}, got '{v}'")
+        return v
+
+    @validator("cost_usd")
+    def validate_cost_usd(cls, v: float) -> float:
+        """Validate cost_usd is a reasonable positive value."""
+        if v < 0:
+            raise ValueError("cost_usd must be non-negative")
+        if v > 1000.0:  # Cap at $1000 per single LLM call
+            raise ValueError("cost_usd exceeds maximum allowed value of $1000")
+        return v
+
+    @validator("input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens", "reasoning_tokens")
+    def validate_token_counts(cls, v: int) -> int:
+        """Validate token counts are non-negative."""
+        if v < 0:
+            raise ValueError("token counts must be non-negative")
+        if v > 10_000_000:  # 10M tokens max per call
+            raise ValueError("token count exceeds maximum allowed value")
+        return v
+
 
 class DesignItem(BaseModel):
     id: str
@@ -1899,11 +1928,23 @@ async def delete_project(project_id: str):
 
 
 @router.post("/cost-entries")
-async def create_cost_entry(req: CostEntryCreate):
+async def create_cost_entry(
+    req: CostEntryCreate,
+    agent_id: str = Header(..., alias="X-Agent-ID"),
+):
     """Create a cost entry and trigger cost derivation rollup.
 
     Used by Pi extension (real-time) and external callers.
+    Requires valid agent authentication via X-Agent-ID header.
     """
+    # SECURITY: Verify agent authentication before allowing cost entry creation
+    if not await verify_agent_authentication(agent_id):
+        logger.warning(f"Unauthenticated cost entry attempt from agent {agent_id}")
+        raise HTTPException(
+            status_code=401,
+            detail="Agent not authenticated. Provide valid X-Agent-ID header.",
+        )
+
     from src.core.cost_derivation import record_cost
     from src.core.database import get_db
 
