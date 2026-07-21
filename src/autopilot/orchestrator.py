@@ -1913,7 +1913,11 @@ def scan_design_queue(queue_dir: Path, processed_hashes: Set[str]) -> List[Desig
                 try:
                     from src.core.database import (
                         AutopilotDesign as _AD,
+                    )
+                    from src.core.database import (
                         Feature as _Feat,
+                    )
+                    from src.core.database import (
                         get_db as _gdb,
                     )
                     with _gdb() as _db:
@@ -2013,7 +2017,17 @@ def pick_next_design(
             if not project:
                 logger.info("pick_next_design: no active project found")
                 return None
-            
+
+            # Budget guard: skip project entirely if over budget
+            from src.core.cost_derivation import check_budget_before_new_work
+
+            if not check_budget_before_new_work(db, project.id):
+                logger.info(
+                    f"pick_next_design: project '{project.name}' ({project.id[:8]}) "
+                    f"over budget (${project.cost_total_usd:.2f} >= ${project.cost_limit_usd:.2f}) — skipping"
+                )
+                return None
+
             logger.info(
                 f"pick_next_design: searching project '{project.name}' ({project.id[:8]})"
             )
@@ -3735,8 +3749,8 @@ def _advance_phases(workflow_id: str, logger: OrchestratorLogger) -> bool:
 def _try_auto_resume_paused_workflow(db, workflow_id: str, wf, logger: OrchestratorLogger) -> None:
     """Auto-resume paused workflow if it has a done task in the stalled phase.
 
-    Skips workflows the user explicitly paused (wf.paused_by == "user", set
-    by the /workflow-executions/{id}/stop endpoint). Without this check, a
+    Skips workflows deliberately paused by anyone/anything (wf.paused_by is
+    not None — "user", "budget", "system", etc.). Without this check, a
     deliberate pause could get silently reverted within one sweep tick
     (~20s) whenever the paused workflow's in-progress phase happens to have
     a done task sitting in it -- a state pausing itself commonly produces
@@ -3746,8 +3760,8 @@ def _try_auto_resume_paused_workflow(db, workflow_id: str, wf, logger: Orchestra
     every cycle until whatever made the phase look stalled resolved on its
     own.
     """
-    if wf.paused_by == "user":
-        return
+    if wf.paused_by is not None:
+        return  # Respect any deliberate pause ("user", "budget", etc.)
     phases = (
         db.query(Phase)
         .filter_by(workflow_id=workflow_id)
@@ -5677,9 +5691,10 @@ def _create_corrective_task(
         if not wf:
             logger.warning(f"[CORRECTIVE-TASK] Workflow {workflow_id[:8]} not found")
             return None
-        if wf.paused_by == "user":
-            # Same class of bug _try_auto_resume_paused_workflow was fixed
-            # for: don't override a deliberate pause. Unlike that function
+        if wf.paused_by is not None:
+            # Any deliberate pause ("user", "budget", etc.) should not be
+            # overridden -- don't reactivate the workflow and spawn a live
+            # agent against something that someone/something stopped.
             # (which just skips and leaves the workflow alone), this one
             # would otherwise both reactivate the workflow AND immediately
             # spawn a live agent against it -- silently resuming real work
@@ -5861,12 +5876,10 @@ def _resume_stuck_workflow_tasks(workflow_id: str, logger: OrchestratorLogger) -
         wf = db.query(Workflow).filter_by(id=workflow_id).first()
         if not wf:
             return 0
-        if wf.status == "paused" and wf.paused_by == "user":
-            # Same class of bug _try_auto_resume_paused_workflow was fixed
-            # for: this runs whenever the design/feature queue loop cycles
-            # back to a workflow it already has an id for, which can
-            # include one the user deliberately paused -- don't silently
-            # un-pause and restart work on it.
+        if wf.status == "paused" and wf.paused_by is not None:
+            # Any deliberate pause ("user", "budget", etc.) means someone/something
+            # stopped this workflow intentionally. Don't silently un-pause and
+            # restart work on it just because the queue loop cycled back.
             logger.info(
                 f"[RESUME-STUCK] Workflow {workflow_id[:8]} is user-paused — skipping"
             )
@@ -6747,7 +6760,8 @@ def run_phase0(
         # before any post-processing that could fail or crash. This ensures
         # _get_phase0_completion can find the completed workflow for recovery
         # even if the server crashes before _create_feature_records runs.
-        from src.core.database import AutopilotDesign as _ADModel, Workflow as _WfModel
+        from src.core.database import AutopilotDesign as _ADModel
+        from src.core.database import Workflow as _WfModel
         with _get_db() as _db:
             _phase0_wf = (
                 _db.query(_WfModel)
@@ -7102,6 +7116,20 @@ def _run_one_feature(
 
         # Set workflow type and link to feature
         # Note: We'll do this after workflow is created
+
+        # Budget guard: block new workflow launches if project is over budget
+        if project_id:
+            from src.core.cost_derivation import check_budget_before_new_work
+
+            with get_db() as budget_db:
+                if not check_budget_before_new_work(budget_db, project_id):
+                    logger.info(
+                        f"[BUDGET] Project over budget — blocking new workflow for feature {feature_key}"
+                    )
+                    _update_feature_status(
+                        feature_id, design_entry.db_id, "paused", "Budget limit reached", logger
+                    )
+                    return "budget_blocked"
 
         # run_single_workflow mutates state.current_workflow_id/_design_branch/
         # _design_worktree while it launches and polls the workflow. When

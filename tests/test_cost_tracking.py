@@ -672,6 +672,7 @@ class TestSecurityValidation:
     def test_reject_negative_cost(self):
         """Test that negative cost values are rejected."""
         from pydantic import ValidationError
+
         from src.mcp.autopilot_api import CostEntryCreate
 
         with pytest.raises(ValidationError, match="cost_usd must be non-negative"):
@@ -683,6 +684,7 @@ class TestSecurityValidation:
     def test_reject_excessive_cost(self):
         """Test that excessively large cost values are rejected."""
         from pydantic import ValidationError
+
         from src.mcp.autopilot_api import CostEntryCreate
 
         with pytest.raises(ValidationError, match="cost_usd exceeds maximum"):
@@ -694,6 +696,7 @@ class TestSecurityValidation:
     def test_reject_invalid_source(self):
         """Test that invalid source values are rejected."""
         from pydantic import ValidationError
+
         from src.mcp.autopilot_api import CostEntryCreate
 
         with pytest.raises(ValidationError, match="source must be one of"):
@@ -713,6 +716,7 @@ class TestSecurityValidation:
     def test_reject_negative_token_counts(self):
         """Test that negative token counts are rejected."""
         from pydantic import ValidationError
+
         from src.mcp.autopilot_api import CostEntryCreate
 
         with pytest.raises(ValidationError, match="token counts must be non-negative"):
@@ -725,6 +729,7 @@ class TestSecurityValidation:
     def test_reject_excessive_token_counts(self):
         """Test that excessively large token counts are rejected."""
         from pydantic import ValidationError
+
         from src.mcp.autopilot_api import CostEntryCreate
 
         with pytest.raises(ValidationError, match="token count exceeds maximum"):
