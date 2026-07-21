@@ -11,6 +11,7 @@ import {
   Loader2,
   DollarSign,
   AlertTriangle,
+  Edit3,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { apiService } from '@/services/api';
@@ -26,12 +27,50 @@ const ProjectSettingsModal: React.FC<ProjectSettingsModalProps> = ({ isOpen, onC
   const [newProjectPath, setNewProjectPath] = useState('');
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
+  const [editingBudget, setEditingBudget] = useState<string | null>(null);
+  const [budgetValue, setBudgetValue] = useState('');
 
   const { data: projects, isLoading } = useQuery({
     queryKey: ['projects'],
     queryFn: () => apiService.getProjects(),
     enabled: isOpen,
   });
+
+  const updateBudgetMutation = useMutation({
+    mutationFn: async ({ projectId, costLimit, clearLimit }: { projectId: string; costLimit?: number; clearLimit?: boolean }) => {
+      const response = await apiService.updateProject(projectId, {
+        cost_limit_usd: costLimit,
+        clear_cost_limit: clearLimit || false,
+      });
+      return response;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['projects'] });
+      toast.success('Budget updated');
+      setEditingBudget(null);
+      setBudgetValue('');
+    },
+    onError: (error: any) => {
+      toast.error(error?.response?.data?.detail || 'Failed to update budget');
+    },
+  });
+
+  const handleSaveBudget = (projectId: string) => {
+    const value = parseFloat(budgetValue);
+    if (isNaN(value) || value < 0) {
+      toast.error('Please enter a valid budget amount');
+      return;
+    }
+    if (value > 100000) {
+      toast.error('Budget cannot exceed $100,000');
+      return;
+    }
+    updateBudgetMutation.mutate({ projectId, costLimit: value });
+  };
+
+  const handleClearBudget = (projectId: string) => {
+    updateBudgetMutation.mutate({ projectId, clearLimit: true });
+  };
 
   const createMutation = useMutation({
     mutationFn: async ({ name, path }: { name: string; path: string }) => {
@@ -218,24 +257,85 @@ const ProjectSettingsModal: React.FC<ProjectSettingsModalProps> = ({ isOpen, onC
                       </div>
 
                       <div className="flex items-center gap-2 flex-shrink-0">
-                        {/* Budget display */}
-                        {project.cost_total_usd > 0 && (
-                          <div className="text-right mr-2">
-                            <div className="flex items-center gap-1">
-                              <DollarSign className="w-3 h-3 text-gray-500" />
-                              <span className="text-sm font-mono">
-                                {project.cost_total_usd >= 1000
-                                  ? `$${(project.cost_total_usd / 1000).toFixed(1)}k`
-                                  : `$${project.cost_total_usd.toFixed(2)}`}
-                              </span>
-                            </div>
-                            {project.cost_limit_usd != null && project.cost_total_usd >= project.cost_limit_usd && (
-                              <div className="flex items-center gap-1 mt-0.5">
-                                <AlertTriangle className="w-3 h-3 text-red-500" />
-                                <span className="text-xs text-red-600">Over budget</span>
-                              </div>
+                        {/* Budget display and edit */}
+                        {editingBudget === project.id ? (
+                          <div className="flex items-center gap-1 mr-2">
+                            <span className="text-xs text-gray-500">$</span>
+                            <input
+                              type="number"
+                              value={budgetValue}
+                              onChange={(e) => setBudgetValue(e.target.value)}
+                              placeholder="100.00"
+                              min="0"
+                              max="100000"
+                              step="0.01"
+                              className="w-20 px-2 py-1 text-sm border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-violet-500"
+                              autoFocus
+                            />
+                            <button
+                              onClick={() => handleSaveBudget(project.id)}
+                              disabled={updateBudgetMutation.isPending}
+                              className="p-1 text-green-600 hover:bg-green-50 rounded"
+                              title="Save budget"
+                            >
+                              <CheckCircle2 className="w-4 h-4" />
+                            </button>
+                            <button
+                              onClick={() => {
+                                setEditingBudget(null);
+                                setBudgetValue('');
+                              }}
+                              className="p-1 text-gray-400 hover:bg-gray-100 rounded"
+                              title="Cancel"
+                            >
+                              <X className="w-4 h-4" />
+                            </button>
+                            {project.cost_limit_usd != null && (
+                              <button
+                                onClick={() => handleClearBudget(project.id)}
+                                className="p-1 text-red-400 hover:bg-red-50 rounded text-xs"
+                                title="Remove budget limit"
+                              >
+                                Clear
+                              </button>
                             )}
                           </div>
+                        ) : (
+                          <>
+                            {project.cost_total_usd > 0 && (
+                              <div className="text-right mr-2">
+                                <div className="flex items-center gap-1">
+                                  <DollarSign className="w-3 h-3 text-gray-500" />
+                                  <span className="text-sm font-mono">
+                                    {project.cost_total_usd >= 1000
+                                      ? `$${(project.cost_total_usd / 1000).toFixed(1)}k`
+                                      : `$${project.cost_total_usd.toFixed(2)}`}
+                                  </span>
+                                  {project.cost_limit_usd != null && (
+                                    <span className="text-xs text-gray-400">
+                                      / ${project.cost_limit_usd.toFixed(0)}
+                                    </span>
+                                  )}
+                                </div>
+                                {project.cost_limit_usd != null && project.cost_total_usd >= project.cost_limit_usd && (
+                                  <div className="flex items-center gap-1 mt-0.5">
+                                    <AlertTriangle className="w-3 h-3 text-red-500" />
+                                    <span className="text-xs text-red-600">Over budget</span>
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                            <button
+                              onClick={() => {
+                                setEditingBudget(project.id);
+                                setBudgetValue(project.cost_limit_usd?.toString() || '');
+                              }}
+                              className="p-1 text-gray-400 hover:text-violet-600 hover:bg-violet-50 rounded-lg transition-colors"
+                              title={project.cost_limit_usd ? 'Edit budget' : 'Set budget'}
+                            >
+                              <Edit3 className="w-4 h-4" />
+                            </button>
+                          </>
                         )}
                         {deleteConfirm === project.id ? (
                           <div className="flex items-center gap-2">
