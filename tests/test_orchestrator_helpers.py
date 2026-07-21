@@ -4397,6 +4397,76 @@ class TestCreatePhaseTaskReviewCap:
         assert result_json.exists()
         assert json.loads(result_json.read_text())["blocker_count"] == 0
 
+    def test_cap_out_review_phase_returns_none_without_working_directory(
+        self, orch_db_env, tmp_path
+    ):
+        """Regression: silently returning False here (instead of None) let
+        a capped-out phase with no working_directory get zero forward
+        progress -- no task, no synthetic completion, nothing -- forever,
+        with only a debug-level log to explain why. None signals the
+        caller to fall through to a normal task instead."""
+        from src.autopilot.orchestrator import OrchestratorLogger, _cap_out_review_phase
+        from src.core.database import Phase, Workflow
+
+        with orch_db_env.session_scope() as session:
+            session.add(
+                Workflow(
+                    id="wf-no-dir",
+                    name="t",
+                    phases_folder_path="/tmp",
+                    status="active",
+                    working_directory=None,
+                )
+            )
+            session.add(
+                Phase(
+                    id="phase-no-dir",
+                    workflow_id="wf-no-dir",
+                    name="architectural_review",
+                    order=5,
+                    description="d",
+                    done_definitions=["x"],
+                )
+            )
+
+        with orch_db_env.session_scope() as session:
+            phase = session.query(Phase).filter_by(id="phase-no-dir").first()
+            result = _cap_out_review_phase(
+                session, "wf-no-dir", phase, run_count=3, max_runs=3,
+                logger=OrchestratorLogger(tmp_path),
+            )
+
+        assert result is None
+
+    @patch("src.autopilot.orchestrator.create_agent_for_task_direct")
+    def test_falls_through_to_normal_task_when_cap_out_cannot_write(
+        self, mock_create_agent, orch_db_env, tmp_path
+    ):
+        """Integration-level version of the above: _create_phase_task must
+        still dispatch a real task when the cap is hit but capping out
+        isn't possible, instead of returning early with nothing done."""
+        from src.autopilot.orchestrator import OrchestratorLogger, _create_phase_task
+        from src.core.database import Task, Workflow
+
+        self._seed(orch_db_env, existing_task_count=3)  # at cap of 3
+        with orch_db_env.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-cap").first()
+            wf.working_directory = None  # cap-out can't write anywhere
+        mock_create_agent.return_value = {"agent_id": "agent-x"}
+
+        with patch("src.autopilot.spec.get_max_review_runs", return_value=3):
+            result = _create_phase_task(
+                "wf-cap", "phase-cap", "architectural_review", "continue",
+                OrchestratorLogger(tmp_path),
+            )
+
+        assert result is True
+        mock_create_agent.assert_called_once()
+        with orch_db_env.session_scope() as session:
+            # A real 4th task was created -- not stranded at 3 with nothing.
+            count = session.query(Task).filter(Task.phase_id == "phase-cap").count()
+            assert count == 4
+
     def test_cap_out_review_phase_writes_caveats_from_history(self, orch_db_env, tmp_path):
         from src.autopilot.orchestrator import OrchestratorLogger, _cap_out_review_phase
         from src.core.database import Phase, Workflow

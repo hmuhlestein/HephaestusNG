@@ -5432,9 +5432,14 @@ def _create_phase_task(
             if max_review_runs is not None:
                 run_count = db.query(Task).filter(Task.phase_id == phase_id).count()
                 if run_count >= max_review_runs:
-                    return _cap_out_review_phase(
+                    capped = _cap_out_review_phase(
                         db, workflow_id, phase, run_count, max_review_runs, logger
                     )
+                    if capped is not None:
+                        return capped
+                    # None: couldn't safely cap out (see its own docstring)
+                    # -- fall through to a normal task rather than
+                    # stranding the phase with no forward progress.
                 if run_count > 0:
                     history = get_review_findings_history(workflow_id, phase.name)
                     if history:
