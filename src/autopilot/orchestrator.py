@@ -1394,9 +1394,12 @@ def _retry_failed_tasks(workflow_id: str, logger: OrchestratorLogger) -> List[st
         if task.get("created_by_agent_id") == ARBITRATION_CREATED_BY:
             continue
 
-        # Only retry if not retried too many times
+        # Only retry if not retried too many times.
+        # Orphaned tasks (never dispatched to an agent) are scheduling
+        # issues, not agent failures -- they should retry indefinitely.
         retry_count = task.get("retry_count", 0)
-        if retry_count >= 2:
+        is_orphan = "Orphaned" in (task.get("failure_reason") or "")
+        if retry_count >= 2 and not is_orphan:
             logger.info(
                 f"  Task {task_id[:8]} failed {retry_count} times - skipping retry"
             )
@@ -1406,8 +1409,10 @@ def _retry_failed_tasks(workflow_id: str, logger: OrchestratorLogger) -> List[st
         # Persist the increment before attempting — counting only successful
         # attempts would let a task that fails every single retry (e.g. a
         # deleted worktree) loop forever, since retry_count would never
-        # reach the >= 2 cutoff above.
-        increment_task_retry_count(task_id)
+        # reach the >= 2 cutoff above.  Orphans don't increment since they
+        # aren't real agent failures.
+        if not is_orphan:
+            increment_task_retry_count(task_id)
         try:
             # Reset task status to pending
             update_task_status(task_id, "pending")
@@ -4484,7 +4489,13 @@ def _maybe_retry_failed_tasks(
             .filter(Task.phase_id == phase.id, Task.status == "failed", *cycle_filter)
             .all()
         )
-        retryable_tasks = [t for t in failed_tasks if (t.retry_count or 0) < max_retry_count]
+        # Orphaned tasks (never dispatched) are scheduling issues, not agent
+        # failures -- they should always be retryable.
+        retryable_tasks = [
+            t for t in failed_tasks
+            if (t.retry_count or 0) < max_retry_count
+            or "Orphaned" in (t.failure_reason or "")
+        ]
         if not retryable_tasks:
             reasons = sorted(
                 {t.failure_reason for t in failed_tasks if t.failure_reason}
