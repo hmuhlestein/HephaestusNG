@@ -161,6 +161,7 @@ def get_phase_required_files(phase: Any, workflow_id: Optional[str] = None) -> l
 # required_output would silently clobber each other, last-loaded-wins).
 _PHASE_OUTPUT_ARTIFACTS_CACHE: Dict[str, dict] = {}
 _OPTIONAL_PHASES_CACHE: Dict[str, set] = {}
+_MAX_REVIEW_RUNS_CACHE: Dict[tuple, Optional[int]] = {}
 
 
 def load_phase_output_artifacts(workflow_id: Optional[str] = None) -> dict:
@@ -258,6 +259,123 @@ def load_optional_phases(workflow_id: Optional[str] = None) -> set:
         logger.debug(f"Could not load optional_phases from workflow.yaml: {e}")
 
     return OPTIONAL_PHASES
+
+
+def get_max_review_runs(workflow_id: Optional[str], phase_name: str) -> Optional[int]:
+    """Opt-in cap on how many times `phase_name` may itself re-run
+    (workflow.yaml's eval_point `max_review_runs`) before
+    _create_phase_task force-completes it "with caveats" instead of
+    spawning yet another review agent.
+
+    Distinct from max_retries, which bounds the GOTO TARGET's retries
+    (e.g. development) -- this bounds the REVIEW phase's own re-entry
+    count. None (the default for every phase that doesn't set this in
+    workflow.yaml) means uncapped, same as today.
+    """
+    if not workflow_id:
+        return None
+
+    try:
+        from src.core.database import DatabaseManager, Workflow
+
+        db = DatabaseManager()
+        session = db.get_session()
+        try:
+            wf = session.query(Workflow).filter_by(id=workflow_id).first()
+            if not wf or not wf.definition_id:
+                return None
+
+            cache_key = (wf.definition_id, phase_name)
+            if cache_key in _MAX_REVIEW_RUNS_CACHE:
+                return _MAX_REVIEW_RUNS_CACHE[cache_key]
+
+            from src.workflow_registry import _WORKFLOWS_DIR
+
+            wf_dir = _WORKFLOWS_DIR / wf.definition_id
+            workflow_yaml = wf_dir / "workflow.yaml"
+            value = None
+            if workflow_yaml.exists():
+                import yaml
+
+                with open(workflow_yaml) as f:
+                    wf_config = yaml.safe_load(f)
+                eval_points = (wf_config or {}).get("orchestrator", {}).get(
+                    "evaluation_points", []
+                )
+                for ep in eval_points:
+                    if ep.get("after_phase") == phase_name:
+                        value = ep.get("max_review_runs")
+                        break
+            _MAX_REVIEW_RUNS_CACHE[cache_key] = value
+            return value
+        finally:
+            session.close()
+    except Exception as e:
+        logger.debug(f"Could not load max_review_runs for {phase_name}: {e}")
+        return None
+
+
+def get_review_findings_history(workflow_id: str, phase_name: str) -> list:
+    """Findings recorded from prior runs of `phase_name` within this
+    workflow (see record_review_finding), oldest first. Empty list if none
+    recorded yet -- the first run, or a phase that doesn't opt into
+    max_review_runs.
+    """
+    from src.core.database import DatabaseManager, ProjectContext
+
+    db = DatabaseManager()
+    session = db.get_session()
+    try:
+        row = (
+            session.query(ProjectContext)
+            .filter_by(key=f"review_findings:{workflow_id}:{phase_name}")
+            .first()
+        )
+        return list(row.value) if row and row.value else []
+    finally:
+        session.close()
+
+
+def record_review_finding(
+    workflow_id: str, phase_name: str, blocker_count: int, summary: str
+) -> None:
+    """Append one run's findings to this phase's persistent history.
+
+    Called right before consume_gate_artifacts deletes the result files
+    those findings were read from -- the NEXT run of this phase is a fresh
+    agent session with zero memory of its own (see _create_phase_task),
+    so without this every re-run re-reviews from scratch instead of just
+    verifying what was already found. Only meaningful for phases that opt
+    into max_review_runs; callers should check get_max_review_runs first
+    to avoid writing history nothing ever reads.
+    """
+    from datetime import datetime
+
+    from src.core.database import DatabaseManager, ProjectContext
+
+    db = DatabaseManager()
+    session = db.get_session()
+    try:
+        key = f"review_findings:{workflow_id}:{phase_name}"
+        row = session.query(ProjectContext).filter_by(key=key).first()
+        history = list(row.value) if row and row.value else []
+        history.append(
+            {
+                "run_number": len(history) + 1,
+                "blocker_count": blocker_count,
+                # Bounded -- this gets echoed into a task description, not
+                # stored for its own sake.
+                "summary": (summary or "")[:500],
+                "timestamp": datetime.utcnow().isoformat(),
+            }
+        )
+        if row:
+            row.value = history
+        else:
+            session.add(ProjectContext(key=key, value=history))
+        session.commit()
+    finally:
+        session.close()
 
 
 # Score anchors for the three bands.
