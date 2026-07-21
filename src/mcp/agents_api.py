@@ -171,9 +171,9 @@ def _require_localhost(request: Request):
     """Guard that only localhost can access the endpoint."""
     client_host = request.client.host if request.client else None
     if client_host not in ("127.0.0.1", "::1", "localhost"):
-        from fastapi import HTTPException as HE
+        from fastapi import HTTPException
 
-        raise HE(status_code=403, detail="Localhost only")
+        raise HTTPException(status_code=403, detail="Localhost only")
 
 
 @router.get("/api/agents")
@@ -279,13 +279,13 @@ async def get_agent_logs(agent_id: str, limit: int = 50, request: Request = None
         )
         return [
             {
-                "id": l.id,
-                "log_type": l.log_type,
-                "message": l.message,
-                "details": l.details,
-                "created_at": l.created_at.isoformat() if l.created_at else None,
+                "id": log.id,
+                "log_type": log.log_type,
+                "message": log.message,
+                "details": log.details,
+                "created_at": log.created_at.isoformat() if log.created_at else None,
             }
-            for l in logs
+            for log in logs
         ]
     finally:
         session.close()

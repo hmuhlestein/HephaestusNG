@@ -369,16 +369,16 @@ class CDPBrowser:
     ) -> List[Dict[str, Any]]:
         logs = list(self.console_logs)
         if level:
-            logs = [l for l in logs if l.level == level]
+            logs = [entry for entry in logs if entry.level == level]
         return [
             {
-                "level": l.level,
-                "text": l.text,
-                "timestamp": l.timestamp,
-                "url": l.url,
-                "line": l.line_number,
+                "level": entry.level,
+                "text": entry.text,
+                "timestamp": entry.timestamp,
+                "url": entry.url,
+                "line": entry.line_number,
             }
-            for l in logs
+            for entry in logs
         ]
 
     async def get_network_logs(
@@ -389,21 +389,21 @@ class CDPBrowser:
     ) -> List[Dict[str, Any]]:
         logs = list(self.network_logs)
         if method:
-            logs = [l for l in logs if l.method.upper() == method.upper()]
+            logs = [entry for entry in logs if entry.method.upper() == method.upper()]
         if status is not None:
-            logs = [l for l in logs if l.status == status]
+            logs = [entry for entry in logs if entry.status == status]
         if failed_only:
-            logs = [l for l in logs if l.status >= 400 or l.status == 0]
+            logs = [entry for entry in logs if entry.status >= 400 or entry.status == 0]
         return [
             {
-                "url": l.url,
-                "method": l.method,
-                "status": l.status,
-                "resource_type": l.resource_type,
-                "duration_ms": round(l.duration_ms, 2),
-                "request_id": l.request_id,
+                "url": entry.url,
+                "method": entry.method,
+                "status": entry.status,
+                "resource_type": entry.resource_type,
+                "duration_ms": round(entry.duration_ms, 2),
+                "request_id": entry.request_id,
             }
-            for l in logs
+            for entry in logs
         ]
 
     async def check_console_errors(self) -> List[Dict[str, Any]]:

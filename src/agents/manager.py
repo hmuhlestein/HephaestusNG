@@ -11,7 +11,11 @@ from typing import Any, Dict, List, Optional
 
 import libtmux
 
-from src.core.constants import AUTOPILOT_STATE_DIR, CONTEXT_DIR_NAME, DESIGN_CONTEXT_SUBDIR, DESIGN_SUBDIR
+from src.core.constants import (
+    AUTOPILOT_STATE_DIR,
+    CONTEXT_DIR_NAME,
+    DESIGN_CONTEXT_SUBDIR,
+)
 from src.core.database import (
     Agent,
     AgentLog,
@@ -427,10 +431,8 @@ class AgentManager:
                         # the task text only if none are present.
                         design_text = ""
                         try:
-                            from pathlib import Path as _P
-
                             if working_directory:
-                                wd = _P(working_directory)
+                                wd = Path(working_directory)
                                 cands = []
                                 dq = wd / DESIGN_CONTEXT_SUBDIR
                                 if dq.is_dir():
@@ -1222,13 +1224,11 @@ class AgentManager:
                                 )
                                 if _task and _task.phase_id and _task.workflow_id:
                                     try:
-                                        from pathlib import Path as _P
-
                                         from src.core.database import (
                                             Phase as _Phase,
                                         )
                                         from src.core.database import (
-                                            Workflow as _WF,
+                                            Workflow as _Workflow,
                                         )
 
                                         _phase = (
@@ -1237,13 +1237,13 @@ class AgentManager:
                                             .first()
                                         )
                                         _wf = (
-                                            session.query(_WF)
+                                            session.query(_Workflow)
                                             .filter_by(id=_task.workflow_id)
                                             .first()
                                         )
                                         if _phase and _wf and _wf.working_directory:
                                             tmux_dir = (
-                                                _P(_wf.working_directory)
+                                                Path(_wf.working_directory)
                                                 / CONTEXT_DIR_NAME
                                                 / "tmux"
                                             )
@@ -2078,7 +2078,7 @@ class AgentManager:
                     if prev_kind or next_kind:
                         drop.add(k)
 
-            deduped = [l for k, l in enumerate(filtered_lines) if k not in drop]
+            deduped = [ln for k, ln in enumerate(filtered_lines) if k not in drop]
             deduped_clean = [c for k, c in enumerate(clean_lines) if k not in drop]
 
             # Deduplicate whole-block redraws: pi re-emits an entire past
@@ -2150,15 +2150,11 @@ class AgentManager:
 
     def _get_orchestrator_output(self, agent, lines: int) -> str:
         """Return the orchestrator's run log as human-readable text."""
-        from pathlib import Path as _P
-
-        # Log dir is stored as "LOG_DIR:<path>" in system_prompt.
-        log_dir: _P | None = None
         if agent.system_prompt and agent.system_prompt.startswith("LOG_DIR:"):
-            log_dir = _P(agent.system_prompt[len("LOG_DIR:") :].strip())
+            log_dir = Path(agent.system_prompt[len("LOG_DIR:") :].strip())
         if log_dir is None or not log_dir.exists():
             # Fall back: latest run-* directory under ~/.hephaestus/autopilot/
-            base = _P(AUTOPILOT_STATE_DIR)
+            base = Path(AUTOPILOT_STATE_DIR)
             candidates = sorted(base.glob("run-*"), reverse=True)
             log_dir = candidates[0] if candidates else None
         if log_dir is None:

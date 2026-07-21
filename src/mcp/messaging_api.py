@@ -4,9 +4,9 @@ Extracted from server.py for better modularity.
 """
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import List
 
-from fastapi import APIRouter, Header, HTTPException, Request
+from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel, Field
 
 from src.core.app_context import get_app_state

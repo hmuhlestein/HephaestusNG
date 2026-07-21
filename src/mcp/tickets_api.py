@@ -5,6 +5,7 @@ Extracted from server.py for better modularity (M-1 fix).
 
 import logging
 import time
+from datetime import datetime
 from typing import Any, Dict, List, Optional, Union
 
 from fastapi import APIRouter, Header, HTTPException, Request

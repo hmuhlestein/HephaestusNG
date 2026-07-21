@@ -166,7 +166,7 @@ class Guardian:
             # Hard timeout so a slow/over-streaming model (mimo can stream a reasoning
             # trace for minutes and still fail to parse) can NEVER freeze the monitor
             # loop. On timeout we fall back to the benign default analysis.
-            GUARDIAN_LLM_TIMEOUT = 90
+            guardian_llm_timeout = 90
             try:
                 analysis = await asyncio.wait_for(
                     self.llm_provider.analyze_agent_trajectory(
@@ -183,14 +183,14 @@ class Guardian:
                         },
                         last_message_marker=last_message_marker,
                     ),
-                    timeout=GUARDIAN_LLM_TIMEOUT,
+                    timeout=guardian_llm_timeout,
                 )
                 self._consecutive_timeouts[agent.id] = 0
             except asyncio.TimeoutError:
                 timeouts = self._consecutive_timeouts.get(agent.id, 0) + 1
                 self._consecutive_timeouts[agent.id] = timeouts
                 logger.warning(
-                    f"Guardian analysis timed out (>{GUARDIAN_LLM_TIMEOUT}s) for agent {agent.id} "
+                    f"Guardian analysis timed out (>{guardian_llm_timeout}s) for agent {agent.id} "
                     f"— using default analysis (model over-streamed the structured call) "
                     f"[{timeouts} consecutive]"
                 )
@@ -452,7 +452,7 @@ class Guardian:
             Tuple of (eligible: bool, reason: str)
         """
         # Types that need 2 consecutive flags before acting
-        NEEDS_CONFIRMATION = {
+        needs_confirmation = {
             SteeringType.DRIFTING.value,
             SteeringType.OFF_TRACK.value,
             SteeringType.OVER_ENGINEERING.value,
@@ -461,7 +461,7 @@ class Guardian:
         }
         
         # Check consecutive-flag confirmation gate
-        if steering_type in NEEDS_CONFIRMATION:
+        if steering_type in needs_confirmation:
             flag_state = self._consecutive_flags.get(agent_id)
             now = datetime.utcnow()
             stale = (

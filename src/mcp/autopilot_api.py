@@ -22,7 +22,6 @@ from src.core.constants import (
     AUTOPILOT_STATE_DIR,
     CONTEXT_DIR_NAME,
     DESIGN_CONTEXT_SUBDIR,
-    DESIGN_SUBDIR,
     GOTO_REASON_PREFIX,
 )
 
@@ -3722,12 +3721,12 @@ async def _start_pipeline_reserved(
     # Observed live: zombie-detected and stopped 8s after auto-resume,
     # trapping a genuinely in-progress workflow in a stop/restart loop that
     # could never escalate past its own recovery counter.
-    ZOMBIE_CHECK_GRACE_SECONDS = 45
+    zombie_check_grace_seconds = 45
     time_since_start = (
         time.time() - service._start_time if service._start_time else None
     )
     if service.running and (
-        time_since_start is None or time_since_start >= ZOMBIE_CHECK_GRACE_SECONDS
+        time_since_start is None or time_since_start >= zombie_check_grace_seconds
     ):
         # Check for zombie state: service says running but no active agents/workflows.
         # This happens when the pipeline task gets stuck. Auto-stop and restart.
@@ -3775,8 +3774,8 @@ async def _start_pipeline_reserved(
                 await service.stop()
             elif active_agents == 0 and active_wfs == 0 and pending_designs == 0:
                 logger.info(
-                    f"[START] Pipeline is running but all designs are done — "
-                    f"stopping cleanly and restarting"
+                    "[START] Pipeline is running but all designs are done — "
+                    "stopping cleanly and restarting"
                 )
                 await service.stop()
             else:

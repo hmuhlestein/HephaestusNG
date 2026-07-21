@@ -455,7 +455,7 @@ class OpenCodeAgent(CLIAgentInterface):
     def get_launch_command(self, system_prompt: str, **kwargs) -> str:
         from src.core.simple_config import get_config
 
-        config = get_config()
+        get_config()
 
         task_id = kwargs.get("task_id", "default")
         prompt_file = self._save_prompt_to_file(

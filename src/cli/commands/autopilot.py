@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 
 from src.cli.utils import output
-from src.core.constants import DESIGN_CONTEXT_SUBDIR, DESIGN_SUBDIR
+from src.core.constants import DESIGN_CONTEXT_SUBDIR
 
 
 def register(subparsers):
