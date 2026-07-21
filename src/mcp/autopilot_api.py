@@ -17,6 +17,7 @@ from typing import Any, Dict, List, Optional, Tuple, TypeVar
 from fastapi import APIRouter, Header, HTTPException, Query
 from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel, validator
+from sqlalchemy import func as sqlfunc
 
 from src.core.constants import (
     AUTOPILOT_STATE_DIR,
@@ -1966,6 +1967,261 @@ async def create_cost_entry(
         )
 
         return {"id": entry.id, "cost_usd": entry.cost_usd}
+
+
+# ── Cost Query Endpoints ──────────────────────────────────────
+
+
+class CostEntrySummary(BaseModel):
+    """Summary of a single cost entry."""
+    id: str
+    task_id: Optional[str] = None
+    agent_id: Optional[str] = None
+    workflow_id: Optional[str] = None
+    source: str
+    model: Optional[str] = None
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cost_usd: float
+    recorded_at: Optional[str] = None
+
+
+class TaskCostSummary(BaseModel):
+    """Cost summary for a task."""
+    task_id: str
+    task_description: str
+    cost_total_usd: float
+    entries: List[CostEntrySummary]
+
+
+class WorkflowCostSummary(BaseModel):
+    """Cost summary for a workflow."""
+    workflow_id: str
+    workflow_name: str
+    cost_total_usd: float
+    tasks: List[TaskCostSummary]
+
+
+class FeatureCostSummary(BaseModel):
+    """Cost summary for a feature."""
+    feature_id: str
+    feature_name: str
+    cost_total_usd: float
+    workflows: List[WorkflowCostSummary]
+
+
+class DesignCostSummary(BaseModel):
+    """Cost summary for a design."""
+    design_id: str
+    design_name: str
+    cost_total_usd: float
+    features: List[FeatureCostSummary]
+
+
+class ProjectCostSummary(BaseModel):
+    """Cost summary for a project."""
+    project_id: str
+    project_name: str
+    cost_total_usd: float
+    cost_limit_usd: Optional[float] = None
+    remaining_usd: Optional[float] = None
+    is_over_budget: bool = False
+    designs: List[DesignCostSummary]
+
+
+@router.get("/tasks/{task_id}/costs", response_model=TaskCostSummary)
+async def get_task_costs(task_id: str):
+    """Get cost breakdown for a single task."""
+    from src.core.cost_derivation import derive_task_cost
+    from src.core.database import CostEntry, Task, get_db
+
+    with get_db() as db:
+        task = db.query(Task).filter_by(id=task_id).first()
+        if not task:
+            raise HTTPException(404, "Task not found")
+
+        cost = derive_task_cost(db, task_id, write_back=False)
+        entries = (
+            db.query(CostEntry)
+            .filter(CostEntry.task_id == task_id)
+            .order_by(CostEntry.recorded_at.desc())
+            .limit(100)
+            .all()
+        )
+
+        return TaskCostSummary(
+            task_id=task.id,
+            task_description=(task.raw_description or "")[:200],
+            cost_total_usd=cost,
+            entries=[
+                CostEntrySummary(
+                    id=e.id,
+                    task_id=e.task_id,
+                    agent_id=e.agent_id,
+                    workflow_id=e.workflow_id,
+                    source=e.source,
+                    model=e.model,
+                    input_tokens=e.input_tokens or 0,
+                    output_tokens=e.output_tokens or 0,
+                    cost_usd=e.cost_usd,
+                    recorded_at=e.recorded_at.isoformat() if e.recorded_at else None,
+                )
+                for e in entries
+            ],
+        )
+
+
+@router.get("/workflows/{workflow_id}/costs", response_model=WorkflowCostSummary)
+async def get_workflow_costs(workflow_id: str):
+    """Get cost breakdown for a workflow."""
+    from src.core.cost_derivation import derive_workflow_cost
+    from src.core.database import CostEntry, Task, Workflow, get_db
+
+    with get_db() as db:
+        workflow = db.query(Workflow).filter_by(id=workflow_id).first()
+        if not workflow:
+            raise HTTPException(404, "Workflow not found")
+
+        cost = derive_workflow_cost(db, workflow_id, write_back=False)
+
+        # Get tasks with costs
+        tasks = db.query(Task).filter(Task.workflow_id == workflow_id).all()
+        task_summaries = []
+        for t in tasks:
+            task_cost = db.query(sqlfunc.sum(CostEntry.cost_usd)).filter(CostEntry.task_id == t.id).scalar() or 0.0
+            if task_cost > 0:
+                task_summaries.append(
+                    TaskCostSummary(
+                        task_id=t.id,
+                        task_description=(t.raw_description or "")[:200],
+                        cost_total_usd=task_cost,
+                        entries=[],
+                    )
+                )
+
+        return WorkflowCostSummary(
+            workflow_id=workflow.id,
+            workflow_name=workflow.name or workflow.id[:8],
+            cost_total_usd=cost,
+            tasks=task_summaries,
+        )
+
+
+@router.get("/features/{feature_id}/costs", response_model=FeatureCostSummary)
+async def get_feature_costs(feature_id: str):
+    """Get cost breakdown for a feature."""
+    from src.core.cost_derivation import derive_feature_cost, derive_workflow_cost
+    from src.core.database import Feature, Workflow, get_db
+
+    with get_db() as db:
+        feature = db.query(Feature).filter_by(id=feature_id).first()
+        if not feature:
+            raise HTTPException(404, "Feature not found")
+
+        cost = derive_feature_cost(db, feature_id, write_back=False)
+
+        # Get workflows for this feature
+        workflows = db.query(Workflow).filter(Workflow.feature_id == feature_id).all()
+        workflow_summaries = []
+        for w in workflows:
+            wf_cost = derive_workflow_cost(db, w.id, write_back=False)
+            if wf_cost > 0:
+                workflow_summaries.append(
+                    WorkflowCostSummary(
+                        workflow_id=w.id,
+                        workflow_name=w.name or w.id[:8],
+                        cost_total_usd=wf_cost,
+                        tasks=[],
+                    )
+                )
+
+        return FeatureCostSummary(
+            feature_id=feature.id,
+            feature_name=feature.name or feature.feature_key,
+            cost_total_usd=cost,
+            workflows=workflow_summaries,
+        )
+
+
+@router.get("/designs/{design_id}/costs", response_model=DesignCostSummary)
+async def get_design_costs(design_id: str):
+    """Get cost breakdown for a design."""
+    from src.core.cost_derivation import derive_design_cost, derive_feature_cost
+    from src.core.database import AutopilotDesign, Feature, get_db
+
+    with get_db() as db:
+        design = db.query(AutopilotDesign).filter_by(id=design_id).first()
+        if not design:
+            raise HTTPException(404, "Design not found")
+
+        cost = derive_design_cost(db, design_id, write_back=False)
+
+        # Get features for this design
+        features = db.query(Feature).filter(Feature.design_id == design_id).all()
+        feature_summaries = []
+        for feat in features:
+            feat_cost = derive_feature_cost(db, feat.id, write_back=False)
+            if feat_cost > 0:
+                feature_summaries.append(
+                    FeatureCostSummary(
+                        feature_id=feat.id,
+                        feature_name=feat.name or feat.feature_key,
+                        cost_total_usd=feat_cost,
+                        workflows=[],
+                    )
+                )
+
+        return DesignCostSummary(
+            design_id=design.id,
+            design_name=design.name or design.filename,
+            cost_total_usd=cost,
+            features=feature_summaries,
+        )
+
+
+@router.get("/projects/{project_id}/costs", response_model=ProjectCostSummary)
+async def get_project_costs(project_id: str):
+    """Get cost breakdown for a project."""
+    from src.core.cost_derivation import derive_design_cost, derive_project_cost
+    from src.core.database import AutopilotDesign, AutopilotProject, get_db
+
+    with get_db() as db:
+        project = db.query(AutopilotProject).filter_by(id=project_id).first()
+        if not project:
+            raise HTTPException(404, "Project not found")
+
+        cost = derive_project_cost(db, project_id, write_back=False)
+
+        # Get designs for this project
+        designs = db.query(AutopilotDesign).filter(AutopilotDesign.project_id == project_id).all()
+        design_summaries = []
+        for d in designs:
+            d_cost = derive_design_cost(db, d.id, write_back=False)
+            if d_cost > 0:
+                design_summaries.append(
+                    DesignCostSummary(
+                        design_id=d.id,
+                        design_name=d.name or d.filename,
+                        cost_total_usd=d_cost,
+                        features=[],
+                    )
+                )
+
+        remaining = None
+        is_over = False
+        if project.cost_limit_usd is not None:
+            remaining = max(0.0, project.cost_limit_usd - cost)
+            is_over = cost >= project.cost_limit_usd
+
+        return ProjectCostSummary(
+            project_id=project.id,
+            project_name=project.name,
+            cost_total_usd=cost,
+            cost_limit_usd=project.cost_limit_usd,
+            remaining_usd=remaining,
+            is_over_budget=is_over,
+            designs=design_summaries,
+        )
 
 
 # ── Project Designs (sync + CRUD) ──────────────────────────────

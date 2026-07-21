@@ -9,6 +9,8 @@ import {
   CheckCircle2,
   Settings,
   Loader2,
+  DollarSign,
+  AlertTriangle,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { apiService } from '@/services/api';
@@ -216,6 +218,25 @@ const ProjectSettingsModal: React.FC<ProjectSettingsModalProps> = ({ isOpen, onC
                       </div>
 
                       <div className="flex items-center gap-2 flex-shrink-0">
+                        {/* Budget display */}
+                        {project.cost_total_usd > 0 && (
+                          <div className="text-right mr-2">
+                            <div className="flex items-center gap-1">
+                              <DollarSign className="w-3 h-3 text-gray-500" />
+                              <span className="text-sm font-mono">
+                                {project.cost_total_usd >= 1000
+                                  ? `$${(project.cost_total_usd / 1000).toFixed(1)}k`
+                                  : `$${project.cost_total_usd.toFixed(2)}`}
+                              </span>
+                            </div>
+                            {project.cost_limit_usd != null && project.cost_total_usd >= project.cost_limit_usd && (
+                              <div className="flex items-center gap-1 mt-0.5">
+                                <AlertTriangle className="w-3 h-3 text-red-500" />
+                                <span className="text-xs text-red-600">Over budget</span>
+                              </div>
+                            )}
+                          </div>
+                        )}
                         {deleteConfirm === project.id ? (
                           <div className="flex items-center gap-2">
                             <span className="text-xs text-red-600">Delete?</span>
