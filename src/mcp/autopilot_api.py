@@ -49,52 +49,6 @@ PHASE0_DEFINITION_IDS = ("autopilot-phase0", "feature_architect")
 DESIGN_WORKFLOW_DEFINITION_IDS = ("autopilot",) + PHASE0_DEFINITION_IDS
 
 
-def _completion_notes_for_ui(task, phase_map: dict, project_path: str) -> Optional[str]:
-    """Return completion_notes for the UI, falling back to tmux transcript.
-
-    When an agent completes but doesn't report a summary (completion_notes is
-    NULL), the UI would otherwise fall through to showing the prompt text.
-    This reads the agent's tmux transcript log and extracts the last few
-    meaningful lines as a preview.
-    """
-    if task.completion_notes:
-        return task.completion_notes
-    if task.status != "done" or not task.assigned_agent_id:
-        return task.completion_notes
-    try:
-        import re as _re
-        phase_name = phase_map.get(task.phase_id, "")
-        agent_short = task.assigned_agent_id[:8]
-        tmux_dir = Path(project_path) / ".hephaestus" / "tmux"
-        # Try the standard naming convention
-        for pattern in [
-            tmux_dir / f"{phase_name}_{agent_short}.log",
-            tmux_dir / f"{agent_short}_{phase_name}.log",
-        ]:
-            if pattern.exists():
-                content = pattern.read_text(errors="replace")
-                content = _re.sub(r"\x1b\[[0-9;]*[a-zA-Z]", "", content)
-                lines = [l.strip() for l in content.split("\n") if l.strip()]
-                # Filter for meaningful output: skip shell commands, short lines, file paths
-                meaningful = [
-                    l for l in lines
-                    if not l.startswith('$')
-                    and not l.startswith('#')
-                    and not l.startswith('src/')
-                    and not l.startswith('cd ')
-                    and len(l) > 25
-                    and not l.startswith('grep ')
-                    and not l.startswith('find ')
-                    and not l.startswith('cat ')
-                    and not l.startswith('sqlite3 ')
-                ]
-                if meaningful:
-                    return " | ".join(meaningful[-3:])
-    except Exception:
-        pass
-    return task.completion_notes
-
-
 def _get_active_project_id() -> Optional[str]:
     """Get the current active project ID from the database."""
     from src.core.database import AutopilotProject, get_db
@@ -2587,9 +2541,7 @@ async def get_project_design_status(project_id: str, filename: str):
                             # (both describe why the task was dispatched, not
                             # what it actually did) -- the frontend prefers
                             # these when status is done/failed.
-                            "completion_notes": _completion_notes_for_ui(
-                                t, phase_map, project_path
-                            ),
+                            "completion_notes": t.completion_notes,
                             "failure_reason": t.failure_reason,
                             "status": t.status,
                             "action": t.action or "",
