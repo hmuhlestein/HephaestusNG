@@ -1507,6 +1507,7 @@ def _run_phase_advancement_sweep_once(sweep_logger) -> None:
         _advance_phases,
         _clean_stale_assigned_tasks,
         _maybe_resolve_arbitration,
+        _recover_abandoned_workflows_missing_worktree,
         _retry_failed_tasks,
         _sync_stale_feature_statuses,
     )
@@ -1518,6 +1519,14 @@ def _run_phase_advancement_sweep_once(sweep_logger) -> None:
         _sync_stale_feature_statuses(sweep_logger)
     except Exception as e:
         logger.error(f"[PHASE-SWEEP] Feature-status sync error: {e}")
+
+    # Runs before the active/paused workflow snapshot below, so a workflow
+    # this just resumed is included in this same tick's per-workflow loop
+    # (_retry_failed_tasks etc.) instead of waiting a full tick.
+    try:
+        _recover_abandoned_workflows_missing_worktree(sweep_logger)
+    except Exception as e:
+        logger.error(f"[PHASE-SWEEP] Abandoned-workflow recovery error: {e}")
 
     session = server_state.db_manager.get_session()
     try:

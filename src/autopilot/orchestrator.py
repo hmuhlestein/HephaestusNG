@@ -2658,6 +2658,107 @@ def _sync_stale_feature_statuses(logger: OrchestratorLogger) -> int:
     return repaired
 
 
+def _recover_abandoned_workflows_missing_worktree(logger: OrchestratorLogger) -> int:
+    """Self-heal for a workflow that _escalate_stale_active_workflows marked
+    "failed" as a false positive (its own message already hedges: "likely
+    lost mid-flight across a backend restart") AND whose shared worktree is
+    now gone (Workflow.working_directory is None -- e.g. from the exact
+    worktree-deletion incident _remove_worktree's require_clean guard now
+    prevents going forward, but which can still be true for a workflow
+    already damaged before that fix landed).
+
+    A workflow in this state has no automated path back to progress:
+    _advance_phases's every case requires status in ("active", "paused"),
+    so a "failed" workflow is invisible to all of them, forever, until a
+    human clicks Resume in the UI. And simply flipping status back to
+    "active" without also fixing working_directory would silently make
+    things worse, not better: create_agent_for_task's shared-worktree
+    resolution only hard-fails when working_directory is a *present-but-
+    missing* path (by design, per its own comment -- no safe fallback for
+    that case, since a disconnected fork would be unmergeable); when
+    working_directory is None outright, that check is skipped entirely and
+    agent creation silently falls through to forking a brand-new, isolated
+    worktree with none of the prior phases' real commits -- the next agent
+    would review/build against the wrong code entirely.
+
+    Recovers correctly instead: rebuild the shared worktree from the
+    feature's own branch (feature/<design_id[:8]>/<feature_key>, same name
+    _run_one_feature always uses) via _create_integration_worktree -- the
+    branch itself was never touched by any of this, so it still carries
+    every phase's real commits. Reconnecting Workflow.working_directory to
+    a fresh checkout of that branch, then resuming, lets the normal retry
+    machinery (_maybe_retry_failed_tasks) safely take it from there.
+
+    Capped via the stuck task's own retry_count (reusing the same
+    MAX_RETRY_COUNT convention _maybe_retry_failed_tasks already enforces)
+    so a workflow whose branch/worktree recreation keeps failing for a
+    real reason eventually stops retrying and stays failed for a human,
+    instead of looping forever.
+    """
+    from src.core.database import AutopilotDesign, AutopilotProject, Feature, Task
+
+    MAX_RECOVERY_ATTEMPTS = 2
+    recovered = 0
+    with get_db() as db:
+        candidates = (
+            db.query(Workflow)
+            .filter(
+                Workflow.status == "failed",
+                Workflow.working_directory.is_(None),
+                Workflow.status_reason.like("Abandoned: no agent/task activity%"),
+            )
+            .all()
+        )
+        for wf in candidates:
+            feature = db.query(Feature).filter_by(workflow_id=wf.id).first()
+            if not feature or not feature.design_id:
+                continue
+            design = db.query(AutopilotDesign).filter_by(id=feature.design_id).first()
+            if not design or not design.project_id:
+                continue
+            project = db.query(AutopilotProject).filter_by(id=design.project_id).first()
+            if not project or not project.base_dir:
+                continue
+
+            stuck_tasks = (
+                db.query(Task)
+                .filter(Task.workflow_id == wf.id, Task.status == "failed")
+                .all()
+            )
+            if not stuck_tasks:
+                continue
+            if any((t.retry_count or 0) >= MAX_RECOVERY_ATTEMPTS for t in stuck_tasks):
+                continue
+
+            branch = f"feature/{feature.design_id[:8]}/{feature.feature_key}"
+            wt_path = _create_integration_worktree(
+                Path(project.base_dir), feature.design_id, branch, logger
+            )
+            if not wt_path:
+                logger.warning(
+                    f"[WORKFLOW-RECOVERY] Could not rebuild worktree for "
+                    f"workflow {wf.id[:8]} (branch {branch}) -- leaving failed"
+                )
+                continue
+
+            logger.warning(
+                f"[WORKFLOW-RECOVERY] Rebuilt worktree for workflow {wf.id[:8]} "
+                f"from branch {branch} at {wt_path} -- resuming; the stuck "
+                "task(s) are left exactly as they are (still \"failed\", own "
+                "retry_count untouched) so _maybe_retry_failed_tasks' own "
+                "already-tested retry-and-dispatch path picks them up on "
+                "the very next active-workflow sweep pass, instead of this "
+                "function reimplementing that dispatch itself."
+            )
+            wf.working_directory = str(wt_path)
+            wf.status = "active"
+            wf.status_reason = None
+            recovered += 1
+        if recovered:
+            db.commit()
+    return recovered
+
+
 def _update_design_status(
     design_id: Optional[str],
     status: str,
