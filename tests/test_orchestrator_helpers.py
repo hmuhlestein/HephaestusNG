@@ -4203,6 +4203,140 @@ class TestGetOrCreateProjectId:
 
         assert project_id == "proj-raced-in-first"
 
+    def test_new_project_gets_worktrees_and_hephaestus_excluded(
+        self, orch_db_env, tmp_path
+    ):
+        """A freshly-registered project is also a real git repo here
+        (unlike this class's other tests, which use a plain directory) --
+        _get_or_create_project_id should set up the local, untracked
+        .git/info/exclude for .worktrees/ and .hephaestus/ so they don't
+        show up as untracked cruft in the project's own git status."""
+        from git import Repo
+
+        from src.autopilot.orchestrator import _get_or_create_project_id
+
+        project = tmp_path / "myproject"
+        project.mkdir()
+        repo = Repo.init(project)
+        (project / "README.md").write_text("hi")
+        repo.index.add(["README.md"])
+        repo.index.commit("init")
+
+        _get_or_create_project_id(str(project))
+
+        exclude_text = (project / ".git" / "info" / "exclude").read_text()
+        assert ".worktrees/" in exclude_text
+        assert ".hephaestus/" in exclude_text
+
+    def test_non_git_project_directory_does_not_raise(self, orch_db_env, tmp_path):
+        """Regression: the exclude-setup call must be a no-op (not an
+        exception) for a project directory that isn't a git repo -- this
+        class's other tests all use a plain non-git tmp_path directory and
+        must keep passing."""
+        from src.autopilot.orchestrator import _get_or_create_project_id
+
+        project = tmp_path / "myproject"
+        project.mkdir()
+
+        project_id = _get_or_create_project_id(str(project))  # must not raise
+
+        assert project_id is not None
+        assert not (project / ".git").exists()
+
+
+class TestEnsureGitExcluded:
+    """_ensure_git_excluded: the shared helper behind both the ash-scan
+    cleanup backstop and new-project .worktrees//.hephaestus/ setup."""
+
+    def _init_repo(self, path):
+        from git import Repo
+
+        path.mkdir()
+        repo = Repo.init(path)
+        (path / "README.md").write_text("hi")
+        repo.index.add(["README.md"])
+        repo.index.commit("init")
+        return repo
+
+    def test_adds_patterns_to_info_exclude(self, tmp_path):
+        import logging
+
+        from src.autopilot.orchestrator import _ensure_git_excluded
+
+        repo_path = tmp_path / "repo"
+        self._init_repo(repo_path)
+
+        _ensure_git_excluded(repo_path, {".ash/": "test comment --"}, logging.getLogger(__name__))
+
+        text = (repo_path / ".git" / "info" / "exclude").read_text()
+        assert ".ash/" in text
+
+    def test_idempotent_no_duplicate_entries(self, tmp_path):
+        import logging
+
+        from src.autopilot.orchestrator import _ensure_git_excluded
+
+        repo_path = tmp_path / "repo"
+        self._init_repo(repo_path)
+        logger = logging.getLogger(__name__)
+
+        _ensure_git_excluded(repo_path, {".ash/": "c1"}, logger)
+        _ensure_git_excluded(repo_path, {".ash/": "c1"}, logger)
+
+        text = (repo_path / ".git" / "info" / "exclude").read_text()
+        assert text.count(".ash/") == 1
+
+    def test_resolves_shared_exclude_from_a_worktree(self, tmp_path):
+        """Worktrees don't have their own info/exclude -- it must resolve
+        to the main repo's shared one via --git-common-dir, not a
+        (nonexistent) per-worktree path."""
+        import logging
+
+        from src.autopilot.orchestrator import _ensure_git_excluded
+
+        repo_path = tmp_path / "repo"
+        repo = self._init_repo(repo_path)
+        repo.git.branch("feature-x")
+        worktree_path = tmp_path / "wt"
+        repo.git.worktree("add", str(worktree_path), "feature-x")
+
+        _ensure_git_excluded(worktree_path, {".ash/": "c"}, logging.getLogger(__name__))
+
+        assert not (worktree_path / ".git" / "info").exists()
+        text = (repo_path / ".git" / "info" / "exclude").read_text()
+        assert ".ash/" in text
+
+    def test_non_git_directory_is_a_silent_noop(self, tmp_path):
+        import logging
+
+        from src.autopilot.orchestrator import _ensure_git_excluded
+
+        not_a_repo = tmp_path / "not-a-repo"
+        not_a_repo.mkdir()
+
+        _ensure_git_excluded(not_a_repo, {".ash/": "c"}, logging.getLogger(__name__))  # must not raise
+
+        assert not (not_a_repo / ".git").exists()
+
+    def test_accepts_plain_stdlib_logger_and_orchestrator_logger(self, tmp_path):
+        """Called from both _run_ash_scan (OrchestratorLogger) and
+        _get_or_create_project_id (plain module-level logging.Logger) --
+        must not assume either-specific methods beyond .warning()."""
+        import logging
+
+        from src.autopilot.orchestrator import OrchestratorLogger, _ensure_git_excluded
+
+        repo_path = tmp_path / "repo"
+        self._init_repo(repo_path)
+
+        # Force the warning path (non-git target) with each logger type --
+        # would raise AttributeError before the fix if the wrong method
+        # were assumed for one of them.
+        not_a_repo = tmp_path / "not-a-repo"
+        not_a_repo.mkdir()
+        _ensure_git_excluded(not_a_repo, {".ash/": "c"}, logging.getLogger(__name__))
+        _ensure_git_excluded(not_a_repo, {".ash/": "c"}, OrchestratorLogger(tmp_path / "logs"))
+
 
 class TestGetProjectContextsByPrefix:
     def test_returns_only_matching_prefix(self, orch_db_env):
