@@ -50,6 +50,13 @@ _MAX_TOKEN_LIMIT_RE = re.compile(
     re.IGNORECASE,
 )
 
+# pi's status-line MCP indicator, e.g. "MCP: 0/1 servers". The denominator
+# group excludes "0/0" (no servers configured at all -- not a failure) by
+# requiring at least one digit that isn't a leading zero. Only observable
+# via AgentManager.get_agent_raw_pane -- get_agent_output strips this line
+# as TUI chrome for every other caller.
+_MCP_DISCONNECTED_RE = re.compile(r"MCP:\s*0/[1-9]\d*\s*servers", re.IGNORECASE)
+
 
 def _strip_sgr(text: str) -> str:
     """Strip SGR color escape codes (\\x1b[...m).
@@ -956,6 +963,81 @@ class MonitoringLoop:
             logger.warning(f"[MAX-TOKEN-LIMIT] check failed for {agent.id[:8]}: {e}")
         return False
 
+    async def _detect_mcp_disconnected(self, agent) -> bool:
+        """Detect a dropped MCP server connection (pi's "MCP: 0/N servers"
+        status line) and nudge the agent to reconnect, instead of leaving
+        it to notice on its own or requiring a full agent restart.
+
+        Observed live: an agent's MCP connection to the hephaestus server
+        dropped mid-session (likely from the backend being briefly
+        unreachable during a `heph restart`) and stayed down across many
+        work cycles -- not a transient blip pi retries on its own. The
+        agent kept making real progress (file writes don't need MCP) but
+        would never have been able to call complete_my_task/create_task/
+        save_memory, silently stranding an otherwise-finished task.
+        Confirmed live that pi exposes `mcp status` and `mcp connect
+        <server>` as tools the agent itself can invoke to reconnect without
+        losing session state -- no restart needed.
+
+        Uses get_agent_raw_pane, not get_agent_output: get_agent_output
+        strips the "MCP: N/M servers" line as TUI chrome for every other
+        caller (both via _read_transcript_log's mcp_status_re filter and
+        strip_tui_chrome on its capture-pane fallback), so this detector
+        would never see it through the normal path.
+
+        The trigger regex only matches pi's own status-line text -- it will
+        never fire for another CLI's differently-shaped output. The nudge
+        text is still fetched polymorphically via
+        CLIAgentInterface.mcp_reconnect_instructions rather than hardcoded,
+        so this stays harness-agnostic like recovery_keystrokes: a CLI with
+        no known reconnect mechanism gets no nudge instead of pi-specific
+        syntax that would confuse it.
+        """
+        try:
+            if not hasattr(self, "_nudged_mcp_disconnected"):
+                self._nudged_mcp_disconnected = {}
+            out = self.agent_manager.get_agent_raw_pane(agent.id, lines=50)
+            if not out:
+                return
+            if not _MCP_DISCONNECTED_RE.search(_strip_sgr(out)):
+                return
+
+            from src.interfaces.cli_interface import get_cli_agent
+
+            try:
+                instructions = get_cli_agent(agent.cli_type).mcp_reconnect_instructions(
+                    "hephaestus"
+                )
+            except Exception:
+                instructions = ""
+            if not instructions:
+                logger.debug(
+                    f"[MCP-DISCONNECTED] Agent {agent.id[:8]} ({agent.cli_type}) has "
+                    "0 connected MCP servers, but no known reconnect mechanism for "
+                    "this CLI — not nudging"
+                )
+                return
+
+            last_nudged = self._nudged_mcp_disconnected.get(agent.id)
+            if last_nudged is not None and time.time() - last_nudged < 30:
+                return
+            self._nudged_mcp_disconnected[agent.id] = time.time()
+
+            logger.warning(
+                f"[MCP-DISCONNECTED] Agent {agent.id[:8]} ({agent.cli_type}) has "
+                "0 connected MCP servers — nudging to reconnect"
+            )
+            await self.agent_manager.send_message_to_agent(
+                agent.id,
+                "Your MCP connection to the hephaestus server is down (0 "
+                "connected servers) — this is a client-side connection issue, "
+                f"not a backend problem. {instructions}",
+            )
+            return True
+        except Exception as e:
+            logger.warning(f"[MCP-DISCONNECTED] check failed for {agent.id[:8]}: {e}")
+        return False
+
     async def _monitoring_cycle(self):
         """Execute one monitoring cycle with trajectory monitoring."""
         logger.debug("Starting trajectory monitoring cycle")
@@ -975,12 +1057,13 @@ class MonitoringLoop:
         agents = self.agent_manager.get_active_agents()
         logger.info(f"Trajectory monitoring {len(agents)} active agents")
 
-        # Phase 0: cheap mechanical recovery (no LLM). Four complementary checks:
+        # Phase 0: cheap mechanical recovery (no LLM). Five complementary checks:
         #   a) frozen output — same substantive 40-line sig for ≥5 min
         #   b) repetition loop — output growing but same sentence repeats 5+ times
         #      in the last 80 lines (LLM cycling "Actually, let me try…")
         #   c) pending rm confirmation — auto-deny immediately, don't wait for (a)
         #   d) max output token limit hit — nudge immediately, don't wait for (a)
+        #   e) MCP server disconnected — nudge to `mcp connect`, don't wait for (a)
         mechanically_intervened = set()
         for agent in agents:
             if await self._mechanical_recovery_for_agent(agent):
@@ -990,6 +1073,8 @@ class MonitoringLoop:
             if await self._detect_dangerous_command_confirmation(agent):
                 mechanically_intervened.add(agent.id)
             if await self._detect_max_token_limit_error(agent):
+                mechanically_intervened.add(agent.id)
+            if await self._detect_mcp_disconnected(agent):
                 mechanically_intervened.add(agent.id)
 
         # Phase 1: Guardian Analysis (Parallel)

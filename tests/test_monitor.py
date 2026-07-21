@@ -870,6 +870,105 @@ class TestDetectMaxTokenLimitError:
         assert mock_agent_manager.send_message_to_agent.call_count == 2
 
 
+# ── _detect_mcp_disconnected ──────────────────────────────────────
+
+
+class TestDetectMcpDisconnected:
+    DISCONNECTED_OUTPUT = (
+        " ⠴ Working...\n\n"
+        "──────────────────────────────────────────────────────────\n"
+        "~/code/HephaestusNG/.worktrees/wt_feature\n"
+        "↑270k ↓15k R2.7M CH99.3% $0.140 8.1%/1.0M (auto)  (openrouter) xiaomi/mimo-v2.5-pro\n"
+        "MCP: 0/1 servers\n"
+    )
+    CONNECTED_OUTPUT = DISCONNECTED_OUTPUT.replace("MCP: 0/1 servers", "MCP: 1/1 servers")
+
+    @pytest.mark.asyncio
+    async def test_no_output(self, make_monitoring_loop, mock_agent_manager, mock_db):
+        agent = Agent(id="a1", cli_type="pi")
+        mock_agent_manager.get_agent_raw_pane.return_value = ""
+        await make_monitoring_loop._detect_mcp_disconnected(agent)
+        mock_agent_manager.send_message_to_agent.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_connected_ignored(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        agent = Agent(id="a1", cli_type="pi")
+        mock_agent_manager.get_agent_raw_pane.return_value = self.CONNECTED_OUTPUT
+        await make_monitoring_loop._detect_mcp_disconnected(agent)
+        mock_agent_manager.send_message_to_agent.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_no_servers_configured_ignored(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        """MCP: 0/0 servers means none are configured at all -- not a
+        failure, so this must not fire."""
+        agent = Agent(id="a1", cli_type="pi")
+        mock_agent_manager.get_agent_raw_pane.return_value = self.DISCONNECTED_OUTPUT.replace(
+            "MCP: 0/1 servers", "MCP: 0/0 servers"
+        )
+        await make_monitoring_loop._detect_mcp_disconnected(agent)
+        mock_agent_manager.send_message_to_agent.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_nudges_immediately_no_keystrokes(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        """No recovery keystrokes -- there's no dialog to dismiss, just a
+        reconnect command for the agent to run itself."""
+        agent = Agent(id="a1", cli_type="pi")
+        mock_agent_manager.get_agent_raw_pane.return_value = self.DISCONNECTED_OUTPUT
+
+        await make_monitoring_loop._detect_mcp_disconnected(agent)
+
+        mock_agent_manager.send_recovery_keystrokes.assert_not_called()
+        mock_agent_manager.send_message_to_agent.assert_called_once()
+        nudge = mock_agent_manager.send_message_to_agent.call_args[0][1]
+        assert "mcp connect hephaestus" in nudge.lower()
+
+    @pytest.mark.asyncio
+    async def test_cooldown_prevents_immediate_resend(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        agent = Agent(id="a1", cli_type="pi")
+        mock_agent_manager.get_agent_raw_pane.return_value = self.DISCONNECTED_OUTPUT
+
+        await make_monitoring_loop._detect_mcp_disconnected(agent)
+        await make_monitoring_loop._detect_mcp_disconnected(agent)
+
+        mock_agent_manager.send_message_to_agent.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_retries_after_cooldown_expires(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        agent = Agent(id="a1", cli_type="pi")
+        mock_agent_manager.get_agent_raw_pane.return_value = self.DISCONNECTED_OUTPUT
+
+        await make_monitoring_loop._detect_mcp_disconnected(agent)
+        make_monitoring_loop._nudged_mcp_disconnected["a1"] = time.time() - 31
+
+        await make_monitoring_loop._detect_mcp_disconnected(agent)
+        assert mock_agent_manager.send_message_to_agent.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_non_pi_cli_gets_no_nudge(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        """Polymorphic via CLIAgentInterface.mcp_reconnect_instructions,
+        like recovery_keystrokes: a CLI with no known reconnect mechanism
+        (base class default "") must not get pi-specific `mcp connect`
+        syntax nudged at it -- that would just confuse it."""
+        agent = Agent(id="a1", cli_type="claude")
+        mock_agent_manager.get_agent_raw_pane.return_value = self.DISCONNECTED_OUTPUT
+
+        await make_monitoring_loop._detect_mcp_disconnected(agent)
+
+        mock_agent_manager.send_message_to_agent.assert_not_called()
+
+
 # ── _update_agent_health_from_trajectory ─────────────────────────
 
 
@@ -1559,6 +1658,7 @@ class TestMonitoringCycleGuardianSkip:
             return_value=False
         )
         make_monitoring_loop._detect_max_token_limit_error = AsyncMock(return_value=False)
+        make_monitoring_loop._detect_mcp_disconnected = AsyncMock(return_value=False)
         make_monitoring_loop._guardian_analysis_for_agent = AsyncMock(return_value=None)
 
         await make_monitoring_loop._monitoring_cycle()
@@ -1581,6 +1681,7 @@ class TestMonitoringCycleGuardianSkip:
             return_value=False
         )
         make_monitoring_loop._detect_max_token_limit_error = AsyncMock(return_value=False)
+        make_monitoring_loop._detect_mcp_disconnected = AsyncMock(return_value=False)
         make_monitoring_loop._guardian_analysis_for_agent = AsyncMock(return_value=None)
 
         await make_monitoring_loop._monitoring_cycle()
