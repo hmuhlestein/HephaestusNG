@@ -273,6 +273,8 @@ ONLY flag these as REAL violations:
 5. **confused**: Circular exploration with no forward movement for 10+ minutes
 6. **idle**: Agent finished responding but hasn't taken the next step (see detection below)
 
+**Output token limit recovery**: If the agent hit the model's output token limit ("Error: Model stopped because it reached the maximum output token limit"), it will restart and may appear to be re-reading files or looping. This is NOT a loop — the agent is trying to resume after an interrupted turn. Steer with: "Break your work into smaller chunks: one file read or write per turn, not several chained together. Check what was actually written before continuing."
+
 ### Queued Message Detection
 
 **IMPORTANT**: Check if your previous steering message has been read before sending another.
