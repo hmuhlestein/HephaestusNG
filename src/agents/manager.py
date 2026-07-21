@@ -220,7 +220,7 @@ class AgentManager:
                 _guard_session.query(_GuardAgent)
                 .filter(
                     _GuardAgent.current_task_id == task.id,
-                    _GuardAgent.status.in_(["working", "idle", "starting"]),
+                    _GuardAgent.status.in_(["working", "idle"]),
                 )
                 .first()
             )
