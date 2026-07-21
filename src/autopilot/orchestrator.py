@@ -5189,6 +5189,23 @@ def _run_ash_scan(worktree: Path, logger: OrchestratorLogger) -> None:
             results_path.write_text(f"SCAN FAILED TO RUN: {e}")
         except Exception:
             pass
+    finally:
+        # The ash CLI leaves its own raw working directory (.ash/ --
+        # per-scanner output, converted files, and an aggregated SARIF
+        # results JSON) behind in the worktree root -- observed live at
+        # 76MB, with the aggregated JSON alone at 19MB. Two real problems
+        # if it's left there: commit_and_link_ticket's `git add -A` after
+        # every task completion would commit all of it into the feature
+        # branch, and a security_review agent digging past the small
+        # summary above into that raw JSON (a natural thing to do when
+        # looking for more detail) has been observed crashing its own CLI
+        # session trying to parse it inline, over and over on every
+        # relaunch. The summary above already has everything the agent
+        # needs -- delete the rest regardless of scan outcome.
+        try:
+            shutil.rmtree(worktree / ".ash", ignore_errors=True)
+        except Exception:
+            pass
 
 
 def _cap_out_review_phase(
