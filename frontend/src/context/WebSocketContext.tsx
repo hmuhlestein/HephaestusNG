@@ -27,7 +27,7 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
   const [isConnected, setIsConnected] = useState(false);
   const [lastMessage, setLastMessage] = useState<WebSocketMessage | null>(null);
   const [lastUpdate, setLastUpdate] = useState(new Date());
-  const [_ws, setWs] = useState<WebSocket | null>(null);
+  const wsRef = useRef<WebSocket | null>(null);
   const subscribersRef = useRef<Map<string, Set<(data: any) => void>>>(new Map());
   const retryCountRef = useRef(0);
   const mountedRef = useRef(true);
@@ -51,6 +51,7 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
       if (!mountedRef.current) return null;
 
       const websocket = new WebSocket('ws://localhost:8300/ws');
+      wsRef.current = websocket;
 
       websocket.onopen = () => {
         if (!mountedRef.current) return;
@@ -60,6 +61,7 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
       };
 
       websocket.onmessage = (event) => {
+        if (!mountedRef.current) return;
         try {
           const data = JSON.parse(event.data) as WebSocketMessage;
           setLastMessage(data);
@@ -160,16 +162,14 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
         }
       };
 
-      setWs(websocket);
-
       return websocket;
     };
 
-    const websocket = connectWebSocket();
+    connectWebSocket();
 
     return () => {
       mountedRef.current = false;
-      websocket?.close();
+      wsRef.current?.close();
     };
   }, []);
 
