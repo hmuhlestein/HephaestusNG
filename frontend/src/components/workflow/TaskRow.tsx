@@ -15,6 +15,18 @@ const priorityColor: Record<string, string> = {
 };
 
 export default function TaskRow({ task, onTerminateAgent }: TaskRowProps) {
+  // Once a task is finished, its own outcome is more useful than the
+  // prompt that started it -- show completion_notes/failure_reason
+  // instead of leaving the input snippet up after the work is done.
+  const finishedMessage =
+    task.status === 'done'
+      ? task.completion_notes
+      : task.status === 'failed'
+        ? task.failure_reason
+        : null;
+  const displayText =
+    finishedMessage || task.enriched_description || task.raw_description || task.description;
+
   return (
     <div className="bg-gray-50 rounded-lg p-3 border border-gray-100">
       <div className="flex items-start justify-between gap-2">
@@ -26,7 +38,7 @@ export default function TaskRow({ task, onTerminateAgent }: TaskRowProps) {
             </Badge>
           </div>
           <div className="text-sm text-gray-800 truncate">
-            {task.enriched_description || task.raw_description || task.description}
+            {displayText}
           </div>
           {task.assigned_agent_id && (
             <div className="text-xs text-gray-500 mt-1">

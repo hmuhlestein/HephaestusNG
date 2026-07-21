@@ -911,14 +911,25 @@ const TaskRow: React.FC<{
 }> = ({ task, onTaskClick, onTaskUpdate }) => {
   const [actionPending, setActionPending] = useState<{ pause?: boolean; stop?: boolean; resume?: boolean; rerun?: boolean }>({});
 
-  // What the agent is actually doing, not the raw task prompt: the goto
-  // reason (why this task exists -- a gate sent it back with a specific
-  // finding to fix) when there is one, else the phase's own config-sourced
+  // Once the task is finished, its own outcome is more useful than why it
+  // was dispatched -- show completion_notes/failure_reason instead of
+  // leaving the input-side goto_reason/phase_description up after the
+  // work is actually done. While still running, show the goto reason (why
+  // this task exists -- a gate sent it back with a specific finding to
+  // fix) when there is one, else the phase's own config-sourced
   // description (Phase.description, from that phase's YAML) instead of
   // re-parsing it back out of the "Execute {phase}: ..." task text.
   // Collapsed to one line -- a multi-line reason/description would
   // otherwise wrap oddly in this compact, single-line-truncated row.
-  const whatItsDoing = (task.goto_reason || task.phase_description || task.description || '')
+  const finishedMessage =
+    task.status === 'done'
+      ? task.completion_notes
+      : task.status === 'failed'
+        ? task.failure_reason
+        : null;
+  const whatItsDoing = (
+    finishedMessage || task.goto_reason || task.phase_description || task.description || ''
+  )
     .replace(/\s*\n+\s*/g, ' ')
     .trim();
 

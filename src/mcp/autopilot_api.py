@@ -2643,6 +2643,13 @@ async def get_project_design_status(project_id: str, filename: str):
                         "description": full_description[:200],
                         "phase_description": phase_description_map.get(t.phase_id),
                         "goto_reason": goto_reason,
+                        # Once the task is finished, its own outcome is more
+                        # useful to show than goto_reason/phase_description
+                        # (both describe why the task was dispatched, not
+                        # what it actually did) -- the frontend prefers
+                        # these when status is done/failed.
+                        "completion_notes": t.completion_notes,
+                        "failure_reason": t.failure_reason,
                         "status": t.status,
                         "action": t.action or "",
                         "action_target_phase": t.action_target_phase or None,
