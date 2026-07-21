@@ -27,7 +27,7 @@ from src.core.constants import (
 )
 
 # Import authentication function from server module
-from src.mcp.server import verify_agent_authentication
+from src.mcp.server import verify_agent_authentication, _check_rate_limit
 
 logger = logging.getLogger(__name__)
 
@@ -1563,6 +1563,28 @@ class CostEntryCreate(BaseModel):
             raise ValueError("token count exceeds maximum allowed value")
         return v
 
+    @validator("raw_usage")
+    def validate_raw_usage(cls, v: Optional[dict]) -> Optional[dict]:
+        """Validate raw_usage is not excessively large.
+
+        SECURITY: Prevents abuse where a malicious caller could store
+        arbitrarily large payloads in the raw_usage JSON column,
+        consuming database storage and slowing queries.
+        """
+        if v is not None:
+            import sys as _sys
+            size = _sys.getsizeof(json.dumps(v))
+            if size > 10_000:  # 10KB limit
+                raise ValueError("raw_usage exceeds maximum size of 10KB")
+        return v
+
+    @validator("model")
+    def validate_model(cls, v: Optional[str]) -> Optional[str]:
+        """Validate model string length."""
+        if v is not None and len(v) > 200:
+            raise ValueError("model name exceeds maximum length of 200 characters")
+        return v
+
 
 class DesignItem(BaseModel):
     id: str
@@ -1948,6 +1970,14 @@ async def create_cost_entry(
             detail="Agent not authenticated. Provide valid X-Agent-ID header.",
         )
 
+    # SECURITY: Rate limiting to prevent cost entry flooding
+    if not _check_rate_limit(f"cost_entry:{agent_id}", max_requests=60):
+        logger.warning(f"Rate limit exceeded for cost entries from agent {agent_id}")
+        raise HTTPException(
+            status_code=429,
+            detail="Rate limit exceeded. Maximum 60 cost entries per minute.",
+        )
+
     from src.core.cost_derivation import record_cost
     from src.core.database import get_db
 
@@ -2038,8 +2068,20 @@ class ProjectCostSummary(BaseModel):
 
 
 @router.get("/tasks/{task_id}/costs", response_model=TaskCostSummary)
-async def get_task_costs(task_id: str):
-    """Get cost breakdown for a single task."""
+async def get_task_costs(
+    task_id: str,
+    agent_id: str = Header(..., alias="X-Agent-ID"),
+):
+    """Get cost breakdown for a single task.
+
+    SECURITY: Requires valid agent authentication.
+    Cost data is sensitive financial information.
+    """
+    if not await verify_agent_authentication(agent_id):
+        raise HTTPException(
+            status_code=401,
+            detail="Agent not authenticated. Provide valid X-Agent-ID header.",
+        )
     from src.core.cost_derivation import derive_task_cost
     from src.core.database import CostEntry, Task, get_db
 
@@ -2074,8 +2116,20 @@ async def get_task_costs(task_id: str):
 
 
 @router.get("/workflows/{workflow_id}/costs", response_model=WorkflowCostSummary)
-async def get_workflow_costs(workflow_id: str):
-    """Get cost breakdown for a workflow."""
+async def get_workflow_costs(
+    workflow_id: str,
+    agent_id: str = Header(..., alias="X-Agent-ID"),
+):
+    """Get cost breakdown for a workflow.
+
+    SECURITY: Requires valid agent authentication.
+    Cost data is sensitive financial information.
+    """
+    if not await verify_agent_authentication(agent_id):
+        raise HTTPException(
+            status_code=401,
+            detail="Agent not authenticated. Provide valid X-Agent-ID header.",
+        )
     from src.core.cost_derivation import derive_workflow_cost
     from src.core.database import CostEntry, Task, Workflow, get_db
 
@@ -2110,8 +2164,20 @@ async def get_workflow_costs(workflow_id: str):
 
 
 @router.get("/features/{feature_id}/costs", response_model=FeatureCostSummary)
-async def get_feature_costs(feature_id: str):
-    """Get cost breakdown for a feature."""
+async def get_feature_costs(
+    feature_id: str,
+    agent_id: str = Header(..., alias="X-Agent-ID"),
+):
+    """Get cost breakdown for a feature.
+
+    SECURITY: Requires valid agent authentication.
+    Cost data is sensitive financial information.
+    """
+    if not await verify_agent_authentication(agent_id):
+        raise HTTPException(
+            status_code=401,
+            detail="Agent not authenticated. Provide valid X-Agent-ID header.",
+        )
     from src.core.cost_derivation import derive_feature_cost, derive_workflow_cost
     from src.core.database import Feature, Workflow, get_db
 
@@ -2146,8 +2212,20 @@ async def get_feature_costs(feature_id: str):
 
 
 @router.get("/designs/{design_id}/costs", response_model=DesignCostSummary)
-async def get_design_costs(design_id: str):
-    """Get cost breakdown for a design."""
+async def get_design_costs(
+    design_id: str,
+    agent_id: str = Header(..., alias="X-Agent-ID"),
+):
+    """Get cost breakdown for a design.
+
+    SECURITY: Requires valid agent authentication.
+    Cost data is sensitive financial information.
+    """
+    if not await verify_agent_authentication(agent_id):
+        raise HTTPException(
+            status_code=401,
+            detail="Agent not authenticated. Provide valid X-Agent-ID header.",
+        )
     from src.core.cost_derivation import derive_design_cost, derive_feature_cost
     from src.core.database import AutopilotDesign, Feature, get_db
 
@@ -2182,8 +2260,20 @@ async def get_design_costs(design_id: str):
 
 
 @router.get("/projects/{project_id}/costs", response_model=ProjectCostSummary)
-async def get_project_costs(project_id: str):
-    """Get cost breakdown for a project."""
+async def get_project_costs(
+    project_id: str,
+    agent_id: str = Header(..., alias="X-Agent-ID"),
+):
+    """Get cost breakdown for a project.
+
+    SECURITY: Requires valid agent authentication.
+    Cost data is sensitive financial information.
+    """
+    if not await verify_agent_authentication(agent_id):
+        raise HTTPException(
+            status_code=401,
+            detail="Agent not authenticated. Provide valid X-Agent-ID header.",
+        )
     from src.core.cost_derivation import derive_design_cost, derive_project_cost
     from src.core.database import AutopilotDesign, AutopilotProject, get_db
 
