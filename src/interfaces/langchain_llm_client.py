@@ -95,21 +95,15 @@ class LangChainLLMClient:
 
         # Initialize embedding model based on configured provider
         embedding_provider = getattr(self.config, "embedding_provider", "openai")
-        logger.info(
-            f"Initializing embedding model: {self.config.embedding_model} (provider: {embedding_provider})"
-        )
+        logger.info(f"Initializing embedding model: {self.config.embedding_model} (provider: {embedding_provider})")
 
         if embedding_provider == "openai":
             openai_provider = self.config.providers.get("openai")
             if openai_provider:
                 openai_key = os.getenv(openai_provider.api_key_env)
                 if openai_key:
-                    self._embedding_model = OpenAIEmbeddings(
-                        model=self.config.embedding_model, openai_api_key=openai_key
-                    )
-                    logger.info(
-                        f"  ✓ Embedding model initialized: OpenAI {self.config.embedding_model}"
-                    )
+                    self._embedding_model = OpenAIEmbeddings(model=self.config.embedding_model, openai_api_key=openai_key)
+                    logger.info(f"  ✓ Embedding model initialized: OpenAI {self.config.embedding_model}")
 
         elif embedding_provider == "azure_openai":
             azure_provider = self.config.providers.get("azure_openai")
@@ -125,13 +119,9 @@ class LangChainLLMClient:
                         api_version=api_version,
                         api_key=azure_key,
                     )
-                    logger.info(
-                        f"  ✓ Embedding model initialized: Azure OpenAI {self.config.embedding_model}"
-                    )
+                    logger.info(f"  ✓ Embedding model initialized: Azure OpenAI {self.config.embedding_model}")
                 else:
-                    logger.warning(
-                        "Azure OpenAI embedding configuration incomplete (key or endpoint missing)"
-                    )
+                    logger.warning("Azure OpenAI embedding configuration incomplete (key or endpoint missing)")
 
         elif embedding_provider == "google_ai":
             google_provider = self.config.providers.get("google_ai")
@@ -142,13 +132,9 @@ class LangChainLLMClient:
                         model=self.config.embedding_model,  # e.g., "models/embedding-001"
                         google_api_key=google_key,
                     )
-                    logger.info(
-                        f"  ✓ Embedding model initialized: Google AI {self.config.embedding_model}"
-                    )
+                    logger.info(f"  ✓ Embedding model initialized: Google AI {self.config.embedding_model}")
                 else:
-                    logger.warning(
-                        "Google AI embedding configuration incomplete (key missing)"
-                    )
+                    logger.warning("Google AI embedding configuration incomplete (key missing)")
 
         elif embedding_provider in ("fastembed", "local", "openrouter"):
             # OpenRouter (and most chat-only providers) have no embeddings API.
@@ -159,21 +145,15 @@ class LangChainLLMClient:
 
                 fe_model = os.getenv("FASTEMBED_MODEL", "BAAI/bge-small-en-v1.5")
                 self._embedding_model = FastEmbedEmbeddings(model_name=fe_model)
-                logger.info(
-                    f"  ✓ Embedding model initialized: FastEmbed {fe_model} (python-only, no API key)"
-                )
+                logger.info(f"  ✓ Embedding model initialized: FastEmbed {fe_model} (python-only, no API key)")
             except Exception as e:
                 logger.warning(f"FastEmbed embedding init failed: {e}")
 
         if not self._embedding_model:
-            logger.warning(
-                f"Embedding model not initialized for provider: {embedding_provider}"
-            )
+            logger.warning(f"Embedding model not initialized for provider: {embedding_provider}")
 
         # Initialize models for each component
-        logger.info(
-            f"Configuring models for {len(self.config.model_assignments)} components:"
-        )
+        logger.info(f"Configuring models for {len(self.config.model_assignments)} components:")
         for component_name, assignment in self.config.model_assignments.items():
             model_key = f"{component_name}_{assignment.provider}_{assignment.model}"
 
@@ -182,14 +162,9 @@ class LangChainLLMClient:
                 if model:
                     self._models[model_key] = model
                     provider_info = f"{assignment.provider}"
-                    if (
-                        hasattr(assignment, "openrouter_provider")
-                        and assignment.openrouter_provider
-                    ):
+                    if hasattr(assignment, "openrouter_provider") and assignment.openrouter_provider:
                         provider_info += f" (via {assignment.openrouter_provider})"
-                    logger.info(
-                        f"  ✓ {component_name}: {assignment.model} [{provider_info}]"
-                    )
+                    logger.info(f"  ✓ {component_name}: {assignment.model} [{provider_info}]")
 
     def _create_model(self, assignment: ModelAssignment):
         """Create a model instance based on assignment.
@@ -254,9 +229,7 @@ class LangChainLLMClient:
                         "order": [provider_name],
                         "allow_fallbacks": False,  # Force only the specified provider
                     }
-                    logger.info(
-                        f"OpenRouter configured with provider routing: {provider_name} (order: [{provider_name}], fallbacks: disabled)"
-                    )
+                    logger.info(f"OpenRouter configured with provider routing: {provider_name} (order: [{provider_name}], fallbacks: disabled)")
                 if assignment.reasoning_effort:
                     # Cap reasoning for reasoning models. "off" disables it entirely;
                     # otherwise pass the effort level. (Ignored harmlessly by models
@@ -264,21 +237,15 @@ class LangChainLLMClient:
                     if assignment.reasoning_effort.lower() == "off":
                         extra_body["reasoning"] = {"enabled": False}
                     else:
-                        extra_body["reasoning"] = {
-                            "effort": assignment.reasoning_effort.lower()
-                        }
-                    logger.info(
-                        f"OpenRouter reasoning capped: {assignment.reasoning_effort} for {assignment.model}"
-                    )
+                        extra_body["reasoning"] = {"effort": assignment.reasoning_effort.lower()}
+                    logger.info(f"OpenRouter reasoning capped: {assignment.reasoning_effort} for {assignment.model}")
+                # Include usage/cost data in responses for cost tracking
+                extra_body["usage"] = {"include": True}
                 if extra_body:
                     model_kwargs["extra_body"] = extra_body
 
                 # Use config base_url, then env var, then default
-                base_url = (
-                    provider_config.base_url
-                    or os.getenv("OPENROUTER_BASE_URL")
-                    or "https://openrouter.ai/api/v1"
-                )
+                base_url = provider_config.base_url or os.getenv("OPENROUTER_BASE_URL") or "https://openrouter.ai/api/v1"
 
                 return ChatOpenAI(
                     model=model_name,
@@ -299,15 +266,11 @@ class LangChainLLMClient:
                 # Requires azure_endpoint, api_version, and azure_deployment parameters
                 azure_endpoint = provider_config.base_url
                 if not azure_endpoint:
-                    logger.error(
-                        "Azure OpenAI requires base_url (azure_endpoint) in configuration"
-                    )
+                    logger.error("Azure OpenAI requires base_url (azure_endpoint) in configuration")
                     return None
 
                 api_version = provider_config.api_version or "2024-02-01"
-                logger.info(
-                    f"Creating Azure OpenAI model with deployment: {assignment.model}, endpoint: {azure_endpoint}, api_version: {api_version}"
-                )
+                logger.info(f"Creating Azure OpenAI model with deployment: {assignment.model}, endpoint: {azure_endpoint}, api_version: {api_version}")
 
                 return AzureChatOpenAI(
                     model=assignment.model,  # This is the deployment name in Azure
@@ -357,6 +320,72 @@ class LangChainLLMClient:
         model_key = f"{component_name}_{assignment.provider}_{assignment.model}"
         return self._models.get(model_key)
 
+    async def _invoke_and_record(
+        self,
+        model,
+        messages: list,
+        component: str,
+        task_id: Optional[str] = None,
+        agent_id: Optional[str] = None,
+        workflow_id: Optional[str] = None,
+    ) -> Any:
+        """Wrap model.ainvoke() with cost recording.
+
+        Extracts cost from response_metadata and writes a CostEntry.
+        All call sites should route through this instead of calling
+        model.ainvoke directly.
+
+        Args:
+            model: The LangChain model instance
+            messages: List of messages to send
+            component: Component name (e.g. 'task_enrichment', 'guardian')
+            task_id: Optional task ID for cost attribution
+            agent_id: Optional agent ID
+            workflow_id: Optional workflow ID
+
+        Returns:
+            The model response
+        """
+        response = await model.ainvoke(messages)
+
+        # Extract cost from response metadata
+        try:
+            metadata = getattr(response, "response_metadata", {}) or {}
+            usage = metadata.get("token_usage", {})
+
+            # OpenRouter returns cost in usage.cost when usage.include=true
+            cost_data = usage.get("cost", {})
+            cost_usd = cost_data.get("total", 0)
+
+            if cost_usd > 0:
+                from src.core.cost_derivation import record_cost
+                from src.core.database import get_db
+
+                input_tokens = usage.get("prompt_tokens", 0)
+                output_tokens = usage.get("completion_tokens", 0)
+                cache_read = usage.get("prompt_tokens_details", {}).get("cached_tokens", 0)
+
+                with get_db() as db:
+                    record_cost(
+                        db=db,
+                        cost_usd=cost_usd,
+                        source="openrouter_direct",
+                        task_id=task_id,
+                        agent_id=agent_id,
+                        workflow_id=workflow_id,
+                        model=metadata.get("model_name", component),
+                        input_tokens=input_tokens,
+                        output_tokens=output_tokens,
+                        cache_read_tokens=cache_read,
+                        raw_usage=usage,
+                    )
+            else:
+                logger.debug(f"No cost in response metadata for {component} (cost_usd={cost_usd})")
+        except Exception as e:
+            logger.debug(f"Cost recording failed for {component}: {e}")
+
+        return response
+
     async def classify_complexity(self, design_text: str) -> str:
         """One fast LLM call: rate a design's implementation complexity as
         'low' | 'medium' | 'high'. Used to size agent reasoning budget + decomposition
@@ -377,13 +406,13 @@ class LangChainLLMClient:
                 f"DESIGN:\n{(design_text or '')[:4000]}\n\n"
                 "Answer with ONE word only (low, medium, or high):"
             )
-            resp = await model.ainvoke(
+            resp = await self._invoke_and_record(
+                model,
                 [
-                    SystemMessage(
-                        content="You are a concise software complexity classifier."
-                    ),
+                    SystemMessage(content="You are a concise software complexity classifier."),
                     HumanMessage(content=prompt),
-                ]
+                ],
+                component="complexity_classification",
             )
             text = (getattr(resp, "content", None) or str(resp)).strip().lower()
             for level in (
@@ -396,9 +425,7 @@ class LangChainLLMClient:
                     return level
             return "medium"
         except Exception as e:
-            logger.warning(
-                f"[COMPLEXITY] classification failed, defaulting to medium: {e}"
-            )
+            logger.warning(f"[COMPLEXITY] classification failed, defaulting to medium: {e}")
             return "medium"
 
     async def enrich_task(
@@ -420,30 +447,22 @@ class LangChainLLMClient:
             Dictionary with enriched task information
         """
         assignment = self.config.model_assignments.get("task_enrichment")
-        logger.info(
-            f"🔵 [LLM CALL] enrich_task | Provider: {assignment.provider} | Model: {assignment.model}"
-        )
+        logger.info(f"🔵 [LLM CALL] enrich_task | Provider: {assignment.provider} | Model: {assignment.model}")
 
         model = self._get_model_for_component(ComponentType.TASK_ENRICHMENT)
         if not model:
-            logger.warning(
-                "⚠️ [LLM CALL] No model available for task_enrichment, using fallback"
-            )
+            logger.warning("⚠️ [LLM CALL] No model available for task_enrichment, using fallback")
             return self._default_task_enrichment(task_description, done_definition)
 
-        prompt = self._build_task_enrichment_prompt(
-            task_description, done_definition, context, phase_context
-        )
+        prompt = self._build_task_enrichment_prompt(task_description, done_definition, context, phase_context)
 
         messages = [
-            SystemMessage(
-                content="You are a task analysis expert for an AI orchestration system."
-            ),
+            SystemMessage(content="You are a task analysis expert for an AI orchestration system."),
             HumanMessage(content=prompt),
         ]
 
         try:
-            response = await model.ainvoke(messages)
+            response = await self._invoke_and_record(model, messages, component="task_enrichment")
             parser = JsonOutputParser()
             result = parser.parse(response.content)
 
@@ -451,15 +470,11 @@ class LangChainLLMClient:
                 logger.warning(f"enrich_task parser returned non-dict: {type(result)}, using fallback")
                 return self._default_task_enrichment(task_description, done_definition)
 
-            logger.info(
-                f"✅ [LLM CALL] enrich_task completed | Provider: {assignment.provider} | Model: {assignment.model}"
-            )
+            logger.info(f"✅ [LLM CALL] enrich_task completed | Provider: {assignment.provider} | Model: {assignment.model}")
             return result
 
         except Exception as e:
-            logger.error(
-                f"❌ [LLM CALL] enrich_task failed | Provider: {assignment.provider} | Model: {assignment.model} | Error: {e}"
-            )
+            logger.error(f"❌ [LLM CALL] enrich_task failed | Provider: {assignment.provider} | Model: {assignment.model} | Error: {e}")
             return self._default_task_enrichment(task_description, done_definition)
 
     async def resolve_ticket_clarification(
@@ -505,19 +520,15 @@ class LangChainLLMClient:
 
         # Create messages
         messages = [
-            SystemMessage(
-                content="You are a ticket clarification arbitrator specialized in resolving conflicts and ambiguities in software development requirements."
-            ),
+            SystemMessage(content="You are a ticket clarification arbitrator specialized in resolving conflicts and ambiguities in software development requirements."),
             HumanMessage(content=prompt),
         ]
 
         try:
             # Invoke model with longer timeout for reasoning
-            response = await model.ainvoke(messages)
+            response = await self._invoke_and_record(model, messages, component="ticket_clarification")
 
-            logger.info(
-                f"Ticket clarification resolved successfully for {ticket_id} using {self.config.model_assignments['task_enrichment'].model}"
-            )
+            logger.info(f"Ticket clarification resolved successfully for {ticket_id} using {self.config.model_assignments['task_enrichment'].model}")
             return response.content
 
         except Exception as e:
@@ -533,9 +544,7 @@ class LangChainLLMClient:
         Returns:
             Embedding vector
         """
-        logger.debug(
-            f"🔵 [LLM CALL] generate_embedding | Provider: openai | Model: {self.config.embedding_model}"
-        )
+        logger.debug(f"🔵 [LLM CALL] generate_embedding | Provider: openai | Model: {self.config.embedding_model}")
 
         if not self._embedding_model:
             logger.error("❌ [LLM CALL] Embedding model not initialized")
@@ -543,14 +552,10 @@ class LangChainLLMClient:
 
         try:
             embedding = await self._embedding_model.aembed_query(text[:8000])
-            logger.debug(
-                f"✅ [LLM CALL] generate_embedding completed | Provider: openai | Model: {self.config.embedding_model}"
-            )
+            logger.debug(f"✅ [LLM CALL] generate_embedding completed | Provider: openai | Model: {self.config.embedding_model}")
             return embedding
         except Exception as e:
-            logger.error(
-                f"❌ [LLM CALL] generate_embedding failed | Provider: openai | Model: {self.config.embedding_model} | Error: {e}"
-            )
+            logger.error(f"❌ [LLM CALL] generate_embedding failed | Provider: openai | Model: {self.config.embedding_model} | Error: {e}")
             # Return zero vector as fallback
             return [0.0] * 1536
 
@@ -574,9 +579,7 @@ class LangChainLLMClient:
         if not model:
             return self._default_agent_state()
 
-        prompt = self._build_agent_state_prompt(
-            agent_output, task_info, project_context
-        )
+        prompt = self._build_agent_state_prompt(agent_output, task_info, project_context)
 
         messages = [
             SystemMessage(content="You are an AI agent monitoring expert."),
@@ -584,13 +587,11 @@ class LangChainLLMClient:
         ]
 
         try:
-            response = await model.ainvoke(messages)
+            response = await self._invoke_and_record(model, messages, component="agent_state_analysis")
             parser = JsonOutputParser()
             result = parser.parse(response.content)
 
-            logger.debug(
-                f"Agent state analyzed using {self.config.model_assignments['agent_monitoring'].model}"
-            )
+            logger.debug(f"Agent state analyzed using {self.config.model_assignments['agent_monitoring'].model}")
             return result
 
         except Exception as e:
@@ -623,9 +624,7 @@ class LangChainLLMClient:
         if phase_name == "Feature Architect":
             from src.prompts.loader import get_feature_architect_system_prompt
 
-            memory_context = "\n".join(
-                [f"- {mem.get('content', '')[:200]}" for mem in memories[:10]]
-            )
+            memory_context = "\n".join([f"- {mem.get('content', '')[:200]}" for mem in memories[:10]])
             return get_feature_architect_system_prompt(
                 agent_id=task.get("agent_id", "unknown"),
                 task_id=task.get("id", "unknown"),
@@ -662,15 +661,11 @@ class LangChainLLMClient:
             Dictionary with trajectory analysis
         """
         assignment = self.config.model_assignments.get("guardian_analysis")
-        logger.info(
-            f"🔵 [LLM CALL] Guardian analyze_agent_trajectory | Provider: {assignment.provider} | Model: {assignment.model}"
-        )
+        logger.info(f"🔵 [LLM CALL] Guardian analyze_agent_trajectory | Provider: {assignment.provider} | Model: {assignment.model}")
 
         model = self._get_model_for_component(ComponentType.GUARDIAN_ANALYSIS)
         if not model:
-            logger.warning(
-                "⚠️ [LLM CALL] No model available for guardian_analysis, using fallback"
-            )
+            logger.warning("⚠️ [LLM CALL] No model available for guardian_analysis, using fallback")
             return self._default_trajectory_analysis()
 
         from src.monitoring.prompt_loader import prompt_loader
@@ -684,33 +679,25 @@ class LangChainLLMClient:
         )
 
         messages = [
-            SystemMessage(
-                content="You are a trajectory analysis expert using accumulated context thinking."
-            ),
+            SystemMessage(content="You are a trajectory analysis expert using accumulated context thinking."),
             HumanMessage(content=prompt),
         ]
 
         for attempt in range(3):
             try:
-                response = await model.ainvoke(messages)
+                response = await self._invoke_and_record(model, messages, component="guardian_analysis")
 
                 # Parse the response as structured output
                 parser = JsonOutputParser()
                 result = parser.parse(response.content)
 
-                logger.info(
-                    f"✅ [LLM CALL] Guardian analyze_agent_trajectory completed | Provider: {assignment.provider} | Model: {assignment.model}"
-                )
+                logger.info(f"✅ [LLM CALL] Guardian analyze_agent_trajectory completed | Provider: {assignment.provider} | Model: {assignment.model}")
                 return result
 
             except Exception as e:
-                logger.error(
-                    f"❌ [LLM CALL] Guardian analyze_agent_trajectory failed (attempt {attempt + 1}/3) | Provider: {assignment.provider} | Model: {assignment.model} | Error: {e}"
-                )
+                logger.error(f"❌ [LLM CALL] Guardian analyze_agent_trajectory failed (attempt {attempt + 1}/3) | Provider: {assignment.provider} | Model: {assignment.model} | Error: {e}")
                 if attempt == 2:
-                    logger.warning(
-                        "⚠️ [LLM CALL] Guardian analyze_agent_trajectory exhausted retries, using fallback"
-                    )
+                    logger.warning("⚠️ [LLM CALL] Guardian analyze_agent_trajectory exhausted retries, using fallback")
                     return self._default_trajectory_analysis()
                 await asyncio.sleep(1)
 
@@ -729,15 +716,11 @@ class LangChainLLMClient:
             Dictionary with coherence analysis
         """
         assignment = self.config.model_assignments.get("conductor_analysis")
-        logger.info(
-            f"🔵 [LLM CALL] Conductor analyze_system_coherence | Provider: {assignment.provider} | Model: {assignment.model}"
-        )
+        logger.info(f"🔵 [LLM CALL] Conductor analyze_system_coherence | Provider: {assignment.provider} | Model: {assignment.model}")
 
         model = self._get_model_for_component(ComponentType.CONDUCTOR_ANALYSIS)
         if not model:
-            logger.warning(
-                "⚠️ [LLM CALL] No model available for conductor_analysis, using fallback"
-            )
+            logger.warning("⚠️ [LLM CALL] No model available for conductor_analysis, using fallback")
             return self._default_coherence_analysis()
 
         from src.monitoring.prompt_loader import prompt_loader
@@ -748,9 +731,7 @@ class LangChainLLMClient:
         )
 
         messages = [
-            SystemMessage(
-                content="You are a system orchestration expert analyzing multi-agent coherence."
-            ),
+            SystemMessage(content="You are a system orchestration expert analyzing multi-agent coherence."),
             HumanMessage(content=prompt),
         ]
 
@@ -763,26 +744,21 @@ class LangChainLLMClient:
         for attempt in range(3):
             try:
                 response = await asyncio.wait_for(
-                    model.ainvoke(messages), timeout=CONDUCTOR_LLM_TIMEOUT
+                    self._invoke_and_record(model, messages, component="conductor_analysis"),
+                    timeout=CONDUCTOR_LLM_TIMEOUT,
                 )
 
                 # Parse the response as structured output
                 parser = JsonOutputParser()
                 result = parser.parse(response.content)
 
-                logger.info(
-                    f"✅ [LLM CALL] Conductor analyze_system_coherence completed | Provider: {assignment.provider} | Model: {assignment.model}"
-                )
+                logger.info(f"✅ [LLM CALL] Conductor analyze_system_coherence completed | Provider: {assignment.provider} | Model: {assignment.model}")
                 return result
 
             except Exception as e:
-                logger.error(
-                    f"❌ [LLM CALL] Conductor analyze_system_coherence failed (attempt {attempt + 1}/3) | Provider: {assignment.provider} | Model: {assignment.model} | Error: {e}"
-                )
+                logger.error(f"❌ [LLM CALL] Conductor analyze_system_coherence failed (attempt {attempt + 1}/3) | Provider: {assignment.provider} | Model: {assignment.model} | Error: {e}")
                 if attempt == 2:
-                    logger.warning(
-                        "⚠️ [LLM CALL] Conductor analyze_system_coherence exhausted retries, using fallback"
-                    )
+                    logger.warning("⚠️ [LLM CALL] Conductor analyze_system_coherence exhausted retries, using fallback")
                     return self._default_coherence_analysis()
                 await asyncio.sleep(1)
 
@@ -805,15 +781,11 @@ class LangChainLLMClient:
             Dictionary with verdict, reasoning, and recommendations
         """
         assignment = self.config.model_assignments.get("conductor_analysis")
-        logger.info(
-            f"🔵 [LLM CALL] Conductor review_qa_report | Provider: {assignment.provider} | Model: {assignment.model}"
-        )
+        logger.info(f"🔵 [LLM CALL] Conductor review_qa_report | Provider: {assignment.provider} | Model: {assignment.model}")
 
         model = self._get_model_for_component(ComponentType.CONDUCTOR_ANALYSIS)
         if not model:
-            logger.warning(
-                "⚠️ [LLM CALL] No model available for conductor_analysis, using fallback"
-            )
+            logger.warning("⚠️ [LLM CALL] No model available for conductor_analysis, using fallback")
             return {"up_to_spec": False, "reasoning": "No LLM available for review"}
 
         prompt = f"""You are a QA reviewer evaluating whether a project's output meets its requirements.
@@ -853,9 +825,7 @@ Consider:
 """
 
         messages = [
-            SystemMessage(
-                content="You are a senior QA engineer reviewing project output against requirements. Be thorough and critical."
-            ),
+            SystemMessage(content="You are a senior QA engineer reviewing project output against requirements. Be thorough and critical."),
             HumanMessage(content=prompt),
         ]
 
@@ -865,26 +835,21 @@ Consider:
         for attempt in range(3):
             try:
                 response = await asyncio.wait_for(
-                    model.ainvoke(messages), timeout=CONDUCTOR_LLM_TIMEOUT
+                    self._invoke_and_record(model, messages, component="conductor_review_qa"),
+                    timeout=CONDUCTOR_LLM_TIMEOUT,
                 )
 
                 # Parse the response as structured output
                 parser = JsonOutputParser()
                 result = parser.parse(response.content)
 
-                logger.info(
-                    f"✅ [LLM CALL] Conductor review_qa_report completed | up_to_spec={result.get('up_to_spec')} | Provider: {assignment.provider} | Model: {assignment.model}"
-                )
+                logger.info(f"✅ [LLM CALL] Conductor review_qa_report completed | up_to_spec={result.get('up_to_spec')} | Provider: {assignment.provider} | Model: {assignment.model}")
                 return result
 
             except Exception as e:
-                logger.error(
-                    f"❌ [LLM CALL] Conductor review_qa_report failed (attempt {attempt + 1}/3) | Provider: {assignment.provider} | Model: {assignment.model} | Error: {e}"
-                )
+                logger.error(f"❌ [LLM CALL] Conductor review_qa_report failed (attempt {attempt + 1}/3) | Provider: {assignment.provider} | Model: {assignment.model} | Error: {e}")
                 if attempt == 2:
-                    logger.warning(
-                        "⚠️ [LLM CALL] Conductor review_qa_report exhausted retries, using fallback"
-                    )
+                    logger.warning("⚠️ [LLM CALL] Conductor review_qa_report exhausted retries, using fallback")
                     return {"up_to_spec": False, "reasoning": f"LLM review failed: {e}"}
                 await asyncio.sleep(1)
 
@@ -956,17 +921,13 @@ Ensure the enriched description is actionable and the completion criteria are sp
         from pathlib import Path
 
         # Load template from src/prompts/ticket_clarification_prompt.md
-        template_path = (
-            Path(__file__).parent.parent / "prompts" / "ticket_clarification_prompt.md"
-        )
+        template_path = Path(__file__).parent.parent / "prompts" / "ticket_clarification_prompt.md"
 
         try:
             with open(template_path, "r") as f:
                 template = f.read()
         except FileNotFoundError:
-            logger.error(
-                f"Ticket clarification prompt template not found at {template_path}"
-            )
+            logger.error(f"Ticket clarification prompt template not found at {template_path}")
             # Fallback to a basic prompt
             return self._build_fallback_clarification_prompt(
                 ticket_id,
@@ -978,33 +939,21 @@ Ensure the enriched description is actionable and the completion criteria are sp
 
         # Format related tickets (60 most recent)
         tickets_context = "\n".join(
-            [
-                f"[{t['ticket_id'][:12]}] ({t['status']}) {t['priority']} - {t['title']}\n"
-                f"  Type: {t['ticket_type']}\n"
-                f"  Description: {t['description'][:150]}..."
-                for t in related_tickets[:60]
-            ]
+            [f"[{t['ticket_id'][:12]}] ({t['status']}) {t['priority']} - {t['title']}\n  Type: {t['ticket_type']}\n  Description: {t['description'][:150]}..." for t in related_tickets[:60]]
         )
 
         if not tickets_context:
             tickets_context = "No other tickets found in the system."
 
         # Format active tasks (60 most recent)
-        tasks_context = "\n".join(
-            [
-                f"[{t['id'][:8]}] ({t['status']}) Phase {t.get('phase_id', 'N/A')} - {t['description'][:150]}..."
-                for t in active_tasks[:60]
-            ]
-        )
+        tasks_context = "\n".join([f"[{t['id'][:8]}] ({t['status']}) Phase {t.get('phase_id', 'N/A')} - {t['description'][:150]}..." for t in active_tasks[:60]])
 
         if not tasks_context:
             tasks_context = "No active tasks found in the system."
 
         # Format potential solutions with numbering
         if potential_solutions:
-            solutions_text = "\n".join(
-                [f"{i + 1}. {sol}" for i, sol in enumerate(potential_solutions)]
-            )
+            solutions_text = "\n".join([f"{i + 1}. {sol}" for i, sol in enumerate(potential_solutions)])
         else:
             solutions_text = "(Agent did not provide potential solutions)"
 
@@ -1013,9 +962,7 @@ Ensure the enriched description is actionable and the completion criteria are sp
             prompt = template.format(
                 ticket_id=ticket_id,
                 ticket_title=ticket_details.get("title", "Unknown"),
-                ticket_description=ticket_details.get(
-                    "description", "No description provided"
-                ),
+                ticket_description=ticket_details.get("description", "No description provided"),
                 ticket_status=ticket_details.get("status", "unknown"),
                 ticket_priority=ticket_details.get("priority", "unknown"),
                 agent_id=ticket_details.get("assigned_agent_id", "unassigned"),
@@ -1045,11 +992,7 @@ Ensure the enriched description is actionable and the completion criteria are sp
         ticket_details: Dict[str, Any],
     ) -> str:
         """Fallback prompt when template is unavailable."""
-        solutions_text = (
-            "\n".join([f"{i + 1}. {sol}" for i, sol in enumerate(potential_solutions)])
-            if potential_solutions
-            else "No solutions provided"
-        )
+        solutions_text = "\n".join([f"{i + 1}. {sol}" for i, sol in enumerate(potential_solutions)]) if potential_solutions else "No solutions provided"
 
         return f"""You are a ticket clarification arbitrator. An agent has encountered a conflict or ambiguity in their ticket requirements.
 
@@ -1076,9 +1019,7 @@ Provide a clear, detailed resolution in markdown format that includes:
 
 Be decisive and provide actionable guidance to prevent the agent from creating infinite tasks."""
 
-    def _build_agent_state_prompt(
-        self, agent_output: str, task_info: Dict[str, Any], project_context: str
-    ) -> str:
+    def _build_agent_state_prompt(self, agent_output: str, task_info: Dict[str, Any], project_context: str) -> str:
         """Build prompt for agent state analysis."""
         return f"""Analyze this AI agent's current state and decide on the appropriate action.
 
@@ -1105,9 +1046,7 @@ Based on the agent's output, determine:
 Return as JSON with keys: state, decision, message, reasoning, confidence"""
 
     # Default/fallback methods
-    def _default_task_enrichment(
-        self, task_description: str, done_definition: str
-    ) -> Dict[str, Any]:
+    def _default_task_enrichment(self, task_description: str, done_definition: str) -> Dict[str, Any]:
         """Default task enrichment when model unavailable."""
         return {
             "enriched_description": task_description,
@@ -1127,13 +1066,9 @@ Return as JSON with keys: state, decision, message, reasoning, confidence"""
             "confidence": 0.3,
         }
 
-    def _default_agent_prompt(
-        self, task: Dict[str, Any], memories: List[Dict[str, Any]], project_context: str
-    ) -> str:
+    def _default_agent_prompt(self, task: Dict[str, Any], memories: List[Dict[str, Any]], project_context: str) -> str:
         """Generate default agent prompt."""
-        memory_context = "\n".join(
-            [f"- {mem.get('content', '')[:200]}" for mem in memories[:10]]
-        )
+        memory_context = "\n".join([f"- {mem.get('content', '')[:200]}" for mem in memories[:10]])
 
         return get_base_system_prompt(
             agent_id=task.get("agent_id", "unknown"),

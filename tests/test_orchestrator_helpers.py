@@ -3,7 +3,7 @@
 import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import ANY, MagicMock, Mock, patch
 
 import pytest
 
@@ -73,9 +73,7 @@ class TestSelfHealTimeoutOrdering:
             STALE_ACTIVE_WORKFLOW_CONSECUTIVE_CHECKS,
         )
 
-        workflow_abandonment_timeout = (
-            STALE_ACTIVE_WORKFLOW_CONSECUTIVE_CHECKS * DESIGN_QUEUE_SCAN_INTERVAL
-        )
+        workflow_abandonment_timeout = STALE_ACTIVE_WORKFLOW_CONSECUTIVE_CHECKS * DESIGN_QUEUE_SCAN_INTERVAL
         assert CLAIM_STALE_TIMEOUT_SECONDS < workflow_abandonment_timeout
 
 
@@ -191,9 +189,7 @@ class TestPersistentPipelineState:
 
         pps = PersistentPipelineState()
         with get_db() as db:
-            _set_project_context(
-                db, pps.STATE_KEY, {"current_design": None, "queue_status": None}
-            )
+            _set_project_context(db, pps.STATE_KEY, {"current_design": None, "queue_status": None})
 
         assert pps.has_incomplete_work() is False
 
@@ -318,22 +314,9 @@ class TestPersistentPipelineState:
         assert hashes == {"h1", "h2"}
 
         with get_db() as db:
-            assert (
-                db.query(ProjectContext)
-                .filter_by(key=PersistentPipelineState.STATE_KEY_LEGACY)
-                .first()
-                is None
-            )
-            assert (
-                db.query(ProjectContext)
-                .filter_by(key=PersistentPipelineState.PROCESSED_KEY_LEGACY)
-                .first()
-                is None
-            )
-            assert (
-                db.query(ProjectContext).filter_by(key=pps.STATE_KEY).first()
-                is not None
-            )
+            assert db.query(ProjectContext).filter_by(key=PersistentPipelineState.STATE_KEY_LEGACY).first() is None
+            assert db.query(ProjectContext).filter_by(key=PersistentPipelineState.PROCESSED_KEY_LEGACY).first() is None
+            assert db.query(ProjectContext).filter_by(key=pps.STATE_KEY).first() is not None
 
         # Idempotent: a second load() after migration behaves like any
         # other project's state, no re-migration/duplication.
@@ -578,9 +561,7 @@ class TestPickNextDesign:
         assert result is not None
         assert result.name == "Design"
 
-    def test_file_scan_fallback_creates_missing_design_row(
-        self, tmp_path, orch_db_env
-    ):
+    def test_file_scan_fallback_creates_missing_design_row(self, tmp_path, orch_db_env):
         """A design picked via the file-scan fallback (no matching
         AutopilotDesign row for the active project -- e.g. the project was
         just auto-created and has no design rows yet) must get a real DB
@@ -618,9 +599,7 @@ class TestPickNextDesign:
             assert row.project_id == "proj-new123"
             assert row.filename == "design.md"
 
-    def test_file_scan_fallback_reuses_existing_design_row(
-        self, tmp_path, orch_db_env
-    ):
+    def test_file_scan_fallback_reuses_existing_design_row(self, tmp_path, orch_db_env):
         """Regression: must not create a duplicate row on every poll cycle
         once one already exists for this file."""
         from src.autopilot.orchestrator import OrchestratorLogger, pick_next_design
@@ -656,11 +635,7 @@ class TestPickNextDesign:
         from src.core.database import get_db
 
         with get_db() as db:
-            matches = (
-                db.query(AutopilotDesign)
-                .filter_by(project_id="proj-new456", filename="design.md")
-                .all()
-            )
+            matches = db.query(AutopilotDesign).filter_by(project_id="proj-new456", filename="design.md").all()
             assert len(matches) == 1
 
     def test_project_id_wins_over_is_active_when_given(self, tmp_path, orch_db_env):
@@ -677,28 +652,30 @@ class TestPickNextDesign:
         from src.core.database import AutopilotDesign, AutopilotProject
 
         session = orch_db_env.get_session()
-        session.add(
-            AutopilotProject(
-                id="proj-a", name="a", base_dir="/tmp/proj-a", is_active=False
-            )
-        )
-        session.add(
-            AutopilotProject(
-                id="proj-b", name="b", base_dir="/tmp/proj-b", is_active=True
-            )
-        )
+        session.add(AutopilotProject(id="proj-a", name="a", base_dir="/tmp/proj-a", is_active=False))
+        session.add(AutopilotProject(id="proj-b", name="b", base_dir="/tmp/proj-b", is_active=True))
         (tmp_path / "a.md").write_text("# A")
         (tmp_path / "b.md").write_text("# B")
         session.add(
             AutopilotDesign(
-                id="des-a", project_id="proj-a", filename="a.md", name="A",
-                status="pending", ordinal=1, file_path=str(tmp_path / "a.md"),
+                id="des-a",
+                project_id="proj-a",
+                filename="a.md",
+                name="A",
+                status="pending",
+                ordinal=1,
+                file_path=str(tmp_path / "a.md"),
             )
         )
         session.add(
             AutopilotDesign(
-                id="des-b", project_id="proj-b", filename="b.md", name="B",
-                status="pending", ordinal=1, file_path=str(tmp_path / "b.md"),
+                id="des-b",
+                project_id="proj-b",
+                filename="b.md",
+                name="B",
+                status="pending",
+                ordinal=1,
+                file_path=str(tmp_path / "b.md"),
             )
         )
         session.commit()
@@ -817,9 +794,7 @@ class TestRegisterOrchestratorAgent:
     restart) already used, colliding with it and failing exactly the same
     way the original bug did. Observed live, restart after restart."""
 
-    def test_three_consecutive_registrations_never_collide(
-        self, orch_db_env, tmp_path, monkeypatch
-    ):
+    def test_three_consecutive_registrations_never_collide(self, orch_db_env, tmp_path, monkeypatch):
         from src.autopilot.orchestrator import (
             OrchestratorLogger,
             _register_orchestrator_agent,
@@ -830,9 +805,7 @@ class TestRegisterOrchestratorAgent:
         # (defaults to hephaestus.db, not HEPHAESTUS_TEST_DB) -- redirect it
         # to this test's real sqlite fixture instead of the live production
         # database.
-        monkeypatch.setattr(
-            "src.core.database.DatabaseManager", lambda *a, **kw: orch_db_env
-        )
+        monkeypatch.setattr("src.core.database.DatabaseManager", lambda *a, **kw: orch_db_env)
 
         logger = OrchestratorLogger(tmp_path)
 
@@ -850,9 +823,7 @@ class TestRegisterOrchestratorAgent:
             assert current is not None
             assert current.tmux_session_name == "orchestrator"
 
-            terminated = [
-                session.query(Agent).filter_by(id=i).first() for i in ids[:-1]
-            ]
+            terminated = [session.query(Agent).filter_by(id=i).first() for i in ids[:-1]]
             for agent in terminated:
                 assert agent.status == "terminated"
                 assert agent.terminated_at is not None
@@ -870,9 +841,7 @@ class TestGetTasks:
 
         with db.session_scope() as session:
             if workflow_id and not session.query(Workflow).filter_by(id=workflow_id).first():
-                session.add(
-                    Workflow(id=workflow_id, name="t", phases_folder_path="/tmp", status="active")
-                )
+                session.add(Workflow(id=workflow_id, name="t", phases_folder_path="/tmp", status="active"))
             session.add(
                 Task(
                     id=task_id,
@@ -948,10 +917,7 @@ class TestWorkflowBelongsToProject:
         created) must not override a definitive project_id mismatch."""
         from src.autopilot.orchestrator import _workflow_belongs_to_project
 
-        assert (
-            _workflow_belongs_to_project("proj-b", "/x/a/.worktrees/wt_1", "proj-a", "/x/a")
-            is False
-        )
+        assert _workflow_belongs_to_project("proj-b", "/x/a/.worktrees/wt_1", "proj-a", "/x/a") is False
 
     def test_falls_back_to_path_when_no_project_id_on_either_side(self, tmp_path):
         from src.autopilot.orchestrator import _workflow_belongs_to_project
@@ -961,9 +927,7 @@ class TestWorkflowBelongsToProject:
         wt = project / ".worktrees" / "wt_1"
         wt.mkdir(parents=True)
 
-        assert (
-            _workflow_belongs_to_project(None, str(wt), None, str(project)) is True
-        )
+        assert _workflow_belongs_to_project(None, str(wt), None, str(project)) is True
 
     def test_sibling_directory_name_prefix_does_not_false_match(self, tmp_path):
         """Regression: a raw str.startswith() prefix match wrongly treated
@@ -980,9 +944,7 @@ class TestWorkflowBelongsToProject:
         wt = project_ab / ".worktrees" / "wt_1"
         wt.mkdir(parents=True)
 
-        assert (
-            _workflow_belongs_to_project(None, str(wt), None, str(project_a)) is False
-        )
+        assert _workflow_belongs_to_project(None, str(wt), None, str(project_a)) is False
 
     def test_no_working_directory_and_no_project_id_defaults_to_false(self):
         """Regression: the previous-workflow check used to only clear stale
@@ -1005,9 +967,7 @@ class TestWorkflowBelongsToProject:
         wt = project / ".worktrees" / "wt_1"
         wt.mkdir(parents=True)
 
-        assert (
-            _workflow_belongs_to_project("proj-a", str(wt), None, str(project)) is True
-        )
+        assert _workflow_belongs_to_project("proj-a", str(wt), None, str(project)) is True
 
 
 class TestGetWorkflowStatus:
@@ -1023,9 +983,7 @@ class TestGetWorkflowStatus:
         from src.core.database import AutopilotProject, Workflow
 
         with orch_db_env.session_scope() as session:
-            session.add(
-                AutopilotProject(id="proj-other", name="other", base_dir="/tmp/other-project")
-            )
+            session.add(AutopilotProject(id="proj-other", name="other", base_dir="/tmp/other-project"))
             session.add(
                 Workflow(
                     id="wf-1",
@@ -1115,9 +1073,7 @@ class TestGetActiveWorkflows:
     def test_paused_workflows_excluded_regardless_of_scope(self, orch_db_env):
         from src.autopilot.orchestrator import get_active_workflows
 
-        self._make_workflow(
-            orch_db_env, "wf-a", "/Users/x/code/project-a/.worktrees/wt_1", status="paused"
-        )
+        self._make_workflow(orch_db_env, "wf-a", "/Users/x/code/project-a/.worktrees/wt_1", status="paused")
 
         assert get_active_workflows() == []
         assert get_active_workflows(project_path="/Users/x/code/project-a") == []
@@ -1201,12 +1157,8 @@ class TestCleanStaleAssignedTasks:
         from src.core.database import Agent, Task, Workflow
 
         with db.session_scope() as session:
-            session.add(
-                Workflow(id="wf-1", name="t", phases_folder_path="/tmp", status="active")
-            )
-            session.add(
-                Agent(id="agent-1", system_prompt="p", status="terminated", cli_type="pi")
-            )
+            session.add(Workflow(id="wf-1", name="t", phases_folder_path="/tmp", status="active"))
+            session.add(Agent(id="agent-1", system_prompt="p", status="terminated", cli_type="pi"))
             session.add(
                 Task(
                     id="task-1",
@@ -1226,9 +1178,7 @@ class TestCleanStaleAssignedTasks:
         )
         from src.core.database import Task
 
-        self._make_workflow_task_agent(
-            orch_db_env, failure_reason="Missing output artifact: docs/report.md"
-        )
+        self._make_workflow_task_agent(orch_db_env, failure_reason="Missing output artifact: docs/report.md")
 
         _clean_stale_assigned_tasks("wf-1", OrchestratorLogger(tmp_path))
 
@@ -1267,16 +1217,12 @@ class TestRetryFailedTasks:
     running attempt_recovery's other, destructive actions (git reset
     --hard on any dirty repo, killing every currently-working agent)."""
 
-    def _make_workflow_and_failed_task(
-        self, db, retry_count=0, phase_id=None, task_id="task-1"
-    ):
+    def _make_workflow_and_failed_task(self, db, retry_count=0, phase_id=None, task_id="task-1"):
         from src.core.database import Task, Workflow
 
         with db.session_scope() as session:
             if not session.query(Workflow).filter_by(id="wf-1").first():
-                session.add(
-                    Workflow(id="wf-1", name="t", phases_folder_path="/tmp", status="active")
-                )
+                session.add(Workflow(id="wf-1", name="t", phases_folder_path="/tmp", status="active"))
             session.add(
                 Task(
                     id=task_id,
@@ -1291,9 +1237,7 @@ class TestRetryFailedTasks:
             )
 
     @patch("src.autopilot.orchestrator.create_agent_for_task_direct")
-    def test_retries_failed_task_and_dispatches_agent(
-        self, mock_create_agent, orch_db_env, tmp_path
-    ):
+    def test_retries_failed_task_and_dispatches_agent(self, mock_create_agent, orch_db_env, tmp_path):
         """Regression: create_agent_for_task_direct does NOT update the
         task row itself (same contract _create_phase_task's callers rely
         on) -- a version of this that only reset status to "pending" and
@@ -1343,9 +1287,7 @@ class TestRetryFailedTasks:
             assert task.retry_count == 2
 
     @patch("src.autopilot.orchestrator.create_agent_for_task_direct", return_value=None)
-    def test_agent_dispatch_failure_lands_back_on_failed_not_stuck_pending(
-        self, mock_create_agent, orch_db_env, tmp_path
-    ):
+    def test_agent_dispatch_failure_lands_back_on_failed_not_stuck_pending(self, mock_create_agent, orch_db_env, tmp_path):
         """Same dead-end this exact fix closed for _maybe_retry_failed_tasks:
         leaving the task "pending" on a dispatch failure would strand it --
         nothing dispatches an agent for an already-existing pending task
@@ -1410,9 +1352,7 @@ class TestResumeStuckWorkflowTasks:
         from src.core.database import Workflow
 
         with db.session_scope() as session:
-            session.add(
-                Workflow(id=wf_id, name="t", phases_folder_path="/tmp", status=status)
-            )
+            session.add(Workflow(id=wf_id, name="t", phases_folder_path="/tmp", status=status))
 
     def _make_task(self, db, task_id, wf_id, status, agent_id=None, phase_id=None):
         from src.core.database import Task
@@ -1641,9 +1581,7 @@ class TestCreateAgentForTaskDirectAppStateGuard:
         from src.core.database import Task
 
         with orch_db_env.session_scope() as session:
-            session.add(
-                Task(id="task-1", raw_description="r", done_definition="d", status="pending")
-            )
+            session.add(Task(id="task-1", raw_description="r", done_definition="d", status="pending"))
 
         with patch(
             "src.core.app_context.get_app_state",
@@ -1664,9 +1602,7 @@ class TestCreateCorrectiveTask:
         from src.core.database import Phase, PhaseExecution, Workflow
 
         with db.session_scope() as session:
-            session.add(
-                Workflow(id="wf-1", name="t", phases_folder_path="/tmp", status=wf_status)
-            )
+            session.add(Workflow(id="wf-1", name="t", phases_folder_path="/tmp", status=wf_status))
             session.add(
                 Phase(
                     id="phase-1",
@@ -1679,7 +1615,9 @@ class TestCreateCorrectiveTask:
             )
             session.add(
                 PhaseExecution(
-                    id="exec-1", phase_id="phase-1", workflow_execution_id="wf-1",
+                    id="exec-1",
+                    phase_id="phase-1",
+                    workflow_execution_id="wf-1",
                     status=phase_status,
                 )
             )
@@ -1698,7 +1636,10 @@ class TestCreateCorrectiveTask:
         mock_create_agent.return_value = {"agent_id": "new-agent"}
 
         task_id = _create_corrective_task(
-            "wf-1", "phase-1", "Feature Architect", "got 6, expected 1-5",
+            "wf-1",
+            "phase-1",
+            "Feature Architect",
+            "got 6, expected 1-5",
             OrchestratorLogger(tmp_path),
         )
 
@@ -1740,7 +1681,10 @@ class TestCreateCorrectiveTask:
         mock_create_agent.return_value = {"agent_id": "new-agent"}
 
         _create_corrective_task(
-            "wf-1", "phase-1", "Feature Architect", "got 6, expected 1-5",
+            "wf-1",
+            "phase-1",
+            "Feature Architect",
+            "got 6, expected 1-5",
             OrchestratorLogger(tmp_path),
         )
 
@@ -1754,7 +1698,10 @@ class TestCreateCorrectiveTask:
         from src.autopilot.orchestrator import OrchestratorLogger, _create_corrective_task
 
         result = _create_corrective_task(
-            "does-not-exist", "phase-1", "Feature Architect", "bad output",
+            "does-not-exist",
+            "phase-1",
+            "Feature Architect",
+            "bad output",
             OrchestratorLogger(tmp_path),
         )
 
@@ -1777,7 +1724,10 @@ class TestCreateCorrectiveTask:
             wf.paused_by = "user"
 
         result = _create_corrective_task(
-            "wf-1", "phase-1", "Feature Architect", "got 6, expected 1-5",
+            "wf-1",
+            "phase-1",
+            "Feature Architect",
+            "got 6, expected 1-5",
             OrchestratorLogger(tmp_path),
         )
 
@@ -1795,7 +1745,10 @@ class TestCreateCorrectiveTask:
         self._seed_workflow_and_phase(orch_db_env)
 
         task_id = _create_corrective_task(
-            "wf-1", "phase-1", "Feature Architect", "bad output",
+            "wf-1",
+            "phase-1",
+            "Feature Architect",
+            "bad output",
             OrchestratorLogger(tmp_path),
         )
 
@@ -1812,9 +1765,7 @@ class TestWaitForTaskTerminal:
         from src.core.database import Task
 
         with orch_db_env.session_scope() as session:
-            session.add(
-                Task(id="t-1", raw_description="r", done_definition="d", status="done")
-            )
+            session.add(Task(id="t-1", raw_description="r", done_definition="d", status="done"))
 
         result = _wait_for_task_terminal("t-1", timeout_seconds=5, logger=OrchestratorLogger(tmp_path))
         assert result == "done"
@@ -1824,9 +1775,7 @@ class TestWaitForTaskTerminal:
         from src.core.database import Task
 
         with orch_db_env.session_scope() as session:
-            session.add(
-                Task(id="t-1", raw_description="r", done_definition="d", status="failed")
-            )
+            session.add(Task(id="t-1", raw_description="r", done_definition="d", status="failed"))
 
         result = _wait_for_task_terminal("t-1", timeout_seconds=5, logger=OrchestratorLogger(tmp_path))
         assert result == "failed"
@@ -1836,9 +1785,7 @@ class TestWaitForTaskTerminal:
         from src.core.database import Task
 
         with orch_db_env.session_scope() as session:
-            session.add(
-                Task(id="t-1", raw_description="r", done_definition="d", status="in_progress")
-            )
+            session.add(Task(id="t-1", raw_description="r", done_definition="d", status="in_progress"))
 
         with patch("src.autopilot.orchestrator.POLL_INTERVAL", 0.01):
             result = _wait_for_task_terminal("t-1", timeout_seconds=0.05, logger=OrchestratorLogger(tmp_path))
@@ -1849,9 +1796,7 @@ class TestWaitForTaskTerminal:
         from src.core.database import Task
 
         with orch_db_env.session_scope() as session:
-            session.add(
-                Task(id="t-1", raw_description="r", done_definition="d", status="in_progress")
-            )
+            session.add(Task(id="t-1", raw_description="r", done_definition="d", status="in_progress"))
 
         with patch("src.autopilot.orchestrator._should_stop", return_value=True):
             result = _wait_for_task_terminal("t-1", timeout_seconds=5, logger=OrchestratorLogger(tmp_path))
@@ -1876,14 +1821,15 @@ class TestNegotiateValidationFix:
             if len(parsed["features"]) > 5:
                 raise ValueError("too many")
 
-        with patch(
-            "src.autopilot.orchestrator._create_corrective_task", side_effect=fake_create_task
-        ), patch(
-            "src.autopilot.orchestrator._wait_for_task_terminal", return_value="done"
-        ):
+        with patch("src.autopilot.orchestrator._create_corrective_task", side_effect=fake_create_task), patch("src.autopilot.orchestrator._wait_for_task_terminal", return_value="done"):
             success, result = _negotiate_validation_fix(
-                "wf-1", "phase-1", "Feature Architect", output_path, validate_fn,
-                "got 6, expected 1-5", OrchestratorLogger(tmp_path),
+                "wf-1",
+                "phase-1",
+                "Feature Architect",
+                output_path,
+                validate_fn,
+                "got 6, expected 1-5",
+                OrchestratorLogger(tmp_path),
             )
 
         assert success is True
@@ -1899,14 +1845,16 @@ class TestNegotiateValidationFix:
             if len(parsed["features"]) > 5:
                 raise ValueError("too many")
 
-        with patch(
-            "src.autopilot.orchestrator._create_corrective_task", return_value="task-1"
-        ), patch(
-            "src.autopilot.orchestrator._wait_for_task_terminal", return_value="done"
-        ) as mock_wait:
+        with patch("src.autopilot.orchestrator._create_corrective_task", return_value="task-1"), patch("src.autopilot.orchestrator._wait_for_task_terminal", return_value="done") as mock_wait:
             success, result = _negotiate_validation_fix(
-                "wf-1", "phase-1", "Feature Architect", output_path, validate_fn,
-                "too many", OrchestratorLogger(tmp_path), max_attempts=2,
+                "wf-1",
+                "phase-1",
+                "Feature Architect",
+                output_path,
+                validate_fn,
+                "too many",
+                OrchestratorLogger(tmp_path),
+                max_attempts=2,
             )
 
         assert success is False
@@ -1918,12 +1866,15 @@ class TestNegotiateValidationFix:
 
         output_path = tmp_path / "features.json"
 
-        with patch(
-            "src.autopilot.orchestrator._create_corrective_task", return_value=None
-        ):
+        with patch("src.autopilot.orchestrator._create_corrective_task", return_value=None):
             success, result = _negotiate_validation_fix(
-                "wf-1", "phase-1", "Feature Architect", output_path, lambda x: None,
-                "bad output", OrchestratorLogger(tmp_path),
+                "wf-1",
+                "phase-1",
+                "Feature Architect",
+                output_path,
+                lambda x: None,
+                "bad output",
+                OrchestratorLogger(tmp_path),
             )
 
         assert success is False
@@ -1934,14 +1885,15 @@ class TestNegotiateValidationFix:
 
         output_path = tmp_path / "features.json"
 
-        with patch(
-            "src.autopilot.orchestrator._create_corrective_task", return_value="task-1"
-        ), patch(
-            "src.autopilot.orchestrator._wait_for_task_terminal", return_value="failed"
-        ):
+        with patch("src.autopilot.orchestrator._create_corrective_task", return_value="task-1"), patch("src.autopilot.orchestrator._wait_for_task_terminal", return_value="failed"):
             success, result = _negotiate_validation_fix(
-                "wf-1", "phase-1", "Feature Architect", output_path, lambda x: None,
-                "bad output", OrchestratorLogger(tmp_path),
+                "wf-1",
+                "phase-1",
+                "Feature Architect",
+                output_path,
+                lambda x: None,
+                "bad output",
+                OrchestratorLogger(tmp_path),
             )
 
         assert success is False
@@ -1960,9 +1912,7 @@ class TestGetAgents:
 
         with db.session_scope() as session:
             if workflow_id and not session.query(Workflow).filter_by(id=workflow_id).first():
-                session.add(
-                    Workflow(id=workflow_id, name="t", phases_folder_path="/tmp", status="active")
-                )
+                session.add(Workflow(id=workflow_id, name="t", phases_folder_path="/tmp", status="active"))
             session.add(
                 Task(
                     id=task_id,
@@ -2029,6 +1979,7 @@ class TestPeekAgentOutput:
 
     def test_returns_empty_on_none(self, orch_db_env):
         from src.autopilot.orchestrator import peek_agent_output
+
         result = peek_agent_output("a1")
         assert result == ""
 
@@ -2072,7 +2023,6 @@ class TestOrchestratorLogger:
         logger.save_state(state)
         state_file = tmp_path / "state.json"
         assert state_file.exists()
-
 
 
 class TestSweepStrayFiles:
@@ -2177,6 +2127,7 @@ class TestSweepStrayFiles:
             _sweep_stray_files(tmp_path, feature, docs, logger)
         assert (docs / "qa_result.json").exists()
 
+
 class TestCheckApiCredits:
     @patch("src.autopilot.orchestrator.get_tasks")
     @patch("src.autopilot.orchestrator.get_agents")
@@ -2193,9 +2144,7 @@ class TestCheckApiCredits:
     def test_agent_credit_error(self, mock_agents, mock_tasks):
         from src.autopilot.orchestrator import check_api_credits
 
-        mock_agents.return_value = [
-            {"id": "a1", "status": "error", "error": "insufficient credits"}
-        ]
+        mock_agents.return_value = [{"id": "a1", "status": "error", "error": "insufficient credits"}]
         mock_tasks.return_value = []
         found, msg = check_api_credits()
         assert found is True
@@ -2379,9 +2328,7 @@ class TestAttemptRecovery:
     @patch("src.autopilot.orchestrator.create_agent_for_task_direct")
     @patch("src.autopilot.orchestrator.get_agents")
     @patch("src.autopilot.orchestrator.get_tasks")
-    def test_retries_failed_tasks(
-        self, mock_tasks, mock_agents, mock_create_agent, mock_update_status, mock_get_db
-    ):
+    def test_retries_failed_tasks(self, mock_tasks, mock_agents, mock_create_agent, mock_update_status, mock_get_db):
         from src.autopilot.orchestrator import OrchestratorLogger, attempt_recovery
 
         # Mock get_db to avoid database queries
@@ -2405,9 +2352,7 @@ class TestAttemptRecovery:
 
     @patch("src.autopilot.orchestrator.create_agent_for_task_direct")
     @patch("src.autopilot.orchestrator.get_agents")
-    def test_retry_count_persists_and_eventually_stops(
-        self, mock_agents, mock_create_agent, orch_db_env
-    ):
+    def test_retry_count_persists_and_eventually_stops(self, mock_agents, mock_create_agent, orch_db_env):
         """Regression (real DB, no get_db mocking): a task whose retry
         always fails (e.g. its worktree was deleted out from under it) must
         stop retrying after 2 attempts, not loop forever. Before this fix,
@@ -2417,9 +2362,7 @@ class TestAttemptRecovery:
         from src.core.database import Phase, Task, Workflow
 
         with orch_db_env.session_scope() as session:
-            session.add(
-                Workflow(id="wf-1", name="t", phases_folder_path="/tmp", status="active")
-            )
+            session.add(Workflow(id="wf-1", name="t", phases_folder_path="/tmp", status="active"))
             session.add(
                 Phase(
                     id="p1",
@@ -2497,10 +2440,7 @@ class TestAttemptRecovery:
     @patch("src.autopilot.orchestrator.api_post")
     @patch("src.autopilot.orchestrator.get_agents")
     @patch("src.autopilot.orchestrator.get_tasks")
-    def test_terminates_stale_agents(
-        self, mock_tasks, mock_agents, mock_post, mock_get_db,
-        mock_core_get_db, mock_terminate, tmp_path
-    ):
+    def test_terminates_stale_agents(self, mock_tasks, mock_agents, mock_post, mock_get_db, mock_core_get_db, mock_terminate, tmp_path):
         from src.autopilot.orchestrator import OrchestratorLogger, attempt_recovery
 
         # Mock get_db to avoid database queries
@@ -2516,6 +2456,7 @@ class TestAttemptRecovery:
 
         # Set PROJECT_PATH so code doesn't return early
         import os
+
         os.environ["PROJECT_PATH"] = str(tmp_path)
 
         logger = OrchestratorLogger(Path("/tmp/logs"))
@@ -2621,9 +2562,7 @@ class TestRunOneFeatureStateIsolation:
             db_id=design_id,
         )
 
-    def test_link_uses_this_calls_own_workflow_id_not_a_sibling_overwrite(
-        self, orch_db_env, tmp_path
-    ):
+    def test_link_uses_this_calls_own_workflow_id_not_a_sibling_overwrite(self, orch_db_env, tmp_path):
         from src.autopilot.orchestrator import (
             OrchestratorLogger,
             PipelineState,
@@ -2634,12 +2573,8 @@ class TestRunOneFeatureStateIsolation:
         design_id = "design-1"
         feature_key = "feat-a"
         with orch_db_env.session_scope() as session:
-            session.add(
-                AutopilotProject(id="proj-1", name="p", base_dir="/tmp/proj-1")
-            )
-            session.add(
-                AutopilotDesign(id=design_id, project_id="proj-1", filename="d.md", name="D")
-            )
+            session.add(AutopilotProject(id="proj-1", name="p", base_dir="/tmp/proj-1"))
+            session.add(AutopilotDesign(id=design_id, project_id="proj-1", filename="d.md", name="D"))
             session.add(
                 Feature(
                     id="feature-row-1",
@@ -2663,9 +2598,7 @@ class TestRunOneFeatureStateIsolation:
         with orch_db_env.session_scope() as session:
             from src.core.database import Workflow
 
-            session.add(
-                Workflow(id="wf-correct", name="t", phases_folder_path="/tmp", status="completed")
-            )
+            session.add(Workflow(id="wf-correct", name="t", phases_folder_path="/tmp", status="completed"))
 
         # The SAME PipelineState instance a real ThreadPoolExecutor run would
         # hand to every parallel feature.
@@ -2682,12 +2615,15 @@ class TestRunOneFeatureStateIsolation:
             shared_state.current_workflow_id = "wf-from-sibling-feature"
             return "completed"
 
-        with patch(
-            "src.autopilot.orchestrator._create_integration_worktree",
-            return_value=worktree_dir,
-        ), patch(
-            "src.autopilot.orchestrator.run_single_workflow",
-            side_effect=fake_run_single_workflow,
+        with (
+            patch(
+                "src.autopilot.orchestrator._create_integration_worktree",
+                return_value=worktree_dir,
+            ),
+            patch(
+                "src.autopilot.orchestrator.run_single_workflow",
+                side_effect=fake_run_single_workflow,
+            ),
         ):
             status = _run_one_feature(
                 sdk=MagicMock(),
@@ -2729,9 +2665,7 @@ class TestRunOneFeatureWorktreeCleanupTiming:
 
         with orch_db_env.session_scope() as session:
             session.add(AutopilotProject(id="proj-1", name="p", base_dir="/tmp/proj-1"))
-            session.add(
-                AutopilotDesign(id=design_id, project_id="proj-1", filename="d.md", name="D")
-            )
+            session.add(AutopilotDesign(id=design_id, project_id="proj-1", filename="d.md", name="D"))
             session.add(
                 Feature(
                     id="feature-row-1",
@@ -2756,18 +2690,18 @@ class TestRunOneFeatureWorktreeCleanupTiming:
     def _run(self, orch_db_env, tmp_path, wf_status, feature_key="feat-a"):
         from src.autopilot.orchestrator import OrchestratorLogger, _run_one_feature
 
-        design_entry, feature, designs_folder, project_path, worktree_dir = self._setup(
-            orch_db_env, tmp_path, feature_key
-        )
-        with patch(
-            "src.autopilot.orchestrator._create_integration_worktree",
-            return_value=worktree_dir,
-        ), patch(
-            "src.autopilot.orchestrator.run_single_workflow",
-            return_value=wf_status,
-        ), patch(
-            "src.autopilot.orchestrator._cleanup_worktree"
-        ) as mock_cleanup:
+        design_entry, feature, designs_folder, project_path, worktree_dir = self._setup(orch_db_env, tmp_path, feature_key)
+        with (
+            patch(
+                "src.autopilot.orchestrator._create_integration_worktree",
+                return_value=worktree_dir,
+            ),
+            patch(
+                "src.autopilot.orchestrator.run_single_workflow",
+                return_value=wf_status,
+            ),
+            patch("src.autopilot.orchestrator._cleanup_worktree") as mock_cleanup,
+        ):
             status = _run_one_feature(
                 sdk=MagicMock(),
                 design_entry=design_entry,
@@ -2785,9 +2719,7 @@ class TestRunOneFeatureWorktreeCleanupTiming:
         mock_cleanup.assert_called_once()
 
     @pytest.mark.parametrize("wf_status", ["interrupted", "timeout", "failed"])
-    def test_non_completed_statuses_never_clean_up_worktree(
-        self, orch_db_env, tmp_path, wf_status
-    ):
+    def test_non_completed_statuses_never_clean_up_worktree(self, orch_db_env, tmp_path, wf_status):
         status, mock_cleanup = self._run(orch_db_env, tmp_path, wf_status)
         assert status == "failed"
         mock_cleanup.assert_not_called()
@@ -2815,18 +2747,18 @@ class TestRunOneFeatureWorktreeCleanupTiming:
     def test_exception_mid_pipeline_never_cleans_up_worktree(self, orch_db_env, tmp_path):
         from src.autopilot.orchestrator import OrchestratorLogger, _run_one_feature
 
-        design_entry, feature, designs_folder, project_path, worktree_dir = self._setup(
-            orch_db_env, tmp_path
-        )
-        with patch(
-            "src.autopilot.orchestrator._create_integration_worktree",
-            return_value=worktree_dir,
-        ), patch(
-            "src.autopilot.orchestrator.run_single_workflow",
-            side_effect=RuntimeError("boom"),
-        ), patch(
-            "src.autopilot.orchestrator._cleanup_worktree"
-        ) as mock_cleanup:
+        design_entry, feature, designs_folder, project_path, worktree_dir = self._setup(orch_db_env, tmp_path)
+        with (
+            patch(
+                "src.autopilot.orchestrator._create_integration_worktree",
+                return_value=worktree_dir,
+            ),
+            patch(
+                "src.autopilot.orchestrator.run_single_workflow",
+                side_effect=RuntimeError("boom"),
+            ),
+            patch("src.autopilot.orchestrator._cleanup_worktree") as mock_cleanup,
+        ):
             status = _run_one_feature(
                 sdk=MagicMock(),
                 design_entry=design_entry,
@@ -2862,9 +2794,7 @@ class TestRunOneFeatureThreadsProjectId:
         feature_key = "feat-a"
         with orch_db_env.session_scope() as session:
             session.add(AutopilotProject(id="proj-1", name="p", base_dir="/tmp/proj-1"))
-            session.add(
-                AutopilotDesign(id=design_id, project_id="proj-1", filename="d.md", name="D")
-            )
+            session.add(AutopilotDesign(id=design_id, project_id="proj-1", filename="d.md", name="D"))
             session.add(
                 Feature(
                     id="feature-row-1",
@@ -2878,9 +2808,7 @@ class TestRunOneFeatureThreadsProjectId:
 
         design_path = tmp_path / "design.md"
         design_path.write_text("# Design\n")
-        design_entry = DesignEntry(
-            path=design_path, name="Test Design", content_hash="hash", db_id=design_id
-        )
+        design_entry = DesignEntry(path=design_path, name="Test Design", content_hash="hash", db_id=design_id)
         feature = {"id": feature_key, "name": "Feature A"}
         designs_folder = tmp_path / "designs"
         (designs_folder / "features" / feature_key).mkdir(parents=True)
@@ -2895,14 +2823,16 @@ class TestRunOneFeatureThreadsProjectId:
             captured["project_id"] = kwargs.get("project_id")
             return "completed"
 
-        with patch(
-            "src.autopilot.orchestrator._create_integration_worktree",
-            return_value=worktree_dir,
-        ), patch(
-            "src.autopilot.orchestrator.run_single_workflow",
-            side_effect=fake_run_single_workflow,
-        ), patch(
-            "src.autopilot.orchestrator._cleanup_worktree"
+        with (
+            patch(
+                "src.autopilot.orchestrator._create_integration_worktree",
+                return_value=worktree_dir,
+            ),
+            patch(
+                "src.autopilot.orchestrator.run_single_workflow",
+                side_effect=fake_run_single_workflow,
+            ),
+            patch("src.autopilot.orchestrator._cleanup_worktree"),
         ):
             _run_one_feature(
                 sdk=MagicMock(),
@@ -2936,9 +2866,7 @@ class TestRunOneFeatureSyncsFeatureStatusOnEarlyReturn:
     _update_feature_status -- leaving feat_record.status stuck at
     whatever an earlier, now-superseded call last set it to."""
 
-    def test_feature_status_synced_when_workflow_already_completed(
-        self, orch_db_env, tmp_path
-    ):
+    def test_feature_status_synced_when_workflow_already_completed(self, orch_db_env, tmp_path):
         from src.autopilot.orchestrator import (
             DesignEntry,
             OrchestratorLogger,
@@ -2950,9 +2878,7 @@ class TestRunOneFeatureSyncsFeatureStatusOnEarlyReturn:
         feature_key = "feat-a"
         with orch_db_env.session_scope() as session:
             session.add(AutopilotProject(id="proj-1", name="p", base_dir="/tmp/proj-1"))
-            session.add(
-                AutopilotDesign(id=design_id, project_id="proj-1", filename="d.md", name="D")
-            )
+            session.add(AutopilotDesign(id=design_id, project_id="proj-1", filename="d.md", name="D"))
             session.add(
                 Workflow(
                     id="wf-done",
@@ -2976,18 +2902,14 @@ class TestRunOneFeatureSyncsFeatureStatusOnEarlyReturn:
 
         design_path = tmp_path / "design.md"
         design_path.write_text("# Design\n")
-        design_entry = DesignEntry(
-            path=design_path, name="Test Design", content_hash="hash", db_id=design_id
-        )
+        design_entry = DesignEntry(path=design_path, name="Test Design", content_hash="hash", db_id=design_id)
         feature = {"id": feature_key, "name": "Feature A"}
         designs_folder = tmp_path / "designs"
         (designs_folder / "features" / feature_key).mkdir(parents=True)
         project_path = tmp_path / "project"
         project_path.mkdir()
 
-        with patch(
-            "src.autopilot.orchestrator.run_single_workflow"
-        ) as mock_run, patch("src.autopilot.orchestrator._cleanup_worktree"):
+        with patch("src.autopilot.orchestrator.run_single_workflow") as mock_run, patch("src.autopilot.orchestrator._cleanup_worktree"):
             status = _run_one_feature(
                 sdk=MagicMock(),
                 design_entry=design_entry,
@@ -3004,9 +2926,7 @@ class TestRunOneFeatureSyncsFeatureStatusOnEarlyReturn:
         with orch_db_env.session_scope() as session:
             feat = session.query(Feature).filter_by(id="feature-row-1").first()
             assert feat.status == "completed", (
-                "Feature.status must be synced to the workflow's real "
-                "outcome even on the already-completed fast path, not just "
-                "the run-it-yourself path further down this function"
+                "Feature.status must be synced to the workflow's real outcome even on the already-completed fast path, not just the run-it-yourself path further down this function"
             )
 
 
@@ -3019,17 +2939,13 @@ class TestSyncStaleFeatureStatuses:
     workflow directly, never re-walking the whole design), so nothing ever
     calls _update_feature_status for it again."""
 
-    def test_flips_feature_to_completed_when_workflow_already_completed(
-        self, orch_db_env
-    ):
+    def test_flips_feature_to_completed_when_workflow_already_completed(self, orch_db_env):
         from src.autopilot.orchestrator import _sync_stale_feature_statuses
         from src.core.database import AutopilotDesign, AutopilotProject, Feature, Workflow
 
         with orch_db_env.session_scope() as session:
             session.add(AutopilotProject(id="proj-1", name="p", base_dir="/tmp/proj-1"))
-            session.add(
-                AutopilotDesign(id="design-1", project_id="proj-1", filename="d.md", name="D")
-            )
+            session.add(AutopilotDesign(id="design-1", project_id="proj-1", filename="d.md", name="D"))
             session.add(
                 Workflow(
                     id="wf-done",
@@ -3065,9 +2981,7 @@ class TestSyncStaleFeatureStatuses:
 
         with orch_db_env.session_scope() as session:
             session.add(AutopilotProject(id="proj-1", name="p", base_dir="/tmp/proj-1"))
-            session.add(
-                AutopilotDesign(id="design-1", project_id="proj-1", filename="d.md", name="D")
-            )
+            session.add(AutopilotDesign(id="design-1", project_id="proj-1", filename="d.md", name="D"))
             session.add(
                 Workflow(
                     id="wf-active",
@@ -3104,9 +3018,7 @@ class TestSyncStaleFeatureStatuses:
 
         with orch_db_env.session_scope() as session:
             session.add(AutopilotProject(id="proj-1", name="p", base_dir="/tmp/proj-1"))
-            session.add(
-                AutopilotDesign(id="design-1", project_id="proj-1", filename="d.md", name="D")
-            )
+            session.add(AutopilotDesign(id="design-1", project_id="proj-1", filename="d.md", name="D"))
             session.add(
                 Workflow(
                     id="wf-done",
@@ -3178,9 +3090,7 @@ class TestRecoverAbandonedWorkflowsMissingWorktree:
 
         design_id = "des-73b1ced0"
         feature_key = "gateway-router-metrics"
-        repo_path, branch = self._make_repo_with_feature_branch(
-            tmp_path, design_id, feature_key
-        )
+        repo_path, branch = self._make_repo_with_feature_branch(tmp_path, design_id, feature_key)
 
         # _create_integration_worktree resolves its own DatabaseManager and
         # WorktreeManager config independently of orch_db_env's env var --
@@ -3195,19 +3105,14 @@ class TestRecoverAbandonedWorkflowsMissingWorktree:
 
         with orch_db_env.session_scope() as session:
             session.add(AutopilotProject(id="proj-1", name="p", base_dir=str(repo_path)))
-            session.add(
-                AutopilotDesign(id=design_id, project_id="proj-1", filename="d.md", name="D")
-            )
+            session.add(AutopilotDesign(id=design_id, project_id="proj-1", filename="d.md", name="D"))
             session.add(
                 Workflow(
                     id="wf-lost",
                     name="feature pipeline",
                     phases_folder_path="/tmp",
                     status="failed",
-                    status_reason=(
-                        "Abandoned: no agent/task activity for 10 consecutive "
-                        "scans -- likely lost mid-flight across a backend restart"
-                    ),
+                    status_reason=("Abandoned: no agent/task activity for 10 consecutive scans -- likely lost mid-flight across a backend restart"),
                     working_directory=None,
                     definition_id="autopilot",
                 )
@@ -3274,9 +3179,7 @@ class TestRecoverAbandonedWorkflowsMissingWorktree:
             assert task.status == "failed"
             assert task.retry_count == 0
 
-    def test_leaves_workflow_alone_when_retry_cap_already_reached(
-        self, orch_db_env, tmp_path, monkeypatch
-    ):
+    def test_leaves_workflow_alone_when_retry_cap_already_reached(self, orch_db_env, tmp_path, monkeypatch):
         """Sanity check the fix isn't overbroad: a workflow whose stuck task
         already hit the retry cap must not be recovered again -- something
         is genuinely, persistently broken and needs a human, not another
@@ -3297,9 +3200,7 @@ class TestRecoverAbandonedWorkflowsMissingWorktree:
 
         design_id = "des-73b1ced0"
         feature_key = "gateway-router-metrics"
-        repo_path, branch = self._make_repo_with_feature_branch(
-            tmp_path, design_id, feature_key
-        )
+        repo_path, branch = self._make_repo_with_feature_branch(tmp_path, design_id, feature_key)
 
         import src.core.simple_config
 
@@ -3311,19 +3212,14 @@ class TestRecoverAbandonedWorkflowsMissingWorktree:
 
         with orch_db_env.session_scope() as session:
             session.add(AutopilotProject(id="proj-1", name="p", base_dir=str(repo_path)))
-            session.add(
-                AutopilotDesign(id=design_id, project_id="proj-1", filename="d.md", name="D")
-            )
+            session.add(AutopilotDesign(id=design_id, project_id="proj-1", filename="d.md", name="D"))
             session.add(
                 Workflow(
                     id="wf-lost",
                     name="feature pipeline",
                     phases_folder_path="/tmp",
                     status="failed",
-                    status_reason=(
-                        "Abandoned: no agent/task activity for 10 consecutive "
-                        "scans -- likely lost mid-flight across a backend restart"
-                    ),
+                    status_reason=("Abandoned: no agent/task activity for 10 consecutive scans -- likely lost mid-flight across a backend restart"),
                     working_directory=None,
                     definition_id="autopilot",
                 )
@@ -3378,9 +3274,7 @@ class TestRecoverAbandonedWorkflowsMissingWorktree:
             assert wf.status == "failed"
             assert wf.working_directory is None
 
-    def test_old_capped_out_task_in_a_different_completed_phase_does_not_block_recovery(
-        self, orch_db_env, tmp_path, monkeypatch
-    ):
+    def test_old_capped_out_task_in_a_different_completed_phase_does_not_block_recovery(self, orch_db_env, tmp_path, monkeypatch):
         """Regression, observed live: a workflow that had already been
         through several goto cycles carried an old "failed" task from an
         early development-phase attempt that hit its own retry cap, from
@@ -3409,9 +3303,7 @@ class TestRecoverAbandonedWorkflowsMissingWorktree:
 
         design_id = "des-73b1ced0"
         feature_key = "gateway-router-metrics"
-        repo_path, branch = self._make_repo_with_feature_branch(
-            tmp_path, design_id, feature_key
-        )
+        repo_path, branch = self._make_repo_with_feature_branch(tmp_path, design_id, feature_key)
 
         import src.core.simple_config
 
@@ -3423,19 +3315,14 @@ class TestRecoverAbandonedWorkflowsMissingWorktree:
 
         with orch_db_env.session_scope() as session:
             session.add(AutopilotProject(id="proj-1", name="p", base_dir=str(repo_path)))
-            session.add(
-                AutopilotDesign(id=design_id, project_id="proj-1", filename="d.md", name="D")
-            )
+            session.add(AutopilotDesign(id=design_id, project_id="proj-1", filename="d.md", name="D"))
             session.add(
                 Workflow(
                     id="wf-lost",
                     name="feature pipeline",
                     phases_folder_path="/tmp",
                     status="failed",
-                    status_reason=(
-                        "Abandoned: no agent/task activity for 10 consecutive "
-                        "scans -- likely lost mid-flight across a backend restart"
-                    ),
+                    status_reason=("Abandoned: no agent/task activity for 10 consecutive scans -- likely lost mid-flight across a backend restart"),
                     working_directory=None,
                     definition_id="autopilot",
                 )
@@ -3456,14 +3343,20 @@ class TestRecoverAbandonedWorkflowsMissingWorktree:
             # failed task as harmless history.
             session.add(
                 Phase(
-                    id="phase-development", workflow_id="wf-lost", name="development",
-                    order=4, description="d", done_definitions=["x"],
+                    id="phase-development",
+                    workflow_id="wf-lost",
+                    name="development",
+                    order=4,
+                    description="d",
+                    done_definitions=["x"],
                 )
             )
             session.add(
                 PhaseExecution(
-                    id="exec-development", phase_id="phase-development",
-                    workflow_execution_id="wf-lost", status="completed",
+                    id="exec-development",
+                    phase_id="phase-development",
+                    workflow_execution_id="wf-lost",
+                    status="completed",
                 )
             )
             session.add(
@@ -3481,14 +3374,20 @@ class TestRecoverAbandonedWorkflowsMissingWorktree:
             # The real, current blocker -- never retried.
             session.add(
                 Phase(
-                    id="phase-security-review", workflow_id="wf-lost", name="security_review",
-                    order=7, description="d", done_definitions=["x"],
+                    id="phase-security-review",
+                    workflow_id="wf-lost",
+                    name="security_review",
+                    order=7,
+                    description="d",
+                    done_definitions=["x"],
                 )
             )
             session.add(
                 PhaseExecution(
-                    id="exec-security-review", phase_id="phase-security-review",
-                    workflow_execution_id="wf-lost", status="in_progress",
+                    id="exec-security-review",
+                    phase_id="phase-security-review",
+                    workflow_execution_id="wf-lost",
+                    status="in_progress",
                 )
             )
             session.add(
@@ -3596,9 +3495,7 @@ class TestRetryExhaustedPausedWorkflows:
         )
         from src.core.database import Task, Workflow
 
-        self._seed_paused_workflow(
-            orch_db_env, paused_at=datetime.utcnow() - timedelta(seconds=999999)
-        )
+        self._seed_paused_workflow(orch_db_env, paused_at=datetime.utcnow() - timedelta(seconds=999999))
 
         recovered = _retry_exhausted_paused_workflows(OrchestratorLogger(tmp_path))
 
@@ -3657,9 +3554,7 @@ class TestRetryExhaustedPausedWorkflows:
         )
         from src.core.database import Workflow
 
-        self._seed_paused_workflow(
-            orch_db_env, paused_by="user", paused_at=datetime.utcnow() - timedelta(seconds=999999)
-        )
+        self._seed_paused_workflow(orch_db_env, paused_by="user", paused_at=datetime.utcnow() - timedelta(seconds=999999))
 
         recovered = _retry_exhausted_paused_workflows(OrchestratorLogger(tmp_path))
 
@@ -3680,9 +3575,7 @@ class TestRetryExhaustedPausedWorkflows:
         )
         from src.core.database import Workflow
 
-        self._seed_paused_workflow(
-            orch_db_env, paused_by=None, paused_at=datetime.utcnow() - timedelta(seconds=999999)
-        )
+        self._seed_paused_workflow(orch_db_env, paused_by=None, paused_at=datetime.utcnow() - timedelta(seconds=999999))
 
         recovered = _retry_exhausted_paused_workflows(OrchestratorLogger(tmp_path))
 
@@ -3731,9 +3624,7 @@ class TestRetryExhaustedPausedWorkflows:
         actually-stuck phase."""
         from src.core.database import Phase, PhaseExecution, Task
 
-        self._seed_paused_workflow(
-            orch_db_env, paused_at=datetime.utcnow() - timedelta(seconds=999999)
-        )
+        self._seed_paused_workflow(orch_db_env, paused_at=datetime.utcnow() - timedelta(seconds=999999))
         with orch_db_env.session_scope() as session:
             session.add(
                 Phase(
@@ -3796,9 +3687,7 @@ class TestWorkflowAppearsAbandoned:
         from src.core.database import Task, Workflow
 
         with orch_db_env.session_scope() as session:
-            session.add(
-                Workflow(id="wf-1", name="t", phases_folder_path="/tmp", status="active")
-            )
+            session.add(Workflow(id="wf-1", name="t", phases_folder_path="/tmp", status="active"))
             session.add(
                 Task(
                     id="t1",
@@ -3816,9 +3705,7 @@ class TestWorkflowAppearsAbandoned:
         from src.core.database import Task, Workflow
 
         with orch_db_env.session_scope() as session:
-            session.add(
-                Workflow(id="wf-1", name="t", phases_folder_path="/tmp", status="active")
-            )
+            session.add(Workflow(id="wf-1", name="t", phases_folder_path="/tmp", status="active"))
             session.add(
                 Task(
                     id="t1",
@@ -3838,12 +3725,8 @@ class TestWorkflowAppearsAbandoned:
         from src.core.database import Agent, Task, Workflow
 
         with orch_db_env.session_scope() as session:
-            session.add(
-                Workflow(id="wf-1", name="t", phases_folder_path="/tmp", status="active")
-            )
-            session.add(
-                Agent(id="a1", system_prompt="p", status="working", cli_type="pi")
-            )
+            session.add(Workflow(id="wf-1", name="t", phases_folder_path="/tmp", status="active"))
+            session.add(Agent(id="a1", system_prompt="p", status="working", cli_type="pi"))
             session.add(
                 Task(
                     id="t1",
@@ -3893,9 +3776,7 @@ class TestUpdateResumedWorkflowRecoveryAttempts:
 
         assert _update_resumed_workflow_recovery_attempts("wf-1", 3) == 4
 
-    def test_a_single_active_scan_prevents_escalation_across_many_calls(
-        self, orch_db_env, monkeypatch
-    ):
+    def test_a_single_active_scan_prevents_escalation_across_many_calls(self, orch_db_env, monkeypatch):
         """A workflow that's abandoned on most scans but shows one real
         activity blip in between must never reach the kill threshold from
         that blip's contribution -- each abandoned run has to restart from
@@ -3933,13 +3814,9 @@ class TestEscalateStaleActiveWorkflows:
         from src.core.database import Workflow
 
         with db.session_scope() as session:
-            session.add(
-                Workflow(id=wf_id, name="t", phases_folder_path="/tmp", status=status)
-            )
+            session.add(Workflow(id=wf_id, name="t", phases_folder_path="/tmp", status=status))
 
-    def test_requires_consecutive_abandoned_checks_before_escalating(
-        self, orch_db_env, tmp_path, monkeypatch
-    ):
+    def test_requires_consecutive_abandoned_checks_before_escalating(self, orch_db_env, tmp_path, monkeypatch):
         from src.autopilot.orchestrator import (
             STALE_ACTIVE_WORKFLOW_CONSECUTIVE_CHECKS,
             OrchestratorLogger,
@@ -3958,9 +3835,7 @@ class TestEscalateStaleActiveWorkflows:
         logger = OrchestratorLogger(tmp_path)
 
         for _ in range(STALE_ACTIVE_WORKFLOW_CONSECUTIVE_CHECKS - 1):
-            still_blocking = _escalate_stale_active_workflows(
-                active_workflows, streak, logger
-            )
+            still_blocking = _escalate_stale_active_workflows(active_workflows, streak, logger)
             assert still_blocking == ["wf-1"]
 
         with orch_db_env.session_scope() as session:
@@ -3968,9 +3843,7 @@ class TestEscalateStaleActiveWorkflows:
             assert wf.status == "active"
 
         # One more consecutive abandoned observation crosses the threshold.
-        still_blocking = _escalate_stale_active_workflows(
-            active_workflows, streak, logger
-        )
+        still_blocking = _escalate_stale_active_workflows(active_workflows, streak, logger)
         assert still_blocking == []
         with orch_db_env.session_scope() as session:
             wf = session.query(Workflow).filter_by(id="wf-1").first()
@@ -4005,18 +3878,14 @@ class TestEscalateStaleActiveWorkflows:
         # Alternating abandoned/active observations should never accumulate
         # a long enough streak to escalate, however many cycles run.
         for _ in range(STALE_ACTIVE_WORKFLOW_CONSECUTIVE_CHECKS * 3):
-            still_blocking = _escalate_stale_active_workflows(
-                active_workflows, streak, logger
-            )
+            still_blocking = _escalate_stale_active_workflows(active_workflows, streak, logger)
             assert still_blocking == ["wf-1"]
 
         with orch_db_env.session_scope() as session:
             wf = session.query(Workflow).filter_by(id="wf-1").first()
             assert wf.status == "active"
 
-    def test_workflow_with_real_activity_is_never_escalated(
-        self, orch_db_env, tmp_path
-    ):
+    def test_workflow_with_real_activity_is_never_escalated(self, orch_db_env, tmp_path):
         from src.autopilot.orchestrator import (
             STALE_ACTIVE_WORKFLOW_CONSECUTIVE_CHECKS,
             OrchestratorLogger,
@@ -4041,9 +3910,7 @@ class TestEscalateStaleActiveWorkflows:
         active_workflows = [{"id": "wf-1"}]
 
         for _ in range(STALE_ACTIVE_WORKFLOW_CONSECUTIVE_CHECKS + 5):
-            still_blocking = _escalate_stale_active_workflows(
-                active_workflows, streak, logger
-            )
+            still_blocking = _escalate_stale_active_workflows(active_workflows, streak, logger)
             assert still_blocking == ["wf-1"]
 
         with orch_db_env.session_scope() as session:
@@ -4130,11 +3997,7 @@ class TestGetOrCreateProjectId:
 
         assert first_id == second_id
         with orch_db_env.session_scope() as session:
-            matches = (
-                session.query(AutopilotProject)
-                .filter_by(base_dir=str(project.resolve()))
-                .all()
-            )
+            matches = session.query(AutopilotProject).filter_by(base_dir=str(project.resolve())).all()
             assert len(matches) == 1
 
     def test_activating_new_project_deactivates_previous(self, orch_db_env, tmp_path):
@@ -4155,9 +4018,7 @@ class TestGetOrCreateProjectId:
             assert proj_a.is_active is False
             assert proj_b.is_active is True
 
-    def test_concurrent_insert_race_recovers_instead_of_raising(
-        self, orch_db_env, tmp_path
-    ):
+    def test_concurrent_insert_race_recovers_instead_of_raising(self, orch_db_env, tmp_path):
         """Simulates two callers racing to create the same brand-new
         project row: the second caller's db.flush() hits IntegrityError on
         AutopilotProject.base_dir's unique constraint, and must recover by
@@ -4217,11 +4078,288 @@ class TestGetProjectContextsByPrefix:
             _set_project_context(session, "unrelated_key", {"x": 3})
 
         with orch_db_env.session_scope() as session:
-            result = _get_project_contexts_by_prefix(
-                session, "autopilot_running_pipeline_"
-            )
+            result = _get_project_contexts_by_prefix(session, "autopilot_running_pipeline_")
 
         assert set(result.keys()) == {
             "autopilot_running_pipeline_proj-a",
             "autopilot_running_pipeline_proj-b",
         }
+
+
+class TestCreatePhaseTaskReviewCap:
+    """_create_phase_task's opt-in review-run cap + prior-findings
+    injection (workflow.yaml's max_review_runs) -- closes the review-fix-
+    review loop a forensics_analysis report found (architectural_review
+    ran 19 times, adversarial_review 14 times on one feature): each re-run
+    is a fresh agent session with zero memory of its own findings."""
+
+    def _seed(self, db, phase_name="architectural_review", existing_task_count=0):
+        from src.core.database import Phase, PhaseExecution, Task, Workflow
+
+        with db.session_scope() as session:
+            session.add(
+                Workflow(
+                    id="wf-cap",
+                    name="t",
+                    phases_folder_path="/tmp",
+                    status="active",
+                    working_directory="/tmp/wf-cap",
+                )
+            )
+            session.add(
+                Phase(
+                    id="phase-cap",
+                    workflow_id="wf-cap",
+                    name=phase_name,
+                    order=5,
+                    description="d",
+                    done_definitions=["x"],
+                )
+            )
+            session.add(
+                PhaseExecution(
+                    id="exec-cap",
+                    phase_id="phase-cap",
+                    workflow_execution_id="wf-cap",
+                    status="pending",
+                )
+            )
+            for i in range(existing_task_count):
+                session.add(
+                    Task(
+                        id=f"prior-task-{i}",
+                        workflow_id="wf-cap",
+                        phase_id="phase-cap",
+                        raw_description="r",
+                        done_definition="d",
+                        status="done",
+                    )
+                )
+
+    @patch("src.autopilot.orchestrator.create_agent_for_task_direct")
+    def test_no_injection_or_cap_when_max_review_runs_unset(self, mock_create_agent, orch_db_env, tmp_path):
+        from src.autopilot.orchestrator import OrchestratorLogger, _create_phase_task
+        from src.core.database import Task
+
+        self._seed(orch_db_env, phase_name="security_review", existing_task_count=5)
+        mock_create_agent.return_value = {"agent_id": "agent-x"}
+
+        with patch("src.autopilot.spec.get_max_review_runs", return_value=None):
+            result = _create_phase_task(
+                "wf-cap",
+                "phase-cap",
+                "security_review",
+                "continue",
+                OrchestratorLogger(tmp_path),
+            )
+
+        assert result is True
+        with orch_db_env.session_scope() as session:
+            new_task = session.query(Task).filter(Task.phase_id == "phase-cap", Task.status == "in_progress").first()
+            assert new_task is not None
+            assert "PRIOR FINDINGS" not in new_task.raw_description
+
+    @patch("src.autopilot.orchestrator.create_agent_for_task_direct")
+    def test_no_injection_on_first_run(self, mock_create_agent, orch_db_env, tmp_path):
+        from src.autopilot.orchestrator import OrchestratorLogger, _create_phase_task
+        from src.core.database import Task
+
+        self._seed(orch_db_env, existing_task_count=0)
+        mock_create_agent.return_value = {"agent_id": "agent-x"}
+
+        with patch("src.autopilot.spec.get_max_review_runs", return_value=3):
+            result = _create_phase_task(
+                "wf-cap",
+                "phase-cap",
+                "architectural_review",
+                "continue",
+                OrchestratorLogger(tmp_path),
+            )
+
+        assert result is True
+        with orch_db_env.session_scope() as session:
+            new_task = session.query(Task).filter(Task.phase_id == "phase-cap", Task.status == "in_progress").first()
+            assert "PRIOR FINDINGS" not in new_task.raw_description
+
+    @patch("src.autopilot.orchestrator.create_agent_for_task_direct")
+    def test_injects_prior_findings_on_re_entry_under_cap(self, mock_create_agent, orch_db_env, tmp_path):
+        from src.autopilot.orchestrator import OrchestratorLogger, _create_phase_task
+        from src.core.database import Task
+
+        self._seed(orch_db_env, existing_task_count=1)  # run_count=1, under cap of 3
+        mock_create_agent.return_value = {"agent_id": "agent-x"}
+        history = [{"run_number": 1, "blocker_count": 2, "summary": "B-1 and B-2", "timestamp": "t"}]
+
+        with patch("src.autopilot.spec.get_max_review_runs", return_value=3), patch("src.autopilot.spec.get_review_findings_history", return_value=history):
+            result = _create_phase_task(
+                "wf-cap",
+                "phase-cap",
+                "architectural_review",
+                "continue",
+                OrchestratorLogger(tmp_path),
+            )
+
+        assert result is True
+        with orch_db_env.session_scope() as session:
+            new_task = session.query(Task).filter(Task.phase_id == "phase-cap", Task.status == "in_progress").first()
+            assert "PRIOR FINDINGS FROM 1 EARLIER RUN(S)" in new_task.raw_description
+            assert "B-1 and B-2" in new_task.raw_description
+            assert "Verify ONLY whether" in new_task.raw_description
+
+    @patch("src.autopilot.orchestrator._fire_phase_transition")
+    @patch("src.autopilot.orchestrator.create_agent_for_task_direct")
+    def test_caps_out_instead_of_creating_another_task(self, mock_create_agent, mock_fire_transition, orch_db_env, tmp_path):
+        from src.autopilot.orchestrator import OrchestratorLogger, _create_phase_task
+        from src.core.database import Task, Workflow
+
+        self._seed(orch_db_env, existing_task_count=3)  # run_count=3, AT cap of 3
+        mock_fire_transition.return_value = True
+
+        # Point the workflow's working_directory at a real tmp dir so
+        # _cap_out_review_phase can actually write the synthetic artifacts.
+        with orch_db_env.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-cap").first()
+            wf.working_directory = str(tmp_path)
+
+        with patch("src.autopilot.spec.get_max_review_runs", return_value=3), patch("src.autopilot.spec.get_review_findings_history", return_value=[]):
+            result = _create_phase_task(
+                "wf-cap",
+                "phase-cap",
+                "architectural_review",
+                "continue",
+                OrchestratorLogger(tmp_path),
+            )
+
+        assert result is True
+        mock_fire_transition.assert_called_once_with("wf-cap", "phase-cap", "architectural_review", ANY)
+        mock_create_agent.assert_not_called()
+        with orch_db_env.session_scope() as session:
+            # No NEW task created -- still exactly the 3 seeded ones.
+            count = session.query(Task).filter(Task.phase_id == "phase-cap").count()
+            assert count == 3
+
+        result_json = tmp_path / "docs" / "architectural_review" / "architectural_review_result.json"
+        assert result_json.exists()
+        assert json.loads(result_json.read_text())["blocker_count"] == 0
+
+    def test_cap_out_review_phase_returns_none_without_working_directory(self, orch_db_env, tmp_path):
+        """Regression: silently returning False here (instead of None) let
+        a capped-out phase with no working_directory get zero forward
+        progress -- no task, no synthetic completion, nothing -- forever,
+        with only a debug-level log to explain why. None signals the
+        caller to fall through to a normal task instead."""
+        from src.autopilot.orchestrator import OrchestratorLogger, _cap_out_review_phase
+        from src.core.database import Phase, Workflow
+
+        with orch_db_env.session_scope() as session:
+            session.add(
+                Workflow(
+                    id="wf-no-dir",
+                    name="t",
+                    phases_folder_path="/tmp",
+                    status="active",
+                    working_directory=None,
+                )
+            )
+            session.add(
+                Phase(
+                    id="phase-no-dir",
+                    workflow_id="wf-no-dir",
+                    name="architectural_review",
+                    order=5,
+                    description="d",
+                    done_definitions=["x"],
+                )
+            )
+
+        with orch_db_env.session_scope() as session:
+            phase = session.query(Phase).filter_by(id="phase-no-dir").first()
+            result = _cap_out_review_phase(
+                session,
+                "wf-no-dir",
+                phase,
+                run_count=3,
+                max_runs=3,
+                logger=OrchestratorLogger(tmp_path),
+            )
+
+        assert result is None
+
+    @patch("src.autopilot.orchestrator.create_agent_for_task_direct")
+    def test_falls_through_to_normal_task_when_cap_out_cannot_write(self, mock_create_agent, orch_db_env, tmp_path):
+        """Integration-level version of the above: _create_phase_task must
+        still dispatch a real task when the cap is hit but capping out
+        isn't possible, instead of returning early with nothing done."""
+        from src.autopilot.orchestrator import OrchestratorLogger, _create_phase_task
+        from src.core.database import Task, Workflow
+
+        self._seed(orch_db_env, existing_task_count=3)  # at cap of 3
+        with orch_db_env.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-cap").first()
+            wf.working_directory = None  # cap-out can't write anywhere
+        mock_create_agent.return_value = {"agent_id": "agent-x"}
+
+        with patch("src.autopilot.spec.get_max_review_runs", return_value=3):
+            result = _create_phase_task(
+                "wf-cap",
+                "phase-cap",
+                "architectural_review",
+                "continue",
+                OrchestratorLogger(tmp_path),
+            )
+
+        assert result is True
+        mock_create_agent.assert_called_once()
+        with orch_db_env.session_scope() as session:
+            # A real 4th task was created -- not stranded at 3 with nothing.
+            count = session.query(Task).filter(Task.phase_id == "phase-cap").count()
+            assert count == 4
+
+    def test_cap_out_review_phase_writes_caveats_from_history(self, orch_db_env, tmp_path):
+        from src.autopilot.orchestrator import OrchestratorLogger, _cap_out_review_phase
+        from src.core.database import Phase, Workflow
+
+        with orch_db_env.session_scope() as session:
+            session.add(
+                Workflow(
+                    id="wf-caveats",
+                    name="t",
+                    phases_folder_path="/tmp",
+                    status="active",
+                    working_directory=str(tmp_path),
+                )
+            )
+            phase = Phase(
+                id="phase-caveats",
+                workflow_id="wf-caveats",
+                name="adversarial_review",
+                order=6,
+                description="d",
+                done_definitions=["x"],
+            )
+            session.add(phase)
+
+        history = [
+            {"run_number": 1, "blocker_count": 3, "summary": "B-1, B-2, B-3", "timestamp": "t"},
+            {"run_number": 2, "blocker_count": 1, "summary": "B-2 still open", "timestamp": "t"},
+        ]
+
+        with patch("src.autopilot.spec.get_review_findings_history", return_value=history), patch("src.autopilot.orchestrator._fire_phase_transition", return_value=True) as mock_fire:
+            with orch_db_env.session_scope() as session:
+                phase = session.query(Phase).filter_by(id="phase-caveats").first()
+                result = _cap_out_review_phase(
+                    session,
+                    "wf-caveats",
+                    phase,
+                    run_count=3,
+                    max_runs=3,
+                    logger=OrchestratorLogger(tmp_path),
+                )
+
+        assert result is True
+        mock_fire.assert_called_once()
+        report = tmp_path / "docs" / "adversarial_review" / "adversarial_review_report.md"
+        assert report.exists()
+        text = report.read_text()
+        assert "capped after 3 runs" in text
+        assert "B-2 still open" in text
