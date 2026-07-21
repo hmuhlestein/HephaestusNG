@@ -14,7 +14,7 @@ Implement spend-limit enforcement using `AutopilotProject.cost_limit_usd` and `c
 ## Implementation Notes
 
 ### Extract `_pause_project_workflows(project_id, paused_by)` in `src/autopilot/orchestrator.py`
-Currently the `/autopilot/stop` endpoint in `src/mcp/autopilot_api.py` contains the logic to pause workflows and terminate active agents. This must be extracted into a standalone function in `orchestrator.py` that:
+Currently the `/autopilot/stop` endpoint in `src/mcp/autopilot_api.py` contains the logic to pause workflows and terminate active agents. The primary canonical stop logic is around line 3841–3913 (the main autopilot stop handling block). However, `definition_id == "autopilot"` filter logic appears at multiple locations in the file (lines 713, 1078, 1329, 1361, 3849, 4065), so the extracted function should be used at all call sites where workflow pausing/filtering occurs — not just the canonical stop endpoint. This extraction must:
 1. Queries `Workflow` where `project_id` matches AND `definition_id.in_(["autopilot", "autopilot-phase0"])` AND `status.in_(["active", "running"])`
 2. Sets `status = "paused"`, `paused_by = paused_by`
 3. Terminates active agents (with `terminated_at` set per existing invariant)

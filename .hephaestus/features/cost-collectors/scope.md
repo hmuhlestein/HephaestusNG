@@ -11,7 +11,8 @@ Build the Python cost collection infrastructure in `src/services/cost_collection
 
 ## Dependencies
 - `cost-schema` — reads/writes `cost_entries`, `session_cost_checkpoints` (including `reasoning_tokens` field)
-- `cost-derivation` — calls `derive_cost_totals()` after new entries are written; `derive_cost_totals` is a pure derivation function with no budget enforcement side effects, so no transitive dependency on `budget-enforcement`
+- `cost-derivation` — calls `derive_cost_totals()` after new entries are written; `derive_cost_totals` is a pure derivation function with no budget enforcement side effects
+- `budget-enforcement` — after calling `derive_cost_totals()`, this feature calls `_enforce_budget_limit(project_id)` to trigger enforcement if the cost limit is crossed; this is a direct import dependency on `src/autopilot/orchestrator.py`
 
 ## Implementation Notes
 
@@ -47,12 +48,13 @@ In `cost_collection_service.py`, add a `CodexCollector` stub that:
 
 ### Cost-ingestion API endpoint
 Add to `src/mcp/server.py`:
-- `POST /api/cost` accepting `{session_id, task_id, source, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd, raw_usage}`
-- Creates a `CostEntry`, calls `derive_cost_totals(db, task_id)`
-- Used by the pi extension for real-time cost reporting
+- `POST /api/cost` accepting `{session_id, source, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd, raw_usage}`
+- `task_id` is optional — if omitted, the endpoint resolves `task_id` by querying the Agent table for the most recent agent with a matching session_id (via `Agent.session_id`), extracting that agent's `task_id`. If no matching agent is found, the entry is written with `task_id=NULL` (it will roll up to the project-level overhead bucket)
+- Creates a `CostEntry` with the resolved or provided `task_id`, calls `derive_cost_totals(db, task_id)`
+- Used by the pi extension for real-time cost reporting (pi extension omits `task_id` since it doesn't know the task context)
 
 ### Budget enforcement hook (after derivation)
-After calling `derive_cost_totals(db, task_id)`, call `_enforce_budget_limit(project_id)` (from `src/autopilot/orchestrator.py`, part of the `budget-enforcement` feature). This function checks `cost_total_usd >= cost_limit_usd` and pauses the project's workflows if the limit is crossed. This is the single integration point between cost collection and budget enforcement — cost-derivation itself is pure computation.
+After calling `derive_cost_totals(db, task_id)`, call `_enforce_budget_limit(project_id)` (from `src/autopilot/orchestrator.py`, part of the `budget-enforcement` feature — this feature has a direct dependency on `budget-enforcement`). That function checks `cost_total_usd >= cost_limit_usd` and pauses the project's workflows if the limit is crossed. This is the single integration point between cost collection and budget enforcement — cost-derivation itself is pure computation.
 
 ### Wiring into task completion
 In `task_completion_service.py`, when `update_task_status(status="done")`:

@@ -41,7 +41,7 @@ extensions/hephaestus-cost-tracker/
      "raw_usage": { ...full usage object }
    }
    ```
-5. `task_id` is NOT included — the server-side cost-ingestion endpoint resolves task_id from session_id via the `session_cost_checkpoints` / task metadata; the pi extension doesn't know the task context
+5. `task_id` is NOT included — the server-side cost-ingestion endpoint resolves `task_id` from `session_id` by querying the Agent table for the most recent agent with a matching session_id (via `Agent.session_id`), extracting that agent's `task_id`. The pi extension doesn't know the task context, and the `session_cost_checkpoints` table has no task_id column, so the Agent table is the correct lookup path.
 
 ### TUI status bar
 - Use `ctx.ui.setStatus()` to show running session cost: e.g. `💰 $0.43`
