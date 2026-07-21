@@ -126,6 +126,47 @@ class TestCleanupDoesNotRemoveActiveWorktree:
         assert "feature_architect/live-design" in branch_names
         assert "feature_architect/old-design" not in branch_names
 
+    def test_worktree_with_uncommitted_changes_survives_cleanup_even_if_workflow_is_failed(
+        self, test_db, temp_repo, worktree_manager
+    ):
+        """Regression, observed live: a workflow can be wrongly marked
+        "failed" by an unrelated self-heal (e.g. "abandoned: no activity"
+        firing because the *backend itself* crashed and stopped recording
+        activity, not because the agent actually stopped working) while an
+        agent is still genuinely mid-task with real, uncommitted fixes
+        sitting in its worktree. Trusting Workflow.status alone here let
+        this exact sweep delete a security_review agent's uncommitted fixes
+        (a written report, several source file changes) permanently --
+        every phase already commits its own work as a matter of course, so
+        a worktree that's actually done has nothing uncommitted left to
+        lose; this one did, and must survive regardless of what the
+        workflow's DB status says."""
+        import src.core.simple_config
+
+        base_path = src.core.simple_config.get_config().worktree_base_path
+
+        dirty_path = _add_worktree(temp_repo, base_path, "feature_architect/mid-task")
+        (dirty_path / "uncommitted_fix.py").write_text("# real, unsaved work\n")
+
+        session = test_db.get_session()
+        session.add(
+            Workflow(
+                id=f"wf-{uuid.uuid4().hex[:8]}",
+                name="Phase 0",
+                phases_folder_path="/tmp",
+                status="failed",
+                definition_id="feature_architect",
+                working_directory=str(dirty_path),
+            )
+        )
+        session.commit()
+        session.close()
+
+        worktree_manager.cleanup_all_stale_branches()
+
+        assert dirty_path.exists(), "a worktree with uncommitted changes must never be deleted"
+        assert (dirty_path / "uncommitted_fix.py").exists(), "the uncommitted work itself must survive"
+
     def test_paused_workflows_worktree_survives_cleanup(
         self, test_db, temp_repo, worktree_manager
     ):

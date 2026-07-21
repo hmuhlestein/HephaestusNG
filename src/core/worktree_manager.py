@@ -304,7 +304,10 @@ class WorktreeManager:
             self.worktree_base.mkdir(parents=True, exist_ok=True)
             worktree_path = self._worktree_path_for(agent_id)
             if worktree_path.exists():
-                self._remove_worktree(str(worktree_path))
+                # This path is about to be overwritten by the fresh worktree
+                # `git worktree add` creates right below -- whatever's here
+                # is being intentionally replaced, not swept up as "stale".
+                self._remove_worktree(str(worktree_path), require_clean=False)
             try:
                 self.main_repo.git.worktree("add", str(worktree_path), branch_name)
             except GitCommandError:
@@ -828,7 +831,7 @@ class WorktreeManager:
 
     # ── Cleanup ──────────────────────────────────────────────────
 
-    def _remove_worktree(self, worktree_path: str) -> None:
+    def _remove_worktree(self, worktree_path: str, require_clean: bool = True) -> None:
         """Remove a git worktree and its directory.
 
         Hard safety guard: refuses to touch the main repo, regardless of
@@ -839,6 +842,24 @@ class WorktreeManager:
         vs-unresolved path mismatch found and fixed in
         cleanup_all_stale_branches, which let this exact function attempt to
         delete the main repository) can't reach shutil.rmtree on it again.
+
+        require_clean: refuses to remove a worktree carrying uncommitted
+        changes (modified, staged, or untracked) unless the caller
+        explicitly opts out. Workflow.status is not a reliable enough
+        signal to gate a destructive delete on: a workflow can be marked
+        "failed" by an unrelated self-heal (e.g. "abandoned: no activity"
+        firing because the *backend itself* crashed and stopped recording
+        activity, not because the agent actually stopped working) while an
+        agent is still genuinely mid-task with real, uncommitted fixes
+        sitting in this exact worktree. Every phase already commits its
+        own work here as a matter of course (see this module's own
+        docstring), so a worktree that's truly done has nothing uncommitted
+        left to lose -- this check only ever blocks the exact case it's
+        meant to. Observed live: a security_review agent's uncommitted
+        fixes (C-1/H-1/H-2, a written report) were permanently destroyed
+        this way when a crash-induced false "abandoned" marking let the
+        generic stale-worktree sweep (cleanup_all_stale_branches) delete
+        the worktree out from under it.
         """
         try:
             target = Path(worktree_path).resolve()
@@ -855,6 +876,33 @@ class WorktreeManager:
                 "be reached; a caller's path-matching logic has a bug."
             )
             return
+
+        if require_clean and target.is_dir():
+            try:
+                wt_repo = Repo(target)
+                dirty = wt_repo.is_dirty(untracked_files=True)
+            except Exception as e:
+                # Can't prove it's clean -- and "assume clean" is exactly the
+                # failure mode this guard exists to close. Refuse rather
+                # than silently fall through to a force-delete.
+                logger.error(
+                    f"[WORKTREE] Refusing to remove {worktree_path} -- could "
+                    f"not verify it has no uncommitted changes ({e}). Pass "
+                    "require_clean=False to force removal if this worktree "
+                    "is genuinely being discarded."
+                )
+                return
+            if dirty:
+                logger.error(
+                    f"[WORKTREE] Refusing to remove {worktree_path} -- has "
+                    "uncommitted changes (modified, staged, or untracked "
+                    "files). A worktree that's genuinely done has already "
+                    "committed everything; this one hasn't, so treating it "
+                    "as stale would destroy real, unrecovered work. Pass "
+                    "require_clean=False to force removal if this worktree "
+                    "is genuinely being discarded."
+                )
+                return
 
         try:
             self.main_repo.git.worktree("remove", worktree_path, "--force")
@@ -886,7 +934,11 @@ class WorktreeManager:
                 return {"status": "not_found"}
 
             if record.worktree_path:
-                self._remove_worktree(record.worktree_path)
+                # Both live callers (cleanup_branch, discard_agent) pass
+                # delete_branch=True -- explicit discard semantics ("failed
+                # work never touches main"), so any uncommitted changes here
+                # are meant to be thrown away, not treated as at-risk work.
+                self._remove_worktree(record.worktree_path, require_clean=False)
                 logger.info(f"[WORKTREE] Removed worktree {record.worktree_path}")
 
             if delete_branch:
@@ -1016,6 +1068,11 @@ class WorktreeManager:
                                 ref = line.split(" ", 1)[1]
                                 active_branch_names.add(ref.removeprefix("refs/heads/"))
                         continue
+                    # Default require_clean=True: this is a generic "is this
+                    # actually stale" sweep, not an intentional discard --
+                    # Workflow.status alone (all that active_working_
+                    # directories above is built from) isn't proof this
+                    # worktree has no real, uncommitted work left in it.
                     self._remove_worktree(wt_path)
                     worktrees_cleaned += 1
             except GitCommandError:
