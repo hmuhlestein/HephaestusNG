@@ -294,7 +294,7 @@ def _check_budget_enforcement(db: Session, project: AutopilotProject) -> None:
 
 
 def _pause_project_workflows(db: Session, project_id: str, paused_by: str) -> int:
-    """Pause all active workflows for a project.
+    """Pause all active workflows for a project and terminate their agents.
 
     This is idempotent - calling it when workflows are already paused
     simply finds nothing to pause and returns 0.
@@ -307,6 +307,8 @@ def _pause_project_workflows(db: Session, project_id: str, paused_by: str) -> in
     Returns:
         Number of workflows paused
     """
+    from src.core.database import Agent
+
     # Find active workflows for this project (including phase0)
     active_workflows = (
         db.query(Workflow)
@@ -326,6 +328,27 @@ def _pause_project_workflows(db: Session, project_id: str, paused_by: str) -> in
         if paused_by == "budget":
             wf.status_reason = "Budget limit reached"
         paused_count += 1
+
+        # Terminate active agents on this workflow
+        active_agents = (
+            db.query(Agent)
+            .filter(
+                Agent.current_task_id.isnot(None),
+                Agent.status.in_(["working", "idle"]),
+            )
+            .all()
+        )
+        for agent in active_agents:
+            # Check if this agent's current task belongs to this workflow
+            from src.core.database import Task
+            task = db.query(Task).filter_by(id=agent.current_task_id).first()
+            if task and task.workflow_id == wf.id:
+                agent.status = "terminated"
+                agent.terminated_at = datetime.utcnow()
+                agent.current_task_id = None
+                logger.info(
+                    f"[BUDGET] Terminated agent {agent.id[:8]} on workflow {wf.id[:8]}"
+                )
 
     if paused_count > 0:
         db.commit()

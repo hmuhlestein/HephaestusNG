@@ -1642,6 +1642,8 @@ class ProjectItem(BaseModel):
     design_count: int
     created_at: str
     updated_at: str
+    cost_total_usd: float = 0.0
+    cost_limit_usd: Optional[float] = None
 
 
 class ProjectCreate(BaseModel):
@@ -1654,6 +1656,23 @@ class ProjectUpdate(BaseModel):
     name: Optional[str] = None
     base_dir: Optional[str] = None
     is_default: Optional[bool] = None
+    cost_limit_usd: Optional[float] = None
+
+
+class CostEntryCreate(BaseModel):
+    """Request model for creating a cost entry."""
+    task_id: Optional[str] = None
+    agent_id: Optional[str] = None
+    workflow_id: Optional[str] = None
+    source: str
+    model: Optional[str] = None
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
+    reasoning_tokens: int = 0
+    cost_usd: float
+    raw_usage: Optional[dict] = None
 
 
 class DesignItem(BaseModel):
@@ -1853,6 +1872,8 @@ async def list_projects():
                     design_count=count,
                     created_at=p.created_at.isoformat() if p.created_at else "",
                     updated_at=p.updated_at.isoformat() if p.updated_at else "",
+                    cost_total_usd=p.cost_total_usd or 0.0,
+                    cost_limit_usd=p.cost_limit_usd,
                 )
             )
         return result
@@ -1918,12 +1939,14 @@ async def get_project(project_id: str):
             design_count=count,
             created_at=proj.created_at.isoformat() if proj.created_at else "",
             updated_at=proj.updated_at.isoformat() if proj.updated_at else "",
+            cost_total_usd=proj.cost_total_usd or 0.0,
+            cost_limit_usd=proj.cost_limit_usd,
         )
 
 
 @router.put("/projects/{project_id}", response_model=ProjectItem)
 async def update_project(project_id: str, req: ProjectUpdate):
-    from src.core.database import AutopilotDesign, AutopilotProject, get_db
+    from src.core.database import AutopilotDesign, AutopilotProject, Workflow, get_db
 
     with get_db() as db:
         proj = db.query(AutopilotProject).get(project_id)
@@ -1940,7 +1963,32 @@ async def update_project(project_id: str, req: ProjectUpdate):
                 db.query(AutopilotProject).update({"is_default": False})
             proj.is_default = req.is_default
 
+        # Handle cost_limit_usd update
+        if req.cost_limit_usd is not None:
+            proj.cost_limit_usd = req.cost_limit_usd
+        elif hasattr(req, 'cost_limit_usd') and req.cost_limit_usd is None:
+            # Explicitly clearing the limit
+            proj.cost_limit_usd = None
+
         db.flush()
+
+        # Clear budget-paused workflows if limit raised or cleared
+        if proj.cost_limit_usd is None or (proj.cost_total_usd and proj.cost_total_usd < proj.cost_limit_usd):
+            budget_paused = (
+                db.query(Workflow)
+                .filter(
+                    Workflow.project_id == project_id,
+                    Workflow.paused_by == "budget",
+                )
+                .all()
+            )
+            for wf in budget_paused:
+                wf.paused_by = None
+                wf.status = "active"
+                wf.status_reason = None
+            if budget_paused:
+                db.flush()
+                logger.info(f"Cleared budget pause on {len(budget_paused)} workflow(s) for project {project_id[:8]}")
 
         # Re-sync if base_dir changed (same session)
         if req.base_dir is not None:
@@ -1958,6 +2006,8 @@ async def update_project(project_id: str, req: ProjectUpdate):
             design_count=count,
             created_at=proj.created_at.isoformat() if proj.created_at else "",
             updated_at=proj.updated_at.isoformat() if proj.updated_at else "",
+            cost_total_usd=proj.cost_total_usd or 0.0,
+            cost_limit_usd=proj.cost_limit_usd,
         )
 
 
@@ -1999,6 +2049,38 @@ async def delete_project(project_id: str):
 
     _invalidate("queue", "status", f"project_designs:{project_id}")
     return {"deleted": project_id}
+
+
+# ── Cost Entries ───────────────────────────────────────────────
+
+
+@router.post("/cost-entries")
+async def create_cost_entry(req: CostEntryCreate):
+    """Create a cost entry and trigger cost derivation rollup.
+
+    Used by Pi extension (real-time) and external callers.
+    """
+    from src.core.cost_derivation import record_cost
+    from src.core.database import get_db
+
+    with get_db() as db:
+        entry = record_cost(
+            db=db,
+            cost_usd=req.cost_usd,
+            source=req.source,
+            task_id=req.task_id,
+            agent_id=req.agent_id,
+            workflow_id=req.workflow_id,
+            model=req.model,
+            input_tokens=req.input_tokens,
+            output_tokens=req.output_tokens,
+            cache_read_tokens=req.cache_read_tokens,
+            cache_write_tokens=req.cache_write_tokens,
+            reasoning_tokens=req.reasoning_tokens,
+            raw_usage=req.raw_usage,
+        )
+
+        return {"id": entry.id, "cost_usd": entry.cost_usd}
 
 
 # ── Project Designs (sync + CRUD) ──────────────────────────────

@@ -2565,6 +2565,14 @@ async def update_task_status(
 
             session.commit()
 
+            # Collect cost data for completed tasks
+            if request.status == "done":
+                try:
+                    from src.services.cost_collection_service import collect_task_cost
+                    collect_task_cost(request.task_id)
+                except Exception as e:
+                    logger.warning(f"Cost collection failed for task {request.task_id[:8]}: {e}")
+
             # Commit in the shared worktree when a task completes successfully,
             # and auto-link the resulting commit to the task's ticket if any.
             if request.status == "done":

@@ -276,11 +276,9 @@ def get_max_review_runs(workflow_id: Optional[str], phase_name: str) -> Optional
         return None
 
     try:
-        from src.core.database import DatabaseManager, Workflow
+        from src.core.database import Workflow, get_db
 
-        db = DatabaseManager()
-        session = db.get_session()
-        try:
+        with get_db() as session:
             wf = session.query(Workflow).filter_by(id=workflow_id).first()
             if not wf or not wf.definition_id:
                 return None
@@ -308,8 +306,6 @@ def get_max_review_runs(workflow_id: Optional[str], phase_name: str) -> Optional
                         break
             _MAX_REVIEW_RUNS_CACHE[cache_key] = value
             return value
-        finally:
-            session.close()
     except Exception as e:
         logger.debug(f"Could not load max_review_runs for {phase_name}: {e}")
         return None
@@ -321,19 +317,15 @@ def get_review_findings_history(workflow_id: str, phase_name: str) -> list:
     recorded yet -- the first run, or a phase that doesn't opt into
     max_review_runs.
     """
-    from src.core.database import DatabaseManager, ProjectContext
+    from src.core.database import ProjectContext, get_db
 
-    db = DatabaseManager()
-    session = db.get_session()
-    try:
+    with get_db() as session:
         row = (
             session.query(ProjectContext)
             .filter_by(key=f"review_findings:{workflow_id}:{phase_name}")
             .first()
         )
         return list(row.value) if row and row.value else []
-    finally:
-        session.close()
 
 
 def record_review_finding(
@@ -351,11 +343,9 @@ def record_review_finding(
     """
     from datetime import datetime
 
-    from src.core.database import DatabaseManager, ProjectContext
+    from src.core.database import ProjectContext, get_db
 
-    db = DatabaseManager()
-    session = db.get_session()
-    try:
+    with get_db() as session:
         key = f"review_findings:{workflow_id}:{phase_name}"
         row = session.query(ProjectContext).filter_by(key=key).first()
         history = list(row.value) if row and row.value else []
@@ -373,9 +363,6 @@ def record_review_finding(
             row.value = history
         else:
             session.add(ProjectContext(key=key, value=history))
-        session.commit()
-    finally:
-        session.close()
 
 
 # Score anchors for the three bands.

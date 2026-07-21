@@ -211,6 +211,26 @@ class AgentManager:
                 "task is REQUIRED for create_agent_for_task — cannot create agent without a task"
             )
 
+        # Guard: don't create a second agent for a task that already has one.
+        # Two concurrent code paths (e.g. orchestrator + task_completion_service)
+        # can both try to spawn an agent for the same task.
+        with self.db_manager.get_session() as _guard_session:
+            from src.core.database import Agent as _GuardAgent
+            existing = (
+                _guard_session.query(_GuardAgent)
+                .filter(
+                    _GuardAgent.current_task_id == task.id,
+                    _GuardAgent.status.in_(["working", "idle"]),
+                )
+                .first()
+            )
+            if existing:
+                logger.warning(
+                    f"Agent {existing.id[:8]} already active for task "
+                    f"{task.id[:8]} — skipping duplicate creation"
+                )
+                return existing
+
         agent_id = str(uuid.uuid4())
 
         # Centralized phase-config fallback: if the caller didn't supply the phase's
