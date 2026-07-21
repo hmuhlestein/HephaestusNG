@@ -29,9 +29,9 @@ The budget enforcement and pipeline throttling implementation demonstrates **str
 
 | ID | Severity | Status | Description |
 |----|----------|--------|-------------|
-| SEC-01 | LOW | OPEN | **Missing IP/User-Agent capture in login attempts** — `record_login_attempt()` receives empty strings for `ip_address` and `user_agent` (TODO comments in `src/auth/auth_api.py` lines 206-207, 226-227). Login attempt auditing is incomplete for security forensics. |
-| SEC-02 | LOW | OPEN | **Logout endpoint stubbed** — `/api/auth/logout` returns success without actually invalidating tokens or sessions (`src/auth/auth_api.py` line 455). Token blacklisting or session termination should be implemented. |
-| SEC-03 | LOW | OPEN | **Agent authentication relies on self-reported header** — `X-Agent-ID` header is validated for format and database existence, but the header itself can be spoofed. For local-only deployments this is acceptable; for network-exposed instances, consider HMAC-signed agent tokens. |
+| SEC-01 | LOW | OPEN (ticket-265a5c39) | **Missing IP/User-Agent capture in login attempts** — `record_login_attempt()` receives empty strings for `ip_address` and `user_agent` (TODO comments in `src/auth/auth_api.py` lines 206-207, 226-227). Login attempt auditing is incomplete for security forensics. |
+| SEC-02 | LOW | OPEN (ticket-9a813371) | **Logout endpoint stubbed** — `/api/auth/logout` returns success without actually invalidating tokens or sessions (`src/auth/auth_api.py` line 455). Token blacklisting or session termination should be implemented. |
+| SEC-03 | LOW | OPEN (ticket-71add0ce) | **Agent authentication relies on self-reported header** — `X-Agent-ID` header is validated for format and database existence, but the header itself can be spoofed. For local-only deployments this is acceptable; for network-exposed instances, consider HMAC-signed agent tokens. |
 
 #### Recommendations
 - Capture actual client IP via `Request` dependency injection in FastAPI endpoints.
@@ -53,7 +53,7 @@ The budget enforcement and pipeline throttling implementation demonstrates **str
 
 | ID | Severity | Status | Description |
 |----|----------|--------|-------------|
-| SEC-04 | MEDIUM | OPEN | **Unlinked costs bypass budget enforcement** — When both `task_id` and `workflow_id` are `None` in `record_cost()`, no derivation rollup occurs and no budget check fires. The `POST /cost-entries` API endpoint allows this. (From adversarial review WARNING-4). |
+| SEC-04 | MEDIUM | OPEN (ticket-6805c19f) | **Unlinked costs bypass budget enforcement** — When both `task_id` and `workflow_id` are `None` in `record_cost()`, no derivation rollup occurs and no budget check fires. The `POST /cost-entries` API endpoint allows this. (From adversarial review WARNING-4). |
 | SEC-05 | LOW | FIXED | **Phase 0 gap in stop endpoint** — `/autopilot/stop` now uses shared `_pause_project_workflows()` which correctly includes Phase 0 workflows. |
 | SEC-06 | LOW | FIXED | **Missing "starting" agent status** — `_pause_project_workflows` filter now includes `["working", "starting", "idle"]`. |
 
@@ -107,7 +107,7 @@ def require_entity_link(cls, v, values):
 
 | ID | Severity | Status | Description |
 |----|----------|--------|-------------|
-| SEC-08 | LOW | OPEN | **Fragile session ID extraction** — `_extract_session_id()` in `src/services/cost_collection_service.py` parses tmux session names by splitting on hyphens. If naming convention changes, extraction fails silently. (From adversarial review NIT-2). |
+| SEC-08 | LOW | OPEN (ticket-266d6a01) | **Fragile session ID extraction** — `_extract_session_id()` in `src/services/cost_collection_service.py` parses tmux session names by splitting on hyphens. If naming convention changes, extraction fails silently. (From adversarial review NIT-2). |
 
 ---
 
@@ -156,7 +156,7 @@ Dependencies use pinned or bounded versions:
 
 | ID | Severity | Status | Description |
 |----|----------|--------|-------------|
-| SEC-11 | LOW | OPEN | **Dependency versions should be audited** — Run `pip-audit` or similar tool to check for known vulnerabilities in pinned versions. |
+| SEC-11 | LOW | OPEN (ticket-83562a22) | **Dependency versions should be audited** — Run `pip-audit` or similar tool to check for known vulnerabilities in pinned versions. |
 
 ---
 
@@ -212,19 +212,19 @@ Dependencies use pinned or bounded versions:
 ### High (Should Fix Before Merge)
 **None found.**
 
-### Medium (Should Fix Soon)
-| ID | Description | Recommendation |
-|----|-------------|----------------|
-| SEC-04 | Unlinked costs bypass budget enforcement | Add validation requiring at least one entity link in CostEntryCreate |
+### Medium (Should Fix Soon — Ticket Created)
+| ID | Description | Ticket | Recommendation |
+|----|-------------|--------|----------------|
+| SEC-04 | Unlinked costs bypass budget enforcement | ticket-6805c19f | Add validation requiring at least one entity link in CostEntryCreate |
 
-### Low (Track as Technical Debt)
-| ID | Description | Recommendation |
-|----|-------------|----------------|
-| SEC-01 | Missing IP/User-Agent capture in login attempts | Add Request dependency for IP extraction |
-| SEC-02 | Logout endpoint stubbed | Implement token blacklisting or session termination |
-| SEC-03 | Agent auth relies on self-reported header | Consider HMAC-signed tokens for network-exposed deployments |
-| SEC-08 | Fragile session ID extraction | Store session_id explicitly in Agent model |
-| SEC-11 | Dependency versions should be audited | Run pip-audit for known vulnerabilities |
+### Low (Track as Technical Debt — Tickets Created)
+| ID | Description | Ticket | Recommendation |
+|----|-------------|--------|----------------|
+| SEC-01 | Missing IP/User-Agent capture in login attempts | ticket-265a5c39 | Add Request dependency for IP extraction |
+| SEC-02 | Logout endpoint stubbed | ticket-9a813371 | Implement token blacklisting or session termination |
+| SEC-03 | Agent auth relies on self-reported header | ticket-71add0ce | Consider HMAC-signed tokens for network-exposed deployments |
+| SEC-08 | Fragile session ID extraction | ticket-266d6a01 | Store session_id explicitly in Agent model |
+| SEC-11 | Dependency versions should be audited | ticket-83562a22 | Run pip-audit for known vulnerabilities |
 
 ### Informational (Good Practices Observed)
 | ID | Description |
