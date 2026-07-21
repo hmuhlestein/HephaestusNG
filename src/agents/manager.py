@@ -518,7 +518,7 @@ class AgentManager:
                             # Feature-model workflows (the standard autopilot
                             # shape since the Feature Architect split) never
                             # populate project_id/design_slug — their
-                            # launch_params carry project_path/feature_id
+                            # launch_params carry project_path and design_id or feature_id
                             # instead. Without this fallback, session_id was
                             # silently always "" for every such workflow,
                             # meaning phases that are supposed to share a
@@ -528,7 +528,11 @@ class AgentManager:
                             # cold --no-session agent instead — while the
                             # phase's own prompt still claimed continuity.
                             _pid = _lp.get("project_id") or _lp.get("project_path", "")
-                            _dsl = _lp.get("design_slug") or _lp.get("feature_id", "")
+                            _dsl = (
+                                _lp.get("design_slug")
+                                or _lp.get("design_id")
+                                or _lp.get("feature_id", "")
+                            )
                             if _pid and _dsl and phase_name:
                                 from src.autopilot.phases import get_session_id
 
@@ -1543,7 +1547,11 @@ class AgentManager:
                             # feature-model workflows use project_path/feature_id,
                             # not project_id/design_slug.
                             _pid = _lp.get("project_id") or _lp.get("project_path", "")
-                            _dsl = _lp.get("design_slug") or _lp.get("feature_id", "")
+                            _dsl = (
+                                _lp.get("design_slug")
+                                or _lp.get("design_id")
+                                or _lp.get("feature_id", "")
+                            )
                             if _pid and _dsl and restart_phase_name:
                                 from src.autopilot.phases import get_session_id
 

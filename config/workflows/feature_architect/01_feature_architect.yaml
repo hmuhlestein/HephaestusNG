@@ -22,14 +22,19 @@ description: |
   discrete, implementable features with clear boundaries, dependencies, and scope documents.
 
   ## Input
-  - Design document at: {design_document}
+  - Design document at: ./.hephaestus/design.md (copied into your worktree at launch)
   - Project path: {project_path}
   - Design ID: {design_id}
+
+  CRITICAL PATH RULE: Your current working directory IS the project root (an
+  isolated git worktree). All file paths are relative to your cwd. Do NOT read
+  from the parent repo's .hephaestus/designs/ directory — the design document
+  is already at ./.hephaestus/design.md in your worktree.
 
   ## Your Task
 
   ### Step 1: Read and Understand the Design Document
-  Read the design document carefully. Understand:
+  Read ./.hephaestus/design.md. Understand:
   - What is being built
   - The major functional areas
   - Integration points
