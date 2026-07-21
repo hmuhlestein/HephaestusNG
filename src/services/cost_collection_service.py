@@ -13,6 +13,7 @@ Usage:
 
 import json
 import logging
+import re
 import uuid
 from abc import ABC, abstractmethod
 from datetime import datetime
@@ -356,8 +357,33 @@ def _discover_session_file(session_id: str, cwd: str) -> Optional[Path]:
     Returns:
         Path to session file, or None if not found
     """
-    sanitized = cwd.replace("/", "-")
+    # SECURITY: Sanitize cwd to prevent path traversal
+    # Remove any path traversal sequences and normalize
+    from pathlib import PurePosixPath
+
+    # Reject paths with obvious traversal attempts
+    if ".." in cwd or "~" in cwd:
+        logger.warning(f"Rejected session file discovery with suspicious cwd: {cwd}")
+        return None
+
+    # Sanitize: replace slashes and special chars
+    sanitized = re.sub(r'[^a-zA-Z0-9_.\-]', '-', cwd)
+    # Collapse multiple dashes
+    sanitized = re.sub(r'-+', '-', sanitized)
+    # Remove leading/trailing dashes
+    sanitized = sanitized.strip('-')
+
     sessions_dir = Path.home() / ".pi" / "agent" / "sessions" / f"--{sanitized}--"
+
+    # SECURITY: Verify the resolved path is within expected directory
+    try:
+        resolved = sessions_dir.resolve()
+        base = (Path.home() / ".pi" / "agent" / "sessions").resolve()
+        if not str(resolved).startswith(str(base)):
+            logger.warning(f"Session path escapes base directory: {resolved}")
+            return None
+    except (OSError, ValueError):
+        return None
 
     if not sessions_dir.exists():
         return None
@@ -435,12 +461,27 @@ def collect_task_cost(task_id: str) -> None:
             # Claude Code session files in ~/.claude/projects/<sanitized_cwd>/
             cwd = _get_agent_cwd(db, agent, task)
             if cwd:
-                sanitized = cwd.replace("/", "-")
-                claude_dir = Path.home() / ".claude" / "projects" / sanitized
-                if claude_dir.exists():
-                    matches = list(claude_dir.glob(f"*_{session_id}.jsonl"))
-                    if matches:
-                        session_file = matches[0]
+                # SECURITY: Sanitize cwd to prevent path traversal
+                if ".." in cwd or "~" in cwd:
+                    logger.warning(f"Rejected Claude Code session discovery with suspicious cwd: {cwd}")
+                else:
+                    sanitized = re.sub(r'[^a-zA-Z0-9_.\-]', '-', cwd)
+                    sanitized = re.sub(r'-+', '-', sanitized).strip('-')
+                    claude_dir = Path.home() / ".claude" / "projects" / sanitized
+
+                    # SECURITY: Verify the resolved path is within expected directory
+                    try:
+                        resolved = claude_dir.resolve()
+                        base = (Path.home() / ".claude" / "projects").resolve()
+                        if not str(resolved).startswith(str(base)):
+                            logger.warning(f"Claude Code path escapes base directory: {resolved}")
+                        else:
+                            if claude_dir.exists():
+                                matches = list(claude_dir.glob(f"*_{session_id}.jsonl"))
+                                if matches:
+                                    session_file = matches[0]
+                    except (OSError, ValueError):
+                        pass
         elif cli_type == "opencode":
             # OpenCode uses one-shot capture, not session tailing
             # This path would need stdout capture file
