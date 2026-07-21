@@ -826,6 +826,11 @@ def score_product_validation(
     if verdict in ("ARCHITECTURE", "ARCH") or "ARCHITECT" in verdict:
         return _ARCH, {**meta, "band": "architecture"}
 
+    # PASS_WITH_MINOR_GAPS: the agent explicitly judged unmet requirements
+    # as non-blocking. Accept the verdict — don't override with _DEV.
+    if "PASS" in verdict and "MINOR" in verdict:
+        return _PASS_FLOOR, {**meta, "band": "pass"}
+
     # Hard floor: a PASS verdict cannot stand if requirements are unmet.
     # Same handoff mechanism as score_architectural_review/score_adversarial_review's
     # report_text quoting (see _fire_phase_transition's feedback extraction):
