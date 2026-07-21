@@ -112,45 +112,6 @@ def _resolve_worktree_head_sha(session, task) -> Optional[str]:
         return None
 
 
-def _summary_from_output_artifact(session, task, phase=None) -> str:
-    """Extract a summary from the phase's output artifact when the agent
-    didn't provide one. Reads the first few meaningful lines of the primary
-    output file so the UI shows the report content instead of the prompt."""
-    try:
-        from src.autopilot.spec import get_phase_required_files
-        from src.core.constants import CONTEXT_DIR_NAME
-
-        if phase is None:
-            from src.core.database import Phase
-            phase = session.query(Phase).filter_by(id=task.phase_id).first()
-        if not phase:
-            return ""
-
-        required_files = get_phase_required_files(phase, task.workflow_id)
-        if not required_files:
-            return ""
-
-        # Find the worktree or feature folder
-        worktree_path = _resolve_worktree_path(session, task)
-        if not worktree_path:
-            return ""
-
-        # Try the first required file (primary output)
-        primary = required_files[0]
-        for candidate in [
-            Path(worktree_path) / "docs" / primary,
-            Path(worktree_path) / CONTEXT_DIR_NAME / "features" / primary,
-        ]:
-            if candidate.exists():
-                content = candidate.read_text(errors="replace")
-                lines = [l.strip() for l in content.split("\n") if l.strip() and not l.startswith("#")]
-                if lines:
-                    return " ".join(lines[:3])[:300]
-    except Exception:
-        pass
-    return ""
-
-
 # Initialize FastAPI app
 app = FastAPI(
     title="Hephaestus MCP Server",
@@ -255,7 +216,7 @@ class UpdateTaskStatusRequest(BaseModel):
 
     task_id: str
     status: str = Field(..., pattern="^(done|failed)$")
-    summary: str = Field(default="", description="What was accomplished")
+    summary: str = Field(default="", description="What was accomplished. Required if status is 'done'")
     key_learnings: List[str] = Field(default=[], description="Important discoveries")
     code_changes: Optional[List[str]] = Field(default=None, description="Files modified/created")
     failure_reason: Optional[str] = Field(default=None, description="Required if status is 'failed'")
@@ -2150,6 +2111,14 @@ async def update_task_status(
                 else:
                     raise HTTPException(status_code=403, detail="Agent not authorized for this task")
 
+        if request.status == "done" and not request.summary.strip():
+            raise HTTPException(
+                status_code=400,
+                detail="summary is required when status='done' -- describe what "
+                "was accomplished so the pipeline and UI have something real to "
+                "show instead of guessing from output files.",
+            )
+
         # 2. Save learnings as memories
         await TaskCompletionService.record_learnings(session, agent_id, request.task_id, request.key_learnings, request.code_changes)
 
@@ -2319,11 +2288,7 @@ async def update_task_status(
             # No validation or task failed - proceed normally
             task.status = request.status
             task.completed_at = datetime.utcnow()
-            # When summary is empty, try to populate from the output artifact
-            # so the UI shows something meaningful instead of the prompt.
-            task.completion_notes = request.summary or _summary_from_output_artifact(
-                session, task, phase
-            )
+            task.completion_notes = request.summary
 
             if request.status == "failed":
                 task.failure_reason = request.failure_reason

@@ -343,6 +343,11 @@ async def _post_task_status(
     """Shared HTTP call + response formatting for update_task_status and
     complete_my_task -- the only difference between them is how task_id/
     agent_id get resolved before reaching here."""
+    if status == "done" and not summary.strip():
+        return (
+            "❌ Failed to complete task: summary is required when status='done' "
+            "— describe what you accomplished."
+        )
     try:
         async with httpx.AsyncClient() as client:
             payload = {
@@ -408,7 +413,8 @@ async def complete_my_task(
 
     Args:
         status: New status (done/failed/in_progress)
-        summary: Summary of what was accomplished (for done status)
+        summary: Summary of what was accomplished. REQUIRED for done status --
+            describe what you actually did, not just that you finished.
         failure_reason: Reason for failure (for failed status)
         key_learnings: List of key learnings from the task
 
