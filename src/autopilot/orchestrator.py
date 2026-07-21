@@ -5367,6 +5367,39 @@ def _create_phase_task(
             if not phase:
                 return False
 
+            # Review-run cap + prior-findings injection -- opt-in per phase
+            # via workflow.yaml's max_review_runs (None for every phase
+            # that doesn't set it, i.e. today's uncapped behavior). Counts
+            # ALL Task rows ever created for this phase_id: unlike
+            # PhaseExecution (reused in place across goto resets), a Task
+            # row is created fresh on every re-entry, so this is a correct
+            # "how many times has this phase run" total.
+            from src.autopilot.spec import get_max_review_runs, get_review_findings_history
+
+            max_review_runs = get_max_review_runs(workflow_id, phase.name)
+            prior_findings_block = ""
+            if max_review_runs is not None:
+                run_count = db.query(Task).filter(Task.phase_id == phase_id).count()
+                if run_count >= max_review_runs:
+                    return _cap_out_review_phase(
+                        db, workflow_id, phase, run_count, max_review_runs, logger
+                    )
+                if run_count > 0:
+                    history = get_review_findings_history(workflow_id, phase.name)
+                    if history:
+                        findings_lines = "\n".join(
+                            f"- Run {h['run_number']}: {h['blocker_count']} "
+                            f"blocker(s) -- {h['summary'][:200]}"
+                            for h in history
+                        )
+                        prior_findings_block = (
+                            f"\n\nPRIOR FINDINGS FROM {len(history)} EARLIER "
+                            f"RUN(S) OF THIS PHASE:\n{findings_lines}\n\n"
+                            "Verify ONLY whether these specific findings are "
+                            "now fixed. Do not re-review from scratch unless "
+                            "you find something genuinely new."
+                        )
+
             # Create task
             task_id = str(uuid.uuid4())
             base_description = f"Execute {phase.name}: {phase.description}"
@@ -5377,7 +5410,7 @@ def _create_phase_task(
                 "pass, it's a return from review with a concrete issue to fix."
                 if feedback
                 else base_description
-            )
+            ) + prior_findings_block
             task = Task(
                 id=task_id,
                 raw_description=description,
