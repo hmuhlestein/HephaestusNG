@@ -112,6 +112,45 @@ def _resolve_worktree_head_sha(session, task) -> Optional[str]:
         return None
 
 
+def _summary_from_output_artifact(session, task, phase=None) -> str:
+    """Extract a summary from the phase's output artifact when the agent
+    didn't provide one. Reads the first few meaningful lines of the primary
+    output file so the UI shows the report content instead of the prompt."""
+    try:
+        from src.autopilot.spec import get_phase_required_files
+        from src.core.constants import CONTEXT_DIR_NAME
+
+        if phase is None:
+            from src.core.database import Phase
+            phase = session.query(Phase).filter_by(id=task.phase_id).first()
+        if not phase:
+            return ""
+
+        required_files = get_phase_required_files(phase, task.workflow_id)
+        if not required_files:
+            return ""
+
+        # Find the worktree or feature folder
+        worktree_path = _resolve_worktree_path(session, task)
+        if not worktree_path:
+            return ""
+
+        # Try the first required file (primary output)
+        primary = required_files[0]
+        for candidate in [
+            Path(worktree_path) / "docs" / primary,
+            Path(worktree_path) / CONTEXT_DIR_NAME / "features" / primary,
+        ]:
+            if candidate.exists():
+                content = candidate.read_text(errors="replace")
+                lines = [l.strip() for l in content.split("\n") if l.strip() and not l.startswith("#")]
+                if lines:
+                    return " ".join(lines[:3])[:300]
+    except Exception:
+        pass
+    return ""
+
+
 # Initialize FastAPI app
 app = FastAPI(
     title="Hephaestus MCP Server",
@@ -2280,7 +2319,11 @@ async def update_task_status(
             # No validation or task failed - proceed normally
             task.status = request.status
             task.completed_at = datetime.utcnow()
-            task.completion_notes = request.summary
+            # When summary is empty, try to populate from the output artifact
+            # so the UI shows something meaningful instead of the prompt.
+            task.completion_notes = request.summary or _summary_from_output_artifact(
+                session, task, phase
+            )
 
             if request.status == "failed":
                 task.failure_reason = request.failure_reason

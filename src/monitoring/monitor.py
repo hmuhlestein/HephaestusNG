@@ -52,9 +52,13 @@ _MAX_TOKEN_LIMIT_RE = re.compile(
 )
 
 # Claude session limit detection -- "You've hit your session limit" or similar
-# messages that indicate the CLI agent can't actually do work.
+# messages that indicate the CLI agent can't actually do work. Anchored to
+# that confirmed exact phrase (not the bare fragment "You've hit", which is
+# generic enough to risk matching an agent's own reasoning text or an echoed
+# task prompt) -- same reasoning as AgentManager._send_initial_prompt_with_retry's
+# equivalent check.
 _SESSION_LIMIT_RE = re.compile(
-    r"(?:session limit|You've hit|rate limit|too many requests)",
+    r"(?:you've hit your session limit|session limit|rate limit|too many requests)",
     re.IGNORECASE,
 )
 
@@ -665,17 +669,30 @@ class MonitoringLoop:
                 return
             frozen_for = now - st["since"] if st["since"] else 0
 
-            # Session limit: hard blocker — can't recover, fail immediately
+            # Session limit: hard blocker — can't recover, fail immediately.
+            # This fires on an already-running agent mid-session (unlike
+            # AgentManager.create_agent_for_task's equivalent check, which
+            # only sees a session-limit rejection during initial prompt
+            # delivery) -- e.g. an agent that did 10+ minutes of real work
+            # before running out of session budget. If the phase has no
+            # fallback_cli_tool configured, retrying will just recreate the
+            # same primary CLI and hit the same limit again until it resets
+            # on its own, so pause the workflow immediately instead of
+            # relying on _maybe_retry_failed_tasks to reach that same
+            # conclusion after 2 more wasted cycles. If a fallback IS
+            # configured, leave it to the normal retry -- the next dispatch
+            # re-reads Phase.cli_tool and create_agent_for_task's own
+            # fallback logic takes over if the primary is still limited.
             if _SESSION_LIMIT_RE.search(_strip_sgr(out)):
                 logger.warning(
                     f"[SESSION-LIMIT] Agent {agent.id[:8]} ({agent.cli_type}) hit session limit — "
                     f"terminating immediately (not recoverable)"
                 )
                 with self.db_manager.session_scope() as session:
-                    from src.core.database import Task as _Task
+                    from src.core.database import Phase as _Phase
 
                     stuck_task = (
-                        session.query(_Task)
+                        session.query(Task)
                         .filter_by(assigned_agent_id=agent.id, status="in_progress")
                         .first()
                     )
@@ -686,6 +703,38 @@ class MonitoringLoop:
                             f"[SESSION-LIMIT] Task {stuck_task.id[:8]} marked failed; "
                             f"phase will be retried"
                         )
+
+                        has_fallback = False
+                        if stuck_task.phase_id:
+                            phase = (
+                                session.query(_Phase)
+                                .filter_by(id=stuck_task.phase_id)
+                                .first()
+                            )
+                            has_fallback = bool(
+                                phase and getattr(phase, "fallback_cli_tool", None)
+                            )
+
+                        if not has_fallback and stuck_task.workflow_id:
+                            workflow = (
+                                session.query(Workflow)
+                                .filter_by(id=stuck_task.workflow_id)
+                                .first()
+                            )
+                            if workflow and workflow.status != "paused":
+                                workflow.status = "paused"
+                                workflow.paused_by = "system"
+                                workflow.status_reason = (
+                                    f"CLI session limit hit ({agent.cli_type}), no "
+                                    "fallback configured -- will auto-resume on its "
+                                    "own retry cooldown once the limit resets"
+                                )
+                                workflow.paused_at = datetime.utcnow()
+                                logger.warning(
+                                    f"[SESSION-LIMIT] Pausing workflow "
+                                    f"{stuck_task.workflow_id[:8]} -- no fallback "
+                                    "configured for this phase"
+                                )
                 await self.agent_manager.terminate_agent(agent.id)
                 self._stuck_state.pop(agent.id, None)
                 return True

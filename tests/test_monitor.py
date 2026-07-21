@@ -1556,6 +1556,109 @@ class TestMechanicalRecovery:
         mock_agent_manager.terminate_agent.assert_called_once()
 
 
+class TestSessionLimitPause:
+    """A session-limit rejection on an already-running agent (unlike
+    create_agent_for_task's equivalent check, which only sees this during
+    initial prompt delivery) must pause the workflow when the phase has no
+    fallback_cli_tool configured -- retrying would just recreate the same
+    primary CLI and hit the same limit again until it resets on its own."""
+
+    def _session_with(self, task, phase=None, workflow=None):
+        from contextlib import contextmanager
+
+        session = Mock()
+
+        def query_side_effect(model):
+            m = Mock()
+            name = model.__name__ if hasattr(model, "__name__") else str(model)
+            if name == "Task":
+                m.filter_by.return_value.first.return_value = task
+            elif name == "Phase":
+                m.filter_by.return_value.first.return_value = phase
+            elif name == "Workflow":
+                m.filter_by.return_value.first.return_value = workflow
+            return m
+
+        session.query.side_effect = query_side_effect
+
+        @contextmanager
+        def mock_session_scope():
+            yield session
+
+        return mock_session_scope
+
+    @pytest.mark.asyncio
+    async def test_pauses_workflow_when_no_fallback_configured(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        agent = Agent(id="a1", cli_type="claude")
+        mock_agent_manager.get_agent_output.return_value = (
+            "You've hit your session limit"
+        )
+        mock_agent_manager.terminate_agent = AsyncMock()
+
+        task = Mock(
+            id="t1", status="in_progress", phase_id="p1", workflow_id="wf1"
+        )
+        phase = Mock(fallback_cli_tool=None)
+        workflow = Mock(status="active", paused_by=None, paused_at=None)
+        mock_db.session_scope = self._session_with(task, phase, workflow)
+
+        # First call only sets the frozen-signature baseline (real check
+        # requires an unchanged signature across two consecutive polls,
+        # matching TestMechanicalRecovery's frozen-detection pattern).
+        await make_monitoring_loop._mechanical_recovery_for_agent(agent)
+        await make_monitoring_loop._mechanical_recovery_for_agent(agent)
+
+        assert task.status == "failed"
+        assert workflow.status == "paused"
+        assert workflow.paused_by == "system"
+        assert workflow.paused_at is not None
+        mock_agent_manager.terminate_agent.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_no_pause_when_fallback_configured(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        agent = Agent(id="a1", cli_type="claude")
+        mock_agent_manager.get_agent_output.return_value = (
+            "You've hit your session limit"
+        )
+        mock_agent_manager.terminate_agent = AsyncMock()
+
+        task = Mock(
+            id="t1", status="in_progress", phase_id="p1", workflow_id="wf1"
+        )
+        phase = Mock(fallback_cli_tool="pi")
+        workflow = Mock(status="active", paused_by=None, paused_at=None)
+        mock_db.session_scope = self._session_with(task, phase, workflow)
+
+        await make_monitoring_loop._mechanical_recovery_for_agent(agent)
+        await make_monitoring_loop._mechanical_recovery_for_agent(agent)
+
+        assert task.status == "failed"
+        assert workflow.status == "active"
+        assert workflow.paused_by is None
+        mock_agent_manager.terminate_agent.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_does_not_false_positive_on_bare_youve_hit(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        """Regression: the bare fragment "You've hit" (e.g. "you've hit a
+        bug", quoted in an agent's own reasoning) must not trigger -- only
+        the confirmed exact Claude phrase or the other specific phrases."""
+        agent = Agent(id="a1", cli_type="claude")
+        mock_agent_manager.get_agent_output.return_value = (
+            "Looks like you've hit a tricky edge case here, let me think..."
+        )
+        mock_agent_manager.terminate_agent = AsyncMock()
+
+        await make_monitoring_loop._mechanical_recovery_for_agent(agent)
+
+        mock_agent_manager.terminate_agent.assert_not_called()
+
+
 # ── _handle_stuck_agent ──────────────────────────────────────────
 
 
