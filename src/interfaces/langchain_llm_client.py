@@ -434,6 +434,7 @@ class LangChainLLMClient:
         done_definition: str,
         context: List[str],
         phase_context: Optional[str] = None,
+        task_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Enrich a task with LLM analysis using assigned model.
 
@@ -462,7 +463,7 @@ class LangChainLLMClient:
         ]
 
         try:
-            response = await self._invoke_and_record(model, messages, component="task_enrichment")
+            response = await self._invoke_and_record(model, messages, component="task_enrichment", task_id=task_id)
             parser = JsonOutputParser()
             result = parser.parse(response.content)
 
@@ -564,6 +565,7 @@ class LangChainLLMClient:
         agent_output: str,
         task_info: Dict[str, Any],
         project_context: str,
+        task_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Analyze agent state for monitoring decisions.
 
@@ -587,7 +589,7 @@ class LangChainLLMClient:
         ]
 
         try:
-            response = await self._invoke_and_record(model, messages, component="agent_state_analysis")
+            response = await self._invoke_and_record(model, messages, component="agent_state_analysis", task_id=task_id)
             parser = JsonOutputParser()
             result = parser.parse(response.content)
 
@@ -647,6 +649,7 @@ class LangChainLLMClient:
         past_summaries: List[Dict[str, Any]],
         task_info: Dict[str, Any],
         last_message_marker: Optional[str] = None,
+        task_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Analyze agent using trajectory thinking.
 
@@ -685,7 +688,7 @@ class LangChainLLMClient:
 
         for attempt in range(3):
             try:
-                response = await self._invoke_and_record(model, messages, component="guardian_analysis")
+                response = await self._invoke_and_record(model, messages, component="guardian_analysis", task_id=task_id)
 
                 # Parse the response as structured output
                 parser = JsonOutputParser()
@@ -768,6 +771,7 @@ class LangChainLLMClient:
         prd_content: str,
         phase_intent: str,
         spec: Dict[str, Any],
+        task_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Review a QA report against PRD and phase intent.
 
@@ -835,7 +839,7 @@ Consider:
         for attempt in range(3):
             try:
                 response = await asyncio.wait_for(
-                    self._invoke_and_record(model, messages, component="conductor_review_qa"),
+                    self._invoke_and_record(model, messages, component="conductor_review_qa", task_id=task_id),
                     timeout=CONDUCTOR_LLM_TIMEOUT,
                 )
 

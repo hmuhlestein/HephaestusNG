@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { motion } from 'framer-motion';
-import { Bot, FileText, Database, AlertCircle, TrendingUp, Clock, Ban, AlertTriangle } from 'lucide-react';
+import { Bot, FileText, Database, AlertCircle, TrendingUp, Clock, Ban, AlertTriangle, DollarSign } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { apiService } from '@/services/api';
 import { DashboardStats } from '@/types';
@@ -11,6 +11,7 @@ import { formatDistanceToNow } from 'date-fns';
 import QueueStatusWidget from '@/components/QueueStatusWidget';
 import BlockedTasksView from '@/components/BlockedTasksView';
 import { useProject } from '@/context/ProjectContext';
+import { ProjectCostSummary, BudgetPausedLabel } from '@/components/cost';
 
 const StatCard: React.FC<{
   title: string;
@@ -100,6 +101,13 @@ const Dashboard: React.FC = () => {
     queryKey: ['blocked-tasks', projectId],
     queryFn: () => apiService.getBlockedTasks(undefined, projectId || undefined),
     refetchInterval: 5000, // Refresh every 5 seconds
+    enabled: !!projectId,
+  });
+
+  const { data: projectCosts } = useQuery({
+    queryKey: ['project-costs', projectId],
+    queryFn: () => apiService.getProjectCosts(projectId!),
+    refetchInterval: 30000, // Refresh every 30 seconds
     enabled: !!projectId,
   });
 
@@ -264,6 +272,22 @@ const Dashboard: React.FC = () => {
 
       {/* Queue Status */}
       <QueueStatusWidget />
+
+      {/* Project Cost Summary */}
+      {projectCosts && (
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+        >
+          <ProjectCostSummary
+            projectId={projectCosts.project_id}
+            projectName={projectCosts.project_name}
+            costTotal={projectCosts.cost_total_usd}
+            costLimit={projectCosts.cost_limit_usd}
+            isOverBudget={projectCosts.is_over_budget}
+          />
+        </motion.div>
+      )}
 
       {/* Blocked Tasks */}
       {blockedTasks && blockedTasks.length > 0 && (
