@@ -23,7 +23,9 @@ from src.core.constants import (
     AUTOPILOT_STATE_DIR,
     CONTEXT_DIR_NAME,
     DESIGN_CONTEXT_SUBDIR,
+    DESIGN_WORKFLOW_DEFINITION_IDS,
     GOTO_REASON_PREFIX,
+    PHASE0_DEFINITION_IDS,
 )
 
 # Import authentication function from server module
@@ -38,16 +40,6 @@ FEATURES_DIR = ""
 _active_project_id_cache: Optional[str] = None  # Track which project the cached dirs belong to
 
 ALLOWED_EXTENSIONS = {".md", ".txt"}
-
-# Workflow.definition_id values that identify a design's workflows.
-# "autopilot-phase0" is the pre-rename Phase 0 definition_id (see
-# config/workflows/feature_architect/, renamed from autopilot-phase0/) --
-# kept here for historical DB rows created before the rename, not because
-# new workflows still use it. One shared constant instead of repeating this
-# pair inline at every call site, so a future retirement of the old value
-# only has to happen in one place.
-PHASE0_DEFINITION_IDS = ("autopilot-phase0", "feature_architect")
-DESIGN_WORKFLOW_DEFINITION_IDS = ("autopilot",) + PHASE0_DEFINITION_IDS
 
 
 def _get_active_project_id() -> Optional[str]:
