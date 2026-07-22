@@ -1,9 +1,18 @@
 # Security Review Report: Budget Enforcement and Pipeline Throttling
 
 **Reviewer:** Hephaestus Security Review (Phase 7)  
-**Date:** 2026-07-21  
-**Commit Under Review:** `bbe52e7` (latest development commit)  
+**Date:** 2026-07-22 (re-verified after retry — see Re-Verification Note)  
+**Commit Under Review:** `196b68b` (latest HEAD)  
 **Scope:** Budget enforcement, cost tracking, authentication, authorization, input validation, data handling
+
+---
+
+## Re-Verification Note (2026-07-22)
+
+This phase was re-run after the previous attempt was orphaned before it could call `complete_my_task`. The report body below was written during the original run and is otherwise still accurate; the code was re-diffed against `main` and re-read directly for this pass. One material change since the original write-up:
+
+- **SEC-04 is now FIXED.** `CostEntryCreate` in `src/mcp/autopilot_api.py` (lines 1567-1573) has a `@model_validator(mode="after")` (`validate_entity_link`) that rejects any cost entry where both `task_id` and `workflow_id` are `None`. Verified by `test_reject_unlinked_costs`. Ticket `ticket-6805c` is already marked resolved in the tracker.
+- No new vulnerabilities were found in the budget-enforcement-specific diff (`src/autopilot/orchestrator.py`, `src/core/cost_derivation.py`, `src/core/database.py`, `src/mcp/autopilot_api.py`, `src/services/cost_collection_service.py`, and the new/changed frontend components `BudgetStatusCard.tsx`, `ProjectSettingsModal.tsx`, `WorkflowCard.tsx`). The remaining findings below (SEC-01, 02, 03, 08, 11) are pre-existing, unrelated to this feature, and already tracked in open tickets.
 
 ---
 
@@ -53,25 +62,20 @@ The budget enforcement and pipeline throttling implementation demonstrates **str
 
 | ID | Severity | Status | Description |
 |----|----------|--------|-------------|
-| SEC-04 | MEDIUM | OPEN (ticket-6805c19f) | **Unlinked costs bypass budget enforcement** — When both `task_id` and `workflow_id` are `None` in `record_cost()`, no derivation rollup occurs and no budget check fires. The `POST /cost-entries` API endpoint allows this. (From adversarial review WARNING-4). |
+| SEC-04 | MEDIUM | **FIXED** | **Unlinked costs bypass budget enforcement** — Previously, when both `task_id` and `workflow_id` were `None` in `record_cost()`, no derivation rollup occurred and no budget check fired. Now fixed: see below. |
 | SEC-05 | LOW | FIXED | **Phase 0 gap in stop endpoint** — `/autopilot/stop` now uses shared `_pause_project_workflows()` which correctly includes Phase 0 workflows. |
 | SEC-06 | LOW | FIXED | **Missing "starting" agent status** — `_pause_project_workflows` filter now includes `["working", "starting", "idle"]`. |
 
-#### SEC-04 Analysis & Mitigation
-The practical risk is **low** because:
-1. The Pi extension always provides `task_id` and `agent_id`.
-2. Direct API callers are internal services, not untrusted users.
-3. Unlinked costs are still recorded in the ledger (audit trail exists).
-
-**Recommended Fix (future):**
+#### SEC-04 Fix Verified
+`src/mcp/autopilot_api.py` `CostEntryCreate` now has:
 ```python
-# In CostEntryCreate validator
-@validator("task_id", "workflow_id", pre=True, always=True)
-def require_entity_link(cls, v, values):
-    if not values.get("task_id") and not values.get("workflow_id"):
-        raise ValueError("At least one of task_id or workflow_id is required")
-    return v
+@model_validator(mode="after")
+def validate_entity_link(self) -> "CostEntryCreate":
+    if self.task_id is None and self.workflow_id is None:
+        raise ValueError("At least one of task_id or workflow_id must be provided for cost attribution and budget enforcement")
+    return self
 ```
+`POST /cost-entries` now rejects unlinked cost entries with a 422. Covered by `test_reject_unlinked_costs` in `tests/test_cost_tracking.py`. Ticket `ticket-6805c` closed.
 
 ---
 
@@ -212,10 +216,8 @@ Dependencies use pinned or bounded versions:
 ### High (Should Fix Before Merge)
 **None found.**
 
-### Medium (Should Fix Soon — Ticket Created)
-| ID | Description | Ticket | Recommendation |
-|----|-------------|--------|----------------|
-| SEC-04 | Unlinked costs bypass budget enforcement | ticket-6805c19f | Add validation requiring at least one entity link in CostEntryCreate |
+### Medium
+**None open.** SEC-04 (unlinked costs bypass budget enforcement) was fixed via a `model_validator` on `CostEntryCreate`; ticket `ticket-6805c` is resolved.
 
 ### Low (Track as Technical Debt — Tickets Created)
 | ID | Description | Ticket | Recommendation |
@@ -238,8 +240,8 @@ Dependencies use pinned or bounded versions:
 
 ## Verdict
 
-**PASS** — Implementation approved for merge. No critical or high-severity vulnerabilities found. The budget enforcement feature has strong security fundamentals with proper cost derivation, idempotent enforcement, and comprehensive agent termination. The 5 low-severity findings are technical debt items that don't block the current release.
+**PASS** — Implementation approved for merge. No critical or high-severity vulnerabilities found. The budget enforcement feature has strong security fundamentals with proper cost derivation, idempotent enforcement, comprehensive agent termination, and validated entity linking on cost entries. The 5 remaining low-severity findings (SEC-01, 02, 03, 08, 11) are pre-existing technical debt unrelated to this feature and already tracked in open tickets; they don't block this release.
 
 ---
 
-*Security review complete. 0 critical, 0 high, 1 medium, 5 low findings.*
+*Security review complete (re-verified 2026-07-22). 0 critical, 0 high, 0 medium open, 5 low (pre-existing, ticketed) findings.*
