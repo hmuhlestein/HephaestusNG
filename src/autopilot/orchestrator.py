@@ -2851,6 +2851,89 @@ def _recover_abandoned_workflows_missing_worktree(logger: OrchestratorLogger) ->
     return recovered
 
 
+def _recover_abandoned_workflows_with_completed_phase(logger: OrchestratorLogger) -> int:
+    """Self-heal for a workflow _escalate_stale_active_workflows marked
+    "failed" (same abandonment message as
+    _recover_abandoned_workflows_missing_worktree), but whose worktree is
+    still intact and whose current in-progress phase's task(s) already
+    finished ("done", none pending/assigned/in_progress) -- i.e. the phase's
+    real work completed, but nothing then evaluated it or created the next
+    phase's task. _escalate_stale_active_workflows's own docstring names the
+    likely cause: a backend restart landing in the narrow window between a
+    task's "done" commit and the synchronous spec-gate evaluation
+    (fire_spec_gate_if_ready) that normally follows it in the same request.
+
+    Distinct from _recover_abandoned_workflows_missing_worktree, which
+    handles a FAILED task with a lost worktree (retry machinery re-dispatches
+    it). This case has no failed task to retry -- the work already
+    succeeded -- so recovery is just: make the workflow visible to
+    _advance_phases again (status back to "active", clear status_reason) and
+    let its own existing "phase complete -> fire transition" path
+    (_case_in_progress_complete) re-evaluate the already-done work on the
+    very next sweep, instead of this function re-implementing that
+    evaluation itself. If the phase's declared output is genuinely missing
+    (e.g. the agent's JSON never made it into the worktree), that path's
+    normal result_missing handling sends it to development with the
+    available report text as context, same as any other run -- this
+    function only unblocks the workflow, it doesn't grade the work.
+    """
+    from src.core.database import Task
+
+    recovered = 0
+    with get_db() as db:
+        candidates = (
+            db.query(Workflow)
+            .filter(
+                Workflow.status == "failed",
+                Workflow.working_directory.isnot(None),
+                Workflow.status_reason.like("Abandoned: no agent/task activity%"),
+            )
+            .all()
+        )
+        for wf in candidates:
+            in_progress_phase_ids = {
+                pid
+                for (pid,) in db.query(PhaseExecution.phase_id)
+                .join(Phase, PhaseExecution.phase_id == Phase.id)
+                .filter(Phase.workflow_id == wf.id, PhaseExecution.status == "in_progress")
+                .all()
+            }
+            if not in_progress_phase_ids:
+                continue  # nothing in_progress -- not this function's case
+
+            unfinished = (
+                db.query(Task)
+                .filter(
+                    Task.phase_id.in_(in_progress_phase_ids),
+                    Task.status.in_(["pending", "assigned", "in_progress"]),
+                )
+                .count()
+            )
+            if unfinished > 0:
+                continue  # something genuinely still active -- leave it alone
+
+            has_done = (
+                db.query(Task)
+                .filter(Task.phase_id.in_(in_progress_phase_ids), Task.status == "done")
+                .count()
+            )
+            if not has_done:
+                continue  # nothing completed yet either -- not evaluable
+
+            logger.warning(
+                f"[WORKFLOW-RECOVERY] Workflow {wf.id[:8]} was marked failed "
+                "(abandoned) but its worktree is intact and its current "
+                "phase's task(s) already finished -- resuming so the next "
+                "sweep can evaluate and advance it"
+            )
+            wf.status = "active"
+            wf.status_reason = None
+            recovered += 1
+        if recovered:
+            db.commit()
+    return recovered
+
+
 def _retry_exhausted_paused_workflows(logger: OrchestratorLogger) -> int:
     """Self-heal for a workflow _maybe_retry_failed_tasks paused after its
     retry cap was exhausted (Workflow.paused_by == "system") -- e.g. every
@@ -3801,8 +3884,18 @@ def _release_stale_task_creation_claims(
     exists for the phase, treat the guarded work as done -- flip
     pending/completed to in_progress and clear the claim. If no Task
     exists at all, just clear the claim so Case 0/0b can create one fresh.
+
+    Uses datetime.utcnow(), matching _claim_phase_task_creation's writer and
+    every other timestamp in this codebase -- datetime.now() (ambient local
+    time) here previously meant a claim's staleness depended on whatever
+    TZ the process happened to be running under at the moment it compared,
+    not real elapsed time. Observed live: a claim set hours earlier under a
+    UTC-flavored clock never registered as stale against a later process's
+    local-time now(), because the raw naive values didn't share a clock to
+    compare against -- the workflow stayed silently stuck indefinitely,
+    invisible to this self-heal despite being its exact intended case.
     """
-    stale_cutoff = datetime.now() - timedelta(seconds=CLAIM_STALE_TIMEOUT_SECONDS)
+    stale_cutoff = datetime.utcnow() - timedelta(seconds=CLAIM_STALE_TIMEOUT_SECONDS)
     stale_executions = (
         db.query(PhaseExecution)
         .join(Phase, PhaseExecution.phase_id == Phase.id)
@@ -3969,7 +4062,7 @@ def _claim_phase_task_creation(db, phase_id: str) -> bool:
     claim (go ahead and create the task), False if someone else already
     holds it (skip -- a task is already being created for this phase).
     """
-    claimed_at = datetime.now()
+    claimed_at = datetime.utcnow()
     result = (
         db.query(PhaseExecution)
         .filter(
