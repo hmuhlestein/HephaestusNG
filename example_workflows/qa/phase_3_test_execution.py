@@ -30,7 +30,7 @@ QA report with pass/fail status and recommendations.""",
         "Task marked as done",
     ],
     working_directory=".",
-    additional_notes="""═══════════════════════════════════════════════════════════════════════
+    additional_notes=r"""═══════════════════════════════════════════════════════════════════════
 YOU ARE A QA EXECUTION AGENT - RUN TESTS AND GENERATE REPORT
 ═══════════════════════════════════════════════════════════════════════
 

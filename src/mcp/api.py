@@ -148,7 +148,7 @@ class FrontendAPI:
             # Base query filters
             agent_query = session.query(Agent)
             task_query = session.query(Task)
-            
+
             if project_id:
                 # Filter by project through workflow
                 project_workflow_ids = session.query(Workflow.id).filter(
@@ -318,7 +318,7 @@ class FrontendAPI:
         session = self.db_manager.get_session()
         try:
             query = session.query(Agent)
-            
+
             if project_id:
                 # Filter agents that have tasks in the specified project
                 project_workflow_ids = session.query(Workflow.id).filter(
@@ -331,7 +331,7 @@ class FrontendAPI:
                 query = query.filter(
                     Agent.id.in_(project_agent_ids)
                 )
-            
+
             agents = query.order_by(desc(Agent.created_at)).all()
 
             result = []

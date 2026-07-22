@@ -50,11 +50,11 @@ def derive_feature_status(db: Session, feature_id: str, write_back: bool = True)
     if not feature:
         logger.warning(f"Feature {feature_id} not found")
         return "unknown"
-    
+
     # Respect paused status - user explicitly paused
     if feature.status == FeatureStatus.PAUSED:
         return FeatureStatus.PAUSED
-    
+
     # Respect skipped status
     if feature.status == FeatureStatus.SKIPPED:
         return FeatureStatus.SKIPPED
@@ -81,11 +81,11 @@ def derive_feature_status(db: Session, feature_id: str, write_back: bool = True)
         )
         .all()
     )
-    
+
     if not tasks:
         # No tasks yet - use DB status (set by orchestrator before tasks exist)
         return feature.status
-    
+
     # Derive from task statuses
     task_statuses = {t.status for t in tasks}
 
@@ -142,7 +142,7 @@ def derive_feature_status(db: Session, feature_id: str, write_back: bool = True)
     else:
         # Fallback to DB status
         derived = feature.status
-    
+
     # Self-heal: write back to DB if status disagrees
     if write_back and derived != feature.status:
         logger.info(
@@ -151,7 +151,7 @@ def derive_feature_status(db: Session, feature_id: str, write_back: bool = True)
         )
         feature.status = derived
         db.commit()
-    
+
     return derived
 
 
@@ -172,7 +172,7 @@ def derive_design_status(db: Session, design_id: str, write_back: bool = True) -
     if not design:
         logger.warning(f"Design {design_id} not found")
         return "unknown"
-    
+
     # Respect paused status only if there are active workflows
     # (otherwise a stale "paused" status blocks reruns from taking effect)
     if design.status == WorkflowStatus.PAUSED:
@@ -183,36 +183,36 @@ def derive_design_status(db: Session, design_id: str, write_back: bool = True) -
         ).first()
         if has_active_wfs:
             return WorkflowStatus.PAUSED
-    
+
     # Respect pending status — it's an explicit orchestrator state
     # (waiting for first run or queued for retry). Don't override it
     # with derived status, or the retry logic in pick_next_design
     # will fight an infinite loop with status derivation.
     if design.status == FeatureStatus.PENDING:
         return FeatureStatus.PENDING
-    
+
     # Get features for this design
     features = db.query(Feature).filter_by(design_id=design_id).all()
-    
+
     if not features:
         # No features yet
         return design.status
-    
+
     # Derive from feature statuses
     feature_status_map = {f: derive_feature_status(db, f.id, write_back=False) for f in features}
     feature_statuses = set(feature_status_map.values())
-    
+
     # Consider skipped features as "done" for status derivation
     # (they were intentionally excluded, not left incomplete)
     non_skipped_statuses = feature_statuses - {FeatureStatus.SKIPPED}
-    
+
     # Check if any workflow for this design has failed
     from src.core.database import Workflow
     has_failed_wf = db.query(Workflow).filter(
         Workflow.design_id == design_id,
         Workflow.status == "failed",
     ).first() is not None
-    
+
     if feature_statuses == {FeatureStatus.COMPLETED}:
         derived = FeatureStatus.COMPLETED
     elif feature_statuses == {FeatureStatus.VALIDATED}:
@@ -245,7 +245,7 @@ def derive_design_status(db: Session, design_id: str, write_back: bool = True) -
         derived = FeatureStatus.ACTIVE
     else:
         derived = design.status
-    
+
     # Self-heal: write back to DB if status disagrees
     if write_back and derived != design.status:
         logger.info(
@@ -291,20 +291,20 @@ def derive_workflow_status(db: Session, workflow_id: str, write_back: bool = Tru
     if not workflow:
         logger.warning(f"Workflow {workflow_id} not found")
         return "unknown"
-    
+
     # Respect paused status
     if workflow.status == WorkflowStatus.PAUSED:
         return WorkflowStatus.PAUSED
-    
+
     # Get tasks for this workflow
     tasks = db.query(Task).filter_by(workflow_id=workflow_id).all()
-    
+
     if not tasks:
         return workflow.status
-    
+
     # Derive from task statuses
     task_statuses = {t.status for t in tasks}
-    
+
     if task_statuses == {TaskStatus.DONE}:
         derived = WorkflowStatus.COMPLETED
     elif TaskStatus.IN_PROGRESS in task_statuses or TaskStatus.ASSIGNED in task_statuses:
@@ -324,7 +324,7 @@ def derive_workflow_status(db: Session, workflow_id: str, write_back: bool = Tru
         derived = WorkflowStatus.ACTIVE
     else:
         derived = workflow.status
-    
+
     # Self-heal
     if write_back and derived != workflow.status:
         logger.info(
@@ -333,5 +333,5 @@ def derive_workflow_status(db: Session, workflow_id: str, write_back: bool = Tru
         )
         workflow.status = derived
         db.commit()
-    
+
     return derived

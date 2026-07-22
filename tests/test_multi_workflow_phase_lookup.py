@@ -14,7 +14,6 @@ The fix ensures:
 3. request.workflow_id takes priority over derived workflow_id
 """
 
-import os
 
 import pytest
 

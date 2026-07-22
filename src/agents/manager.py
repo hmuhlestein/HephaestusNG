@@ -52,7 +52,7 @@ class AgentManager:
         self.phase_manager = phase_manager
         self.config = get_config()
         self.tmux_server = libtmux.Server()
-        
+
         # Branch manager for agent isolation
         self.branch_manager = WorktreeManager(db_manager)
 
@@ -623,7 +623,7 @@ class AgentManager:
                 agent_type=agent_type,  # Set the agent type
             )
             session.add(agent)
-            
+
             # Assign task to agent
             task.assigned_agent_id = agent_id
             task.status = "in_progress"
@@ -1708,12 +1708,12 @@ class AgentManager:
                 logger.debug(
                     f"Agent {agent_id} is terminated, trying transcript log"
                 )
-                
+
                 # Try transcript log first (has full history)
                 transcript_output = self._read_transcript_log(agent, lines)
                 if transcript_output:
                     return transcript_output
-                
+
                 # Fall back to stored output in AgentLog
                 # Get the most recent termination log with output
                 termination_log = (
@@ -1851,7 +1851,7 @@ class AgentManager:
                             project_base = proj.base_dir
             finally:
                 session.close()
-            
+
             if not working_dir:
                 # Search in common locations using the session name
                 import glob
@@ -1859,7 +1859,7 @@ class AgentManager:
                 if project_base:
                     search_paths.append(project_base)
                 search_paths.append(str(Path.home()))
-                
+
                 transcript_path = None
                 for base in search_paths:
                     pattern = f"{base}/**/{CONTEXT_DIR_NAME}/tmux/{agent.tmux_session_name}.transcript.log"
@@ -1867,12 +1867,12 @@ class AgentManager:
                     if matches:
                         transcript_path = Path(max(matches, key=lambda p: Path(p).stat().st_mtime))
                         break
-                
+
                 if not transcript_path:
                     return ""
             else:
                 transcript_path = Path(working_dir) / CONTEXT_DIR_NAME / "tmux" / f"{agent.tmux_session_name}.transcript.log"
-            
+
             file_stat = transcript_path.stat()
             if file_stat.st_size == 0:
                 return ""
@@ -1912,7 +1912,7 @@ class AgentManager:
                 while all_lines and not all_lines[-1].strip():
                     all_lines.pop()
                 text = "".join(all_lines).rstrip()
-            
+
             # Strip terminal control sequences that pipe-pane might have missed
             # Keep: SGR color sequences (\x1b[...m)
             # Strip: everything else aggressively
@@ -1921,7 +1921,7 @@ class AgentManager:
             text = re.sub(r'\x1b\[[?]?[0-9;]*[^0-9;m]', '', text)  # All CSI/DEC except m
             text = re.sub(r'\x1b[()][A-Za-z0-9]', '', text)  # Charset selection
             text = re.sub(r'\x1b[^\x1b\x5b\x5d]', '', text)  # Any other bare ESC
-            
+
             # Collapse carriage-return redraws: TUI spinners redraw the same
             # line using \r. Split on \n first, then for each line, if it
             # contains \r, keep only the last segment (final state).
@@ -1931,7 +1931,7 @@ class AgentManager:
                     line = line.rsplit("\r", 1)[-1]
                 collapsed.append(line.rstrip())
             text = "\n".join(collapsed)
-            
+
             # Filter TUI chrome (status bars, spinners, elapsed timers, etc.)
             spinner_re = re.compile(r'^\s*(?:[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]*\s*)?Working\.{0,3}\s*$')
             thinking_re = re.compile(r'^\s*Thinking\.{0,3}\s*$')
