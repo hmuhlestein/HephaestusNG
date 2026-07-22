@@ -31,8 +31,13 @@ def configure_logging(
         format_string: Custom format string (optional)
         log_file: Optional log file path (for standalone use, not when launched by start.py)
     """
+    from src.core.log_context import ContextFormatter, StructuredContextFilter
+
     if format_string is None:
         format_string = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+
+    context_filter = StructuredContextFilter()
+    formatter = ContextFormatter(format_string)
 
     handlers = [logging.StreamHandler(sys.stdout)]
 
@@ -40,6 +45,10 @@ def configure_logging(
     # When launched by start.py, stdout is already redirected to log files
     if log_file:
         handlers.append(logging.FileHandler(log_file))
+
+    for handler in handlers:
+        handler.addFilter(context_filter)
+        handler.setFormatter(formatter)
 
     logging.basicConfig(
         level=level,

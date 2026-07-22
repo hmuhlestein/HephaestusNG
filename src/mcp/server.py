@@ -1413,6 +1413,8 @@ def _run_phase_advancement_sweep_once(sweep_logger) -> None:
         # is resumed -- the very next sweep tick after that picks it up and
         # resolves it normally. Not a permanent stall, just deferred.
         if wf_status == "active":
+            from src.core.log_context import set_log_context
+            set_log_context(workflow=wf_id)
             try:
                 _clean_stale_assigned_tasks(wf_id, sweep_logger)
             except Exception as e:
@@ -1475,6 +1477,8 @@ async def create_task(
     agent_id: str = Header(..., alias="X-Agent-ID"),
 ):
     """Create a new task with automatic enrichment and agent assignment."""
+    from src.core.log_context import set_log_context
+
     # SECURITY: Verify agent authentication before allowing task creation
     if not await verify_agent_authentication(agent_id):
         raise HTTPException(
@@ -1483,6 +1487,7 @@ async def create_task(
         )
 
     _touch_agent_activity(agent_id)
+    set_log_context(agent=agent_id)
     logger.info(f"Creating task from agent {agent_id}: {request.task_description[:100]}...")
 
     try:
@@ -2034,6 +2039,8 @@ async def update_task_status(
     agent_id: str = Header(..., alias="X-Agent-ID"),
 ):
     """Update task status when complete or failed."""
+    from src.core.log_context import clear_log_context, set_log_context
+
     # SECURITY: Verify agent authentication before allowing status updates
     if not await verify_agent_authentication(agent_id):
         raise HTTPException(
@@ -2042,6 +2049,7 @@ async def update_task_status(
         )
 
     _touch_agent_activity(agent_id)
+    set_log_context(agent=agent_id, task=request.task_id)
     logger.info(f"Updating task {request.task_id} status to {request.status}")
 
     # There's no dedicated column for structured verdict/count data agents

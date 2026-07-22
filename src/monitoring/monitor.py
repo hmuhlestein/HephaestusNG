@@ -1491,6 +1491,9 @@ class MonitoringLoop:
         Returns:
             Guardian analysis result or None if failed
         """
+        from src.core.log_context import set_log_context
+        set_log_context(agent=agent.id, task=agent.current_task_id or "")
+        """
         session = self.db_manager.get_session()
         try:
             # Skip agents that are too young (grace period for spin-up)
