@@ -8,7 +8,7 @@
   "passed_tests": 84,
   "failed_tests": 0,
   "total_tests": 84,
-  "pass_rate": 1.0,
+  "pass_rate": 100.0,
   "critical_issues": 0,
   "blockers": [],
   "testing_md": {
@@ -20,7 +20,7 @@
       "total": 84,
       "passed": 84,
       "failed": 0,
-      "pass_rate": 1.0,
+      "pass_rate": 100.0,
       "breakdown": {
         "test_cost_tracking": {"total": 43, "passed": 43, "failed": 0},
         "test_budget_enforcement": {"total": 21, "passed": 21, "failed": 0},
@@ -63,7 +63,7 @@
     "total_feature_tests": 84,
     "total_feature_passed": 84,
     "total_feature_failed": 0,
-    "feature_pass_rate": 1.0,
+    "feature_pass_rate": 100.0,
     "requirements_total": 10,
     "requirements_passed": 10,
     "security_total": 3,
