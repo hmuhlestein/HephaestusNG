@@ -354,6 +354,15 @@ class Guardian:
         2. The parent has already detected impasse and prompted human
         3. The cooldown has elapsed (no spam)
         """
+        # Check if task is already done — don't send messages to completed agents
+        task = await self._get_agent_task(agent)
+        if task and task.get("status") == "done":
+            logger.info(
+                f"[GUARDIAN] Skipping steering for agent {agent.id[:8]} — "
+                f"task {task.get('id', '')[:8]} is already done"
+            )
+            return
+
         logger.info(
             f"[GUARDIAN] Agent {agent.id[:8]} flagged: {steering_type} — "
             f"last resort steering (parent already detected impasse)"
@@ -606,6 +615,7 @@ class Guardian:
                 return None
             return {
                 "id": task.id,
+                "status": task.status,
                 "phase_id": task.phase_id,
                 "workflow_id": task.workflow_id,
                 "enriched_description": task.enriched_description,

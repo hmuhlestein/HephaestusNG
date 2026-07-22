@@ -301,6 +301,22 @@ class Conductor:
             resource = decision["resource"]
 
             for i, agent_id in enumerate(agents):
+                # Skip agents whose task is already done
+                session = self.db_manager.get_session()
+                try:
+                    from src.core.database import Agent, Task
+                    agent = session.query(Agent).filter_by(id=agent_id).first()
+                    if agent and agent.current_task_id:
+                        task = session.query(Task).filter_by(id=agent.current_task_id).first()
+                        if task and task.status == "done":
+                            logger.info(
+                                f"[CONDUCTOR] Skipping coordination message for agent {agent_id[:8]} — "
+                                f"task {task.id[:8]} is already done"
+                            )
+                            continue
+                finally:
+                    session.close()
+
                 # Assign time slots or priorities
                 message = f"[CONDUCTOR]: Resource coordination for {resource}. "
                 if i == 0:
