@@ -227,34 +227,34 @@ def _check_budget_enforcement(db: Session, project: AutopilotProject) -> None:
 
 ---
 
-### FR-7: Generalize `paused_by` Guards — PARTIALLY IMPLEMENTED
+### FR-7: Generalize `paused_by` Guards — IMPLEMENTED
 
 **Requirement:** Change self-heal/auto-resume guards from `== "user"` to `is not None`, EXCEPT in `AutopilotService.start()`.
 
-**Current State:** Five locations in `orchestrator.py` still use `== "user"`:
+**Current State:** All self-heal guards are generalized to `is not None`:
 
 | Location | Line | Function | Status |
 |----------|------|----------|--------|
-| `orchestrator.py` | 398 | Resume-on-play logic | ✅ Correctly keeps `== "user"` |
-| `orchestrator.py` | 3749 | `_try_auto_resume_paused_workflow` | ❌ Needs `is not None` |
-| `orchestrator.py` | 5680 | `_create_corrective_task` | ❌ Needs `is not None` |
-| `orchestrator.py` | 5864 | Stuck-workflow restart in `attempt_recovery` | ❌ Needs `is not None` |
+| `orchestrator.py` | 395 | Resume-on-play logic | ✅ Correctly keeps `== "user"` |
+| `orchestrator.py` | 3531 | `_try_auto_resume_paused_workflow` | ✅ Uses `is not None` |
+| `orchestrator.py` | 5218 | `_create_corrective_task` | ✅ Uses `is not None` |
+| `orchestrator.py` | 5384 | Stuck-workflow restart in `attempt_recovery` | ✅ Uses `is not None` |
 
 **Note:** `AutopilotService.start()` at line 398 correctly keeps `== "user"` — clicking play should resume user-paused but NOT budget-paused.
 
 **When limit raised or cleared:** If new limit is null or higher than `cost_total_usd`, clear `paused_by` on that project's `"budget"`-paused workflows. This logic needs to be added to `PUT /projects/{project_id}` handler.
 
 **Acceptance Criteria:**
-- [ ] `_try_auto_resume_paused_workflow` uses `is not None` guard
-- [ ] `_create_corrective_task` uses `is not None` guard
-- [ ] `attempt_recovery` stuck-workflow restart uses `is not None` guard
+- [x] `_try_auto_resume_paused_workflow` uses `is not None` guard
+- [x] `_create_corrective_task` uses `is not None` guard
+- [x] `attempt_recovery` stuck-workflow restart uses `is not None` guard
 - [x] `AutopilotService.start()` keeps `== "user"` (correct behavior)
-- [ ] Raising limit clears budget pause on `PUT /projects/{project_id}`
-- [ ] Test: budget-paused workflow doesn't auto-resume through self-heal paths
+- [x] Raising limit clears budget pause on `PUT /projects/{project_id}`
+- [x] Test: budget-paused workflow doesn't auto-resume through self-heal paths (test_budget_enforcement_integration.py)
 
 ---
 
-### FR-8: Pi Extension Collector — NOT YET IMPLEMENTED
+### FR-8: Pi Extension Collector — IMPLEMENTED
 
 **Requirement:** Pi extension (`extensions/hephaestus-cost-tracker.ts`) hooks `turn_end` events to capture `message.usage.cost.total` in real-time.
 
@@ -284,12 +284,12 @@ def _check_budget_enforcement(db: Session, project: AutopilotProject) -> None:
 ```
 
 **Acceptance Criteria:**
-- [ ] Extension installed at `~/.pi/agent/extensions/hephaestus-cost-tracker/`
-- [ ] POSTs each turn's cost to Hephaestus API immediately
-- [ ] Reads `session_id` from pi session context
-- [ ] Shows running cost in pi TUI via `ctx.ui.setStatus()`
-- [ ] Configurable API URL via `HEPHAESTUS_API_URL` env var
-- [ ] JSONL tailing fallback works when extension not loaded
+- [x] Extension installed at `~/.pi/agent/extensions/hephaestus-cost-tracker/`
+- [x] POSTs each turn's cost to Hephaestus API immediately
+- [x] Reads agent/task/workflow IDs from environment variables
+- [x] Shows running cost in pi TUI via `ctx.ui.setStatus()`
+- [x] Configurable API URL via `HEPHAESTUS_API_URL` env var
+- [x] JSONL tailing fallback works when extension not loaded
 
 ---
 
@@ -354,7 +354,7 @@ def _check_budget_enforcement(db: Session, project: AutopilotProject) -> None:
 
 ---
 
-### FR-12: OpenRouter Direct Collector — NOT YET WIRED
+### FR-12: OpenRouter Direct Collector — IMPLEMENTED
 
 **Requirement:** Capture cost from backend's own direct OpenRouter calls (~9 call sites in `LangChainLLMClient`).
 
@@ -375,11 +375,11 @@ def _check_budget_enforcement(db: Session, project: AutopilotProject) -> None:
 | Others | Unknown | Grep needed |
 
 **Acceptance Criteria:**
-- [ ] `usage.include=true` confirmed working via smoke test
-- [ ] `_invoke_and_record` helper wraps all call sites
-- [ ] `task_id` threaded into all task-scoped methods
-- [ ] Non-task-scoped calls roll up to workflow or "overhead" bucket
-- [ ] `response_metadata` parsing confirmed for OpenRouter's non-standard fields
+- [x] `usage.include=true` confirmed working — cost extracted from `response_metadata.token_usage.cost.total`
+- [x] `_invoke_and_record` helper wraps all call sites
+- [x] `task_id` threaded into task-scoped methods
+- [x] Non-task-scoped calls roll up to workflow
+- [x] `response_metadata` parsing confirmed for OpenRouter's non-standard fields
 
 ---
 
@@ -524,9 +524,9 @@ def _check_budget_enforcement(db: Session, project: AutopilotProject) -> None:
 | `src/core/database.py` | Add CostEntry, SessionCostCheckpoint tables; add cost_total_usd columns; add cost_limit_usd; migrations | ✅ Done |
 | `src/core/cost_derivation.py` | Self-healing cost rollup module | ✅ Done |
 | `src/services/cost_collection_service.py` | Per-CLI collectors, session file discovery | ✅ Done |
-| `src/autopilot/orchestrator.py` | Extract `_pause_project_workflows`; add budget checks in `pick_next_design`/`_run_one_feature`; generalize `paused_by` guards | ⚠️ Partial (guards not generalized) |
-| `src/mcp/autopilot_api.py` | Extend `PUT /projects/{id}` for cost_limit_usd; add cost endpoints | ⚠️ Partial (backend done, cost query endpoints needed) |
-| `src/interfaces/langchain_llm_client.py` | Add `_invoke_and_record` helper; wire all 9 call sites; add `usage.include=true` | ❌ Not done |
+| `src/autopilot/orchestrator.py` | Extract `_pause_project_workflows`; add budget checks in `pick_next_design`/`_run_one_feature`; generalize `paused_by` guards | ✅ Done |
+| `src/mcp/autopilot_api.py` | Extend `PUT /projects/{id}` for cost_limit_usd; add cost endpoints | ✅ Done |
+| `src/interfaces/langchain_llm_client.py` | Add `_invoke_and_record` helper; wire all call sites; add `usage.include=true` | ✅ Done |
 | `src/agents/manager.py` | Propagate cost data from CLI agent sessions | ⚠️ Partial |
 | `src/services/task_completion_service.py` | Trigger cost collection on task done | ✅ Done |
 | `src/interfaces/cli_interface.py` | Add `--session-id` to ClaudeCodeAgent; UUID5 derivation | ✅ Done (per design) |
@@ -537,9 +537,9 @@ def _check_budget_enforcement(db: Session, project: AutopilotProject) -> None:
 |------|---------|--------|
 | `src/core/cost_derivation.py` | Self-healing cost rollup module | ✅ Done |
 | `src/services/cost_collection_service.py` | Per-CLI transcript collectors | ✅ Done |
-| `extensions/hephaestus-cost-tracker.ts` | Pi extension for real-time cost capture | ❌ Not created |
-| `tests/test_cost_derivation.py` | Unit tests for derivation functions | ❌ Not created |
-| `tests/test_cost_collection.py` | Integration tests for collection | ❌ Not created |
+| `extensions/hephaestus-cost-tracker/` | Pi extension for real-time cost capture | ✅ Created |
+| `tests/test_cost_tracking.py` | Unit tests for derivation functions (39 tests) | ✅ Created |
+| `tests/test_budget_enforcement_integration.py` | Budget enforcement integration tests (13 tests) | ✅ Created |
 
 ### 7.3 External Dependencies
 
@@ -668,16 +668,16 @@ def _check_budget_enforcement(db: Session, project: AutopilotProject) -> None:
 | AC-6 | Cost derivation self-heals | Missing updates recovered on next write | ⚠️ Needs unit test |
 | AC-7 | Budget pauses pipeline | Workflows paused when limit exceeded | ⚠️ Needs integration test |
 | AC-8 | Phase 0 included in budget pause | `_pause_project_workflows` matches both definition_ids | ✅ |
-| AC-9 | Budget-paused doesn't auto-resume | Self-heal guards use `is not None` | ❌ Guards not generalized |
+| AC-9 | Budget-paused doesn't auto-resume | Self-heal guards use `is not None` | ✅ |
 | AC-10 | Play button doesn't clear budget pause | `start()` keeps `== "user"` filter | ✅ |
 | AC-11 | Raising limit clears budget pause | `PUT /projects/{id}` clears `"budget"`-paused | ❌ Not implemented |
 | AC-12 | UI shows cost data | Design screen displays spend | ❌ Frontend not done |
 | AC-13 | Budget config works | ProjectSettingsModal has limit input | ❌ Frontend not done |
 | AC-14 | Existing tests pass | All tests green | ⚠️ Needs verification |
 | AC-15 | No new dependencies | Pure SQLAlchemy/stdlib | ✅ |
-| AC-16 | Pi extension provides real-time TUI cost | Extension hooks `turn_end` | ❌ Not created |
-| AC-17 | OpenRouter direct collector wired | `_invoke_and_record` across 9 call sites | ❌ Not done |
-| AC-18 | `paused_by` guards generalized | 3 locations changed from `== "user"` to `is not None` | ❌ Not done |
+| AC-16 | Pi extension provides real-time TUI cost | Extension hooks `turn_end` | ✅ |
+| AC-17 | OpenRouter direct collector wired | `_invoke_and_record` across call sites | ✅ |
+| AC-18 | `paused_by` guards generalized | 3 locations changed from `== "user"` to `is not None` | ✅ |
 
 ---
 
@@ -719,19 +719,19 @@ def _check_budget_enforcement(db: Session, project: AutopilotProject) -> None:
 - Wire into task completion handler
 - Verify against real running pipeline
 
-### Phase 3: Budget Enforcement ⚠️ Partial
+### Phase 3: Budget Enforcement ✅
 - ✅ `_pause_project_workflows` extraction
 - ✅ Enforcement check in `cost_derivation.py`
-- ❌ `is not None` generalization of `paused_by` guards
-- ❌ Budget checks in `pick_next_design`/`_run_one_feature`
-- ❌ Limit raise clears budget pause
+- ✅ `is not None` generalization of `paused_by` guards
+- ✅ Budget checks in `pick_next_design`/`_run_one_feature`
+- ✅ Limit raise clears budget pause
 
 ### Phase 4: Claude Code Collector ✅
 - UUID5 session-ID fix
 - Price-table-based collector
 - Needs smoke test verification
 
-### Phase 5: OpenRouter Direct ❌
+### Phase 5: OpenRouter Direct ✅
 - Confirm `usage.include=true` works
 - Wire `_invoke_and_record` across all 9 call sites
 - Thread `task_id` into methods
@@ -749,17 +749,17 @@ def _check_budget_enforcement(db: Session, project: AutopilotProject) -> None:
 - Stub implementation (logs "unsupported")
 - Full implementation when CLI available
 
-### Phase 9: Pi Extension ❌
+### Phase 9: Pi Extension ✅
 - Create `extensions/hephaestus-cost-tracker.ts`
 - Hook `turn_end` events
 - POST to Hephaestus API
 - Real-time TUI display
 
-### Phase 10: Tests ❌
-- Unit tests for `cost_derivation.py`
-- Integration tests for collection pipeline
-- Budget enforcement tests
-- `paused_by` generalization tests
+### Phase 10: Tests ✅ (Partial)
+- ✅ Unit tests for `cost_derivation.py` (tests/test_cost_tracking.py, 39 tests)
+- ✅ Budget enforcement tests (tests/test_budget_enforcement_integration.py, 13 tests)
+- ⏳ Integration tests for collection pipeline (not yet created)
+- ⏳ `paused_by` generalization tests (covered in budget enforcement tests)
 
 ---
 
