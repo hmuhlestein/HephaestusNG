@@ -346,6 +346,14 @@ class LangChainLLMClient:
         Returns:
             The model response
         """
+        from src.core.log_context import set_log_context
+        if task_id:
+            set_log_context(task=task_id)
+        if agent_id:
+            set_log_context(agent=agent_id)
+        if workflow_id:
+            set_log_context(workflow=workflow_id)
+
         response = await model.ainvoke(messages)
 
         # Extract cost from response metadata
