@@ -6378,10 +6378,17 @@ def _run_one_feature(
 
     # Find feature record in DB
     from src.core.database import Feature, Workflow, get_db
+    from src.core.cost_derivation import check_budget_before_new_work
 
     feature_id = None
     existing_workflow_id = None
     with get_db() as db:
+        # Budget guard: refuse to launch features for over-budget projects
+        # (inside same session to avoid race condition with concurrent cost writes)
+        if project_id and not check_budget_before_new_work(db, project_id):
+            logger.warning(f"[BUDGET] Cannot launch feature {feature_key} — project {project_id[:8]} over budget")
+            return "skipped"
+
         feat_record = (
             db.query(Feature)
             .filter_by(
@@ -6429,15 +6436,6 @@ def _run_one_feature(
     if not feature_id:
         logger.error(f"Feature record not found for {feature_key}")
         return "failed"
-
-    # Budget guard: refuse to launch features for over-budget projects
-    from src.core.cost_derivation import check_budget_before_new_work
-
-    if project_id:
-        with get_db() as budget_db:
-            if not check_budget_before_new_work(budget_db, project_id):
-                logger.warning(f"[BUDGET] Cannot launch feature {feature_key} — project {project_id[:8]} over budget")
-                return "skipped"
 
     # Create feature record folder
     feature_record_path = designs_folder / "features" / feature_key
