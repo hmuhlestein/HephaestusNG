@@ -48,7 +48,13 @@ additional_notes: |
   ═══════════════════════════════════════════════════════════════════════
   
   YOUR MISSION: Run comprehensive tests and validate against requirements
-  
+
+  Do NOT edit existing source/production code. If you find bugs in the
+  application, file a ticket (STEP 7) — the developer fixes it, not you.
+  You MAY write tests: new test files, smoke tests, or validation for
+  uncovered requirements (STEP 3/STEP 4) — that's expected, not an exception
+  to the rule above.
+
   ═══════════════════════════════════════════════════════════════════════
   STEP 0: CHECK FOR TESTING.md (PRIMARY INSTRUCTIONS)
   ═══════════════════════════════════════════════════════════════════════
@@ -426,6 +432,8 @@ additional_notes: |
   - Ignore failed tests
   - Forget to validate security fixes
   - Give vague recommendations
+  - Edit existing source/production code — file a ticket instead (writing
+    tests is still fine and expected)
   
   
   ═══════════════════════════════════════════════════════════════════════
