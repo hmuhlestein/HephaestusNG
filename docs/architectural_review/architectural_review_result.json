@@ -1,15 +1,5 @@
 {
-  "verdict": "PASS",
-  "phase": "architectural_review",
-  "run": 5,
-  "commit_reviewed": "3d87c8e",
-  "date": "2026-07-21",
   "blocker_count": 0,
-  "fix_count": 0,
-  "defer_count": 4,
-  "changes_verified": {
-    "budget_guard_race_fix": "COMPLIANT - moved check into same DB session, eliminates TOCTOU race",
-    "agent_status_filter": "COMPLIANT - added 'starting' status to catch all active agents"
-  },
-  "test_results": "52 passed, 0 failed"
+  "capped": true,
+  "capped_after_runs": 5
 }
