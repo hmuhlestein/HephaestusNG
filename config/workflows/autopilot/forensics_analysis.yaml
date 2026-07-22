@@ -35,7 +35,11 @@ additional_notes: |
   ═══════════════════════════════════════════════════════════════════════
   
   YOUR MISSION: Read real data, compare prompts to outcomes, propose fixes
-  
+
+  Do NOT edit any source code or tests. Your only outputs are
+  forensics_report.md, tickets, and memory entries — you analyze what
+  already happened, you don't change it.
+
   ═══════════════════════════════════════════════════════════════════════
   STEP 0: ESTABLISH YOUR PATHS
   ═══════════════════════════════════════════════════════════════════════
@@ -369,6 +373,7 @@ additional_notes: |
   - Write 200-line templates — fill sections proportionally to findings
   - Give generic advice ("be more specific")
   - Analyze yourself (Phase 10) — you can't objectively self-assess
+  - Edit any source code or test files — report only
   
   
   ═══════════════════════════════════════════════════════════════════════

@@ -45,7 +45,10 @@ additional_notes: |
   ═══════════════════════════════════════════════════════════════════════
   
   YOUR MISSION: Verify the implementation matches the original design intent
-  
+
+  Do NOT edit any source code or tests. Your only output is the report and
+  the structured verdict — the developer fixes issues based on your findings.
+
   ═══════════════════════════════════════════════════════════════════════
   STEP 1: RE-READ THE ORIGINAL DESIGN DOCUMENT
   ═══════════════════════════════════════════════════════════════════════
@@ -193,12 +196,21 @@ additional_notes: |
   Field rules:
   - verdict is one of:
     - "PASS" — every design requirement is met; ready for human review.
+    - "PASS_WITH_MINOR_GAPS" — every requirement that matters is met; only
+      cosmetic/trivial gaps remain (e.g. a nice-to-have edge case, minor
+      wording). List them in unmet_requirements. The gate accepts this verdict
+      ONLY when unmet_requirements has 2 or fewer items — past that it is
+      treated exactly like a plain "PASS" with unmet items (see below) and
+      sent back to development regardless of this verdict string. Use this
+      sparingly: it exists for genuinely trivial gaps, not as a way to avoid
+      a NEEDS_WORK verdict.
     - "NEEDS_WORK" — code-level gaps remain (pipeline returns to development).
     - "ARCHITECTURE" — the implementation's structure cannot satisfy the design
       (pipeline returns to architecture).
   - unmet_requirements: list each design requirement NOT fully met (empty if PASS).
-    IMPORTANT: if this list is non-empty the gate overrides a "PASS" verdict and
-    returns the work to development — so do not claim PASS with unmet items.
+    IMPORTANT: if this list is non-empty, a plain "PASS" verdict is overridden
+    and the work returns to development — so do not claim PASS with unmet
+    items. Use "PASS_WITH_MINOR_GAPS" (above) if the gaps are genuinely minor.
   - agent_score (0.0–1.0): your subjective confidence for what the verdict and
     requirement list don't capture (only used when the verdict is PASS with no
     unmet requirements).
@@ -231,6 +243,7 @@ additional_notes: |
   - Ignore integration with existing system
   - Give a PASS verdict if there are significant gaps
   - Rush through validation
+  - Edit any source code or test files — report only
   
   
   ═══════════════════════════════════════════════════════════════════════

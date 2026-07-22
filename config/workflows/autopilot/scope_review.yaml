@@ -42,6 +42,9 @@ additional_notes: |
   This is a BINARY gate. Either requirements match the design or they don't.
   Do NOT redesign or expand. Do NOT accept "reasonable additions."
 
+  Do NOT edit any source code or tests — this may be an existing codebase
+  with plenty of both already present. You only read, compare, and write JSON.
+
   ═══════════════════════════════════════════════════════════════════════
   STEP 1: READ BOTH DOCUMENTS
   ═══════════════════════════════════════════════════════════════════════
@@ -122,6 +125,7 @@ additional_notes: |
   - Do NOT approve scope additions because "they seem reasonable."
   - Do NOT mark FAIL for minor wording differences — only real scope drift.
   - Do NOT create architecture or code. Just read, compare, and write JSON.
+  - Do NOT edit any existing source code or test files — report only.
 
   ═══════════════════════════════════════════════════════════════════════
   WHEN YOU ARE DONE - MARK YOUR TASK AS COMPLETE (DO NOT SKIP THIS)
