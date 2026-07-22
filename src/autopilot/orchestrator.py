@@ -4620,7 +4620,8 @@ def _fire_phase_transition(
                 # mark_phase_complete ever got called.
                 if wf and wf.working_directory and Path(wf.working_directory).exists():
                     phase_output = build_phase_output(
-                        phase_name, Path(wf.working_directory)
+                        phase_name, Path(wf.working_directory),
+                        skip_independent_verification=True,
                     )
 
         # Mark phase complete and get engine decision

@@ -1314,7 +1314,13 @@ async def background_phase_advancement_sweep():
 
     while not server_state.shutdown_event.is_set():
         try:
-            await loop.run_in_executor(None, _run_phase_advancement_sweep_once, sweep_logger)
+            await asyncio.wait_for(
+                loop.run_in_executor(None, _run_phase_advancement_sweep_once, sweep_logger),
+                timeout=120.0,
+            )
+        except asyncio.TimeoutError:
+            logger.error("[PHASE-SWEEP] Tick timed out after 120s — will retry next cycle")
+            sweep_logger.warning("[PHASE-SWEEP] Tick timed out after 120s — will retry next cycle")
         except Exception as e:
             logger.error(f"[PHASE-SWEEP] Error in phase advancement sweep: {e}")
 
