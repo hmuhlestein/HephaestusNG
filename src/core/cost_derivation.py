@@ -22,6 +22,7 @@ from typing import Optional
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from src.core.constants import DESIGN_WORKFLOW_DEFINITION_IDS
 from src.core.database import (
     AutopilotDesign,
     AutopilotProject,
@@ -327,7 +328,7 @@ def _pause_project_workflows(db: Session, project_id: str, paused_by: str) -> in
         db.query(Workflow)
         .filter(
             Workflow.project_id == project_id,
-            Workflow.definition_id.in_(["autopilot", "autopilot-phase0"]),
+            Workflow.definition_id.in_(DESIGN_WORKFLOW_DEFINITION_IDS),
             Workflow.status.in_(["active", "running"]),
         )
         .all()
