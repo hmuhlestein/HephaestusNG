@@ -1,8 +1,9 @@
 # QA Validation Report: Budget Enforcement and Pipeline Throttling
 
 **Feature ID:** des-91c8-budget-enforcement  
-**Task ID:** 23a81866-b752-4c4e-af99-eafd8b19b454  
-**Workflow ID:** 0acbf2fc-fcf5-4b24-ad2d-31b1db62df6d  
+**Task ID:** 277115a6-4af8-4687-ba9a-12e5c0e5222e  
+**Workflow ID:** 0acbf2fc-fcf5-4b24-ad2d-31b1db62df6d
+**Agent ID:** 3ea123f7-b18d-46e3-8388-f356e85140ff
 **QA Date:** 2026-07-21  
 **QA Agent:** Hephaestus QA Validation Agent (Phase 8)  
 **Status:** PASS — Ready for Product Validation
@@ -11,7 +12,7 @@
 
 ## 1. Executive Summary
 
-All 80 feature-specific tests pass with 100% success rate. The implementation correctly provides:
+All 84 feature-specific tests pass with 100% success rate. The test suite grew from 80 to 84 tests during the latest retry (4 new tests added to `test_cost_tracking.py`). The implementation correctly provides:
 
 - **Append-only `cost_entries` ledger table** with proper indexes for task/workflow/recorded_at
 - **`session_cost_checkpoints` table** for resumable collection keyed by session_id (not Agent.id)
