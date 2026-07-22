@@ -264,6 +264,10 @@ class AgentManager:
         # Use phase config with fallback to global defaults
         cli_type = phase_cli_tool or cli_type or self.config.default_cli_tool
 
+        # Set structured log context for this agent's lifetime
+        from src.core.log_context import set_log_context
+        set_log_context(agent=agent_id, task=task.id, workflow=task.workflow_id or "")
+
         logger.info(f"Creating {cli_type} agent {agent_id} for task {task.id}")
 
         try:

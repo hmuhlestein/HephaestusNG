@@ -5003,11 +5003,26 @@ def _cap_out_review_phase(
 
     Returns True/False (the outcome of firing the transition) once capped
     out successfully. Returns None if it couldn't safely cap out at all
-    (no working_directory, or this isn't a known gated phase) -- callers
-    must treat None as "fall through and create a normal task instead,"
-    not as a completed action: silently returning False here would strand
-    the phase with no task, no synthetic completion, and no forward
-    progress, forever, with nothing but a debug-level log to explain why.
+    (no working_directory) -- callers must treat None as "fall through and
+    create a normal task instead," not as a completed action: silently
+    returning False here would strand the phase with no task, no synthetic
+    completion, and no forward progress, forever, with nothing but a
+    debug-level log to explain why.
+
+    A phase with no GATE_RESULT_ARTIFACTS entry (e.g. security_review,
+    doc_review -- opted into max_review_runs in workflow.yaml but not
+    scored via a JSON gate artifact the way architectural_review/
+    adversarial_review/qa_validation/product_validation are) has nothing
+    for a scorer to re-read, so there's no synthetic result file to write
+    -- but the cap must still apply. _fire_phase_transition doesn't require
+    one either: it only calls build_phase_output (which reads
+    GATE_RESULT_ARTIFACTS) for phases in GATED_PHASES, and _create_phase_
+    task already relies on this exact same path with zero synthetic
+    artifacts for forensics_analysis's clean-run shortcut. Previously this
+    branch returned None here ("isn't a known gated phase"), which meant
+    the cap silently never engaged for security_review/doc_review -- a live
+    run hit 25 re-entries of security_review with max_review_runs: 4
+    configured and doing nothing.
     """
     from src.autopilot.spec import GATE_RESULT_ARTIFACTS, get_review_findings_history
 
@@ -5021,30 +5036,29 @@ def _cap_out_review_phase(
         )
         return None
 
-    artifacts = GATE_RESULT_ARTIFACTS.get(phase.name, ())
-    if not artifacts:
-        logger.warning(
-            f"[PHASE-TASK] {phase.name} hit its review-run cap ({run_count}/"
-            f"{max_runs}) but isn't a known gated phase (no "
-            "GATE_RESULT_ARTIFACTS entry) -- falling through to a normal "
-            "task instead of stranding the phase silently"
-        )
-        return None
-
     docs_dir = Path(workflow.working_directory) / "docs" / phase.name
     docs_dir.mkdir(parents=True, exist_ok=True)
 
     history = get_review_findings_history(workflow_id, phase.name)
     caveats = "\n".join(f"- Run {h['run_number']}: {h['blocker_count']} blocker(s) -- {h['summary'][:200]}" for h in history) or "(no findings history recorded)"
 
-    (docs_dir / artifacts[0]).write_text(
-        json.dumps(
-            {"blocker_count": 0, "capped": True, "capped_after_runs": run_count},
-            indent=2,
+    artifacts = GATE_RESULT_ARTIFACTS.get(phase.name, ())
+    if artifacts:
+        (docs_dir / artifacts[0]).write_text(
+            json.dumps(
+                {"blocker_count": 0, "capped": True, "capped_after_runs": run_count},
+                indent=2,
+            )
         )
-    )
-    if len(artifacts) > 1:
-        (docs_dir / artifacts[1]).write_text(
+        if len(artifacts) > 1:
+            (docs_dir / artifacts[1]).write_text(
+                f"# {phase.name} -- capped after {run_count} runs\n\n"
+                f"Stopped re-reviewing after {max_runs} runs without a clean "
+                "pass (workflow.yaml's max_review_runs). Unresolved findings "
+                f"from prior runs:\n\n{caveats}\n"
+            )
+    else:
+        (docs_dir / f"{phase.name}_capped_notice.md").write_text(
             f"# {phase.name} -- capped after {run_count} runs\n\n"
             f"Stopped re-reviewing after {max_runs} runs without a clean "
             "pass (workflow.yaml's max_review_runs). Unresolved findings "
@@ -6508,6 +6522,10 @@ def _run_one_feature(
     feature_name = feature.get("name", feature_key)
 
     logger.info(f"Starting feature pipeline: {feature_name} ({feature_key})")
+
+    # Set structured log context for this feature's lifetime
+    from src.core.log_context import set_log_context
+    set_log_context(workflow=feature_key, phase="feature_pipeline")
 
     # Find feature record in DB
     from src.core.database import Feature, Workflow, get_db
