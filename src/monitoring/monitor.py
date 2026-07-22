@@ -339,6 +339,18 @@ Current time: {datetime.utcnow().isoformat()}
             agent: Agent to message
             message: Message to send
         """
+        # Check if task is already done — don't send messages to completed agents
+        if agent.current_task_id:
+            with self.db_manager.session_scope() as session:
+                from src.core.database import Task
+                task = session.query(Task).filter_by(id=agent.current_task_id).first()
+                if task and task.status == "done":
+                    logger.info(
+                        f"[MONITOR] Skipping message to agent {agent.id[:8]} — "
+                        f"task {task.id[:8]} is already done"
+                    )
+                    return
+
         formatted_message = f"\n[HEPHAESTUS]: {message}\n"
         await self.agent_manager.send_message_to_agent(agent.id, formatted_message)
 
