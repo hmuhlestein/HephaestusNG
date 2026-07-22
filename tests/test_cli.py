@@ -473,6 +473,16 @@ class TestAutopilotCommand:
         assert "design2" in out
 
     def test_add_to_queue(self, args, capsys):
+        """Regression: this test used to call the real, running backend
+        (add_to_queue does a genuine requests.post to 127.0.0.1:8300 with
+        no mock) -- every run silently created a real AutopilotProject
+        pointed at this test's throwaway tmp directory against whatever
+        live dev database happened to be running. Observed live: dozens of
+        "tmpXXXXXXXX" projects accumulated over days, several ending up
+        simultaneously is_active=True and hijacking the phase-advancement
+        sweep's project scoping away from the real project. Mock the HTTP
+        call -- this test verifies add_to_queue's own request/response
+        handling, not the live server."""
         from src.cli.commands.autopilot import add_to_queue
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -482,7 +492,17 @@ class TestAutopilotCommand:
             args.file = str(source)
             args.project_path = tmpdir
 
-            result = add_to_queue(args)
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_response.json.return_value = {
+                "id": "des-test1234",
+                "name": "source.md",
+                "status": "pending",
+            }
+            with patch("requests.post", return_value=mock_response) as mock_post:
+                result = add_to_queue(args)
+
+        mock_post.assert_called_once()
         assert result == 0
         out = capsys.readouterr().out
         assert "Added" in out
