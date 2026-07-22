@@ -7,7 +7,7 @@ import time
 from datetime import datetime, timedelta
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from src.agents.manager import AgentManager
 from src.core.constants import CONTEXT_DIR_NAME, HEPHAESTUS_LOGS_DIR, WORKTREES_SUBDIR
@@ -117,6 +117,13 @@ class MonitoringDecision(Enum):
 # comment for why this must never be unbounded (mirrors Guardian's
 # GUARDIAN_LLM_TIMEOUT in guardian.py).
 AGENT_STATE_LLM_TIMEOUT = 90
+
+# How many idle-nudges a stuck task gets before "the agent produced output"
+# stops being trusted as "the agent made progress" -- see the stuck-task
+# nudge cap in _audit_system_health's own comment for the failure mode this
+# closes (an agent that keeps replying without ever calling
+# complete_my_task resets the idle check forever on activity alone).
+MAX_STUCK_TASK_NUDGES = 3
 
 
 class IntelligentMonitor:
@@ -570,12 +577,13 @@ class MonitoringLoop:
         # Cache for Guardian summaries
         self.guardian_summaries_cache: Dict[str, Dict[str, Any]] = {}
 
-        # Tracks task_id -> when we last nudged an idle-but-still-"working"
-        # agent, for the stuck-task check in _audit_system_health. Reset on
-        # restart like the other in-process monitoring state on this class
-        # (e.g. _last_phase_states equivalents elsewhere) -- acceptable since
-        # a restart already re-derives everything from DB state.
-        self._stuck_task_nudges: Dict[str, datetime] = {}
+        # Tracks task_id -> (how many nudges sent, when we last nudged) an
+        # idle-but-still-"working" agent, for the stuck-task check in
+        # _audit_system_health. Reset on restart like the other in-process
+        # monitoring state on this class (e.g. _last_phase_states
+        # equivalents elsewhere) -- acceptable since a restart already
+        # re-derives everything from DB state.
+        self._stuck_task_nudges: Dict[str, Tuple[int, datetime]] = {}
 
         # Orphaned tmux session reconciliation collaborator (SOLID review
         # 3.4) — _cleanup_orphaned_tmux_sessions below delegates to this.
@@ -2199,38 +2207,65 @@ class MonitoringLoop:
 
                 if agent and agent.status == "working":
                     last_seen = agent.last_activity or task.started_at
+                    nudge_count, nudged_at = self._stuck_task_nudges.get(task.id, (0, None))
+
                     if last_seen >= idle_cutoff:
-                        # Producing output within the window -- not stuck.
-                        self._stuck_task_nudges.pop(task.id, None)
+                        # Producing output within the window -- healthy
+                        # right now, take no action. Deliberately NOT
+                        # clearing nudge_count/nudged_at here: an agent
+                        # stuck in a belief loop (e.g. confusing this task
+                        # with an already-completed earlier one in the same
+                        # resumed session) can reply right after each nudge
+                        # -- satisfying this exact check -- and then go
+                        # idle again soon after, never actually calling
+                        # complete_my_task. If this branch reset the
+                        # counter, that cycle could repeat forever and the
+                        # cap below would never be reached -- observed
+                        # live: the task stayed in_progress indefinitely
+                        # this way. Nudge history only clears when the task
+                        # leaves the candidate set entirely (see the
+                        # live_task_ids sweep above) or once genuinely
+                        # marked stuck below.
                         continue
 
-                    nudged_at = self._stuck_task_nudges.get(task.id)
-                    if nudged_at is None:
+                    if nudged_at is not None and datetime.utcnow() - nudged_at < idle_minutes:
+                        continue  # still within the post-nudge grace period
+
+                    if nudge_count >= MAX_STUCK_TASK_NUDGES:
+                        logger.warning(
+                            f"[HEALTH] Task {task.id[:8]}: agent {agent.id[:8]} has "
+                            f"been nudged {nudge_count} times without completing "
+                            "the task -- treating as genuinely stuck rather than "
+                            "nudging again"
+                        )
+                        # Fall through to the stuck-handling block below.
+                    else:
                         try:
                             await self.agent_manager.send_message_to_agent(
                                 agent.id,
                                 "No activity has been seen from you in a while. "
-                                "If you're still working, please continue and "
-                                "report your current status.",
+                                f"Your CURRENT task_id is {task.id} -- if a resumed "
+                                "session made you recall completing a DIFFERENT, "
+                                "earlier task, that is not this one and does not "
+                                "count. Check specifically: have you already called "
+                                f"complete_my_task for task_id {task.id} in this "
+                                "session? If not, do that now (verify your actual "
+                                "work against the current code first, don't assume "
+                                "an earlier task's fix covers this one). If you "
+                                "have called it and are still here, say so "
+                                "explicitly and stop.",
                             )
-                            self._stuck_task_nudges[task.id] = datetime.utcnow()
+                            self._stuck_task_nudges[task.id] = (nudge_count + 1, datetime.utcnow())
                             logger.info(
                                 f"[HEALTH] Nudged idle agent {agent.id[:8]} for task "
-                                f"{task.id[:8]} (no activity since {last_seen})"
+                                f"{task.id[:8]} (no activity since {last_seen}, "
+                                f"nudge #{nudge_count + 1})"
                             )
                         except Exception as e:
                             logger.warning(
                                 f"[HEALTH] Failed to nudge agent {agent.id[:8]}: {e}"
                             )
                         continue  # give it one more window before failing
-
-                    if last_seen > nudged_at:
-                        # Activity arrived after the nudge -- it was working.
-                        self._stuck_task_nudges.pop(task.id, None)
-                        continue
-
-                    if datetime.utcnow() - nudged_at < idle_minutes:
-                        continue  # still within the post-nudge grace period
 
                 # No agent, agent not active, or no response even after a
                 # nudge and a full grace period -- genuinely stuck.
