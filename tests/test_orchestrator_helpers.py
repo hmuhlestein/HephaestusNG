@@ -4820,3 +4820,118 @@ class TestCreatePhaseTaskReviewCap:
         text = report.read_text()
         assert "capped after 3 runs" in text
         assert "B-2 still open" in text
+
+
+class TestCreatePhaseTaskOrphanedPendingAge:
+    """_create_phase_task's "existing pending task with no agent yet ->
+    treat as orphaned, replace it" check must require the task to actually
+    be old (matching _case_in_progress_complete's own 1-minute orphan
+    threshold), not fire on any momentarily-agentless pending task.
+    Observed live: two callers evaluated the same phase 11 seconds apart --
+    the second one found the first task still mid-dispatch (row committed,
+    agent not attached yet, a normal few-second gap), "helpfully" marked it
+    failed as an orphan, and spawned a full duplicate agent for the same
+    phase."""
+
+    def _seed(self, db, pending_created_at):
+        from src.core.database import Phase, PhaseExecution, Task, Workflow
+
+        with db.session_scope() as session:
+            session.add(
+                Workflow(
+                    id="wf-orphan-age",
+                    name="t",
+                    phases_folder_path="/tmp",
+                    status="active",
+                    working_directory="/tmp/wf-orphan-age",
+                )
+            )
+            session.add(
+                Phase(
+                    id="phase-orphan-age",
+                    workflow_id="wf-orphan-age",
+                    name="security_review",
+                    order=7,
+                    description="d",
+                    done_definitions=["x"],
+                )
+            )
+            session.add(
+                PhaseExecution(
+                    id="exec-orphan-age",
+                    phase_id="phase-orphan-age",
+                    workflow_execution_id="wf-orphan-age",
+                    status="pending",
+                )
+            )
+            session.add(
+                Task(
+                    id="task-maybe-orphan",
+                    workflow_id="wf-orphan-age",
+                    phase_id="phase-orphan-age",
+                    raw_description="r",
+                    done_definition="d",
+                    status="pending",
+                    assigned_agent_id=None,
+                    created_at=pending_created_at,
+                )
+            )
+
+    @patch("src.autopilot.orchestrator.create_agent_for_task_direct")
+    def test_recently_created_pending_task_is_not_treated_as_orphaned(
+        self, mock_create_agent, orch_db_env, tmp_path
+    ):
+        from src.autopilot.orchestrator import OrchestratorLogger, _create_phase_task
+        from src.core.database import Task
+
+        self._seed(orch_db_env, pending_created_at=datetime.utcnow())
+        mock_create_agent.return_value = {"agent_id": "agent-x"}
+
+        result = _create_phase_task(
+            "wf-orphan-age", "phase-orphan-age", "security_review", "continue",
+            OrchestratorLogger(tmp_path),
+        )
+
+        assert result is False
+        mock_create_agent.assert_not_called()
+        with orch_db_env.session_scope() as session:
+            original = session.query(Task).filter_by(id="task-maybe-orphan").first()
+            assert original.status == "pending"
+            assert original.failure_reason is None
+            duplicate_count = (
+                session.query(Task)
+                .filter(Task.phase_id == "phase-orphan-age")
+                .count()
+            )
+            assert duplicate_count == 1
+
+    @patch("src.autopilot.orchestrator.create_agent_for_task_direct")
+    def test_genuinely_stale_pending_task_is_still_replaced(
+        self, mock_create_agent, orch_db_env, tmp_path
+    ):
+        from src.autopilot.orchestrator import OrchestratorLogger, _create_phase_task
+        from src.core.database import Task
+
+        self._seed(
+            orch_db_env,
+            pending_created_at=datetime.utcnow() - timedelta(minutes=5),
+        )
+        mock_create_agent.return_value = {"agent_id": "agent-x"}
+
+        result = _create_phase_task(
+            "wf-orphan-age", "phase-orphan-age", "security_review", "continue",
+            OrchestratorLogger(tmp_path),
+        )
+
+        assert result is True
+        with orch_db_env.session_scope() as session:
+            original = session.query(Task).filter_by(id="task-maybe-orphan").first()
+            assert original.status == "failed"
+            assert original.failure_reason == "Orphaned: never dispatched to an agent"
+            fresh = (
+                session.query(Task)
+                .filter(Task.phase_id == "phase-orphan-age", Task.status == "in_progress")
+                .first()
+            )
+            assert fresh is not None
+            assert fresh.id != "task-maybe-orphan"
