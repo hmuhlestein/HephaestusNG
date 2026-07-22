@@ -354,7 +354,7 @@ def _pause_project_workflows(db: Session, project_id: str, paused_by: str) -> in
             .join(Task, Agent.current_task_id == Task.id)
             .filter(
                 Task.workflow_id.in_(workflow_ids),
-                Agent.status.in_(["working", "idle"]),
+                Agent.status.in_(["working", "starting", "idle"]),
             )
             .all()
         )
