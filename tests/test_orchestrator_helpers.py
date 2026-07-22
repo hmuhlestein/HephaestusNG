@@ -3517,6 +3517,177 @@ class TestRecoverAbandonedWorkflowsMissingWorktree:
             assert old_task.retry_count == 2
 
 
+class TestRecoverAbandonedWorkflowsWithCompletedPhase:
+    """_recover_abandoned_workflows_with_completed_phase: sibling recovery
+    for the case _recover_abandoned_workflows_missing_worktree doesn't
+    cover -- a workflow marked "failed" (abandoned) whose worktree is
+    still intact and whose current in-progress phase's task already
+    finished ("done"), so there's nothing to retry, just a lost hand-off
+    back to _advance_phases. Same "invisible to every case forever" bug
+    as the sibling class's docstring describes, different starting state."""
+
+    def _seed(self, session, task_status="done", extra_task=None, working_directory="/tmp/repo/.worktrees/wt_feature"):
+        from src.core.database import (
+            AutopilotDesign,
+            AutopilotProject,
+            Feature,
+            Phase,
+            PhaseExecution,
+            Task,
+            Workflow,
+        )
+
+        session.add(AutopilotProject(id="proj-1", name="p", base_dir="/tmp/repo"))
+        session.add(
+            AutopilotDesign(id="des-1", project_id="proj-1", filename="d.md", name="D")
+        )
+        session.add(
+            Workflow(
+                id="wf-stuck",
+                name="feature pipeline",
+                phases_folder_path="/tmp",
+                status="failed",
+                status_reason=(
+                    "Abandoned: no agent/task activity for 10 consecutive "
+                    "scans -- likely lost mid-flight across a backend restart"
+                ),
+                working_directory=working_directory,
+                definition_id="autopilot",
+            )
+        )
+        session.add(
+            Feature(
+                id="feature-row-1",
+                design_id="des-1",
+                feature_key="cost-derivation",
+                name="Cost Derivation",
+                scope="s",
+                status="active",
+                workflow_id="wf-stuck",
+            )
+        )
+        session.add(
+            Phase(
+                id="phase-product-validation",
+                workflow_id="wf-stuck",
+                name="product_validation",
+                order=9,
+                description="d",
+                done_definitions=["x"],
+            )
+        )
+        session.add(
+            PhaseExecution(
+                id="exec-product-validation",
+                phase_id="phase-product-validation",
+                workflow_execution_id="wf-stuck",
+                status="in_progress",
+            )
+        )
+        session.add(
+            Task(
+                id="task-finished",
+                workflow_id="wf-stuck",
+                phase_id="phase-product-validation",
+                raw_description="r",
+                done_definition="d",
+                status=task_status,
+            )
+        )
+        if extra_task:
+            session.add(extra_task)
+
+    def test_resumes_workflow_whose_finished_task_was_never_evaluated(
+        self, orch_db_env, tmp_path
+    ):
+        from src.autopilot.orchestrator import (
+            OrchestratorLogger,
+            _recover_abandoned_workflows_with_completed_phase,
+        )
+        from src.core.database import Workflow
+
+        with orch_db_env.session_scope() as session:
+            self._seed(session, task_status="done")
+
+        recovered = _recover_abandoned_workflows_with_completed_phase(
+            OrchestratorLogger(tmp_path)
+        )
+
+        assert recovered == 1
+        with orch_db_env.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-stuck").first()
+            assert wf.status == "active"
+            assert wf.status_reason is None
+            # Recovery only unblocks -- it must not touch working_directory,
+            # unlike the missing-worktree sibling which has to rebuild it.
+            assert wf.working_directory == "/tmp/repo/.worktrees/wt_feature"
+
+    def test_leaves_workflow_alone_when_a_task_is_still_in_progress(
+        self, orch_db_env, tmp_path
+    ):
+        """A phase with real in-flight work (not abandoned at all, or the
+        abandonment flag is stale) must not be force-resumed -- that's a
+        different, still-active situation this function must not touch."""
+        from src.autopilot.orchestrator import (
+            OrchestratorLogger,
+            _recover_abandoned_workflows_with_completed_phase,
+        )
+        from src.core.database import Workflow
+
+        with orch_db_env.session_scope() as session:
+            self._seed(session, task_status="in_progress")
+
+        recovered = _recover_abandoned_workflows_with_completed_phase(
+            OrchestratorLogger(tmp_path)
+        )
+
+        assert recovered == 0
+        with orch_db_env.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-stuck").first()
+            assert wf.status == "failed"
+
+    def test_leaves_workflow_alone_when_no_task_has_finished(self, orch_db_env, tmp_path):
+        """Nothing to evaluate yet (e.g. only a failed task exists) --
+        that's _recover_abandoned_workflows_missing_worktree's or
+        _maybe_retry_failed_tasks' territory, not this function's."""
+        from src.autopilot.orchestrator import (
+            OrchestratorLogger,
+            _recover_abandoned_workflows_with_completed_phase,
+        )
+        from src.core.database import Workflow
+
+        with orch_db_env.session_scope() as session:
+            self._seed(session, task_status="failed")
+
+        recovered = _recover_abandoned_workflows_with_completed_phase(
+            OrchestratorLogger(tmp_path)
+        )
+
+        assert recovered == 0
+        with orch_db_env.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-stuck").first()
+            assert wf.status == "failed"
+
+    def test_ignores_workflows_with_no_working_directory(self, orch_db_env, tmp_path):
+        """working_directory is None -- that's the OTHER recovery
+        function's case (rebuild the worktree first); this one must not
+        try to evaluate a phase with nowhere to read its output from."""
+        from src.autopilot.orchestrator import (
+            OrchestratorLogger,
+            _recover_abandoned_workflows_with_completed_phase,
+        )
+        from src.core.database import Workflow
+
+        with orch_db_env.session_scope() as session:
+            self._seed(session, task_status="done", working_directory=None)
+
+        recovered = _recover_abandoned_workflows_with_completed_phase(
+            OrchestratorLogger(tmp_path)
+        )
+
+        assert recovered == 0
+
+
 class TestRetryExhaustedPausedWorkflows:
     """Regression: _maybe_retry_failed_tasks pauses a workflow
     (paused_by="system") once every task in a phase has failed past its
