@@ -34,6 +34,7 @@ DEFAULT_SPEC: Dict[str, Any] = {
     "max_critical_issues": 0,
     "required_pass_rate": 100,  # percent of tests that must pass
     "min_requirements_met_rate": 100,  # percent of requirements that must be met
+    "max_minor_unmet_requirements": 2,  # PASS_WITH_MINOR_GAPS tolerance, see score_product_validation
 }
 
 _WORKFLOWS_DIR = Path(__file__).parent.parent.parent / "config" / "workflows"
@@ -802,17 +803,31 @@ def score_qa(
 
 
 def score_product_validation(
-    result: Optional[Dict[str, Any]], spec: Dict[str, Any]
+    result: Optional[Dict[str, Any]],
+    spec: Dict[str, Any],
+    report_text: Optional[str] = None,
 ) -> Tuple[float, Dict[str, Any]]:
     """Score a structured product-validation result (verdict + unmet reqs + floors).
 
-    Expected keys: verdict ("PASS"|"NEEDS_WORK"|"ARCHITECTURE"),
+    Expected keys: verdict ("PASS"|"PASS_WITH_MINOR_GAPS"|"NEEDS_WORK"|"ARCHITECTURE"),
         unmet_requirements (list), agent_score (0-1).
     """
     if not result:
+        # The agent may have written the markdown report but failed (or
+        # forgot) to also emit the structured JSON -- don't discard real
+        # findings just because the JSON is missing. Same fail-safe pattern
+        # as score_adversarial_review/score_architectural_review/
+        # score_feature_review: always the failing band, report text is
+        # context for the developer, never a route to a pass.
+        reason = (
+            f"no product_validation.json found, but a report was "
+            f"written:\n\n{report_text}"
+            if report_text
+            else "no product_validation.json found"
+        )
         return _DEV, {
             "gate": "product",
-            "reason": "no product_validation.json found",
+            "reason": reason,
             "result_missing": True,
         }
 
@@ -827,9 +842,19 @@ def score_product_validation(
         return _ARCH, {**meta, "band": "architecture"}
 
     # PASS_WITH_MINOR_GAPS: the agent explicitly judged unmet requirements
-    # as non-blocking. Accept the verdict — don't override with _DEV.
-    if "PASS" in verdict and "MINOR" in verdict:
-        return _PASS_FLOOR, {**meta, "band": "pass"}
+    # as non-blocking. Accept the verdict only for an EXACT match (not any
+    # string containing "PASS" and "MINOR") and only up to
+    # max_minor_unmet_requirements -- past that cap, fall through to the
+    # hard floor below like any other unmet-requirements case. This is a
+    # documented verdict value (product_validation.yaml's schema), not an
+    # emergent one the scorer just happens to tolerate.
+    max_minor = spec.get("max_minor_unmet_requirements", DEFAULT_SPEC["max_minor_unmet_requirements"])
+    if verdict == "PASS_WITH_MINOR_GAPS" and len(unmet) <= max_minor:
+        return _PASS_FLOOR, {
+            **meta,
+            "band": "pass",
+            "reason": f"PASS_WITH_MINOR_GAPS accepted: {len(unmet)} unmet requirement(s), within cap of {max_minor}",
+        }
 
     # Hard floor: a PASS verdict cannot stand if requirements are unmet.
     # Same handoff mechanism as score_architectural_review/score_adversarial_review's
@@ -1254,6 +1279,7 @@ def build_phase_output(
     phase_name: str,
     working_directory: Any,
     spec: Optional[Dict[str, Any]] = None,
+    skip_independent_verification: bool = False,
 ) -> Dict[str, Any]:
     """Build the engine phase_output (carrying `score`) for a gated phase.
 
@@ -1291,7 +1317,8 @@ def build_phase_output(
     elif phase_name == "qa_validation":
         result = read_result(working_directory, "qa_result.json", phase_name=phase_name)
         # Enhancement 1: Pass working_directory for independent test verification
-        score, meta = score_qa(result, spec, working_directory=working_directory)
+        wd = None if skip_independent_verification else working_directory
+        score, meta = score_qa(result, spec, working_directory=wd)
     elif phase_name == "feature_review":
         # .hephaestus/, not docs/ -- matches Feature Architect (the phase it
         # reviews), whose own outputs already live there. Phase 0 artifacts
@@ -1307,6 +1334,9 @@ def build_phase_output(
         result = read_result(
             working_directory, "product_validation.json", phase_name=phase_name
         )
-        score, meta = score_product_validation(result, spec)
+        report_text = read_report_text(
+            working_directory, "product_validation.md", phase_name=phase_name
+        )
+        score, meta = score_product_validation(result, spec, report_text=report_text)
 
     return {"score": score, "spec_gate": meta}
