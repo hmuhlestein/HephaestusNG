@@ -93,7 +93,7 @@ orchestrator:
       # stop looping: mark the phase done with its unresolved findings
       # documented instead of re-reviewing forever. See
       # _create_phase_task's cap-enforcement block.
-      max_review_runs: 3
+      max_review_runs: 4
       conditions:
         - if: "score < 0.3"
           action: goto
@@ -111,7 +111,7 @@ orchestrator:
       evaluator: heuristic
       max_retries: 10
       # See architectural_review's identical max_review_runs above.
-      max_review_runs: 3
+      max_review_runs: 4
       conditions:
         - if: "score < 0.3"
           action: goto
@@ -128,6 +128,8 @@ orchestrator:
     - after_phase: security_review
       evaluator: heuristic
       max_retries: 2
+      # See architectural_review's identical max_review_runs above.
+      max_review_runs: 4
       conditions:
         - if: "score < 0.3"
           action: goto
@@ -144,6 +146,8 @@ orchestrator:
     - after_phase: qa_validation
       evaluator: heuristic
       max_retries: 2
+      # See architectural_review's identical max_review_runs above.
+      max_review_runs: 4
       conditions:
         - if: "score < 0.3"
           action: goto
@@ -160,6 +164,8 @@ orchestrator:
     - after_phase: product_validation
       evaluator: heuristic
       max_retries: 2
+      # See architectural_review's identical max_review_runs above.
+      max_review_runs: 4
       conditions:
         - if: "score < 0.3"
           action: goto
@@ -176,6 +182,8 @@ orchestrator:
     - after_phase: doc_review
       evaluator: heuristic
       max_retries: 2
+      # See architectural_review's identical max_review_runs above.
+      max_review_runs: 4
       conditions:
         - if: "score < 0.3"
           action: goto
