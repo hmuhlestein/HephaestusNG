@@ -5548,11 +5548,31 @@ def _create_phase_task(
                 # pass saw it and silently skipped, since its status string
                 # alone made it look active). Clear it and fall through to
                 # create a fresh task instead of returning early.
-                if existing.status == "pending" and not existing.assigned_agent_id:
+                #
+                # BUT: require it to actually be old before calling it
+                # orphaned (same 1-minute threshold _case_in_progress_
+                # complete's own orphaned-pending check already uses) --
+                # without this, a task that's simply mid-flight (row
+                # committed, agent not attached yet -- a normal few-second
+                # gap in the creation sequence) looks identical to a
+                # genuine hours-old orphan. Observed live: two callers
+                # evaluating the same phase 11 seconds apart raced past
+                # each other -- the second one saw the first task still
+                # agentless, "helpfully" marked it failed, and spawned a
+                # full duplicate agent for the same phase. The task_creation_
+                # claimed_at claim only serializes who gets to create a
+                # task; it does nothing to stop this check from
+                # misjudging one that already exists.
+                orphan_cutoff = datetime.utcnow() - timedelta(minutes=1)
+                if (
+                    existing.status == "pending"
+                    and not existing.assigned_agent_id
+                    and existing.created_at < orphan_cutoff
+                ):
                     logger.info(
                         f"[PHASE-TASK] {phase_name} has an orphaned pending task "
-                        f"{existing.id[:8]} (never dispatched) -- marking failed "
-                        "and creating a fresh one"
+                        f"{existing.id[:8]} (never dispatched, stale >1min) -- "
+                        "marking failed and creating a fresh one"
                     )
                     existing.status = "failed"
                     existing.failure_reason = "Orphaned: never dispatched to an agent"
@@ -5694,7 +5714,6 @@ def _create_phase_task(
             if execution:
                 if execution.status in ("pending", "completed"):
                     execution.status = "in_progress"
-                    from datetime import datetime
                     execution.started_at = datetime.utcnow()
                 # Always release the claim once the task it was guarding
                 # actually exists, regardless of the entry status. The
@@ -5742,7 +5761,6 @@ def _create_phase_task(
             if task:
                 task.assigned_agent_id = agent_id
                 task.status = "in_progress"
-                from datetime import datetime
                 task.started_at = datetime.utcnow()
                 db.commit()
 
