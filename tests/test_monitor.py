@@ -1909,3 +1909,163 @@ class TestMonitoringCycleGuardianSkip:
         await make_monitoring_loop._monitoring_cycle()
 
         make_monitoring_loop._guardian_analysis_for_agent.assert_called_once()
+
+
+class TestStuckTaskNudgeCap:
+    """_audit_system_health's stuck-task nudge: an idle-but-"working"
+    agent gets a task-specific nudge naming its current task_id (not a
+    generic "report your status", which let an agent stuck believing an
+    earlier task's completion applied to a brand new one just re-confirm
+    that same wrong belief forever -- observed live on a resumed pi
+    session). Repeated nudge-then-respond-without-completing cycles are
+    capped at MAX_STUCK_TASK_NUDGES instead of trusting "the agent
+    produced output" as proof of progress indefinitely -- the naive
+    version reset its own counter to zero every time activity was seen,
+    so the cap could never actually be reached."""
+
+    @pytest.fixture
+    def real_db(self, tmp_path):
+        from src.core.database import DatabaseManager
+
+        db_path = tmp_path / "test.db"
+        db = DatabaseManager(str(db_path))
+        db.create_tables()
+        return db
+
+    @pytest.fixture
+    def audit_monitor(self, real_db, mock_agent_manager, mock_llm, mock_rag):
+        from src.monitoring.monitor import MonitoringLoop
+
+        with patch("src.monitoring.monitor.get_config") as mock_cfg:
+            mock_cfg.return_value = Mock(stuck_detection_minutes=10, agent_timeout_minutes=60)
+            m = MonitoringLoop(
+                db_manager=real_db,
+                agent_manager=mock_agent_manager,
+                llm_provider=mock_llm,
+                rag_system=mock_rag,
+            )
+        return m
+
+    def _seed_stuck_task(self, real_db, idle_minutes=15):
+        from src.core.database import Agent, Task
+
+        session = real_db.get_session()
+        started = datetime.utcnow() - timedelta(minutes=20)
+        session.add(
+            Agent(
+                id="agent-stuck",
+                system_prompt="p",
+                status="working",
+                cli_type="pi",
+                agent_type="phase",
+                last_activity=datetime.utcnow() - timedelta(minutes=idle_minutes),
+            )
+        )
+        session.add(
+            Task(
+                id="task-stuck",
+                raw_description="r",
+                done_definition="d",
+                status="in_progress",
+                assigned_agent_id="agent-stuck",
+                started_at=started,
+            )
+        )
+        session.commit()
+        session.close()
+        return "task-stuck", "agent-stuck"
+
+    def _set_agent_last_activity(self, real_db, agent_id, when):
+        from src.core.database import Agent
+
+        session = real_db.get_session()
+        agent = session.query(Agent).filter_by(id=agent_id).first()
+        agent.last_activity = when
+        session.commit()
+        session.close()
+
+    @pytest.mark.asyncio
+    async def test_first_nudge_names_the_current_task_id(
+        self, audit_monitor, real_db, mock_agent_manager
+    ):
+        task_id, agent_id = self._seed_stuck_task(real_db)
+
+        with patch("src.mcp.autopilot_api.run_health_audit", return_value={"findings": []}):
+            await audit_monitor._audit_system_health()
+
+        mock_agent_manager.send_message_to_agent.assert_called_once()
+        call_args = mock_agent_manager.send_message_to_agent.call_args
+        assert call_args[0][0] == agent_id
+        assert task_id in call_args[0][1]
+        assert "complete_my_task" in call_args[0][1]
+
+    @pytest.mark.asyncio
+    async def test_caps_repeated_nudges_when_agent_keeps_responding_without_completing(
+        self, audit_monitor, real_db, mock_agent_manager
+    ):
+        from src.core.database import Task
+        from src.monitoring.monitor import MAX_STUCK_TASK_NUDGES
+
+        task_id, agent_id = self._seed_stuck_task(real_db)
+
+        with patch("src.mcp.autopilot_api.run_health_audit", return_value={"findings": []}):
+            # Each cycle: agent is idle (due for a nudge -- grace period
+            # from the previous nudge is force-expired directly, since real
+            # wall-clock time won't elapse meaningfully in a fast test),
+            # then "responds" (activity moves forward) before the next
+            # cycle -- never actually completes the task.
+            for _ in range(MAX_STUCK_TASK_NUDGES):
+                self._set_agent_last_activity(
+                    real_db, agent_id, datetime.utcnow() - timedelta(minutes=15)
+                )
+                count, _ = audit_monitor._stuck_task_nudges.get(task_id, (0, None))
+                if count:
+                    audit_monitor._stuck_task_nudges[task_id] = (
+                        count,
+                        datetime.utcnow() - timedelta(minutes=15),
+                    )
+                await audit_monitor._audit_system_health()  # sends a nudge
+                self._set_agent_last_activity(real_db, agent_id, datetime.utcnow())
+                await audit_monitor._audit_system_health()  # sees "activity", must not reset the count
+
+            # One more idle cycle after the cap is reached -- must be
+            # treated as stuck now, not nudged a 4th time.
+            self._set_agent_last_activity(
+                real_db, agent_id, datetime.utcnow() - timedelta(minutes=15)
+            )
+            count, _ = audit_monitor._stuck_task_nudges.get(task_id, (0, None))
+            audit_monitor._stuck_task_nudges[task_id] = (
+                count,
+                datetime.utcnow() - timedelta(minutes=15),
+            )
+            await audit_monitor._audit_system_health()
+
+        assert mock_agent_manager.send_message_to_agent.call_count == MAX_STUCK_TASK_NUDGES
+
+        session = real_db.get_session()
+        task = session.query(Task).filter_by(id=task_id).first()
+        assert task.status == "failed"
+        session.close()
+
+    @pytest.mark.asyncio
+    async def test_does_not_cap_a_healthy_agent_that_stays_active(
+        self, audit_monitor, real_db, mock_agent_manager
+    ):
+        """Sanity check the cap isn't overbroad: an agent producing steady
+        activity (never idle long enough to be nudged at all) must never
+        be touched."""
+        from src.core.database import Task
+        from src.monitoring.monitor import MAX_STUCK_TASK_NUDGES
+
+        task_id, agent_id = self._seed_stuck_task(real_db, idle_minutes=0)
+
+        with patch("src.mcp.autopilot_api.run_health_audit", return_value={"findings": []}):
+            for _ in range(MAX_STUCK_TASK_NUDGES + 2):
+                self._set_agent_last_activity(real_db, agent_id, datetime.utcnow())
+                await audit_monitor._audit_system_health()
+
+        mock_agent_manager.send_message_to_agent.assert_not_called()
+        session = real_db.get_session()
+        task = session.query(Task).filter_by(id=task_id).first()
+        assert task.status == "in_progress"
+        session.close()
