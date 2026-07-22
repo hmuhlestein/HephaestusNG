@@ -492,6 +492,9 @@ class TaskCompletionService:
         if incomplete != 0:
             return
 
+        from src.core.log_context import set_log_context
+        set_log_context(task=task.id, phase=phase.name, workflow=task.workflow_id or "")
+
         # Phase complete — fire the gate now
         wf = session.query(Workflow).filter_by(id=task.workflow_id).first()
         if not (wf and wf.working_directory):

@@ -696,13 +696,30 @@ class PhaseManager:
 
         FIX #19: Shared by _handle_force_continue and _handle_evaluation_continue
         to eliminate duplicated advance-or-complete logic.
+
+        Calls _start_next_phase directly (not via _advance_or_complete) and
+        reuses the Phase it actually started to build target_phase/
+        target_phase_id, instead of recomputing next-by-order separately --
+        a separate _find_next_phase() call here previously ignored
+        _start_next_phase's action_target_phase honoring, so callers (e.g.
+        orchestrator.py's task dispatch) could be told to create a task for
+        a different phase than the one actually flipped to in_progress.
         """
-        result = self._advance_or_complete(session, phase_id)
-        if result.get("should_continue"):
-            next_phase = self._find_next_phase(session, phase_id)
-            result["target_phase"] = next_phase.name if next_phase else None
-            result["target_phase_id"] = next_phase.id if next_phase else None
-        return result
+        next_phase = self._start_next_phase(session, phase_id)
+        if not next_phase:
+            self._complete_workflow(session)
+            return {
+                "action": "continue",
+                "target_phase": None,
+                "target_phase_id": None,
+                "should_continue": False,
+            }
+        return {
+            "action": "continue",
+            "target_phase": next_phase.name,
+            "target_phase_id": next_phase.id,
+            "should_continue": True,
+        }
 
     def _handle_force_continue(self, session, phase, execution, summary) -> Dict[str, Any]:
         # FIX #19: Delegate to _advance_or_complete_with_phase_info.
@@ -795,8 +812,8 @@ class PhaseManager:
         # 2.12). Behavior matches CONTINUE; only the log message differs.
         self._close_execution(session, execution, "completed", summary)
         logger.info(f"Skipping past phase {phase.name}: {evaluation.reason}")
-        next_started = self._start_next_phase(session, phase.id)
-        if not next_started:
+        next_phase = self._start_next_phase(session, phase.id)
+        if not next_phase:
             self._complete_workflow(session)
             return {
                 "action": "continue",
@@ -804,11 +821,10 @@ class PhaseManager:
                 "target_phase_id": None,
                 "should_continue": False,
             }
-        next_phase = self._find_next_phase(session, phase.id)
         return {
             "action": "continue",
-            "target_phase": next_phase.name if next_phase else None,
-            "target_phase_id": next_phase.id if next_phase else None,
+            "target_phase": next_phase.name,
+            "target_phase_id": next_phase.id,
             "should_continue": True,
         }
 
@@ -1105,6 +1121,9 @@ class PhaseManager:
                     "should_continue": True,
                 }
 
+            from src.core.log_context import set_log_context
+            set_log_context(phase=phase.name, workflow=phase.workflow_id or "")
+
             execution = (
                 session.query(PhaseExecution).filter_by(phase_id=phase_id).first()
             )
@@ -1334,21 +1353,7 @@ class PhaseManager:
                 session.commit()
                 logger.error(f"Workflow {self.workflow_id} failed: {reason}")
 
-    def _find_next_phase(self, session, current_phase_id: str):
-        """Find the next phase after current one (without starting it)."""
-        current = session.query(Phase).filter_by(id=current_phase_id).first()
-        if not current:
-            return None
-        return (
-            session.query(Phase)
-            .filter(
-                Phase.workflow_id == current.workflow_id, Phase.order > current.order
-            )
-            .order_by(Phase.order)
-            .first()
-        )
-
-    def _start_next_phase(self, session, current_phase_id: str) -> bool:
+    def _start_next_phase(self, session, current_phase_id: str) -> Optional[Phase]:
         """Start the next phase after current one completes.
 
         Args:
@@ -1356,11 +1361,11 @@ class PhaseManager:
             current_phase_id: Current phase ID
 
         Returns:
-            True if a next phase was started, False if this was the last phase
+            The Phase that was started, or None if this was the last phase
         """
         current_phase = session.query(Phase).filter_by(id=current_phase_id).first()
         if not current_phase:
-            return False
+            return None
 
         # Don't advance phases on a completed workflow — stale mark_phase_complete
         # calls from the spec-gate or 3a path can fire after _complete_workflow runs.
@@ -1371,18 +1376,64 @@ class PhaseManager:
             logger.debug(
                 f"[PHASE] _start_next_phase skipped — workflow is {getattr(workflow, 'status', 'missing')}"
             )
-            return False
+            return None
 
-        # Find next phase
-        next_phase = (
-            session.query(Phase)
+        # Honor an explicit goto/retry target recorded on the task that just
+        # completed this phase, instead of unconditionally advancing to the
+        # next phase by order. E.g. qa_validation finds a failure and goto's
+        # to development with action_target_phase="qa_validation" (where the
+        # pipeline should resume once development's fix is done) -- blindly
+        # picking "next phase by order" instead lands on architectural_review
+        # and walks the ENTIRE review chain again, burning real agent/LLM
+        # cycles on phases that already passed and have nothing to do with
+        # the fix. orchestrator.py's _case_completed_with_successor (the
+        # periodic sweep) already implements this same check, but this
+        # function is also reached directly and synchronously (e.g.
+        # fire_spec_gate_if_ready's continue path) -- ported here so the
+        # smart target wins regardless of which caller gets here first,
+        # not just when the sweep happens to run before a task exists yet.
+        # Falls back to next-by-order when no target was supplied (a plain
+        # "continue" completion, not a goto/retry return).
+        from src.core.constants import DIAGNOSTIC_TASK_PREFIX
+
+        next_phase = None
+        last_task = (
+            session.query(Task)
             .filter(
-                Phase.workflow_id == current_phase.workflow_id,
-                Phase.order > current_phase.order,
+                Task.phase_id == current_phase_id,
+                Task.status == "done",
+                ~Task.raw_description.like(f"{DIAGNOSTIC_TASK_PREFIX}%"),
             )
-            .order_by(Phase.order)
+            .order_by(Task.completed_at.desc())
             .first()
         )
+        if last_task and last_task.action in ("goto", "retry") and last_task.action_target_phase:
+            next_phase = (
+                session.query(Phase)
+                .filter(
+                    Phase.workflow_id == current_phase.workflow_id,
+                    Phase.name == last_task.action_target_phase,
+                )
+                .first()
+            )
+            if next_phase:
+                logger.info(
+                    f"[PHASE] {current_phase.name} completed via {last_task.action} "
+                    f"with an explicit target -- resuming at {next_phase.name} "
+                    "instead of the next phase by order"
+                )
+
+        if next_phase is None:
+            # Find next phase by order (default/fallback)
+            next_phase = (
+                session.query(Phase)
+                .filter(
+                    Phase.workflow_id == current_phase.workflow_id,
+                    Phase.order > current_phase.order,
+                )
+                .order_by(Phase.order)
+                .first()
+            )
 
         if next_phase:
             # Update execution status for pending or completed phases
@@ -1403,9 +1454,9 @@ class PhaseManager:
                 session.commit()
 
                 logger.info(f"Started next phase: {next_phase.name}")
-            return True
+            return next_phase
 
-        return False
+        return None
 
     def _complete_workflow(self, session) -> None:
         """Mark the workflow as completed when the last phase finishes."""
