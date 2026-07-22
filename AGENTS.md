@@ -125,6 +125,8 @@ scripts/        Setup helpers
 - **Design storage**: `.hephaestus/designs/` (not git-tracked)
 - **No hardcoded timeouts**: Use `hephaestus_config.yaml`
 - **Transcript logs**: `.hephaestus/tmux/*.transcript.log` for full agent output history
+- **Always `datetime.utcnow()`, never bare `datetime.now()`**: every stored/compared timestamp in this codebase uses UTC. `datetime.now()` returns naive local time that depends on the calling process's ambient `TZ` — two processes (or the same process across a restart) can disagree by hours with no error. Root-caused a real incident: a task-creation claim's staleness check compared a `datetime.utcnow()`-stamped value against a `datetime.now()`-based cutoff, so the claim never registered as stale and a workflow sat silently stuck for hours. Applies to anything written to the DB and later compared against a fresh timestamp, not just this one case — a mixed clock only fails when the two calls happen to run under different `TZ`, so it won't show up in same-process testing.
+- **`AutopilotProject.is_active` must stay exclusive**: exactly one project may have `is_active=True` at a time. Every reader does `.filter_by(is_active=True).first()` (with no ordering guarantee), including the phase-advancement sweep's project scoping — so creating or activating a project MUST clear every other project's flag first (`db.query(AutopilotProject).update({"is_active": False})`), same as `projects_api.py`'s `activate_project` already does. A write site that skips this (e.g. auto-creating a project without clearing others) leaves multiple "active" projects; `.first()`'s arbitrary pick among them can silently scope background work to the wrong project while looking like nothing is wrong.
 
 ## Security
 
