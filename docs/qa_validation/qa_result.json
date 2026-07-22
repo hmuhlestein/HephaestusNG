@@ -3,7 +3,7 @@
   "failed_test_names": [],
   "passed_tests": 161,
   "total_tests": 161,
-  "pass_rate": 100,
+  "pass_rate": 100.0,
   "critical_issues": 0,
   "major_issues": 0,
   "requirements_total": 13,
