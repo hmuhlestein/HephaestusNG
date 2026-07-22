@@ -1,18 +1,15 @@
 {
   "verdict": "PASS",
   "phase": "architectural_review",
-  "run": 4,
-  "commit_reviewed": "b029258",
+  "run": 5,
+  "commit_reviewed": "3d87c8e",
   "date": "2026-07-21",
   "blocker_count": 0,
   "fix_count": 0,
   "defer_count": 4,
   "changes_verified": {
-    "constants_centralization": "COMPLIANT - single source of truth for definition IDs",
-    "input_validation_hardening": "COMPLIANT - security hardening",
-    "orchestrator_formatting": "COMPLIANT - whitespace only, no behavioral change",
-    "definition_id_consistency": "COMPLIANT - fixes Phase 0 workflow matching"
+    "budget_guard_race_fix": "COMPLIANT - moved check into same DB session, eliminates TOCTOU race",
+    "agent_status_filter": "COMPLIANT - added 'starting' status to catch all active agents"
   },
-  "defers": ["D-1 pagination", "D-2 utcnow deprecation", "D-3 orchestrator test coverage", "D-4 LangChain smoke test"],
   "test_results": "52 passed, 0 failed"
 }

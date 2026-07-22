@@ -1,19 +1,19 @@
-# Architectural Review Report (Run 4 — Final)
+# Architectural Review Report (Run 5 — Final)
 
 **Reviewer:** Architecture Design Agent (Phase 5)  
 **Date:** 2026-07-21  
-**Phase:** architectural_review (run 4)  
+**Phase:** architectural_review (run 5)  
 **Branch:** `feature/des-91c8-cost-derivation`  
-**Reviewed Commit:** `b029258`  
+**Reviewed Commit:** `3d87c8e`  
 **Architecture Reference:** `docs/architecture.md`
 
 ---
 
 ## Executive Summary
 
-Run 3 (commit `c938cbf`) issued PASS. Since then, Phases 7-9 (security review, QA validation, product validation) ran. Development applied additional fixes in `b029258`. I reviewed these changes for architectural compliance.
+Run 4 issued PASS. Since then, adversarial review (Phase 6) found a race condition in the budget guard, and development fixed it in `3d87c8e`. Changes are architecturally compliant.
 
-**Verdict: PASS** — all changes are architecturally compliant improvements.
+**Verdict: PASS**
 
 | Category | Count |
 |----------|-------|
@@ -23,51 +23,56 @@ Run 3 (commit `c938cbf`) issued PASS. Since then, Phases 7-9 (security review, Q
 
 ---
 
-## Changes Since Last Review
+## Changes Verified
 
-### 1. Constants Centralization — COMPLIANT ✅
+### 1. Budget Guard Race Condition Fix — COMPLIANT ✅
 
-`PHASE0_DEFINITION_IDS` and `DESIGN_WORKFLOW_DEFINITION_IDS` extracted from inline tuples in `autopilot_api.py` to `src/core/constants.py:42-43`. Now used consistently in:
-- `src/core/cost_derivation.py:331` (`_pause_project_workflows`)
-- `src/mcp/autopilot_api.py` (multiple query sites)
+**File:** `src/autopilot/orchestrator.py`
 
-**Assessment:** Improves maintainability. Single source of truth for definition ID matching — exactly what the architecture intended with the `_pause_project_workflows` fix.
+The budget check was moved from a separate `get_db()` session into the same session as the feature lookup. Previously:
 
-### 2. Input Validation Hardening — COMPLIANT ✅
+```python
+# Old: separate sessions = race window
+with get_db() as db:
+    feat_record = db.query(Feature)...
 
-`CostEntryCreate` model in `autopilot_api.py` gained:
-- `raw_usage` validator: 10KB max size (prevents JSON column abuse)
-- `model` validator: 200 char max length
-- Rate limiting on `POST /cost-entries`: 60 requests per agent
+with get_db() as budget_db:  # Different session!
+    if not check_budget_before_new_work(budget_db, project_id):
+```
 
-**Assessment:** Security hardening, no architecture violation.
+Now:
+```python
+# New: same session = no race window
+with get_db() as db:
+    if project_id and not check_budget_before_new_work(db, project_id):
+        return "skipped"
+    feat_record = db.query(Feature)...
+```
 
-### 3. Orchestrator Formatting Cleanup — COMPLIANT ✅
+**Assessment:** Correct fix. The old code had a TOCTOU race where a concurrent cost write could push the project over budget between the two sessions.
 
-`orchestrator.py` changes are purely formatting (line wrapping, whitespace). No behavioral changes. The `paused_by` guards and budget checks remain intact.
+### 2. Agent Status Filter Expansion — COMPLIANT ✅
 
-### 4. Workflow Definition ID Consistency — COMPLIANT ✅
+**File:** `src/core/cost_derivation.py:357`
 
-`requeue_design`, `rerun_design`, and `_run_repair` now use `DESIGN_WORKFLOW_DEFINITION_IDS` instead of hardcoded `"autopilot"`. This fixes a real bug where Phase 0 workflows were missed — same class of bug the architecture identified in `_pause_project_workflows`.
+Added `"starting"` to the agent status filter in `_pause_project_workflows`:
+
+```python
+# Old
+Agent.status.in_(["working", "idle"])
+# New
+Agent.status.in_(["working", "starting", "idle"])
+```
+
+**Assessment:** Correct. Agents in "starting" state (between creation and running) were previously missed, allowing them to continue consuming costs after a budget pause.
 
 ---
 
 ## Test Results
 
 ```
-================= 52 passed, 381 warnings in 7.99s =================
+================= 52 passed, 381 warnings in 9.95s =================
 ```
-
----
-
-## Remaining DEFER Items
-
-| ID | Issue |
-|----|-------|
-| D-1 | No pagination on cost query endpoints |
-| D-2 | `datetime.utcnow()` deprecation |
-| D-3 | Test coverage for orchestrator guard functions |
-| D-4 | LangChain `usage.include=true` smoke test |
 
 ---
 
