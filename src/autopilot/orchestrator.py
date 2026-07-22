@@ -63,33 +63,41 @@ def _get_workflow_timeout() -> int:
     """Get workflow timeout from config, with fallback to default."""
     try:
         from src.core.simple_config import get_config
+
         return get_config().workflow_timeout_seconds
     except Exception:
         return 7200  # 2 hours default
+
 
 def _get_phase0_timeout() -> int:
     """Get Phase 0 timeout from config, with fallback to default."""
     try:
         from src.core.simple_config import get_config
+
         return get_config().phase0_timeout_seconds
     except Exception:
         return 3600  # 1 hour default
+
 
 def _get_paused_workflow_retry_cooldown_seconds() -> int:
     """Get the exhausted-retry-pause cooldown from config, with fallback to default."""
     try:
         from src.core.simple_config import get_config
+
         return get_config().paused_workflow_retry_cooldown_seconds
     except Exception:
         return 300  # 5 min default
+
 
 def _get_paused_workflow_max_retry_cycles() -> int:
     """Get the exhausted-retry-pause retry cycle cap from config, with fallback to default."""
     try:
         from src.core.simple_config import get_config
+
         return get_config().paused_workflow_max_retry_cycles
     except Exception:
         return 10  # default
+
 
 POLL_INTERVAL = 15
 STUCK_THRESHOLD = 3
@@ -102,9 +110,7 @@ ACTIVE_AGENT_STATUSES = {
     "working",
     "idle",
 }  # Excludes 'created' (not yet started), 'stuck', 'terminated'
-PARENT_PEEK_INTERVAL = int(
-    os.environ.get("HEPH_PEEK_INTERVAL", "60")
-)  # seconds between parent peeks
+PARENT_PEEK_INTERVAL = int(os.environ.get("HEPH_PEEK_INTERVAL", "60"))  # seconds between parent peeks
 
 # Feature Model constants
 # FIX: Extracted to config (hephaestus_config.yaml -> autopilot section)
@@ -145,8 +151,7 @@ def get_litellm_config() -> Dict[str, str]:
         "url": os.environ.get("LITELLM_PROXY_URL", ""),
         "api_key": os.environ.get("LITELLM_API_KEY", ""),
         "cost_api_key": os.environ.get("LITELLM_MASTER_KEY", ""),
-        "cost_tracking": os.environ.get("LITELLM_COST_TRACKING", "false").lower()
-        == "true",
+        "cost_tracking": os.environ.get("LITELLM_COST_TRACKING", "false").lower() == "true",
     }
 
 
@@ -176,9 +181,7 @@ class DesignEntry:
     name: str
     content_hash: str
     status: DesignStatus = DesignStatus.PENDING
-    db_id: Optional[str] = (
-        None  # autopilot_designs.id — links Workflow back to Design (§9.7)
-    )
+    db_id: Optional[str] = None  # autopilot_designs.id — links Workflow back to Design (§9.7)
     project_path: Optional[Path] = None
     feature_folder: Optional[Path] = None
     error: Optional[str] = None
@@ -324,11 +327,7 @@ def _resolve_project_id(project_path: str) -> Optional[str]:
 
     try:
         with get_db() as db:
-            proj = (
-                db.query(AutopilotProject)
-                .filter_by(base_dir=str(Path(project_path).resolve()))
-                .first()
-            )
+            proj = db.query(AutopilotProject).filter_by(base_dir=str(Path(project_path).resolve())).first()
             return proj.id if proj else None
     except Exception:
         return None
@@ -393,11 +392,7 @@ def _get_or_create_project_id(project_path: str) -> str:
         # user-paused workflows would also skip them here, leaving a
         # workflow permanently stuck even after the user explicitly hits
         # play again.
-        resumed = (
-            db.query(Workflow)
-            .filter(Workflow.project_id == proj.id, Workflow.paused_by == "user")
-            .update({Workflow.status: "active", Workflow.paused_by: None})
-        )
+        resumed = db.query(Workflow).filter(Workflow.project_id == proj.id, Workflow.paused_by == "user").update({Workflow.status: "active", Workflow.paused_by: None})
         if resumed:
             logger.info(f"Resumed {resumed} user-paused workflow(s) for '{proj.name}'")
 
@@ -472,9 +467,7 @@ class PersistentPipelineState:
                 legacy_processed = _get_project_context(db, self.PROCESSED_KEY_LEGACY)
                 if legacy_state is None and legacy_processed is None:
                     return
-                logger.info(
-                    f"[MIGRATE] Namespacing legacy pipeline state to project {self.project_id}"
-                )
+                logger.info(f"[MIGRATE] Namespacing legacy pipeline state to project {self.project_id}")
                 if legacy_state is not None:
                     _set_project_context(db, self.STATE_KEY, legacy_state)
                     _delete_project_context(db, self.STATE_KEY_LEGACY)
@@ -550,9 +543,7 @@ class PersistentPipelineState:
                 state_data = _get_project_context(db, self.STATE_KEY)
             if state_data:
                 state = PipelineState.from_dict(state_data)
-                logger.info(
-                    f"Loaded pipeline state: {state.designs_processed} designs processed"
-                )
+                logger.info(f"Loaded pipeline state: {state.designs_processed} designs processed")
         except Exception as e:
             logger.warning(f"Failed to load pipeline state: {e}")
 
@@ -588,9 +579,7 @@ class PersistentPipelineState:
             # AttributeError on the next .get() call below without the
             # `or {}` guard.
             queue_status = state_data.get("queue_status") or {}
-            return (
-                current_design is not None or queue_status.get("status") == "processing"
-            )
+            return current_design is not None or queue_status.get("status") == "processing"
         except Exception as e:
             logger.warning(f"Failed to read state for incomplete work check: {e}")
             return False
@@ -699,14 +688,10 @@ def api_get(endpoint: str, timeout: int = 5) -> Optional[dict]:
     return None
 
 
-def api_post(
-    endpoint: str, data: dict = None, timeout: int = 5, headers: dict = None
-) -> Optional[dict]:
+def api_post(endpoint: str, data: dict = None, timeout: int = 5, headers: dict = None) -> Optional[dict]:
     """Legacy HTTP POST - prefer direct DB access functions below."""
     try:
-        r = requests.post(
-            f"{API_BASE}{endpoint}", json=data, timeout=timeout, headers=headers or {}
-        )
+        r = requests.post(f"{API_BASE}{endpoint}", json=data, timeout=timeout, headers=headers or {})
         if r.status_code == 200:
             return r.json()
         else:
@@ -902,7 +887,6 @@ def _update_orchestrator_status(status: str) -> None:
     if not _orchestrator_agent_id:
         return
     try:
-
         with get_db() as session:
             agent = session.query(Agent).filter_by(id=_orchestrator_agent_id).first()
             if agent:
@@ -952,12 +936,7 @@ def get_agents(workflow_id: str = None) -> list:
             query = session.query(Agent)
             if workflow_id:
                 # Filter agents by workflow through their assigned tasks
-                agent_ids = (
-                    session.query(Task.assigned_agent_id)
-                    .filter(Task.workflow_id == workflow_id, Task.assigned_agent_id.isnot(None))
-                    .distinct()
-                    .all()
-                )
+                agent_ids = session.query(Task.assigned_agent_id).filter(Task.workflow_id == workflow_id, Task.assigned_agent_id.isnot(None)).distinct().all()
                 agent_ids = [a[0] for a in agent_ids]
                 query = query.filter(Agent.id.in_(agent_ids))
             agents = query.all()
@@ -966,7 +945,7 @@ def get_agents(workflow_id: str = None) -> list:
                     "id": a.id,
                     "status": a.status,
                     "cli_type": a.cli_type,
-                    "agent_type": a.agent_type if hasattr(a, 'agent_type') else None,
+                    "agent_type": a.agent_type if hasattr(a, "agent_type") else None,
                     "tmux_session_name": a.tmux_session_name,
                     "current_task_id": a.current_task_id,
                     "created_at": a.created_at.isoformat() if a.created_at else None,
@@ -991,6 +970,7 @@ def peek_agent_output(agent_id: str, lines: int = 30) -> str:
             # Get output from tmux directly
             try:
                 import libtmux
+
                 server = libtmux.Server()
                 tmux_session = server.sessions.get(agent.tmux_session_name)
                 if tmux_session:
@@ -1010,9 +990,7 @@ def get_task_progress(agent_id: str) -> dict:
     tasks = get_tasks(status="done")
     agent_done = [t for t in tasks if t.get("assigned_agent_id") == agent_id]
     tasks_in_progress = get_tasks(status="in_progress")
-    agent_active = [
-        t for t in tasks_in_progress if t.get("assigned_agent_id") == agent_id
-    ]
+    agent_active = [t for t in tasks_in_progress if t.get("assigned_agent_id") == agent_id]
     return {"done": len(agent_done), "in_progress": len(agent_active)}
 
 
@@ -1041,9 +1019,7 @@ def _workflow_belongs_to_project(
     if not wf_working_directory:
         return False
     try:
-        return Path(wf_working_directory).resolve().is_relative_to(
-            Path(current_project_path).resolve()
-        )
+        return Path(wf_working_directory).resolve().is_relative_to(Path(current_project_path).resolve())
     except (OSError, ValueError):
         return False
 
@@ -1059,7 +1035,7 @@ def get_workflow_status(workflow_id: str) -> dict:
                 "id": wf.id,
                 "status": wf.status,
                 "status_reason": wf.status_reason,
-                "name": wf.name if hasattr(wf, 'name') else None,
+                "name": wf.name if hasattr(wf, "name") else None,
                 "created_at": wf.created_at.isoformat() if wf.created_at else None,
                 "project_id": wf.project_id,
                 "working_directory": wf.working_directory,
@@ -1069,9 +1045,7 @@ def get_workflow_status(workflow_id: str) -> dict:
         return {}
 
 
-def get_active_workflows(
-    project_path: Optional[str] = None, project_id: Optional[str] = None
-) -> list:
+def get_active_workflows(project_path: Optional[str] = None, project_id: Optional[str] = None) -> list:
     """Get list of active workflows directly from database (H-2 fix).
 
     project_path/project_id: if given, only return workflows belonging to
@@ -1088,18 +1062,12 @@ def get_active_workflows(
         with get_db() as session:
             workflows = session.query(Workflow).filter(Workflow.status == "active").all()
             if project_path:
-                workflows = [
-                    wf
-                    for wf in workflows
-                    if _workflow_belongs_to_project(
-                        wf.project_id, wf.working_directory, project_id, project_path
-                    )
-                ]
+                workflows = [wf for wf in workflows if _workflow_belongs_to_project(wf.project_id, wf.working_directory, project_id, project_path)]
             return [
                 {
                     "id": wf.id,
                     "status": wf.status,
-                    "name": wf.name if hasattr(wf, 'name') else None,
+                    "name": wf.name if hasattr(wf, "name") else None,
                     "created_at": wf.created_at.isoformat() if wf.created_at else None,
                     "working_directory": wf.working_directory,
                     "project_id": wf.project_id,
@@ -1147,9 +1115,7 @@ def _workflow_appears_abandoned(workflow_id: str) -> bool:
         return False
 
 
-def _update_resumed_workflow_recovery_attempts(
-    workflow_id: str, recovery_attempts: int
-) -> int:
+def _update_resumed_workflow_recovery_attempts(workflow_id: str, recovery_attempts: int) -> int:
     """Advance run_continuous_pipeline's per-resume "recovery attempts"
     counter for a workflow that isn't fully complete yet.
 
@@ -1211,21 +1177,13 @@ def _escalate_stale_active_workflows(
             still_blocking.append(wf_id)
             continue
 
-        logger.warning(
-            f"Workflow {wf_id[:8]} has shown no agent/task activity for "
-            f"{streak} consecutive scans -- marking failed so the design "
-            "queue can proceed"
-        )
+        logger.warning(f"Workflow {wf_id[:8]} has shown no agent/task activity for {streak} consecutive scans -- marking failed so the design queue can proceed")
         try:
             with get_db() as _db:
                 _wf_row = _db.query(Workflow).filter_by(id=wf_id).first()
                 if _wf_row and _wf_row.status == "active":
                     _wf_row.status = "failed"
-                    _wf_row.status_reason = (
-                        f"Abandoned: no agent/task activity for {streak} "
-                        "consecutive scans -- likely lost mid-flight across "
-                        "a backend restart"
-                    )
+                    _wf_row.status_reason = f"Abandoned: no agent/task activity for {streak} consecutive scans -- likely lost mid-flight across a backend restart"
         except Exception as e:
             logger.error(f"Failed to mark stale workflow {wf_id[:8]} as failed: {e}")
         abandoned_streak.pop(wf_id, None)
@@ -1239,9 +1197,7 @@ def _escalate_stale_active_workflows(
     return still_blocking
 
 
-def is_design_fully_complete(
-    workflow_id: str, logger: OrchestratorLogger
-) -> Tuple[bool, str]:
+def is_design_fully_complete(workflow_id: str, logger: OrchestratorLogger) -> Tuple[bool, str]:
     """Check if a design is fully complete:
     1. Workflow DB status is completed (or no active agents/tasks remain)
     2. No active agents
@@ -1269,11 +1225,7 @@ def is_design_fully_complete(
     # Pending/active tasks indicate real work remaining.
     # Ignore DIAGNOSTIC tasks (created by the monitor itself when stuck) — they
     # should not block completion detection.
-    real_pending = [
-        t
-        for t in (pending + queued + in_progress + assigned)
-        if not (t.get("raw_description") or "").startswith(DIAGNOSTIC_TASK_PREFIX)
-    ]
+    real_pending = [t for t in (pending + queued + in_progress + assigned) if not (t.get("raw_description") or "").startswith(DIAGNOSTIC_TASK_PREFIX)]
     if real_pending:
         task_ids = [t.get("id", "")[:8] for t in real_pending[:3]]
         return False, f"{len(real_pending)} task(s) still active: {', '.join(task_ids)}"
@@ -1281,12 +1233,7 @@ def is_design_fully_complete(
     # Failed tasks: only block if the same phase has NO subsequent done task
     # (i.e., a retry succeeded → the failure is resolved).
     done_phase_ids = {t.get("phase_id") for t in done if t.get("phase_id")}
-    unresolved_failures = [
-        t
-        for t in failed
-        if t.get("phase_id") not in done_phase_ids
-        and not (t.get("raw_description") or "").startswith(DIAGNOSTIC_TASK_PREFIX)
-    ]
+    unresolved_failures = [t for t in failed if t.get("phase_id") not in done_phase_ids and not (t.get("raw_description") or "").startswith(DIAGNOSTIC_TASK_PREFIX)]
     if unresolved_failures:
         task_ids = [t.get("id", "")[:8] for t in unresolved_failures[:3]]
         return (
@@ -1296,9 +1243,7 @@ def is_design_fully_complete(
 
     # Check for active agents
     agents = get_agents(workflow_id=workflow_id)
-    active_agents = [
-        a for a in agents if a.get("status") in ("working", "starting", "idle")
-    ]
+    active_agents = [a for a in agents if a.get("status") in ("working", "starting", "idle")]
     if active_agents:
         agent_ids = [a.get("id", "")[:8] for a in active_agents[:3]]
         return (
@@ -1315,6 +1260,7 @@ def is_design_fully_complete(
             # Fallback: try to get from DB
             try:
                 from src.core.database import Workflow, get_db
+
                 with get_db() as _db:
                     _wf = _db.query(Workflow).filter_by(id=workflow_id).first()
                     if _wf and _wf.working_directory and Path(_wf.working_directory).exists():
@@ -1331,11 +1277,7 @@ def is_design_fully_complete(
             cwd=project_path,
         )
         if result.returncode == 0:
-            branches = [
-                b.strip().lstrip("* ")
-                for b in result.stdout.strip().split("\n")
-                if b.strip()
-            ]
+            branches = [b.strip().lstrip("* ") for b in result.stdout.strip().split("\n") if b.strip()]
             if branches:
                 return False, f"{len(branches)} unmerged agent branch(es)"
     except Exception:
@@ -1446,10 +1388,7 @@ def _retry_failed_tasks(workflow_id: str, logger: OrchestratorLogger) -> List[st
                         _t2.started_at = datetime.utcnow()
                         _db4.commit()
             except Exception as e3:
-                logger.error(
-                    f"  Agent {agent_id[:8]} created for task {task_id[:8]} but "
-                    f"failed to link it to the task row: {e3}"
-                )
+                logger.error(f"  Agent {agent_id[:8]} created for task {task_id[:8]} but failed to link it to the task row: {e3}")
         except Exception as e:
             # Back to "failed" (not left "pending") so a later retry pass
             # -- this function, or _maybe_retry_failed_tasks -- gets
@@ -1504,9 +1443,7 @@ def attempt_recovery(workflow_id: str, logger: OrchestratorLogger) -> Tuple[bool
                 if task.assigned_agent_id:
                     agent = _db.query(_Agent).filter_by(id=task.assigned_agent_id).first()
                     if agent and agent.status == "terminated":
-                        logger.info(
-                            f"  Task {task.id[:8]} assigned to terminated agent {task.assigned_agent_id[:8]} — marking failed"
-                        )
+                        logger.info(f"  Task {task.id[:8]} assigned to terminated agent {task.assigned_agent_id[:8]} — marking failed")
                         task.status = "failed"
                         task.failure_reason = f"Agent {task.assigned_agent_id[:8]} terminated unexpectedly"
                         _db.commit()
@@ -1590,18 +1527,20 @@ def attempt_recovery(workflow_id: str, logger: OrchestratorLogger) -> Tuple[bool
     # times in six minutes, purely because this step never checked whether
     # the agent was actually still alive).
     agents = get_agents(workflow_id=workflow_id)
-    active_agents = [
-        a for a in agents if a.get("status") in ("working", "starting", "idle")
-    ]
+    active_agents = [a for a in agents if a.get("status") in ("working", "starting", "idle")]
     for agent in active_agents:
         aid = agent.get("id", "")
         tmux_name = agent.get("tmux_session_name")
         try:
-            alive = bool(tmux_name) and subprocess.run(
-                ["tmux", "has-session", "-t", tmux_name],
-                capture_output=True,
-                timeout=3,
-            ).returncode == 0
+            alive = (
+                bool(tmux_name)
+                and subprocess.run(
+                    ["tmux", "has-session", "-t", tmux_name],
+                    capture_output=True,
+                    timeout=3,
+                ).returncode
+                == 0
+            )
         except Exception:
             alive = False
         if alive:
@@ -1676,9 +1615,7 @@ def check_api_credits() -> Tuple[bool, str]:
     return False, ""
 
 
-def detect_hard_error(
-    agents: list, failed_tasks: list, workflow_id: str = None
-) -> Tuple[bool, str]:
+def detect_hard_error(agents: list, failed_tasks: list, workflow_id: str = None) -> Tuple[bool, str]:
     # Filter to only tasks from the current workflow if provided
     if workflow_id:
         failed_tasks = [t for t in failed_tasks if t.get("workflow_id") == workflow_id]
@@ -1689,12 +1626,7 @@ def detect_hard_error(
         names = [a.get("id", "unknown")[:20] for a in crashed_agents[:3]]
         return True, f"Crashed agents: {', '.join(names)}"
 
-    critical_failures = [
-        t
-        for t in failed_tasks
-        if t.get("priority") == "critical"
-        or "architectural" in (t.get("description", "") or "").lower()
-    ]
+    critical_failures = [t for t in failed_tasks if t.get("priority") == "critical" or "architectural" in (t.get("description", "") or "").lower()]
     if critical_failures:
         descs = [t.get("description", "")[:60] for t in critical_failures[:3]]
         return True, f"Critical task failures: {descs}"
@@ -1702,9 +1634,7 @@ def detect_hard_error(
     return False, ""
 
 
-def detect_impasse(
-    agents: list, pending_tasks: list, in_progress_tasks: list, elapsed_seconds: int = 0
-) -> Tuple[bool, str]:
+def detect_impasse(agents: list, pending_tasks: list, in_progress_tasks: list, elapsed_seconds: int = 0) -> Tuple[bool, str]:
     """Detect if the workflow is stuck.
 
     Parent-child model: check if tasks are progressing, not health_check_failures.
@@ -1720,6 +1650,7 @@ def detect_impasse(
         # Check if any pending task was created recently (within last 120s)
         # If so, the monitor is likely about to spawn an agent — don't trigger impasse.
         from datetime import datetime, timezone
+
         now = datetime.now(timezone.utc)
         for task in pending_tasks:
             created = task.get("created_at")
@@ -1816,7 +1747,6 @@ def prompt_human(reason: str, logger: OrchestratorLogger, timeout: int = 600) ->
 
     logger.event("human_input_required", {"reason": reason, "request_id": request_id})
 
-
     start = time.time()
     while time.time() - start < timeout:
         # Check if request file was dismissed (deleted by API)
@@ -1845,9 +1775,7 @@ def prompt_human(reason: str, logger: OrchestratorLogger, timeout: int = 600) ->
                             "request_id": request_id,
                         },
                     )
-                    response_file.unlink(
-                        missing_ok=True
-                    )  # Delete response, keep waiting
+                    response_file.unlink(missing_ok=True)  # Delete response, keep waiting
                     continue
 
                 if choice in ("c", "s", "q"):
@@ -1894,9 +1822,7 @@ def prompt_human(reason: str, logger: OrchestratorLogger, timeout: int = 600) ->
 
     # Timeout - auto-continue
     logger.warning(f"Human input timed out after {timeout}s, auto-continuing")
-    logger.event(
-        "human_input", {"choice": "timeout", "reason": reason, "request_id": request_id}
-    )
+    logger.event("human_input", {"choice": "timeout", "reason": reason, "request_id": request_id})
     request_file.unlink(missing_ok=True)
     return "c"
 
@@ -1921,22 +1847,13 @@ def scan_design_queue(queue_dir: Path, processed_hashes: Set[str]) -> List[Desig
                         Feature as _Feat,
                         get_db as _gdb,
                     )
+
                     with _gdb() as _db:
-                        _des = _db.query(_AD).filter_by(
-                            content_hash=content_hash
-                        ).first()
+                        _des = _db.query(_AD).filter_by(content_hash=content_hash).first()
                         if _des:
-                            _feats = _db.query(_Feat).filter_by(
-                                design_id=_des.id
-                            ).all()
-                            if not _feats or all(
-                                f.status == "pending" for f in _feats
-                            ):
-                                logger.warning(
-                                    f"[SELF-HEAL] Design {_des.name} is in "
-                                    f"processed_hashes but has no features "
-                                    f"or all pending — re-queuing"
-                                )
+                            _feats = _db.query(_Feat).filter_by(design_id=_des.id).all()
+                            if not _feats or all(f.status == "pending" for f in _feats):
+                                logger.warning(f"[SELF-HEAL] Design {_des.name} is in processed_hashes but has no features or all pending — re-queuing")
                                 processed_hashes.discard(content_hash)
                             else:
                                 continue
@@ -1966,9 +1883,7 @@ def scan_design_queue(queue_dir: Path, processed_hashes: Set[str]) -> List[Desig
                 if fname in by_filename:
                     ordered.append(by_filename.pop(fname))
             # Add remaining files (not in saved order) sorted by name
-            ordered.extend(
-                sorted(by_filename.values(), key=lambda d: d.path.name.lower())
-            )
+            ordered.extend(sorted(by_filename.values(), key=lambda d: d.path.name.lower()))
             return ordered
         except (json.JSONDecodeError, KeyError):
             pass  # Fall back to default sort
@@ -2018,38 +1933,28 @@ def pick_next_design(
             if not project:
                 logger.info("pick_next_design: no active project found")
                 return None
-            
-            logger.info(
-                f"pick_next_design: searching project '{project.name}' ({project.id[:8]})"
-            )
-            
+
+            # Budget guard: skip this project if over budget
+            from src.core.cost_derivation import check_budget_before_new_work
+
+            if not check_budget_before_new_work(db, project.id):
+                logger.info(f"[BUDGET] pick_next_design: project {project.id[:8]} over budget — skipping")
+                return None  # No designs available from this over-budget project
+
+            logger.info(f"pick_next_design: searching project '{project.name}' ({project.id[:8]})")
+
             # Get next pending design ordered by ordinal
-            design = (
-                db.query(AutopilotDesign)
-                .filter_by(project_id=project.id, status="pending")
-                .order_by(AutopilotDesign.ordinal, AutopilotDesign.filename)
-                .first()
-            )
+            design = db.query(AutopilotDesign).filter_by(project_id=project.id, status="pending").order_by(AutopilotDesign.ordinal, AutopilotDesign.filename).first()
 
             if design:
-                logger.info(
-                    f"pick_next_design: found pending design '{design.name}' ({design.id[:8]})"
-                )
-            
+                logger.info(f"pick_next_design: found pending design '{design.name}' ({design.id[:8]})")
+
             if design is None:
                 # Resume support: a design that already finished Phase 0
                 # (status moved to "active") but was stopped mid-feature-
                 # pipeline is invisible to the "pending" query above.
-                active_designs = (
-                    db.query(AutopilotDesign)
-                    .filter_by(project_id=project.id, status="active")
-                    .order_by(AutopilotDesign.ordinal, AutopilotDesign.filename)
-                    .all()
-                )
-                logger.info(
-                    f"pick_next_design: no pending designs, found "
-                    f"{len(active_designs)} active design(s)"
-                )
+                active_designs = db.query(AutopilotDesign).filter_by(project_id=project.id, status="active").order_by(AutopilotDesign.ordinal, AutopilotDesign.filename).all()
+                logger.info(f"pick_next_design: no pending designs, found {len(active_designs)} active design(s)")
                 for candidate in active_designs:
                     incomplete = (
                         db.query(Feature)
@@ -2059,7 +1964,7 @@ def pick_next_design(
                         )
                         .count()
                     )
-                    
+
                     # Check if any associated workflow has failed
                     failed_wf = (
                         db.query(Workflow)
@@ -2069,13 +1974,9 @@ def pick_next_design(
                         )
                         .first()
                     )
-                    
-                    logger.info(
-                        f"  Active design '{candidate.name}' ({candidate.id[:8]}): "
-                        f"incomplete={incomplete}, failed_wf={failed_wf.id[:8] if failed_wf else 'None'}, "
-                        f"status={candidate.status}"
-                    )
-                    
+
+                    logger.info(f"  Active design '{candidate.name}' ({candidate.id[:8]}): incomplete={incomplete}, failed_wf={failed_wf.id[:8] if failed_wf else 'None'}, status={candidate.status}")
+
                     if incomplete > 0:
                         if failed_wf:
                             # Failed workflow with incomplete features — retry
@@ -2083,10 +1984,7 @@ def pick_next_design(
                             retry_count = _get_project_context(db, retry_key) or 0
                             if retry_count >= MAX_DESIGN_RETRIES:
                                 logger.info(
-                                    f"Design {candidate.name} has failed "
-                                    f"workflow {failed_wf.id[:8]} and "
-                                    f"exceeded {MAX_DESIGN_RETRIES} retries "
-                                    f"({retry_count}/{MAX_DESIGN_RETRIES}) — marking failed"
+                                    f"Design {candidate.name} has failed workflow {failed_wf.id[:8]} and exceeded {MAX_DESIGN_RETRIES} retries ({retry_count}/{MAX_DESIGN_RETRIES}) — marking failed"
                                 )
                                 candidate.status = "failed"
                                 # Surfaced by /autopilot/status's last_error so
@@ -2096,27 +1994,17 @@ def pick_next_design(
                                 # empty" every 60s afterward, looking healthy,
                                 # while having permanently given up on the
                                 # only design in the queue.
-                                candidate.error = (
-                                    f"Gave up after {MAX_DESIGN_RETRIES} retries: "
-                                    f"workflow {failed_wf.id[:8]} kept failing"
-                                )
+                                candidate.error = f"Gave up after {MAX_DESIGN_RETRIES} retries: workflow {failed_wf.id[:8]} kept failing"
                                 db.commit()
                                 continue
-                            logger.info(
-                                f"Design {candidate.name} has failed "
-                                f"workflow {failed_wf.id[:8]} — resetting "
-                                f"to pending for retry ({retry_count + 1}/{MAX_DESIGN_RETRIES})"
-                            )
+                            logger.info(f"Design {candidate.name} has failed workflow {failed_wf.id[:8]} — resetting to pending for retry ({retry_count + 1}/{MAX_DESIGN_RETRIES})")
                             _set_project_context(db, retry_key, retry_count + 1)
                             candidate.status = "pending"
                             candidate.error = None  # clear any stale exhausted-retry message
                             db.commit()
                             continue
                         design = candidate
-                        logger.info(
-                            f"Resuming active design {design.name} "
-                            f"({incomplete} feature(s) not yet complete)"
-                        )
+                        logger.info(f"Resuming active design {design.name} ({incomplete} feature(s) not yet complete)")
                         break
                     else:
                         # All features completed/skipped — but check
@@ -2135,11 +2023,7 @@ def pick_next_design(
                                 candidate.status = "completed"
                                 db.commit()
                                 continue
-                            logger.info(
-                                f"Design {candidate.name} has all features done "
-                                f"but failed workflow {failed_wf.id[:8]} — "
-                                f"retrying ({retry_count + 1}/{MAX_DESIGN_RETRIES})"
-                            )
+                            logger.info(f"Design {candidate.name} has all features done but failed workflow {failed_wf.id[:8]} — retrying ({retry_count + 1}/{MAX_DESIGN_RETRIES})")
                             _set_project_context(db, retry_key, retry_count + 1)
                             candidate.status = "pending"
                             db.commit()
@@ -2147,11 +2031,8 @@ def pick_next_design(
                         # All features done, no failed workflows — mark done.
                         candidate.status = "completed"
                         db.commit()
-                        logger.info(
-                            f"Design {candidate.name} has all features "
-                            f"completed/skipped — marking done"
-                        )
-                
+                        logger.info(f"Design {candidate.name} has all features completed/skipped — marking done")
+
                 if design is None:
                     logger.info("pick_next_design: no designs to process")
 
@@ -2172,9 +2053,7 @@ def pick_next_design(
 
                 if design_path is None:
                     # Fall back to filename-based path
-                    design_path = (
-                        Path(project.base_dir) / DESIGN_CONTEXT_SUBDIR / design.filename
-                    )
+                    design_path = Path(project.base_dir) / DESIGN_CONTEXT_SUBDIR / design.filename
 
                 if design_path.exists():
                     entry = DesignEntry(
@@ -2184,9 +2063,7 @@ def pick_next_design(
                         db_id=design.id,
                         file_path=str(design_path),
                     )
-                    logger.info(
-                        f"Selected from DB: {design.name} (ordinal={design.ordinal})"
-                    )
+                    logger.info(f"Selected from DB: {design.name} (ordinal={design.ordinal})")
                     return entry
                 else:
                     logger.warning(f"Design file not found: {design_path}")
@@ -2220,15 +2097,14 @@ def pick_next_design(
 
         from src.core.database import AutopilotDesign, AutopilotProject
         from src.core.database import get_db as _get_db
+
         with _get_db() as _db:
             if project_id:
                 project = _db.query(AutopilotProject).filter_by(id=project_id).first()
             else:
                 project = _db.query(AutopilotProject).filter_by(is_active=True).first()
             if project:
-                db_design = _db.query(AutopilotDesign).filter_by(
-                    project_id=project.id, filename=next_design.path.name
-                ).first()
+                db_design = _db.query(AutopilotDesign).filter_by(project_id=project.id, filename=next_design.path.name).first()
                 if not db_design:
                     db_design = AutopilotDesign(
                         id=f"des-{_uuid.uuid4().hex[:12]}",
@@ -2241,11 +2117,7 @@ def pick_next_design(
                     )
                     _db.add(db_design)
                     _db.flush()
-                    logger.info(
-                        f"Auto-created AutopilotDesign row for "
-                        f"{next_design.path.name} (none existed for project "
-                        f"{project.id})"
-                    )
+                    logger.info(f"Auto-created AutopilotDesign row for {next_design.path.name} (none existed for project {project.id})")
                 next_design.db_id = db_design.id
     except Exception as e:
         logger.warning(f"Could not link/create DB design row: {e}")
@@ -2299,11 +2171,7 @@ def _assess_run_health(
         for log_file in sorted(tmux_dir.glob("*.log")):
             try:
                 text = log_file.read_text(errors="replace")
-                hits = [
-                    ln.strip()
-                    for ln in text.splitlines()
-                    if any(p in ln for p in error_patterns)
-                ]
+                hits = [ln.strip() for ln in text.splitlines() if any(p in ln for p in error_patterns)]
                 if hits:
                     total_errors += len(hits)
                     health["tmux_errors"].append(
@@ -2322,23 +2190,16 @@ def _assess_run_health(
     if health["clean"]:
         logger.info("Run health: CLEAN (no GOTOs, no tmux errors)")
     else:
-        logger.info(
-            f"Run health: PROBLEMS DETECTED — "
-            f"gotos={health['goto_count']} tmux_errors={health['error_count']}"
-        )
+        logger.info(f"Run health: PROBLEMS DETECTED — gotos={health['goto_count']} tmux_errors={health['error_count']}")
 
     return health
 
 
-def create_feature_folder(
-    project_path: Path, design_name: str, logger: OrchestratorLogger
-) -> Path:
+def create_feature_folder(project_path: Path, design_name: str, logger: OrchestratorLogger) -> Path:
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     safe_name = design_name.lower().replace(" ", "_")[:40]
     # Features go in .hephaestus/features/ to keep project root clean
-    feature_folder = (
-        project_path / CONTEXT_DIR_NAME / "features" / f"{timestamp}_{safe_name}"
-    )
+    feature_folder = project_path / CONTEXT_DIR_NAME / "features" / f"{timestamp}_{safe_name}"
     feature_folder.mkdir(parents=True, exist_ok=True)
     (feature_folder / "docs").mkdir(exist_ok=True)
 
@@ -2408,10 +2269,7 @@ def _create_integration_worktree(
             # output validation can never find what the agent wrote. Treat
             # "exists but not a real worktree" the same as "doesn't exist".
             if wt_path.exists() and not (wt_path / ".git").exists():
-                logger.warning(
-                    f"Found stale non-worktree directory at {wt_path} "
-                    "(no .git) -- removing before recreating"
-                )
+                logger.warning(f"Found stale non-worktree directory at {wt_path} (no .git) -- removing before recreating")
                 import shutil as _shutil
 
                 _shutil.rmtree(wt_path, ignore_errors=True)
@@ -2500,12 +2358,17 @@ def _cleanup_worktree(
                 # that's still genuinely in progress or waiting to be resumed.
                 try:
                     from src.core.database import Workflow
+
                     _s = db.get_session()
                     try:
-                        wfs = _s.query(Workflow).filter(
-                            Workflow.working_directory == str(worktree),
-                            Workflow.status.notin_(["active", "paused"]),
-                        ).all()
+                        wfs = (
+                            _s.query(Workflow)
+                            .filter(
+                                Workflow.working_directory == str(worktree),
+                                Workflow.status.notin_(["active", "paused"]),
+                            )
+                            .all()
+                        )
                         for wf in wfs:
                             wf.working_directory = None
                             logger.info(f"Cleared stale working_directory from workflow {wf.id[:8]}")
@@ -2543,12 +2406,7 @@ def _create_designs_folder(
     """
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     safe_name = design_entry.name.lower().replace(" ", "_")[:40]
-    designs_folder = (
-        project_path
-        / CONTEXT_DIR_NAME
-        / "designs"
-        / f"{timestamp}_{safe_name}_{design_entry.db_id or 'unknown'}"
-    )
+    designs_folder = project_path / CONTEXT_DIR_NAME / "designs" / f"{timestamp}_{safe_name}_{design_entry.db_id or 'unknown'}"
     designs_folder.mkdir(parents=True, exist_ok=True)
     (designs_folder / "features").mkdir(exist_ok=True)
 
@@ -2653,9 +2511,7 @@ def _update_feature_status(
     from src.core.database import Feature, get_db
 
     with get_db() as db:
-        feature = (
-            db.query(Feature).filter_by(id=feature_id, design_id=design_id).first()
-        )
+        feature = db.query(Feature).filter_by(id=feature_id, design_id=design_id).first()
         if feature:
             feature.status = status
             if status == "active":
@@ -2711,11 +2567,7 @@ def _sync_stale_feature_statuses(logger: OrchestratorLogger) -> int:
             .all()
         )
         for feature in stale:
-            logger.info(
-                f"[FEATURE-SYNC] {feature.feature_key}: workflow already "
-                f"completed but Feature.status was {feature.status!r} -- "
-                "syncing to completed"
-            )
+            logger.info(f"[FEATURE-SYNC] {feature.feature_key}: workflow already completed but Feature.status was {feature.status!r} -- syncing to completed")
             feature.status = "completed"
             feature.completed_at = feature.completed_at or datetime.utcnow()
             repaired += 1
@@ -2800,11 +2652,7 @@ def _recover_abandoned_workflows_missing_worktree(logger: OrchestratorLogger) ->
             # all, purely because an unrelated, ancient development-phase
             # task happened to already be at the cap.
             in_progress_phase_ids = {
-                pid
-                for (pid,) in db.query(PhaseExecution.phase_id)
-                .join(Phase, PhaseExecution.phase_id == Phase.id)
-                .filter(Phase.workflow_id == wf.id, PhaseExecution.status == "in_progress")
-                .all()
+                pid for (pid,) in db.query(PhaseExecution.phase_id).join(Phase, PhaseExecution.phase_id == Phase.id).filter(Phase.workflow_id == wf.id, PhaseExecution.status == "in_progress").all()
             }
             stuck_tasks = (
                 db.query(Task)
@@ -2823,20 +2671,15 @@ def _recover_abandoned_workflows_missing_worktree(logger: OrchestratorLogger) ->
                 continue
 
             branch = f"feature/{feature.design_id[:8]}/{feature.feature_key}"
-            wt_path = _create_integration_worktree(
-                Path(project.base_dir), feature.design_id, branch, logger
-            )
+            wt_path = _create_integration_worktree(Path(project.base_dir), feature.design_id, branch, logger)
             if not wt_path:
-                logger.warning(
-                    f"[WORKFLOW-RECOVERY] Could not rebuild worktree for "
-                    f"workflow {wf.id[:8]} (branch {branch}) -- leaving failed"
-                )
+                logger.warning(f"[WORKFLOW-RECOVERY] Could not rebuild worktree for workflow {wf.id[:8]} (branch {branch}) -- leaving failed")
                 continue
 
             logger.warning(
                 f"[WORKFLOW-RECOVERY] Rebuilt worktree for workflow {wf.id[:8]} "
                 f"from branch {branch} at {wt_path} -- resuming; the stuck "
-                "task(s) are left exactly as they are (still \"failed\", own "
+                'task(s) are left exactly as they are (still "failed", own '
                 "retry_count untouched) so _maybe_retry_failed_tasks' own "
                 "already-tested retry-and-dispatch path picks them up on "
                 "the very next active-workflow sweep pass, instead of this "
@@ -2971,9 +2814,7 @@ def _retry_exhausted_paused_workflows(logger: OrchestratorLogger) -> int:
     from sqlalchemy import or_
 
     max_cycles = _get_paused_workflow_max_retry_cycles()
-    cutoff = datetime.utcnow() - timedelta(
-        seconds=_get_paused_workflow_retry_cooldown_seconds()
-    )
+    cutoff = datetime.utcnow() - timedelta(seconds=_get_paused_workflow_retry_cooldown_seconds())
     recovered = 0
     with get_db() as db:
         candidates = (
@@ -2987,35 +2828,18 @@ def _retry_exhausted_paused_workflows(logger: OrchestratorLogger) -> int:
         )
         for wf in candidates:
             if wf.paused_retry_count >= max_cycles:
-                logger.warning(
-                    f"[WORKFLOW-RECOVERY] Workflow {wf.id[:8]} exhausted "
-                    f"{max_cycles} auto-retry cycles -- giving up permanently, "
-                    "needs a manual resume"
-                )
+                logger.warning(f"[WORKFLOW-RECOVERY] Workflow {wf.id[:8]} exhausted {max_cycles} auto-retry cycles -- giving up permanently, needs a manual resume")
                 wf.paused_by = "system-exhausted"
-                wf.status_reason = (
-                    f"{wf.status_reason or ''} (auto-retry gave up after "
-                    f"{max_cycles} attempts -- manual resume required)"
-                )
+                wf.status_reason = f"{wf.status_reason or ''} (auto-retry gave up after {max_cycles} attempts -- manual resume required)"
                 recovered += 1  # counts as "handled", not "retried"
                 continue
 
             # Scoped to the CURRENTLY in_progress phase only -- see the
             # identical reasoning in _recover_abandoned_workflows_missing_worktree.
             in_progress_phase_ids = {
-                pid
-                for (pid,) in db.query(PhaseExecution.phase_id)
-                .join(Phase, PhaseExecution.phase_id == Phase.id)
-                .filter(Phase.workflow_id == wf.id, PhaseExecution.status == "in_progress")
-                .all()
+                pid for (pid,) in db.query(PhaseExecution.phase_id).join(Phase, PhaseExecution.phase_id == Phase.id).filter(Phase.workflow_id == wf.id, PhaseExecution.status == "in_progress").all()
             }
-            failed_tasks = (
-                db.query(Task)
-                .filter(Task.workflow_id == wf.id, Task.status == "failed", Task.phase_id.in_(in_progress_phase_ids))
-                .all()
-                if in_progress_phase_ids
-                else []
-            )
+            failed_tasks = db.query(Task).filter(Task.workflow_id == wf.id, Task.status == "failed", Task.phase_id.in_(in_progress_phase_ids)).all() if in_progress_phase_ids else []
             if not failed_tasks:
                 continue
 
@@ -3063,9 +2887,7 @@ def _update_design_status(
                 if hasattr(design, key):
                     setattr(design, key, value)
                 elif logger:
-                    logger.warning(
-                        f"_update_design_status: unknown field {key!r} for AutopilotDesign"
-                    )
+                    logger.warning(f"_update_design_status: unknown field {key!r} for AutopilotDesign")
             db.commit()
             if logger:
                 logger.info(f"Updated design {design_id} status to {status}")
@@ -3134,17 +2956,8 @@ def _get_phase0_completion(design_id: Optional[str]) -> Optional[dict]:
         wf = db.query(Workflow).filter_by(id=design.phase0_workflow_id).first()
         if not wf or wf.status != "completed":
             return None
-        last_phase = (
-            db.query(Phase)
-            .filter_by(workflow_id=wf.id)
-            .order_by(Phase.order.desc())
-            .first()
-        )
-        execution = (
-            db.query(PhaseExecution).filter_by(phase_id=last_phase.id).first()
-            if last_phase
-            else None
-        )
+        last_phase = db.query(Phase).filter_by(workflow_id=wf.id).order_by(Phase.order.desc()).first()
+        execution = db.query(PhaseExecution).filter_by(phase_id=last_phase.id).first() if last_phase else None
         if execution and execution.status == "completed":
             return {"workflow_id": wf.id, "designs_folder": design.designs_folder}
         return None
@@ -3180,21 +2993,12 @@ def _relink_features_to_workflows(design_id: str, logger: OrchestratorLogger) ->
     from src.core.database import Feature, Workflow, get_db
 
     with get_db() as db:
-        unlinked = (
-            db.query(Feature)
-            .filter_by(design_id=design_id, workflow_id=None)
-            .all()
-        )
+        unlinked = db.query(Feature).filter_by(design_id=design_id, workflow_id=None).all()
         if not unlinked:
             return
 
         # Get all autopilot workflows for this design's project
-        workflows = (
-            db.query(Workflow)
-            .filter(Workflow.definition_id == "autopilot")
-            .order_by(Workflow.created_at.desc())
-            .all()
-        )
+        workflows = db.query(Workflow).filter(Workflow.definition_id == "autopilot").order_by(Workflow.created_at.desc()).all()
 
         for feat in unlinked:
             for wf in workflows:
@@ -3231,10 +3035,7 @@ def _clean_stale_assigned_tasks(workflow_id: str, logger: OrchestratorLogger) ->
         for task in stale_tasks:
             agent = db.query(Agent).filter_by(id=task.assigned_agent_id).first()
             if agent and agent.status == "terminated":
-                logger.info(
-                    f"[STALE-TASK] Task {task.id[:8]} assigned to terminated agent "
-                    f"{task.assigned_agent_id[:8]} — marking failed"
-                )
+                logger.info(f"[STALE-TASK] Task {task.id[:8]} assigned to terminated agent {task.assigned_agent_id[:8]} — marking failed")
                 task.status = "failed"
                 # Don't clobber a real reason: update_task_status already
                 # records why a "done" claim was rejected (e.g. a missing
@@ -3243,9 +3044,7 @@ def _clean_stale_assigned_tasks(workflow_id: str, logger: OrchestratorLogger) ->
                 # nothing more specific is already there -- otherwise the
                 # retry below loses exactly the feedback it needs to fix.
                 if not task.failure_reason:
-                    task.failure_reason = (
-                        f"Agent {task.assigned_agent_id[:8]} terminated unexpectedly"
-                    )
+                    task.failure_reason = f"Agent {task.assigned_agent_id[:8]} terminated unexpectedly"
                 db.commit()
 
 
@@ -3282,10 +3081,7 @@ def _validate_features_json(features_json: dict) -> None:
     if len(features) < 1:
         raise ValueError("features array must have at least 1 entry, got 0")
     if len(features) > 50:
-        raise ValueError(
-            f"features array has {len(features)} entries -- that's not a "
-            "feature decomposition, it looks like one feature per file"
-        )
+        raise ValueError(f"features array has {len(features)} entries -- that's not a feature decomposition, it looks like one feature per file")
 
     # Check for required fields and unique IDs
     ids = set()
@@ -3327,9 +3123,7 @@ def _validate_features_json(features_json: dict) -> None:
                 # Check for overlap: exact match or directory containment
                 # (e.g. src/ contains src/utils/file.py, but .env does NOT contain .env.example)
                 if f_norm == existing_norm or f_norm.startswith(existing_norm + "/") or existing_norm.startswith(f_norm + "/"):
-                    raise ValueError(
-                        f"File overlap between features: {f} and {existing}"
-                    )
+                    raise ValueError(f"File overlap between features: {f} and {existing}")
             all_files.append(f)
 
     # Validate depends_on references
@@ -3337,9 +3131,7 @@ def _validate_features_json(features_json: dict) -> None:
         depends_on = feat.get("depends_on", [])
         for dep in depends_on:
             if dep not in ids:
-                raise ValueError(
-                    f"Feature {feat['id']} depends on unknown feature: {dep}"
-                )
+                raise ValueError(f"Feature {feat['id']} depends on unknown feature: {dep}")
 
     # Check for cycles
     def has_cycle(graph: dict) -> bool:
@@ -3457,10 +3249,7 @@ def _resolve_execution_order(
     # Check for cycles (unprocessed features)
     unprocessed = [f["id"] for f in features if f["id"] not in processed]
     if unprocessed:
-        logger.warning(
-            f"Cycle detected in dependencies among {unprocessed}; "
-            "appending cyclic features sequentially after already-resolved groups"
-        )
+        logger.warning(f"Cycle detected in dependencies among {unprocessed}; appending cyclic features sequentially after already-resolved groups")
         # Preserve groups already resolved by Kahn's algorithm; append the cyclic
         # remainder one-by-one so we don't silently drop any processed features.
         for fid in feat_map:
@@ -3628,11 +3417,7 @@ def collect_files_created(project_path: Path, feature_folder: Path = None) -> Li
             "**/*.md",
         ]:
             for f in sorted(scan_dir.glob(pattern)):
-                if (
-                    ".venv" in str(f)
-                    or "node_modules" in str(f)
-                    or "__pycache__" in str(f)
-                ):
+                if ".venv" in str(f) or "node_modules" in str(f) or "__pycache__" in str(f):
                     continue
                 rel = f.relative_to(scan_dir)
                 files.append(str(rel))
@@ -3683,6 +3468,7 @@ def generate_html_feature_report(
     logger.info(f"HTML feature report: {html_path}")
     import subprocess
     import sys
+
     if sys.platform == "darwin":
         subprocess.Popen(["open", str(html_path)])
     return html_path
@@ -3718,9 +3504,7 @@ def generate_product_validation_report(
     if validation_path.exists():
         try:
             existing = validation_path.read_text()
-            meets_spec = qa_passed and (
-                "PASS" in existing or "pass" in existing.lower()
-            )
+            meets_spec = qa_passed and ("PASS" in existing or "pass" in existing.lower())
             logger.info("Using existing product validation from Phase 8")
             return meets_spec, existing
         except Exception:
@@ -3834,35 +3618,21 @@ def _try_auto_resume_paused_workflow(db, workflow_id: str, wf, logger: Orchestra
     every cycle until whatever made the phase look stalled resolved on its
     own.
     """
-    if wf.paused_by == "user":
+    if wf.paused_by is not None:
         return
-    phases = (
-        db.query(Phase)
-        .filter_by(workflow_id=workflow_id)
-        .order_by(Phase.order)
-        .all()
-    )
+    phases = db.query(Phase).filter_by(workflow_id=workflow_id).order_by(Phase.order).all()
     for phase in phases:
         exec = db.query(PhaseExecution).filter_by(phase_id=phase.id).first()
         if exec and exec.status == "in_progress":
-            done_task = (
-                db.query(Task)
-                .filter_by(phase_id=phase.id, status="done")
-                .first()
-            )
+            done_task = db.query(Task).filter_by(phase_id=phase.id, status="done").first()
             if done_task:
-                logger.info(
-                    f"[PHASE-ADVANCE] Auto-resuming paused workflow — "
-                    f"{phase.name} has done task {done_task.id[:8]}"
-                )
+                logger.info(f"[PHASE-ADVANCE] Auto-resuming paused workflow — {phase.name} has done task {done_task.id[:8]}")
                 wf.status = "active"
                 db.commit()
                 break
 
 
-def _release_stale_task_creation_claims(
-    db, workflow_id: str, logger: OrchestratorLogger
-) -> None:
+def _release_stale_task_creation_claims(db, workflow_id: str, logger: OrchestratorLogger) -> None:
     """Self-heal for any PhaseExecution in this workflow whose
     task_creation_claimed_at claim has been held past
     CLAIM_STALE_TIMEOUT_SECONDS -- regardless of the phase's current
@@ -3908,16 +3678,9 @@ def _release_stale_task_creation_claims(
     )
     for execution in stale_executions:
         phase = db.query(Phase).filter_by(id=execution.phase_id).first()
-        latest_task = (
-            db.query(Task)
-            .filter_by(phase_id=execution.phase_id)
-            .order_by(Task.created_at.desc())
-            .first()
-        )
+        latest_task = db.query(Task).filter_by(phase_id=execution.phase_id).order_by(Task.created_at.desc()).first()
         logger.warning(
-            f"[PHASE-ADVANCE] {phase.name if phase else execution.phase_id}: "
-            "task_creation_claimed_at held with no release -- clearing "
-            f"stale claim ({'task exists' if latest_task else 'no task yet'})"
+            f"[PHASE-ADVANCE] {phase.name if phase else execution.phase_id}: task_creation_claimed_at held with no release -- clearing stale claim ({'task exists' if latest_task else 'no task yet'})"
         )
         if latest_task and execution.status in ("pending", "completed"):
             execution.status = "in_progress"
@@ -3933,9 +3696,7 @@ def _release_stale_task_creation_claims(
         db.commit()
 
 
-def _release_pending_phases_with_done_tasks(
-    db, workflow_id: str, logger: OrchestratorLogger
-) -> None:
+def _release_pending_phases_with_done_tasks(db, workflow_id: str, logger: OrchestratorLogger) -> None:
     """Self-heal for a PhaseExecution stuck at status="pending" despite
     already having a "done" Task -- a state none of _advance_phases's four
     dispatch cases recognize (Case 0/0b act on a *lack* of tasks, Case 1
@@ -3968,12 +3729,7 @@ def _release_pending_phases_with_done_tasks(
     Must run before _get_phase_statuses is read for this cycle's dispatch,
     same as _release_stale_task_creation_claims.
     """
-    already_active = (
-        db.query(PhaseExecution)
-        .join(Phase, PhaseExecution.phase_id == Phase.id)
-        .filter(Phase.workflow_id == workflow_id, PhaseExecution.status == "in_progress")
-        .first()
-    )
+    already_active = db.query(PhaseExecution).join(Phase, PhaseExecution.phase_id == Phase.id).filter(Phase.workflow_id == workflow_id, PhaseExecution.status == "in_progress").first()
     if already_active:
         return
 
@@ -3997,11 +3753,7 @@ def _release_pending_phases_with_done_tasks(
     if not most_recent_done_task:
         return
 
-    execution = (
-        db.query(PhaseExecution)
-        .filter_by(phase_id=most_recent_done_task.phase_id)
-        .first()
-    )
+    execution = db.query(PhaseExecution).filter_by(phase_id=most_recent_done_task.phase_id).first()
     if not execution or execution.status != "pending":
         return
 
@@ -4024,21 +3776,18 @@ def _release_pending_phases_with_done_tasks(
 
 def _get_phase_statuses(db, workflow_id: str) -> list:
     """Get all phases with their execution statuses."""
-    phases = (
-        db.query(Phase)
-        .filter_by(workflow_id=workflow_id)
-        .order_by(Phase.order)
-        .all()
-    )
+    phases = db.query(Phase).filter_by(workflow_id=workflow_id).order_by(Phase.order).all()
 
     phase_statuses = []
     for phase in phases:
         exec = db.query(PhaseExecution).filter_by(phase_id=phase.id).first()
-        phase_statuses.append({
-            "phase": phase,
-            "execution": exec,
-            "status": exec.status if exec else "pending",
-        })
+        phase_statuses.append(
+            {
+                "phase": phase,
+                "execution": exec,
+                "status": exec.status if exec else "pending",
+            }
+        )
     return phase_statuses
 
 
@@ -4106,12 +3855,7 @@ def _release_phase_task_creation_claim(db, phase_id: str) -> None:
     the claim held in the database forever. Found by
     test_maybe_retry_failed_tasks_is_claim_protected.
     """
-    execution = (
-        db.query(PhaseExecution)
-        .filter_by(phase_id=phase_id)
-        .populate_existing()
-        .first()
-    )
+    execution = db.query(PhaseExecution).filter_by(phase_id=phase_id).populate_existing().first()
     if not execution:
         return
     if execution.status in ("pending", "completed"):
@@ -4121,9 +3865,7 @@ def _release_phase_task_creation_claim(db, phase_id: str) -> None:
     db.commit()
 
 
-def _case_start_first_phase(
-    db, workflow_id: str, pending: list, in_progress: list, completed: list, logger: OrchestratorLogger
-) -> Optional[bool]:
+def _case_start_first_phase(db, workflow_id: str, pending: list, in_progress: list, completed: list, logger: OrchestratorLogger) -> Optional[bool]:
     """Case 0: No in-progress phase and first phase is pending — start it.
 
     Returns None if this case doesn't apply, True/False otherwise.
@@ -4131,19 +3873,13 @@ def _case_start_first_phase(
     if not in_progress and not completed and pending:
         first_phase = min(pending, key=lambda p: p["phase"].order)
         # Check if it already has tasks
-        existing = (
-            db.query(Task)
-            .filter_by(phase_id=first_phase["phase"].id)
-            .count()
-        )
+        existing = db.query(Task).filter_by(phase_id=first_phase["phase"].id).count()
         if existing == 0 and not _claim_phase_task_creation(db, first_phase["phase"].id):
             # Someone else (or a previous iteration of this same loop) is
             # already creating this phase's first task -- don't duplicate it.
             existing = 1
         if existing == 0:
-            logger.info(
-                f"[PHASE-ADVANCE] Starting first phase: {first_phase['phase'].name}"
-            )
+            logger.info(f"[PHASE-ADVANCE] Starting first phase: {first_phase['phase'].name}")
             return _create_phase_task(
                 workflow_id,
                 first_phase["phase"].id,
@@ -4154,21 +3890,15 @@ def _case_start_first_phase(
     return None
 
 
-def _case_in_progress_no_tasks(
-    db, workflow_id: str, in_progress: list, logger: OrchestratorLogger
-) -> Optional[bool]:
+def _case_in_progress_no_tasks(db, workflow_id: str, in_progress: list, logger: OrchestratorLogger) -> Optional[bool]:
     """Case 0b: In-progress phase with no tasks at all.
-    
+
     Workflow engine set it but didn't create task.
     Returns None if this case doesn't apply, True/False otherwise.
     """
     for ps in in_progress:
         phase = ps["phase"]
-        task_count = (
-            db.query(Task)
-            .filter_by(phase_id=phase.id)
-            .count()
-        )
+        task_count = db.query(Task).filter_by(phase_id=phase.id).count()
         if task_count == 0 and not _claim_phase_task_creation(db, phase.id):
             # Same race as _case_start_first_phase: other paths (e.g. the
             # spec-gate immediate-fire path in task_completion_service.py,
@@ -4179,9 +3909,7 @@ def _case_in_progress_no_tasks(
             # path takes to finish creating its task, unlike a fixed sleep.
             task_count = 1
         if task_count == 0:
-            logger.info(
-                f"[PHASE-ADVANCE] Phase {phase.name} is in_progress but has no tasks — creating one"
-            )
+            logger.info(f"[PHASE-ADVANCE] Phase {phase.name} is in_progress but has no tasks — creating one")
             return _create_phase_task(
                 workflow_id,
                 phase.id,
@@ -4192,11 +3920,9 @@ def _case_in_progress_no_tasks(
     return None
 
 
-def _case_completed_with_successor(
-    db, workflow_id: str, completed: list, pending: list, in_progress: list, logger: OrchestratorLogger
-) -> Optional[bool]:
+def _case_completed_with_successor(db, workflow_id: str, completed: list, pending: list, in_progress: list, logger: OrchestratorLogger) -> Optional[bool]:
     """Case 1: Completed phase with pending successor.
-    
+
     Phase N done, next never started.
     Returns None if this case doesn't apply, True/False otherwise.
     """
@@ -4250,11 +3976,7 @@ def _case_completed_with_successor(
             )
         if successor:
             # Check if successor already has tasks (transition already fired)
-            existing_tasks = (
-                db.query(Task)
-                .filter_by(phase_id=successor["phase"].id)
-                .count()
-            )
+            existing_tasks = db.query(Task).filter_by(phase_id=successor["phase"].id).count()
             # This case only fires when last_completed's PhaseExecution.status
             # is ALREADY "completed" (that's what put it in the `completed`
             # list). Re-running the transition via _fire_phase_transition ->
@@ -4275,33 +3997,22 @@ def _case_completed_with_successor(
             if existing_tasks > 0:
                 return False  # Already fired (or someone else just claimed it)
 
-            logger.info(
-                f"[PHASE-ADVANCE] {last_completed['phase'].name} completed, "
-                f"advancing to {successor['phase'].name}"
-            )
+            logger.info(f"[PHASE-ADVANCE] {last_completed['phase'].name} completed, advancing to {successor['phase'].name}")
             return _create_phase_task(
                 workflow_id,
                 successor["phase"].id,
                 successor["phase"].name,
                 successor_action,
                 logger,
-                feedback=(
-                    last_task.completion_notes
-                    if successor_action != "continue" and last_task
-                    else None
-                ),
-                source_phase_name=(
-                    last_completed["phase"].name if successor_action != "continue" else None
-                ),
+                feedback=(last_task.completion_notes if successor_action != "continue" and last_task else None),
+                source_phase_name=(last_completed["phase"].name if successor_action != "continue" else None),
             )
     return None
 
 
-def _case_in_progress_complete(
-    db, workflow_id: str, in_progress: list, logger: OrchestratorLogger
-) -> Optional[bool]:
+def _case_in_progress_complete(db, workflow_id: str, in_progress: list, logger: OrchestratorLogger) -> Optional[bool]:
     """Case 2: In-progress phase that is now complete.
-    
+
     Returns None if this case doesn't apply, True/False otherwise.
     """
     for ps in in_progress:
@@ -4371,9 +4082,7 @@ def _case_in_progress_complete(
         # real completion still counted toward done_count. Falls back to
         # unscoped (the prior behavior) if started_at was never set.
         cycle_start = execution.started_at if execution else None
-        cycle_filter = (
-            (Task.created_at >= cycle_start,) if cycle_start else ()
-        )
+        cycle_filter = (Task.created_at >= cycle_start,) if cycle_start else ()
 
         orphan_cutoff = datetime.utcnow() - timedelta(minutes=1)
         orphaned_pending = (
@@ -4389,11 +4098,7 @@ def _case_in_progress_complete(
             .all()
         )
         for orphan in orphaned_pending:
-            logger.info(
-                f"[PHASE-ADVANCE] {phase.name} has an orphaned pending task "
-                f"{orphan.id[:8]} (never dispatched, stale >1min) -- marking "
-                "failed so it becomes eligible for retry"
-            )
+            logger.info(f"[PHASE-ADVANCE] {phase.name} has an orphaned pending task {orphan.id[:8]} (never dispatched, stale >1min) -- marking failed so it becomes eligible for retry")
             orphan.status = "failed"
             orphan.failure_reason = "Orphaned: never dispatched to an agent"
         if orphaned_pending:
@@ -4438,20 +4143,12 @@ def _case_in_progress_complete(
             # unscoped count still sees the phase's pre-cycle task and
             # concludes nothing needs creating). Treat a genuinely empty
             # cycle the same as Case 0b: dispatch a fresh task.
-            total_cycle_tasks = (
-                db.query(Task).filter(Task.phase_id == phase.id, *cycle_filter).count()
-            )
+            total_cycle_tasks = db.query(Task).filter(Task.phase_id == phase.id, *cycle_filter).count()
             if total_cycle_tasks == 0:
                 if not _claim_phase_task_creation(db, phase.id):
                     continue
-                logger.warning(
-                    f"[PHASE-ADVANCE] {phase.name} is in_progress but has no "
-                    "tasks within its own cycle (stale started_at?) — "
-                    "creating a fresh one"
-                )
-                return _create_phase_task(
-                    workflow_id, phase.id, phase.name, "continue", logger
-                )
+                logger.warning(f"[PHASE-ADVANCE] {phase.name} is in_progress but has no tasks within its own cycle (stale started_at?) — creating a fresh one")
+                return _create_phase_task(workflow_id, phase.id, phase.name, "continue", logger)
 
             # Check if ALL tasks are failed — retry them. Same claim
             # protection as the _fire_phase_transition path below, for the
@@ -4496,16 +4193,10 @@ def _case_in_progress_complete(
         # phase" race for the evaluate-and-transition path, not just the
         # create-the-first-task path.
         if not _claim_phase_task_creation(db, phase.id):
-            logger.info(
-                f"[PHASE-ADVANCE] {phase.name} transition already being "
-                "evaluated by another caller — skipping"
-            )
+            logger.info(f"[PHASE-ADVANCE] {phase.name} transition already being evaluated by another caller — skipping")
             continue
 
-        logger.info(
-            f"[PHASE-ADVANCE] {phase.name} appears complete "
-            f"({done_count} tasks done, 0 active), evaluating transition"
-        )
+        logger.info(f"[PHASE-ADVANCE] {phase.name} appears complete ({done_count} tasks done, 0 active), evaluating transition")
         # Extract primitives before session closes to avoid DetachedInstanceError
         phase_id = phase.id
         phase_name = phase.name
@@ -4536,16 +4227,12 @@ def _case_in_progress_complete(
             # Setting an in-memory attribute back to a value it already
             # appears to hold produces no dirty column for SQLAlchemy to
             # write, so the commit was a silent no-op in testing.
-            db.query(PhaseExecution).filter_by(phase_id=phase_id).update(
-                {"task_creation_claimed_at": None}, synchronize_session=False
-            )
+            db.query(PhaseExecution).filter_by(phase_id=phase_id).update({"task_creation_claimed_at": None}, synchronize_session=False)
             db.commit()
     return None
 
 
-def _maybe_retry_failed_tasks(
-    db, phase, logger: OrchestratorLogger, cycle_start: Optional[datetime] = None
-) -> Optional[bool]:
+def _maybe_retry_failed_tasks(db, phase, logger: OrchestratorLogger, cycle_start: Optional[datetime] = None) -> Optional[bool]:
     """Retry all failed tasks in a phase if all tasks are failed.
 
     cycle_start: scopes both counts to the current PhaseExecution cycle
@@ -4559,14 +4246,8 @@ def _maybe_retry_failed_tasks(
     Returns None if no retry was needed, True if tasks were reset for retry.
     """
     cycle_filter = (Task.created_at >= cycle_start,) if cycle_start else ()
-    failed_count = (
-        db.query(Task)
-        .filter(Task.phase_id == phase.id, Task.status == "failed", *cycle_filter)
-        .count()
-    )
-    total_count = (
-        db.query(Task).filter(Task.phase_id == phase.id, *cycle_filter).count()
-    )
+    failed_count = db.query(Task).filter(Task.phase_id == phase.id, Task.status == "failed", *cycle_filter).count()
+    total_count = db.query(Task).filter(Task.phase_id == phase.id, *cycle_filter).count()
     if failed_count > 0 and failed_count == total_count:
         # Same retry_count cap _retry_failed_tasks already enforces (that
         # function's own comment names this one as sharing it, but it
@@ -4590,9 +4271,7 @@ def _maybe_retry_failed_tasks(
             or "Orphaned" in (t.failure_reason or "")
         ]
         if not retryable_tasks:
-            reasons = sorted(
-                {t.failure_reason for t in failed_tasks if t.failure_reason}
-            )
+            reasons = sorted({t.failure_reason for t in failed_tasks if t.failure_reason})
             reason_text = "; ".join(reasons) if reasons else "no reason recorded"
             logger.warning(
                 f"[PHASE-ADVANCE] Phase {phase.name} has {len(failed_tasks)} failed "
@@ -4608,11 +4287,7 @@ def _maybe_retry_failed_tasks(
                 db.commit()
             return None
 
-        logger.info(
-            f"[PHASE-ADVANCE] Phase {phase.name} has {failed_count} failed tasks "
-            f"and 0 done — retrying {len(retryable_tasks)} (of {len(failed_tasks)}, "
-            f"cap {max_retry_count})"
-        )
+        logger.info(f"[PHASE-ADVANCE] Phase {phase.name} has {failed_count} failed tasks and 0 done — retrying {len(retryable_tasks)} (of {len(failed_tasks)}, cap {max_retry_count})")
         # Reset retryable failed tasks to pending. Per-task (not a bulk
         # .update()) so each one's own failure_reason -- e.g. a specific
         # "missing output artifact: X" from update_task_status's validation
@@ -4625,11 +4300,7 @@ def _maybe_retry_failed_tasks(
         for task in retryable_tasks:
             if task.failure_reason:
                 base = task.enriched_description or task.raw_description or ""
-                task.enriched_description = (
-                    f"{base}\n\n--- RETRY: your previous attempt failed with this "
-                    f"specific error, fix it rather than repeating the same "
-                    f"mistake ---\n{task.failure_reason}"
-                )
+                task.enriched_description = f"{base}\n\n--- RETRY: your previous attempt failed with this specific error, fix it rather than repeating the same mistake ---\n{task.failure_reason}"
             task.status = "pending"
             task.failure_reason = None
             # Persist the increment before attempting -- counting only
@@ -4674,11 +4345,7 @@ def _maybe_retry_failed_tasks(
                     retry_task.status = "failed"
                     retry_task.failure_reason = "Retry agent creation failed"
                     retry_db.commit()
-                    logger.warning(
-                        f"[PHASE-ADVANCE] Retry agent creation failed for task "
-                        f"{task_id[:8]} in {phase.name} -- marked failed for "
-                        "another retry pass"
-                    )
+                    logger.warning(f"[PHASE-ADVANCE] Retry agent creation failed for task {task_id[:8]} in {phase.name} -- marked failed for another retry pass")
                     continue
                 retry_task.assigned_agent_id = agent_data.get("agent_id", "unknown")
                 retry_task.status = "in_progress"
@@ -4688,9 +4355,7 @@ def _maybe_retry_failed_tasks(
     return None
 
 
-def _fire_phase_transition(
-    workflow_id: str, phase_id: str, phase_name: str, logger: OrchestratorLogger
-) -> bool:
+def _fire_phase_transition(workflow_id: str, phase_id: str, phase_name: str, logger: OrchestratorLogger) -> bool:
     """Fire the phase transition: mark complete, evaluate, create next task/agent.
 
     Returns True if something was done.
@@ -4719,6 +4384,7 @@ def _fire_phase_transition(
 
         # Mark phase complete and get engine decision
         from src.core.database import DatabaseManager
+
         pm = PhaseManager(DatabaseManager())
         pm.workflow_id = workflow_id
         result = pm.mark_phase_complete(
@@ -4731,10 +4397,7 @@ def _fire_phase_transition(
         target_phase_id = result.get("target_phase_id")
         target_phase_name = result.get("target_phase")
 
-        logger.info(
-            f"[PHASE-ADVANCE] Engine decision for {phase_name}: {action}" +
-            (f" -> {target_phase_name}" if target_phase_name else "")
-        )
+        logger.info(f"[PHASE-ADVANCE] Engine decision for {phase_name}: {action}" + (f" -> {target_phase_name}" if target_phase_name else ""))
 
         if action == "already_completed":
             # Phase was already advanced by another caller (spec gate, etc.)
@@ -4780,19 +4443,19 @@ def _fire_phase_transition(
             # rediscover them itself instead of being told directly).
             if spec_gate.get("result_missing"):
                 with get_db() as db:
-                    completing_task = (
-                        db.query(Task)
-                        .filter(Task.phase_id == phase_id, Task.status == "done")
-                        .order_by(Task.completed_at.desc())
-                        .first()
-                    )
+                    completing_task = db.query(Task).filter(Task.phase_id == phase_id, Task.status == "done").order_by(Task.completed_at.desc()).first()
                 if completing_task and completing_task.completion_notes:
                     feedback = completing_task.completion_notes
 
         # Create task and agent for the next phase
         return _create_phase_task(
-            workflow_id, target_phase_id, target_phase_name, action, logger,
-            feedback=feedback, source_phase_name=phase_name,
+            workflow_id,
+            target_phase_id,
+            target_phase_name,
+            action,
+            logger,
+            feedback=feedback,
+            source_phase_name=phase_name,
         )
 
     except Exception as e:
@@ -4821,21 +4484,12 @@ def _gather_arbitration_context(phase_id: str, phase_name: str) -> str:
     attempt history, each carrying the "WHY YOU'RE HERE" reason
     _create_phase_task embedded in that attempt's task description."""
     with get_db() as db:
-        recent_tasks = (
-            db.query(Task)
-            .filter(Task.phase_id == phase_id)
-            .order_by(Task.created_at.desc())
-            .limit(6)
-            .all()
-        )
+        recent_tasks = db.query(Task).filter(Task.phase_id == phase_id).order_by(Task.created_at.desc()).limit(6).all()
         lines = [f"Phase: {phase_name}", ""]
         if not recent_tasks:
             lines.append("No task history found for this phase.")
         for t in reversed(recent_tasks):
-            lines.append(
-                f"- [{t.created_at.isoformat() if t.created_at else '?'}] "
-                f"action={t.action or 'initial'} status={t.status}"
-            )
+            lines.append(f"- [{t.created_at.isoformat() if t.created_at else '?'}] action={t.action or 'initial'} status={t.status}")
             if t.raw_description:
                 lines.append(f"  {t.raw_description.strip()[:500]}")
             if t.failure_reason:
@@ -4853,11 +4507,7 @@ def _build_arbitration_prompt(
     valid_phase_names: Optional[list] = None,
 ) -> str:
     context = _gather_arbitration_context(phase_id, phase_name)
-    phase_list_text = (
-        ", ".join(valid_phase_names)
-        if valid_phase_names
-        else "(could not be determined -- use the exact name from RECENT HISTORY above)"
-    )
+    phase_list_text = ", ".join(valid_phase_names) if valid_phase_names else "(could not be determined -- use the exact name from RECENT HISTORY above)"
     return f"""=== ARBITRATION TASK ===
 
 The autopilot pipeline's phase "{phase_name}" has exhausted its automatic
@@ -4954,25 +4604,16 @@ def _trigger_arbitration(
             .count()
         )
         if prior_arbitrations >= max_arbitrations_per_phase:
-            logger.error(
-                f"[ARBITRATE] {phase_name} has already been arbitrated "
-                f"{prior_arbitrations} times without converging -- failing "
-                "the workflow instead of arbitrating again"
-            )
+            logger.error(f"[ARBITRATE] {phase_name} has already been arbitrated {prior_arbitrations} times without converging -- failing the workflow instead of arbitrating again")
             wf = db.query(Workflow).filter_by(id=workflow_id).first()
             if wf:
                 wf.status = "failed"
-                wf.status_reason = (
-                    f"{phase_name}: arbitrated {prior_arbitrations} times without "
-                    f"converging (last reason: {reason})"
-                )
+                wf.status_reason = f"{phase_name}: arbitrated {prior_arbitrations} times without converging (last reason: {reason})"
                 db.commit()
             return False
 
         if not _claim_phase_task_creation(db, phase_id):
-            logger.info(
-                f"[ARBITRATE] {phase_name} already has arbitration in flight -- skipping"
-            )
+            logger.info(f"[ARBITRATE] {phase_name} already has arbitration in flight -- skipping")
             return False
 
         execution = db.query(PhaseExecution).filter_by(phase_id=phase_id).first()
@@ -4995,17 +4636,9 @@ def _trigger_arbitration(
             wf.status_reason = f"Awaiting arbiter decision for {phase_name}: {reason}"
         db.commit()
 
-        valid_phase_names = [
-            p.name
-            for p in db.query(Phase)
-            .filter_by(workflow_id=workflow_id)
-            .order_by(Phase.order)
-            .all()
-        ]
+        valid_phase_names = [p.name for p in db.query(Phase).filter_by(workflow_id=workflow_id).order_by(Phase.order).all()]
 
-    prompt = _build_arbitration_prompt(
-        phase_id, phase_name, reason, working_directory, valid_phase_names
-    )
+    prompt = _build_arbitration_prompt(phase_id, phase_name, reason, working_directory, valid_phase_names)
 
     task_id = str(uuid.uuid4())
     with get_db() as db:
@@ -5035,10 +4668,7 @@ def _trigger_arbitration(
         # Dispatch itself failed -- never leave the phase silently claimed
         # forever with nothing working on it. Fail loudly and immediately
         # instead of quietly re-attempting every sweep tick.
-        logger.error(
-            f"[ARBITRATE] Failed to dispatch arbitration agent for {phase_name} -- "
-            "failing the workflow instead of leaving it stuck silently"
-        )
+        logger.error(f"[ARBITRATE] Failed to dispatch arbitration agent for {phase_name} -- failing the workflow instead of leaving it stuck silently")
         with get_db() as db:
             task = db.query(Task).filter_by(id=task_id).first()
             if task:
@@ -5055,17 +4685,11 @@ def _trigger_arbitration(
         with get_db() as db:
             wf = db.query(Workflow).filter_by(id=workflow_id).first()
             if wf:
-                wf.status_reason = (
-                    f"{phase_name}: could not dispatch an arbitration agent after "
-                    f"exhausting retries ({reason})"
-                )
+                wf.status_reason = f"{phase_name}: could not dispatch an arbitration agent after exhausting retries ({reason})"
                 db.commit()
         return False
 
-    logger.warning(
-        f"[ARBITRATE] Dispatched arbitration agent {agent_data.get('agent_id', '?')[:8]} "
-        f"for {phase_name}"
-    )
+    logger.warning(f"[ARBITRATE] Dispatched arbitration agent {agent_data.get('agent_id', '?')[:8]} for {phase_name}")
     return True
 
 
@@ -5078,14 +4702,7 @@ def _maybe_resolve_arbitration(workflow_id: str, logger: OrchestratorLogger) -> 
     """
     with get_db() as db:
         phases = db.query(Phase).filter_by(workflow_id=workflow_id).all()
-        claimed_phase_ids = [
-            p.id
-            for p in phases
-            if db.query(PhaseExecution)
-            .filter_by(phase_id=p.id)
-            .filter(PhaseExecution.task_creation_claimed_at.isnot(None))
-            .first()
-        ]
+        claimed_phase_ids = [p.id for p in phases if db.query(PhaseExecution).filter_by(phase_id=p.id).filter(PhaseExecution.task_creation_claimed_at.isnot(None)).first()]
         arb_tasks = {}
         for phase_id in claimed_phase_ids:
             t = (
@@ -5109,9 +4726,7 @@ def _maybe_resolve_arbitration(workflow_id: str, logger: OrchestratorLogger) -> 
         if task.status == "failed":
             reason = task.failure_reason or "Arbitration agent failed with no reason given"
             logger.error(f"[ARBITRATE] {phase_name}: arbitration agent failed -- {reason}")
-            _resolve_arbitration_outcome(
-                workflow_id, phase_id, phase_name, "fail", None, reason, logger
-            )
+            _resolve_arbitration_outcome(workflow_id, phase_id, phase_name, "fail", None, reason, logger)
             continue
 
         if task.status != "done":
@@ -5119,10 +4734,7 @@ def _maybe_resolve_arbitration(workflow_id: str, logger: OrchestratorLogger) -> 
 
         decision, target_phase, dec_reason = _read_arbitration_result(working_directory)
         if decision is None:
-            logger.error(
-                f"[ARBITRATE] {phase_name}: arbitration task marked done but "
-                "arbitration_result.json is missing/invalid -- treating as fail"
-            )
+            logger.error(f"[ARBITRATE] {phase_name}: arbitration task marked done but arbitration_result.json is missing/invalid -- treating as fail")
             _resolve_arbitration_outcome(
                 workflow_id,
                 phase_id,
@@ -5134,9 +4746,7 @@ def _maybe_resolve_arbitration(workflow_id: str, logger: OrchestratorLogger) -> 
             )
             continue
 
-        _resolve_arbitration_outcome(
-            workflow_id, phase_id, phase_name, decision, target_phase, dec_reason, logger
-        )
+        _resolve_arbitration_outcome(workflow_id, phase_id, phase_name, decision, target_phase, dec_reason, logger)
 
 
 def _read_arbitration_result(
@@ -5194,9 +4804,7 @@ def _resolve_arbitration_outcome(
     result: Dict[str, Any] = {}
     try:
         if decision == "continue":
-            result = pm.mark_phase_complete(
-                phase_id, f"Arbiter: proceed -- {reason}", force_action="continue"
-            )
+            result = pm.mark_phase_complete(phase_id, f"Arbiter: proceed -- {reason}", force_action="continue")
         elif decision == "goto" and target_phase:
             result = pm.mark_phase_complete(
                 phase_id,
@@ -5206,9 +4814,7 @@ def _resolve_arbitration_outcome(
                 force_reason=reason,
             )
         else:
-            result = pm.mark_phase_complete(
-                phase_id, f"Arbiter: unrecoverable -- {reason}", force_action="fail"
-            )
+            result = pm.mark_phase_complete(phase_id, f"Arbiter: unrecoverable -- {reason}", force_action="fail")
     finally:
         # mark_phase_complete's _close_execution sets status but never
         # touches task_creation_claimed_at -- clear it directly rather than
@@ -5247,20 +4853,19 @@ def _resolve_arbitration_outcome(
     action = result.get("action")
     if target_phase_id and action in ("continue", "goto", "retry"):
         dispatched = _create_phase_task(
-            workflow_id, target_phase_id, target_phase_name, action, logger,
-            feedback=result.get("reason"), source_phase_name=phase_name,
+            workflow_id,
+            target_phase_id,
+            target_phase_name,
+            action,
+            logger,
+            feedback=result.get("reason"),
+            source_phase_name=phase_name,
         )
         if not dispatched:
-            logger.error(
-                f"[ARBITRATE] {phase_name}: resolved to {action} -> "
-                f"{target_phase_name}, but failed to create its task -- "
-                "pipeline may be stalled"
-            )
+            logger.error(f"[ARBITRATE] {phase_name}: resolved to {action} -> {target_phase_name}, but failed to create its task -- pipeline may be stalled")
 
 
-def _ensure_git_excluded(
-    repo_path: Path, patterns: Dict[str, str], logger: Any
-) -> None:
+def _ensure_git_excluded(repo_path: Path, patterns: Dict[str, str], logger: Any) -> None:
     """logger: OrchestratorLogger or the plain module-level logging.Logger --
     called from both. Only uses .warning(), which both support.
 
@@ -5325,12 +4930,7 @@ def _run_ash_scan(worktree: Path, logger: OrchestratorLogger) -> None:
     results_path = worktree / CONTEXT_DIR_NAME / "ash_results.txt"
     _ensure_git_excluded(
         worktree,
-        {
-            ".ash/": (
-                "AWS Automated Security Helper's own scan working "
-                "directory (security_review's mandatory ash scan) --"
-            )
-        },
+        {".ash/": ("AWS Automated Security Helper's own scan working directory (security_review's mandatory ash scan) --")},
         logger,
     )
     try:
@@ -5350,10 +4950,7 @@ def _run_ash_scan(worktree: Path, logger: OrchestratorLogger) -> None:
         )
         output = (result.stdout or "") + (result.stderr or "")
         results_path.write_text(output or "(no output)")
-        logger.info(
-            f"[ASH] Automated security scan complete (exit code {result.returncode}), "
-            f"results written to {results_path}"
-        )
+        logger.info(f"[ASH] Automated security scan complete (exit code {result.returncode}), results written to {results_path}")
     except subprocess.TimeoutExpired:
         logger.warning("[ASH] Automated security scan timed out after 300s")
         results_path.write_text("SCAN TIMED OUT after 300s")
@@ -5438,14 +5035,7 @@ def _cap_out_review_phase(
     docs_dir.mkdir(parents=True, exist_ok=True)
 
     history = get_review_findings_history(workflow_id, phase.name)
-    caveats = (
-        "\n".join(
-            f"- Run {h['run_number']}: {h['blocker_count']} blocker(s) -- "
-            f"{h['summary'][:200]}"
-            for h in history
-        )
-        or "(no findings history recorded)"
-    )
+    caveats = "\n".join(f"- Run {h['run_number']}: {h['blocker_count']} blocker(s) -- {h['summary'][:200]}" for h in history) or "(no findings history recorded)"
 
     (docs_dir / artifacts[0]).write_text(
         json.dumps(
@@ -5461,11 +5051,7 @@ def _cap_out_review_phase(
             f"from prior runs:\n\n{caveats}\n"
         )
 
-    logger.warning(
-        f"[PHASE-TASK] {phase.name} hit its review-run cap ({run_count}/"
-        f"{max_runs}) -- marking done with caveats instead of re-reviewing "
-        "again"
-    )
+    logger.warning(f"[PHASE-TASK] {phase.name} hit its review-run cap ({run_count}/{max_runs}) -- marking done with caveats instead of re-reviewing again")
     return _fire_phase_transition(workflow_id, phase.id, phase.name, logger)
 
 
@@ -5516,17 +5102,12 @@ def _create_phase_task(
                         logger,
                     )
                     if health["clean"]:
-                        logger.info(
-                            "[PHASE-TASK] forensics_analysis skipped — run was "
-                            "clean (no tmux error patterns detected)"
-                        )
+                        logger.info("[PHASE-TASK] forensics_analysis skipped — run was clean (no tmux error patterns detected)")
                         # _fire_phase_transition marks this phase complete via
                         # PhaseManager itself and advances to the next phase —
                         # the same completion path a real agent would trigger
                         # via update_task_status, just fired synthetically.
-                        return _fire_phase_transition(
-                            workflow_id, phase_id, phase_name, logger
-                        )
+                        return _fire_phase_transition(workflow_id, phase_id, phase_name, logger)
 
             # Check if phase already has an active task
             existing = (
@@ -5578,23 +5159,13 @@ def _create_phase_task(
                     existing.failure_reason = "Orphaned: never dispatched to an agent"
                     db.commit()
                 else:
-                    logger.info(
-                        f"[PHASE-TASK] {phase_name} already has active task {existing.id[:8]}, skipping"
-                    )
+                    logger.info(f"[PHASE-TASK] {phase_name} already has active task {existing.id[:8]}, skipping")
                     return False
 
             # Check for active agent on this phase
-            active_agent = (
-                db.query(Agent)
-                .filter(Agent.status.in_(["working", "idle", "starting"]))
-                .join(Task, Task.assigned_agent_id == Agent.id)
-                .filter(Task.phase_id == phase_id)
-                .first()
-            )
+            active_agent = db.query(Agent).filter(Agent.status.in_(["working", "idle", "starting"])).join(Task, Task.assigned_agent_id == Agent.id).filter(Task.phase_id == phase_id).first()
             if active_agent:
-                logger.info(
-                    f"[PHASE-TASK] {phase_name} has active agent {active_agent.id[:8]}, skipping"
-                )
+                logger.info(f"[PHASE-TASK] {phase_name} has active agent {active_agent.id[:8]}, skipping")
                 return False
 
             # Check retry/goto bounds
@@ -5610,16 +5181,12 @@ def _create_phase_task(
                     .count()
                 )
                 if retries >= max_phase_attempts:
-                    logger.warning(
-                        f"[PHASE-TASK] {phase_name} hit retry bound "
-                        f"({retries}/{max_phase_attempts}), triggering arbitration"
-                    )
+                    logger.warning(f"[PHASE-TASK] {phase_name} hit retry bound ({retries}/{max_phase_attempts}), triggering arbitration")
                     _trigger_arbitration(
                         workflow_id,
                         phase_id,
                         phase_name,
-                        f"{phase_name} was sent back {retries} times without resolving "
-                        f"(last reason: {feedback or 'unknown'})",
+                        f"{phase_name} was sent back {retries} times without resolving (last reason: {feedback or 'unknown'})",
                         logger,
                     )
                     return False
@@ -5643,9 +5210,7 @@ def _create_phase_task(
             if max_review_runs is not None:
                 run_count = db.query(Task).filter(Task.phase_id == phase_id).count()
                 if run_count >= max_review_runs:
-                    capped = _cap_out_review_phase(
-                        db, workflow_id, phase, run_count, max_review_runs, logger
-                    )
+                    capped = _cap_out_review_phase(db, workflow_id, phase, run_count, max_review_runs, logger)
                     if capped is not None:
                         return capped
                     # None: couldn't safely cap out (see its own docstring)
@@ -5654,11 +5219,7 @@ def _create_phase_task(
                 if run_count > 0:
                     history = get_review_findings_history(workflow_id, phase.name)
                     if history:
-                        findings_lines = "\n".join(
-                            f"- Run {h['run_number']}: {h['blocker_count']} "
-                            f"blocker(s) -- {h['summary'][:200]}"
-                            for h in history
-                        )
+                        findings_lines = "\n".join(f"- Run {h['run_number']}: {h['blocker_count']} blocker(s) -- {h['summary'][:200]}" for h in history)
                         prior_findings_block = (
                             f"\n\nPRIOR FINDINGS FROM {len(history)} EARLIER "
                             f"RUN(S) OF THIS PHASE:\n{findings_lines}\n\n"
@@ -5675,10 +5236,7 @@ def _create_phase_task(
             task_id = str(uuid.uuid4())
             base_description = f"Execute {phase.name}: {phase.description}"
             description = (
-                f"{base_description}\n\n"
-                f"{GOTO_REASON_PREFIX}{feedback}\n"
-                "Address this specifically -- this is not a fresh implementation "
-                "pass, it's a return from review with a concrete issue to fix."
+                f"{base_description}\n\n{GOTO_REASON_PREFIX}{feedback}\nAddress this specifically -- this is not a fresh implementation pass, it's a return from review with a concrete issue to fix."
                 if feedback
                 else base_description
             ) + prior_findings_block
@@ -5686,11 +5244,7 @@ def _create_phase_task(
                 id=task_id,
                 raw_description=description,
                 enriched_description=description,
-                done_definition=(
-                    " AND ".join(phase.done_definitions)
-                    if phase.done_definitions
-                    else "Complete phase objectives"
-                ),
+                done_definition=(" AND ".join(phase.done_definitions) if phase.done_definitions else "Complete phase objectives"),
                 status="pending",
                 priority="high",
                 phase_id=phase.id,
@@ -5703,9 +5257,7 @@ def _create_phase_task(
                 # orchestrator agent hasn't been registered in this process.
                 created_by_agent_id=_orchestrator_agent_id,
                 action=action,
-                action_target_phase=(
-                    source_phase_name if action in ("goto", "retry") else None
-                ),
+                action_target_phase=(source_phase_name if action in ("goto", "retry") else None),
             )
             db.add(task)
 
@@ -5743,9 +5295,7 @@ def _create_phase_task(
         agent_data = create_agent_for_task_direct(task_id, workflow_id, phase_id)
         if not agent_data:
             # Agent creation failed — clean up the orphaned task
-            logger.warning(
-                f"[PHASE-TASK] Failed to create agent for {phase_name}, cleaning up task {task_id[:8]}"
-            )
+            logger.warning(f"[PHASE-TASK] Failed to create agent for {phase_name}, cleaning up task {task_id[:8]}")
             with get_db() as db:
                 task = db.query(Task).filter_by(id=task_id).first()
                 if task:
@@ -5764,9 +5314,7 @@ def _create_phase_task(
                 task.started_at = datetime.utcnow()
                 db.commit()
 
-        logger.info(
-            f"[PHASE-TASK] Created task {task_id[:8]} and agent {agent_id[:8]} for {phase_name}"
-        )
+        logger.info(f"[PHASE-TASK] Created task {task_id[:8]} and agent {agent_id[:8]} for {phase_name}")
         return True
 
     except Exception as e:
@@ -5800,17 +5348,15 @@ def _create_corrective_task(
         if not wf:
             logger.warning(f"[CORRECTIVE-TASK] Workflow {workflow_id[:8]} not found")
             return None
-        if wf.paused_by == "user":
+        if wf.paused_by is not None:
             # Same class of bug _try_auto_resume_paused_workflow was fixed
             # for: don't override a deliberate pause. Unlike that function
             # (which just skips and leaves the workflow alone), this one
             # would otherwise both reactivate the workflow AND immediately
             # spawn a live agent against it -- silently resuming real work
-            # on something the user explicitly stopped.
-            logger.info(
-                f"[CORRECTIVE-TASK] Workflow {workflow_id[:8]} is user-paused — "
-                "skipping corrective task"
-            )
+            # on something the user or budget explicitly stopped.
+            pause_reason = wf.paused_by
+            logger.info(f"[CORRECTIVE-TASK] Workflow {workflow_id[:8]} is {pause_reason}-paused — skipping corrective task")
             return None
         if wf.status != "active":
             wf.status = "active"
@@ -5828,11 +5374,7 @@ def _create_corrective_task(
             execution.task_creation_claimed_at = None
 
         phase = db.query(Phase).filter_by(id=phase_id).first()
-        done_def = (
-            " AND ".join(phase.done_definitions)
-            if phase and phase.done_definitions
-            else "Complete phase objectives"
-        )
+        done_def = " AND ".join(phase.done_definitions) if phase and phase.done_definitions else "Complete phase objectives"
 
         task = Task(
             id=task_id,
@@ -5859,9 +5401,7 @@ def _create_corrective_task(
 
     agent_data = create_agent_for_task_direct(task_id, workflow_id, phase_id)
     if not agent_data:
-        logger.warning(
-            f"[CORRECTIVE-TASK] Failed to create agent for corrective task on {phase_name}"
-        )
+        logger.warning(f"[CORRECTIVE-TASK] Failed to create agent for corrective task on {phase_name}")
         with get_db() as db:
             t = db.query(Task).filter_by(id=task_id).first()
             if t:
@@ -5878,10 +5418,7 @@ def _create_corrective_task(
             t.started_at = datetime.utcnow()
             db.commit()
 
-    logger.info(
-        f"[CORRECTIVE-TASK] Created task {task_id[:8]} and agent {agent_id[:8]} "
-        f"to fix: {feedback}"
-    )
+    logger.info(f"[CORRECTIVE-TASK] Created task {task_id[:8]} and agent {agent_id[:8]} to fix: {feedback}")
     return task_id
 
 
@@ -5934,18 +5471,14 @@ def _negotiate_validation_fix(
     """
     error = initial_error
     for attempt in range(1, max_attempts + 1):
-        logger.info(
-            f"[NEGOTIATE] Attempt {attempt}/{max_attempts} for {phase_name}: {error}"
-        )
+        logger.info(f"[NEGOTIATE] Attempt {attempt}/{max_attempts} for {phase_name}: {error}")
         task_id = _create_corrective_task(workflow_id, phase_id, phase_name, error, logger)
         if not task_id:
             return False, None
 
         result = _wait_for_task_terminal(task_id, timeout_seconds, logger, project_id)
         if result not in ("done",):
-            logger.warning(
-                f"[NEGOTIATE] Corrective task {result} for {phase_name} — giving up"
-            )
+            logger.warning(f"[NEGOTIATE] Corrective task {result} for {phase_name} — giving up")
             return False, None
 
         try:
@@ -5957,10 +5490,7 @@ def _negotiate_validation_fix(
             error = str(e)
             logger.warning(f"[NEGOTIATE] Still invalid after attempt {attempt}: {error}")
 
-    logger.error(
-        f"[NEGOTIATE] {phase_name} still failing validation after {max_attempts} "
-        f"corrective attempts: {error}"
-    )
+    logger.error(f"[NEGOTIATE] {phase_name} still failing validation after {max_attempts} corrective attempts: {error}")
     return False, None
 
 
@@ -5984,15 +5514,14 @@ def _resume_stuck_workflow_tasks(workflow_id: str, logger: OrchestratorLogger) -
         wf = db.query(Workflow).filter_by(id=workflow_id).first()
         if not wf:
             return 0
-        if wf.status == "paused" and wf.paused_by == "user":
+        if wf.status == "paused" and wf.paused_by is not None:
             # Same class of bug _try_auto_resume_paused_workflow was fixed
             # for: this runs whenever the design/feature queue loop cycles
             # back to a workflow it already has an id for, which can
-            # include one the user deliberately paused -- don't silently
-            # un-pause and restart work on it.
-            logger.info(
-                f"[RESUME-STUCK] Workflow {workflow_id[:8]} is user-paused — skipping"
-            )
+            # include one the user or budget deliberately paused -- don't
+            # silently un-pause and restart work on it.
+            pause_reason = wf.paused_by
+            logger.info(f"[RESUME-STUCK] Workflow {workflow_id[:8]} is {pause_reason}-paused — skipping")
             return 0
         if wf.status in ("paused", "failed"):
             wf.status = "active"
@@ -6026,9 +5555,7 @@ def _resume_stuck_workflow_tasks(workflow_id: str, logger: OrchestratorLogger) -
                     agent = db.query(Agent).filter_by(id=t.assigned_agent_id).first()
                     if not agent or agent.status == "terminated":
                         restartable.append(t)
-                elif t.created_at and (
-                    datetime.utcnow() - t.created_at
-                ) > timedelta(minutes=pending_stuck_minutes):
+                elif t.created_at and (datetime.utcnow() - t.created_at) > timedelta(minutes=pending_stuck_minutes):
                     restartable.append(t)
             elif t.assigned_agent_id:
                 agent = db.query(Agent).filter_by(id=t.assigned_agent_id).first()
@@ -6133,15 +5660,9 @@ def run_single_workflow(
     if not pause_existing:
         existing_workflows = []
     else:
-        existing_workflows = [
-            wf
-            for wf in get_active_workflows(project_path, project_id=project_id)
-            if wf.get("id") != existing_workflow_id
-        ]
+        existing_workflows = [wf for wf in get_active_workflows(project_path, project_id=project_id) if wf.get("id") != existing_workflow_id]
     if existing_workflows:
-        logger.info(
-            f"Found {len(existing_workflows)} active workflow(s) - stopping them..."
-        )
+        logger.info(f"Found {len(existing_workflows)} active workflow(s) - stopping them...")
         for wf in existing_workflows:
             wf_id = wf.get("id", "")
             try:
@@ -6151,9 +5672,7 @@ def run_single_workflow(
                     if agent.get("status") in ACTIVE_AGENT_STATUSES:
                         try:
                             terminate_agent_direct(agent["id"])
-                            logger.info(
-                                f"  Terminated agent {agent['id'][:8]} for workflow {wf_id[:8]}"
-                            )
+                            logger.info(f"  Terminated agent {agent['id'][:8]} for workflow {wf_id[:8]}")
                         except Exception:
                             pass
                 # Mark workflow as paused
@@ -6165,9 +5684,7 @@ def run_single_workflow(
     logger.info(f"Launching workflow: {workflow_id} (max_iterations={max_iterations})")
     # Extract design document from launch_params for the event
     design_doc = (launch_params or {}).get("design_document", "")
-    design_name = (
-        Path(design_doc).stem.replace("_", " ").replace("-", " ") if design_doc else ""
-    )
+    design_name = Path(design_doc).stem.replace("_", " ").replace("-", " ") if design_doc else ""
     logger.event(
         "workflow_launch",
         {
@@ -6193,11 +5710,9 @@ def run_single_workflow(
         # use it directly as the design worktree. Don't create a nested
         # worktree inside it — that would be destroyed when the parent
         # worktree is cleaned up.
-        if '.worktrees/' in str(project_path):
+        if ".worktrees/" in str(project_path):
             design_worktree_path = str(project_path)
-            logger.info(
-                f"Using existing worktree directly: {design_worktree_path}"
-            )
+            logger.info(f"Using existing worktree directly: {design_worktree_path}")
         else:
             # Reload to point at the actual project repo (not config.main_repo_path)
             wt_mgr.reload(Path(project_path))
@@ -6206,9 +5721,7 @@ def run_single_workflow(
             import git as _git
 
             # Use design_entry name if available, otherwise derive from design_doc
-            _design_label = (
-                design_name.replace(" ", "-").lower() if design_name else "design"
-            )
+            _design_label = design_name.replace(" ", "-").lower() if design_name else "design"
             feature_branch = f"feature/{_design_label}"
             # Ensure branch name is unique (append short hash if needed)
             try:
@@ -6225,9 +5738,7 @@ def run_single_workflow(
                 wt_mgr.main_repo.git.worktree("add", str(wt_path), feature_branch)
             design_worktree_path = str(wt_path)
             design_branch_name = feature_branch
-            logger.info(
-                f"Created shared worktree: {design_worktree_path} (branch: {feature_branch})"
-            )
+            logger.info(f"Created shared worktree: {design_worktree_path} (branch: {feature_branch})")
 
         # Copy design doc into worktree as .hephaestus/design.md so all phases can read it
         wt_heph = Path(design_worktree_path) / CONTEXT_DIR_NAME
@@ -6256,15 +5767,10 @@ def run_single_workflow(
             with get_db() as _db_resume:
                 _wf_resume = _db_resume.query(Workflow).filter_by(id=exec_id).first()
                 if _wf_resume and _wf_resume.working_directory != design_worktree_path:
-                    logger.info(
-                        f"Restoring working_directory for {exec_id[:8]}: "
-                        f"{_wf_resume.working_directory!r} -> {design_worktree_path}"
-                    )
+                    logger.info(f"Restoring working_directory for {exec_id[:8]}: {_wf_resume.working_directory!r} -> {design_worktree_path}")
                     _wf_resume.working_directory = design_worktree_path
             restarted = _resume_stuck_workflow_tasks(exec_id, logger)
-            logger.info(
-                f"Resume: reset {restarted} stuck task(s) for workflow {exec_id[:8]}"
-            )
+            logger.info(f"Resume: reset {restarted} stuck task(s) for workflow {exec_id[:8]}")
         else:
             exec_id = sdk.start_workflow(
                 definition_id=workflow_id,
@@ -6293,6 +5799,7 @@ def run_single_workflow(
                 _pm_path = Path(state.current_feature_folder) / "docs" / "pipeline_metrics.json"
                 if _pm_path.exists():
                     import json as _json
+
                     _pm_data = _json.loads(_pm_path.read_text())
                     _pm_data["workflow_id"] = exec_id
                     _pm_path.write_text(_json.dumps(_pm_data, indent=2, default=str))
@@ -6335,9 +5842,7 @@ def run_single_workflow(
                         continue
                     # Detect GOTO: a previously completed phase rewound to in_progress
                     if prev == "completed" and status == "in_progress":
-                        logger.info(
-                            f"  [GOTO] {name}: completed → in_progress (rewound by earlier phase)"
-                        )
+                        logger.info(f"  [GOTO] {name}: completed → in_progress (rewound by earlier phase)")
                     else:
                         logger.info(f"  [TRANSITION] {name}: {prev} → {status}")
                 _last_phase_states = current
@@ -6364,9 +5869,7 @@ def run_single_workflow(
             wf_status = get_workflow_status(exec_id)
             # Get agents for this workflow only
             agents = get_agents(workflow_id=exec_id)
-            active_agents = [
-                a for a in agents if a.get("status") in ACTIVE_AGENT_STATUSES
-            ]
+            active_agents = [a for a in agents if a.get("status") in ACTIVE_AGENT_STATUSES]
             # Filter tasks by workflow_id to avoid counting tasks from other workflows
             pending = get_tasks(status="pending", workflow_id=exec_id)
             in_progress = get_tasks(status="in_progress", workflow_id=exec_id)
@@ -6379,16 +5882,12 @@ def run_single_workflow(
             validation = get_tasks(status="validation_in_progress", workflow_id=exec_id)
             needs_work = get_tasks(status="needs_work", workflow_id=exec_id)
             blocked = get_tasks(status="blocked", workflow_id=exec_id)
-            non_terminal = (
-                assigned + queued + under_review + validation + needs_work + blocked
-            )
+            non_terminal = assigned + queued + under_review + validation + needs_work + blocked
 
             _log_phase_transitions(exec_id)
 
             # Log agent spawns and terminations
-            current_agent_states = {
-                a["id"]: (a.get("status", ""), a.get("agent_type", "")) for a in agents
-            }
+            current_agent_states = {a["id"]: (a.get("status", ""), a.get("agent_type", "")) for a in agents}
             for aid, (status, atype) in current_agent_states.items():
                 prev_status, _ = _last_agent_states.get(aid, (None, None))
                 if prev_status is None and status in ACTIVE_AGENT_STATUSES:
@@ -6396,16 +5895,10 @@ def run_single_workflow(
                 elif prev_status in ACTIVE_AGENT_STATUSES and status == "terminated":
                     logger.info(f"  [AGENT DONE]  {aid[:8]} ({atype}) terminated")
                 elif prev_status is not None and prev_status != status:
-                    logger.info(
-                        f"  [AGENT]       {aid[:8]} ({atype}): {prev_status} → {status}"
-                    )
+                    logger.info(f"  [AGENT]       {aid[:8]} ({atype}): {prev_status} → {status}")
             _last_agent_states = current_agent_states
 
-            logger.info(
-                f"[{workflow_id}] [{elapsed}s] Agents: {len(active_agents)} active | "
-                f"Tasks: {len(pending)} pending, {len(in_progress)} active, "
-                f"{len(done)} done, {len(failed)} failed"
-            )
+            logger.info(f"[{workflow_id}] [{elapsed}s] Agents: {len(active_agents)} active | Tasks: {len(pending)} pending, {len(in_progress)} active, {len(done)} done, {len(failed)} failed")
 
             # Phase progression — the single source of truth for advancing phases.
             # This replaces the monitor's phase progression logic.
@@ -6426,9 +5919,7 @@ def run_single_workflow(
                     output = peek_agent_output(aid, lines=15)
                     if output:
                         # Show last meaningful lines (skip blank)
-                        lines = [
-                            ln.strip() for ln in output.strip().split("\n") if ln.strip()
-                        ][-8:]
+                        lines = [ln.strip() for ln in output.strip().split("\n") if ln.strip()][-8:]
                         if lines:
                             preview = " | ".join(lines[-3:])  # last 3 lines
                             logger.info(f"  [{aid[:8]}] {preview}")
@@ -6440,12 +5931,7 @@ def run_single_workflow(
 
             # Check if workflow should be considered complete:
             # No active agents AND no pending/in-progress/non-terminal tasks
-            if (
-                not active_agents
-                and not pending
-                and not in_progress
-                and not non_terminal
-            ):
+            if not active_agents and not pending and not in_progress and not non_terminal:
                 # All agents done, no more work to do
                 if done:
                     # Verify all phases are completed before declaring workflow done.
@@ -6464,16 +5950,12 @@ def run_single_workflow(
                                 _session.query(PhaseExecution)
                                 .filter(
                                     PhaseExecution.workflow_execution_id == exec_id,
-                                    PhaseExecution.status.in_(
-                                        ["pending", "in_progress"]
-                                    ),
+                                    PhaseExecution.status.in_(["pending", "in_progress"]),
                                 )
                                 .count()
                             )
                             if pending_phases > 0:
-                                logger.info(
-                                    f"{len(done)} tasks done but {pending_phases} phases still pending/in_progress — waiting"
-                                )
+                                logger.info(f"{len(done)} tasks done but {pending_phases} phases still pending/in_progress — waiting")
                                 # Don't declare complete yet; monitor will create next task
                                 time.sleep(POLL_INTERVAL)
                                 continue
@@ -6482,9 +5964,7 @@ def run_single_workflow(
                     except Exception as e:
                         logger.warning(f"Could not check phase status: {e}")
 
-                    logger.info(
-                        f"Workflow complete: {len(done)} tasks done, no agents active, all phases done"
-                    )
+                    logger.info(f"Workflow complete: {len(done)} tasks done, no agents active, all phases done")
 
                     # Final merge: merge the shared design branch into main
                     try:
@@ -6516,27 +5996,19 @@ def run_single_workflow(
                                     m=f"Merge design branch {design_branch} into main",
                                 )
                                 merge_sha = wt_mgr.main_repo.head.commit.hexsha
-                                logger.info(
-                                    f"Final merge complete: {design_branch} -> main ({merge_sha[:8]})"
-                                )
+                                logger.info(f"Final merge complete: {design_branch} -> main ({merge_sha[:8]})")
                             except _git.exc.GitCommandError as e:
                                 if "CONFLICT" in str(e):
-                                    logger.warning(
-                                        f"Merge conflict on {design_branch} -> main, aborting"
-                                    )
+                                    logger.warning(f"Merge conflict on {design_branch} -> main, aborting")
                                     wt_mgr.main_repo.git.merge("--abort")
                                     # Create PR instead
-                                    logger.info(
-                                        f"Conflict detected — branch {design_branch} preserved for manual merge/PR"
-                                    )
+                                    logger.info(f"Conflict detected — branch {design_branch} preserved for manual merge/PR")
                                 else:
                                     raise
 
                             # Worktree is intentionally kept — UI references artifacts there
                         else:
-                            logger.info(
-                                "No design branch tracked — skipping final merge"
-                            )
+                            logger.info("No design branch tracked — skipping final merge")
                     except Exception as e:
                         logger.warning(f"Final merge failed: {e}")
 
@@ -6545,9 +6017,7 @@ def run_single_workflow(
                     return "completed"
                 elif elapsed > 300 and not done:
                     # No tasks AND no done tasks after 5 minutes — something is wrong
-                    logger.error(
-                        f"No tasks exist after {elapsed}s — workflow appears broken"
-                    )
+                    logger.error(f"No tasks exist after {elapsed}s — workflow appears broken")
                     return "hard_error"
 
             out_of_credits, credit_reason = check_api_credits()
@@ -6574,39 +6044,26 @@ def run_single_workflow(
                 consume=True,
             )
             if high_confidence_signals:
-                logger.info(
-                    f"[ORCHESTRATOR] Received {len(high_confidence_signals)} "
-                    f"monitor signals for workflow {exec_id[:8]}"
-                )
+                logger.info(f"[ORCHESTRATOR] Received {len(high_confidence_signals)} monitor signals for workflow {exec_id[:8]}")
                 for sig in high_confidence_signals:
                     logger.info(f"[ORCHESTRATOR] Signal: {sig}")
                     # Signal metadata could be used for more nuanced decisions
                     # For now, signals factor into stuck_count below
 
-            hard_error, error_reason = detect_hard_error(
-                agents, failed, workflow_id=exec_id
-            )
+            hard_error, error_reason = detect_hard_error(agents, failed, workflow_id=exec_id)
             if hard_error:
                 logger.error(f"Hard error detected: {error_reason}")
                 return "hard_error"
 
-            impasse, impasse_reason = detect_impasse(
-                agents, pending, in_progress, elapsed
-            )
+            impasse, impasse_reason = detect_impasse(agents, pending, in_progress, elapsed)
             # Enhancement 4: Monitor signals can also indicate impasse.
             # Require at least 2 high-confidence stuck signals to avoid false
             # positives from a single Guardian assessment firing too aggressively.
             if not impasse and high_confidence_signals:
-                stuck_signals = [
-                    s for s in high_confidence_signals
-                    if s.type in (SignalType.STUCK_PATTERN, SignalType.PHASE_STUCK)
-                ]
+                stuck_signals = [s for s in high_confidence_signals if s.type in (SignalType.STUCK_PATTERN, SignalType.PHASE_STUCK)]
                 if len(stuck_signals) >= 2:
                     impasse = True
-                    impasse_reason = (
-                        f"Monitor detected {len(stuck_signals)} stuck signals: "
-                        f"{'; '.join(s.evidence[:50] for s in stuck_signals[:3])}"
-                    )
+                    impasse_reason = f"Monitor detected {len(stuck_signals)} stuck signals: {'; '.join(s.evidence[:50] for s in stuck_signals[:3])}"
                     logger.warning(f"[ORCHESTRATOR] Signal-driven impasse: {impasse_reason}")
             if impasse:
                 stuck_count += 1
@@ -6621,9 +6078,7 @@ def run_single_workflow(
                             if a.get("status") in ACTIVE_AGENT_STATUSES:
                                 try:
                                     terminate_agent_direct(a["id"])
-                                    logger.info(
-                                        f"Terminated agent {a['id'][:8]} (skip)"
-                                    )
+                                    logger.info(f"Terminated agent {a['id'][:8]} (skip)")
                                 except Exception:
                                     pass
                         return "skipped"
@@ -6649,7 +6104,7 @@ def run_single_workflow(
                             logger.info(f"  Terminated agent {agent['id'][:8]} on workflow cleanup")
                         except Exception:
                             pass
-                
+
                 wf_status = get_workflow_status(exec_id)
                 if wf_status.get("status") == "active":
                     pause_workflow_direct(exec_id)
@@ -6691,13 +6146,11 @@ def run_phase0(
     # idempotent), so it must be checked first and preserved as-is.
     from src.core.database import Feature as FeatureModel
     from src.core.database import get_db as _get_db
+
     with _get_db() as _db:
         existing_features = _db.query(FeatureModel).filter_by(design_id=design_entry.db_id).all()
         # Copy data out of session to avoid DetachedInstanceError
-        existing_feature_data = [
-            {"id": f.feature_key, "name": f.name, "scope": f.scope, "files": f.files or [], "depends_on": f.depends_on or [], "execution": f.execution}
-            for f in existing_features
-        ]
+        existing_feature_data = [{"id": f.feature_key, "name": f.name, "scope": f.scope, "files": f.files or [], "depends_on": f.depends_on or [], "execution": f.execution} for f in existing_features]
     if existing_feature_data:
         logger.info(f"Features already exist for {design_entry.name} ({len(existing_feature_data)} features) — skipping Phase 0")
         features_json = {
@@ -6726,24 +6179,12 @@ def run_phase0(
             try:
                 features_json = json.loads(features_json_path.read_text())
                 _validate_features_json(features_json)
-                logger.info(
-                    f"Phase 0 workflow {completion['workflow_id'][:8]} already "
-                    f"completed for {design_entry.name} — resuming feature-record "
-                    "creation without re-running the agent"
-                )
-                feature_records = _create_feature_records(
-                    design_entry.db_id, features_json, designs_folder, logger
-                )
-                logger.info(
-                    f"Phase 0 resumed: {len(feature_records)} features created"
-                )
+                logger.info(f"Phase 0 workflow {completion['workflow_id'][:8]} already completed for {design_entry.name} — resuming feature-record creation without re-running the agent")
+                feature_records = _create_feature_records(design_entry.db_id, features_json, designs_folder, logger)
+                logger.info(f"Phase 0 resumed: {len(feature_records)} features created")
                 return features_json, designs_folder
             except (json.JSONDecodeError, ValueError, OSError) as e:
-                logger.warning(
-                    f"Phase 0 workflow {completion['workflow_id'][:8]} completed "
-                    f"but its features.json could not be resumed ({e}) — "
-                    "falling through to a full re-run"
-                )
+                logger.warning(f"Phase 0 workflow {completion['workflow_id'][:8]} completed but its features.json could not be resumed ({e}) — falling through to a full re-run")
         else:
             # features.json not in designs_folder — the server may have
             # crashed before the copy. Try extracting from the git branch
@@ -6752,10 +6193,13 @@ def run_phase0(
             branch = f"feature_architect/{design_entry.db_id or 'unknown'}"
             try:
                 import subprocess
+
                 result = subprocess.run(
                     ["git", "show", f"{branch}:.hephaestus/features.json"],
                     cwd=str(project_path),
-                    capture_output=True, text=True, timeout=10,
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
                 )
                 if result.returncode == 0:
                     features_json = json.loads(result.stdout)
@@ -6769,28 +6213,21 @@ def run_phase0(
                         scope_result = subprocess.run(
                             ["git", "show", f"{branch}:.hephaestus/features/{feat_id}/scope.md"],
                             cwd=str(project_path),
-                            capture_output=True, text=True, timeout=10,
+                            capture_output=True,
+                            text=True,
+                            timeout=10,
                         )
                         if scope_result.returncode == 0:
                             scope_dest = designs_folder / "features" / feat_id / "scope.md"
                             scope_dest.parent.mkdir(parents=True, exist_ok=True)
                             scope_dest.write_text(scope_result.stdout)
-                    logger.info(
-                        f"Recovered features.json from git branch {branch} — "
-                        f"{len(features_json.get('features', []))} features"
-                    )
-                    feature_records = _create_feature_records(
-                        design_entry.db_id, features_json, designs_folder, logger
-                    )
-                    logger.info(
-                        f"Phase 0 resumed from branch: {len(feature_records)} features created"
-                    )
+                    logger.info(f"Recovered features.json from git branch {branch} — {len(features_json.get('features', []))} features")
+                    feature_records = _create_feature_records(design_entry.db_id, features_json, designs_folder, logger)
+                    logger.info(f"Phase 0 resumed from branch: {len(feature_records)} features created")
                     return features_json, designs_folder
                 else:
                     logger.warning(
-                        f"Phase 0 workflow {completion['workflow_id'][:8]} completed but "
-                        f"no features.json found at {features_json_path} or branch "
-                        f"{branch} — falling through to a full re-run"
+                        f"Phase 0 workflow {completion['workflow_id'][:8]} completed but no features.json found at {features_json_path} or branch {branch} — falling through to a full re-run"
                     )
             except Exception as branch_err:
                 logger.warning(
@@ -6813,9 +6250,7 @@ def run_phase0(
 
     # Create integration worktree for Phase 0
     branch = f"feature_architect/{design_entry.db_id or 'unknown'}"
-    worktree = _create_integration_worktree(
-        project_path, design_entry.db_id or "", branch, logger
-    )
+    worktree = _create_integration_worktree(project_path, design_entry.db_id or "", branch, logger)
 
     if worktree is None:
         logger.error("Failed to create worktree for Phase 0")
@@ -6871,17 +6306,11 @@ def run_phase0(
         # _get_phase0_completion can find the completed workflow for recovery
         # even if the server crashes before _create_feature_records runs.
         from src.core.database import AutopilotDesign as _ADModel, Workflow as _WfModel
+
         with _get_db() as _db:
-            _phase0_wf = (
-                _db.query(_WfModel)
-                .filter_by(design_id=design_entry.db_id, definition_id="feature_architect")
-                .order_by(_WfModel.created_at.desc())
-                .first()
-            )
+            _phase0_wf = _db.query(_WfModel).filter_by(design_id=design_entry.db_id, definition_id="feature_architect").order_by(_WfModel.created_at.desc()).first()
             if _phase0_wf:
-                _db.query(_ADModel).filter_by(id=design_entry.db_id).update(
-                    {_ADModel.phase0_workflow_id: _phase0_wf.id}
-                )
+                _db.query(_ADModel).filter_by(id=design_entry.db_id).update({_ADModel.phase0_workflow_id: _phase0_wf.id})
                 _db.flush()
                 logger.info(f"Persisted phase0_workflow_id={_phase0_wf.id[:8]} for {design_entry.name}")
 
@@ -6895,15 +6324,10 @@ def run_phase0(
             # with, that's a worktree-tracking bug to surface loudly (see
             # cleanup_all_stale_branches's fix in worktree_manager.py), not
             # something to route around by looking elsewhere.
-            candidates = [
-                p for p in worktree.rglob("features.json")
-                if p.stat().st_size > 0
-            ]
+            candidates = [p for p in worktree.rglob("features.json") if p.stat().st_size > 0]
             if candidates:
                 features_json_path = candidates[0]
-                logger.warning(
-                    f"features.json not at expected path; found at {features_json_path}"
-                )
+                logger.warning(f"features.json not at expected path; found at {features_json_path}")
             else:
                 logger.error("Phase 0 completed but features.json not found anywhere in worktree")
                 _update_design_status(
@@ -6935,20 +6359,10 @@ def run_phase0(
             try:
                 from src.core.database import Phase as _NegPhase
                 from src.core.database import Workflow as _NegWF
+
                 with _get_db() as _ndb:
-                    neg_wf = (
-                        _ndb.query(_NegWF)
-                        .filter_by(design_id=design_entry.db_id, definition_id="feature_architect")
-                        .order_by(_NegWF.created_at.desc())
-                        .first()
-                    )
-                    neg_phase = (
-                        _ndb.query(_NegPhase)
-                        .filter_by(workflow_id=neg_wf.id)
-                        .order_by(_NegPhase.order)
-                        .first()
-                        if neg_wf else None
-                    )
+                    neg_wf = _ndb.query(_NegWF).filter_by(design_id=design_entry.db_id, definition_id="feature_architect").order_by(_NegWF.created_at.desc()).first()
+                    neg_phase = _ndb.query(_NegPhase).filter_by(workflow_id=neg_wf.id).order_by(_NegPhase.order).first() if neg_wf else None
 
                 if neg_wf and neg_phase:
                     fixed, negotiated_json = _negotiate_validation_fix(
@@ -6964,16 +6378,9 @@ def run_phase0(
                     if fixed:
                         features_json = negotiated_json
                 else:
-                    logger.warning(
-                        "Could not locate Phase 0 workflow/phase for corrective "
-                        "negotiation — failing outright"
-                    )
+                    logger.warning("Could not locate Phase 0 workflow/phase for corrective negotiation — failing outright")
             except Exception as negotiate_err:
-                logger.error(
-                    f"Corrective negotiation itself failed unexpectedly: "
-                    f"{negotiate_err} — failing design with the original "
-                    "validation error"
-                )
+                logger.error(f"Corrective negotiation itself failed unexpectedly: {negotiate_err} — failing design with the original validation error")
                 fixed = False
 
             if not fixed:
@@ -7045,13 +6452,9 @@ def run_phase0(
         # fields: designs_folder, error, status.
         update_kwargs = {"designs_folder": str(designs_folder), "error": None}
         from src.core.database import Workflow
+
         with _get_db() as _db:
-            phase0_wf = (
-                _db.query(Workflow)
-                .filter_by(design_id=design_entry.db_id, definition_id="feature_architect")
-                .order_by(Workflow.created_at.desc())
-                .first()
-            )
+            phase0_wf = _db.query(Workflow).filter_by(design_id=design_entry.db_id, definition_id="feature_architect").order_by(Workflow.created_at.desc()).first()
             phase0_wf_id = phase0_wf.id if phase0_wf else None
         if phase0_wf_id:
             _set_workflow_type(phase0_wf_id, "design")
@@ -7063,9 +6466,7 @@ def run_phase0(
         )
 
         # Create Feature DB records
-        feature_records = _create_feature_records(
-            design_entry.db_id, features_json, designs_folder, logger
-        )
+        feature_records = _create_feature_records(design_entry.db_id, features_json, designs_folder, logger)
 
         logger.info(f"Phase 0 complete: {len(feature_records)} features created")
         return features_json, designs_folder
@@ -7110,10 +6511,17 @@ def _run_one_feature(
 
     # Find feature record in DB
     from src.core.database import Feature, Workflow, get_db
+    from src.core.cost_derivation import check_budget_before_new_work
 
     feature_id = None
     existing_workflow_id = None
     with get_db() as db:
+        # Budget guard: refuse to launch features for over-budget projects
+        # (inside same session to avoid race condition with concurrent cost writes)
+        if project_id and not check_budget_before_new_work(db, project_id):
+            logger.warning(f"[BUDGET] Cannot launch feature {feature_key} — project {project_id[:8]} over budget")
+            return "skipped"
+
         feat_record = (
             db.query(Feature)
             .filter_by(
@@ -7136,10 +6544,7 @@ def _run_one_feature(
             if feat_record.workflow_id:
                 wf = db.query(Workflow).filter_by(id=feat_record.workflow_id).first()
                 if wf and wf.status == "completed":
-                    logger.info(
-                        f"Feature {feature_key} already completed (workflow "
-                        f"{wf.id[:8]}) — skipping"
-                    )
+                    logger.info(f"Feature {feature_key} already completed (workflow {wf.id[:8]}) — skipping")
                     # feat_record.status may still be "active" from the run
                     # that actually did the work, if this function returned
                     # on that earlier call before reaching its own
@@ -7187,9 +6592,7 @@ def _run_one_feature(
 
     if worktree is None:
         logger.error(f"Failed to create worktree for feature {feature_key}")
-        _update_feature_status(
-            feature_id, design_entry.db_id, "failed", "Worktree creation failed", logger
-        )
+        _update_feature_status(feature_id, design_entry.db_id, "failed", "Worktree creation failed", logger)
         return "failed"
 
     try:
@@ -7282,9 +6685,7 @@ def _run_one_feature(
             final_status = "failed"
 
         # Update feature status
-        _update_feature_status(
-            feature_id, design_entry.db_id, final_status, logger=logger
-        )
+        _update_feature_status(feature_id, design_entry.db_id, final_status, logger=logger)
 
         # Sweep artifacts to permanent record
         docs_dir = worktree / "docs"
@@ -7507,9 +6908,7 @@ def run_design_aggregate(
 
     # Generate design_report.html
     try:
-        _generate_design_report_html(
-            design_entry, feature_results, designs_folder, logger
-        )
+        _generate_design_report_html(design_entry, feature_results, designs_folder, logger)
     except Exception as e:
         logger.warning(f"Failed to generate design report: {e}")
 
@@ -7572,12 +6971,8 @@ def _generate_design_report_html(
                     {
                         "name": feat.name,
                         "status": feat.status,
-                        "started_at": feat.started_at.isoformat()
-                        if feat.started_at
-                        else None,
-                        "completed_at": feat.completed_at.isoformat()
-                        if feat.completed_at
-                        else None,
+                        "started_at": feat.started_at.isoformat() if feat.started_at else None,
+                        "completed_at": feat.completed_at.isoformat() if feat.completed_at else None,
                     }
                 )
 
@@ -7586,9 +6981,7 @@ def _generate_design_report_html(
         "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "features": feature_records,
         "total_features": len(feature_records),
-        "completed_features": sum(
-            1 for f in feature_records if f["status"] == "completed"
-        ),
+        "completed_features": sum(1 for f in feature_records if f["status"] == "completed"),
         "failed_features": sum(1 for f in feature_records if f["status"] == "failed"),
         "skipped_features": sum(1 for f in feature_records if f["status"] == "skipped"),
     }
@@ -7685,28 +7078,28 @@ def run_single_design(
     logger.info("=" * 70)
 
     # ── Stage 1: Phase 0 — Feature Architect ──
-    features_json, designs_folder = run_phase0(
-        sdk, design_entry, project_path, logger, state, project_id=project_id
-    )
+    features_json, designs_folder = run_phase0(sdk, design_entry, project_path, logger, state, project_id=project_id)
     if features_json is None:
-        raise RuntimeError(
-            f"Phase 0 failed to produce features.json for design '{design_entry.name}'. "
-            "Check the feature_architect workflow and agent logs."
-        )
+        raise RuntimeError(f"Phase 0 failed to produce features.json for design '{design_entry.name}'. Check the feature_architect workflow and agent logs.")
 
     # ── Stage 2: Per-feature pipelines ──
     # Re-link features to their workflows if missing (handles pipeline restarts)
     _relink_features_to_workflows(design_entry.db_id, logger)
 
     feature_results = run_feature_pipelines(
-        sdk, design_entry, features_json, designs_folder,
-        project_path, logger, state, max_iterations, project_id=project_id,
+        sdk,
+        design_entry,
+        features_json,
+        designs_folder,
+        project_path,
+        logger,
+        state,
+        max_iterations,
+        project_id=project_id,
     )
 
     # ── Stage 3: Design aggregate ──
-    status, report = run_design_aggregate(
-        design_entry, feature_results, designs_folder, logger
-    )
+    status, report = run_design_aggregate(design_entry, feature_results, designs_folder, logger)
 
     design_entry.completed_at = datetime.now().isoformat()
 
@@ -7748,9 +7141,7 @@ def _should_stop(project_id: Optional[str]) -> bool:
     return False
 
 
-def _register_orchestrator_agent(
-    log_dir: Path, cli_tool: str, logger: OrchestratorLogger
-) -> Optional[str]:
+def _register_orchestrator_agent(log_dir: Path, cli_tool: str, logger: OrchestratorLogger) -> Optional[str]:
     """Register (or re-register, after a restart) the orchestrator's own
     Agent row, whose id becomes Task.created_by_agent_id for every task the
     orchestrator itself creates (_create_phase_task, _create_corrective_task).
@@ -7855,9 +7246,7 @@ def run_continuous_pipeline(args) -> None:
     logger.info("=" * 70)
     logger.info(f"Design Queue: {args.design_queue}")
     logger.info(f"Project Root: {args.project_path}")
-    logger.info(
-        f"Control Model: Engine evaluation points (max_total_gotos={args.max_iterations})"
-    )
+    logger.info(f"Control Model: Engine evaluation points (max_total_gotos={args.max_iterations})")
     logger.info(f"Poll Interval: {DESIGN_QUEUE_SCAN_INTERVAL}s")
     logger.info(f"Run ID: {state.run_id}")
     logger.info(f"Logs: {log_dir}")
@@ -7884,11 +7273,7 @@ def run_continuous_pipeline(args) -> None:
             from src.core.database import AutopilotProject as _AutopilotProject
 
             with get_db() as _pdb:
-                _proj = (
-                    _pdb.query(_AutopilotProject)
-                    .filter_by(base_dir=str(project_path.resolve()))
-                    .first()
-                )
+                _proj = _pdb.query(_AutopilotProject).filter_by(base_dir=str(project_path.resolve())).first()
                 if _proj:
                     current_project_id = _proj.id
         except Exception:
@@ -7919,6 +7304,7 @@ def run_continuous_pipeline(args) -> None:
 
     # Load all workflow definitions from registry (including feature_architect)
     from src.workflow_registry import get_all_workflow_definitions
+
     all_defs = get_all_workflow_definitions()
     # Add any definitions not already in our list
     known_ids = {autopilot_def.id}
@@ -7930,9 +7316,7 @@ def run_continuous_pipeline(args) -> None:
     logger.info("Initializing SDK...")
     sdk = HephaestusSDK(
         workflow_definitions=workflow_defs,
-        database_path=os.environ.get(
-            "DATABASE_PATH", str(HEPHAESTUS_DIR / "hephaestus.db")
-        ),
+        database_path=os.environ.get("DATABASE_PATH", str(HEPHAESTUS_DIR / "hephaestus.db")),
         qdrant_url=os.environ.get("QDRANT_URL", "http://localhost:6333"),
         working_directory=str(project_path),
         mcp_port=int(os.environ.get("MCP_PORT", "8300")),
@@ -8032,14 +7416,10 @@ def run_continuous_pipeline(args) -> None:
                 # touched, no matter how long it legitimately runs.
                 try:
                     active_workflows = get_active_workflows(str(project_path), project_id=current_project_id)
-                    still_blocking = _escalate_stale_active_workflows(
-                        active_workflows, active_workflow_abandoned_streak, logger
-                    )
+                    still_blocking = _escalate_stale_active_workflows(active_workflows, active_workflow_abandoned_streak, logger)
                     if still_blocking:
                         wf_ids = [i[:8] for i in still_blocking]
-                        logger.info(
-                            f"Workflow still active ({', '.join(wf_ids)}) - waiting before picking next design"
-                        )
+                        logger.info(f"Workflow still active ({', '.join(wf_ids)}) - waiting before picking next design")
                         state.queue_status = {
                             "status": "waiting",
                             "reason": "workflow_active",
@@ -8058,9 +7438,7 @@ def run_continuous_pipeline(args) -> None:
                             wf_check_status = wf_check.get("status", "")
                             if not wf_check_status:
                                 # Workflow no longer exists in DB — clear stale state
-                                logger.info(
-                                    f"Previous workflow {state.current_workflow_id[:8]} no longer exists in DB, clearing stale state"
-                                )
+                                logger.info(f"Previous workflow {state.current_workflow_id[:8]} no longer exists in DB, clearing stale state")
                                 state.current_workflow_id = None
                                 continue
                             # state.current_workflow_id is global, persisted
@@ -8107,15 +7485,11 @@ def run_continuous_pipeline(args) -> None:
                                 state.current_workflow_id = None
                                 continue
                         except Exception:
-                            logger.info(
-                                f"Previous workflow {state.current_workflow_id[:8]} could not be checked, clearing stale state"
-                            )
+                            logger.info(f"Previous workflow {state.current_workflow_id[:8]} could not be checked, clearing stale state")
                             state.current_workflow_id = None
                             continue
 
-                        is_complete, reason = is_design_fully_complete(
-                            state.current_workflow_id, logger
-                        )
+                        is_complete, reason = is_design_fully_complete(state.current_workflow_id, logger)
 
                         # Periodic stale task cleanup (every cycle)
                         try:
@@ -8132,16 +7506,10 @@ def run_continuous_pipeline(args) -> None:
                             # activity rather than ticking up regardless.
                             if not hasattr(state, "_recovery_attempts"):
                                 state._recovery_attempts = 0
-                            state._recovery_attempts = (
-                                _update_resumed_workflow_recovery_attempts(
-                                    state.current_workflow_id, state._recovery_attempts
-                                )
-                            )
+                            state._recovery_attempts = _update_resumed_workflow_recovery_attempts(state.current_workflow_id, state._recovery_attempts)
 
                             if state._recovery_attempts > 5:
-                                logger.warning(
-                                    f"Recovery failed after {state._recovery_attempts} attempts, escalating to impasse for workflow {state.current_workflow_id[:8]}"
-                                )
+                                logger.warning(f"Recovery failed after {state._recovery_attempts} attempts, escalating to impasse for workflow {state.current_workflow_id[:8]}")
                                 # Mark workflow as failed — required phase was abandoned
                                 try:
                                     # Aliased: a bare `get_db` import here makes
@@ -8160,34 +7528,20 @@ def run_continuous_pipeline(args) -> None:
                                     from src.core.database import get_db as _get_db2
 
                                     with _get_db2() as db:
-                                        wf = (
-                                            db.query(Workflow)
-                                            .filter_by(id=state.current_workflow_id)
-                                            .first()
-                                        )
+                                        wf = db.query(Workflow).filter_by(id=state.current_workflow_id).first()
                                         if wf:
                                             wf.status = "failed"
-                                            wf.status_reason = (
-                                                f"Abandoned: no agent/task activity for "
-                                                f"{state._recovery_attempts} consecutive resume "
-                                                "attempts after a backend restart"
-                                            )
+                                            wf.status_reason = f"Abandoned: no agent/task activity for {state._recovery_attempts} consecutive resume attempts after a backend restart"
                                             db.commit()
-                                            logger.warning(
-                                                f"Workflow {state.current_workflow_id[:8]} marked as failed (abandoned phase)"
-                                            )
+                                            logger.warning(f"Workflow {state.current_workflow_id[:8]} marked as failed (abandoned phase)")
                                 except Exception as e:
-                                    logger.error(
-                                        f"Failed to mark workflow as failed: {e}"
-                                    )
+                                    logger.error(f"Failed to mark workflow as failed: {e}")
                                 state.current_workflow_id = None
                                 state._recovery_attempts = 0
                                 continue
 
                             # Attempt recovery
-                            success, recovery_msg = attempt_recovery(
-                                state.current_workflow_id, logger
-                            )
+                            success, recovery_msg = attempt_recovery(state.current_workflow_id, logger)
                             if success:
                                 logger.info(f"Recovery actions: {recovery_msg}")
 
@@ -8206,14 +7560,10 @@ def run_continuous_pipeline(args) -> None:
                 except Exception as e:
                     logger.warning(f"Warning: Could not check active workflows: {e}")
 
-                next_design = pick_next_design(
-                    queue_dir, processed_hashes, logger, project_id=current_project_id
-                )
+                next_design = pick_next_design(queue_dir, processed_hashes, logger, project_id=current_project_id)
 
                 if next_design is None:
-                    logger.info(
-                        f"Queue empty. Scanning again in {DESIGN_QUEUE_SCAN_INTERVAL}s..."
-                    )
+                    logger.info(f"Queue empty. Scanning again in {DESIGN_QUEUE_SCAN_INTERVAL}s...")
                     state.queue_status = {
                         "status": "empty",
                         "processed": len(processed_hashes),
@@ -8226,11 +7576,7 @@ def run_continuous_pipeline(args) -> None:
 
                 next_design.status = DesignStatus.IN_PROGRESS
                 state.current_design = next_design.name
-                state.current_feature_folder = (
-                    str(next_design.feature_folder)
-                    if next_design.feature_folder
-                    else None
-                )
+                state.current_feature_folder = str(next_design.feature_folder) if next_design.feature_folder else None
                 state.queue_status = {
                     "status": "processing",
                     "current": next_design.name,
@@ -8257,10 +7603,7 @@ def run_continuous_pipeline(args) -> None:
                     logger.save_state(state)
                     persistent_state.save(state, processed_hashes)
                 except Exception as _design_err:
-                    logger.error(
-                        f"run_single_design raised unexpectedly for "
-                        f"'{next_design.name}': {_design_err}"
-                    )
+                    logger.error(f"run_single_design raised unexpectedly for '{next_design.name}': {_design_err}")
                     status = DesignStatus.FAILED
                     feature_report = _empty_report(next_design)
 
@@ -8275,36 +7618,14 @@ def run_continuous_pipeline(args) -> None:
 
                     with _get_db() as _db:
                         if current_project_id:
-                            _proj = (
-                                _db.query(AutopilotProject)
-                                .filter_by(id=current_project_id)
-                                .first()
-                            )
+                            _proj = _db.query(AutopilotProject).filter_by(id=current_project_id).first()
                         else:
-                            _proj = (
-                                _db.query(AutopilotProject)
-                                .filter_by(is_active=True)
-                                .first()
-                            )
+                            _proj = _db.query(AutopilotProject).filter_by(is_active=True).first()
                         if _proj:
-                            _des = (
-                                _db.query(AutopilotDesign)
-                                .filter_by(
-                                    project_id=_proj.id, filename=next_design.path.name
-                                )
-                                .first()
-                            )
+                            _des = _db.query(AutopilotDesign).filter_by(project_id=_proj.id, filename=next_design.path.name).first()
                             if _des:
-                                _des.status = (
-                                    status.value
-                                    if hasattr(status, "value")
-                                    else str(status)
-                                )
-                                _des.feature_folder = (
-                                    str(next_design.feature_folder)
-                                    if next_design.feature_folder
-                                    else None
-                                )
+                                _des.status = status.value if hasattr(status, "value") else str(status)
+                                _des.feature_folder = str(next_design.feature_folder) if next_design.feature_folder else None
                                 if status == DesignStatus.COMPLETED:
                                     _des.completed_at = datetime.utcnow()
                                     # Clear retry counter on success
@@ -8350,9 +7671,7 @@ def run_continuous_pipeline(args) -> None:
                 )
 
                 logger.info("")
-                logger.info(
-                    f"Design '{next_design.name}' complete. Status: {status.value}"
-                )
+                logger.info(f"Design '{next_design.name}' complete. Status: {status.value}")
                 logger.info(f"Total designs processed: {state.designs_processed}")
                 logger.info(f"  Succeeded: {state.designs_succeeded}")
                 logger.info(f"  Failed: {state.designs_failed}")
@@ -8415,9 +7734,7 @@ def run_continuous_pipeline(args) -> None:
 def main():
     import argparse
 
-    parser = argparse.ArgumentParser(
-        description="Autopilot Continuous Pipeline - Design Queue to Validated Software"
-    )
+    parser = argparse.ArgumentParser(description="Autopilot Continuous Pipeline - Design Queue to Validated Software")
     parser.add_argument(
         "--design-queue",
         default=None,
@@ -8434,9 +7751,7 @@ def main():
         default=3,
         help="Maximum review-fix-QA iterations per design",
     )
-    parser.add_argument(
-        "--drop-db", action="store_true", help="Drop database before starting"
-    )
+    parser.add_argument("--drop-db", action="store_true", help="Drop database before starting")
 
     args = parser.parse_args()
 

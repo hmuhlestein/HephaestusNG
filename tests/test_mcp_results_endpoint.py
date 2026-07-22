@@ -9,8 +9,6 @@ from fastapi.testclient import TestClient
 from src.mcp.server import app, server_state
 from unittest.mock import AsyncMock, patch
 
-import httpx
-import pytest
 
 
 class TestReportResultsEndpoint:

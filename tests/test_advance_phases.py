@@ -87,7 +87,7 @@ def sample_workflow(db_manager):
             phases_folder_path="/tmp",
         )
         session.add(wf)
-        
+
         # Create phases
         phase1 = Phase(
             id="phase-1",
@@ -107,7 +107,7 @@ def sample_workflow(db_manager):
         )
         session.add(phase1)
         session.add(phase2)
-        
+
         # Create phase executions
         exec1 = PhaseExecution(
             id="exec-1",
@@ -116,7 +116,7 @@ def sample_workflow(db_manager):
             status="in_progress",
         )
         session.add(exec1)
-        
+
         return wf
 
 
@@ -278,40 +278,40 @@ class TestReleasePhaseTaskCreationClaim:
 
 class TestAdvancePhases:
     """Tests for _advance_phases function."""
-    
+
     def test_returns_false_when_workflow_not_found(self, db_manager):
         """Should return False when workflow doesn't exist."""
         from src.autopilot.orchestrator import _advance_phases
-        
+
         logger = MagicMock()
         result = _advance_phases("nonexistent-wf", logger)
         assert result is False
-    
+
     def test_returns_false_when_workflow_paused(self, db_manager, sample_workflow):
         """Should return False when workflow is paused (no done tasks)."""
         from src.autopilot.orchestrator import _advance_phases
-        
+
         # Pause the workflow
         with db_manager.session_scope() as session:
             wf = session.query(Workflow).filter_by(id="wf-1").first()
             wf.status = "paused"
-        
+
         logger = MagicMock()
         result = _advance_phases("wf-1", logger)
         assert result is False
-    
+
     @patch("src.autopilot.orchestrator.create_agent_for_task_direct")
     def test_auto_resumes_paused_workflow_with_done_task(self, mock_create_agent, db_manager, sample_workflow):
         """Should auto-resume paused workflow if it has a done task in stalled phase."""
         from src.autopilot.orchestrator import _advance_phases
-        
+
         mock_create_agent.return_value = {"agent_id": "new-agent-1"}
-        
+
         # Pause the workflow and add a done task
         with db_manager.session_scope() as session:
             wf = session.query(Workflow).filter_by(id="wf-1").first()
             wf.status = "paused"
-            
+
             task = Task(
                 id="task-1",
                 workflow_id="wf-1",
@@ -321,10 +321,10 @@ class TestAdvancePhases:
                 status="done",
             )
             session.add(task)
-        
+
         logger = MagicMock()
         _advance_phases("wf-1", logger)
-        
+
         # Verify workflow was resumed
         with db_manager.session_scope() as session:
             wf = session.query(Workflow).filter_by(id="wf-1").first()
@@ -368,25 +368,25 @@ class TestAdvancePhases:
 
 class TestCaseStartFirstPhase:
     """Tests for _case_start_first_phase function."""
-    
+
     def test_starts_first_phase_when_no_progress(self, db_manager, sample_workflow):
         """Should start first phase when no phases are in progress or completed."""
         from src.autopilot.orchestrator import (
             _case_start_first_phase,
             _get_phase_statuses,
         )
-        
+
         with db_manager.session_scope() as session:
             # Reset phase execution to pending
             exec = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
             if exec:
                 exec.status = "pending"
-            
+
             phase_statuses = _get_phase_statuses(session, "wf-1")
             pending = [p for p in phase_statuses if p["status"] == "pending"]
             in_progress = [p for p in phase_statuses if p["status"] == "in_progress"]
             completed = [p for p in phase_statuses if p["status"] == "completed"]
-        
+
         logger = MagicMock()
         with patch("src.autopilot.orchestrator._create_phase_task", return_value=True) as mock_create:
             with db_manager.session_scope() as session:
@@ -450,15 +450,15 @@ class TestCaseStartFirstPhase:
 
 class TestCaseInProgressNoTasks:
     """Tests for _case_in_progress_no_tasks function."""
-    
+
     def test_creates_task_for_phase_without_tasks(self, db_manager, sample_workflow):
         """Should create task when in-progress phase has no tasks."""
         from src.autopilot.orchestrator import _case_in_progress_no_tasks
-        
+
         with db_manager.session_scope() as session:
             phase = session.query(Phase).filter_by(id="phase-1").first()
             in_progress = [{"phase": phase, "status": "in_progress"}]
-        
+
         logger = MagicMock()
         with patch("src.autopilot.orchestrator._create_phase_task", return_value=True) as mock_create:
             with db_manager.session_scope() as session:
@@ -469,7 +469,7 @@ class TestCaseInProgressNoTasks:
 
 class TestMaybeRetryFailedTasks:
     """Tests for _maybe_retry_failed_tasks function."""
-    
+
     def test_retries_all_failed_tasks(self, db_manager, sample_workflow):
         """Should reset failed tasks and dispatch a fresh agent for each,
         landing on in_progress -- not just reset to pending and abandoned
@@ -1820,14 +1820,14 @@ class TestCaseCompletedWithSuccessor:
 
 class TestGetPhaseStatuses:
     """Tests for _get_phase_statuses helper."""
-    
+
     def test_returns_phase_statuses(self, db_manager, sample_workflow):
         """Should return all phases with their execution statuses."""
         from src.autopilot.orchestrator import _get_phase_statuses
-        
+
         with db_manager.session_scope() as session:
             statuses = _get_phase_statuses(session, "wf-1")
-            
+
             assert len(statuses) == 2
             assert statuses[0]["phase"].name == "requirements"
             assert statuses[0]["status"] == "in_progress"
@@ -1934,7 +1934,7 @@ class TestFirePhaseTransition:
     def test_fires_transition_successfully(self, mock_create, mock_pm_class, db_manager, sample_workflow):
         """Should fire phase transition and create next task."""
         from src.autopilot.orchestrator import _fire_phase_transition
-        
+
         # Mock phase manager
         mock_pm = MagicMock()
         mock_pm_class.return_value = mock_pm
@@ -1944,10 +1944,10 @@ class TestFirePhaseTransition:
             "target_phase": "implementation",
         }
         mock_create.return_value = True
-        
+
         logger = MagicMock()
         result = _fire_phase_transition("wf-1", "phase-1", "requirements", logger)
-        
+
         assert result is True
         mock_pm.mark_phase_complete.assert_called_once()
         mock_create.assert_called_once()

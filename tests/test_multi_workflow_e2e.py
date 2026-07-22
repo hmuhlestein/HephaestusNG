@@ -8,7 +8,6 @@ This module tests end-to-end workflow scenarios including:
 5. Backward compatibility
 """
 
-import os
 import uuid
 from datetime import datetime
 

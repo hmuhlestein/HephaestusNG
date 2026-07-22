@@ -3,14 +3,13 @@
 import time
 import uuid
 from datetime import datetime
-from unittest.mock import Mock, patch
+from unittest.mock import Mock
 
 import libtmux
 import pytest
 
 from src.agents.manager import AgentManager
 from src.core.database import Agent, AgentLog, DatabaseManager, Task
-from src.interfaces import get_llm_provider
 
 
 @pytest.mark.integration

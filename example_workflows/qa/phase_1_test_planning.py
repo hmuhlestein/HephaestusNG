@@ -30,7 +30,7 @@ unit tests, integration tests, API tests, and browser automation tests.""",
         "Task marked as done",
     ],
     working_directory=".",
-    additional_notes="""═══════════════════════════════════════════════════════════════════════
+    additional_notes=r"""═══════════════════════════════════════════════════════════════════════
 YOU ARE A QA TEST PLANNER - CREATE A COMPREHENSIVE TEST PLAN
 ═══════════════════════════════════════════════════════════════════════
 

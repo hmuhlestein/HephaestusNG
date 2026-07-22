@@ -199,7 +199,7 @@ class TestEndToEndValidationFlow:
         # 6. Simulate agent completing task1 (with validation)
         agent1 = Agent(
             id=str(uuid.uuid4()),
-            
+
             status="working",
             current_task_id=task1.id,
             agent_type="phase",
@@ -238,7 +238,7 @@ class TestEndToEndValidationFlow:
         # 7. Simulate agent completing task2 (without validation)
         agent2 = Agent(
             id=str(uuid.uuid4()),
-            
+
             status="working",
             current_task_id=task2.id,
             agent_type="phase",
@@ -318,7 +318,7 @@ class TestEndToEndValidationFlow:
 
         agent = Agent(
             id="agent-123",
-            
+
             status="working",
             current_task_id=task.id,
             agent_type="phase",

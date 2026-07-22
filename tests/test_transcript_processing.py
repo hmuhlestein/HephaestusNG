@@ -1,11 +1,7 @@
 """Tests for transcript log ANSI processing and \\r collapsing."""
 
-import os
-import tempfile
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 
 def _make_agent(tmux_session_name="test_agent", status="working", current_task_id=None):
@@ -130,7 +126,6 @@ class TestCarriageReturnCollapsing:
 
     def _collapse(self, content):
         """Run the \\r collapsing logic."""
-        import re
 
         text = content
         collapsed = []
@@ -627,7 +622,6 @@ class TestReadTranscriptLogReal:
         filtered result is still exactly correct. The second call must
         not re-open/re-read the file at all."""
         import builtins
-        from unittest.mock import patch
 
         mgr, agent = self._make_manager_and_agent(tmp_path, "hello\nworld\n")
 
@@ -679,8 +673,6 @@ class TestReadTranscriptLogReal:
         """A terminated agent's transcript file never changes again -- its
         full (ANSI-strip + dedup) history should only ever be computed
         once, not on every future request for it."""
-        import builtins
-        from unittest.mock import patch
 
         mgr, agent = self._make_manager_and_agent(
             tmp_path, "hello\nworld\n", status="terminated"

@@ -1,6 +1,5 @@
 """Tests for multi-workflow infrastructure."""
 
-import os
 import uuid
 from datetime import datetime
 

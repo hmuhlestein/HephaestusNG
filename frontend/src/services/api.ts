@@ -832,6 +832,48 @@ export const apiService = {
     await api.delete(`/projects/${encodeURIComponent(projectId)}`);
   },
 
+  updateProject: async (projectId: string, updates: Record<string, any>): Promise<any> => {
+    const { data } = await api.put(`/projects/${encodeURIComponent(projectId)}`, updates);
+    return data;
+  },
+
+  // ── Cost Endpoints ──────────────────────────────────────────────────────
+
+  getProjectCosts: async (projectId: string): Promise<any> => {
+    const { data } = await api.get(`/projects/${encodeURIComponent(projectId)}/costs`, {
+      headers: { 'X-Agent-ID': 'ui-user' },
+    });
+    return data;
+  },
+
+  getDesignCosts: async (designId: string): Promise<any> => {
+    const { data } = await api.get(`/designs/${encodeURIComponent(designId)}/costs`, {
+      headers: { 'X-Agent-ID': 'ui-user' },
+    });
+    return data;
+  },
+
+  getFeatureCosts: async (featureId: string): Promise<any> => {
+    const { data } = await api.get(`/features/${encodeURIComponent(featureId)}/costs`, {
+      headers: { 'X-Agent-ID': 'ui-user' },
+    });
+    return data;
+  },
+
+  getWorkflowCosts: async (workflowId: string): Promise<any> => {
+    const { data } = await api.get(`/workflows/${encodeURIComponent(workflowId)}/costs`, {
+      headers: { 'X-Agent-ID': 'ui-user' },
+    });
+    return data;
+  },
+
+  getTaskCosts: async (taskId: string): Promise<any> => {
+    const { data } = await api.get(`/tasks/${encodeURIComponent(taskId)}/costs`, {
+      headers: { 'X-Agent-ID': 'ui-user' },
+    });
+    return data;
+  },
+
   // ── Phase Prompt Editor ──────────────────────────────────────────────
 
   updatePhase: async (

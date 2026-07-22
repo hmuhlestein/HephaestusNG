@@ -1,7 +1,6 @@
 """Tests for autopilot API endpoints."""
 
 import json
-import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock

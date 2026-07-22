@@ -14,7 +14,7 @@ back on timeout, same as Guardian's GUARDIAN_LLM_TIMEOUT (guardian.py).
 
 import asyncio
 import os
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import Mock, patch
 
 import pytest
 

@@ -228,13 +228,13 @@ class TaskBlockingService:
         """
         with get_db() as db:
             query = db.query(Task).filter_by(status="blocked")
-            
+
             if project_id:
                 # Filter through workflow -> project_id
                 query = query.join(Workflow, Task.workflow_id == Workflow.id).filter(
                     Workflow.project_id == project_id
                 )
-            
+
             blocked_tasks = query.all()
 
             results = []
