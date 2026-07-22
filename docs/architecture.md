@@ -253,7 +253,7 @@ def collect_task_cost(task_id: str) -> None:
 
 ---
 
-### 2.4 OpenRouter Direct Collection (PARTIALLY IMPLEMENTED)
+### 2.4 OpenRouter Direct Collection (IMPLEMENTED)
 
 **Location:** `src/interfaces/langchain_llm_client.py`
 
@@ -262,68 +262,67 @@ def collect_task_cost(task_id: str) -> None:
 - ✅ `_invoke_and_record()` method implemented at line 323
 - ✅ `usage.include=true` added to `extra_body` at line 243
 - ✅ Cost extraction from `response_metadata.token_usage.cost.total`
-- ❌ Not all 9 call sites routed through `_invoke_and_record()`
-- ❌ `task_id` not threaded into all methods
+- ✅ All major call sites routed through `_invoke_and_record()`: `classify_complexity`, `enrich_task`, `resolve_ticket_clarification`, `analyze_agent_state`, `analyze_agent_trajectory` (guardian), conductor analysis, conductor review_qa
+- ✅ `task_id` threaded into task-scoped methods
 
 #### 2.4.2 Call Site Inventory
 
 | Call Site | File:Line | task_id Available? | Status |
 |-----------|-----------|-------------------|--------|
-| `classify_complexity` | langchain_llm_client.py | No (design-level) | ❌ Needs routing |
-| `enrich_task` | langchain_llm_client.py | No — caller knows but doesn't pass | ❌ Needs `task_id` param |
-| `analyze_agent_state` | langchain_llm_client.py | Via `task_info` dict | ❌ Needs verification |
-| `analyze_agent_trajectory` | langchain_llm_client.py | Via `task_info` dict | ❌ Needs verification |
-| `analyze_system_coherence` | langchain_llm_client.py | No (system-wide) | ❌ Rolls up to overhead |
-| `review_qa_report` | langchain_llm_client.py | Unknown | ❌ Needs inspection |
-| `generate_agent_prompt` | langchain_llm_client.py | Unknown | ❌ Needs inspection |
+| `classify_complexity` | langchain_llm_client.py:409 | No (design-level) | ✅ Routed |
+| `enrich_task` | langchain_llm_client.py:466 | Yes (passed as param) | ✅ Routed |
+| `resolve_ticket_clarification` | langchain_llm_client.py:530 | No (ticket-scoped) | ✅ Routed |
+| `analyze_agent_state` | langchain_llm_client.py:592 | Via `task_info` dict | ✅ Routed |
+| `analyze_agent_trajectory` | langchain_llm_client.py:691 | Via `task_info` dict | ✅ Routed (guardian) |
+| `analyze_system_coherence` | langchain_llm_client.py:750 | No (system-wide) | ✅ Routed (conductor) |
+| `review_qa_report` | langchain_llm_client.py:842 | Yes (passed as param) | ✅ Routed (conductor) |
 | `generate_embedding` | langchain_llm_client.py | N/A | ⏭️ Skip (not cost-tracked) |
-| Others | Various | Unknown | ❌ Grep needed |
 
 ---
 
-### 2.5 Budget Enforcement (PARTIALLY IMPLEMENTED)
+### 2.5 Budget Enforcement (IMPLEMENTED)
 
 #### 2.5.1 Implemented
 
 - ✅ `cost_limit_usd` column on `AutopilotProject`
 - ✅ `_check_budget_enforcement()` in `cost_derivation.py`
-- ✅ `_pause_project_workflows()` includes Phase 0 (`definition_id.in_(["autopilot", "autopilot-phase0"])`)
+- ✅ `_pause_project_workflows()` includes Phase 0 (`definition_id.in_(DESIGN_WORKFLOW_DEFINITION_IDS)`)
 - ✅ `check_budget_before_new_work()` guard function
-- ✅ `PUT /projects/{id}` handles `cost_limit_usd` update
+- ✅ `PUT /projects/{id}` handles `cost_limit_usd` update AND clears budget pause when limit raised
+- ✅ `paused_by` guards generalized — all self-heal paths use `is not None`
+- ✅ Budget checks wired into `pick_next_design()` (line 1931) and `_run_one_feature()` (line 6381)
 
-#### 2.5.2 Not Implemented
+#### 2.5.2 `paused_by` Guard Locations
 
-- ❌ `paused_by` guards not generalized (3 locations still use `== "user"`)
-- ❌ Budget checks not wired into `pick_next_design()` and `_run_one_feature()`
-- ❌ Limit raise doesn't clear budget pause on `PUT /projects/{id}`
-
-#### 2.5.3 `paused_by` Guard Locations
-
-| Location | Line | Current Check | Required Change |
-|----------|------|---------------|-----------------|
-| `_try_auto_resume_paused_workflow` | 3749 | `== "user"` | `is not None` |
-| `_create_corrective_task` | 5680 | `== "user"` | `is not None` |
-| `attempt_recovery` (stuck restart) | 5864 | `== "user"` | `is not None` |
-| `AutopilotService.start()` | 398 | `== "user"` | **Keep as-is** (play button resumes user-paused, not budget-paused) |
+| Location | Line | Current Check | Status |
+|----------|------|---------------|--------|
+| `_try_auto_resume_paused_workflow` | 3531 | `is not None` | ✅ Generalized |
+| `_create_corrective_task` | 5218 | `is not None` | ✅ Generalized |
+| `attempt_recovery` (stuck restart) | 5384 | `is not None` | ✅ Generalized |
+| `AutopilotService.start()` | 395 | `== "user"` | ✅ Correctly kept — play button resumes user-paused, not budget-paused |
 
 ---
 
-### 2.6 Pi Extension (NOT IMPLEMENTED)
+### 2.6 Pi Extension (IMPLEMENTED)
 
-**Target:** `extensions/hephaestus-cost-tracker.ts`
+**Location:** `extensions/hephaestus-cost-tracker/src/index.ts`
 
-#### 2.6.1 Requirements
+The pi extension is implemented and hooks `turn_end` events to capture `message.usage.cost.total` in real-time. It POSTs each turn's cost to the Hephaestus API and displays running cost in the pi TUI via `ctx.ui.setStatus()`.
 
-- Hook `turn_end` events in pi process
-- Extract `message.usage.cost.total` from turn data
-- POST to Hephaestus API (`POST /cost-entries`)
-- Show running cost in TUI via `ctx.ui.setStatus()`
-- Configurable API URL via `HEPHAESTUS_API_URL` env var
+#### 2.6.1 Current Implementation
+
+- ✅ Hooks `turn_end` events in pi process
+- ✅ Extracts `message.usage.cost.total` from turn data
+- ✅ POSTs to Hephaestus API (`POST /api/autopilot/cost-entries`)
+- ✅ Shows running cost in TUI via `ctx.ui.setStatus()`
+- ✅ Configurable API URL via `HEPHAESTUS_API_URL` env var (default: `http://localhost:8300`)
+- ✅ Fire-and-forget POST with graceful error handling (never blocks pi)
+- ✅ Reads `agent_id`, `task_id`, `workflow_id` from environment variables
 
 #### 2.6.2 Benefits over JSONL Tailing
 
-| Aspect | Pi Extension | JSONL Tailing |
-|--------|-------------|---------------|
+| Aspect | Pi Extension (✅ Implemented) | JSONL Tailing (Fallback) |
+|--------|------------------------------|--------------------------|
 | File-system access | Not needed | Required |
 | Real-time display | Yes (TUI) | No (on completion) |
 | Checkpoint table | Not needed | Required |
@@ -335,6 +334,7 @@ When extension not loaded:
 - JSONL tailing collector activates on task completion
 - No real-time TUI display
 - Same data accuracy, delayed timing
+- Extension installed globally at `~/.pi/agent/extensions/hephaestus-cost-tracker/` by `scripts/install.sh` when pi is detected
 
 ---
 
@@ -351,14 +351,17 @@ When extension not loaded:
 | `BudgetPausedLabel` | Workflow status | "Paused: budget limit reached" instead of generic "Paused" |
 | `BudgetConfigInput` | ProjectSettingsModal | Number input for `cost_limit_usd` |
 
-#### 2.7.2 API Endpoints Required
+#### 2.7.2 API Endpoints (All Implemented)
 
 | Endpoint | Method | Purpose | Status |
 |----------|--------|---------|--------|
-| `/projects/{id}` | PUT | Update `cost_limit_usd` | ✅ Implemented |
-| `/projects/{id}/costs` | GET | Get project cost breakdown | ❌ Not implemented |
-| `/designs/{id}/costs` | GET | Get design cost breakdown | ❌ Not implemented |
-| `/features/{id}/costs` | GET | Get feature cost breakdown | ❌ Not implemented |
+| `/projects/{id}` | PUT | Update `cost_limit_usd` + clear budget pause | ✅ Implemented |
+| `/cost-entries` | POST | Create cost entry (pi extension endpoint) | ✅ Implemented |
+| `/tasks/{id}/costs` | GET | Get task cost breakdown with entries | ✅ Implemented |
+| `/workflows/{id}/costs` | GET | Get workflow cost breakdown | ✅ Implemented |
+| `/features/{id}/costs` | GET | Get feature cost breakdown | ✅ Implemented |
+| `/designs/{id}/costs` | GET | Get design cost breakdown | ✅ Implemented |
+| `/projects/{id}/costs` | GET | Get project cost breakdown | ✅ Implemented |
 
 ---
 
@@ -1061,11 +1064,12 @@ interface TurnData {
 | `src/core/cost_derivation.py` | Self-healing cost rollup | ✅ Implemented |
 | `src/core/database.py` | CostEntry, SessionCostCheckpoint models | ✅ Implemented |
 | `src/services/cost_collection_service.py` | Per-CLI collectors | ✅ Implemented |
-| `src/interfaces/langchain_llm_client.py` | OpenRouter direct collection | ⚠️ Partial |
-| `src/autopilot/orchestrator.py` | Budget enforcement guards | ⚠️ Partial |
-| `src/mcp/autopilot_api.py` | API endpoints | ⚠️ Partial |
-| `tests/test_cost_tracking.py` | Existing tests | ✅ Implemented |
-| `extensions/hephaestus-cost-tracker/` | Pi extension | ❌ Not created |
+| `src/interfaces/langchain_llm_client.py` | OpenRouter direct collection | ✅ Implemented |
+| `src/autopilot/orchestrator.py` | Budget enforcement guards | ✅ Implemented |
+| `src/mcp/autopilot_api.py` | API endpoints (all 7) | ✅ Implemented |
+| `tests/test_cost_tracking.py` | Unit + derivation tests (39 tests) | ✅ Implemented |
+| `tests/test_budget_enforcement_integration.py` | Budget enforcement tests (13 tests) | ✅ Implemented |
+| `extensions/hephaestus-cost-tracker/` | Pi extension | ✅ Implemented |
 | `frontend/src/components/cost/` | Cost UI components | ❌ Not created |
 
 ### B. Design Decisions Log
@@ -1077,14 +1081,14 @@ interface TurnData {
 | Collection on completion | No torn-read risk | ✅ Accepted |
 | Pi extension preferred | Real-time display, no file access | ✅ Accepted |
 | Price table for Claude Code | No dollar cost in transcripts | ✅ Accepted |
-| `is not None` for paused_by | Prevents budget-paused auto-resume | ✅ Accepted |
+| `is not None` for paused_by | Prevents budget-paused auto-resume | ✅ Implemented |
 
 ### C. Open Questions
 
 | Question | Status | Recommendation |
 |----------|--------|----------------|
 | Force session_id on standalone tasks? | Unresolved | Yes — eliminates permanent gap |
-| `usage.include=true` survives LangChain? | Needs smoke test | Test before T4 |
+| `usage.include=true` survives LangChain? | ✅ Confirmed working | Cost extraction from response_metadata verified |
 | OpenCode actually used? | Needs verification | Check workflow.yaml |
 
 ---

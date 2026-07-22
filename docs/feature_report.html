@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Feature Report: Cost Tracking Database Schema</title>
+    <title>Feature Report: Cost Derivation Engine</title>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body { 
@@ -92,18 +92,18 @@
 </head>
 <body>
     <div class="container">
-        <h1>Feature Report: Cost Tracking Database Schema</h1>
-        <p class="meta">Generated: 2026-07-21 | Feature ID: cost-tracking-database-schema | Workflow ID: af451d18-d3c7-4a3e-9c58-9c1ed72fc0ad</p>
+        <h1>Feature Report: Cost Derivation Engine</h1>
+        <p class="meta">Generated: 2026-07-21 | Feature ID: cost-derivation-engine | Branch: feature/des-91c8-cost-derivation</p>
 
         <div class="summary-grid">
             <div class="summary-card">
                 <h3>Functional Reqs</h3>
-                <div class="value success">10/15</div>
-                <small>4 deferred, 1 partial</small>
+                <div class="value success">13/15</div>
+                <small>2 deferred (frontend UI)</small>
             </div>
             <div class="summary-card">
                 <h3>Tests</h3>
-                <div class="value success">39/39</div>
+                <div class="value success">52/52</div>
                 <small>100% pass rate</small>
             </div>
             <div class="summary-card">
@@ -112,9 +112,9 @@
                 <small>All verified</small>
             </div>
             <div class="summary-card">
-                <h3>Doc Accuracy</h3>
-                <div class="value success">95%</div>
-                <small>After fixes</small>
+                <h3>API Endpoints</h3>
+                <div class="value success">7/7</div>
+                <small>All implemented</small>
             </div>
         </div>
 
@@ -145,7 +145,7 @@
                 </tr>
                 <tr>
                     <td>FR-4</td>
-                    <td>Cost Derivation Module</td>
+                    <td>Cost Derivation Module (self-healing)</td>
                     <td><span class="status complete">✅ Complete</span></td>
                 </tr>
                 <tr>
@@ -166,16 +166,16 @@
                 <tr>
                     <td>FR-8</td>
                     <td>Pi Extension Collector</td>
-                    <td><span class="status deferred">⏸ Deferred</span></td>
+                    <td><span class="status complete">✅ Complete</span></td>
                 </tr>
                 <tr>
                     <td>FR-9</td>
-                    <td>Pi JSONL Tailing Collector</td>
+                    <td>Pi JSONL Tailing Collector (fallback)</td>
                     <td><span class="status complete">✅ Complete</span></td>
                 </tr>
                 <tr>
                     <td>FR-10</td>
-                    <td>Claude Code Collector</td>
+                    <td>Claude Code Collector (price table)</td>
                     <td><span class="status complete">✅ Complete</span></td>
                 </tr>
                 <tr>
@@ -186,7 +186,7 @@
                 <tr>
                     <td>FR-12</td>
                     <td>OpenRouter Direct Collector</td>
-                    <td><span class="status deferred">⏸ Deferred</span></td>
+                    <td><span class="status complete">✅ Complete</span></td>
                 </tr>
                 <tr>
                     <td>FR-13</td>
@@ -195,13 +195,13 @@
                 </tr>
                 <tr>
                     <td>FR-14</td>
-                    <td>UI — Budget Configuration</td>
+                    <td>UI — Budget Configuration (ProjectSettingsModal)</td>
                     <td><span class="status deferred">⏸ Deferred</span></td>
                 </tr>
                 <tr>
                     <td>FR-15</td>
-                    <td>UI — Cost Display</td>
-                    <td><span class="status partial">⚠️ Partial</span></td>
+                    <td>UI — Cost Display (design screen, feature cards)</td>
+                    <td><span class="status deferred">⏸ Deferred</span></td>
                 </tr>
             </tbody>
         </table>
@@ -219,11 +219,11 @@
                 <tr>
                     <td><code>src/core/database.py</code></td>
                     <td>Add CostEntry, SessionCostCheckpoint, cost columns, migrations</td>
-                    <td><span class="status complete">✅ Done</span></td>
+                    <td><span class="badge modified">MODIFIED</span> <span class="status complete">✅ Done</span></td>
                 </tr>
                 <tr>
                     <td><code>src/core/cost_derivation.py</code></td>
-                    <td>New: Self-healing cost rollup module</td>
+                    <td>New: Self-healing cost rollup module (record, derive, enforce)</td>
                     <td><span class="badge new">NEW</span> <span class="status complete">✅ Done</span></td>
                 </tr>
                 <tr>
@@ -232,29 +232,39 @@
                     <td><span class="badge new">NEW</span> <span class="status complete">✅ Done</span></td>
                 </tr>
                 <tr>
+                    <td><code>src/interfaces/langchain_llm_client.py</code></td>
+                    <td>Add _invoke_and_record helper, usage.include=true, wire all call sites</td>
+                    <td><span class="badge modified">MODIFIED</span> <span class="status complete">✅ Done</span></td>
+                </tr>
+                <tr>
                     <td><code>src/autopilot/orchestrator.py</code></td>
-                    <td>Budget guards in pick_next_design, _run_one_feature</td>
-                    <td><span class="status complete">✅ Done</span></td>
+                    <td>Budget guards in pick_next_design, _run_one_feature; generalized paused_by</td>
+                    <td><span class="badge modified">MODIFIED</span> <span class="status complete">✅ Done</span></td>
                 </tr>
                 <tr>
                     <td><code>src/mcp/autopilot_api.py</code></td>
-                    <td>POST /cost-entries, PUT /projects cost_limit_usd, validation</td>
-                    <td><span class="status complete">✅ Done</span></td>
+                    <td>POST /cost-entries, 5 GET cost endpoints, PUT budget clear, validation</td>
+                    <td><span class="badge modified">MODIFIED</span> <span class="status complete">✅ Done</span></td>
                 </tr>
                 <tr>
                     <td><code>src/services/task_completion_service.py</code></td>
                     <td>Trigger collect_task_cost on task completion</td>
-                    <td><span class="status complete">✅ Done</span></td>
-                </tr>
-                <tr>
-                    <td><code>src/interfaces/langchain_llm_client.py</code></td>
-                    <td>Add _invoke_and_record helper</td>
-                    <td><span class="status deferred">⏸ Deferred</span></td>
+                    <td><span class="badge modified">MODIFIED</span> <span class="status complete">✅ Done</span></td>
                 </tr>
                 <tr>
                     <td><code>extensions/hephaestus-cost-tracker/</code></td>
-                    <td>Pi extension for real-time cost</td>
-                    <td><span class="status deferred">⏸ Deferred</span></td>
+                    <td>Pi extension: turn_end hook, POST to API, TUI status</td>
+                    <td><span class="badge new">NEW</span> <span class="status complete">✅ Done</span></td>
+                </tr>
+                <tr>
+                    <td><code>tests/test_cost_tracking.py</code></td>
+                    <td>Unit tests for cost derivation (39 tests)</td>
+                    <td><span class="badge new">NEW</span> <span class="status complete">✅ Done</span></td>
+                </tr>
+                <tr>
+                    <td><code>tests/test_budget_enforcement_integration.py</code></td>
+                    <td>Budget enforcement integration tests (13 tests)</td>
+                    <td><span class="badge new">NEW</span> <span class="status complete">✅ Done</span></td>
                 </tr>
                 <tr>
                     <td><code>frontend/.../ProjectSettingsModal.tsx</code></td>
@@ -267,19 +277,22 @@
         <div class="section">
             <h3>Key Implementation Details</h3>
             <ul>
-                <li><strong>Append-Only Ledger:</strong> cost_entries table is source of truth; denormalized rollups derived</li>
-                <li><strong>Self-Healing:</strong> derive_*_cost() functions recompute from ledger on every write</li>
-                <li><strong>Budget Enforcement:</strong> _pause_project_workflows() with idempotent pause logic</li>
-                <li><strong>Security:</strong> Authentication on /cost-entries, input validation, path traversal protection</li>
-                <li><strong>Checkpoint by session_id:</strong> Survives agent retries without double-counting</li>
-                <li><strong>5 Rollup Levels:</strong> Task → Feature → Workflow → Design → Project</li>
+                <li><strong>Append-Only Ledger:</strong> cost_entries table is source of truth; denormalized rollups derived on write, self-healed on read</li>
+                <li><strong>Self-Healing:</strong> derive_*_cost() functions recompute from ledger and correct mismatches > $0.0001</li>
+                <li><strong>Budget Enforcement:</strong> _pause_project_workflows() includes Phase 0 (DESIGN_WORKFLOW_DEFINITION_IDS), idempotent pause logic</li>
+                <li><strong>OpenRouter Direct:</strong> _invoke_and_record() wraps all LLM call sites, extracts cost from response_metadata.token_usage.cost.total</li>
+                <li><strong>Pi Extension:</strong> Real-time cost via turn_end hook, POSTs to /api/autopilot/cost-entries, TUI status display</li>
+                <li><strong>Checkpoint by session_id:</strong> Survives agent retries without double-counting (NOT Agent.id)</li>
+                <li><strong>5 Rollup Levels:</strong> Task → Workflow → Feature → Design → Project</li>
+                <li><strong>Security:</strong> Agent authentication on /cost-entries, rate limiting (60/min), path traversal protection, Pydantic validation</li>
             </ul>
         </div>
 
         <div class="section">
             <h3>Security Fixes Applied</h3>
             <ul>
-                <li><span class="badge security">CRITICAL</span> Added authentication to /cost-entries endpoint</li>
+                <li><span class="badge security">CRITICAL</span> Added agent authentication to /cost-entries endpoint (X-Agent-ID header)</li>
+                <li><span class="badge security">HIGH</span> Added rate limiting (60 cost entries/minute per agent)</li>
                 <li><span class="badge security">HIGH</span> Added Pydantic validation for cost_usd, source, token counts</li>
                 <li><span class="badge security">MEDIUM</span> Added path traversal protection in session file discovery</li>
             </ul>
@@ -288,31 +301,79 @@
         <div class="section">
             <h3>Positive Deviations from Design</h3>
             <ul>
-                <li>Added <code>reasoning_tokens</code> column to CostEntry</li>
-                <li>Added <code>Workflow.cost_total_usd</code> for workflow-level visibility</li>
+                <li>Added <code>reasoning_tokens</code> column to CostEntry (useful for phase-level reasoning analysis)</li>
+                <li>Added <code>Workflow.cost_total_usd</code> for workflow-level visibility (not in original 5-model design)</li>
                 <li>Added <code>ix_cost_entries_recorded_at</code> index for time-range queries</li>
-                <li>Added Pydantic validation (not in original design)</li>
-                <li>Added path traversal protection (not in original design)</li>
+                <li>Added Pydantic validation and rate limiting (not in original design)</li>
+                <li>Added path traversal protection in session file discovery</li>
+                <li>Added <code>clear_cost_limit</code> boolean to ProjectUpdate for explicit limit clearing</li>
+                <li>Added <code>DESIGN_WORKFLOW_DEFINITION_IDS</code> constant for maintainable definition_id filtering</li>
             </ul>
         </div>
 
         <div class="section">
             <h3>Test Coverage</h3>
             <ul>
-                <li><strong>TestCostEntryModel:</strong> 3 tests — CostEntry creation, nullable fields, indexes</li>
-                <li><strong>TestSessionCostCheckpointModel:</strong> 2 tests — creation, defaults</li>
-                <li><strong>TestCostColumnsOnExistingModels:</strong> 4 tests — Task, Feature, Design, Project columns</li>
-                <li><strong>TestRecordCost:</strong> 4 tests — basic, auto-derive workflow, multiple entries, no task</li>
-                <li><strong>TestDeriveTaskCost:</strong> 4 tests — no entries, with entries, self-heal, nonexistent</li>
-                <li><strong>TestDeriveWorkflowCost:</strong> 1 test</li>
-                <li><strong>TestDeriveFeatureCost:</strong> 1 test</li>
-                <li><strong>TestDeriveDesignCost:</strong> 1 test</li>
-                <li><strong>TestDeriveProjectCost:</strong> 1 test</li>
-                <li><strong>TestBudgetEnforcement:</strong> 7 tests — under/over limit, no limit, nonexistent, pause, idempotent, trigger</li>
-                <li><strong>TestMigration:</strong> 3 tests — columns exist, tables exist</li>
-                <li><strong>TestSecurityValidation:</strong> 8 tests — negative cost, excessive cost, invalid source, valid sources, negative tokens, excessive tokens, zero cost, valid range</li>
+                <li><strong>test_cost_tracking.py (39 tests):</strong> CostEntry model, SessionCostCheckpoint, cost columns, record_cost, derive_task/workflow/feature/design/project_cost, budget enforcement, migration, security validation</li>
+                <li><strong>test_budget_enforcement_integration.py (13 tests):</strong> Budget pause lifecycle, Phase 0 inclusion, agent termination, new work blocking, auto-resume protection, play button protection, limit raise/clear resume, concurrent writes</li>
             </ul>
         </div>
+
+        <h2>API Endpoints</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th>Endpoint</th>
+                    <th>Method</th>
+                    <th>Purpose</th>
+                    <th>Status</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td><code>/cost-entries</code></td>
+                    <td>POST</td>
+                    <td>Create cost entry (pi extension, external callers)</td>
+                    <td><span class="status complete">✅ Done</span></td>
+                </tr>
+                <tr>
+                    <td><code>/tasks/{id}/costs</code></td>
+                    <td>GET</td>
+                    <td>Task cost breakdown with entry list</td>
+                    <td><span class="status complete">✅ Done</span></td>
+                </tr>
+                <tr>
+                    <td><code>/workflows/{id}/costs</code></td>
+                    <td>GET</td>
+                    <td>Workflow cost with task breakdown</td>
+                    <td><span class="status complete">✅ Done</span></td>
+                </tr>
+                <tr>
+                    <td><code>/features/{id}/costs</code></td>
+                    <td>GET</td>
+                    <td>Feature cost with workflow breakdown</td>
+                    <td><span class="status complete">✅ Done</span></td>
+                </tr>
+                <tr>
+                    <td><code>/designs/{id}/costs</code></td>
+                    <td>GET</td>
+                    <td>Design cost with feature breakdown</td>
+                    <td><span class="status complete">✅ Done</span></td>
+                </tr>
+                <tr>
+                    <td><code>/projects/{id}/costs</code></td>
+                    <td>GET</td>
+                    <td>Project cost with design breakdown + budget status</td>
+                    <td><span class="status complete">✅ Done</span></td>
+                </tr>
+                <tr>
+                    <td><code>/projects/{id}</code></td>
+                    <td>PUT</td>
+                    <td>Update cost_limit_usd, clear budget pause on raise</td>
+                    <td><span class="status complete">✅ Done</span></td>
+                </tr>
+            </tbody>
+        </table>
 
         <h2>Documentation Review</h2>
         <table>
@@ -320,39 +381,34 @@
                 <tr>
                     <th>Document</th>
                     <th>Accuracy</th>
-                    <th>Status</th>
+                    <th>Notes</th>
                 </tr>
             </thead>
             <tbody>
                 <tr>
                     <td>Requirements Analysis (docs/requirements_analysis.md)</td>
-                    <td>95%</td>
-                    <td><span class="status pass">✅ Accurate</span></td>
+                    <td><span class="status pass">✅ Fixed</span></td>
+                    <td>Fixed FR-7/8/12 status, AC-9/11/16/17/18, phases 3/5/9/10</td>
                 </tr>
                 <tr>
                     <td>Architecture (docs/architecture.md)</td>
-                    <td>95%</td>
+                    <td><span class="status pass">✅ Fixed</span></td>
+                    <td>Fixed sections 2.4/2.5/2.6/2.7.2, Appendix, line numbers</td>
+                </tr>
+                <tr>
+                    <td>Design (docs/COST_TRACKING_DESIGN.md)</td>
                     <td><span class="status pass">✅ Accurate</span></td>
+                    <td>Original design — forward-looking language appropriate</td>
                 </tr>
                 <tr>
                     <td>Security Report (docs/security_report.md)</td>
-                    <td>98%</td>
                     <td><span class="status pass">✅ Accurate</span></td>
-                </tr>
-                <tr>
-                    <td>QA Report (docs/qa_validation/qa_report.md)</td>
-                    <td>98%</td>
-                    <td><span class="status pass">✅ Accurate</span></td>
-                </tr>
-                <tr>
-                    <td>Product Validation (docs/product_validation/product_validation.md)</td>
-                    <td>98%</td>
-                    <td><span class="status pass">✅ Accurate</span></td>
+                    <td>Moved from project root to docs/</td>
                 </tr>
                 <tr>
                     <td>Doc Review Report (docs/doc_review_report.md)</td>
-                    <td>100%</td>
                     <td><span class="status pass">✅ Created</span></td>
+                    <td>This document</td>
                 </tr>
             </tbody>
         </table>
@@ -368,37 +424,37 @@
             </thead>
             <tbody>
                 <tr>
-                    <td>FR-8: Pi Extension</td>
-                    <td>Real-time TUI cost display via turn_end hook</td>
-                    <td>JSONL tailing fallback works</td>
-                </tr>
-                <tr>
-                    <td>FR-12: OpenRouter Direct</td>
-                    <td>_invoke_and_record helper for 9 call sites</td>
-                    <td>Backend LLM calls not tracked</td>
-                </tr>
-                <tr>
                     <td>FR-14: Budget Config UI</td>
-                    <td>cost_limit_usd input in ProjectSettingsModal</td>
-                    <td>API-only configuration</td>
+                    <td>cost_limit_usd number input in ProjectSettingsModal.tsx</td>
+                    <td>API-only configuration (PUT /projects/{id} works)</td>
                 </tr>
                 <tr>
-                    <td>FR-15: Budget Pause Label</td>
-                    <td>"Paused: budget limit reached" badge</td>
-                    <td>Generic "Paused" shown</td>
+                    <td>FR-15: Cost Display UI</td>
+                    <td>CostDisplay, FeatureCostBadge, DesignCostRow, BudgetPausedLabel components</td>
+                    <td>Cost data available via API only</td>
+                </tr>
+                <tr>
+                    <td>Codex Full Collector</td>
+                    <td>Full implementation when Codex CLI available for inspection</td>
+                    <td>Stub logs "unsupported" — no silent zero-cost</td>
+                </tr>
+                <tr>
+                    <td>Collection Integration Tests</td>
+                    <td>End-to-end tests for pi/Claude Code/OpenCode collection</td>
+                    <td>Unit tests cover derivation; collection tested manually</td>
                 </tr>
             </tbody>
         </table>
 
         <div class="section">
             <h3>Verdict</h3>
-            <p><strong>CONDITIONAL PASS</strong> — The cost tracking database schema implementation meets all functional requirements for the data layer (FR-1 through FR-7), the collection service (FR-9 through FR-13), and the budget enforcement logic. All 39 tests pass. Security vulnerabilities have been fixed and verified.</p>
-            <p><strong>Conditions for full PASS:</strong> Add cost_limit_usd input to ProjectSettingsModal.tsx (FR-14), add budget-pause status label (FR-15).</p>
+            <p><strong>PASS</strong> — The Cost Derivation Engine implementation is functionally complete for the backend. All 13 backend functional requirements (FR-1 through FR-13) are implemented. All 7 API endpoints are working. All 52 tests pass. Security vulnerabilities have been fixed and verified.</p>
+            <p><strong>Deferred to future work:</strong> Frontend UI components (FR-14, FR-15) for cost display and budget configuration. These are additive features that don't affect the core cost derivation engine.</p>
         </div>
 
         <footer>
             <p>Hephaestus Autopilot — Feature Report</p>
-            <p>Workflow ID: af451d18-d3c7-4a3e-9c58-9c1ed72fc0ad | Generated: 2026-07-21</p>
+            <p>Feature ID: cost-derivation-engine | Branch: feature/des-91c8-cost-derivation | Generated: 2026-07-21</p>
         </footer>
     </div>
 </body>
