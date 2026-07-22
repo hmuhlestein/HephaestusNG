@@ -1,8 +1,8 @@
 # QA Validation Report: Budget Enforcement and Pipeline Throttling
 
 **Feature ID:** des-91c8-budget-enforcement  
-**Task ID:** 65941c6e-9de1-4292-a19c-76459e79209b  
-**Agent ID:** 2f3adef7-87df-499a-878f-f5dd2cfec08c
+**Task ID:** 91422549-3825-452d-abe9-2651985e1310  
+**Agent ID:** 92d2700a-9dc1-44da-af61-21756a3b72b7
 **QA Date:** 2026-07-21  
 **QA Agent:** Hephaestus QA Validation Agent (Phase 8)  
 **Status:** PASS — Ready for Product Validation
