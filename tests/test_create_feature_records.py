@@ -1,6 +1,5 @@
 """Tests for _create_feature_records function."""
 
-import os
 from pathlib import Path
 from unittest.mock import MagicMock
 

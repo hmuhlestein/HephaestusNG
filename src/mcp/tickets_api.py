@@ -633,7 +633,7 @@ async def get_ticket_stats_endpoint(
             board_config = (
                 session.query(BoardConfig).filter(BoardConfig.workflow_id.in_(workflow_ids)).first()
             )
-            
+
             # If no board config found, use a default one
             if not board_config:
                 # Return default board config for project-level view
@@ -667,7 +667,7 @@ async def get_ticket_stats_endpoint(
                         "track_time": False,
                     },
                 }
-            
+
             logger.info(
                 f"BoardConfig found: {board_config is not None}, workflow_ids: {workflow_ids}"
             )

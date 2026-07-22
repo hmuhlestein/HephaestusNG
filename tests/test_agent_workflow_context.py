@@ -7,7 +7,6 @@ This module tests that agents receive proper workflow context in their initial p
 4. Different agent types receive appropriate prompts
 """
 
-import os
 import uuid
 from unittest.mock import MagicMock, patch
 

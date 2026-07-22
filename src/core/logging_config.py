@@ -33,14 +33,14 @@ def configure_logging(
     """
     if format_string is None:
         format_string = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-    
+
     handlers = [logging.StreamHandler(sys.stdout)]
-    
+
     # Only add FileHandler if explicitly requested (standalone mode)
     # When launched by start.py, stdout is already redirected to log files
     if log_file:
         handlers.append(logging.FileHandler(log_file))
-    
+
     logging.basicConfig(
         level=level,
         format=format_string,

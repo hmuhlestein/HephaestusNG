@@ -367,7 +367,7 @@ class Guardian:
         # docstring already claims ("flagged multiple times") but the caller
         # never actually enforced. This is what let a single off-track
         # judgment interrupt a legitimate in-progress file write.
-        
+
         # Use consolidated rate-limiter (L-3 fix)
         eligible, reason = self._evaluate_steering_eligibility(agent.id, steering_type)
         if not eligible:
@@ -459,7 +459,7 @@ class Guardian:
             SteeringType.CONFUSED.value,
             SteeringType.VIOLATING_CONSTRAINTS.value,
         }
-        
+
         # Check consecutive-flag confirmation gate
         if steering_type in needs_confirmation:
             flag_state = self._consecutive_flags.get(agent_id)
@@ -476,15 +476,15 @@ class Guardian:
                     "last_seen": now,
                 }
                 return False, f"first flag ({steering_type}) — waiting for confirmation"
-            
+
             flag_state["count"] += 1
             flag_state["last_seen"] = now
             if flag_state["count"] < 2:
                 return False, f"{flag_state['count']}/2 flags — waiting for confirmation"
-            
+
             # Confirmed — clear and proceed
             del self._consecutive_flags[agent_id]
-        
+
         # Check cooldown — max 1 steering per 10 minutes
         if agent_id in self.steering_history:
             recent_steerings = [
@@ -493,7 +493,7 @@ class Guardian:
             ]
             if recent_steerings:
                 return False, "cooldown active (10 minutes)"
-        
+
         return True, "eligible"
 
     def detect_agent_exited(self, tmux_output: str) -> bool:

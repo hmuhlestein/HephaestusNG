@@ -51,7 +51,7 @@ def sample_task(db_manager):
             done_definitions=["code written and tested"],
         )
         session.add(phase)
-        
+
         # Create task
         task = Task(
             id="task-1",
@@ -63,7 +63,7 @@ def sample_task(db_manager):
             status="pending",
         )
         session.add(task)
-        
+
         return task
 
 
@@ -71,27 +71,27 @@ def sample_task(db_manager):
 def mock_agent_manager(db_manager):
     """Create a mock agent manager."""
     from src.agents.manager import AgentManager
-    
+
     llm_provider = MagicMock()
     phase_manager = MagicMock()
-    
+
     with patch("src.agents.manager.libtmux.Server"):
         manager = AgentManager(
             db_manager=db_manager,
             llm_provider=llm_provider,
             phase_manager=phase_manager,
         )
-    
+
     # Mock tmux operations
     manager.tmux_server = MagicMock()
     manager.tmux_server.sessions = MagicMock()
-    
+
     return manager
 
 
 class TestCreateAgentForTask:
     """Tests for create_agent_for_task method."""
-    
+
     @pytest.mark.asyncio
     async def test_raises_error_when_task_is_none(self, mock_agent_manager):
         """Should raise ValueError when task is None."""
@@ -102,7 +102,7 @@ class TestCreateAgentForTask:
                 memories=[],
                 project_context="",
             )
-    
+
     @pytest.mark.asyncio
     async def test_creates_agent_with_valid_task(self, mock_agent_manager, sample_task, db_manager):
         """Should create agent successfully with valid task."""
@@ -119,19 +119,19 @@ class TestCreateAgentForTask:
         mock_agent_manager.llm_provider.generate_agent_prompt = AsyncMock(
             return_value="You are an AI agent."
         )
-        
+
         # Mock tmux session creation
         mock_session = MagicMock()
         mock_session.name = "agent-session-1"
         mock_agent_manager.tmux_server.new_session.return_value = mock_session
         mock_session.attached_window.attached_pane = MagicMock()
-        
+
         with patch("src.agents.manager.get_cli_agent") as mock_get_cli, \
              patch("src.agents.manager.asyncio.sleep", new_callable=AsyncMock):
             mock_cli = MagicMock()
             mock_cli.get_launch_command.return_value = ["pi", "--task", "test"]
             mock_get_cli.return_value = mock_cli
-            
+
             agent = await mock_agent_manager.create_agent_for_task(
                 task=sample_task,
                 enriched_data={"description": "Implement feature X"},
@@ -140,7 +140,7 @@ class TestCreateAgentForTask:
                 cli_type="pi",
                 working_directory="/tmp/test-project",
             )
-        
+
         # Verify agent was created (create_agent_for_task returns a minimal
         # AgentInfo with only .id — status lives on the DB row)
         assert agent is not None
@@ -152,7 +152,7 @@ class TestCreateAgentForTask:
             assert saved_agent is not None
             assert saved_agent.status == "working"
             assert saved_agent.current_task_id == "task-1"
-    
+
     @pytest.mark.asyncio
     async def test_session_id_uses_feature_model_launch_params(
         self, mock_agent_manager, sample_task, db_manager
@@ -294,25 +294,25 @@ class TestCreateAgentForTask:
         mock_agent_manager.llm_provider.generate_agent_prompt = AsyncMock(
             return_value="You are an AI agent."
         )
-        
+
         mock_session = MagicMock()
         mock_session.name = "agent-session-2"
         mock_agent_manager.tmux_server.new_session.return_value = mock_session
         mock_session.attached_window.attached_pane = MagicMock()
-        
+
         with patch("src.agents.manager.get_cli_agent") as mock_get_cli, \
              patch("src.agents.manager.asyncio.sleep", new_callable=AsyncMock):
             mock_cli = MagicMock()
             mock_cli.get_launch_command.return_value = ["pi", "--task", "test"]
             mock_get_cli.return_value = mock_cli
-            
+
             agent = await mock_agent_manager.create_agent_for_task(
                 task=sample_task,
                 enriched_data={"description": "Implement feature X"},
                 memories=[],
                 project_context="Test project context",
             )
-        
+
         # Verify agent log was created
         with db_manager.session_scope() as session:
             log = session.query(AgentLog).filter_by(agent_id=agent.id).first()
@@ -373,13 +373,13 @@ class TestCreateAgentForTaskMissingSharedWorktree:
 
 class TestRestartAgent:
     """Tests for restart_agent method."""
-    
+
     @pytest.mark.asyncio
     async def test_raises_error_when_agent_not_found(self, mock_agent_manager, db_manager):
         """Should handle gracefully when agent doesn't exist."""
         await mock_agent_manager.restart_agent("nonexistent-agent", "Test restart")
         # Should not raise, just log warning
-    
+
     @pytest.mark.asyncio
     async def test_terminates_agent_exceeding_max_restarts(self, mock_agent_manager, db_manager):
         """Should terminate agent that exceeds max restart count."""
@@ -393,14 +393,14 @@ class TestRestartAgent:
                 restart_count=3,  # At max
             )
             session.add(agent)
-        
+
         await mock_agent_manager.restart_agent("agent-1", "Stuck too long")
-        
+
         # Verify agent was terminated
         with db_manager.session_scope() as session:
             agent = session.query(Agent).filter_by(id="agent-1").first()
             assert agent.status == "terminated"
-    
+
     @pytest.mark.asyncio
     async def test_kills_tmux_session_on_restart(self, mock_agent_manager, db_manager):
         """Should kill tmux session when restarting agent."""
@@ -452,7 +452,7 @@ class TestRestartAgent:
 
         # Verify tmux session was killed
         mock_tmux_session.kill_session.assert_called_with()
-    
+
     @pytest.mark.asyncio
     async def test_increments_restart_count(self, mock_agent_manager, db_manager):
         """Should increment restart count on successful restart."""
@@ -476,7 +476,7 @@ class TestRestartAgent:
             )
             session.add(task)
             session.flush()  # Ensure task exists before agent references it via FK
-            
+
             agent = Agent(
                 id="agent-3",
                 system_prompt="Test prompt",
@@ -486,22 +486,22 @@ class TestRestartAgent:
                 restart_count=1,
             )
             session.add(agent)
-        
+
         # Mock dependencies for restart
         mock_agent_manager.branch_manager.commit_changes = MagicMock(return_value={})
         mock_agent_manager.create_agent_for_task = AsyncMock(
             return_value=MagicMock(id="agent-3-new")
         )
-        
+
         await mock_agent_manager.restart_agent("agent-3", "Test restart")
-        
+
         # Verify restart count was incremented (in the new agent)
         # Note: The old agent is terminated, new agent is created
 
 
 class TestGetActiveAgents:
     """Tests for get_active_agents method."""
-    
+
     def test_returns_only_active_agents(self, mock_agent_manager, db_manager):
         """Should return only non-terminated agents."""
         with db_manager.session_scope() as session:
@@ -514,9 +514,9 @@ class TestGetActiveAgents:
                     cli_type="pi",
                 )
                 session.add(agent)
-        
+
         agents = mock_agent_manager.get_active_agents()
-        
+
         # Should return 3 agents (idle, working, stuck) but not terminated
         assert len(agents) == 3
         agent_statuses = {a.status for a in agents}
@@ -525,7 +525,7 @@ class TestGetActiveAgents:
 
 class TestTerminateAgent:
     """Tests for terminate_agent method."""
-    
+
     @pytest.mark.asyncio
     async def test_terminates_agent_successfully(self, mock_agent_manager, db_manager):
         """Should terminate agent and update database."""
@@ -538,14 +538,14 @@ class TestTerminateAgent:
                 tmux_session_name="test-session-term",
             )
             session.add(agent)
-        
+
         await mock_agent_manager.terminate_agent("agent-term-1")
-        
+
         # Verify agent was terminated
         with db_manager.session_scope() as session:
             agent = session.query(Agent).filter_by(id="agent-term-1").first()
             assert agent.status == "terminated"
-        
+
         # Verify tmux session was killed
         mock_agent_manager.tmux_server.has_session.return_value = False
 
