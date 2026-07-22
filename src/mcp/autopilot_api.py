@@ -1361,7 +1361,19 @@ async def add_design_by_path(req: DesignAddByPath):
         # Find or create project
         project = db.query(AutopilotProject).filter_by(base_dir=str(project_path)).first()
         if not project:
-            # Create new project
+            # Create new project. is_active must stay exclusive across all
+            # projects (every reader does .filter_by(is_active=True).first(),
+            # e.g. the phase-advancement sweep's project scoping) -- clear
+            # every other project's flag first, same as projects_api.py's
+            # activate_project endpoint already does correctly. Without
+            # this, each auto-created project (e.g. a design-add pointed at
+            # a throwaway/test directory) stacks up as ANOTHER "active"
+            # project alongside real ones, and .first()'s arbitrary pick
+            # among them can silently scope the sweep to the wrong project
+            # -- observed live: the sweep never advanced a real project's
+            # stuck workflow because three leftover tmp-directory projects
+            # were also marked active.
+            db.query(AutopilotProject).update({"is_active": False})
             project = AutopilotProject(
                 id=f"proj-{uuid.uuid4().hex[:12]}",
                 name=project_path.name,
