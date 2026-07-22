@@ -214,6 +214,70 @@ def test_product_needs_work_goto_development():
     assert 0.3 <= score < 0.7
 
 
+def test_product_missing_json_falls_back_to_report_text():
+    # Same fail-safe pattern as score_adversarial_review/
+    # score_architectural_review/score_feature_review: missing JSON is
+    # always the failing band, report text is just attached as context --
+    # never a route to a pass.
+    score, meta = S.score_product_validation(
+        None, S.DEFAULT_SPEC, report_text="## Verdict\nPASS, everything looks great"
+    )
+    assert 0.3 <= score < 0.7
+    assert meta["result_missing"] is True
+    assert "PASS, everything looks great" in meta["reason"]
+
+
+def test_product_missing_json_no_report_text():
+    score, meta = S.score_product_validation(None, S.DEFAULT_SPEC)
+    assert 0.3 <= score < 0.7
+    assert meta["reason"] == "no product_validation.json found"
+
+
+def test_product_pass_with_minor_gaps_accepted_within_cap():
+    score, meta = S.score_product_validation(
+        {
+            "verdict": "PASS_WITH_MINOR_GAPS",
+            "unmet_requirements": ["cosmetic wording gap"],
+            "agent_score": 0.9,
+        },
+        S.DEFAULT_SPEC,
+    )
+    assert score >= 0.7
+    assert meta["band"] == "pass"
+
+
+def test_product_pass_with_minor_gaps_exceeding_cap_is_overridden():
+    # DEFAULT_SPEC's max_minor_unmet_requirements is 2 -- 3 unmet items
+    # must fall through to the same hard floor as a plain PASS.
+    score, meta = S.score_product_validation(
+        {
+            "verdict": "PASS_WITH_MINOR_GAPS",
+            "unmet_requirements": ["gap 1", "gap 2", "gap 3"],
+            "agent_score": 0.9,
+        },
+        S.DEFAULT_SPEC,
+    )
+    assert 0.3 <= score < 0.7
+    assert "override" in meta["reason"]
+
+
+def test_product_pass_with_minor_gaps_is_not_a_loose_substring_match():
+    # Regression: the original implementation matched any verdict string
+    # containing both "PASS" and "MINOR" as substrings, not this exact
+    # value -- e.g. a verdict that happens to mention both words in an
+    # unrelated sentence should NOT bypass the hard floor.
+    score, meta = S.score_product_validation(
+        {
+            "verdict": "NEEDS_WORK - MINOR ISSUES SHOULD NOT PASS REVIEW",
+            "unmet_requirements": ["FR-1 missing"],
+            "agent_score": 0.5,
+        },
+        S.DEFAULT_SPEC,
+    )
+    assert 0.3 <= score < 0.7
+    assert meta["band"] == "development"
+
+
 # ── build_phase_output: the engine seam ───────────────────────────────
 
 

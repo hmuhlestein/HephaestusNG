@@ -245,6 +245,59 @@ class TestVerifyOutputArtifact:
             )
             assert result is None
 
+    def test_rejects_when_json_output_exists_but_is_malformed(self, tmp_path):
+        """Regression: a truncated/malformed JSON write used to pass this
+        floor (the file exists) and only surface much later, at gate-scoring
+        time, as a confusing 'not found' -- read_result's bare
+        except-return-None makes a malformed file indistinguishable from a
+        missing one downstream. This floor must catch it here instead."""
+        phase = Mock(name="product_validation", id="phase-1")
+        phase.name = "product_validation"
+        task = Mock(phase_id="phase-1", workflow_id="wf-1", id="task-1")
+
+        sub = tmp_path / "docs" / "product_validation"
+        sub.mkdir(parents=True)
+        (sub / "product_validation.json").write_text("{not valid json")
+
+        mock_session = Mock()
+        mock_session.query.return_value.filter_by.return_value.first.return_value = (
+            Mock(working_directory=str(tmp_path))
+        )
+
+        with patch(
+            "src.autopilot.spec.get_phase_required_files",
+            return_value=["product_validation.json"],
+        ), patch("src.autopilot.spec.load_optional_phases", return_value=[]):
+            result = TaskCompletionService.verify_output_artifact(
+                session=mock_session, task=task, phase=phase
+            )
+            assert result is not None
+            assert result["status"] == "failed"
+            assert "not valid json" in result["message"].lower()
+
+    def test_passes_when_json_output_is_well_formed(self, tmp_path):
+        phase = Mock(name="product_validation", id="phase-1")
+        phase.name = "product_validation"
+        task = Mock(phase_id="phase-1", workflow_id="wf-1", id="task-1")
+
+        sub = tmp_path / "docs" / "product_validation"
+        sub.mkdir(parents=True)
+        (sub / "product_validation.json").write_text('{"verdict": "PASS"}')
+
+        mock_session = Mock()
+        mock_session.query.return_value.filter_by.return_value.first.return_value = (
+            Mock(working_directory=str(tmp_path))
+        )
+
+        with patch(
+            "src.autopilot.spec.get_phase_required_files",
+            return_value=["product_validation.json"],
+        ):
+            result = TaskCompletionService.verify_output_artifact(
+                session=mock_session, task=task, phase=phase
+            )
+            assert result is None
+
 
 class TestVerifyOutputSurvivedCommit:
     """Regression: verify_output_artifact found the declared output in the
