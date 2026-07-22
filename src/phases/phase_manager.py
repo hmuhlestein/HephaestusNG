@@ -1779,7 +1779,7 @@ class PhaseManager:
 
             # Generate unique workflow ID
             workflow_id = str(uuid.uuid4())
-            
+
             # Resolve project_id from design if provided
             project_id = None
             if design_id:

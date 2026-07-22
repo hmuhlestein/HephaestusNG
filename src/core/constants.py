@@ -35,3 +35,9 @@ PIPELINE_METRICS_FILE = "pipeline_metrics.json"
 # get_project_design_status) doesn't hardcode a second, driftable copy of
 # the exact same label text.
 GOTO_REASON_PREFIX = "WHY YOU'RE HERE: "
+
+# Workflow definition IDs for design pipelines
+# "autopilot-phase0" is the pre-rename Phase 0 definition_id
+# "feature_architect" is the current Phase 0 definition_id
+PHASE0_DEFINITION_IDS = ("autopilot-phase0", "feature_architect")
+DESIGN_WORKFLOW_DEFINITION_IDS = ("autopilot",) + PHASE0_DEFINITION_IDS

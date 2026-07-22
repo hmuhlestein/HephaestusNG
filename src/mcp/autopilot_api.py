@@ -17,16 +17,19 @@ from typing import Any, Dict, List, Optional, Tuple, TypeVar
 from fastapi import APIRouter, Header, HTTPException, Query
 from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel, validator
+from sqlalchemy import func as sqlfunc
 
 from src.core.constants import (
     AUTOPILOT_STATE_DIR,
     CONTEXT_DIR_NAME,
     DESIGN_CONTEXT_SUBDIR,
+    DESIGN_WORKFLOW_DEFINITION_IDS,
     GOTO_REASON_PREFIX,
+    PHASE0_DEFINITION_IDS,
 )
 
 # Import authentication function from server module
-from src.mcp.server import verify_agent_authentication
+from src.mcp.server import verify_agent_authentication, _check_rate_limit
 
 logger = logging.getLogger(__name__)
 
@@ -37,16 +40,6 @@ FEATURES_DIR = ""
 _active_project_id_cache: Optional[str] = None  # Track which project the cached dirs belong to
 
 ALLOWED_EXTENSIONS = {".md", ".txt"}
-
-# Workflow.definition_id values that identify a design's workflows.
-# "autopilot-phase0" is the pre-rename Phase 0 definition_id (see
-# config/workflows/feature_architect/, renamed from autopilot-phase0/) --
-# kept here for historical DB rows created before the rename, not because
-# new workflows still use it. One shared constant instead of repeating this
-# pair inline at every call site, so a future retirement of the old value
-# only has to happen in one place.
-PHASE0_DEFINITION_IDS = ("autopilot-phase0", "feature_architect")
-DESIGN_WORKFLOW_DEFINITION_IDS = ("autopilot",) + PHASE0_DEFINITION_IDS
 
 
 def _get_active_project_id() -> Optional[str]:
@@ -665,7 +658,7 @@ async def requeue_design(request: dict):
             active_workflows = (
                 db.query(Workflow)
                 .filter(
-                    Workflow.definition_id == "autopilot",
+                    Workflow.definition_id.in_(DESIGN_WORKFLOW_DEFINITION_IDS),
                     Workflow.status.in_(["active", "running"]),
                 )
                 .all()
@@ -974,7 +967,7 @@ async def rerun_design(request: dict):
                     wf = (
                         db.query(Workflow)
                         .filter(
-                            Workflow.definition_id == "autopilot",
+                            Workflow.definition_id.in_(DESIGN_WORKFLOW_DEFINITION_IDS),
                             Workflow.status == "active",
                         )
                         .order_by(Workflow.created_at.desc())
@@ -1232,7 +1225,7 @@ def _run_repair(repair_id: str, filename: str, project: Path, logger):
         # 3. Find any existing workflows for context
         logger.info("[REPAIR] Step 3: Finding existing workflows for context")
         with get_db() as db:
-            workflows = db.query(Workflow).filter(Workflow.definition_id == "autopilot").all()
+            workflows = db.query(Workflow).filter(Workflow.definition_id.in_(DESIGN_WORKFLOW_DEFINITION_IDS)).all()
 
             existing_workflow_ids = []
             for wf in workflows:
@@ -1529,6 +1522,7 @@ class ProjectUpdate(BaseModel):
     base_dir: Optional[str] = None
     is_default: Optional[bool] = None
     cost_limit_usd: Optional[float] = None
+    clear_cost_limit: bool = False  # Explicit signal to clear the budget
 
 
 class CostEntryCreate(BaseModel):
@@ -1571,6 +1565,29 @@ class CostEntryCreate(BaseModel):
             raise ValueError("token counts must be non-negative")
         if v > 10_000_000:  # 10M tokens max per call
             raise ValueError("token count exceeds maximum allowed value")
+        return v
+
+    @validator("raw_usage")
+    def validate_raw_usage(cls, v: Optional[dict]) -> Optional[dict]:
+        """Validate raw_usage is not excessively large.
+
+        SECURITY: Prevents abuse where a malicious caller could store
+        arbitrarily large payloads in the raw_usage JSON column,
+        consuming database storage and slowing queries.
+        """
+        if v is not None:
+            import sys as _sys
+
+            size = _sys.getsizeof(json.dumps(v))
+            if size > 10_000:  # 10KB limit
+                raise ValueError("raw_usage exceeds maximum size of 10KB")
+        return v
+
+    @validator("model")
+    def validate_model(cls, v: Optional[str]) -> Optional[str]:
+        """Validate model string length."""
+        if v is not None and len(v) > 200:
+            raise ValueError("model name exceeds maximum length of 200 characters")
         return v
 
 
@@ -1851,11 +1868,11 @@ async def update_project(project_id: str, req: ProjectUpdate):
             proj.is_default = req.is_default
 
         # Handle cost_limit_usd update
-        if req.cost_limit_usd is not None:
-            proj.cost_limit_usd = req.cost_limit_usd
-        elif hasattr(req, "cost_limit_usd") and req.cost_limit_usd is None:
-            # Explicitly clearing the limit
+        if req.clear_cost_limit:
             proj.cost_limit_usd = None
+        elif req.cost_limit_usd is not None:
+            proj.cost_limit_usd = req.cost_limit_usd
+        # else: leave unchanged (don't wipe on partial updates)
 
         db.flush()
 
@@ -1873,6 +1890,7 @@ async def update_project(project_id: str, req: ProjectUpdate):
                 wf.paused_by = None
                 wf.status = "active"
                 wf.status_reason = None
+                wf.paused_at = None
             if budget_paused:
                 db.flush()
                 logger.info(f"Cleared budget pause on {len(budget_paused)} workflow(s) for project {project_id[:8]}")
@@ -1957,6 +1975,14 @@ async def create_cost_entry(
             detail="Agent not authenticated. Provide valid X-Agent-ID header.",
         )
 
+    # SECURITY: Rate limiting to prevent cost entry flooding
+    if not _check_rate_limit(f"cost_entry:{agent_id}", max_requests=60):
+        logger.warning(f"Rate limit exceeded for cost entries from agent {agent_id}")
+        raise HTTPException(
+            status_code=429,
+            detail="Rate limit exceeded. Maximum 60 cost entries per minute.",
+        )
+
     from src.core.cost_derivation import record_cost
     from src.core.database import get_db
 
@@ -1978,6 +2004,321 @@ async def create_cost_entry(
         )
 
         return {"id": entry.id, "cost_usd": entry.cost_usd}
+
+
+# ── Cost Query Endpoints ──────────────────────────────────────
+
+
+class CostEntrySummary(BaseModel):
+    """Summary of a single cost entry."""
+
+    id: str
+    task_id: Optional[str] = None
+    agent_id: Optional[str] = None
+    workflow_id: Optional[str] = None
+    source: str
+    model: Optional[str] = None
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cost_usd: float
+    recorded_at: Optional[str] = None
+
+
+class TaskCostSummary(BaseModel):
+    """Cost summary for a task."""
+
+    task_id: str
+    task_description: str
+    cost_total_usd: float
+    entries: List[CostEntrySummary]
+
+
+class WorkflowCostSummary(BaseModel):
+    """Cost summary for a workflow."""
+
+    workflow_id: str
+    workflow_name: str
+    cost_total_usd: float
+    tasks: List[TaskCostSummary]
+
+
+class FeatureCostSummary(BaseModel):
+    """Cost summary for a feature."""
+
+    feature_id: str
+    feature_name: str
+    cost_total_usd: float
+    workflows: List[WorkflowCostSummary]
+
+
+class DesignCostSummary(BaseModel):
+    """Cost summary for a design."""
+
+    design_id: str
+    design_name: str
+    cost_total_usd: float
+    features: List[FeatureCostSummary]
+
+
+class ProjectCostSummary(BaseModel):
+    """Cost summary for a project."""
+
+    project_id: str
+    project_name: str
+    cost_total_usd: float
+    cost_limit_usd: Optional[float] = None
+    remaining_usd: Optional[float] = None
+    is_over_budget: bool = False
+    designs: List[DesignCostSummary]
+
+
+@router.get("/tasks/{task_id}/costs", response_model=TaskCostSummary)
+async def get_task_costs(
+    task_id: str,
+    agent_id: str = Header(..., alias="X-Agent-ID"),
+):
+    """Get cost breakdown for a single task.
+
+    SECURITY: Requires valid agent authentication.
+    Cost data is sensitive financial information.
+    """
+    if not await verify_agent_authentication(agent_id):
+        raise HTTPException(
+            status_code=401,
+            detail="Agent not authenticated. Provide valid X-Agent-ID header.",
+        )
+    from src.core.cost_derivation import derive_task_cost
+    from src.core.database import CostEntry, Task, get_db
+
+    with get_db() as db:
+        task = db.query(Task).filter_by(id=task_id).first()
+        if not task:
+            raise HTTPException(404, "Task not found")
+
+        cost = derive_task_cost(db, task_id, write_back=False)
+        entries = db.query(CostEntry).filter(CostEntry.task_id == task_id).order_by(CostEntry.recorded_at.desc()).limit(100).all()
+
+        return TaskCostSummary(
+            task_id=task.id,
+            task_description=(task.raw_description or "")[:200],
+            cost_total_usd=cost,
+            entries=[
+                CostEntrySummary(
+                    id=e.id,
+                    task_id=e.task_id,
+                    agent_id=e.agent_id,
+                    workflow_id=e.workflow_id,
+                    source=e.source,
+                    model=e.model,
+                    input_tokens=e.input_tokens or 0,
+                    output_tokens=e.output_tokens or 0,
+                    cost_usd=e.cost_usd,
+                    recorded_at=e.recorded_at.isoformat() if e.recorded_at else None,
+                )
+                for e in entries
+            ],
+        )
+
+
+@router.get("/workflows/{workflow_id}/costs", response_model=WorkflowCostSummary)
+async def get_workflow_costs(
+    workflow_id: str,
+    agent_id: str = Header(..., alias="X-Agent-ID"),
+):
+    """Get cost breakdown for a workflow.
+
+    SECURITY: Requires valid agent authentication.
+    Cost data is sensitive financial information.
+    """
+    if not await verify_agent_authentication(agent_id):
+        raise HTTPException(
+            status_code=401,
+            detail="Agent not authenticated. Provide valid X-Agent-ID header.",
+        )
+    from src.core.cost_derivation import derive_workflow_cost
+    from src.core.database import CostEntry, Task, Workflow, get_db
+
+    with get_db() as db:
+        workflow = db.query(Workflow).filter_by(id=workflow_id).first()
+        if not workflow:
+            raise HTTPException(404, "Workflow not found")
+
+        cost = derive_workflow_cost(db, workflow_id, write_back=False)
+
+        # Get tasks with costs
+        tasks = db.query(Task).filter(Task.workflow_id == workflow_id).all()
+        task_summaries = []
+        for t in tasks:
+            task_cost = db.query(sqlfunc.sum(CostEntry.cost_usd)).filter(CostEntry.task_id == t.id).scalar() or 0.0
+            if task_cost > 0:
+                task_summaries.append(
+                    TaskCostSummary(
+                        task_id=t.id,
+                        task_description=(t.raw_description or "")[:200],
+                        cost_total_usd=task_cost,
+                        entries=[],
+                    )
+                )
+
+        return WorkflowCostSummary(
+            workflow_id=workflow.id,
+            workflow_name=workflow.name or workflow.id[:8],
+            cost_total_usd=cost,
+            tasks=task_summaries,
+        )
+
+
+@router.get("/features/{feature_id}/costs", response_model=FeatureCostSummary)
+async def get_feature_costs(
+    feature_id: str,
+    agent_id: str = Header(..., alias="X-Agent-ID"),
+):
+    """Get cost breakdown for a feature.
+
+    SECURITY: Requires valid agent authentication.
+    Cost data is sensitive financial information.
+    """
+    if not await verify_agent_authentication(agent_id):
+        raise HTTPException(
+            status_code=401,
+            detail="Agent not authenticated. Provide valid X-Agent-ID header.",
+        )
+    from src.core.cost_derivation import derive_feature_cost, derive_workflow_cost
+    from src.core.database import Feature, Workflow, get_db
+
+    with get_db() as db:
+        feature = db.query(Feature).filter_by(id=feature_id).first()
+        if not feature:
+            raise HTTPException(404, "Feature not found")
+
+        cost = derive_feature_cost(db, feature_id, write_back=False)
+
+        # Get workflows for this feature
+        workflows = db.query(Workflow).filter(Workflow.feature_id == feature_id).all()
+        workflow_summaries = []
+        for w in workflows:
+            wf_cost = derive_workflow_cost(db, w.id, write_back=False)
+            if wf_cost > 0:
+                workflow_summaries.append(
+                    WorkflowCostSummary(
+                        workflow_id=w.id,
+                        workflow_name=w.name or w.id[:8],
+                        cost_total_usd=wf_cost,
+                        tasks=[],
+                    )
+                )
+
+        return FeatureCostSummary(
+            feature_id=feature.id,
+            feature_name=feature.name or feature.feature_key,
+            cost_total_usd=cost,
+            workflows=workflow_summaries,
+        )
+
+
+@router.get("/designs/{design_id}/costs", response_model=DesignCostSummary)
+async def get_design_costs(
+    design_id: str,
+    agent_id: str = Header(..., alias="X-Agent-ID"),
+):
+    """Get cost breakdown for a design.
+
+    SECURITY: Requires valid agent authentication.
+    Cost data is sensitive financial information.
+    """
+    if not await verify_agent_authentication(agent_id):
+        raise HTTPException(
+            status_code=401,
+            detail="Agent not authenticated. Provide valid X-Agent-ID header.",
+        )
+    from src.core.cost_derivation import derive_design_cost, derive_feature_cost
+    from src.core.database import AutopilotDesign, Feature, get_db
+
+    with get_db() as db:
+        design = db.query(AutopilotDesign).filter_by(id=design_id).first()
+        if not design:
+            raise HTTPException(404, "Design not found")
+
+        cost = derive_design_cost(db, design_id, write_back=False)
+
+        # Get features for this design
+        features = db.query(Feature).filter(Feature.design_id == design_id).all()
+        feature_summaries = []
+        for feat in features:
+            feat_cost = derive_feature_cost(db, feat.id, write_back=False)
+            if feat_cost > 0:
+                feature_summaries.append(
+                    FeatureCostSummary(
+                        feature_id=feat.id,
+                        feature_name=feat.name or feat.feature_key,
+                        cost_total_usd=feat_cost,
+                        workflows=[],
+                    )
+                )
+
+        return DesignCostSummary(
+            design_id=design.id,
+            design_name=design.name or design.filename,
+            cost_total_usd=cost,
+            features=feature_summaries,
+        )
+
+
+@router.get("/projects/{project_id}/costs", response_model=ProjectCostSummary)
+async def get_project_costs(
+    project_id: str,
+    agent_id: str = Header(..., alias="X-Agent-ID"),
+):
+    """Get cost breakdown for a project.
+
+    SECURITY: Requires valid agent authentication.
+    Cost data is sensitive financial information.
+    """
+    if not await verify_agent_authentication(agent_id):
+        raise HTTPException(
+            status_code=401,
+            detail="Agent not authenticated. Provide valid X-Agent-ID header.",
+        )
+    from src.core.cost_derivation import derive_design_cost, derive_project_cost
+    from src.core.database import AutopilotDesign, AutopilotProject, get_db
+
+    with get_db() as db:
+        project = db.query(AutopilotProject).filter_by(id=project_id).first()
+        if not project:
+            raise HTTPException(404, "Project not found")
+
+        cost = derive_project_cost(db, project_id, write_back=False)
+
+        # Get designs for this project
+        designs = db.query(AutopilotDesign).filter(AutopilotDesign.project_id == project_id).all()
+        design_summaries = []
+        for d in designs:
+            d_cost = derive_design_cost(db, d.id, write_back=False)
+            if d_cost > 0:
+                design_summaries.append(
+                    DesignCostSummary(
+                        design_id=d.id,
+                        design_name=d.name or d.filename,
+                        cost_total_usd=d_cost,
+                        features=[],
+                    )
+                )
+
+        remaining = None
+        is_over = False
+        if project.cost_limit_usd is not None:
+            remaining = max(0.0, project.cost_limit_usd - cost)
+            is_over = cost >= project.cost_limit_usd
+
+        return ProjectCostSummary(
+            project_id=project.id,
+            project_name=project.name,
+            cost_total_usd=cost,
+            cost_limit_usd=project.cost_limit_usd,
+            remaining_usd=remaining,
+            is_over_budget=is_over,
+            designs=design_summaries,
+        )
 
 
 # ── Project Designs (sync + CRUD) ──────────────────────────────
@@ -3693,7 +4034,7 @@ async def stop_pipeline(clear_state: bool = False, project_id: Optional[str] = N
         with get_db() as db:
             from src.core.database import Workflow
 
-            query = db.query(Workflow).filter_by(definition_id="autopilot").filter(Workflow.status.in_(["active", "running"]))
+            query = db.query(Workflow).filter(Workflow.definition_id.in_(DESIGN_WORKFLOW_DEFINITION_IDS)).filter(Workflow.status.in_(["active", "running"]))
             if project_id:
                 query = query.filter(Workflow.project_id == project_id)
 
@@ -3887,7 +4228,7 @@ def run_health_audit(db_manager=None):
         autopilot_wfs = (
             session.query(Workflow)
             .filter(
-                Workflow.definition_id == "autopilot",
+                Workflow.definition_id.in_(DESIGN_WORKFLOW_DEFINITION_IDS),
                 Workflow.status.in_(["active", "running", "paused"]),
             )
             .all()

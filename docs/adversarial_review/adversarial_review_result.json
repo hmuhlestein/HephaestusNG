@@ -1,27 +1,5 @@
 {
-  "run": 3,
-  "timestamp": "2025-07-21T12:30:00Z",
-  "prior_blockers_fixed": 5,
-  "prior_blockers_partial": 0,
-  "prior_blockers_unfixed": 0,
   "blocker_count": 0,
-  "warning_count": 0,
-  "nit_count": 1,
-  "findings": [
-    {
-      "id": "N-1",
-      "severity": "NIT",
-      "title": "datetime.utcnow() deprecated in Python 3.12",
-      "files": [
-        "src/core/cost_derivation.py",
-        "src/services/cost_collection_service.py",
-        "src/core/database.py"
-      ],
-      "description": "Multiple uses of datetime.utcnow() which is deprecated. Should migrate to datetime.now(datetime.UTC)."
-    }
-  ],
-  "tests_passed": 31,
-  "tests_failed": 0,
-  "verdict": "PASS",
-  "notes": "All 5 prior BLOCKERs fully resolved. All 31 cost tracking tests pass. No new blockers or warnings."
+  "capped": true,
+  "capped_after_runs": 5
 }

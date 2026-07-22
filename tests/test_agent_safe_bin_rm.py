@@ -8,7 +8,6 @@ against a real `rm -rf` running immediately outside .hephaestus/.
 import subprocess
 from pathlib import Path
 
-import pytest
 
 RM_SCRIPT = str(
     Path(__file__).parent.parent / "scripts" / "agent-safe-bin" / "rm"

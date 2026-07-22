@@ -1,5 +1,5 @@
 {
   "blocker_count": 0,
   "capped": true,
-  "capped_after_runs": 3
+  "capped_after_runs": 5
 }

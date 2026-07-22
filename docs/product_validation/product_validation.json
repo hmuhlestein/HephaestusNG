@@ -1,10 +1,5 @@
 {
-    "verdict": "NEEDS_WORK",
-    "unmet_requirements": [
-        "FR-8: Pi Extension Collector — extensions/hephaestus-cost-tracker/ not implemented",
-        "FR-14: UI Budget Configuration — ProjectSettingsModal.tsx missing cost_limit_usd input",
-        "FR-15: UI Cost Display — budget-pause label not surfaced, no '$current / $limit' indicator on design screen"
-    ],
-    "agent_score": 0.85,
-    "summary": "Data layer complete and tested (39/39 pass); 2 frontend gaps and pi extension missing require follow-up"
+  "blocker_count": 0,
+  "capped": true,
+  "capped_after_runs": 10
 }

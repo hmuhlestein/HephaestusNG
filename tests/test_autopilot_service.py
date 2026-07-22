@@ -349,7 +349,6 @@ class TestAutopilotServiceRegistry:
     its own occupied slot."""
 
     def _running_service(self, registry, project_id):
-        from src.autopilot.service import AutopilotService
 
         service = registry.get_or_create(project_id)
         service._running = True

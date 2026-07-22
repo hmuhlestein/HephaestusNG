@@ -2,7 +2,6 @@
 
 import sqlite3
 import sys
-from pathlib import Path
 
 
 def migrate(db_path: str = "hephaestus.db"):

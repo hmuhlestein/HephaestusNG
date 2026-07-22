@@ -7,7 +7,6 @@ This module tests all MCP endpoint changes for multi-workflow support:
 4. Error handling for missing workflow_id
 """
 
-import os
 import uuid
 
 import pytest
