@@ -62,7 +62,7 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
     queryKey: ['autopilot-design-statuses', projectId, designs?.length],
     queryFn: async () => {
       if (!projectId || !designs || designs.length === 0) return {};
-      const statuses: Record<string, { status: string; workflowId?: string; error?: string | null; costTotal: number }> = {};
+      const statuses: Record<string, { status: string; workflowId?: string; error?: string | null; costTotal: number; costUnavailable?: boolean; pausedBy?: string | null; statusReason?: string | null }> = {};
       await Promise.all(
         designs.map(async (d: any) => {
           try {
@@ -72,9 +72,12 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
               workflowId: status.workflows?.[0]?.id,
               error: status.error || null,
               costTotal: status.cost_total_usd ?? 0,
+              pausedBy: status.paused_by || null,
+              statusReason: status.status_reason || null,
             };
-          } catch {
-            statuses[d.filename] = { status: 'pending', costTotal: 0 };
+          } catch (err) {
+            console.error(`Failed to fetch status for design ${d.filename}:`, err);
+            statuses[d.filename] = { status: 'pending', costTotal: 0, costUnavailable: true };
           }
         })
       );
@@ -319,6 +322,9 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
                   workflowId={designStatuses[item.filename]?.workflowId}
                   error={designStatuses[item.filename]?.error}
                   costTotal={designStatuses[item.filename]?.costTotal ?? 0}
+                  costUnavailable={designStatuses[item.filename]?.costUnavailable ?? false}
+                  pausedBy={designStatuses[item.filename]?.pausedBy}
+                  statusReason={designStatuses[item.filename]?.statusReason}
                   projectId={projectId}
                   onDetail={handleDetail}
                   onTaskClick={setSelectedTaskId}
@@ -410,13 +416,14 @@ const STATUS_CONFIG: Record<string, { color: string; icon: React.ReactNode; labe
   failed: { color: 'bg-red-100 text-red-700', icon: <XCircle className="w-3 h-3" />, label: 'Failed' },
 };
 
-const StatusBadge: React.FC<{ status: string }> = ({ status }) => {
+const StatusBadge: React.FC<{ status: string; pausedBy?: string | null }> = ({ status, pausedBy }) => {
   const config = STATUS_CONFIG[status];
   if (!config) return null;
+  const label = status === 'paused' && pausedBy === 'budget' ? 'Paused: budget limit reached' : config.label;
   return (
     <span className={`px-2 py-0.5 text-xs font-semibold rounded-full flex items-center gap-1 ${config.color}`}>
       {config.icon}
-      {config.label}
+      {label}
     </span>
   );
 };
@@ -515,10 +522,13 @@ interface SortableDesignItemProps {
   workflowId?: string;
   error?: string | null;
   costTotal?: number;
+  costUnavailable?: boolean;
+  pausedBy?: string | null;
+  statusReason?: string | null;
   projectId: string | null;
 }
 
-const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, isActive, onRemove, onDetail, onTaskClick, onSelectFeature, onAction, actionPending, status, error, costTotal, projectId }) => {
+const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, isActive, onRemove, onDetail, onTaskClick, onSelectFeature, onAction, actionPending, status, error, costTotal, costUnavailable, pausedBy, projectId }) => {
   const [expanded, setExpanded] = useState(() => {
     // Restore expanded state from localStorage
     const saved = localStorage.getItem('autopilot-expanded-designs');
@@ -656,11 +666,15 @@ const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, is
           </div>
 
           <div className="flex items-center gap-2">
-            {costTotal !== undefined && costTotal > 0 && (
-              <CostDisplay currentCost={costTotal} showProgress={false} className="text-xs" />
+            {costUnavailable ? (
+              <span className="text-xs text-gray-400" title="Cost unavailable — status fetch failed">—</span>
+            ) : (
+              costTotal !== undefined && costTotal > 0 && (
+                <CostDisplay currentCost={costTotal} showProgress={false} className="text-xs" />
+              )
             )}
             {status && status !== 'pending' && (
-              <StatusBadge status={status} />
+              <StatusBadge status={status} pausedBy={pausedBy} />
             )}
             <RowActionIcons
               canPause={status === 'active'}

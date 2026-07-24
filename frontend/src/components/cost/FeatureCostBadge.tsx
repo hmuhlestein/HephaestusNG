@@ -8,7 +8,6 @@ interface FeatureCostBadgeProps {
 
 /**
  * Small badge showing cost for a feature.
- * Displays a dollar amount with color coding based on cost.
  */
 const FeatureCostBadge: React.FC<FeatureCostBadgeProps> = ({
   cost,
@@ -24,9 +23,7 @@ const FeatureCostBadge: React.FC<FeatureCostBadgeProps> = ({
 
   return (
     <span
-      className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs font-medium ${
-        cost >= 5 ? 'bg-red-100 text-red-800' : 'bg-blue-100 text-blue-800'
-      } ${className}`}
+      className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-800 ${className}`}
     >
       <DollarSign className="w-3 h-3" />
       {formatCost(cost)}

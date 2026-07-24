@@ -2928,6 +2928,17 @@ async def get_project_design_status(project_id: str, filename: str):
         # design that's since recovered.
         design_error = _design_raw_error if overall_status == "failed" else None
 
+        # Surface *why* a paused workflow is paused -- "paused" alone is
+        # ambiguous between a user-initiated pause and a budget-enforcement
+        # pause, and the latter is the one users most need to notice.
+        design_paused_by = None
+        design_status_reason = None
+        if overall_status == "paused":
+            paused_wf = next((wf for wf in matching_workflows if wf.status == "paused" and wf.paused_by), None)
+            if paused_wf:
+                design_paused_by = paused_wf.paused_by
+                design_status_reason = paused_wf.status_reason
+
         # Find feature folder
         feature_folder = None
         for wf in matching_workflows:
@@ -3156,12 +3167,16 @@ async def get_project_design_status(project_id: str, filename: str):
             "status": overall_status,
             "error": design_error,
             "warning": warning,
+            "paused_by": design_paused_by,
+            "status_reason": design_status_reason,
             "workflows": [
                 {
                     "id": wf.id,
                     "status": wf.status,
                     "created_at": wf.created_at.isoformat() if wf.created_at else None,
                     "error": next((e for e in workflow_errors if wf.id[:8] in e), None) if wf.status == "failed" else None,
+                    "paused_by": wf.paused_by,
+                    "status_reason": wf.status_reason,
                 }
                 for wf in matching_workflows
             ],

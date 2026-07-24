@@ -20,7 +20,7 @@ const CostDisplay: React.FC<CostDisplayProps> = ({
   showProgress = true,
 }) => {
   const isOverBudget = costLimit != null && currentCost >= costLimit;
-  const progressPercent = costLimit != null ? Math.min((currentCost / costLimit) * 100, 100) : null;
+  const progressPercent = costLimit ? Math.min((currentCost / costLimit) * 100, 100) : costLimit === 0 ? 100 : null;
 
   const formatCost = (cost: number): string => {
     if (cost >= 1000) {
