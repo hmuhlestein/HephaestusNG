@@ -1,5 +1,11 @@
 {
-  "blocker_count": 0,
   "capped": true,
-  "capped_after_runs": 12
+  "capped_after_runs": 12,
+  "passed_tests": 1,
+  "failed_tests": 0,
+  "total_tests": 1,
+  "pass_rate": 100.0,
+  "critical_issues": 0,
+  "requirements_met": 1,
+  "requirements_total": 1
 }
