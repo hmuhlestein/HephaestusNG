@@ -151,8 +151,11 @@ additional_notes: |
 
   Don't just describe the code — explain the reasoning. An engineer should
   understand not just WHAT was built, but WHY it was built this way and what
-  alternatives were considered. This section should let someone form a mental
-  model of the change architecture without reading every file.
+  alternatives were considered. Explain HOW it works — the key mechanisms,
+  data flows, error handling paths, and integration patterns. Anything an
+  engineer needs to understand the feature end-to-end without reading every
+  file. This section should let someone form a complete mental model of the
+  change architecture.
 
   Also write this section as a standalone `<Docs Path>/code_summary.md` file
   so it can be referenced independently of the HTML report.
