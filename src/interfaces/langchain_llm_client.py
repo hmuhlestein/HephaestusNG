@@ -360,10 +360,10 @@ class LangChainLLMClient:
         # Extract cost from response metadata
         try:
             metadata = getattr(response, "response_metadata", {}) or {}
-            usage = metadata.get("token_usage", {})
+            usage = metadata.get("token_usage") or {}
 
             # OpenRouter returns cost in usage.cost when usage.include=true
-            cost_data = usage.get("cost", {})
+            cost_data = usage.get("cost") or {}
             cost_usd = cost_data.get("total", 0)
 
             if cost_usd > 0:
@@ -372,7 +372,8 @@ class LangChainLLMClient:
 
                 input_tokens = usage.get("prompt_tokens", 0)
                 output_tokens = usage.get("completion_tokens", 0)
-                cache_read = usage.get("prompt_tokens_details", {}).get("cached_tokens", 0)
+                token_details = usage.get("prompt_tokens_details") or {}
+                cache_read = token_details.get("cached_tokens", 0)
 
                 with get_db() as db:
                     record_cost(
