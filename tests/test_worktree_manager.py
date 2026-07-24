@@ -257,6 +257,69 @@ def test_cleanup_worktree(worktree_manager, test_db):
     assert not worktree_path.exists()
 
 
+class TestReloadInstanceIsolation:
+    """reload() must be instance-local, not a side-channel write to the
+    shared config singleton -- otherwise two WorktreeManager instances each
+    scoped to a different project (the multi-project dispatch fix) would
+    silently interfere with each other, whichever reload()ed last winning
+    for every reader of get_config()."""
+
+    def _make_repo(self, path):
+        path.mkdir(parents=True, exist_ok=True)
+        repo = Repo.init(path)
+        f = path / "f.txt"
+        f.write_text("x")
+        repo.index.add([str(f)])
+        repo.index.commit("init")
+        return repo
+
+    def test_reload_does_not_mutate_shared_config(self, worktree_manager, tmp_path):
+        import src.core.simple_config as simple_config
+
+        config = simple_config.get_config()
+        original_main_repo_path = config.main_repo_path
+        original_worktree_base_path = config.worktree_base_path
+        config.worktree_base_path = None  # exercise the _project_root fallback
+        try:
+            other_repo_dir = tmp_path / "other-repo"
+            self._make_repo(other_repo_dir)
+
+            worktree_manager.reload(other_repo_dir)
+
+            assert worktree_manager.worktree_base == other_repo_dir / ".worktrees"
+            assert config.main_repo_path == original_main_repo_path
+        finally:
+            config.worktree_base_path = original_worktree_base_path
+
+    def test_two_instances_scoped_to_different_projects_dont_interfere(
+        self, test_db, tmp_path, monkeypatch
+    ):
+        import src.core.simple_config as simple_config
+
+        config = simple_config.Config()
+        config.worktree_base_path = None
+        config.main_repo_path = tmp_path / "default"
+        self._make_repo(config.main_repo_path)
+        monkeypatch.setattr("src.core.simple_config.get_config", lambda: config)
+        monkeypatch.setattr("src.core.worktree_manager.get_config", lambda: config)
+
+        proj_a = tmp_path / "proj-a"
+        self._make_repo(proj_a)
+        proj_b = tmp_path / "proj-b"
+        self._make_repo(proj_b)
+
+        wt_a = WorktreeManager(test_db)
+        wt_a.reload(proj_a)
+        wt_b = WorktreeManager(test_db)
+        wt_b.reload(proj_b)
+
+        # Constructing/reloading b after a must not move a's state.
+        assert wt_a.worktree_base == proj_a / ".worktrees"
+        assert wt_b.worktree_base == proj_b / ".worktrees"
+        assert wt_a.main_repo.working_dir == str(proj_a)
+        assert wt_b.main_repo.working_dir == str(proj_b)
+
+
 if __name__ == "__main__":
     # Run tests
     pytest.main([__file__, "-v"])

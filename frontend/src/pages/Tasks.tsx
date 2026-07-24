@@ -177,8 +177,8 @@ const Tasks: React.FC = () => {
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const { subscribe } = useWebSocket();
   const { selectedExecutionId, selectedExecution } = useWorkflow();
-  const { activeProject } = useProject();
-  const projectId = activeProject?.id || null;
+  const { selectedProject } = useProject();
+  const projectId = selectedProject?.id || null;
 
   // Debounce search text for performance
   const debouncedSearchText = useDebounce(filters.searchText, 300);

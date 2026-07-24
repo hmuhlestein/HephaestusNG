@@ -4,6 +4,7 @@ These tests address the critical test coverage gap identified in ARCHITECTURE_RE
 "create_agent_for_task and restart_agent have no direct test coverage"
 """
 
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -429,6 +430,109 @@ class TestCreateAgentForTaskMissingSharedWorktree:
             task = session.query(Task).filter_by(id="task-shared").first()
             assert task.status == "failed"
             assert "missing or not a valid git worktree" in (task.failure_reason or "")
+
+
+class TestProjectScopedWorktreeManager:
+    """Regression for the multi-project worktree-collision hazard: dispatch
+    must resolve a WorktreeManager scoped to the TASK's own project (via
+    Workflow.project_id -> AutopilotProject.base_dir), not operate on the
+    shared self.branch_manager instance in whatever state a DIFFERENT
+    project's activation/reload last left it in."""
+
+    @pytest.mark.asyncio
+    async def test_isolated_worktree_branch_uses_project_scoped_manager(
+        self, mock_agent_manager, db_manager
+    ):
+        from src.core.database import AutopilotProject
+
+        with db_manager.session_scope() as session:
+            session.add(
+                AutopilotProject(
+                    id="proj-x", name="Project X", base_dir="/tmp/project-x-repo"
+                )
+            )
+            session.add(
+                Workflow(
+                    id="wf-x",
+                    name="Project X Workflow",
+                    status="active",
+                    working_directory="/tmp/project-x-nonshared",
+                    phases_folder_path="/tmp",
+                    project_id="proj-x",
+                )
+            )
+            session.add(
+                Task(
+                    id="task-x",
+                    workflow_id="wf-x",
+                    raw_description="r",
+                    enriched_description="r",
+                    done_definition="d",
+                    status="pending",
+                )
+            )
+
+        captured = {}
+
+        class FakeScopedManager:
+            def reload(self, path):
+                captured["reloaded_to"] = path
+
+            def create_agent_branch(self, **kwargs):
+                return {
+                    "working_directory": "/tmp/project-x-repo/.worktrees/wt_x",
+                    "branch_name": "agent-x",
+                }
+
+            def switch_to_branch(self, name):
+                pass
+
+            def discard_agent(self, agent_id):
+                pass
+
+        mock_agent_manager.llm_provider.generate_agent_prompt = AsyncMock(
+            return_value="You are an AI agent."
+        )
+        mock_session = MagicMock()
+        mock_session.name = "agent-session-x"
+        mock_agent_manager.tmux_server.new_session.return_value = mock_session
+        mock_session.attached_window.attached_pane = MagicMock()
+
+        with db_manager.session_scope() as session:
+            task = session.query(Task).filter_by(id="task-x").first()
+            with patch(
+                "src.agents.manager.WorktreeManager",
+                return_value=FakeScopedManager(),
+            ), patch("src.agents.manager.get_cli_agent") as mock_get_cli, patch(
+                "src.agents.manager.asyncio.sleep", new_callable=AsyncMock
+            ):
+                mock_cli = MagicMock()
+                mock_cli.get_launch_command.return_value = ["pi", "--task", "test"]
+                mock_cli.default_model = "sonnet"
+                mock_get_cli.return_value = mock_cli
+
+                await mock_agent_manager.create_agent_for_task(
+                    task=task,
+                    enriched_data={},
+                    memories=[],
+                    project_context="",
+                    cli_type="pi",
+                )
+
+        assert captured["reloaded_to"] == Path("/tmp/project-x-repo")
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_shared_instance_without_project_id(
+        self, mock_agent_manager, sample_task
+    ):
+        """sample_task's workflow ('wf-1') has no project_id -- confirms the
+        fallback path is exercised (not silently broken) when there's
+        nothing to resolve a project from."""
+        assert mock_agent_manager._resolve_project_base_dir("wf-1") is None
+        assert (
+            mock_agent_manager._scoped_worktree_manager("wf-1")
+            is mock_agent_manager.branch_manager
+        )
 
 
 class TestCreateAgentForTaskFallback:

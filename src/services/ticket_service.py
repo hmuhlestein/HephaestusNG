@@ -396,6 +396,9 @@ class TicketService:
 
                 server_state = get_app_state()
 
+                from src.core.database import resolve_project_for_workflow
+
+                bcast_project_id, bcast_project_name = resolve_project_for_workflow(workflow_id)
                 await server_state.broadcast_update(
                     {
                         "type": "ticket_pending_review",
@@ -403,7 +406,9 @@ class TicketService:
                         "workflow_id": workflow_id,
                         "title": title,
                         "pending_count": approval_manager.get_pending_count(),
-                    }
+                    },
+                    project_id=bcast_project_id,
+                    project_name=bcast_project_name,
                 )
             except Exception as e:
                 logger.warning(
@@ -461,6 +466,9 @@ class TicketService:
 
                         server_state = get_app_state()
 
+                        from src.core.database import resolve_project_for_workflow
+
+                        bcast_project_id, bcast_project_name = resolve_project_for_workflow(workflow_id)
                         await server_state.broadcast_update(
                             {
                                 "type": "ticket_deleted",
@@ -468,7 +476,9 @@ class TicketService:
                                 "workflow_id": workflow_id,
                                 "reason": "timeout",
                                 "pending_count": approval_manager.get_pending_count(),
-                            }
+                            },
+                            project_id=bcast_project_id,
+                            project_name=bcast_project_name,
                         )
                     except Exception as e:
                         logger.warning(
@@ -526,6 +536,9 @@ class TicketService:
 
                         server_state = get_app_state()
 
+                        from src.core.database import resolve_project_for_workflow
+
+                        bcast_project_id, bcast_project_name = resolve_project_for_workflow(workflow_id)
                         await server_state.broadcast_update(
                             {
                                 "type": "ticket_deleted",
@@ -534,7 +547,9 @@ class TicketService:
                                 "reason": "rejected",
                                 "rejection_reason": rejection_reason,
                                 "pending_count": approval_manager.get_pending_count(),
-                            }
+                            },
+                            project_id=bcast_project_id,
+                            project_name=bcast_project_name,
                         )
                     except Exception as e:
                         logger.warning(
@@ -564,13 +579,18 @@ class TicketService:
 
                     server_state = get_app_state()
 
+                    from src.core.database import resolve_project_for_workflow
+
+                    bcast_project_id, bcast_project_name = resolve_project_for_workflow(workflow_id)
                     await server_state.broadcast_update(
                         {
                             "type": "ticket_approved",
                             "ticket_id": ticket_id,
                             "workflow_id": workflow_id,
                             "pending_count": approval_manager.get_pending_count(),
-                        }
+                        },
+                        project_id=bcast_project_id,
+                        project_name=bcast_project_name,
                     )
                 except Exception as e:
                     logger.warning(
@@ -1395,9 +1415,22 @@ class TicketService:
                     "message": "Commit already linked to this ticket",
                 }
 
-            # Get real commit stats from git
-            config = get_config()
-            main_repo_path = str(config.main_repo_path)
+            # Get real commit stats from git -- resolve the ticket's own
+            # project repo rather than assuming it's whichever project the
+            # process-wide singleton currently points at (only one project
+            # could ever be active before multi-project concurrency).
+            main_repo_path = None
+            if ticket.workflow_id:
+                wf = db.query(Workflow).filter_by(id=ticket.workflow_id).first()
+                if wf and wf.project_id:
+                    from src.core.database import AutopilotProject
+
+                    proj = db.query(AutopilotProject).filter_by(id=wf.project_id).first()
+                    if proj and proj.base_dir:
+                        main_repo_path = proj.base_dir
+            if main_repo_path is None:
+                config = get_config()
+                main_repo_path = str(config.main_repo_path)
             commit_stats = TicketService._get_commit_stats(commit_sha, main_repo_path)
 
             # Create commit link with real stats

@@ -1751,6 +1751,62 @@ class TestSessionLimitPause:
 
         mock_agent_manager.terminate_agent.assert_not_called()
 
+    @pytest.mark.asyncio
+    async def test_spend_limit_pauses_workflow_when_no_fallback_configured(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        """Claude Code's monthly-spend-limit message is the same failure
+        class as a session limit -- the agent cannot make any more API
+        calls -- and gets identical handling."""
+        agent = Agent(id="a1", cli_type="claude")
+        mock_agent_manager.get_agent_output.return_value = (
+            "You've hit your monthly spend limit."
+        )
+        mock_agent_manager.terminate_agent = AsyncMock()
+
+        task = Mock(
+            id="t1", status="in_progress", phase_id="p1", workflow_id="wf1"
+        )
+        phase = Mock(fallback_cli_tool=None)
+        workflow = Mock(status="active", paused_by=None, paused_at=None)
+        mock_db.session_scope = self._session_with(task, phase, workflow)
+
+        await make_monitoring_loop._mechanical_recovery_for_agent(agent)
+        await make_monitoring_loop._mechanical_recovery_for_agent(agent)
+
+        assert task.status == "failed"
+        assert task.failure_reason == "CLI monthly spend limit reached"
+        assert workflow.status == "paused"
+        assert workflow.paused_by == "system"
+        mock_agent_manager.terminate_agent.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_spend_limit_no_pause_when_fallback_configured(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        """A configured fallback_cli_tool should get a chance to run
+        instead of leaving the workflow paused."""
+        agent = Agent(id="a1", cli_type="claude")
+        mock_agent_manager.get_agent_output.return_value = (
+            "You've hit your monthly spend limit."
+        )
+        mock_agent_manager.terminate_agent = AsyncMock()
+
+        task = Mock(
+            id="t1", status="in_progress", phase_id="p1", workflow_id="wf1"
+        )
+        phase = Mock(fallback_cli_tool="pi")
+        workflow = Mock(status="active", paused_by=None, paused_at=None)
+        mock_db.session_scope = self._session_with(task, phase, workflow)
+
+        await make_monitoring_loop._mechanical_recovery_for_agent(agent)
+        await make_monitoring_loop._mechanical_recovery_for_agent(agent)
+
+        assert task.status == "failed"
+        assert workflow.status == "active"
+        assert workflow.paused_by is None
+        mock_agent_manager.terminate_agent.assert_called_once()
+
 
 # ── _handle_stuck_agent ──────────────────────────────────────────
 

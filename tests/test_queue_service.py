@@ -493,3 +493,127 @@ class TestGetQueuedTasks:
         assert tasks[0].priority_boosted is True
         # Regular high priority task should be second
         assert tasks[1].id == high_id
+
+
+class TestProjectScopedQueue:
+    """Each active project gets its own independent max_concurrent_agents
+    budget -- required once more than one project can be active at once
+    (multi-project concurrency), otherwise one project's queue depth /
+    agent count can starve another's out of the single global cap."""
+
+    def _make_project_task_agent(
+        self, db_manager, project_id, workflow_id, agent_status="working"
+    ):
+        from src.core.database import AutopilotProject, Workflow
+
+        session = db_manager.get_session()
+        try:
+            if not session.query(AutopilotProject).filter_by(id=project_id).first():
+                session.add(
+                    AutopilotProject(
+                        id=project_id, name=project_id, base_dir=f"/tmp/{project_id}"
+                    )
+                )
+            if not session.query(Workflow).filter_by(id=workflow_id).first():
+                session.add(
+                    Workflow(
+                        id=workflow_id,
+                        name=workflow_id,
+                        status="active",
+                        project_id=project_id,
+                        phases_folder_path="/tmp",
+                    )
+                )
+            session.commit()
+
+            task = Task(
+                id=str(uuid.uuid4()),
+                workflow_id=workflow_id,
+                raw_description="r",
+                enriched_description="r",
+                done_definition="d",
+                status="in_progress",
+            )
+            session.add(task)
+            session.commit()
+
+            agent = Agent(
+                id=str(uuid.uuid4()),
+                system_prompt="p",
+                status=agent_status,
+                cli_type="claude",
+                current_task_id=task.id,
+            )
+            session.add(agent)
+            session.commit()
+            return task.id, agent.id
+        finally:
+            session.close()
+
+    def test_active_agent_count_scoped_to_project(self, queue_service, db_manager):
+        self._make_project_task_agent(db_manager, "proj-a", "wf-a")
+        self._make_project_task_agent(db_manager, "proj-a", "wf-a2")
+        self._make_project_task_agent(db_manager, "proj-b", "wf-b")
+
+        assert queue_service.get_active_agent_count("proj-a") == 2
+        assert queue_service.get_active_agent_count("proj-b") == 1
+        # Unscoped (no project_id) still counts globally -- unchanged.
+        assert queue_service.get_active_agent_count() == 3
+
+    def test_should_queue_task_is_per_project_not_global(self, db_manager):
+        """A project at its OWN cap must queue, even while another active
+        project is well under the SAME cap -- proves each project has an
+        independent budget, not a shared global one."""
+        queue_service = QueueService(db_manager, max_concurrent_agents=2)
+
+        self._make_project_task_agent(db_manager, "proj-busy", "wf-busy")
+        self._make_project_task_agent(db_manager, "proj-busy", "wf-busy2")
+        self._make_project_task_agent(db_manager, "proj-quiet", "wf-quiet")
+
+        assert queue_service.should_queue_task("proj-busy") is True
+        assert queue_service.should_queue_task("proj-quiet") is False
+
+    def test_get_next_queued_task_scoped_to_project(self, queue_service, db_manager):
+        from src.core.database import AutopilotProject, Workflow
+
+        session = db_manager.get_session()
+        try:
+            session.add(AutopilotProject(id="proj-a", name="a", base_dir="/tmp/a"))
+            session.add(AutopilotProject(id="proj-b", name="b", base_dir="/tmp/b"))
+            session.add(
+                Workflow(
+                    id="wf-a", name="a", status="active", project_id="proj-a",
+                    phases_folder_path="/tmp",
+                )
+            )
+            session.add(
+                Workflow(
+                    id="wf-b", name="b", status="active", project_id="proj-b",
+                    phases_folder_path="/tmp",
+                )
+            )
+            session.commit()
+        finally:
+            session.close()
+
+        task_a = Task(
+            id=str(uuid.uuid4()), workflow_id="wf-a", raw_description="r",
+            done_definition="d", status="queued", priority="medium",
+        )
+        task_b = Task(
+            id=str(uuid.uuid4()), workflow_id="wf-b", raw_description="r",
+            done_definition="d", status="queued", priority="medium",
+        )
+        session = db_manager.get_session()
+        try:
+            session.add(task_a)
+            session.add(task_b)
+            session.commit()
+        finally:
+            session.close()
+
+        next_a = queue_service.get_next_queued_task("proj-a")
+        assert next_a.id == task_a.id
+
+        next_b = queue_service.get_next_queued_task("proj-b")
+        assert next_b.id == task_b.id

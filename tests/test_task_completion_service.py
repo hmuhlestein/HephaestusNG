@@ -148,7 +148,7 @@ class TestVerifyOutputArtifact:
 
         mock_session = Mock()
         mock_session.query.return_value.filter_by.return_value.first.return_value = (
-            Mock(working_directory=str(tmp_path))
+            Mock(working_directory=str(tmp_path), project_id=None)
         )
 
         with patch(
@@ -174,7 +174,7 @@ class TestVerifyOutputArtifact:
 
         mock_session = Mock()
         mock_session.query.return_value.filter_by.return_value.first.return_value = (
-            Mock(working_directory=str(tmp_path))
+            Mock(working_directory=str(tmp_path), project_id=None)
         )
 
         # Step 2's feature_dir fallback defaults to the REAL config's
@@ -201,7 +201,7 @@ class TestVerifyOutputArtifact:
         task = Mock(phase_id="phase-1", workflow_id="wf-1", id="task-1")
 
         mock_session = Mock()
-        mock_session.query.return_value.filter_by.return_value.first.return_value = Mock(working_directory="/nonexistent")
+        mock_session.query.return_value.filter_by.return_value.first.return_value = Mock(working_directory="/nonexistent", project_id=None)
 
         with patch("src.autopilot.spec.get_phase_required_files", return_value=["docs/output.md"]), \
              patch("pathlib.Path.exists", return_value=False), \
@@ -218,7 +218,7 @@ class TestVerifyOutputArtifact:
         task = Mock(phase_id="phase-1", workflow_id="wf-1", id="task-1")
 
         mock_session = Mock()
-        mock_session.query.return_value.filter_by.return_value.first.return_value = Mock(working_directory="/path/to/project")
+        mock_session.query.return_value.filter_by.return_value.first.return_value = Mock(working_directory="/path/to/project", project_id=None)
 
         with patch("src.autopilot.spec.get_phase_required_files", return_value=["docs/output.md"]), \
              patch("pathlib.Path.exists", return_value=True):
@@ -234,7 +234,7 @@ class TestVerifyOutputArtifact:
         task = Mock(phase_id="phase-1", workflow_id="wf-1", id="task-1")
 
         mock_session = Mock()
-        mock_session.query.return_value.filter_by.return_value.first.return_value = Mock(working_directory="/path")
+        mock_session.query.return_value.filter_by.return_value.first.return_value = Mock(working_directory="/path", project_id=None)
 
         with patch("src.autopilot.spec.get_phase_required_files", return_value=["docs/output.md"]), \
              patch("pathlib.Path.exists", return_value=False), \
@@ -260,7 +260,7 @@ class TestVerifyOutputArtifact:
 
         mock_session = Mock()
         mock_session.query.return_value.filter_by.return_value.first.return_value = (
-            Mock(working_directory=str(tmp_path))
+            Mock(working_directory=str(tmp_path), project_id=None)
         )
 
         with patch(
@@ -285,7 +285,7 @@ class TestVerifyOutputArtifact:
 
         mock_session = Mock()
         mock_session.query.return_value.filter_by.return_value.first.return_value = (
-            Mock(working_directory=str(tmp_path))
+            Mock(working_directory=str(tmp_path), project_id=None)
         )
 
         with patch(
@@ -296,6 +296,54 @@ class TestVerifyOutputArtifact:
                 session=mock_session, task=task, phase=phase
             )
             assert result is None
+
+    def test_uses_own_projects_feature_dir_not_global_singleton(self, tmp_path):
+        """Regression: with two projects active simultaneously, the
+        feature-dir fallback must search the task's OWN project's base_dir,
+        not whichever project the process-wide config singleton currently
+        points at (there's no longer only one "the active project")."""
+        phase = Mock(name="development", id="phase-1")
+        phase.name = "development"
+        task = Mock(phase_id="phase-1", workflow_id="wf-1", id="task-1")
+
+        workdir = tmp_path / "workdir"  # workflow's shared worktree -- no output here
+        workdir.mkdir()
+
+        project_dir = tmp_path / "project-a"
+        feature_docs = project_dir / ".hephaestus" / "features" / "feat-1" / "docs"
+        feature_docs.mkdir(parents=True)
+        (feature_docs / "output.md").write_text("content")
+
+        wf = Mock(working_directory=str(workdir), project_id="proj-a")
+        project = Mock(base_dir=str(project_dir))
+
+        def fake_query(model):
+            q = Mock()
+            if getattr(model, "__name__", "") == "Workflow":
+                q.filter_by.return_value.first.return_value = wf
+            elif getattr(model, "__name__", "") == "AutopilotProject":
+                q.filter_by.return_value.first.return_value = project
+            return q
+
+        mock_session = Mock()
+        mock_session.query.side_effect = fake_query
+
+        # Simulates a DIFFERENT project being the one the global config
+        # singleton points at -- proves the fix doesn't fall back to it.
+        other_active_project = tmp_path / "some-other-active-project"
+        other_active_project.mkdir()
+
+        with patch(
+            "src.autopilot.spec.get_phase_required_files", return_value=["output.md"]
+        ), patch("src.autopilot.spec.load_optional_phases", return_value=[]), patch(
+            "src.core.simple_config.get_config",
+            return_value=Mock(project_root=other_active_project),
+        ):
+            result = TaskCompletionService.verify_output_artifact(
+                session=mock_session, task=task, phase=phase
+            )
+
+        assert result is None
 
 
 class TestVerifyOutputSurvivedCommit:
@@ -346,7 +394,7 @@ class TestVerifyOutputSurvivedCommit:
 
         mock_session = Mock()
         mock_session.query.return_value.filter_by.return_value.first.return_value = (
-            Mock(working_directory=str(tmp_path))
+            Mock(working_directory=str(tmp_path), project_id=None)
         )
 
         with patch("src.autopilot.spec.get_phase_required_files", return_value=["output.md"]):
@@ -415,7 +463,7 @@ class TestVerifyGateResultSchema:
 
         mock_session = Mock()
         mock_session.query.return_value.filter_by.return_value.first.return_value = (
-            Mock(working_directory=str(tmp_path))
+            Mock(working_directory=str(tmp_path), project_id=None)
         )
 
         result = TaskCompletionService.verify_gate_result_schema(
@@ -441,7 +489,7 @@ class TestVerifyGateResultSchema:
 
         mock_session = Mock()
         mock_session.query.return_value.filter_by.return_value.first.return_value = (
-            Mock(working_directory=str(tmp_path))
+            Mock(working_directory=str(tmp_path), project_id=None)
         )
 
         result = TaskCompletionService.verify_gate_result_schema(
@@ -458,7 +506,7 @@ class TestVerifyGateResultSchema:
 
         mock_session = Mock()
         mock_session.query.return_value.filter_by.return_value.first.return_value = (
-            Mock(working_directory=str(tmp_path))
+            Mock(working_directory=str(tmp_path), project_id=None)
         )
 
         result = TaskCompletionService.verify_gate_result_schema(
@@ -484,7 +532,7 @@ class TestVerifyGateResultSchema:
 
         mock_session = Mock()
         mock_session.query.return_value.filter_by.return_value.first.return_value = (
-            Mock(working_directory=str(tmp_path))
+            Mock(working_directory=str(tmp_path), project_id=None)
         )
 
         result = TaskCompletionService.verify_gate_result_schema(

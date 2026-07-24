@@ -68,30 +68,40 @@ async def list_projects():
         return result
 
 
-@router.get("/active", response_model=Optional[ProjectItem])
+@router.get("/active", response_model=List[ProjectItem])
 async def get_active_project():
+    """List every currently-active project (0 to max_concurrent_projects).
+
+    Was Optional[ProjectItem] (a single project via .first()) before
+    multi-project concurrency -- now that more than one project can be
+    active at once, returning only one would silently hide the rest.
+    """
     from src.core.database import AutopilotDesign, AutopilotProject, get_db
 
     with get_db() as db:
-        proj = db.query(AutopilotProject).filter_by(is_active=True).first()
-        if not proj:
-            return None
-        count = db.query(AutopilotDesign).filter_by(project_id=proj.id).count()
-        return ProjectItem(
-            id=proj.id,
-            name=proj.name,
-            base_dir=proj.base_dir,
-            is_default=proj.is_default,
-            is_active=True,
-            design_count=count,
-            created_at=proj.created_at.isoformat() if proj.created_at else "",
-            updated_at=proj.updated_at.isoformat() if proj.updated_at else "",
-        )
+        projects = db.query(AutopilotProject).filter_by(is_active=True).all()
+        result = []
+        for proj in projects:
+            count = db.query(AutopilotDesign).filter_by(project_id=proj.id).count()
+            result.append(
+                ProjectItem(
+                    id=proj.id,
+                    name=proj.name,
+                    base_dir=proj.base_dir,
+                    is_default=proj.is_default,
+                    is_active=True,
+                    design_count=count,
+                    created_at=proj.created_at.isoformat() if proj.created_at else "",
+                    updated_at=proj.updated_at.isoformat() if proj.updated_at else "",
+                )
+            )
+        return result
 
 
 @router.post("", response_model=ProjectItem)
 async def create_project(req: ProjectCreate):
     from src.core.database import AutopilotProject, get_db
+    from src.core.simple_config import get_config
 
     resolved = _validate_base_dir(req.base_dir)
 
@@ -107,13 +117,27 @@ async def create_project(req: ProjectCreate):
 
         # First project is automatically active
         is_first = db.query(AutopilotProject).count() == 0
+        want_active = is_first
+        if want_active:
+            active_count = db.query(AutopilotProject).filter_by(is_active=True).count()
+            max_concurrent = get_config().max_concurrent_projects
+            if active_count >= max_concurrent:
+                # Activation here is a side effect of project creation, not
+                # an explicit user "activate" request -- create it inactive
+                # rather than reject the whole creation like
+                # activate_project's 409 does.
+                logger.warning(
+                    f"Not auto-activating new project {req.name!r}: "
+                    f"max_concurrent_projects ({max_concurrent}) already reached"
+                )
+                want_active = False
 
         proj = AutopilotProject(
             id=f"proj-{uuid.uuid4().hex[:12]}",
             name=req.name,
             base_dir=resolved,
             is_default=req.is_default or is_first,
-            is_active=is_first,
+            is_active=want_active,
         )
         db.add(proj)
         db.flush()
@@ -133,7 +157,7 @@ async def create_project(req: ProjectCreate):
     # session above closes, so pass a plain object instead of touching the
     # ORM instance (accessing proj.base_dir here would raise
     # DetachedInstanceError, silently swallowed by the except below).
-    if is_first:
+    if want_active:
         try:
             from types import SimpleNamespace
 
@@ -229,17 +253,31 @@ async def delete_project(project_id: str):
 @router.post("/{project_id}/activate", response_model=ProjectItem)
 async def activate_project(project_id: str):
     from src.core.database import AutopilotDesign, AutopilotProject, get_db
+    from src.core.simple_config import get_config
 
     with get_db() as db:
         proj = db.query(AutopilotProject).filter_by(id=project_id).first()
         if not proj:
             raise HTTPException(404, f"Project not found: {project_id}")
 
-        # Clear all active flags
-        db.query(AutopilotProject).update({"is_active": False})
-
-        # Set target active
-        proj.is_active = True
+        # Cap the number of simultaneously-active projects at
+        # max_concurrent_projects instead of exclusively clearing every
+        # other project -- mirrors AutopilotServiceRegistry.can_start's
+        # "already occupies a slot" exemption (src/autopilot/service.py)
+        # for re-activating an already-active project.
+        if not proj.is_active:
+            active_projects = (
+                db.query(AutopilotProject).filter_by(is_active=True).all()
+            )
+            max_concurrent = get_config().max_concurrent_projects
+            if len(active_projects) >= max_concurrent:
+                names = ", ".join(p.name for p in active_projects)
+                raise HTTPException(
+                    409,
+                    f"Max concurrent projects ({max_concurrent}) reached: "
+                    f"{names}. Stop one before starting another.",
+                )
+            proj.is_active = True
         db.flush()
 
         # Apply to runtime config
@@ -255,6 +293,34 @@ async def activate_project(project_id: str):
             base_dir=proj.base_dir,
             is_default=proj.is_default,
             is_active=True,
+            design_count=count,
+            created_at=proj.created_at.isoformat() if proj.created_at else "",
+            updated_at=proj.updated_at.isoformat() if proj.updated_at else "",
+        )
+
+
+@router.post("/{project_id}/deactivate", response_model=ProjectItem)
+async def deactivate_project(project_id: str):
+    from src.core.database import AutopilotDesign, AutopilotProject, get_db
+
+    with get_db() as db:
+        proj = db.query(AutopilotProject).filter_by(id=project_id).first()
+        if not proj:
+            raise HTTPException(404, f"Project not found: {project_id}")
+
+        proj.is_active = False
+        db.flush()
+
+        count = db.query(AutopilotDesign).filter_by(project_id=proj.id).count()
+
+        logger.info(f"Deactivated project: {proj.name} ({proj.base_dir})")
+
+        return ProjectItem(
+            id=proj.id,
+            name=proj.name,
+            base_dir=proj.base_dir,
+            is_default=proj.is_default,
+            is_active=False,
             design_count=count,
             created_at=proj.created_at.isoformat() if proj.created_at else "",
             updated_at=proj.updated_at.isoformat() if proj.updated_at else "",

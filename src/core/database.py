@@ -2074,3 +2074,35 @@ def get_db(database_path: Optional[str] = None):
         raise
     finally:
         db.close()
+
+
+def get_project_info_for_workflow(session, workflow_id: Optional[str]):
+    """Resolve a workflow's (project_id, project_name), or (None, None) if
+    workflow_id is missing, the workflow has no project_id, or nothing
+    matches. Never raises -- callers (e.g. WebSocket/SSE broadcast sites)
+    use this to label events by project without letting a lookup failure
+    take down an otherwise-successful action.
+    """
+    if not workflow_id:
+        return None, None
+    try:
+        wf = session.query(Workflow).filter_by(id=workflow_id).first()
+        if not wf or not wf.project_id:
+            return None, None
+        proj = session.query(AutopilotProject).filter_by(id=wf.project_id).first()
+        return wf.project_id, (proj.name if proj else None)
+    except Exception:
+        return None, None
+
+
+def resolve_project_for_workflow(workflow_id: Optional[str]):
+    """Same as get_project_info_for_workflow, but opens and closes its own
+    session -- for call sites (mainly WebSocket/SSE broadcast points) that
+    don't already have one open. Never raises."""
+    if not workflow_id:
+        return None, None
+    try:
+        with get_db() as session:
+            return get_project_info_for_workflow(session, workflow_id)
+    except Exception:
+        return None, None

@@ -168,6 +168,63 @@ class AgentManager:
             )
         return None
 
+    def _resolve_project_base_dir(self, workflow_id: Optional[str]) -> Optional[Path]:
+        """Resolve workflow_id's project base_dir via Workflow.project_id ->
+        AutopilotProject.base_dir. Never raises -- returns None on any
+        lookup failure (no workflow_id, workflow/project row missing, or no
+        project_id) so callers can fall back to today's default-instance
+        behavior instead of erroring.
+        """
+        if not workflow_id:
+            return None
+        try:
+            from src.core.database import AutopilotProject, Workflow
+
+            session = self.db_manager.get_session()
+            try:
+                wf = session.query(Workflow).filter_by(id=workflow_id).first()
+                if not wf or not wf.project_id:
+                    return None
+                proj = (
+                    session.query(AutopilotProject)
+                    .filter_by(id=wf.project_id)
+                    .first()
+                )
+                if not proj or not proj.base_dir:
+                    return None
+                return Path(proj.base_dir)
+            finally:
+                session.close()
+        except Exception as e:
+            logger.warning(
+                f"[WORKTREE] Could not resolve project for workflow {workflow_id}: {e}"
+            )
+            return None
+
+    def _scoped_worktree_manager(self, workflow_id: Optional[str]) -> WorktreeManager:
+        """Return a WorktreeManager instance safely scoped to workflow_id's
+        project. Constructs a FRESH instance and reload()s it -- mirrors
+        orchestrator.py's precedented pattern (construct fresh, reload
+        immediately, use, discard) rather than reload()-ing the shared
+        self.branch_manager singleton in place.
+
+        A fresh instance is required, not just a reload of the shared one:
+        dispatch can run on genuinely different ThreadPoolExecutor worker
+        threads (MAX_PARALLEL_FEATURES), so reload-then-use on a SHARED
+        instance still races against another thread's reload landing in
+        between reload() and the git operations that follow it.
+
+        Falls back to self.branch_manager, unreloaded, when workflow_id
+        doesn't resolve to a project -- preserves today's default/
+        single-project behavior for that edge case rather than erroring.
+        """
+        base_dir = self._resolve_project_base_dir(workflow_id)
+        if base_dir is None:
+            return self.branch_manager
+        wt_mgr = WorktreeManager(db_manager=self.db_manager)
+        wt_mgr.reload(base_dir)
+        return wt_mgr
+
     async def create_agent_for_task(
         self,
         task: Task,
@@ -232,6 +289,7 @@ class AgentManager:
                 return existing
 
         agent_id = str(uuid.uuid4())
+        wt_mgr = self._scoped_worktree_manager(task.workflow_id)
 
         # Centralized phase-config fallback: if the caller didn't supply the phase's
         # CLI/thinking config, derive it from task.phase_id here. This guarantees every
@@ -320,7 +378,7 @@ class AgentManager:
                                     "silently recover it -- find out what deleted it."
                                 )
                             shared_worktree = wf.working_directory
-                            self.branch_manager.reload(wt_path)
+                            wt_mgr.reload(wt_path)
 
             if shared_worktree:
                 # Use the shared worktree — all phases commit here
@@ -332,7 +390,7 @@ class AgentManager:
                 )
             else:
                 # Create an isolated worktree for the agent (legacy path)
-                branch_info = self.branch_manager.create_agent_branch(
+                branch_info = wt_mgr.create_agent_branch(
                     agent_id=agent_id,
                     parent_agent_id=getattr(task, "created_by_agent_id", None),
                     context_files=context_files,
@@ -343,7 +401,7 @@ class AgentManager:
                     f"Created worktree {branch_name} for agent {agent_id} "
                     f"at {branch_path} (context: {sorted(context_files) if context_files else 'none'})"
                 )
-                self.branch_manager.switch_to_branch(branch_name)
+                wt_mgr.switch_to_branch(branch_name)
 
             # 2. Generate system prompt
             # Get phase name for specialized prompts
@@ -779,7 +837,7 @@ class AgentManager:
                         # creates one). Without this, every fallback leaves
                         # the primary's orphaned worktree on disk forever.
                         try:
-                            self.branch_manager.discard_agent(agent_id)
+                            wt_mgr.discard_agent(agent_id)
                         except Exception:
                             pass
 
@@ -1654,7 +1712,8 @@ class AgentManager:
                 try:
                     wf = restart_sess.query(Workflow).filter_by(id=task.workflow_id).first()
                     if wf and wf.working_directory and Path(wf.working_directory).exists():
-                        self.branch_manager.reload(Path(wf.working_directory))
+                        restart_wt_mgr = WorktreeManager(db_manager=self.db_manager)
+                        restart_wt_mgr.reload(Path(wf.working_directory))
                         restart_wd = wf.working_directory
                 finally:
                     restart_sess.close()

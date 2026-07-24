@@ -318,8 +318,8 @@ const Agents: React.FC = () => {
   const [showAll, setShowAll] = useState(!!urlAgentId);
   const [page, setPage] = useState(1);
   const { subscribe } = useWebSocket();
-  const { activeProject } = useProject();
-  const projectId = activeProject?.id || null;
+  const { selectedProject } = useProject();
+  const projectId = selectedProject?.id || null;
 
   const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['agents', showAll ? 'all' : 'active', page, projectId],

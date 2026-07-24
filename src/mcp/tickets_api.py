@@ -31,13 +31,62 @@ def _get_ticket_service():
     return _ticket_service
 
 
-async def _broadcast_update(data: dict):
-    """Broadcast update to SSE/WebSocket clients."""
+def _get_workflow_id_for_ticket(ticket_id: str) -> Optional[str]:
+    """Resolve a ticket's workflow_id for broadcast project-tagging.
+    Never raises -- a lookup failure just means the broadcast goes out
+    without project context, same as omitting workflow_id entirely."""
+    try:
+        from src.core.database import Ticket, get_db
+
+        with get_db() as db:
+            ticket = db.query(Ticket).filter_by(id=ticket_id).first()
+            return ticket.workflow_id if ticket else None
+    except Exception:
+        return None
+
+
+def _resolve_repo_path_for_commit(commit_sha: str) -> Optional[str]:
+    """Resolve which project's repo a commit lives in via the ticket it's
+    linked to. Returns None (never raises) when the commit isn't linked to
+    any ticket, or the ticket/workflow/project chain doesn't resolve --
+    callers fall back to the process-wide active project in that case."""
+    try:
+        from src.core.database import AutopilotProject, Ticket, TicketCommit, Workflow, get_db
+
+        with get_db() as db:
+            commit = db.query(TicketCommit).filter_by(commit_sha=commit_sha).first()
+            if not commit:
+                return None
+            ticket = db.query(Ticket).filter_by(id=commit.ticket_id).first()
+            if not ticket or not ticket.workflow_id:
+                return None
+            wf = db.query(Workflow).filter_by(id=ticket.workflow_id).first()
+            if not wf or not wf.project_id:
+                return None
+            proj = db.query(AutopilotProject).filter_by(id=wf.project_id).first()
+            return proj.base_dir if proj else None
+    except Exception:
+        return None
+
+
+async def _broadcast_update(data: dict, workflow_id: Optional[str] = None):
+    """Broadcast update to SSE/WebSocket clients.
+
+    workflow_id: resolved to project_id/project_name and merged into the
+    payload when given, so clients can filter ticket events by their
+    currently-selected project instead of seeing every project's ticket
+    activity indiscriminately.
+    """
     try:
         from src.core.app_context import get_app_state
 
         server_state = get_app_state()
-        await server_state.broadcast_update(data)
+        project_id, project_name = None, None
+        if workflow_id:
+            from src.core.database import resolve_project_for_workflow
+
+            project_id, project_name = resolve_project_for_workflow(workflow_id)
+        await server_state.broadcast_update(data, project_id=project_id, project_name=project_name)
     except Exception:
         pass  # Non-critical
 
@@ -417,7 +466,8 @@ async def create_ticket_endpoint(
                 "workflow_id": workflow_id,
                 "agent_id": agent_id,
                 "title": request.title,
-            }
+            },
+            workflow_id=workflow_id,
         )
         logger.info("[TICKET_CREATE] Broadcast complete")
 
@@ -479,7 +529,8 @@ async def update_ticket_endpoint(
                 "ticket_id": request.ticket_id,
                 "agent_id": agent_id,
                 "fields_updated": result["fields_updated"],
-            }
+            },
+            workflow_id=_get_workflow_id_for_ticket(request.ticket_id),
         )
 
         return UpdateTicketResponse(**result)
@@ -520,7 +571,8 @@ async def change_ticket_status_endpoint(
                 "old_status": result["old_status"],
                 "new_status": result["new_status"],
                 "blocked": result["blocked"],
-            }
+            },
+            workflow_id=_get_workflow_id_for_ticket(request.ticket_id),
         )
 
         return ChangeTicketStatusResponse(**result)
@@ -558,7 +610,8 @@ async def add_comment_endpoint(
                 "ticket_id": request.ticket_id,
                 "agent_id": agent_id,
                 "comment_id": result["comment_id"],
-            }
+            },
+            workflow_id=_get_workflow_id_for_ticket(request.ticket_id),
         )
 
         return AddCommentResponse(**result)
@@ -981,7 +1034,8 @@ async def resolve_ticket_endpoint(
                 "ticket_id": request.ticket_id,
                 "agent_id": agent_id,
                 "unblocked_tickets": result["unblocked_tickets"],
-            }
+            },
+            workflow_id=_get_workflow_id_for_ticket(request.ticket_id),
         )
 
         return ResolveTicketResponse(**result)
@@ -1020,7 +1074,8 @@ async def link_commit_endpoint(
                 "ticket_id": request.ticket_id,
                 "agent_id": agent_id,
                 "commit_sha": request.commit_sha,
-            }
+            },
+            workflow_id=_get_workflow_id_for_ticket(request.ticket_id),
         )
 
         return LinkCommitResponse(**result)
@@ -1109,13 +1164,20 @@ async def approve_ticket_endpoint(
 
         # Broadcast approval
         server_state = get_app_state()
+        from src.core.database import resolve_project_for_workflow
+
+        bcast_project_id, bcast_project_name = resolve_project_for_workflow(
+            _get_workflow_id_for_ticket(ticket_id)
+        )
         await server_state.broadcast_update(
             {
                 "type": "ticket_approved",
                 "ticket_id": ticket_id,
                 "approved_by": agent_id,
                 "pending_count": _get_ticket_service().get_pending_review_count(),
-            }
+            },
+            project_id=bcast_project_id,
+            project_name=bcast_project_name,
         )
 
         logger.info(f"[APPROVE_TICKET] Ticket {ticket_id} approved successfully")
@@ -1167,6 +1229,11 @@ async def reject_ticket_endpoint(
 
         # Broadcast rejection
         server_state = get_app_state()
+        from src.core.database import resolve_project_for_workflow
+
+        bcast_project_id, bcast_project_name = resolve_project_for_workflow(
+            _get_workflow_id_for_ticket(ticket_id)
+        )
         await server_state.broadcast_update(
             {
                 "type": "ticket_rejected",
@@ -1174,7 +1241,9 @@ async def reject_ticket_endpoint(
                 "rejected_by": agent_id,
                 "rejection_reason": rejection_reason,
                 "pending_count": _get_ticket_service().get_pending_review_count(),
-            }
+            },
+            project_id=bcast_project_id,
+            project_name=bcast_project_name,
         )
 
         logger.info(f"[REJECT_TICKET] Ticket {ticket_id} rejected successfully")
@@ -1204,9 +1273,14 @@ async def get_commit_diff_endpoint(
     logger.info(f"Agent {agent_id} fetching commit diff for {commit_sha}")
 
     try:
-        # Get the configured main repo path
-        config = get_config()
-        main_repo_path = str(config.main_repo_path)
+        # Resolve the repo this commit actually belongs to via the ticket
+        # it's linked to -- falls back to the process-wide "active project"
+        # singleton (today's behavior) when the commit isn't linked to any
+        # ticket, e.g. commits made outside the ticket-linking flow.
+        main_repo_path = _resolve_repo_path_for_commit(commit_sha)
+        if main_repo_path is None:
+            config = get_config()
+            main_repo_path = str(config.main_repo_path)
 
         # Helper function to detect language from file extension
         def detect_language(file_path: str) -> str:

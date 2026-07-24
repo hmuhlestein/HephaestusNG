@@ -194,6 +194,14 @@ additional_notes: |
   - **File:** {path}:{line}
   - **Reason:** {why deferred}
 
+  TICKET EVERY DEFER FINDING: a DEFER is tech debt this feature introduced or
+  touched but isn't worth blocking on now. The report above lives in a docs
+  folder that may never be looked at again — file one
+  hephaestus_create_ticket(ticket_type="improvement", tags=["tech-debt"], ...)
+  per DEFER finding so it stays tracked. Do NOT ticket BLOCKER or FIX findings
+  here — those go back to development now via blocker_count, not later via a
+  ticket. Ticketing DEFER items does not change blocker_count/fix_count.
+
   ## Architecture Deviations
   [Deviations from the planned architecture — what was different and why it matters]
 

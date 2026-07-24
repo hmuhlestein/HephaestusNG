@@ -207,6 +207,11 @@ export interface WebSocketMessage {
     | 'ticket_approved'
     | 'ticket_rejected'
     | 'ticket_deleted';
+  // Present when the event is scoped to a project (most are, via the
+  // task/workflow it originated from) -- absent for genuinely
+  // project-agnostic/system-level events.
+  project_id?: string;
+  project_name?: string;
   [key: string]: any;
 }
 
