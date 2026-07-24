@@ -28,7 +28,8 @@ additional_notes: |
 
   ═══ STEP 2: FIX CRITICAL DOC ERRORS ═══
 
-  Read requirements_analysis.md, architecture.md, and key source files. Look for:
+  Read requirements_analysis.md, architecture.md, the adversarial review report,
+  README.md, and skim key source files. Look for:
   - Forward-looking language now out of date ("will be implemented", "not yet created")
   - Filenames or paths that don't match the actual filesystem
   - Requirements listed as missing that are actually implemented
@@ -49,16 +50,17 @@ additional_notes: |
 
   ═══ STEP 4: WRITE HTML FEATURE REPORT (feature_report.html) ═══
 
-  Self-contained HTML (inline styles, no external deps). Include:
+  Self-contained HTML (inline styles, no external deps). Include these sections:
 
   1. Executive Summary — what it does, the problem it solves, status
-  2. Architecture — module structure, data flow, dependencies
+  2. Architecture — module structure, data flow, dependencies, config
   3. Subsystems — for each: purpose, location, key classes, data model
   4. API Surface — new endpoints/tools with examples
   5. Integration Points — what was modified, migrations, frontend changes
   6. Quality — test coverage, security review, known limitations
   7. Changelog — files created/modified, config changes
 
+  The code_summary.md content (WHAT/WHY/HOW) should feed into sections 2-3.
   Target 200-400 lines. Enough for someone to understand the feature without
   reading source code.
 
