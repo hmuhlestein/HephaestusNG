@@ -86,6 +86,12 @@ class Config:
         agents = config.get("agents", {})
         self.default_cli_tool = agents.get("default_cli_tool", DEFAULT_CLI_TOOL)
         self.cli_model = agents.get("cli_model", "sonnet")
+        # Global fallback used when a phase doesn't set its own
+        # fallback_cli_tool/fallback_cli_model (Phase DB columns) -- same
+        # role for the fallback as default_cli_tool/cli_model play for the
+        # primary. None means no global fallback, matching prior behavior.
+        self.default_fallback_cli_tool = agents.get("default_fallback_cli_tool")
+        self.default_fallback_cli_model = agents.get("default_fallback_cli_model")
         # Per-turn reasoning budget for pi agents (off|minimal|low|medium|high|xhigh).
         # Bounds rumination; per-phase `thinking_level` overrides this.
         self.cli_thinking_level = agents.get("cli_thinking_level", "medium")

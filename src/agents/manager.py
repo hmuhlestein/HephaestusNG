@@ -264,6 +264,19 @@ class AgentManager:
         # Use phase config with fallback to global defaults
         cli_type = phase_cli_tool or cli_type or self.config.default_cli_tool
 
+        # A phase with no fallback_cli_tool of its own (the common case)
+        # still gets the global default fallback -- mirrors cli_type's own
+        # phase-then-global resolution above. Only applies when the
+        # fallback would actually differ from the primary; a global
+        # fallback equal to the resolved primary is a no-op guarded at the
+        # use site (create_agent_for_task's `if fallback_cli_tool and
+        # fallback_cli_tool != cli_type`) but resolving it here too avoids
+        # ever handing that site a same-as-primary "fallback".
+        if not fallback_cli_tool and self.config.default_fallback_cli_tool:
+            if self.config.default_fallback_cli_tool != cli_type:
+                fallback_cli_tool = self.config.default_fallback_cli_tool
+                fallback_cli_model = self.config.default_fallback_cli_model
+
         # Set structured log context for this agent's lifetime
         from src.core.log_context import set_log_context
         set_log_context(agent=agent_id, task=task.id, workflow=task.workflow_id or "")
@@ -366,13 +379,26 @@ class AgentManager:
             # that default. A phase that opts into a different cli_tool
             # must fall back to that CLI's own default_model instead, or it
             # launches with a model string the CLI can't parse.
+            #
+            # phase_cli_model is only trusted when phase_cli_tool was ALSO
+            # explicitly set. A Phase row can have cli_model populated from
+            # whatever the global default was AT THE TIME it was created,
+            # with cli_tool left null (no explicit per-phase CLI choice) --
+            # if the global default_cli_tool/cli_model pairing later changes
+            # (e.g. switching from pi/mimo to claude/sonnet), that stale
+            # cli_model becomes a phase-level "override" for a CLI it was
+            # never actually paired with. Observed live: default_cli_tool
+            # changed to claude, but an existing Phase row's leftover
+            # cli_model="xiaomi/mimo-v2.5-pro" (from when default_cli_tool
+            # was pi) got handed straight to Claude, which rejected it
+            # outright ("issue with the selected model") and did zero work.
             cli_agent = get_cli_agent(cli_type)
             global_model = (
                 getattr(self.config, "cli_model", None)
                 if cli_type == self.config.default_cli_tool
                 else None
             )
-            model = phase_cli_model or global_model or cli_agent.default_model
+            model = (phase_cli_model if phase_cli_tool else None) or global_model or cli_agent.default_model
             env_vars = self._build_glm_env_vars(
                 model, phase_glm_token_env, agent_id, label="agent"
             )
