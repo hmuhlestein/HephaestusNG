@@ -1,55 +1,5 @@
 {
-  "review_type": "architectural_review",
-  "phase": "architectural_review",
-  "date": "2026-07-21",
-  "verdict": "PASS",
   "blocker_count": 0,
-  "fix_count": 1,
-  "defer_count": 2,
-  "summary": "All core architectural requirements correctly implemented. /autopilot/stop refactored to shared _pause_project_workflows, agent termination includes 'starting' status, log messages updated, budget guard uses same DB session, frontend UI complete. Single FIX: missing tests for 2 of 3 guard locations.",
-  "findings": {
-    "blockers": [],
-    "fixes": [
-      {
-        "id": "FIX-1",
-        "title": "Missing tests for _create_corrective_task and _resume_stuck_workflow_tasks guard generalization",
-        "file": "tests/test_budget_enforcement.py",
-        "severity": "low",
-        "description": "Architecture T6 specified tests for all 3 guard locations. Tests only cover _try_auto_resume_paused_workflow. No tests for _create_corrective_task or _resume_stuck_workflow_tasks skipping budget-paused workflows.",
-        "recommended_fix": "Add test_create_corrective_task_skips_budget_paused and test_resume_stuck_skips_budget_paused test cases"
-      }
-    ],
-    "defers": [
-      {
-        "id": "DEFER-1",
-        "title": "Budget Status Card not integrated in main autopilot view",
-        "description": "BudgetStatusCard.tsx exists as standalone component but may not be wired into main autopilot page layout."
-      },
-      {
-        "id": "DEFER-2",
-        "title": "Source-code inspection tests removed",
-        "description": "Previous inspect.getsource tests were replaced with behavioral tests per NIT-1. Behavioral approach is correct but source-inspection provided additional assurance."
-      }
-    ]
-  },
-  "requirements_coverage": {
-    "FR-1_budget_guard_pick_next_design": "DONE",
-    "FR-2_budget_guard_run_one_feature": "DONE",
-    "FR-3_paused_by_generalization": "DONE",
-    "FR-3_autopilot_service_start_exception": "DONE",
-    "FR-4_refactor_autopilot_stop": "DONE",
-    "FR-5_budget_resume_via_limit_increase": "DONE",
-    "FR-6_ui_budget_configuration": "DONE",
-    "FR-7_ui_cost_display": "DONE",
-    "FR-8_ui_budget_paused_label": "DONE"
-  },
-  "test_coverage": {
-    "total_tests": 21,
-    "pause_project_workflows": 8,
-    "check_budget": 4,
-    "paused_by_generalization": 3,
-    "pick_next_design_guard": 4,
-    "update_project_clears_pause": 2,
-    "missing_coverage": ["_create_corrective_task", "_resume_stuck_workflow_tasks"]
-  }
+  "capped": true,
+  "capped_after_runs": 4
 }
