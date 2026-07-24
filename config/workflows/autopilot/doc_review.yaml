@@ -137,21 +137,33 @@ additional_notes: |
   git diff --name-only --diff-filter=A main..HEAD 2>/dev/null || git diff --name-only --diff-filter=A HEAD~10..HEAD
 
   # 3. Key class/function signatures in new files
-  for f in $(git diff --name-only --diff-filter=A main..HEAD 2>/dev/null | grep '\.py$'); do
+  #    Adapt to the project's language — detect from file extensions
+  NEW_FILES=$(git diff --name-only --diff-filter=A main..HEAD 2>/dev/null || git diff --name-only --diff-filter=A HEAD~10..HEAD)
+  for f in $NEW_FILES; do
     echo "=== $f ==="
-    grep -n '^class \|^def \|^async def ' "$f" 2>/dev/null
+    case "$f" in
+      *.py)   grep -n '^class \|^def \|^async def ' "$f" 2>/dev/null ;;
+      *.ts|*.tsx) grep -n '^export \|^class \|^function \|^const .* = \|^interface \|^type ' "$f" 2>/dev/null ;;
+      *.js|*.jsx) grep -n '^export \|^class \|^function \|^const .* = ' "$f" 2>/dev/null ;;
+      *.rs)   grep -n '^pub \|^fn \|^struct \|^impl \|^trait ' "$f" 2>/dev/null ;;
+      *.go)   grep -n '^func \|^type \|^struct ' "$f" 2>/dev/null ;;
+      *.java) grep -n '^public \|^class \|^interface ' "$f" 2>/dev/null ;;
+      *)      grep -n 'function\|class\|def\|fn\|func' "$f" 2>/dev/null ;;
+    esac
   done
 
-  # 4. Database model changes (new tables, new columns)
+  # 4. Database/model changes (new tables, new columns, new schemas)
+  #    Adapt to the project's ORM or DB layer
   grep -rn '__tablename__\|Column(' src/core/database.py 2>/dev/null | head -20
+  grep -rn 'model \|schema \|@Entity\|@Table\|CREATE TABLE' src/ 2>/dev/null | grep -v __pycache__ | head -20
 
   # 5. New API endpoints
-  grep -rn '@app\.@\|@router\.\|def.*endpoint\|async def.*request' src/mcp/ 2>/dev/null | grep -v __pycache__ | head -20
+  grep -rn '@app\.@\|@router\.\|def.*endpoint\|async def.*request\|app\.get\|app\.post\|router\.get\|router\.post\|@Get\|@Post' src/ 2>/dev/null | grep -v __pycache__ | head -20
 
   # 6. New test files and test count
-  find tests/ -name '*.py' -newer src/core/database.py 2>/dev/null | while read f; do
-    count=$(grep -c 'def test_' "$f" 2>/dev/null || echo 0)
-    echo "$f: $count tests"
+  find tests/ -name '*.py' -o -name '*.ts' -o -name '*.js' -o -name '*.test.*' 2>/dev/null | while read f; do
+    count=$(grep -c 'def test_\|it(\|test(\|describe(' "$f" 2>/dev/null || echo 0)
+    [ "$count" -gt 0 ] && echo "$f: $count tests"
   done
   ```
 
