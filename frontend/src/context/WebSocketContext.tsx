@@ -32,7 +32,6 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
   const wsRef = useRef<WebSocket | null>(null);
   const subscribersRef = useRef<Map<string, Set<(data: any) => void>>>(new Map());
   const retryCountRef = useRef(0);
-  const mountedRef = useRef(true);
   // The message handler is set up once (empty-deps effect below, so the
   // socket doesn't reconnect every time the user switches projects) --
   // a ref keeps it reading the CURRENT selection instead of a stale one
@@ -55,23 +54,30 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
   }, []);
 
   useEffect(() => {
-    mountedRef.current = true;
+    // Scoped to THIS effect invocation only -- unlike a ref, a closure
+    // variable isn't shared across StrictMode's mount/cleanup/remount
+    // cycle. A ref here previously caused every toast to fire twice: the
+    // remount's "mountedRef.current = true" flipped a shared flag back on
+    // while the first (cleaned-up) socket was still closing, so its
+    // onmessage handler kept passing the guard and both sockets ended up
+    // delivering the same broadcast.
+    let isActive = true;
 
     const connectWebSocket = () => {
-      if (!mountedRef.current) return null;
+      if (!isActive) return null;
 
       const websocket = new WebSocket('ws://localhost:8300/ws');
       wsRef.current = websocket;
 
       websocket.onopen = () => {
-        if (!mountedRef.current) return;
+        if (!isActive || wsRef.current !== websocket) return;
         retryCountRef.current = 0;
         setIsConnected(true);
         toast.success('Connected to server', { duration: 2000 });
       };
 
       websocket.onmessage = (event) => {
-        if (!mountedRef.current) return;
+        if (!isActive || wsRef.current !== websocket) return;
         try {
           const data = JSON.parse(event.data) as WebSocketMessage;
           // lastMessage/lastUpdate stay unfiltered -- Layout.tsx's "Last
@@ -165,7 +171,7 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
         // Suppress error toasts during initial retry backoff —
         // the backend is often not ready on first page load.
         // Only show error after several failed attempts.
-        if (!mountedRef.current) return;
+        if (!isActive || wsRef.current !== websocket) return;
         retryCountRef.current += 1;
         if (retryCountRef.current > 3) {
           toast.error('Connection error');
@@ -173,7 +179,7 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
       };
 
       websocket.onclose = () => {
-        if (!mountedRef.current) return;
+        if (!isActive || wsRef.current !== websocket) return;
         setIsConnected(false);
 
         if (retryCountRef.current <= 3) {
@@ -194,7 +200,7 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
     connectWebSocket();
 
     return () => {
-      mountedRef.current = false;
+      isActive = false;
       wsRef.current?.close();
     };
   }, []);

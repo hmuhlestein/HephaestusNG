@@ -716,6 +716,122 @@ class TestPickNextDesign:
         assert result is not None
         assert result.db_id == "des-a"
 
+    def test_orphaned_failed_workflow_does_not_block_an_active_design(
+        self, tmp_path, orch_db_env
+    ):
+        """Regression (live incident): a failed Feature Architect retry
+        attempt left a Workflow row with design_id set but no Feature
+        linking to it (the successful retry's own Workflow row was what
+        actually got linked). pick_next_design's failed_wf check used to
+        match on design_id alone, so this orphaned failure permanently
+        blocked the design -- exhausting retries and marking it "failed",
+        which derive_design_status then healed back to "active" since
+        every real feature was fine, an infinite ping-pong with no actual
+        problem to fix. Must instead recognize the workflow as orphaned,
+        clear its design_id so it stops matching, and let the design
+        proceed normally."""
+        from src.autopilot.orchestrator import OrchestratorLogger, pick_next_design
+        from src.core.database import AutopilotDesign, AutopilotProject, Feature, Workflow
+
+        (tmp_path / "d.md").write_text("# D")
+
+        session = orch_db_env.get_session()
+        session.add(
+            AutopilotProject(id="proj-orphan", name="p", base_dir=str(tmp_path), is_active=True)
+        )
+        session.add(
+            AutopilotDesign(
+                id="des-orphan", project_id="proj-orphan", filename="d.md", name="D",
+                status="active", file_path=str(tmp_path / "d.md"),
+            )
+        )
+        # Genuine incomplete work -- no workflow yet, nothing wrong with it.
+        session.add(
+            Feature(
+                id="feat-pending", design_id="des-orphan", feature_key="feat-a",
+                name="Feature A", scope="s", status="pending",
+            )
+        )
+        # The orphaned failed workflow: linked to the design, linked to no feature.
+        session.add(
+            Workflow(
+                id="wf-orphaned-failure", name="Feature Architect", status="failed",
+                phases_folder_path="/tmp", design_id="des-orphan",
+            )
+        )
+        session.commit()
+        session.close()
+
+        logger = OrchestratorLogger(tmp_path)
+        result = pick_next_design(tmp_path, set(), logger, project_id="proj-orphan")
+
+        assert result is not None
+        assert result.db_id == "des-orphan"
+
+        from src.core.database import get_db
+
+        with get_db() as db:
+            design = db.query(AutopilotDesign).filter_by(id="des-orphan").first()
+            # "processing" (not "failed") -- pick_next_design resumed it
+            # normally instead of exhausting retries on the orphan.
+            assert design.status == "processing"
+            assert design.error is None
+
+            wf = db.query(Workflow).filter_by(id="wf-orphaned-failure").first()
+            assert wf.design_id is None
+
+    def test_failed_workflow_linked_to_incomplete_feature_still_blocks(
+        self, tmp_path, orch_db_env
+    ):
+        """Companion to the orphaned-workflow regression above: a failed
+        workflow that IS linked to a still-incomplete feature must keep
+        blocking (retry, then eventually mark failed) -- the orphan
+        fallback must not accidentally swallow genuine failures too."""
+        from src.autopilot.orchestrator import OrchestratorLogger, pick_next_design
+        from src.core.database import AutopilotDesign, AutopilotProject, Feature, Workflow
+
+        session = orch_db_env.get_session()
+        session.add(
+            AutopilotProject(id="proj-real-fail", name="p", base_dir=str(tmp_path), is_active=True)
+        )
+        session.add(
+            AutopilotDesign(
+                id="des-real-fail", project_id="proj-real-fail", filename="d.md", name="D",
+                status="active",
+            )
+        )
+        session.add(
+            Workflow(
+                id="wf-real-failure", name="autopilot", status="failed",
+                phases_folder_path="/tmp", design_id="des-real-fail",
+            )
+        )
+        session.add(
+            Feature(
+                id="feat-blocked", design_id="des-real-fail", feature_key="feat-a",
+                name="Feature A", scope="s", status="failed",
+                workflow_id="wf-real-failure",
+            )
+        )
+        session.commit()
+        session.close()
+
+        logger = OrchestratorLogger(tmp_path)
+        result = pick_next_design(tmp_path, set(), logger, project_id="proj-real-fail")
+
+        # Retried, not resumed directly -- pick_next_design resets the
+        # design to "pending" for a fresh attempt rather than returning it.
+        assert result is None
+
+        from src.core.database import get_db
+
+        with get_db() as db:
+            design = db.query(AutopilotDesign).filter_by(id="des-real-fail").first()
+            assert design.status == "pending"
+
+            wf = db.query(Workflow).filter_by(id="wf-real-failure").first()
+            assert wf.design_id == "des-real-fail"
+
 
 class TestCreateFeatureFolder:
     def test_creates_folder(self, tmp_path):
@@ -2709,13 +2825,18 @@ class TestGetLitellmConfig:
 
 
 class TestRunOneFeatureStateIsolation:
-    """Regression: run_feature_pipelines' ThreadPoolExecutor hands every
-    parallel feature the SAME PipelineState object (MAX_PARALLEL_FEATURES
-    concurrent threads). run_single_workflow mutates state.current_workflow_id
-    while it launches/polls a feature's 12-phase workflow -- without a
-    thread-local copy, one feature's workflow_id can be stomped by a sibling
-    feature's concurrent write before _link_workflow_to_feature reads it back,
-    permanently linking the WRONG workflow to this Feature row."""
+    """Regression: _run_one_feature used to link a just-finished feature's
+    workflow by reading thread_state.current_workflow_id after
+    run_single_workflow returned -- but run_single_workflow's own success
+    path clears that field back to None right before returning "completed"
+    (see its final success branch), making that read a permanent no-op on
+    every completed feature. Observed live: a feature ("Budget Enforcement
+    and Pipeline Throttling") whose 12-phase workflow had genuinely
+    completed still showed "active" in the UI indefinitely, because
+    Feature.workflow_id was never set and derive_feature_status has no way
+    to find the (unlinked) workflow. Fixed by resolving the link via a DB
+    lookup (_relink_features_to_workflows, matching by feature_key in
+    launch_params) instead of the field run_single_workflow clears."""
 
     def _make_design_entry(self, tmp_path, design_id):
         from src.autopilot.orchestrator import DesignEntry
@@ -2729,7 +2850,7 @@ class TestRunOneFeatureStateIsolation:
             db_id=design_id,
         )
 
-    def test_link_uses_this_calls_own_workflow_id_not_a_sibling_overwrite(
+    def test_links_via_db_lookup_even_though_state_is_cleared_on_success(
         self, orch_db_env, tmp_path
     ):
         from src.autopilot.orchestrator import (
@@ -2771,23 +2892,32 @@ class TestRunOneFeatureStateIsolation:
         with orch_db_env.session_scope() as session:
             from src.core.database import Workflow
 
+            # The workflow _run_one_feature's own sdk.start_workflow call
+            # would have created -- design_id + definition_id + feature_key
+            # in launch_params is what _relink_features_to_workflows
+            # matches on, same as a real "autopilot" workflow row.
             session.add(
-                Workflow(id="wf-correct", name="t", phases_folder_path="/tmp", status="completed")
+                Workflow(
+                    id="wf-correct",
+                    name="t",
+                    phases_folder_path="/tmp",
+                    status="completed",
+                    design_id=design_id,
+                    definition_id="autopilot",
+                    launch_params={"feature_id": feature_key},
+                )
             )
-
-        # The SAME PipelineState instance a real ThreadPoolExecutor run would
-        # hand to every parallel feature.
-        shared_state = PipelineState()
 
         def fake_run_single_workflow(sdk, wf_def, wt, desc, logger, **kwargs):
             passed_state = kwargs["state"]
-            # This call's own, correct workflow id.
-            passed_state.current_workflow_id = "wf-correct"
-            # Simulate a sibling feature thread finishing its own
-            # run_single_workflow call afterward and stomping the shared
-            # object -- this is what a caller reading the ORIGINAL `state`
-            # (instead of a private copy) would see.
-            shared_state.current_workflow_id = "wf-from-sibling-feature"
+            # Mirrors run_single_workflow's real success path: it sets
+            # current_workflow_id while running, then clears it back to
+            # None right before returning "completed" -- the exact
+            # behavior that made the old thread_state.current_workflow_id
+            # read a permanent no-op.
+            if passed_state:
+                passed_state.current_workflow_id = "wf-correct"
+                passed_state.current_workflow_id = None
             return "completed"
 
         with patch(
@@ -2804,7 +2934,7 @@ class TestRunOneFeatureStateIsolation:
                 designs_folder=designs_folder,
                 project_path=project_path,
                 logger=OrchestratorLogger(tmp_path),
-                state=shared_state,
+                state=PipelineState(),
             )
 
         assert status == "completed"
@@ -3239,6 +3369,70 @@ class TestSyncStaleFeatureStatuses:
         repaired = _sync_stale_feature_statuses(MagicMock())
 
         assert repaired == 0
+
+    def test_never_marks_a_never_started_sibling_completed(self, orch_db_env):
+        """Regression (live incident): a "no workflow + no active sibling
+        implies done" heuristic briefly lived here. The instant a design's
+        last in-flight feature completed, every genuinely not-yet-started
+        sibling (workflow_id=None, status="pending", never dispatched --
+        indistinguishable from an orphaned-but-actually-done feature by
+        sibling status alone) got marked "completed" on the very next
+        sweep tick, since none of them were "active" at that moment
+        either. Real data loss: those features' actual pipeline work
+        never ran, but the design looked finished. This must never fire
+        for a feature with no workflow at all, no matter what its
+        siblings look like."""
+        from src.autopilot.orchestrator import _sync_stale_feature_statuses
+        from src.core.database import AutopilotDesign, AutopilotProject, Feature, Workflow
+
+        with orch_db_env.session_scope() as session:
+            session.add(AutopilotProject(id="proj-1", name="p", base_dir="/tmp/proj-1"))
+            session.add(
+                AutopilotDesign(id="design-1", project_id="proj-1", filename="d.md", name="D")
+            )
+            session.add(
+                Workflow(
+                    id="wf-done",
+                    name="feature pipeline",
+                    phases_folder_path="/tmp",
+                    status="completed",
+                    definition_id="feature_pipeline",
+                )
+            )
+            # A completed sibling, linked to a completed workflow.
+            session.add(
+                Feature(
+                    id="feature-done",
+                    design_id="design-1",
+                    feature_key="feat-done",
+                    name="Feature Done",
+                    scope="s",
+                    status="completed",
+                    workflow_id="wf-done",
+                )
+            )
+            # The never-started sibling: no workflow, "pending", no active
+            # sibling anywhere else in the design at this instant.
+            session.add(
+                Feature(
+                    id="feature-pending",
+                    design_id="design-1",
+                    feature_key="feat-pending",
+                    name="Feature Pending",
+                    scope="s",
+                    status="pending",
+                    workflow_id=None,
+                )
+            )
+
+        repaired = _sync_stale_feature_statuses(MagicMock())
+
+        assert repaired == 0
+        with orch_db_env.session_scope() as session:
+            feat = session.query(Feature).filter_by(id="feature-pending").first()
+            assert feat.status == "pending"
+            assert feat.workflow_id is None
+            assert feat.completed_at is None
 
 
 class TestRecoverAbandonedWorkflowsMissingWorktree:

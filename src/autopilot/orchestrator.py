@@ -1995,15 +1995,37 @@ def pick_next_design(
                         .count()
                     )
 
-                    # Check if any associated workflow has failed
+                    # Check if any associated workflow has failed — only consider
+                    # workflows linked to incomplete features. A failed workflow
+                    # that's orphaned (no feature links to it) or only linked to
+                    # completed features should not block the design.
                     failed_wf = (
                         db.query(Workflow)
+                        .join(Feature, Feature.workflow_id == Workflow.id)
                         .filter(
                             Workflow.design_id == candidate.id,
                             Workflow.status == "failed",
+                            Feature.status.notin_(["completed", "skipped"]),
                         )
                         .first()
                     )
+                    # Fallback: orphaned failed workflow (no feature links to it at all)
+                    if not failed_wf:
+                        orphaned_failed = (
+                            db.query(Workflow)
+                            .outerjoin(Feature, Feature.workflow_id == Workflow.id)
+                            .filter(
+                                Workflow.design_id == candidate.id,
+                                Workflow.status == "failed",
+                                Feature.id.is_(None),
+                            )
+                            .first()
+                        )
+                        if orphaned_failed:
+                            logger.info(f"  Ignoring orphaned failed workflow {orphaned_failed.id[:8]} (no features link to it)")
+                            # Clear the design_id so it stops showing up
+                            orphaned_failed.design_id = None
+                            db.commit()
 
                     logger.info(f"  Active design '{candidate.name}' ({candidate.id[:8]}): incomplete={incomplete}, failed_wf={failed_wf.id[:8] if failed_wf else 'None'}, status={candidate.status}")
 
@@ -2587,7 +2609,22 @@ def _sync_stale_feature_statuses(logger: OrchestratorLogger) -> int:
 
     repaired = 0
     with get_db() as db:
-        # Case 1: Feature has a linked workflow that completed
+        # Feature has a linked workflow that completed. Deliberately NOT
+        # also inferring completion for workflow_id-less features from
+        # sibling status ("has a completed sibling, no active sibling" was
+        # tried here and reverted -- a feature that simply hasn't been
+        # dispatched yet is indistinguishable from an orphaned-but-actually-
+        # done one by that signal alone: both have workflow_id=None and a
+        # non-terminal status. Observed live: the instant a design's last
+        # in-flight feature flipped to "completed", every one of its
+        # genuinely not-yet-started siblings got marked "completed" too on
+        # the very next sweep tick, since none of them were "active" at
+        # that moment either -- silently dropping their real work from the
+        # pipeline). The actual "workflow completed but link never got
+        # written" scenario is handled at the source instead: see
+        # _relink_features_to_workflows, called from _run_one_feature
+        # after every feature run and from run_single_design before every
+        # design reprocessing.
         stale = (
             db.query(Feature)
             .join(Workflow, Feature.workflow_id == Workflow.id)
@@ -2602,39 +2639,6 @@ def _sync_stale_feature_statuses(logger: OrchestratorLogger) -> int:
             feature.status = "completed"
             feature.completed_at = feature.completed_at or datetime.utcnow()
             repaired += 1
-
-        # Case 2: Feature has no linked workflow (workflow_id is null) but the
-        # design's other features all have completed workflows. This happens when
-        # a feature was skipped or its workflow_id was never populated. If the
-        # design has any completed workflow, this feature's absence means it was
-        # either skipped or its workflow finished without linking back.
-        orphaned = (
-            db.query(Feature)
-            .filter(
-                Feature.workflow_id.is_(None),
-                Feature.status.notin_(["completed", "failed", "skipped"]),
-            )
-            .all()
-        )
-        for feature in orphaned:
-            # Check if other features in the same design have completed workflows
-            siblings = (
-                db.query(Feature)
-                .filter(
-                    Feature.design_id == feature.design_id,
-                    Feature.id != feature.id,
-                )
-                .all()
-            )
-            has_completed_sibling = any(s.status == "completed" for s in siblings)
-            has_active_sibling = any(
-                s.status == "active" and s.workflow_id is not None for s in siblings
-            )
-            if has_completed_sibling and not has_active_sibling:
-                logger.info(f"[FEATURE-SYNC] {feature.feature_key}: no workflow and no active siblings -- marking completed")
-                feature.status = "completed"
-                feature.completed_at = feature.completed_at or datetime.utcnow()
-                repaired += 1
 
         if repaired:
             db.commit()
