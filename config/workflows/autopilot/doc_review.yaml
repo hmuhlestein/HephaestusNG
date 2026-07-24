@@ -3,288 +3,70 @@ name: doc_review
 thinking_level: low
 description: |
   Review and fix all project documentation for accuracy, completeness, and quality.
-
-  Compares documentation against the actual implementation, fixes inaccuracies,
-  fills gaps, ensures consistency, and produces a documentation quality report.
-  This phase runs after adversarial code review so it reviews docs that reflect
-  the post-review state of the code.
+  Produces a feature report, code summary, and doc review findings.
 done_definitions:
   - "Stray files organized into Docs Path"
-  - "Key docs and source code read (requirements, architecture, README, source)"
-  - "Critical inaccuracies fixed (stale forward-looking language, wrong paths, missing features)"
+  - "Critical inaccuracies fixed"
   - "feature_report.html written to Docs Path"
-  - "doc_review_report.md written with brief findings summary"
+  - "code_summary.md written to Docs Path"
+  - "doc_review_report.md written to Docs Path"
   - "Task marked as done"
 outputs:
   - "doc_review_report.md"
   - "feature_report.html"
   - "code_summary.md"
 additional_notes: |
-  OUTPUT STYLE: Terse. Drop filler (just/really/basically/actually). Fragments OK. 
-  Technical terms exact. No pleasantries (sure/certainly/happy to). 
-  Not: "I'll now proceed to review the documentation." Yes: "Review docs for errors."
-  
-  ═══════════════════════════════════════════════════════════════════════
-  YOU ARE A DOCUMENTATION REVIEWER - FOCUS ON THE HTML REPORT
-  ═══════════════════════════════════════════════════════════════════════
+  OUTPUT STYLE: Terse. Fragments OK. No filler.
 
-  YOUR MISSION: Fix critical doc errors and produce the HTML feature report.
-  Be efficient — read only what you need, fix only real problems.
+  Your working directory IS the project root. Docs Path = ./docs/ (create if missing).
+  ALL reports go in Docs Path. Do NOT write into ./.hephaestus/.
 
-  CRITICAL PATH RULE: Your current working directory IS the project root.
-  - "Project Path" = your working directory (.).
-  - "Docs Path" = ./docs/ (create if missing).
-  - ALL reports go in Docs Path. Code fixes go in Project Path.
-  - Do NOT write into ./.hephaestus/.
+  ═══ STEP 1: CLEAN UP ═══
 
-  ═══════════════════════════════════════════════════════════════════════
-  STEP 1: ORGANIZE STRAY FILES (MANDATORY FIRST STEP)
-  ═══════════════════════════════════════════════════════════════════════
+  Move stray .md/.txt/.log files from project root into Docs Path (skip README.md, AGENTS.md, etc.).
+  Delete scratch/temp files agents left behind (*_draft*, *_temp*, *.tmp, *.bak, empty dirs).
 
-  Move misplaced pipeline artifacts out of the project root into Docs Path.
+  ═══ STEP 2: FIX CRITICAL DOC ERRORS ═══
 
-  ```bash
-  DOCS="<paste Docs Path from your task description>"
-  PROJECT="<paste Project Path from your task description>"
-
-  for f in "$PROJECT"/*.md; do
-    [ -f "$f" ] || continue
-    BASENAME=$(basename "$f")
-    case "$BASENAME" in README.md|AGENTS.md|CHANGELOG.md|TESTING.md|LICENSE*) continue ;; esac
-    [ ! -f "$DOCS/$BASENAME" ] && mv "$f" "$DOCS/$BASENAME" && echo "Moved $BASENAME"
-  done
-  for f in "$PROJECT"/*.txt "$PROJECT"/*.log; do
-    [ -f "$f" ] || continue
-    BASENAME=$(basename "$f")
-    [ ! -f "$DOCS/$BASENAME" ] && mv "$f" "$DOCS/$BASENAME" && echo "Moved $BASENAME"
-  done
-  ```
-
-  ═══════════════════════════════════════════════════════════════════════
-  STEP 2: DELETE SCRATCH AND UNNECESSARY FILES (MANDATORY SECOND STEP)
-  ═══════════════════════════════════════════════════════════════════════
-
-  After organizing stray files, identify and DELETE scratch/unnecessary files
-  that other agents left behind. These clutter the project root and confuse
-  reviewers. Common patterns to look for and delete:
-
-  ```bash
-  PROJECT="<paste Project Path from your task description>"
-  DOCS="<paste Docs Path from your task description>"
-
-  # Scratch/temp files from agents
-  find "$PROJECT" -maxdepth 2 -type f \
-    -name "*_draft*" -o -name "*_temp*" -o -name "*_scratch*" -o \
-    -name "*TODO.txt" -o -name "*notes.txt" -o -name "*debug*" -o \
-    -name "*.tmp" -o -name "*.bak" -o -name "*.swp" -o \
-    -name "pytest_*" -o -name "test_output*" -o -name "coverage*" -o \
-    -name "*.pyc" -o -name "__pycache__"
-  # Delete them (ask user confirmation for ambiguous cases)
-
-  # Old/redundant docs in root (README.md variants, CONTRIBUTING copies)
-  find "$PROJECT" -maxdepth 1 -type f -name "*.md" ! -name "README.md" \
-    ! -name "AGENTS.md" ! -name "CHANGELOG.md" ! -name "TESTING.md" \
-    ! -name "LICENSE*"
-  # These should already be in Docs Path from step 1; delete if orphaned
-
-  # Empty directories left by agents
-  find "$PROJECT" -type d -empty -delete 2>/dev/null
-
-  # Duplicate files (same content, different names)
-  find "$PROJECT" -type f -name "*.md" | xargs md5sum 2>/dev/null | \
-    sort | uniq -d -w 32
-  # Delete duplicates, keeping the more descriptive filename
-  ```
-
-  Report what you deleted in the doc_review_report.md. If a file seems
-  potentially important but suspicious, note it rather than deleting.
-
-  ═══════════════════════════════════════════════════════════════════════
-  STEP 3: READ KEY ARTIFACTS (SKIM — DON'T DEEP-DIVE)
-  ═══════════════════════════════════════════════════════════════════════
-
-  Read the following to gather context for the HTML report and spot critical errors:
-  - Your task description (Docs Path, Project Path, feature name)
-  - requirements_analysis.md (Docs Path)
-  - architecture.md (Docs Path)
-  - review_report.md (Docs Path) — what the adversarial reviewer changed
-  - README.md (Project Path)
-  - Source code files (Project Path) — skim for module names and API surface
-
-  Look only for CRITICAL issues:
+  Read requirements_analysis.md, architecture.md, and key source files. Look for:
   - Forward-looking language now out of date ("will be implemented", "not yet created")
-  - Filenames or import paths that don't match the actual filesystem
+  - Filenames or paths that don't match the actual filesystem
   - Requirements listed as missing that are actually implemented
 
-  Fix anything critical directly. Skip minor style or formatting issues.
+  Fix critical issues directly. Skip minor style issues.
 
-  ═══════════════════════════════════════════════════════════════════════
-  STEP 3B: BUILD CODE-LEVEL CHANGE SUMMARY (MANDATORY)
-  ═══════════════════════════════════════════════════════════════════════
+  ═══ STEP 3: WRITE CODE SUMMARY (code_summary.md) ═══
 
-  Before writing the HTML report, explore the actual code changes and build
-  a concrete summary of what was written. This is the section engineers will
-  read to understand what was delivered without cloning the branch.
+  Explore the actual code changes (git diff, read new/modified files) and write
+  a standalone code_summary.md that explains to an engineer:
 
-  Use git diff, read the new/modified source files, and incorporate your
-  findings into the HTML report's "SUBSYSTEMS CREATED" and "CHANGELOG"
-  sections.
+  - WHAT was built: new files, key classes/functions, what each module does
+  - WHY it exists: the problem it solves, design decisions, alternatives considered
+  - HOW it works: data flows, error handling, integration patterns, key mechanisms
 
-  For each new source file:
-  - File path and purpose (one line)
-  - Key classes/functions with their signatures
-  - Lines of code
-  - What it depends on and what depends on it
+  Don't just list diffs. Explain the architecture and reasoning so someone can
+  form a complete mental model without reading every file.
 
-  For modified files, explain WHAT changed and WHY — don't just list diffs:
-  - What was added/removed/refactored
-  - Why the change was needed (bug fix, new capability, performance)
-  - How it connects to other components
+  ═══ STEP 4: WRITE HTML FEATURE REPORT (feature_report.html) ═══
 
-  Include an "Architecture Context" subsection that explains:
-  - WHY this feature exists — the problem it solves, the gap it fills
-  - The overall design pattern (e.g. event-driven, layered, plugin-based)
-  - How data flows through the system end-to-end
-  - Key design decisions and their trade-offs
-  - What was intentionally NOT built (and why)
-  - How this feature fits into the broader system — what it enables downstream
+  Self-contained HTML (inline styles, no external deps). Include:
 
-  Don't just describe the code — explain the reasoning. An engineer should
-  understand not just WHAT was built, but WHY it was built this way and what
-  alternatives were considered. Explain HOW it works — the key mechanisms,
-  data flows, error handling paths, and integration patterns. Anything an
-  engineer needs to understand the feature end-to-end without reading every
-  file. This section should let someone form a complete mental model of the
-  change architecture.
+  1. Executive Summary — what it does, the problem it solves, status
+  2. Architecture — module structure, data flow, dependencies
+  3. Subsystems — for each: purpose, location, key classes, data model
+  4. API Surface — new endpoints/tools with examples
+  5. Integration Points — what was modified, migrations, frontend changes
+  6. Quality — test coverage, security review, known limitations
+  7. Changelog — files created/modified, config changes
 
-  Also write this section as a standalone `<Docs Path>/code_summary.md` file
-  so it can be referenced independently of the HTML report.
+  Target 200-400 lines. Enough for someone to understand the feature without
+  reading source code.
 
-  ═══════════════════════════════════════════════════════════════════════
-  STEP 4: WRITE HTML FEATURE REPORT (MANDATORY — PRIMARY DELIVERABLE)
-  ═══════════════════════════════════════════════════════════════════════
+  ═══ STEP 5: WRITE DOC REVIEW REPORT (doc_review_report.md) ═══
 
-  Write `<Docs Path>/feature_report.html` — a comprehensive, polished HTML
-  summary of what was built. This is the PRIMARY DELIVERABLE that stakeholders,
-  technical leads, and future developers will read. Make it RICH and DETAILED.
+  Brief: documents reviewed, critical issues fixed, scratch files deleted,
+  overall quality rating.
 
-  The HTML must be self-contained (no external CSS/JS). Use inline styles.
-  Keep it professional — dark header, clean card layout, readable typography.
+  ═══ MARK DONE ═══
 
-  ┌─────────────────────────────────────────────────────────────────────┐
-  │  STRUCTURE THE REPORT WITH THESE SECTIONS                          │
-  └─────────────────────────────────────────────────────────────────────┘
-
-  1. EXECUTIVE SUMMARY (2-3 paragraphs)
-     - What the feature does in plain English
-     - The problem it solves (user pain point or business need)
-     - One-line "elevator pitch" for non-technical readers
-     - Status: [COMPLETE/PARTIAL] — link to any known limitations
-
-  2. ARCHITECTURE OVERVIEW (detailed)
-     - Module structure diagram (use ASCII art or HTML table)
-     - Key components and their responsibilities
-     - Data flow: how data moves through the system
-     - External dependencies (libraries, APIs, databases)
-     - Configuration requirements
-
-  3. SUBSYSTEMS CREATED (one subsection per major subsystem)
-     For each subsystem:
-     - **Purpose**: What it does and why it exists
-     - **Location**: File paths in the codebase
-     - **Key Classes/Functions**: With brief descriptions
-     - **Dependencies**: What it depends on and what depends on it
-     - **Configuration**: Any config files or environment variables
-     - **Data Model**: Database tables, schemas, or data structures used
-
-  4. API SURFACE
-     - New endpoints added (with request/response examples)
-     - New MCP tools added (with usage examples)
-     - New CLI commands added
-     - Breaking changes (if any)
-
-  5. INTEGRATION POINTS
-     - How this feature integrates with existing systems
-     - What other features/modules were modified
-     - Database migrations added
-     - Frontend changes (if applicable)
-
-  6. QUALITY ASSURANCE
-     - Test coverage: how many tests, what types
-     - Security review outcome: [PASSED/PENDING/ISSUES FOUND]
-     - Performance considerations: any benchmarks or concerns
-     - Known limitations or technical debt
-
-  7. DEVELOPMENT DECISIONS
-     - Key architectural decisions and rationale
-     - Trade-offs considered (with alternatives evaluated)
-     - Patterns used (and why)
-     - Anti-patterns avoided
-
-  8. CHANGELOG
-     - List of files created
-     - List of files modified
-     - Database migrations
-     - Configuration changes
-
-  9. FUTURE WORK
-     - What's planned next
-     - Known issues to address
-     - Scaling considerations
-
-  ┌─────────────────────────────────────────────────────────────────────┐
-  │  RESEARCH INSTRUCTIONS (MANDATORY BEFORE WRITING)                  │
-  └─────────────────────────────────────────────────────────────────────┘
-
-  Before writing the report, you MUST:
-
-  1. List all source files: `find src/ -name '*.py' | head -50`
-  2. Check for tests: `find tests/ -name '*.py' | head -20`
-  3. Read the architecture doc: `cat Docs Path/architecture.md`
-  4. Read the requirements doc: `cat Docs Path/requirements_analysis.md`
-  5. Skim key source files for API signatures and docstrings
-  6. Check for database models: grep for `class.*Model`, `__tablename__`
-  7. Check for configuration: grep for `config`, `settings`, `env`
-
-  The report should be 400-800 lines of HTML. This is NOT a 1-paragraph summary —
-  it's a comprehensive technical document that someone could use to understand
-  the feature without reading any source code.
-
-  Save to: `<Docs Path>/feature_report.html`
-
-  ═══════════════════════════════════════════════════════════════════════
-  STEP 5: WRITE BRIEF DOC REVIEW REPORT
-  ═══════════════════════════════════════════════════════════════════════
-
-  Write `<Docs Path>/doc_review_report.md` with:
-
-  # Documentation Review Report
-
-  ## Summary
-  - Documents reviewed: [list]
-  - Critical issues fixed: [count + brief list]
-  - Overall quality: [EXCELLENT/GOOD/NEEDS_WORK/POOR]
-
-  ## Issues Fixed
-  - [Each fix in one line]
-
-  ## Scratch Files Deleted
-  - [Files removed in step 2, with brief reason]
-
-  ## No Action Needed
-  - [Anything you checked and found correct]
-
-  ═══════════════════════════════════════════════════════════════════════
-  WHEN YOU ARE DONE - MARK YOUR TASK AS COMPLETE (DO NOT SKIP THIS)
-  ═══════════════════════════════════════════════════════════════════════
-
-  CRITICAL: You MUST call the complete_my_task tool. The pipeline WILL
-  get stuck without this call. Do NOT just print a summary and stop.
-
-  hephaestus_complete_my_task({
-    "status": "done",
-    "summary": "<brief summary>",
-    "key_learnings": ["<key findings>"]
-  })
-
-  Then wait for confirmation before stopping.
+  Call hephaestus_complete_my_task with status="done" and a brief summary.
