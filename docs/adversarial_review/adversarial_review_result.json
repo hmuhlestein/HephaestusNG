@@ -1,19 +1,5 @@
 {
-  "phase": "adversarial_review",
-  "status": "done",
   "blocker_count": 0,
-  "warning_count": 0,
-  "nit_count": 0,
-  "prior_findings_verified": {
-    "blocker_1_entity_link_validation": "FIXED",
-    "blocker_2_starting_agent_status": "FIXED"
-  },
-  "test_results": {
-    "test_budget_enforcement": "21 passed",
-    "test_cost_collection_service": "20 passed",
-    "test_cost_tracking": "34 passed",
-    "total_passed": 84,
-    "total_failed": 0
-  },
-  "verdict": "PASS"
+  "capped": true,
+  "capped_after_runs": 4
 }
