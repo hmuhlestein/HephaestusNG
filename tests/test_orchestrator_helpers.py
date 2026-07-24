@@ -1364,6 +1364,114 @@ class TestRetryFailedTasks:
             assert task.retry_count == 1
 
 
+class TestMaybeRetryFailedTasksPreservesGotoTarget:
+    """Regression: a task's action/action_target_phase, when it's still
+    "failed" (never reached "done"), can only have come from
+    _create_phase_task's creation-time tagging -- "I exist because an
+    earlier phase goto'd/retried back to me, resume AT that target once
+    I'm done" (see its action_target_phase= assignment). _tag_completing_
+    task, the only other writer of these fields, tags a task only AFTER it
+    completes and gets evaluated, which a failed task never reached.
+    _maybe_retry_failed_tasks previously cleared both fields unconditionally
+    on every retry, believing it was clearing a stale post-completion badge
+    that in this code path never existed -- silently discarding the real
+    resume target. Observed live: a development task that goto'd back from
+    qa_validation got stuck (CLI session limit) and retried here, losing
+    action_target_phase="qa_validation" entirely, so its eventual
+    completion fell back to next-phase-by-order and re-ran the entire
+    architectural_review -> adversarial_review -> security_review chain
+    from scratch even though none of it had been invalidated."""
+
+    def _seed(self, db, action="goto", action_target_phase="qa_validation"):
+        from src.core.database import Phase, PhaseExecution, Task, Workflow
+
+        with db.session_scope() as session:
+            session.add(
+                Workflow(id="wf-1", name="t", phases_folder_path="/tmp", status="active")
+            )
+            session.add(
+                Phase(
+                    id="phase-dev",
+                    workflow_id="wf-1",
+                    name="development",
+                    order=4,
+                    description="d",
+                    done_definitions=["x"],
+                )
+            )
+            session.add(
+                PhaseExecution(
+                    id="exec-dev",
+                    phase_id="phase-dev",
+                    workflow_execution_id="wf-1",
+                    status="in_progress",
+                )
+            )
+            session.add(
+                Task(
+                    id="task-dev",
+                    workflow_id="wf-1",
+                    phase_id="phase-dev",
+                    raw_description="Fix per qa_validation findings",
+                    done_definition="d",
+                    status="failed",
+                    failure_reason="CLI session limit hit",
+                    retry_count=0,
+                    action=action,
+                    action_target_phase=action_target_phase,
+                )
+            )
+
+    @patch("src.autopilot.orchestrator.create_agent_for_task_direct")
+    def test_retry_preserves_action_target_phase(self, mock_create_agent, orch_db_env, tmp_path):
+        from src.autopilot.orchestrator import OrchestratorLogger, _maybe_retry_failed_tasks
+        from src.core.database import Agent, Phase, Task
+
+        self._seed(orch_db_env)
+        with orch_db_env.session_scope() as session:
+            session.add(Agent(id="new-agent", system_prompt="p", status="working", cli_type="pi"))
+            phase = session.query(Phase).filter_by(id="phase-dev").first()
+            phase_id, phase_name = phase.id, phase.name
+        mock_create_agent.return_value = {"agent_id": "new-agent"}
+
+        with orch_db_env.session_scope() as session:
+            phase = session.query(Phase).filter_by(id=phase_id).first()
+            result = _maybe_retry_failed_tasks(session, phase, OrchestratorLogger(tmp_path))
+
+        assert result is True
+        with orch_db_env.session_scope() as session:
+            task = session.query(Task).filter_by(id="task-dev").first()
+            assert task.status == "in_progress"
+            assert task.action == "goto"
+            assert task.action_target_phase == "qa_validation"
+
+    @patch("src.autopilot.orchestrator.create_agent_for_task_direct")
+    def test_retry_preserves_absence_of_action_target_phase(
+        self, mock_create_agent, orch_db_env, tmp_path
+    ):
+        """A task that was never a goto/retry target (plain fresh attempt)
+        stays that way across a retry -- nothing to preserve, nothing
+        fabricated either."""
+        from src.autopilot.orchestrator import OrchestratorLogger, _maybe_retry_failed_tasks
+        from src.core.database import Agent, Phase, Task
+
+        self._seed(orch_db_env, action="", action_target_phase=None)
+        with orch_db_env.session_scope() as session:
+            session.add(Agent(id="new-agent", system_prompt="p", status="working", cli_type="pi"))
+            phase = session.query(Phase).filter_by(id="phase-dev").first()
+            phase_id = phase.id
+        mock_create_agent.return_value = {"agent_id": "new-agent"}
+
+        with orch_db_env.session_scope() as session:
+            phase = session.query(Phase).filter_by(id=phase_id).first()
+            _maybe_retry_failed_tasks(session, phase, OrchestratorLogger(tmp_path))
+
+        with orch_db_env.session_scope() as session:
+            task = session.query(Task).filter_by(id="task-dev").first()
+            assert task.action == ""
+            assert task.action_target_phase is None
+
+
 class TestFailWorkflowDirect:
     """Regression: the backend-startup stale-workflow cleanup used
     complete_workflow_direct unconditionally for any workflow still "active"
@@ -4702,6 +4810,52 @@ class TestCreatePhaseTaskReviewCap:
         assert result_json.exists()
         assert json.loads(result_json.read_text())["blocker_count"] == 0
 
+    @patch("src.autopilot.orchestrator._fire_phase_transition")
+    @patch("src.autopilot.orchestrator.create_agent_for_task_direct")
+    def test_caps_out_a_phase_with_no_gate_result_artifacts(
+        self, mock_create_agent, mock_fire_transition, orch_db_env, tmp_path
+    ):
+        """Regression: security_review/doc_review have max_review_runs
+        configured in workflow.yaml but no GATE_RESULT_ARTIFACTS entry (they
+        aren't scored via a JSON gate artifact the way architectural_review/
+        adversarial_review/qa_validation/product_validation are).
+        _cap_out_review_phase previously returned None for these ("isn't a
+        known gated phase"), which _create_phase_task treats as "fall
+        through and create a normal task" -- so the cap silently never
+        engaged and the phase re-ran forever. Observed live: security_review
+        ran 25 times with max_review_runs: 4 configured, doing nothing."""
+        from src.autopilot.orchestrator import OrchestratorLogger, _create_phase_task
+        from src.core.database import Task, Workflow
+
+        self._seed(orch_db_env, phase_name="security_review", existing_task_count=4)
+        mock_fire_transition.return_value = True
+
+        with orch_db_env.session_scope() as session:
+            wf = session.query(Workflow).filter_by(id="wf-cap").first()
+            wf.working_directory = str(tmp_path)
+
+        with patch("src.autopilot.spec.get_max_review_runs", return_value=4), patch(
+            "src.autopilot.spec.get_review_findings_history", return_value=[]
+        ):
+            result = _create_phase_task(
+                "wf-cap", "phase-cap", "security_review", "continue",
+                OrchestratorLogger(tmp_path),
+            )
+
+        assert result is True
+        mock_fire_transition.assert_called_once_with(
+            "wf-cap", "phase-cap", "security_review", ANY
+        )
+        mock_create_agent.assert_not_called()
+        with orch_db_env.session_scope() as session:
+            # No NEW task created -- still exactly the 4 seeded ones.
+            count = session.query(Task).filter(Task.phase_id == "phase-cap").count()
+            assert count == 4
+
+        notice = tmp_path / "docs" / "security_review" / "security_review_capped_notice.md"
+        assert notice.exists()
+        assert "capped after 4 runs" in notice.read_text()
+
     def test_cap_out_review_phase_returns_none_without_working_directory(
         self, orch_db_env, tmp_path
     ):
@@ -4935,3 +5089,110 @@ class TestCreatePhaseTaskOrphanedPendingAge:
             )
             assert fresh is not None
             assert fresh.id != "task-maybe-orphan"
+
+    def _seed_with_agent(self, db, agent_status, pending_created_at=None):
+        from src.core.database import Agent, Phase, PhaseExecution, Task, Workflow
+
+        pending_created_at = pending_created_at or (datetime.utcnow() - timedelta(minutes=5))
+        with db.session_scope() as session:
+            session.add(
+                Workflow(
+                    id="wf-orphan-age",
+                    name="t",
+                    phases_folder_path="/tmp",
+                    status="active",
+                    working_directory="/tmp/wf-orphan-age",
+                )
+            )
+            session.add(
+                Phase(
+                    id="phase-orphan-age",
+                    workflow_id="wf-orphan-age",
+                    name="security_review",
+                    order=7,
+                    description="d",
+                    done_definitions=["x"],
+                )
+            )
+            session.add(
+                PhaseExecution(
+                    id="exec-orphan-age",
+                    phase_id="phase-orphan-age",
+                    workflow_execution_id="wf-orphan-age",
+                    status="pending",
+                )
+            )
+            session.add(
+                Agent(id="dead-or-alive-agent", system_prompt="p", status=agent_status, cli_type="pi")
+            )
+            session.add(
+                Task(
+                    id="task-maybe-orphan",
+                    workflow_id="wf-orphan-age",
+                    phase_id="phase-orphan-age",
+                    raw_description="r",
+                    done_definition="d",
+                    status="pending",
+                    assigned_agent_id="dead-or-alive-agent",
+                    created_at=pending_created_at,
+                )
+            )
+
+    @patch("src.autopilot.orchestrator.create_agent_for_task_direct")
+    def test_pending_task_pointing_at_terminated_agent_is_replaced(
+        self, mock_create_agent, orch_db_env, tmp_path
+    ):
+        """Regression: a task dispatched to a real agent that later died
+        (killed mid-launch by a backend restart, or manually terminated as
+        stuck-agent cleanup) before ever flipping the task to in_progress
+        stayed "pending" with a non-null assigned_agent_id forever -- the
+        orphan check only ever looked at assigned_agent_id being NULL, so a
+        task assigned to a now-dead agent looked identical to one still
+        being actively worked."""
+        from src.autopilot.orchestrator import OrchestratorLogger, _create_phase_task
+        from src.core.database import Task
+
+        self._seed_with_agent(orch_db_env, agent_status="terminated")
+        mock_create_agent.return_value = {"agent_id": "agent-x"}
+
+        result = _create_phase_task(
+            "wf-orphan-age", "phase-orphan-age", "security_review", "continue",
+            OrchestratorLogger(tmp_path),
+        )
+
+        assert result is True
+        with orch_db_env.session_scope() as session:
+            original = session.query(Task).filter_by(id="task-maybe-orphan").first()
+            assert original.status == "failed"
+            assert "no longer active" in original.failure_reason
+            fresh = (
+                session.query(Task)
+                .filter(Task.phase_id == "phase-orphan-age", Task.status == "in_progress")
+                .first()
+            )
+            assert fresh is not None
+            assert fresh.id != "task-maybe-orphan"
+
+    @patch("src.autopilot.orchestrator.create_agent_for_task_direct")
+    def test_pending_task_pointing_at_working_agent_is_left_alone(
+        self, mock_create_agent, orch_db_env, tmp_path
+    ):
+        """A task assigned to a genuinely still-working agent must not be
+        touched, even if it hasn't flipped to in_progress yet (a brief
+        normal gap) -- only a DEAD agent's assignment counts as orphaned."""
+        from src.autopilot.orchestrator import OrchestratorLogger, _create_phase_task
+        from src.core.database import Task
+
+        self._seed_with_agent(orch_db_env, agent_status="working")
+
+        result = _create_phase_task(
+            "wf-orphan-age", "phase-orphan-age", "security_review", "continue",
+            OrchestratorLogger(tmp_path),
+        )
+
+        assert result is False
+        mock_create_agent.assert_not_called()
+        with orch_db_env.session_scope() as session:
+            original = session.query(Task).filter_by(id="task-maybe-orphan").first()
+            assert original.status == "pending"
+            assert original.failure_reason is None
