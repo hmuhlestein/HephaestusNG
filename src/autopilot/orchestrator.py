@@ -2587,6 +2587,7 @@ def _sync_stale_feature_statuses(logger: OrchestratorLogger) -> int:
 
     repaired = 0
     with get_db() as db:
+        # Case 1: Feature has a linked workflow that completed
         stale = (
             db.query(Feature)
             .join(Workflow, Feature.workflow_id == Workflow.id)
@@ -2601,6 +2602,40 @@ def _sync_stale_feature_statuses(logger: OrchestratorLogger) -> int:
             feature.status = "completed"
             feature.completed_at = feature.completed_at or datetime.utcnow()
             repaired += 1
+
+        # Case 2: Feature has no linked workflow (workflow_id is null) but the
+        # design's other features all have completed workflows. This happens when
+        # a feature was skipped or its workflow_id was never populated. If the
+        # design has any completed workflow, this feature's absence means it was
+        # either skipped or its workflow finished without linking back.
+        orphaned = (
+            db.query(Feature)
+            .filter(
+                Feature.workflow_id.is_(None),
+                Feature.status.notin_(["completed", "failed", "skipped"]),
+            )
+            .all()
+        )
+        for feature in orphaned:
+            # Check if other features in the same design have completed workflows
+            siblings = (
+                db.query(Feature)
+                .filter(
+                    Feature.design_id == feature.design_id,
+                    Feature.id != feature.id,
+                )
+                .all()
+            )
+            has_completed_sibling = any(s.status == "completed" for s in siblings)
+            has_active_sibling = any(
+                s.status == "active" and s.workflow_id is not None for s in siblings
+            )
+            if has_completed_sibling and not has_active_sibling:
+                logger.info(f"[FEATURE-SYNC] {feature.feature_key}: no workflow and no active siblings -- marking completed")
+                feature.status = "completed"
+                feature.completed_at = feature.completed_at or datetime.utcnow()
+                repaired += 1
+
         if repaired:
             db.commit()
     return repaired
@@ -2993,30 +3028,16 @@ def _get_phase0_completion(design_id: Optional[str]) -> Optional[dict]:
         return None
 
 
-def _link_workflow_to_feature(workflow_id: str, feature_id: str) -> None:
-    """Link a workflow to a feature.
-
-    Sets Feature.workflow_id so the UI can find tasks for each feature.
-
-    Args:
-        workflow_id: Workflow ID
-        feature_id: Feature ID (feat-...)
-    """
-    from src.core.database import Feature, get_db
-
-    with get_db() as db:
-        feature = db.query(Feature).filter_by(id=feature_id).first()
-        if feature:
-            feature.workflow_id = workflow_id
-            db.commit()
-            logger.info(f"Linked workflow {workflow_id[:8]} to feature {feature_id}")
-
-
 def _relink_features_to_workflows(design_id: str, logger: OrchestratorLogger) -> None:
     """Re-link features to their workflows if workflow_id is missing.
 
     Handles pipeline restarts where features exist but their workflow link
-    was lost. Matches features to workflows by feature_key in launch_params.
+    was lost -- and, since run_single_workflow clears
+    state.current_workflow_id back to None right before returning
+    "completed" (see its final success branch), this is also _run_one_
+    feature's ONLY working way to link a just-finished feature's workflow
+    (see the call site there). Matches features to workflows by feature_key
+    in launch_params.
     """
     import json as _json
 
@@ -3027,8 +3048,14 @@ def _relink_features_to_workflows(design_id: str, logger: OrchestratorLogger) ->
         if not unlinked:
             return
 
-        # Get all autopilot workflows for this design's project
-        workflows = db.query(Workflow).filter(Workflow.definition_id == "autopilot").order_by(Workflow.created_at.desc()).all()
+        # Scoped to this design_id -- without it, two different designs
+        # that happen to share a feature_key (e.g. both have an "auth"
+        # feature) could link a feature to the WRONG design's workflow.
+        # Matters more now that this runs after every single feature
+        # completes, not just once per design reprocessing.
+        workflows = db.query(Workflow).filter(
+            Workflow.definition_id == "autopilot", Workflow.design_id == design_id
+        ).order_by(Workflow.created_at.desc()).all()
 
         for feat in unlinked:
             for wf in workflows:
@@ -6540,12 +6567,11 @@ def run_phase0(
         # NOTE: deliberately NOT using state.current_workflow_id here —
         # run_single_workflow clears it back to None right before returning
         # "completed" (see its final success branch), so by this point it's
-        # already gone (the same reason _run_one_feature's analogous
-        # _link_workflow_to_feature call below is a pre-existing no-op; not
-        # fixing that here, out of scope, but avoiding relying on the same
-        # broken channel for this new code). Query the just-created Workflow
-        # row directly instead, via the design_id/definition_id it was
-        # created with — robust regardless of that state-clearing behavior.
+        # already gone (the same reason _run_one_feature's feature-linking
+        # call now goes through _relink_features_to_workflows instead of
+        # reading that field directly). Query the just-created Workflow row
+        # directly instead, via the design_id/definition_id it was created
+        # with — robust regardless of that state-clearing behavior.
         # Clear any stale error from a prior failed attempt on this same
         # design (e.g. a validation failure that negotiation then fixed, or
         # an earlier run that failed before a later retry succeeded) --
@@ -6755,11 +6781,11 @@ def _run_one_feature(
         # _design_worktree while it launches and polls the workflow. When
         # features run in parallel (run_feature_pipelines' ThreadPoolExecutor),
         # every thread is handed the SAME PipelineState object -- without a
-        # thread-local copy here, one feature's workflow_id can be stomped by
-        # another's mid-poll, and _link_workflow_to_feature below would then
-        # attach the WRONG workflow to this feature. The status-display fields
-        # (designs_processed, current_design, ...) are untouched by
-        # run_single_workflow and stay correctly shared via `state`.
+        # thread-local copy here, run_single_workflow's own INTERNAL use of
+        # these fields while polling would race across threads. The
+        # status-display fields (designs_processed, current_design, ...) are
+        # untouched by run_single_workflow and stay correctly shared via
+        # `state`.
         thread_state = copy.copy(state) if state else None
 
         wf_status = run_single_workflow(
@@ -6777,9 +6803,18 @@ def _run_one_feature(
             project_id=project_id,
         )
 
-        # Link workflow to feature in DB
-        if thread_state and thread_state.current_workflow_id and feature_id:
-            _link_workflow_to_feature(thread_state.current_workflow_id, feature_id)
+        # Link workflow to feature in DB. Deliberately NOT reading
+        # thread_state.current_workflow_id here -- run_single_workflow
+        # clears it back to None right before returning "completed" (see
+        # its final success branch), so it's always empty by this point;
+        # that made this a permanent no-op regardless of thread isolation
+        # (see run_phase0's analogous phase0_workflow_id persistence for
+        # the same reasoning). Resolve via the DB instead, matching this
+        # design's just-created/resumed workflow by feature_key in
+        # launch_params -- the same lookup _relink_features_to_workflows
+        # already does for pipeline-restart recovery.
+        if feature_id:
+            _relink_features_to_workflows(design_entry.db_id, logger)
 
         # Determine final status
         if wf_status == "completed":
