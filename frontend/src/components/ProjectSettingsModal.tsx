@@ -103,33 +103,18 @@ const ProjectSettingsModal: React.FC<ProjectSettingsModalProps> = ({ isOpen, onC
     },
   });
 
-  const updateBudgetMutation = useMutation({
-    mutationFn: async ({ projectId, costLimitUsd }: { projectId: string; costLimitUsd: number | null }) => {
-      await apiService.updateAutopilotProject(projectId, { cost_limit_usd: costLimitUsd });
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['projects'] });
-      toast.success('Budget limit updated');
-      setEditingBudget(null);
-      setBudgetValue('');
-    },
-    onError: (error: any) => {
-      toast.error(error?.response?.data?.detail || 'Failed to update budget');
-    },
-  });
-
   const handleUpdateBudget = (projectId: string) => {
     const value = budgetValue.trim();
     if (value === '') {
       // Clear the budget limit
-      updateBudgetMutation.mutate({ projectId, costLimitUsd: null });
+      updateBudgetMutation.mutate({ projectId, clearLimit: true });
     } else {
       const parsed = parseFloat(value);
       if (isNaN(parsed) || parsed < 0) {
         toast.error('Budget must be a non-negative number');
         return;
       }
-      updateBudgetMutation.mutate({ projectId, costLimitUsd: parsed });
+      updateBudgetMutation.mutate({ projectId, costLimit: parsed });
     }
   };
 
