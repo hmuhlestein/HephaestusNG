@@ -2,6 +2,7 @@
 
 import json
 import logging
+import re
 import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -16,6 +17,36 @@ logger = logging.getLogger(__name__)
 
 # Configurable vector store collection for tickets (turbovec key, 384-dim).
 TICKET_COLLECTION = "ticket_embeddings"
+
+# Matches FTS5's own token boundary (word characters), not the FTS5 grammar --
+# used to strip arbitrary search text down to plain terms before it reaches
+# fts5_to_query below.
+_FTS5_TOKEN_RE = re.compile(r"\w+")
+
+
+def _fts5_query(keywords: str) -> str:
+    """Turn arbitrary free text into a safe FTS5 MATCH query.
+
+    Passing keywords straight through as the MATCH argument means anything
+    a ticket title/search term contains that FTS5's query grammar treats
+    specially -- a colon ("title:foo" is a column filter, and "no such
+    column" is exactly the error a non-existent column name produces),
+    AND/OR/NOT/NEAR, unbalanced quotes, parens, a leading hyphen (NOT
+    prefix) -- either breaks the query outright or silently changes its
+    meaning. Observed live: searching for a ticket titled "...capped-notice
+    run counters..." raised "no such column: notice", not because any
+    table has that column, but because FTS5 parsed part of the phrase as a
+    column-filter expression.
+
+    Tokenizing to plain words and quoting each one neutralizes all of that
+    -- a quoted token is always a literal string to FTS5, never an
+    operator -- while preserving the original whitespace-separated terms
+    as an implicit AND search.
+    """
+    tokens = _FTS5_TOKEN_RE.findall(keywords)
+    if not tokens:
+        return '""'
+    return " ".join(f'"{t}"' for t in tokens)
 
 
 class TicketSearchService:
@@ -171,9 +202,9 @@ class TicketSearchService:
         """
         try:
             with get_db() as db:
-                # Build FTS5 query
-                # Use FTS5 MATCH syntax
-                fts_query = keywords
+                # Build FTS5 query -- sanitized so arbitrary search text
+                # can't be parsed as FTS5 query grammar (see _fts5_query).
+                fts_query = _fts5_query(keywords)
 
                 # Query FTS5 with JOIN to tickets table
                 sql = text(

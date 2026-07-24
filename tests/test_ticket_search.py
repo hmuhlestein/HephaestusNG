@@ -92,13 +92,57 @@ class TestTicketSearchService:
         pytest.skip("Integration test - requires Qdrant and test data")
 
     @pytest.mark.asyncio
-    async def test_keyword_search(self):
-        """Test keyword search using FTS5."""
-        # This test would require:
-        # 1. A test workflow
-        # 2. Test tickets in database
-        # 3. FTS5 table populated
-        pytest.skip("Integration test - requires database and test data")
+    async def test_keyword_search_handles_fts5_special_characters(self, db_manager):
+        """Regression: keyword_search passed raw search text straight
+        through as the FTS5 MATCH argument. FTS5's query grammar treats a
+        colon as a column-filter ("title:foo"), and AND/OR/NOT/NEAR,
+        hyphens, and unbalanced quotes all have operator meaning too --
+        any of that in the search text either breaks the query outright or
+        silently changes what it matches. Observed live: searching for a
+        ticket titled "...capped-notice run counters..." raised "no such
+        column: notice", not because any table has that column, but
+        because FTS5 parsed part of the phrase as a column-filter
+        expression."""
+        import uuid
+
+        from src.core.database import Ticket
+        from src.services.ticket_search_service import TicketSearchService
+
+        workflow_id = f"wf-{uuid.uuid4()}"
+        with db_manager.session_scope() as session:
+            session.add(
+                Ticket(
+                    id=f"ticket-{uuid.uuid4()}",
+                    workflow_id=workflow_id,
+                    created_by_agent_id="agent-x",
+                    title="Orchestrator: capped-notice run counters appear scoped to parent design session",
+                    description="Found during forensics review",
+                    ticket_type="bug",
+                    priority="medium",
+                    status="backlog",
+                )
+            )
+
+        results = await TicketSearchService.keyword_search(
+            keywords="capped-notice run counters scoped to parent design session",
+            workflow_id=workflow_id,
+        )
+
+        assert len(results) == 1
+        assert "capped-notice" in results[0]["title"]
+
+    @pytest.mark.asyncio
+    async def test_keyword_search_tolerates_reserved_fts5_syntax(self, db_manager):
+        """Search text containing FTS5's own reserved words/operators
+        (title:, AND/OR/NOT, unbalanced quotes, parens) must not raise --
+        it should just search for those as literal words."""
+        from src.services.ticket_search_service import TicketSearchService
+
+        for keywords in ['title:foo', 'a AND b', 'a OR "b', 'NEAR(a b)', '-exclude me', '(unbalanced']:
+            results = await TicketSearchService.keyword_search(
+                keywords=keywords, workflow_id="wf-does-not-exist",
+            )
+            assert results == []
 
     @pytest.mark.asyncio
     async def test_hybrid_search(self):
@@ -203,6 +247,34 @@ class TestMCPEndpoints:
 # 2. Qdrant running locally or mocked
 # 3. Sample workflows, agents, and tickets
 # 4. Cleanup after tests
+
+
+class TestFts5QuerySanitization:
+    """Unit coverage for _fts5_query -- the sanitizer that keeps arbitrary
+    search text from being parsed as FTS5 query grammar (see its own
+    docstring for the exact live failure this closes)."""
+
+    def test_quotes_every_token(self):
+        from src.services.ticket_search_service import _fts5_query
+
+        assert _fts5_query("capped-notice run counters") == '"capped" "notice" "run" "counters"'
+
+    def test_neutralizes_column_filter_syntax(self):
+        from src.services.ticket_search_service import _fts5_query
+
+        assert _fts5_query("title:foo") == '"title" "foo"'
+
+    def test_neutralizes_boolean_operators(self):
+        from src.services.ticket_search_service import _fts5_query
+
+        assert _fts5_query("a AND b OR NOT c") == '"a" "AND" "b" "OR" "NOT" "c"'
+
+    def test_empty_input_produces_a_valid_empty_query(self):
+        from src.services.ticket_search_service import _fts5_query
+
+        assert _fts5_query("") == '""'
+        assert _fts5_query("   ") == '""'
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
