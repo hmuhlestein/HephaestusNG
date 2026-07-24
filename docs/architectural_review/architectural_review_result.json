@@ -1,5 +1,19 @@
 {
-  "capped": true,
-  "capped_after_runs": 4,
-  "blocker_count": 0
+  "verdict": "PASS",
+  "feature_id": "des-91c8-openrouter-direct",
+  "date": "2026-07-24",
+  "blocker_count": 0,
+  "fix_count": 0,
+  "defer_count": 1,
+  "findings": [
+    {
+      "severity": "DEFER",
+      "file": "src/interfaces/langchain_llm_client.py",
+      "line": "349-350",
+      "summary": "Stray blank-line whitespace change inside _invoke_and_record unrelated to either scoped task (test coverage / log-level narrowing).",
+      "recommendation": "No action required; informational only, not an architecture violation."
+    }
+  ],
+  "tests_run": "python -m pytest tests/test_cost_tracking.py -q",
+  "tests_result": "47 passed"
 }
