@@ -347,6 +347,7 @@ class LangChainLLMClient:
             The model response
         """
         from src.core.log_context import set_log_context
+
         if task_id:
             set_log_context(task=task_id)
         if agent_id:
@@ -390,7 +391,7 @@ class LangChainLLMClient:
             else:
                 logger.debug(f"No cost in response metadata for {component} (cost_usd={cost_usd})")
         except Exception as e:
-            logger.debug(f"Cost recording failed for {component}: {e}")
+            logger.warning(f"Cost recording failed for {component}: {e}")
 
         return response
 
