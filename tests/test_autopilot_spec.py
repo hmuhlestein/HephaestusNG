@@ -500,8 +500,8 @@ class TestGetMaxReviewRuns:
                 )
             )
 
-        assert S.get_max_review_runs("wf-mrr-1", "architectural_review") == 3
-        assert S.get_max_review_runs("wf-mrr-1", "adversarial_review") == 3
+        assert S.get_max_review_runs("wf-mrr-1", "architectural_review") == 4
+        assert S.get_max_review_runs("wf-mrr-1", "adversarial_review") == 4
 
     def test_returns_none_for_a_phase_that_did_not_opt_in(self, db_manager):
         from src.core.database import Workflow
@@ -517,7 +517,7 @@ class TestGetMaxReviewRuns:
                 )
             )
 
-        assert S.get_max_review_runs("wf-mrr-2", "security_review") is None
+        assert S.get_max_review_runs("wf-mrr-2", "development") is None
 
     def test_returns_none_for_unknown_definition_id(self, db_manager):
         from src.core.database import Workflow
@@ -569,6 +569,58 @@ class TestReviewFindingsHistory:
         )
         history = S.get_review_findings_history("wf-history-4", "architectural_review")
         assert len(history[0]["summary"]) == 500
+
+
+class TestSyntheticCleanResult:
+    """Regression: _cap_out_review_phase writes this result for a phase
+    that hit its max_review_runs cap, so the gate's own scorer lets the
+    pipeline continue instead of looping forever. Each gated phase's
+    scorer reads a DIFFERENT schema -- a single blocker_count-only shape
+    written for every phase is wrong for qa_validation/product_validation/
+    scope_review, and reads as the WORST possible score there (e.g.
+    score_qa sees total_tests=0 -> pass_rate=0%), which is worse than not
+    capping at all. Observed live: qa_validation's cap-out wrote
+    {"blocker_count": 0}, scored 0% pass rate, and immediately goto'd back
+    to development -- burning through max_total_gotos faster than an
+    uncapped loop would have. Each case below asserts the synthetic result
+    actually clears the REAL scorer, not just that it has the right keys.
+    """
+
+    def test_qa_validation_result_scores_a_clean_pass(self):
+        result = S.synthetic_clean_result("qa_validation", run_count=5)
+        score, meta = S.score_qa(result, S.DEFAULT_SPEC)
+        assert score >= S._PASS_FLOOR
+        assert meta["violations"] == []
+
+    def test_product_validation_result_scores_a_clean_pass(self):
+        result = S.synthetic_clean_result("product_validation", run_count=5)
+        score, meta = S.score_product_validation(result, S.DEFAULT_SPEC)
+        assert score >= S._PASS_FLOOR
+        assert meta["band"] == "pass"
+
+    def test_scope_review_result_scores_a_clean_pass(self):
+        result = S.synthetic_clean_result("scope_review", run_count=5)
+        score, meta = S.score_scope_review(result)
+        assert score >= S._PASS_FLOOR
+        assert meta["band"] == "pass"
+
+    def test_architectural_review_result_scores_a_clean_pass(self):
+        result = S.synthetic_clean_result("architectural_review", run_count=5)
+        score, meta = S.score_architectural_review(result)
+        assert score >= S._PASS_FLOOR
+
+    def test_adversarial_review_result_scores_a_clean_pass(self):
+        result = S.synthetic_clean_result("adversarial_review", run_count=5)
+        score, meta = S.score_adversarial_review(result)
+        assert score >= S._PASS_FLOOR
+
+    def test_every_result_records_capped_metadata(self):
+        for phase_name in (
+            "qa_validation", "product_validation", "scope_review", "architectural_review",
+        ):
+            result = S.synthetic_clean_result(phase_name, run_count=7)
+            assert result["capped"] is True
+            assert result["capped_after_runs"] == 7
 
 
 if __name__ == "__main__":
