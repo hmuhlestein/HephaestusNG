@@ -130,6 +130,7 @@ class TestCreateAgentForTask:
              patch("src.agents.manager.asyncio.sleep", new_callable=AsyncMock):
             mock_cli = MagicMock()
             mock_cli.get_launch_command.return_value = ["pi", "--task", "test"]
+            mock_cli.default_model = "sonnet"
             mock_get_cli.return_value = mock_cli
 
             agent = await mock_agent_manager.create_agent_for_task(
@@ -198,6 +199,7 @@ class TestCreateAgentForTask:
              patch("src.agents.manager.asyncio.sleep", new_callable=AsyncMock):
             mock_cli = MagicMock()
             mock_cli.get_launch_command.return_value = ["pi", "--task", "test"]
+            mock_cli.default_model = "sonnet"
             mock_get_cli.return_value = mock_cli
 
             await mock_agent_manager.create_agent_for_task(
@@ -262,6 +264,7 @@ class TestCreateAgentForTask:
              patch("src.agents.manager.asyncio.sleep", new_callable=AsyncMock):
             mock_cli = MagicMock()
             mock_cli.get_launch_command.return_value = ["pi", "--task", "test"]
+            mock_cli.default_model = "sonnet"
             mock_get_cli.return_value = mock_cli
 
             await mock_agent_manager.create_agent_for_task(
@@ -304,6 +307,7 @@ class TestCreateAgentForTask:
              patch("src.agents.manager.asyncio.sleep", new_callable=AsyncMock):
             mock_cli = MagicMock()
             mock_cli.get_launch_command.return_value = ["pi", "--task", "test"]
+            mock_cli.default_model = "sonnet"
             mock_get_cli.return_value = mock_cli
 
             agent = await mock_agent_manager.create_agent_for_task(
@@ -318,6 +322,62 @@ class TestCreateAgentForTask:
             log = session.query(AgentLog).filter_by(agent_id=agent.id).first()
             assert log is not None
             assert log.log_type == "created"
+
+    @pytest.mark.asyncio
+    async def test_ignores_stale_phase_cli_model_when_phase_cli_tool_unset(
+        self, mock_agent_manager, sample_task, db_manager
+    ):
+        """Regression: a Phase row can have cli_model populated from
+        whatever the global default was AT THE TIME it was created, with
+        cli_tool left null (no explicit per-phase CLI choice). If the
+        global default_cli_tool/cli_model pairing later changes (e.g.
+        switching from pi/mimo to claude/sonnet), that stale cli_model
+        becomes a phase-level "override" for a CLI it was never actually
+        paired with. Observed live: default_cli_tool changed to claude, but
+        an existing Phase row's leftover cli_model="xiaomi/mimo-v2.5-pro"
+        (from when default_cli_tool was pi) got handed straight to Claude,
+        which rejected it outright and did zero work."""
+        with db_manager.session_scope() as session:
+            phase = session.query(Phase).filter_by(id="phase-1").first()
+            phase.cli_tool = None
+            phase.cli_model = "xiaomi/mimo-v2.5-pro"
+
+        mock_agent_manager.config.default_cli_tool = "claude"
+        mock_agent_manager.config.cli_model = "sonnet"
+
+        mock_agent_manager.branch_manager.create_agent_branch = MagicMock(
+            return_value={
+                "working_directory": "/tmp/test-project-agent",
+                "branch_name": "agent-test-branch",
+            }
+        )
+        mock_agent_manager.branch_manager.switch_to_branch = MagicMock()
+        mock_agent_manager.llm_provider.generate_agent_prompt = AsyncMock(
+            return_value="You are an AI agent."
+        )
+
+        mock_session = MagicMock()
+        mock_session.name = "agent-session-claude"
+        mock_agent_manager.tmux_server.new_session.return_value = mock_session
+        mock_session.attached_window.attached_pane = MagicMock()
+
+        with patch("src.agents.manager.get_cli_agent") as mock_get_cli, \
+             patch("src.agents.manager.asyncio.sleep", new_callable=AsyncMock):
+            mock_cli = MagicMock()
+            mock_cli.get_launch_command.return_value = ["claude", "--model", "sonnet"]
+            mock_cli.default_model = "sonnet"
+            mock_get_cli.return_value = mock_cli
+
+            await mock_agent_manager.create_agent_for_task(
+                task=sample_task,
+                enriched_data={"description": "Implement feature X"},
+                memories=[],
+                project_context="Test project context",
+                working_directory="/tmp/test-project",
+            )
+
+        _, call_kwargs = mock_cli.get_launch_command.call_args
+        assert call_kwargs["model"] == "sonnet"
 
 
 class TestCreateAgentForTaskMissingSharedWorktree:

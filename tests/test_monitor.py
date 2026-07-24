@@ -968,6 +968,26 @@ class TestDetectMcpDisconnected:
 
         mock_agent_manager.send_message_to_agent.assert_not_called()
 
+    @pytest.mark.asyncio
+    async def test_nudge_tells_agent_to_complete_current_task(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        """Regression: observed live, an agent reconnected MCP after this
+        exact nudge and then just replied "Task already completed. No
+        action needed." on repeat forever, never actually calling
+        complete_my_task -- reconnecting fixed the connection but didn't
+        tell the agent to act on it. The nudge must name the agent's
+        CURRENT task_id and explicitly instruct it to call complete_my_task
+        if it hasn't, not just reconnect."""
+        agent = Agent(id="a1", cli_type="pi", current_task_id="task-42")
+        mock_agent_manager.get_agent_raw_pane.return_value = self.DISCONNECTED_OUTPUT
+
+        await make_monitoring_loop._detect_mcp_disconnected(agent)
+
+        nudge = mock_agent_manager.send_message_to_agent.call_args[0][1]
+        assert "complete_my_task" in nudge
+        assert "task-42" in nudge
+
 
 # ── _detect_credit_exhausted ──────────────────────────────────────
 
@@ -1084,6 +1104,79 @@ class TestDetectCreditExhausted:
         await make_monitoring_loop._detect_credit_exhausted(agent)
 
         mock_agent_manager.terminate_agent.assert_called_once()
+
+
+class TestDetectBadModelError:
+    """Regression: Claude Code rejects a --model string it doesn't
+    recognize (e.g. a stale OpenRouter path baked into a Phase row from
+    before default_cli_tool/cli_model changed) and just sits there. The
+    agent CANNOT fix this itself -- /model is a client-side slash command
+    Claude Code's input loop intercepts before it reaches the model, so no
+    reply the agent generates can invoke it. Only the monitor, sending
+    literal keystrokes via send_message_to_agent, can."""
+
+    BAD_MODEL_OUTPUT = (
+        "⏺ There's an issue with the selected model (xiaomi/mimo-v2.5-pro). "
+        "It may not exist or you may not have access to it. Run /model to pick a "
+        "different model.\n"
+    )
+
+    @pytest.mark.asyncio
+    async def test_no_output(self, make_monitoring_loop, mock_agent_manager, mock_db):
+        agent = Agent(id="a1", cli_type="claude", current_task_id="t1")
+        mock_agent_manager.get_agent_output.return_value = ""
+        await make_monitoring_loop._detect_bad_model_error(agent)
+        mock_agent_manager.send_message_to_agent.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_normal_output_ignored(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        agent = Agent(id="a1", cli_type="claude", current_task_id="t1")
+        mock_agent_manager.get_agent_output.return_value = "Reading design.md..."
+        await make_monitoring_loop._detect_bad_model_error(agent)
+        mock_agent_manager.send_message_to_agent.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_non_claude_cli_ignored(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        """This is Claude Code's own slash-command syntax and error
+        phrasing -- must not fire for other CLIs even if their output
+        happened to contain similar text."""
+        agent = Agent(id="a1", cli_type="pi", current_task_id="t1")
+        mock_agent_manager.get_agent_output.return_value = self.BAD_MODEL_OUTPUT
+        await make_monitoring_loop._detect_bad_model_error(agent)
+        mock_agent_manager.send_message_to_agent.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_sends_slash_model_command_directly(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        agent = Agent(id="a1", cli_type="claude", current_task_id="t1")
+        mock_agent_manager.get_agent_output.return_value = self.BAD_MODEL_OUTPUT
+        make_monitoring_loop.config.cli_model = "sonnet"
+
+        result = await make_monitoring_loop._detect_bad_model_error(agent)
+
+        assert result is True
+        mock_agent_manager.send_message_to_agent.assert_called_once_with("a1", "/model sonnet")
+
+    @pytest.mark.asyncio
+    async def test_only_fixes_once_per_agent(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        """One-shot, like credit-exhaustion -- not a repeatable nudge with
+        a cooldown, since sending the fix again while Claude is still
+        reloading with the new model would just be noise."""
+        agent = Agent(id="a1", cli_type="claude", current_task_id="t1")
+        mock_agent_manager.get_agent_output.return_value = self.BAD_MODEL_OUTPUT
+        make_monitoring_loop.config.cli_model = "sonnet"
+
+        await make_monitoring_loop._detect_bad_model_error(agent)
+        await make_monitoring_loop._detect_bad_model_error(agent)
+
+        mock_agent_manager.send_message_to_agent.assert_called_once()
 
 
 # ── _update_agent_health_from_trajectory ─────────────────────────

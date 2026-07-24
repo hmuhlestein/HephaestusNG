@@ -78,6 +78,19 @@ _CREDIT_EXHAUSTED_RE = re.compile(
     r"requires more credits, or fewer max_tokens", re.IGNORECASE
 )
 
+# Claude Code's exact rejection when launched with a --model string it
+# doesn't recognize (e.g. a stale OpenRouter path baked into a Phase row
+# from before default_cli_tool/cli_model changed). This is a hard stop --
+# no amount of "just try again" recovers it, and unlike the MCP-disconnect
+# case, the agent CANNOT self-remediate: /model is a client-side slash
+# command Claude Code's input loop intercepts before it ever reaches the
+# model, so no tool call or generated response can invoke it -- only
+# literal keystrokes typed into the pane (which is exactly what
+# send_message_to_agent does) can.
+_BAD_MODEL_ERROR_RE = re.compile(
+    r"issue with the selected model", re.IGNORECASE
+)
+
 
 def _strip_sgr(text: str) -> str:
     """Strip SGR color escape codes (\\x1b[...m).
@@ -1143,11 +1156,63 @@ class MonitoringLoop:
                 agent.id,
                 "Your MCP connection to the hephaestus server is down (0 "
                 "connected servers) — this is a client-side connection issue, "
-                f"not a backend problem. {instructions}",
+                f"not a backend problem. {instructions} Once reconnected, "
+                "verify with `mcp status` that hephaestus is actually back, "
+                "then check specifically: have you already called "
+                f"complete_my_task for your CURRENT task_id ({agent.current_task_id or 'unknown -- call get_my_tasks first'}) "
+                "in THIS session? If not, call it now with your real "
+                "results — do not just say 'task already completed' and "
+                "stop. A resumed session can make you recall finishing a "
+                "DIFFERENT, earlier task; that does not count for this one.",
             )
             return True
         except Exception as e:
             logger.warning(f"[MCP-DISCONNECTED] check failed for {agent.id[:8]}: {e}")
+        return False
+
+    async def _detect_bad_model_error(self, agent) -> bool:
+        """Detect Claude Code's "issue with the selected model" rejection
+        and fix it directly by sending `/model <config default>` as literal
+        pane input, instead of nudging the agent to do it -- the agent
+        cannot: /model is a client-side slash command Claude Code's input
+        loop intercepts before it reaches the model at all, so no reply the
+        agent generates can invoke it, only real keystrokes typed into the
+        pane (which is exactly what send_message_to_agent delivers here,
+        unlike a normal nudge where the text is meant to be read and acted
+        on BY the model).
+
+        Only meaningful for cli_type == "claude" -- this is Claude Code's
+        own slash-command syntax and error phrasing, not a cross-CLI
+        concept like mcp_reconnect_instructions.
+
+        Observed live: a Phase row's stale cli_model (baked in from before
+        default_cli_tool/cli_model changed) got handed to a freshly-launched
+        Claude agent, which rejected it outright and sat frozen -- unable to
+        do anything, including the one thing that would have fixed it.
+        """
+        try:
+            if agent.cli_type != "claude":
+                return False
+            if not hasattr(self, "_fixed_bad_model"):
+                self._fixed_bad_model = set()
+            if agent.id in self._fixed_bad_model:
+                return False
+            out = self.agent_manager.get_agent_output(agent.id, lines=40)
+            if not out:
+                return False
+            if not _BAD_MODEL_ERROR_RE.search(_strip_sgr(out)):
+                return False
+            self._fixed_bad_model.add(agent.id)
+
+            fix_model = getattr(self.config, "cli_model", None) or "sonnet"
+            logger.warning(
+                f"[BAD-MODEL] Agent {agent.id[:8]} (claude) rejected its "
+                f"launch model — sending '/model {fix_model}' directly"
+            )
+            await self.agent_manager.send_message_to_agent(agent.id, f"/model {fix_model}")
+            return True
+        except Exception as e:
+            logger.warning(f"[BAD-MODEL] check failed for {agent.id[:8]}: {e}")
         return False
 
     async def _detect_credit_exhausted(self, agent) -> bool:
@@ -1235,7 +1300,7 @@ class MonitoringLoop:
         agents = self.agent_manager.get_active_agents()
         logger.info(f"Trajectory monitoring {len(agents)} active agents")
 
-        # Phase 0: cheap mechanical recovery (no LLM). Six complementary checks:
+        # Phase 0: cheap mechanical recovery (no LLM). Seven complementary checks:
         #   a) OpenRouter credits exhausted — pause workflow + terminate
         #      immediately, before any other check wastes a recovery attempt
         #      on an agent that's about to be torn down anyway
@@ -1245,6 +1310,9 @@ class MonitoringLoop:
         #   d) pending rm confirmation — auto-deny immediately, don't wait for (b)
         #   e) max output token limit hit — nudge immediately, don't wait for (b)
         #   f) MCP server disconnected — nudge to `mcp connect`, don't wait for (b)
+        #   g) Claude Code rejected its launch model — fix directly with a
+        #      real `/model <x>` keystroke send, since the agent can't
+        #      invoke that slash command itself
         mechanically_intervened = set()
         for agent in agents:
             if await self._detect_credit_exhausted(agent):
@@ -1259,6 +1327,8 @@ class MonitoringLoop:
             if await self._detect_max_token_limit_error(agent):
                 mechanically_intervened.add(agent.id)
             if await self._detect_mcp_disconnected(agent):
+                mechanically_intervened.add(agent.id)
+            if await self._detect_bad_model_error(agent):
                 mechanically_intervened.add(agent.id)
 
         # Phase 1: Guardian Analysis (Parallel)
@@ -1493,7 +1563,6 @@ class MonitoringLoop:
         """
         from src.core.log_context import set_log_context
         set_log_context(agent=agent.id, task=agent.current_task_id or "")
-        """
         session = self.db_manager.get_session()
         try:
             # Skip agents that are too young (grace period for spin-up)
