@@ -1,7 +1,9 @@
 """Tests for cost tracking schema and cost derivation module."""
 
+import os
 import uuid
 from datetime import datetime
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 from sqlalchemy import create_engine, event, text
@@ -31,6 +33,8 @@ from src.core.database import (
     Workflow,
     WorkflowDefinition,
 )
+from src.core.llm_config import ModelAssignment, MultiProviderLLMConfig, ProviderConfig
+from src.interfaces.langchain_llm_client import LangChainLLMClient
 
 
 @pytest.fixture
@@ -793,3 +797,116 @@ class TestSecurityValidation:
         entry = CostEntryCreate(source="pi", cost_usd=1.0, task_id="task-123", workflow_id="wf-456")
         assert entry.task_id == "task-123"
         assert entry.workflow_id == "wf-456"
+
+
+@pytest.fixture
+def llm_client():
+    """A LangChainLLMClient with model creation short-circuited (unused by _invoke_and_record)."""
+    config = MultiProviderLLMConfig(
+        providers={
+            "openrouter": ProviderConfig(
+                api_key_env="OPENROUTER_API_KEY",
+                base_url="https://openrouter.ai/api/v1",
+                models=["anthropic/claude-sonnet-4"],
+            ),
+        },
+        model_assignments={
+            "task_enrichment": ModelAssignment(
+                provider="openrouter",
+                model="anthropic/claude-sonnet-4",
+            ),
+        },
+    )
+    with (
+        patch.dict(os.environ, {"OPENROUTER_API_KEY": "test-key"}),
+        patch("src.interfaces.langchain_llm_client.ChatOpenAI"),
+    ):
+        return LangChainLLMClient(config)
+
+
+class TestInvokeAndRecord:
+    """Test _invoke_and_record's cost extraction from OpenRouter response_metadata."""
+
+    @pytest.mark.asyncio
+    async def test_openrouter_response_writes_cost_entry(self, llm_client):
+        """A response shaped like a real OpenRouter usage.include=true reply writes exactly one CostEntry."""
+        model = Mock()
+        model.ainvoke = AsyncMock(
+            return_value=Mock(
+                response_metadata={
+                    "token_usage": {
+                        "prompt_tokens": 120,
+                        "completion_tokens": 45,
+                        "prompt_tokens_details": {"cached_tokens": 30},
+                        "cost": {"total": 0.0034},
+                    },
+                    "model_name": "anthropic/claude-sonnet-4",
+                }
+            )
+        )
+
+        with (
+            patch("src.core.cost_derivation.record_cost") as mock_record_cost,
+            patch("src.core.database.get_db"),
+        ):
+            response = await llm_client._invoke_and_record(model, ["hi"], component="task_enrichment", task_id="t1")
+
+        mock_record_cost.assert_called_once()
+        _, kwargs = mock_record_cost.call_args
+        assert kwargs["cost_usd"] == 0.0034
+        assert kwargs["source"] == "openrouter_direct"
+        assert kwargs["input_tokens"] == 120
+        assert kwargs["output_tokens"] == 45
+        assert kwargs["cache_read_tokens"] == 30
+        assert kwargs["model"] == "anthropic/claude-sonnet-4"
+        assert kwargs["task_id"] == "t1"
+        assert response is model.ainvoke.return_value
+
+    @pytest.mark.asyncio
+    async def test_non_openrouter_response_writes_no_cost_entry(self, llm_client):
+        """token_usage present but cost.total absent/0 (every non-OpenRouter provider) writes no CostEntry."""
+        model = Mock()
+        model.ainvoke = AsyncMock(
+            return_value=Mock(
+                response_metadata={
+                    "token_usage": {
+                        "prompt_tokens": 50,
+                        "completion_tokens": 10,
+                    },
+                    "model_name": "openai/gpt-4o",
+                }
+            )
+        )
+
+        with patch("src.core.cost_derivation.record_cost") as mock_record_cost:
+            response = await llm_client._invoke_and_record(model, ["hi"], component="task_enrichment")
+
+        mock_record_cost.assert_not_called()
+        assert response is model.ainvoke.return_value
+
+    @pytest.mark.asyncio
+    async def test_missing_response_metadata_does_not_raise(self, llm_client):
+        """A response with no response_metadata attribute at all is a defensive no-op, not an error."""
+        model = Mock()
+        model.ainvoke = AsyncMock(return_value=Mock(spec=[]))
+
+        with patch("src.core.cost_derivation.record_cost") as mock_record_cost:
+            response = await llm_client._invoke_and_record(model, ["hi"], component="task_enrichment")
+
+        mock_record_cost.assert_not_called()
+        assert response is model.ainvoke.return_value
+
+    @pytest.mark.asyncio
+    async def test_malformed_metadata_logs_warning_and_still_returns_response(self, llm_client, caplog):
+        """An unexpected error while parsing/writing cost data logs at warning, not debug,
+        and never breaks the underlying LLM call (NFR-1)."""
+        model = Mock()
+        # response_metadata is present but not a dict -- .get() raises AttributeError,
+        # exercising the except branch rather than the "no cost" else branch.
+        model.ainvoke = AsyncMock(return_value=Mock(response_metadata="not-a-dict"))
+
+        with caplog.at_level("WARNING"):
+            response = await llm_client._invoke_and_record(model, ["hi"], component="task_enrichment")
+
+        assert response is model.ainvoke.return_value
+        assert any(record.levelname == "WARNING" and "Cost recording failed" in record.message for record in caplog.records)
