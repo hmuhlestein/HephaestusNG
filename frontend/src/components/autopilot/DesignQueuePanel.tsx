@@ -32,6 +32,7 @@ import TaskDetailModal from '../TaskDetailModal';
 import FeatureRecordDetailModal from './FeatureRecordDetailModal';
 import RealTimeAgentOutput from '../RealTimeAgentOutput';
 import { Agent } from '@/types';
+import { CostDisplay, FeatureCostBadge } from '@/components/cost';
 
 interface DesignQueuePanelProps {
   projectId: string | null;
@@ -61,7 +62,7 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
     queryKey: ['autopilot-design-statuses', projectId, designs?.length],
     queryFn: async () => {
       if (!projectId || !designs || designs.length === 0) return {};
-      const statuses: Record<string, { status: string; workflowId?: string; error?: string | null }> = {};
+      const statuses: Record<string, { status: string; workflowId?: string; error?: string | null; costTotal: number }> = {};
       await Promise.all(
         designs.map(async (d: any) => {
           try {
@@ -70,9 +71,10 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
               status: status.status || 'pending',
               workflowId: status.workflows?.[0]?.id,
               error: status.error || null,
+              costTotal: status.cost_total_usd ?? 0,
             };
           } catch {
-            statuses[d.filename] = { status: 'pending' };
+            statuses[d.filename] = { status: 'pending', costTotal: 0 };
           }
         })
       );
@@ -316,6 +318,7 @@ const DesignQueuePanel: React.FC<DesignQueuePanelProps> = ({ projectId, onAddDes
                   status={designStatuses[item.filename]?.status}
                   workflowId={designStatuses[item.filename]?.workflowId}
                   error={designStatuses[item.filename]?.error}
+                  costTotal={designStatuses[item.filename]?.costTotal ?? 0}
                   projectId={projectId}
                   onDetail={handleDetail}
                   onTaskClick={setSelectedTaskId}
@@ -511,10 +514,11 @@ interface SortableDesignItemProps {
   status?: string;
   workflowId?: string;
   error?: string | null;
+  costTotal?: number;
   projectId: string | null;
 }
 
-const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, isActive, onRemove, onDetail, onTaskClick, onSelectFeature, onAction, actionPending, status, error, projectId }) => {
+const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, isActive, onRemove, onDetail, onTaskClick, onSelectFeature, onAction, actionPending, status, error, costTotal, projectId }) => {
   const [expanded, setExpanded] = useState(() => {
     // Restore expanded state from localStorage
     const saved = localStorage.getItem('autopilot-expanded-designs');
@@ -652,6 +656,9 @@ const SortableDesignItem: React.FC<SortableDesignItemProps> = ({ item, index, is
           </div>
 
           <div className="flex items-center gap-2">
+            {costTotal !== undefined && costTotal > 0 && (
+              <CostDisplay currentCost={costTotal} showProgress={false} className="text-xs" />
+            )}
             {status && status !== 'pending' && (
               <StatusBadge status={status} />
             )}
@@ -856,6 +863,7 @@ const FeatureRow: React.FC<{
               {activeCount} active
             </span>
           )}
+          <FeatureCostBadge cost={feature.cost_total_usd ?? 0} />
           <FeatureStatusBadge status={feature.status} />
           <RowActionIcons
             size="sm"

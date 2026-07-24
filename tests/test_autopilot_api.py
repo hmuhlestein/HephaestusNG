@@ -1510,6 +1510,61 @@ class TestProjectDesigns:
             "Invalid features.json: features array must have at least 1 entry, got 0"
         )
 
+    def test_design_status_includes_cost_total(self, project_client):
+        """cost_total_usd must be surfaced per-feature and summed at the
+        design level so the UI can show a budget indicator without an extra
+        network call."""
+        client, dirs = project_client
+        pid = self._create_project(client, dirs)
+
+        from src.core.database import AutopilotDesign, Feature, Workflow, get_db
+
+        design_dir = dirs["project_dir"] / ".hephaestus" / "designs"
+        design_dir.mkdir(parents=True, exist_ok=True)
+        (design_dir / "cost-design.md").write_text("# Design")
+
+        with get_db() as db:
+            db.add(
+                AutopilotDesign(
+                    id="des-test-cost",
+                    project_id=pid,
+                    filename="cost-design.md",
+                    name="Cost Design",
+                    ordinal=13,
+                    size_bytes=10,
+                    extension=".md",
+                    status="active",
+                )
+            )
+            db.add(
+                Workflow(
+                    id="wf-cost-1",
+                    name="autopilot",
+                    phases_folder_path="/tmp",
+                    status="active",
+                )
+            )
+
+        with get_db() as db:
+            db.add(
+                Feature(
+                    id="feat-cost-1",
+                    design_id="des-test-cost",
+                    feature_key="core",
+                    name="Core",
+                    scope="s",
+                    status="active",
+                    workflow_id="wf-cost-1",
+                    cost_total_usd=1.5,
+                )
+            )
+
+        resp = client.get(f"/api/autopilot/projects/{pid}/designs/cost-design.md/status")
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["features"][0]["cost_total_usd"] == 1.5
+        assert body["cost_total_usd"] == 1.5
+
     def test_design_status_omits_error_when_not_failed(self, project_client):
         """The error field shouldn't leak a stale message from a previous
         failed attempt once the design is no longer in a failed state."""
