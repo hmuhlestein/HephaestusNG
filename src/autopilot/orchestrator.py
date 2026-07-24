@@ -380,11 +380,32 @@ def _get_or_create_project_id(project_path: str) -> str:
             )
 
         if not proj.is_active:
-            current = db.query(AutopilotProject).filter_by(is_active=True).first()
-            if current:
-                current.is_active = False
-            proj.is_active = True
-            logger.info(f"Activated project '{proj.name}' for pipeline")
+            # Cap at max_concurrent_projects instead of evicting whatever
+            # else is active -- this function is the actual pipeline-launch
+            # path (POST /start, AutopilotService.start()), called BEFORE
+            # /start's own AutopilotServiceRegistry.try_reserve() cap check.
+            # The old unconditional eviction here defeated that cap
+            # entirely: starting project B would silently deactivate
+            # project A's is_active flag (and with it, the phase-
+            # advancement sweep's coverage of A's workflows) regardless of
+            # whether the cap was actually exceeded. Lenient like
+            # projects_api.py's create_project: leave inactive rather than
+            # raise here -- try_reserve() immediately after (for the
+            # /start path) is the authoritative gate and already returns a
+            # proper 409; a caller that isn't /start (e.g. rerun_design)
+            # shouldn't hard-fail just because the cap is full elsewhere.
+            from src.core.simple_config import get_config
+
+            active_count = db.query(AutopilotProject).filter_by(is_active=True).count()
+            max_concurrent = get_config().max_concurrent_projects
+            if active_count < max_concurrent:
+                proj.is_active = True
+                logger.info(f"Activated project '{proj.name}' for pipeline")
+            else:
+                logger.warning(
+                    f"Not activating project '{proj.name}': max_concurrent_projects "
+                    f"({max_concurrent}) already reached"
+                )
 
         # Clear the deliberate-pause marker /autopilot/stop sets
         # (Workflow.paused_by="user") for this project's workflows --

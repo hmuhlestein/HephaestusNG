@@ -20,8 +20,8 @@ const Tickets: React.FC = () => {
   const statusFilterRef = useRef<HTMLDivElement>(null);
 
   const { executions, selectedExecutionId, selectExecution, loading } = useWorkflow();
-  const { activeProject } = useProject();
-  const projectId = activeProject?.id;
+  const { selectedProject } = useProject();
+  const projectId = selectedProject?.id;
 
   // Close dropdowns when clicking outside
   useEffect(() => {
@@ -162,7 +162,7 @@ const Tickets: React.FC = () => {
               className="flex items-center px-4 py-2 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors shadow-sm min-w-[200px]"
             >
               <span className="flex-1 text-left text-sm text-gray-700 truncate">
-                {!selectedExecutionId ? `📁 ${activeProject?.name || 'Project'} Level` : activeProject?.name || selectedWorkflow?.definition_name || 'Select Workflow'}
+                {!selectedExecutionId ? `📁 ${selectedProject?.name || 'Project'} Level` : selectedProject?.name || selectedWorkflow?.definition_name || 'Select Workflow'}
               </span>
               <ChevronDown className={`w-4 h-4 ml-2 text-gray-500 transition-transform ${showWorkflowDropdown ? 'rotate-180' : ''}`} />
             </button>
@@ -183,7 +183,7 @@ const Tickets: React.FC = () => {
                     📁 Project Level
                   </div>
                   <div className="text-xs text-gray-500 mt-1">
-                    All tickets in {activeProject?.name || 'project'}
+                    All tickets in {selectedProject?.name || 'project'}
                   </div>
                 </button>
                 

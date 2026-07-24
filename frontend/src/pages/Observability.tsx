@@ -58,8 +58,8 @@ const Observability: React.FC = () => {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [fullscreenAgent, setFullscreenAgent] = useState<string | null>(null);
   const [showCustomLayoutDialog, setShowCustomLayoutDialog] = useState(false);
-  const { activeProject } = useProject();
-  const projectId = activeProject?.id || null;
+  const { selectedProject } = useProject();
+  const projectId = selectedProject?.id || null;
 
   // Fetch agents data - only fetch on mount and explicit WebSocket lifecycle events
   const { data: agentData, isLoading, error, refetch } = useQuery({

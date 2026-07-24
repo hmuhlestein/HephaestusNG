@@ -16,7 +16,7 @@ from typing import Any, Dict, List, Optional, Tuple, TypeVar
 
 from fastapi import APIRouter, Header, HTTPException, Query
 from fastapi.responses import FileResponse, HTMLResponse
-from pydantic import BaseModel, field_validator, model_validator, validator
+from pydantic import BaseModel, Field, field_validator, model_validator, validator
 from sqlalchemy import func as sqlfunc
 
 from src.core.constants import (
@@ -29,7 +29,7 @@ from src.core.constants import (
 )
 
 # Import authentication function from server module
-from src.mcp.server import verify_agent_authentication, _check_rate_limit
+from src.mcp.server import _check_rate_limit, verify_agent_authentication
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +38,18 @@ router = APIRouter(prefix="/api/autopilot", tags=["Autopilot"])
 DESIGN_QUEUE_DIR = ""
 FEATURES_DIR = ""
 _active_project_id_cache: Optional[str] = None  # Track which project the cached dirs belong to
+
+# Per-project resolved dirs, keyed by project_id -- required once more than
+# one project can be active at once (max_concurrent_projects): the single
+# DESIGN_QUEUE_DIR/FEATURES_DIR globals above silently resolved EVERY
+# caller against whichever ONE project happened to be picked by
+# is_active's .first(), regardless of which project the request was
+# actually for. Callers that pass project_id explicitly get resolved from
+# here instead; callers that don't (not yet updated, or genuinely
+# project-agnostic) keep using the DESIGN_QUEUE_DIR/FEATURES_DIR globals
+# above unchanged, including the configure_autopilot_api/env var override.
+_queue_dir_by_project: Dict[str, str] = {}
+_features_dir_by_project: Dict[str, str] = {}
 
 ALLOWED_EXTENSIONS = {".md", ".txt"}
 
@@ -60,13 +72,27 @@ def _invalidate_project_dirs():
     DESIGN_QUEUE_DIR = ""
     FEATURES_DIR = ""
     _active_project_id_cache = None
+    _queue_dir_by_project.clear()
+    _features_dir_by_project.clear()
     _invalidate("queue", "features", "status")
 
 
-def _get_effective_queue_dir() -> str:
+def _get_effective_queue_dir(project_id: Optional[str] = None) -> str:
     """Get the effective design queue directory.
 
-    Automatically invalidates the cache when the active project changes.
+    The explicit DESIGN_QUEUE_DIR override (configure_autopilot_api/env
+    var) always wins regardless of project_id -- it's a "pin to one fixed
+    directory, ignore the DB entirely" escape hatch (tests, simple
+    single-directory deployments), inherently incompatible with genuine
+    multi-project use, so a caller that set it gets it back unconditionally.
+
+    Otherwise: when project_id is given, resolves and caches THAT
+    project's queue dir specifically -- does not fall back to the
+    is_active-derived global, since a caller asking for a specific
+    project wants that project's real directory regardless of which
+    project (if any) currently occupies the global "active" slot. When
+    project_id is omitted, preserves the original is_active-derived
+    fallback for callers not yet updated to pass project_id.
 
     Raises:
         FileNotFoundError: If queue directory doesn't exist
@@ -74,17 +100,35 @@ def _get_effective_queue_dir() -> str:
     """
     global DESIGN_QUEUE_DIR, _active_project_id_cache
 
+    if DESIGN_QUEUE_DIR:
+        if not Path(DESIGN_QUEUE_DIR).exists():
+            raise FileNotFoundError(f"Design queue directory does not exist: {DESIGN_QUEUE_DIR}")
+        return DESIGN_QUEUE_DIR
+
+    if project_id:
+        cached = _queue_dir_by_project.get(project_id)
+        if cached:
+            if not Path(cached).exists():
+                raise FileNotFoundError(f"Design queue directory does not exist: {cached}")
+            return cached
+
+        from src.core.database import AutopilotProject, get_db
+
+        with get_db() as db:
+            proj = db.query(AutopilotProject).filter_by(id=project_id).first()
+            if not proj or not proj.base_dir:
+                raise RuntimeError(f"Project not found or has no base_dir: {project_id}")
+            queue_dir = Path(proj.base_dir) / DESIGN_CONTEXT_SUBDIR
+            queue_dir.mkdir(parents=True, exist_ok=True)
+            _queue_dir_by_project[project_id] = str(queue_dir)
+            return str(queue_dir)
+
     # Check if the active project has changed since we last cached
     current_project_id = _get_active_project_id()
     if current_project_id != _active_project_id_cache:
         # Project changed — invalidate cached dirs
         DESIGN_QUEUE_DIR = ""
         _active_project_id_cache = current_project_id
-
-    if DESIGN_QUEUE_DIR:
-        if not Path(DESIGN_QUEUE_DIR).exists():
-            raise FileNotFoundError(f"Design queue directory does not exist: {DESIGN_QUEUE_DIR}")
-        return DESIGN_QUEUE_DIR
 
     # Get from active project
     from src.core.database import AutopilotProject, get_db
@@ -101,10 +145,11 @@ def _get_effective_queue_dir() -> str:
         return DESIGN_QUEUE_DIR
 
 
-def _get_effective_features_dir() -> str:
+def _get_effective_features_dir(project_id: Optional[str] = None) -> str:
     """Get the effective features directory.
 
-    Automatically invalidates the cache when the active project changes.
+    See _get_effective_queue_dir's docstring -- same override-first,
+    project_id-second, global-fallback-last design.
 
     Raises:
         FileNotFoundError: If features directory doesn't exist
@@ -112,17 +157,38 @@ def _get_effective_features_dir() -> str:
     """
     global FEATURES_DIR, _active_project_id_cache
 
+    if FEATURES_DIR:
+        if not Path(FEATURES_DIR).exists():
+            raise FileNotFoundError(f"Features directory does not exist: {FEATURES_DIR}")
+        return FEATURES_DIR
+
+    if project_id:
+        cached = _features_dir_by_project.get(project_id)
+        if cached:
+            if not Path(cached).exists():
+                raise FileNotFoundError(f"Features directory does not exist: {cached}")
+            return cached
+
+        from src.core.database import AutopilotProject, get_db
+
+        with get_db() as db:
+            proj = db.query(AutopilotProject).filter_by(id=project_id).first()
+            if not proj or not proj.base_dir:
+                raise RuntimeError(f"Project not found or has no base_dir: {project_id}")
+            features_dir = Path(proj.base_dir) / CONTEXT_DIR_NAME / "features"
+            if not features_dir.exists():
+                raise FileNotFoundError(
+                    f"Features directory does not exist: {features_dir}. Run the autopilot pipeline first."
+                )
+            _features_dir_by_project[project_id] = str(features_dir)
+            return str(features_dir)
+
     # Check if the active project has changed since we last cached
     current_project_id = _get_active_project_id()
     if current_project_id != _active_project_id_cache:
         # Project changed — invalidate cached dirs
         FEATURES_DIR = ""
         _active_project_id_cache = current_project_id
-
-    if FEATURES_DIR:
-        if not Path(FEATURES_DIR).exists():
-            raise FileNotFoundError(f"Features directory does not exist: {FEATURES_DIR}")
-        return FEATURES_DIR
 
     # Get from active project
     from src.core.database import AutopilotProject, get_db
@@ -247,6 +313,7 @@ class DesignQueueAdd(BaseModel):
     name: str
     content: str
     extension: str = ".md"
+    project_id: Optional[str] = None
 
 
 class FeatureSummary(BaseModel):
@@ -307,11 +374,20 @@ class PipelineStatus(BaseModel):
     # running, if any -- lets the UI say "X is running" instead of a vague
     # "another project pipeline is running" that doesn't even distinguish
     # a genuine cross-project conflict from the caller's own just-started run.
+    # Kept for backward compat (mirrors running_projects[0] when >=1 is
+    # running) -- new callers should use running_projects, which is the
+    # only field that can actually represent more than one concurrently
+    # running project.
     running_project_path: Optional[str] = None
     running_project_name: Optional[str] = None
     # True when the running project matches the requested project (after
     # realpath resolution, so /tmp == /private/tmp on macOS).
     is_self_conflict: bool = False
+    # Every currently-running project (0 to max_concurrent_projects), for
+    # the global (no project_id) status check. Populated so a caller
+    # hitting the concurrency cap can identify and stop EXACTLY the
+    # project(s) blocking it instead of resorting to a bare stop-all call.
+    running_projects: List[Dict[str, Any]] = Field(default_factory=list)
 
 
 class MessageItem(BaseModel):
@@ -348,18 +424,17 @@ async def get_pipeline_status(
     # service directly instead of the DB-workaround this endpoint used
     # before per-project services existed (kept below as a belt-and-
     # suspenders check, not the primary source of truth anymore).
+    running_projects_list: List[Dict[str, Any]] = []
     if project_id:
         service_status = get_autopilot_service(project_id).status()
     else:
-        # PipelineStatus is a single-object shape (running_project_path/
-        # running_project_name are singular fields, by the same pre-multi-
-        # project assumption noted on those fields above) -- it can't
-        # represent "N projects running" without a schema change. Sum what
-        # CAN be honestly aggregated (counts) across every running project
-        # instead of arbitrarily reporting only the first one's numbers;
-        # current_design/elapsed_seconds/error still reflect just one
-        # project (the first), since those genuinely have no multi-project
-        # representation in this response shape.
+        # current_design/elapsed_seconds/error still only reflect one
+        # project (the first running one) -- those genuinely have no
+        # multi-project representation in this response shape. But
+        # running_projects (below) reports EVERY running project, not just
+        # the first, specifically so a caller hitting the concurrency cap
+        # can identify and stop exactly the project(s) blocking it instead
+        # of resorting to a bare stop-all call.
         running_services = get_registry().running()
         if running_services:
             service_status = dict(running_services[0].status())
@@ -367,6 +442,23 @@ async def get_pipeline_status(
                 extra_status = extra.status()
                 for key in ("designs_processed", "designs_succeeded", "designs_failed"):
                     service_status[key] = service_status.get(key, 0) + extra_status.get(key, 0)
+
+            for svc in running_services:
+                svc_path = svc.status().get("project_path")
+                svc_name = None
+                if svc_path:
+                    try:
+                        from src.core.database import AutopilotProject
+                        from src.core.database import get_db as _get_db
+
+                        with _get_db() as _db:
+                            _rp = _db.query(AutopilotProject).filter_by(base_dir=svc_path).first()
+                            svc_name = _rp.name if _rp else Path(svc_path).name
+                    except Exception:
+                        svc_name = Path(svc_path).name
+                running_projects_list.append(
+                    {"id": getattr(svc, "project_id", None), "name": svc_name, "base_dir": svc_path}
+                )
         else:
             service_status = {}
 
@@ -528,6 +620,7 @@ async def get_pipeline_status(
         # Compute self-conflict server-side using realpath to handle
         # symlink resolution (/tmp -> /private/tmp on macOS).
         is_self_conflict=(running_project_path is not None and project_path is not None and os.path.realpath(running_project_path) == os.path.realpath(project_path)),
+        running_projects=running_projects_list,
     )
     return _store(cache_key, result)
 
@@ -535,11 +628,11 @@ async def get_pipeline_status(
 # ── Design Queue ─────────────────────────────────────────────────
 
 
-def _get_queue_order_path() -> Optional[Path]:
+def _get_queue_order_path(project_id: Optional[str] = None) -> Optional[Path]:
     try:
         # Write alongside other server state under .hephaestus/, not inside
         # the tracked docs/design/ directory (which would pollute git status).
-        effective_dir = _get_effective_queue_dir()
+        effective_dir = _get_effective_queue_dir(project_id)
         hephaestus_dir = Path(effective_dir).parent.parent / CONTEXT_DIR_NAME
         hephaestus_dir.mkdir(parents=True, exist_ok=True)
         return hephaestus_dir / ".queue_order.json"
@@ -547,8 +640,8 @@ def _get_queue_order_path() -> Optional[Path]:
         return None
 
 
-def _load_queue_order() -> List[str]:
-    path = _get_queue_order_path()
+def _load_queue_order(project_id: Optional[str] = None) -> List[str]:
+    path = _get_queue_order_path(project_id)
     if path and path.exists():
         try:
             return json.loads(path.read_text())
@@ -557,26 +650,27 @@ def _load_queue_order() -> List[str]:
     return []
 
 
-def _save_queue_order(order: List[str]):
-    path = _get_queue_order_path()
+def _save_queue_order(order: List[str], project_id: Optional[str] = None):
+    path = _get_queue_order_path(project_id)
     if path:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(order))
 
 
 @router.get("/queue", response_model=List[DesignQueueItem])
-async def list_design_queue():
-    cached = _cached("queue")
+async def list_design_queue(project_id: Optional[str] = None):
+    cache_key = f"queue:{project_id}" if project_id else "queue"
+    cached = _cached(cache_key)
     if cached is not None:
         return cached
 
     try:
-        effective_dir = _get_effective_queue_dir()
+        effective_dir = _get_effective_queue_dir(project_id)
     except (FileNotFoundError, RuntimeError) as e:
         raise HTTPException(404, str(e))
 
     queue_path = Path(effective_dir)
-    saved_order = _load_queue_order()
+    saved_order = _load_queue_order(project_id)
 
     files_by_name: Dict[str, Path] = {}
     for ext in ALLOWED_EXTENSIONS:
@@ -602,17 +696,18 @@ async def list_design_queue():
             )
         )
 
-    return _store("queue", items)
+    return _store(cache_key, items)
 
 
 class QueueReorderRequest(BaseModel):
     filenames: List[str]
+    project_id: Optional[str] = None
 
 
 @router.post("/queue/reorder")
 async def reorder_queue(req: QueueReorderRequest):
     try:
-        effective_dir = _get_effective_queue_dir()
+        effective_dir = _get_effective_queue_dir(req.project_id)
     except (FileNotFoundError, RuntimeError) as e:
         raise HTTPException(404, str(e))
 
@@ -626,8 +721,8 @@ async def reorder_queue(req: QueueReorderRequest):
         if fname not in existing:
             raise HTTPException(400, f"Unknown file: {fname}")
 
-    _save_queue_order(req.filenames)
-    _invalidate("queue")
+    _save_queue_order(req.filenames, req.project_id)
+    _invalidate("queue", f"queue:{req.project_id}" if req.project_id else "queue")
     return {"order": req.filenames}
 
 
@@ -639,16 +734,17 @@ async def requeue_design(request: dict):
     filename = request.get("filename")
     if not filename:
         raise HTTPException(400, "filename is required")
+    req_project_id = request.get("project_id")
 
     # Get the queue order
-    order = _load_queue_order()
+    order = _load_queue_order(req_project_id)
 
     # Move to front
     if filename in order:
         order.remove(filename)
     order.insert(0, filename)
-    _save_queue_order(order)
-    _invalidate("queue")
+    _save_queue_order(order, req_project_id)
+    _invalidate("queue", f"queue:{req_project_id}" if req_project_id else "queue")
 
     # Pause any active workflow processing this design
     paused_count = 0
@@ -740,6 +836,14 @@ async def rerun_design(request: dict):
     project = Path(project_path).resolve()
     if not project.exists():
         raise HTTPException(400, f"Project path does not exist: {project_path}")
+
+    # Resolved once and reused for every project-scoped step below (queue
+    # order, pipeline state clearing, pipeline start) -- must all scope to
+    # the SAME project, not independently-resolved ids that could diverge
+    # once more than one project can be active at once.
+    from src.autopilot.orchestrator import _get_or_create_project_id
+
+    rerun_start_project_id = _get_or_create_project_id(str(project))
 
     # Validate design exists in queue
     queue_dir = project / DESIGN_CONTEXT_SUBDIR
@@ -904,19 +1008,12 @@ async def rerun_design(request: dict):
         logger.error(f"Error starting branch cleanup: {e}")
 
     # Step 4: Move design to front of queue
-    order = _load_queue_order()
+    order = _load_queue_order(rerun_start_project_id)
     if filename in order:
         order.remove(filename)
     order.insert(0, filename)
-    _save_queue_order(order)
-    _invalidate("queue")
-
-    # Resolved once and reused below -- clearing pipeline state (Step 5) and
-    # starting the pipeline (Step 6) must scope to the SAME project, not two
-    # independently-resolved ids.
-    from src.autopilot.orchestrator import _get_or_create_project_id
-
-    rerun_start_project_id = _get_or_create_project_id(str(project))
+    _save_queue_order(order, rerun_start_project_id)
+    _invalidate("queue", f"queue:{rerun_start_project_id}")
 
     # Step 5: Clear pipeline state so orchestrator starts fresh
     try:
@@ -1329,6 +1426,7 @@ async def add_design_by_path(req: DesignAddByPath):
     import uuid
 
     from src.core.database import AutopilotDesign, AutopilotProject, get_db
+    from src.core.simple_config import get_config
 
     # Validate file exists
     file_path = Path(req.file_path).resolve()
@@ -1354,24 +1452,26 @@ async def add_design_by_path(req: DesignAddByPath):
         # Find or create project
         project = db.query(AutopilotProject).filter_by(base_dir=str(project_path)).first()
         if not project:
-            # Create new project. is_active must stay exclusive across all
-            # projects (every reader does .filter_by(is_active=True).first(),
-            # e.g. the phase-advancement sweep's project scoping) -- clear
-            # every other project's flag first, same as projects_api.py's
-            # activate_project endpoint already does correctly. Without
-            # this, each auto-created project (e.g. a design-add pointed at
-            # a throwaway/test directory) stacks up as ANOTHER "active"
-            # project alongside real ones, and .first()'s arbitrary pick
-            # among them can silently scope the sweep to the wrong project
-            # -- observed live: the sweep never advanced a real project's
-            # stuck workflow because three leftover tmp-directory projects
-            # were also marked active.
-            db.query(AutopilotProject).update({"is_active": False})
+            # Cap simultaneously-active projects at max_concurrent_projects
+            # instead of exclusively clearing every other project's flag --
+            # mirrors projects_api.py's create_project/activate_project.
+            # Lenient like create_project's own is_first path (not a 409
+            # like activate_project): activation here is a side effect of
+            # an unrelated "upload a design file" action, so a full project
+            # cap shouldn't fail the upload -- create it inactive instead.
+            active_count = db.query(AutopilotProject).filter_by(is_active=True).count()
+            max_concurrent = get_config().max_concurrent_projects
+            want_active = active_count < max_concurrent
+            if not want_active:
+                logger.warning(
+                    f"Not auto-activating new project {project_path.name!r}: "
+                    f"max_concurrent_projects ({max_concurrent}) already reached"
+                )
             project = AutopilotProject(
                 id=f"proj-{uuid.uuid4().hex[:12]}",
                 name=project_path.name,
                 base_dir=str(project_path),
-                is_active=True,
+                is_active=want_active,
             )
             db.add(project)
             db.flush()
@@ -1429,7 +1529,7 @@ async def add_design_by_path(req: DesignAddByPath):
 @router.post("/queue", response_model=DesignQueueItem)
 async def add_to_queue(item: DesignQueueAdd):
     try:
-        effective_dir = _get_effective_queue_dir()
+        effective_dir = _get_effective_queue_dir(item.project_id)
     except (FileNotFoundError, RuntimeError) as e:
         raise HTTPException(404, str(e))
 
@@ -1450,7 +1550,7 @@ async def add_to_queue(item: DesignQueueAdd):
     filepath.write_text(item.content)
     stat = filepath.stat()
 
-    _invalidate("queue", "status")
+    _invalidate("queue", f"queue:{item.project_id}" if item.project_id else "queue", "status")
 
     return DesignQueueItem(
         filename=filename,
@@ -1462,23 +1562,23 @@ async def add_to_queue(item: DesignQueueAdd):
 
 
 @router.delete("/queue/{filename}")
-async def remove_from_queue(filename: str):
+async def remove_from_queue(filename: str, project_id: Optional[str] = None):
     try:
-        effective_dir = _get_effective_queue_dir()
+        effective_dir = _get_effective_queue_dir(project_id)
     except (FileNotFoundError, RuntimeError) as e:
         raise HTTPException(404, str(e))
     filepath = _safe_path(effective_dir, filename)
     if not filepath.exists():
         raise HTTPException(404, f"Design '{filename}' not found")
     filepath.unlink()
-    _invalidate("queue", "status")
+    _invalidate("queue", f"queue:{project_id}" if project_id else "queue", "status")
     return {"removed": filename}
 
 
 @router.get("/queue/{filename}/content")
-async def get_queue_item_content(filename: str):
+async def get_queue_item_content(filename: str, project_id: Optional[str] = None):
     try:
-        effective_dir = _get_effective_queue_dir()
+        effective_dir = _get_effective_queue_dir(project_id)
     except (FileNotFoundError, RuntimeError) as e:
         raise HTTPException(404, str(e))
     filepath = _safe_path(effective_dir, filename)
@@ -3546,9 +3646,9 @@ async def get_feature_record_report(feature_id: str):
 
 
 @router.get("/features/{feature_id}/report")
-async def get_feature_report(feature_id: str):
+async def get_feature_report(feature_id: str, project_id: Optional[str] = None):
     try:
-        effective_dir = _get_effective_features_dir()
+        effective_dir = _get_effective_features_dir(project_id)
     except (FileNotFoundError, RuntimeError) as e:
         raise HTTPException(404, str(e))
     report_path = _safe_path(effective_dir, feature_id, "feature_report.html")
@@ -3558,14 +3658,16 @@ async def get_feature_report(feature_id: str):
 
 
 @router.get("/features/{feature_id}/docs/{doc_name}")
-async def get_feature_doc(feature_id: str, doc_name: str):
+async def get_feature_doc(feature_id: str, doc_name: str, project_id: Optional[str] = None):
+    # feature_id is globally unique (UUID), so this cache key is already
+    # collision-safe across projects without needing project_id in it too.
     cache_key = f"doc:{feature_id}:{doc_name}"
     cached = _cached(cache_key, ttl=60.0)
     if cached is not None:
         return cached
 
     try:
-        effective_dir = _get_effective_features_dir()
+        effective_dir = _get_effective_features_dir(project_id)
     except (FileNotFoundError, RuntimeError) as e:
         raise HTTPException(404, str(e))
     doc_path = _safe_path(effective_dir, feature_id, "docs", doc_name)
@@ -3575,9 +3677,9 @@ async def get_feature_doc(feature_id: str, doc_name: str):
 
 
 @router.get("/features/{feature_id}/download")
-async def download_feature_report(feature_id: str):
+async def download_feature_report(feature_id: str, project_id: Optional[str] = None):
     try:
-        effective_dir = _get_effective_features_dir()
+        effective_dir = _get_effective_features_dir(project_id)
     except (FileNotFoundError, RuntimeError) as e:
         raise HTTPException(404, str(e))
     report_path = _safe_path(effective_dir, feature_id, "feature_report.html")
@@ -3591,10 +3693,10 @@ async def download_feature_report(feature_id: str):
 
 
 @router.get("/features/{feature_id}/logs")
-async def list_feature_logs(feature_id: str):
+async def list_feature_logs(feature_id: str, project_id: Optional[str] = None):
     """List available tmux phase logs for a feature run."""
     try:
-        effective_dir = _get_effective_features_dir()
+        effective_dir = _get_effective_features_dir(project_id)
     except (FileNotFoundError, RuntimeError) as e:
         raise HTTPException(404, str(e))
     tmux_dir = _safe_path(effective_dir, feature_id, "tmux")
@@ -3614,10 +3716,10 @@ async def list_feature_logs(feature_id: str):
 
 
 @router.get("/features/{feature_id}/logs/{log_name}")
-async def get_feature_log(feature_id: str, log_name: str):
+async def get_feature_log(feature_id: str, log_name: str, project_id: Optional[str] = None):
     """Return the content of a single tmux phase log."""
     try:
-        effective_dir = _get_effective_features_dir()
+        effective_dir = _get_effective_features_dir(project_id)
     except (FileNotFoundError, RuntimeError) as e:
         raise HTTPException(404, str(e))
     log_path = _safe_path(effective_dir, feature_id, "tmux", log_name)

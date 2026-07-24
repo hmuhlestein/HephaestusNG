@@ -813,11 +813,6 @@ export const apiService = {
     return data;
   },
 
-  getActiveProject: async (): Promise<any | null> => {
-    const { data } = await api.get('/projects/active');
-    return data;
-  },
-
   createProject: async (name: string, baseDir: string, isDefault: boolean = false): Promise<any> => {
     const { data } = await api.post('/projects', { name, base_dir: baseDir, is_default: isDefault });
     return data;
@@ -825,6 +820,11 @@ export const apiService = {
 
   activateProject: async (projectId: string): Promise<any> => {
     const { data } = await api.post(`/projects/${encodeURIComponent(projectId)}/activate`);
+    return data;
+  },
+
+  deactivateProject: async (projectId: string): Promise<any> => {
+    const { data } = await api.post(`/projects/${encodeURIComponent(projectId)}/deactivate`);
     return data;
   },
 

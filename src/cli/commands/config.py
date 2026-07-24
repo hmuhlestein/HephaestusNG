@@ -62,15 +62,20 @@ def _overlay_active_project(parsed: dict):
     try:
         db_manager = DatabaseManager(str(db_path))
         with db_manager.get_session() as session:
-            active = session.execute(
+            active_rows = session.execute(
                 sqlalchemy.text(
-                    "SELECT name, base_dir FROM autopilot_projects WHERE is_active = 1 LIMIT 1"
+                    "SELECT name, base_dir FROM autopilot_projects WHERE is_active = 1"
                 )
-            ).fetchone()
-            if active:
-                parsed.setdefault("paths", {})["project_root"] = active[1]
-                parsed.setdefault("git", {})["main_repo_path"] = active[1]
-                parsed["_active_project"] = {"name": active[0], "path": active[1]}
+            ).fetchall()
+            if active_rows:
+                # paths.project_root/git.main_repo_path reflect only the
+                # first row -- there's no single-path representation once
+                # more than one project can be active at once.
+                parsed.setdefault("paths", {})["project_root"] = active_rows[0][1]
+                parsed.setdefault("git", {})["main_repo_path"] = active_rows[0][1]
+                parsed["_active_projects"] = [
+                    {"name": row[0], "path": row[1]} for row in active_rows
+                ]
     except Exception:
         pass
 
@@ -87,17 +92,19 @@ def _print_active_project_overlay():
     try:
         db_manager = DatabaseManager(str(db_path))
         with db_manager.get_session() as session:
-            active = session.execute(
+            active_rows = session.execute(
                 sqlalchemy.text(
-                    "SELECT name, base_dir FROM autopilot_projects WHERE is_active = 1 LIMIT 1"
+                    "SELECT name, base_dir FROM autopilot_projects WHERE is_active = 1"
                 )
-            ).fetchone()
-            if active:
+            ).fetchall()
+            if active_rows:
                 print(
-                    "\n# Active project (overrides paths.project_root and git.main_repo_path):"
+                    "\n# Active project(s) (paths.project_root/git.main_repo_path "
+                    "reflect only the first):"
                 )
-                print(f"#   name: {active[0]}")
-                print(f"#   path: {active[1]}")
+                for name, path in active_rows:
+                    print(f"#   name: {name}")
+                    print(f"#   path: {path}")
     except Exception:
         pass
 

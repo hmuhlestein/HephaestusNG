@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional
 
 from sqlalchemy import and_
 
-from src.core.database import Agent, DatabaseManager, Task
+from src.core.database import Agent, DatabaseManager, Task, Workflow
 
 logger = logging.getLogger(__name__)
 
@@ -27,31 +27,47 @@ class QueueService:
             f"QueueService initialized with max_concurrent_agents={max_concurrent_agents}"
         )
 
-    def get_active_agent_count(self) -> int:
+    def get_active_agent_count(self, project_id: Optional[str] = None) -> int:
         """Get count of currently active agents (not terminated).
+
+        Args:
+            project_id: When given, count only agents whose current task
+                belongs to a workflow of this project. When omitted, counts
+                globally across every project (original behavior, kept for
+                callers not yet updated).
 
         Returns:
             Number of active agents
         """
         with self.db_manager.session_scope() as session:
-            count = (
-                session.query(Agent)
-                .filter(Agent.status.in_(["working", "starting", "idle"]))
-                .count()
+            query = session.query(Agent).filter(
+                Agent.status.in_(["working", "starting", "idle"])
             )
-            logger.debug(f"Active agent count: {count}")
+            if project_id:
+                query = query.join(Task, Agent.current_task_id == Task.id).join(
+                    Workflow, Task.workflow_id == Workflow.id
+                ).filter(Workflow.project_id == project_id)
+            count = query.count()
+            logger.debug(f"Active agent count: {count} (project_id={project_id})")
             return count
 
-    def should_queue_task(self) -> bool:
+    def should_queue_task(self, project_id: Optional[str] = None) -> bool:
         """Check if we should queue the next task instead of creating an agent.
+
+        Args:
+            project_id: When given, checks that project's own agent count
+                against max_concurrent_agents -- each project gets its own
+                independent budget instead of sharing one global cap, so
+                one project's queue depth can't starve another's. When
+                omitted, checks the global count (original behavior).
 
         Returns:
             True if we've reached the concurrent agent limit, False otherwise
         """
-        active_count = self.get_active_agent_count()
+        active_count = self.get_active_agent_count(project_id)
         should_queue = active_count >= self.max_concurrent_agents
         logger.debug(
-            f"Should queue: {should_queue} (active={active_count}, max={self.max_concurrent_agents})"
+            f"Should queue: {should_queue} (active={active_count}, max={self.max_concurrent_agents}, project_id={project_id})"
         )
         return should_queue
 
@@ -186,7 +202,7 @@ class QueueService:
 
         return ahead_count + 1
 
-    def get_next_queued_task(self) -> Optional[Task]:
+    def get_next_queued_task(self, project_id: Optional[str] = None) -> Optional[Task]:
         """Get the next task from the queue based on priority.
 
         Priority order:
@@ -195,6 +211,13 @@ class QueueService:
         3. queued_at ASC (earlier first)
 
         Skips blocked tasks (status='blocked').
+
+        Args:
+            project_id: When given, only considers queued tasks belonging
+                to this project's workflows -- required so one project's
+                queue can't have its priority ordering interleaved with
+                (and starved by) another project's. When omitted, considers
+                every queued task globally (original behavior).
 
         Returns:
             Next task to process, or None if queue is empty
@@ -212,19 +235,19 @@ class QueueService:
 
             # Get all queued tasks (excluding blocked)
             # Note: We only look at "queued" status, blocked tasks have status="blocked"
-            tasks = (
-                session.query(Task)
-                .filter(
-                    Task.status
-                    == "queued"  # Blocked tasks have status='blocked', not 'queued'
-                )
-                .order_by(
-                    Task.priority_boosted.desc(),
-                    priority_order.desc(),
-                    Task.queued_at.asc(),
-                )
-                .all()
+            query = session.query(Task).filter(
+                Task.status
+                == "queued"  # Blocked tasks have status='blocked', not 'queued'
             )
+            if project_id:
+                query = query.join(Workflow, Task.workflow_id == Workflow.id).filter(
+                    Workflow.project_id == project_id
+                )
+            tasks = query.order_by(
+                Task.priority_boosted.desc(),
+                priority_order.desc(),
+                Task.queued_at.asc(),
+            ).all()
 
             # Filter out any tasks that shouldn't be processed
             # (additional safety check in case a task is queued but its ticket is blocked)
@@ -310,21 +333,26 @@ class QueueService:
         except Exception as e:
             logger.error(f"Failed to recalculate queue positions: {e}")
 
-    def get_queue_status(self) -> Dict[str, Any]:
+    def get_queue_status(self, project_id: Optional[str] = None) -> Dict[str, Any]:
         """Get current queue status information.
+
+        Args:
+            project_id: When given, scopes both the active-agent count and
+                the queued-task list to this project. When omitted, reports
+                globally (original behavior).
 
         Returns:
             Dictionary with queue status information
         """
         with self.db_manager.session_scope() as session:
-            active_agents = self.get_active_agent_count()
+            active_agents = self.get_active_agent_count(project_id)
 
-            queued_tasks = (
-                session.query(Task)
-                .filter(Task.status == "queued")
-                .order_by(Task.queue_position.asc())
-                .all()
-            )
+            query = session.query(Task).filter(Task.status == "queued")
+            if project_id:
+                query = query.join(Workflow, Task.workflow_id == Workflow.id).filter(
+                    Workflow.project_id == project_id
+                )
+            queued_tasks = query.order_by(Task.queue_position.asc()).all()
 
             queued_task_details = [
                 {

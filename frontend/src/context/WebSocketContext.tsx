@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react';
 import { WebSocketMessage } from '@/types';
 import toast from 'react-hot-toast';
+import { useProject } from '@/context/ProjectContext';
 
 interface WebSocketContextType {
   isConnected: boolean;
@@ -24,6 +25,7 @@ interface WebSocketProviderProps {
 }
 
 export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }) => {
+  const { selectedProject } = useProject();
   const [isConnected, setIsConnected] = useState(false);
   const [lastMessage, setLastMessage] = useState<WebSocketMessage | null>(null);
   const [lastUpdate, setLastUpdate] = useState(new Date());
@@ -31,6 +33,14 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
   const subscribersRef = useRef<Map<string, Set<(data: any) => void>>>(new Map());
   const retryCountRef = useRef(0);
   const mountedRef = useRef(true);
+  // The message handler is set up once (empty-deps effect below, so the
+  // socket doesn't reconnect every time the user switches projects) --
+  // a ref keeps it reading the CURRENT selection instead of a stale one
+  // captured at connect time.
+  const selectedProjectRef = useRef(selectedProject);
+  useEffect(() => {
+    selectedProjectRef.current = selectedProject;
+  }, [selectedProject]);
 
   const subscribe = useCallback((event: string, callback: (data: any) => void) => {
     if (!subscribersRef.current.has(event)) {
@@ -64,8 +74,24 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
         if (!mountedRef.current) return;
         try {
           const data = JSON.parse(event.data) as WebSocketMessage;
+          // lastMessage/lastUpdate stay unfiltered -- Layout.tsx's "Last
+          // update" timestamp is a connection-alive heartbeat, not a
+          // per-project feed, and must keep advancing even while only a
+          // DIFFERENT project has activity.
           setLastMessage(data);
           setLastUpdate(new Date());
+
+          // Broadcasts carry no per-connection routing (every client gets
+          // every project's events) -- a message tagged with a project_id
+          // that isn't the one currently selected belongs to a project the
+          // user isn't looking at right now. Messages with no project_id
+          // at all (system-level, not project-scoped) always pass through.
+          const current = selectedProjectRef.current;
+          const belongsToOtherProject =
+            !!data.project_id && !!current && data.project_id !== current.id;
+          if (belongsToOtherProject) {
+            return;
+          }
 
           // Notify subscribers
           const callbacks = subscribersRef.current.get(data.type);

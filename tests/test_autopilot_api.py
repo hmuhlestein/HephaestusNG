@@ -408,6 +408,108 @@ class TestCaching:
         assert len(resp.json()) == 1
 
 
+# ── Multi-project queue-dir scoping ────────────────────────────────
+
+
+@pytest.fixture
+def two_project_client(tmp_path, monkeypatch):
+    """Test client wired to a real DB with two distinct AutopilotProject
+    rows, each with its own design-queue directory -- for verifying
+    _get_effective_queue_dir(project_id) resolves the RIGHT project's
+    directory instead of silently falling back to whichever one is
+    is_active."""
+    db_path = str(tmp_path / "test.db")
+    monkeypatch.setenv("HEPHAESTUS_TEST_DB", db_path)
+
+    from src.core.database import AutopilotProject, DatabaseManager
+
+    db_manager = DatabaseManager(db_path)
+    db_manager.create_tables()
+
+    proj_a_dir = tmp_path / "proj-a"
+    proj_b_dir = tmp_path / "proj-b"
+    proj_a_dir.mkdir()
+    proj_b_dir.mkdir()
+
+    with db_manager.session_scope() as session:
+        session.add(AutopilotProject(id="proj-a", name="proj-a", base_dir=str(proj_a_dir), is_active=True))
+        session.add(AutopilotProject(id="proj-b", name="proj-b", base_dir=str(proj_b_dir), is_active=True))
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from src.mcp.autopilot_api import router
+
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+
+    import src.mcp.autopilot_api as api_mod
+
+    api_mod._cache.clear()
+    api_mod._queue_dir_by_project.clear()
+    api_mod._features_dir_by_project.clear()
+
+    yield client, proj_a_dir, proj_b_dir
+
+    api_mod._cache.clear()
+    api_mod._queue_dir_by_project.clear()
+    api_mod._features_dir_by_project.clear()
+
+
+class TestQueueDirProjectScoping:
+    """Regression: with two projects both is_active, _get_effective_queue_dir()
+    (no project_id) silently resolved EVERY caller against whichever ONE
+    project happened to be picked by is_active's .first() -- these prove
+    project_id, once passed, resolves that project specifically and keeps
+    the two projects' queues fully isolated."""
+
+    def test_add_and_list_are_isolated_per_project(self, two_project_client):
+        client, proj_a_dir, proj_b_dir = two_project_client
+
+        resp = client.post(
+            "/api/autopilot/queue",
+            json={"name": "Design A", "content": "a", "project_id": "proj-a"},
+        )
+        assert resp.status_code == 200, resp.text
+
+        resp = client.post(
+            "/api/autopilot/queue",
+            json={"name": "Design B", "content": "b", "project_id": "proj-b"},
+        )
+        assert resp.status_code == 200, resp.text
+
+        queue_a = client.get("/api/autopilot/queue?project_id=proj-a").json()
+        queue_b = client.get("/api/autopilot/queue?project_id=proj-b").json()
+
+        assert [d["name"] for d in queue_a] == ["Design A"]
+        assert [d["name"] for d in queue_b] == ["Design B"]
+
+        # File actually landed under the RIGHT project's own directory.
+        assert any(proj_a_dir.rglob("Design_A.md"))
+        assert any(proj_b_dir.rglob("Design_B.md"))
+        assert not any(proj_a_dir.rglob("Design_B.md"))
+        assert not any(proj_b_dir.rglob("Design_A.md"))
+
+    def test_remove_only_affects_its_own_project(self, two_project_client):
+        client, proj_a_dir, proj_b_dir = two_project_client
+
+        client.post(
+            "/api/autopilot/queue",
+            json={"name": "Shared Name", "content": "a", "project_id": "proj-a"},
+        )
+        client.post(
+            "/api/autopilot/queue",
+            json={"name": "Shared Name", "content": "b", "project_id": "proj-b"},
+        )
+
+        resp = client.delete("/api/autopilot/queue/Shared_Name.md?project_id=proj-a")
+        assert resp.status_code == 200, resp.text
+
+        assert client.get("/api/autopilot/queue?project_id=proj-a").json() == []
+        assert len(client.get("/api/autopilot/queue?project_id=proj-b").json()) == 1
+
+
 # ── Features ─────────────────────────────────────────────────────
 
 
@@ -738,6 +840,92 @@ class TestPipelineStatus:
         assert data["designs_processed"] == 8
         assert data["designs_succeeded"] == 6
         assert data["designs_failed"] == 2
+
+    def test_status_reports_every_running_project_not_just_the_first(
+        self, client, autopilot_dirs, monkeypatch
+    ):
+        """running_project_path/running_project_name are singular fields
+        that can't represent more than one concurrently running project --
+        running_projects must list every one of them (id/name/base_dir),
+        so a caller hitting the concurrency cap can identify and stop
+        exactly the project(s) blocking it instead of a bare stop-all call
+        that would also kill an unrelated project it was never told about."""
+        import src.mcp.autopilot_api as api_mod
+
+        api_mod._cache.clear()
+
+        class FakeService:
+            def __init__(self, project_id, project_path):
+                self.running = True
+                self.project_id = project_id
+                self._project_path = project_path
+
+            def status(self):
+                return {
+                    "running": True,
+                    "project_path": self._project_path,
+                    "current_design": None,
+                    "designs_processed": 0,
+                    "designs_succeeded": 0,
+                    "designs_failed": 0,
+                    "elapsed_seconds": 0,
+                    "error": None,
+                }
+
+        fake_registry = Mock()
+        fake_registry.running.return_value = [
+            FakeService("proj-a", "/Users/test/project-a"),
+            FakeService("proj-b", "/Users/test/project-b"),
+        ]
+        monkeypatch.setattr(
+            "src.autopilot.service.get_registry", lambda: fake_registry
+        )
+
+        resp = client.get("/api/autopilot/status")
+        assert resp.status_code == 200
+        running_projects = resp.json()["running_projects"]
+        assert len(running_projects) == 2
+        assert {p["id"] for p in running_projects} == {"proj-a", "proj-b"}
+        assert {p["base_dir"] for p in running_projects} == {
+            "/Users/test/project-a",
+            "/Users/test/project-b",
+        }
+
+    def test_status_running_projects_survives_missing_project_id_attr(
+        self, client, autopilot_dirs, monkeypatch
+    ):
+        """Must not crash if a service object doesn't expose project_id
+        (defensive -- real AutopilotService always sets it, but this
+        endpoint shouldn't 500 on a test double or future refactor that
+        doesn't)."""
+        import src.mcp.autopilot_api as api_mod
+
+        api_mod._cache.clear()
+
+        class FakeService:
+            running = True
+
+            def status(self):
+                return {
+                    "running": True,
+                    "project_path": "/Users/test/some-project",
+                    "current_design": None,
+                    "designs_processed": 0,
+                    "designs_succeeded": 0,
+                    "designs_failed": 0,
+                    "elapsed_seconds": 0,
+                    "error": None,
+                }
+
+        fake_registry = Mock()
+        fake_registry.running.return_value = [FakeService()]
+        monkeypatch.setattr(
+            "src.autopilot.service.get_registry", lambda: fake_registry
+        )
+
+        resp = client.get("/api/autopilot/status")
+        assert resp.status_code == 200
+        assert resp.json()["running_projects"][0]["id"] is None
 
 
 # ── Messages ─────────────────────────────────────────────────────

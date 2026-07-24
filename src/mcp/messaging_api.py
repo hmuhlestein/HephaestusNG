@@ -203,6 +203,7 @@ async def request_ticket_clarification_endpoint(
                 )
 
             logger.info(f"[CLARIFICATION] Ticket found: {ticket.title}")
+            ticket_workflow_id = ticket.workflow_id
 
             # 2. Gather context - Latest 60 tickets
             recent_tickets = (
@@ -303,13 +304,20 @@ async def request_ticket_clarification_endpoint(
         logger.info("[CLARIFICATION] ========== SUCCESS ==========")
 
         # Broadcast update
+        from src.core.database import resolve_project_for_workflow
+
+        bcast_project_id, bcast_project_name = resolve_project_for_workflow(
+            ticket_workflow_id
+        )
         await server_state.broadcast_update(
             {
                 "type": "ticket_clarification_requested",
                 "ticket_id": request.ticket_id,
                 "agent_id": agent_id,
                 "comment_id": comment_result["comment_id"],
-            }
+            },
+            project_id=bcast_project_id,
+            project_name=bcast_project_name,
         )
 
         return RequestTicketClarificationResponse(

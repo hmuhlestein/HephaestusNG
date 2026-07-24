@@ -405,8 +405,28 @@ class ServerState:
         except Exception as e:
             logger.warning(f"Could not load active project: {e}")
 
-    async def broadcast_update(self, message: Dict[str, Any]):
-        """Broadcast update to all connected WebSocket and SSE clients."""
+    async def broadcast_update(
+        self,
+        message: Dict[str, Any],
+        project_id: Optional[str] = None,
+        project_name: Optional[str] = None,
+    ):
+        """Broadcast update to all connected WebSocket and SSE clients.
+
+        project_id/project_name: when known, merged into the payload so
+        clients can filter events by their currently-selected project
+        (and label them by name) instead of rendering every project's
+        activity indiscriminately -- with more than one project able to
+        run concurrently, an unfiltered feed mixes together events from
+        projects the viewer isn't even looking at. Broadcasting itself
+        stays global (every connected client still receives every message;
+        there's no per-connection project subscription to route through)
+        -- this only adds the fields a client-side filter/label needs.
+        Callers that don't have a project in scope (e.g. non-project-scoped
+        triggers) omit these rather than guess.
+        """
+        if project_id:
+            message = {**message, "project_id": project_id, "project_name": project_name}
         disconnected = []
         for websocket in self.active_websockets:
             try:
@@ -1052,22 +1072,31 @@ def _touch_agent_activity(agent_id: str) -> None:
         pass  # non-critical
 
 
-async def process_queue():
+async def process_queue(project_id: Optional[str] = None):
     """Process the next queued task by creating an agent for it.
 
     Only creates an agent if we're under the max concurrent agent limit.
+
+    Args:
+        project_id: When given, scopes both the capacity check and the
+            next-task selection to this project -- each active project
+            gets its own independent max_concurrent_agents budget instead
+            of competing for one global slot count, so a busier project
+            can't starve a quieter one's queue. When omitted, behaves
+            globally (original behavior, used by callers not yet updated
+            to pass project_id, e.g. terminate_and_process_queue below).
     """
     from src.services.agent_dispatch_service import AgentDispatchService
     from src.services.task_enrichment_service import TaskEnrichmentService
 
     try:
         # Check if we should queue (i.e., at capacity)
-        if server_state.queue_service.should_queue_task():
-            logger.debug("At capacity - not processing queue")
+        if server_state.queue_service.should_queue_task(project_id):
+            logger.debug(f"At capacity - not processing queue (project_id={project_id})")
             return
 
         # Get next task from queue
-        next_task = server_state.queue_service.get_next_queued_task()
+        next_task = server_state.queue_service.get_next_queued_task(project_id)
 
         if not next_task:
             logger.debug("No queued tasks to process")
@@ -1205,13 +1234,18 @@ async def process_queue():
         AgentDispatchService.mark_assigned(next_task.id, agent.id, status="in_progress")
 
         # Broadcast update
+        from src.core.database import resolve_project_for_workflow
+
+        bcast_project_id, bcast_project_name = resolve_project_for_workflow(task_for_agent.workflow_id)
         await server_state.broadcast_update(
             {
                 "type": "task_dequeued",
                 "task_id": next_task.id,
                 "agent_id": agent.id,
                 "description": (next_task.enriched_description or next_task.raw_description)[:200],
-            }
+            },
+            project_id=bcast_project_id,
+            project_name=bcast_project_name,
         )
 
     except Exception as e:
@@ -1238,15 +1272,43 @@ async def background_queue_processor():
 
     while not server_state.shutdown_event.is_set():
         try:
-            # Check if there are any queued tasks
-            queue_status = server_state.queue_service.get_queue_status()
-            queued_count = queue_status.get("queued_tasks_count", 0)
+            # Scope to every currently-active project (plural, capped at
+            # max_concurrent_projects) so one project's queue depth can't
+            # starve another's -- mirrors the phase-advancement sweep's own
+            # is_active=True scoping fix. Falls back to a single global,
+            # unscoped pass when no project is active (fresh install /
+            # single-project mode), same as the sweep does.
+            from src.core.database import AutopilotProject
 
-            if queued_count > 0:
-                logger.info(f"[BACKGROUND_QUEUE] Found {queued_count} queued task(s), processing queue...")
-                await process_queue()
+            session = server_state.db_manager.get_session()
+            try:
+                active_project_ids = [
+                    p.id
+                    for p in session.query(AutopilotProject).filter_by(is_active=True).all()
+                ]
+            finally:
+                session.close()
+
+            if not active_project_ids:
+                queue_status = server_state.queue_service.get_queue_status()
+                queued_count = queue_status.get("queued_tasks_count", 0)
+                if queued_count > 0:
+                    logger.info(f"[BACKGROUND_QUEUE] Found {queued_count} queued task(s), processing queue...")
+                    await process_queue()
+                else:
+                    logger.debug("[BACKGROUND_QUEUE] No queued tasks, skipping")
             else:
-                logger.debug("[BACKGROUND_QUEUE] No queued tasks, skipping")
+                for proj_id in active_project_ids:
+                    queue_status = server_state.queue_service.get_queue_status(proj_id)
+                    queued_count = queue_status.get("queued_tasks_count", 0)
+                    if queued_count > 0:
+                        logger.info(
+                            f"[BACKGROUND_QUEUE] Found {queued_count} queued task(s) for "
+                            f"project {proj_id[:8]}, processing queue..."
+                        )
+                        await process_queue(proj_id)
+                    else:
+                        logger.debug(f"[BACKGROUND_QUEUE] No queued tasks for project {proj_id[:8]}, skipping")
 
         except Exception as e:
             logger.error(f"[BACKGROUND_QUEUE] Error in background queue processor: {e}")
@@ -1378,15 +1440,17 @@ def _run_phase_advancement_sweep_once(sweep_logger) -> None:
 
     session = server_state.db_manager.get_session()
     try:
-        # Scope sweep to the active project to avoid processing stale
-        # workflows from other projects (e.g. applitnator) that are
-        # constantly failing and retrying, starving the current project.
+        # Scope sweep to the active projects (plural, capped at
+        # max_concurrent_projects) to avoid processing stale workflows
+        # from OTHER, non-active projects that are constantly failing and
+        # retrying, starving the ones currently in use.
         from src.core.database import AutopilotProject
-        active_proj = session.query(AutopilotProject).filter_by(is_active=True).first()
-        proj_id = active_proj.id if active_proj else None
+        active_proj_ids = [
+            p.id for p in session.query(AutopilotProject).filter_by(is_active=True).all()
+        ]
         query = session.query(Workflow.id, Workflow.status).filter(Workflow.status.in_(["active", "paused"]))
-        if proj_id:
-            query = query.filter(Workflow.project_id == proj_id)
+        if active_proj_ids:
+            query = query.filter(Workflow.project_id.in_(active_proj_ids))
         workflows = query.all()
     finally:
         session.close()
@@ -1739,13 +1803,18 @@ async def create_task(
                     session.close()
 
                 # Broadcast blocked status
+                from src.core.database import resolve_project_for_workflow
+
+                bcast_project_id, bcast_project_name = resolve_project_for_workflow(request.workflow_id)
                 await server_state.broadcast_update(
                     {
                         "type": "task_blocked",
                         "task_id": task_id,
                         "description": request.task_description[:200],
                         "blocking_tickets": blocking_info["blocking_ticket_ids"],
-                    }
+                    },
+                    project_id=bcast_project_id,
+                    project_name=bcast_project_name,
                 )
 
                 # Return immediately - don't process this task further
@@ -1908,6 +1977,9 @@ async def create_task(
                         queue_status = server_state.queue_service.get_queue_status()
 
                         # Broadcast queued status
+                        from src.core.database import resolve_project_for_workflow
+
+                        bcast_project_id, bcast_project_name = resolve_project_for_workflow(request.workflow_id)
                         await server_state.broadcast_update(
                             {
                                 "type": "task_queued",
@@ -1915,7 +1987,9 @@ async def create_task(
                                 "description": enriched_task["enriched_description"][:200],
                                 "queue_position": queue_status.get("queued_tasks_count", 0),
                                 "slots_available": queue_status.get("slots_available", 0),
-                            }
+                            },
+                            project_id=bcast_project_id,
+                            project_name=bcast_project_name,
                         )
 
                         logger.info(f"Task {task_id} queued (at capacity: {queue_status['active_agents']}/{queue_status['max_concurrent_agents']} agents)")
@@ -1960,13 +2034,18 @@ async def create_task(
                     AgentDispatchService.mark_assigned(task_id, agent_id_str, status="assigned")
 
                     # 9. Broadcast update via WebSocket
+                    from src.core.database import resolve_project_for_workflow
+
+                    bcast_project_id, bcast_project_name = resolve_project_for_workflow(task_data["workflow_id"])
                     await server_state.broadcast_update(
                         {
                             "type": "task_created",
                             "task_id": task_id,
                             "agent_id": agent_id_str,
                             "description": enriched_task["enriched_description"][:200],
-                        }
+                        },
+                        project_id=bcast_project_id,
+                        project_name=bcast_project_name,
                     )
 
                     logger.info(f"Task {task_id} processed successfully in background")
@@ -2370,6 +2449,9 @@ async def update_task_status(
             await TaskCompletionService.fire_spec_gate_if_ready(session, task)
 
         # 5. Broadcast update
+        from src.core.database import resolve_project_for_workflow
+
+        bcast_project_id, bcast_project_name = resolve_project_for_workflow(task.workflow_id)
         await server_state.broadcast_update(
             {
                 "type": "task_completed",
@@ -2377,7 +2459,9 @@ async def update_task_status(
                 "agent_id": agent_id,
                 "status": "failed" if output_lost_rejection else request.status,
                 "summary": request.summary[:200],
-            }
+            },
+            project_id=bcast_project_id,
+            project_name=bcast_project_name,
         )
 
         # Return appropriate response based on whether validation was spawned
@@ -2470,6 +2554,7 @@ async def pause_task_endpoint(task_id: str):
                 )
 
             agent_id = task.assigned_agent_id
+            task_workflow_id = task.workflow_id
             task.status = "blocked"
             task.assigned_agent_id = None
             session.commit()
@@ -2479,7 +2564,14 @@ async def pause_task_endpoint(task_id: str):
         if agent_id:
             await server_state.agent_manager.terminate_agent(agent_id)
 
-        await server_state.broadcast_update({"type": "task_paused", "task_id": task_id})
+        from src.core.database import resolve_project_for_workflow
+
+        bcast_project_id, bcast_project_name = resolve_project_for_workflow(task_workflow_id)
+        await server_state.broadcast_update(
+            {"type": "task_paused", "task_id": task_id},
+            project_id=bcast_project_id,
+            project_name=bcast_project_name,
+        )
 
         return {"success": True, "task_id": task_id, "status": "blocked"}
 
@@ -2550,12 +2642,17 @@ async def bump_task_priority_endpoint(
         AgentDispatchService.mark_assigned(task_id, agent.id, status="assigned")
 
         # Broadcast update
+        from src.core.database import resolve_project_for_workflow
+
+        bcast_project_id, bcast_project_name = resolve_project_for_workflow(task.workflow_id)
         await server_state.broadcast_update(
             {
                 "type": "task_priority_bumped",
                 "task_id": task_id,
                 "agent_id": agent.id,
-            }
+            },
+            project_id=bcast_project_id,
+            project_name=bcast_project_name,
         )
 
         logger.info(f"Task {task_id} bumped and agent {agent.id} created (bypassing limit)")
@@ -2604,17 +2701,23 @@ async def cancel_task_endpoint(task_id: str):
             task.failure_reason = "Cancelled by user"
             task.completed_at = datetime.utcnow()
             cancelled_task_id = task.id
+            cancelled_task_workflow_id = task.workflow_id
             session.commit()
 
         finally:
             session.close()
 
         if cancelled_task_id:
+            from src.core.database import resolve_project_for_workflow
+
+            bcast_project_id, bcast_project_name = resolve_project_for_workflow(cancelled_task_workflow_id)
             await server_state.broadcast_update(
                 {
                     "type": "task_cancelled",
                     "task_id": cancelled_task_id,
-                }
+                },
+                project_id=bcast_project_id,
+                project_name=bcast_project_name,
             )
 
             logger.info(f"Task {cancelled_task_id} cancelled")
@@ -2657,6 +2760,7 @@ async def cancel_queued_task_endpoint(
             task.status = "failed"
             task.failure_reason = "Cancelled by user from queue"
             task.completed_at = datetime.utcnow()
+            queued_task_workflow_id = task.workflow_id
             session.commit()
 
         finally:
@@ -2666,11 +2770,16 @@ async def cancel_queued_task_endpoint(
         server_state.queue_service.dequeue_task(task_id)
 
         # Broadcast update
+        from src.core.database import resolve_project_for_workflow
+
+        bcast_project_id, bcast_project_name = resolve_project_for_workflow(queued_task_workflow_id)
         await server_state.broadcast_update(
             {
                 "type": "task_cancelled",
                 "task_id": task_id,
-            }
+            },
+            project_id=bcast_project_id,
+            project_name=bcast_project_name,
         )
 
         logger.info(f"Task {task_id} cancelled and removed from queue")
@@ -2720,6 +2829,7 @@ async def restart_task_endpoint(
 
             # Get agent ID before clearing (to delete trajectory data)
             old_agent_id = task.assigned_agent_id
+            restart_task_workflow_id = task.workflow_id
 
             # Clear completion data
             task.status = "pending"
@@ -2785,6 +2895,10 @@ async def restart_task_endpoint(
         # Check if we should queue or create agent immediately
         should_queue = server_state.queue_service.should_queue_task()
 
+        from src.core.database import resolve_project_for_workflow
+
+        bcast_project_id, bcast_project_name = resolve_project_for_workflow(restart_task_workflow_id)
+
         if should_queue:
             # Queue the task
             server_state.queue_service.enqueue_task(task_id)
@@ -2796,7 +2910,9 @@ async def restart_task_endpoint(
                     "type": "task_restarted",
                     "task_id": task_id,
                     "status": "queued",
-                }
+                },
+                project_id=bcast_project_id,
+                project_name=bcast_project_name,
             )
 
             return {
@@ -2843,7 +2959,9 @@ async def restart_task_endpoint(
                     "task_id": task_id,
                     "agent_id": agent.id,
                     "status": "assigned",
-                }
+                },
+                project_id=bcast_project_id,
+                project_name=bcast_project_name,
             )
 
             return {

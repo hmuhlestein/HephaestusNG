@@ -103,30 +103,37 @@ class WorktreeManager:
     def __init__(self, db_manager: DatabaseManager):
         self.db_manager = db_manager
         self.config = get_config()
+        self._project_root = Path(self.config.main_repo_path)
 
         try:
-            self.main_repo = Repo(self.config.main_repo_path)
+            self.main_repo = Repo(self._project_root)
         except git.InvalidGitRepositoryError:
-            logger.error(f"Invalid git repository at {self.config.main_repo_path}")
-            raise ValueError(f"Not a git repository: {self.config.main_repo_path}")
+            logger.error(f"Invalid git repository at {self._project_root}")
+            raise ValueError(f"Not a git repository: {self._project_root}")
 
         self.merge_lock_path = (
-            Path(self.config.main_repo_path) / ".git" / ".hephaestus_merge_lock"
+            Path(self.main_repo.working_dir) / ".git" / ".hephaestus_merge_lock"
         )
         self._ensure_excludes()
-        logger.info(
-            f"WorktreeManager initialized for repo: {self.config.main_repo_path}"
-        )
+        logger.info(f"WorktreeManager initialized for repo: {self._project_root}")
 
     def reload(self, new_path):
-        """Reinitialize with a new repository path."""
+        """Reinitialize with a new repository path.
+
+        Instance-local only -- does NOT write through to the process-wide
+        config singleton (get_config()). Two WorktreeManager instances each
+        reload()ed to a different project must never interfere with each
+        other; writing to the shared config here would let whichever
+        instance reloaded last silently redirect every OTHER instance's
+        `worktree_base` (which read the config fresh on every access) to
+        the wrong project's repo.
+        """
         new_path = Path(new_path) if not isinstance(new_path, Path) else new_path
         try:
             self.main_repo = Repo(new_path)
         except git.InvalidGitRepositoryError:
             raise ValueError(f"Not a git repository: {new_path}")
-        self.config.main_repo_path = new_path
-        self.config.project_root = new_path
+        self._project_root = new_path
         self.merge_lock_path = Path(new_path) / ".git" / ".hephaestus_merge_lock"
         self._ensure_excludes()
         logger.info(f"WorktreeManager reloaded with repo: {new_path}")
@@ -139,7 +146,7 @@ class WorktreeManager:
         override = getattr(self.config, "worktree_base_path", None)
         if override:
             return Path(override)
-        return Path(self.config.main_repo_path) / WORKTREES_SUBDIR
+        return self._project_root / WORKTREES_SUBDIR
 
     def _worktree_path_for(self, agent_id: str) -> Path:
         return self.worktree_base / f"wt_{agent_id}"
@@ -247,12 +254,6 @@ class WorktreeManager:
             Dict with branch_name, parent_commit, and working_directory (the
             worktree path — the only directory the agent should ever see).
         """
-        # Lazy reload: if config path changed (e.g. project switch), reload now
-        config_path = Path(self.config.main_repo_path)
-        if self.main_repo.working_dir != str(config_path):
-            logger.info(f"[WORKTREE] Lazy reload: {self.main_repo.working_dir} -> {config_path}")
-            self.reload(config_path)
-
         logger.info(
             f"[WORKTREE] Creating worktree for agent {agent_id} (parent={parent_agent_id})"
         )
@@ -821,7 +822,7 @@ class WorktreeManager:
             record = self._agent_record(session, agent_id)
             if record and record.worktree_path:
                 return record.worktree_path
-            return str(self.config.project_root)
+            return str(self._project_root)
         finally:
             session.close()
 

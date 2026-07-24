@@ -49,7 +49,7 @@ const LaunchWorkflowModal: React.FC<LaunchWorkflowModalProps> = ({
   const [isLaunching, setIsLaunching] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const { activeProject } = useProject();
+  const { selectedProject } = useProject();
 
   // Fetch workflow definitions
   const { data: definitions = [], isLoading } = useQuery<WorkflowDefinition[]>({
@@ -80,7 +80,7 @@ const LaunchWorkflowModal: React.FC<LaunchWorkflowModalProps> = ({
   // Initialize form values when definition is selected
   useEffect(() => {
     initializeFormValues(selectedDefinition?.launch_template);
-  }, [selectedDefinition, activeProject]);
+  }, [selectedDefinition, selectedProject]);
 
   const initializeFormValues = (template: LaunchTemplate | null | undefined) => {
     if (!template) {
@@ -90,8 +90,8 @@ const LaunchWorkflowModal: React.FC<LaunchWorkflowModalProps> = ({
     const initial: Record<string, any> = {};
     template.parameters.forEach((param) => {
       // Auto-populate project_path from active project
-      if (param.name === 'project_path' && activeProject?.base_dir) {
-        initial[param.name] = activeProject.base_dir;
+      if (param.name === 'project_path' && selectedProject?.base_dir) {
+        initial[param.name] = selectedProject.base_dir;
       } else {
         initial[param.name] = param.default ?? (param.type === 'boolean' ? false : '');
       }

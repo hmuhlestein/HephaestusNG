@@ -33,8 +33,8 @@ const Autopilot: React.FC = () => {
   const [showAddDesign, setShowAddDesign] = useState(false);
   const [showLoadDesign, setShowLoadDesign] = useState(false);
   const [featureStatusFilter, setFeatureStatusFilter] = useState<'all' | 'validated' | 'needs_review' | 'failed'>('all');
-  const { activeProject } = useProject();
-  const projectId = activeProject?.id || null;
+  const { selectedProject } = useProject();
+  const projectId = selectedProject?.id || null;
   const queryClient = useQueryClient();
 
   // Sync tab state to URL path
@@ -79,11 +79,11 @@ const Autopilot: React.FC = () => {
     mutationFn: async () => {
       if (status?.running) {
         return apiService.stopAutopilot(projectId || undefined);
-      } else if (activeProject) {
-        // Try to start; if 409, the (single, global) service is already
-        // running something -- find out what before deciding what to do.
+      } else if (selectedProject) {
+        // Try to start; a 409 means max_concurrent_projects is already
+        // reached -- find out what's running before deciding what to do.
         try {
-          return await apiService.startAutopilot(activeProject.base_dir);
+          return await apiService.startAutopilot(selectedProject.base_dir);
         } catch (err: any) {
           const is409 = err?.response?.status === 409 || err?.status === 409;
           if (!is409) throw err;
@@ -98,36 +98,58 @@ const Autopilot: React.FC = () => {
           //
           // Pass project_path so the backend can do realpath-resolved
           // comparison (handles /tmp -> /private/tmp on macOS).
-          const globalStatus = await apiService.getAutopilotStatus(undefined, activeProject.base_dir);
-          const runningProjectName = globalStatus?.running_project_name;
+          const globalStatus = await apiService.getAutopilotStatus(undefined, selectedProject.base_dir);
           const isSelfConflict = globalStatus?.is_self_conflict ?? false;
+          // running_projects reports EVERY currently-running project, not
+          // just one -- with max_concurrent_projects > 1, hitting the cap
+          // can mean two DIFFERENT other projects are blocking the start,
+          // not just the single one running_project_name used to imply.
+          const runningProjects: Array<{ id: string; name: string | null; base_dir: string | null }> =
+            globalStatus?.running_projects || [];
 
           if (isSelfConflict) {
             // Already running (this project) despite the 409 -- the
             // optimistic "now running" flip from onMutate was actually
             // correct, just confirmed a different way. Not a revert case.
-            toast.success(`${activeProject.name} is already running — no action needed.`);
+            toast.success(`${selectedProject.name} is already running — no action needed.`);
             return { confirmed: true };
           }
 
-          const label = runningProjectName || 'Another project';
+          const label = runningProjects.length > 0
+            ? runningProjects.map((p) => p.name || 'Unnamed project').join(' and ')
+            : 'Another project';
           const confirmed = window.confirm(
-            `${label} is currently running.\n\nStop it and start ${activeProject.name}?`
+            `${label} ${runningProjects.length > 1 ? 'are' : 'is'} currently running.\n\nStop ${runningProjects.length > 1 ? 'them' : 'it'} and start ${selectedProject.name}?`
           );
           if (!confirmed) {
             // Genuinely nothing changed for this project -- revert the
             // optimistic flip.
-            toast(`Left ${label} running. ${activeProject.name} was not started.`);
+            toast(`Left ${label} running. ${selectedProject.name} was not started.`);
             return { revert: true };
           }
 
-          // Stop the global pipeline and wait for it to complete
-          await apiService.stopAutopilot();
+          // Stop EVERY project actually blocking the start, by id.
+          // stopAutopilot() with no id tells the backend "stop every
+          // currently running project" (there's no single global service
+          // to fall back to now that projects run concurrently) -- without
+          // resolving specific ids here, confirming this dialog could
+          // silently kill an unrelated project's pipeline the user was
+          // never even told about, or (with the cap > 1) miss stopping a
+          // second blocker entirely and leave the retry below 409-ing again.
+          if (runningProjects.length > 0) {
+            await Promise.all(runningProjects.map((p) => apiService.stopAutopilot(p.id)));
+          } else {
+            // Couldn't identify anyone specific (shouldn't normally happen
+            // once the cap is actually hit) -- fall back to the old
+            // stop-everything behavior rather than being stuck unable to
+            // proceed at all.
+            await apiService.stopAutopilot();
+          }
           // Small delay to let the backend fully stop
           await new Promise(r => setTimeout(r, 500));
           // Retry start
-          const result = await apiService.startAutopilot(activeProject.base_dir);
-          toast.success(`Stopped ${label}, started ${activeProject.name}.`);
+          const result = await apiService.startAutopilot(selectedProject.base_dir);
+          toast.success(`Stopped ${label}, started ${selectedProject.name}.`);
           return result;
         }
       }
@@ -146,7 +168,7 @@ const Autopilot: React.FC = () => {
     },
     onSuccess: (data: any, _vars, context) => {
       // data === undefined happens when mutationFn's implicit no-op path
-      // ran (e.g. no activeProject) -- nothing was actually requested.
+      // ran (e.g. no selectedProject) -- nothing was actually requested.
       if (data?.revert || data === undefined) {
         // Nothing actually changed for this project (user declined to stop
         // another running project, or there was no project to act on) --
@@ -237,7 +259,7 @@ const Autopilot: React.FC = () => {
       <PipelineStatusCard
         status={status}
         pendingAgents={pendingTasks?.length}
-        projectName={activeProject?.name}
+        projectName={selectedProject?.name}
         onToggle={() => togglePipeline.mutate()}
         onMetricClick={(metric) => {
           if (metric === 'agents' || metric === 'pending_agents') {

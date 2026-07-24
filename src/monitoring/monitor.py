@@ -62,6 +62,17 @@ _SESSION_LIMIT_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Claude Code's exact message when the account/org hits its configured
+# monthly spend cap -- the agent cannot make any more API calls until a
+# human raises the limit or the billing period resets. Same failure class
+# as a session limit (hard blocker, not recoverable by retrying), so it
+# gets identical handling below: fail the task, terminate the agent, and
+# pause the workflow only if the phase has no fallback_cli_tool -- a
+# configured fallback should get a chance to run instead of sitting paused.
+_SPEND_LIMIT_RE = re.compile(
+    r"you've hit your monthly spend limit", re.IGNORECASE
+)
+
 # pi's status-line MCP indicator, e.g. "MCP: 0/1 servers". The denominator
 # group excludes "0/0" (no servers configured at all -- not a failure) by
 # requiring at least one digit that isn't a leading zero. Only observable
@@ -716,9 +727,12 @@ class MonitoringLoop:
             # configured, leave it to the normal retry -- the next dispatch
             # re-reads Phase.cli_tool and create_agent_for_task's own
             # fallback logic takes over if the primary is still limited.
-            if _SESSION_LIMIT_RE.search(_strip_sgr(out)):
+            stripped_out = _strip_sgr(out)
+            spend_limit_hit = _SPEND_LIMIT_RE.search(stripped_out)
+            if spend_limit_hit or _SESSION_LIMIT_RE.search(stripped_out):
+                limit_kind = "monthly spend limit" if spend_limit_hit else "session limit"
                 logger.warning(
-                    f"[SESSION-LIMIT] Agent {agent.id[:8]} ({agent.cli_type}) hit session limit — "
+                    f"[SESSION-LIMIT] Agent {agent.id[:8]} ({agent.cli_type}) hit {limit_kind} — "
                     f"terminating immediately (not recoverable)"
                 )
                 with self.db_manager.session_scope() as session:
@@ -731,7 +745,7 @@ class MonitoringLoop:
                     )
                     if stuck_task:
                         stuck_task.status = "failed"
-                        stuck_task.failure_reason = "CLI session limit reached"
+                        stuck_task.failure_reason = f"CLI {limit_kind} reached"
                         logger.info(
                             f"[SESSION-LIMIT] Task {stuck_task.id[:8]} marked failed; "
                             f"phase will be retried"
@@ -758,7 +772,7 @@ class MonitoringLoop:
                                 workflow.status = "paused"
                                 workflow.paused_by = "system"
                                 workflow.status_reason = (
-                                    f"CLI session limit hit ({agent.cli_type}), no "
+                                    f"CLI {limit_kind} hit ({agent.cli_type}), no "
                                     "fallback configured -- will auto-resume on its "
                                     "own retry cooldown once the limit resets"
                                 )

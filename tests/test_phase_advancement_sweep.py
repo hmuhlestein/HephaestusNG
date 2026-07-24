@@ -18,7 +18,7 @@ import asyncio
 
 import pytest
 
-from src.core.database import DatabaseManager, Workflow
+from src.core.database import AutopilotProject, DatabaseManager, Workflow
 
 
 @pytest.fixture
@@ -36,6 +36,27 @@ def _make_workflow(db_manager, wf_id, status):
                 id=wf_id,
                 name="t",
                 status=status,
+                phases_folder_path="/tmp",
+            )
+        )
+
+
+def _make_active_project_with_workflow(db_manager, project_id, workflow_id):
+    with db_manager.session_scope() as session:
+        session.add(
+            AutopilotProject(
+                id=project_id,
+                name=project_id,
+                base_dir=f"/tmp/{project_id}",
+                is_active=True,
+            )
+        )
+        session.add(
+            Workflow(
+                id=workflow_id,
+                name=workflow_id,
+                status="active",
+                project_id=project_id,
                 phases_folder_path="/tmp",
             )
         )
@@ -150,3 +171,82 @@ class TestSweepSelfHealing:
 
         assert cleaned_ids == ["wf-active"]
         assert retried_ids == ["wf-active"]
+
+
+class TestSweepMultiProjectScoping:
+    """Part of the multi-project concurrency fix: the sweep used to scope
+    itself to a single is_active=True project
+    (.filter_by(is_active=True).first()), starving every OTHER active
+    project's workflows -- observed live: applitnator's workflows sat idle
+    for days because HephaestusNG was the sole active project. It must now
+    process every currently-active project's workflows, not just one."""
+
+    @pytest.mark.asyncio
+    async def test_sweeps_workflows_across_all_active_projects(
+        self, db_manager, monkeypatch
+    ):
+        from src.mcp import server
+
+        _make_active_project_with_workflow(db_manager, "proj-a", "wf-a")
+        _make_active_project_with_workflow(db_manager, "proj-b", "wf-b")
+
+        monkeypatch.setattr(server.server_state, "db_manager", db_manager)
+        server.server_state.shutdown_event = asyncio.Event()
+
+        advanced_ids = []
+
+        def fake_advance_phases(wf_id, logger):
+            advanced_ids.append(wf_id)
+            if len(advanced_ids) >= 2:
+                server.server_state.shutdown_event.set()
+
+        monkeypatch.setattr(
+            "src.autopilot.orchestrator._advance_phases", fake_advance_phases
+        )
+
+        await server.background_phase_advancement_sweep()
+
+        assert set(advanced_ids) == {"wf-a", "wf-b"}
+
+    @pytest.mark.asyncio
+    async def test_does_not_sweep_workflows_of_an_inactive_project(
+        self, db_manager, monkeypatch
+    ):
+        from src.mcp import server
+
+        _make_active_project_with_workflow(db_manager, "proj-active", "wf-in-scope")
+        with db_manager.session_scope() as session:
+            session.add(
+                AutopilotProject(
+                    id="proj-inactive",
+                    name="proj-inactive",
+                    base_dir="/tmp/proj-inactive",
+                    is_active=False,
+                )
+            )
+            session.add(
+                Workflow(
+                    id="wf-out-of-scope",
+                    name="wf-out-of-scope",
+                    status="active",
+                    project_id="proj-inactive",
+                    phases_folder_path="/tmp",
+                )
+            )
+
+        monkeypatch.setattr(server.server_state, "db_manager", db_manager)
+        server.server_state.shutdown_event = asyncio.Event()
+
+        advanced_ids = []
+
+        def fake_advance_phases(wf_id, logger):
+            advanced_ids.append(wf_id)
+            server.server_state.shutdown_event.set()
+
+        monkeypatch.setattr(
+            "src.autopilot.orchestrator._advance_phases", fake_advance_phases
+        )
+
+        await server.background_phase_advancement_sweep()
+
+        assert advanced_ids == ["wf-in-scope"]

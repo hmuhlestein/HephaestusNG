@@ -10,6 +10,7 @@ import { apiService, api } from '@/services/api';
 import { Button } from '@/components/ui/button';
 import { formatDistanceToNow } from 'date-fns';
 import toast from 'react-hot-toast';
+import { useProject } from '@/context/ProjectContext';
 
 interface DesignDetailModalProps {
   projectId: string;
@@ -30,6 +31,7 @@ type DetailTab = 'overview' | 'docs';
 
 const DesignDetailModal: React.FC<DesignDetailModalProps> = ({ projectId, filename, onClose, onRerun }) => {
   const queryClient = useQueryClient();
+  const { projects } = useProject();
   const [activeTab, setActiveTab] = useState<DetailTab>('overview');
 
   const { data: status, isLoading } = useQuery({
@@ -40,8 +42,12 @@ const DesignDetailModal: React.FC<DesignDetailModalProps> = ({ projectId, filena
 
   const rerunMutation = useMutation({
     mutationFn: async () => {
-      const project = await apiService.getActiveProject();
-      if (!project) throw new Error('No active project');
+      // This modal is always about a specific project (projectId prop) --
+      // resolve THAT project's base_dir, not whichever one happens to be
+      // globally active (which may not even be this one now that more
+      // than one project can be active at once).
+      const project = projects.find((p) => p.id === projectId);
+      if (!project) throw new Error('Project not found');
       return api.post('/autopilot/queue/rerun', {
         filename,
         project_path: project.base_dir,

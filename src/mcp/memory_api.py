@@ -407,6 +407,14 @@ async def report_results(
         )
 
         # Broadcast update
+        from src.core.database import get_db, resolve_project_for_workflow
+
+        with get_db() as db:
+            report_task = db.query(Task).filter_by(id=request.task_id).first()
+            report_workflow_id = report_task.workflow_id if report_task else None
+        bcast_project_id, bcast_project_name = resolve_project_for_workflow(
+            report_workflow_id
+        )
         await server_state.broadcast_update(
             {
                 "type": "results_reported",
@@ -414,7 +422,9 @@ async def report_results(
                 "agent_id": agent_id,
                 "result_id": result["result_id"],
                 "summary": request.summary[:200],
-            }
+            },
+            project_id=bcast_project_id,
+            project_name=bcast_project_name,
         )
 
         return ReportResultsResponse(
@@ -561,6 +571,11 @@ async def give_validation_review(
             asyncio.create_task(terminate_both_and_process_queue())
 
             # Broadcast success
+            from src.core.database import resolve_project_for_workflow
+
+            bcast_project_id, bcast_project_name = resolve_project_for_workflow(
+                task.workflow_id
+            )
             await server_state.broadcast_update(
                 {
                     "type": "validation_passed",
@@ -568,7 +583,9 @@ async def give_validation_review(
                     "agent_id": original_agent_id,
                     "validator_id": agent_id,
                     "iteration": task.validation_iteration,
-                }
+                },
+                project_id=bcast_project_id,
+                project_name=bcast_project_name,
             )
 
             return GiveValidationReviewResponse(
@@ -604,6 +621,11 @@ async def give_validation_review(
             asyncio.create_task(terminate_validator_and_process_queue())
 
             # Broadcast validation failure
+            from src.core.database import resolve_project_for_workflow
+
+            bcast_project_id, bcast_project_name = resolve_project_for_workflow(
+                task.workflow_id
+            )
             await server_state.broadcast_update(
                 {
                     "type": "validation_failed",
@@ -611,7 +633,9 @@ async def give_validation_review(
                     "agent_id": original_agent_id,
                     "validator_id": agent_id,
                     "iteration": task.validation_iteration,
-                }
+                },
+                project_id=bcast_project_id,
+                project_name=bcast_project_name,
             )
 
             return GiveValidationReviewResponse(
@@ -756,6 +780,11 @@ async def submit_result(
             asyncio.create_task(spawn_validator_async())
             validation_triggered = True
 
+        from src.core.database import resolve_project_for_workflow
+
+        bcast_project_id, bcast_project_name = resolve_project_for_workflow(
+            workflow_id
+        )
         await server_state.broadcast_update(
             {
                 "type": "result_submitted",
@@ -763,7 +792,9 @@ async def submit_result(
                 "workflow_id": workflow_id,
                 "agent_id": agent_id,
                 "validation_triggered": validation_triggered,
-            }
+            },
+            project_id=bcast_project_id,
+            project_name=bcast_project_name,
         )
 
         return SubmitResultResponse(
@@ -869,6 +900,11 @@ async def submit_result_validation(
         asyncio.create_task(terminate_result_validator_and_process_queue())
 
         # Broadcast validation result
+        from src.core.database import resolve_project_for_workflow
+
+        bcast_project_id, bcast_project_name = resolve_project_for_workflow(
+            outcome["workflow_id"]
+        )
         await server_state.broadcast_update(
             {
                 "type": "result_validation_completed",
@@ -877,7 +913,9 @@ async def submit_result_validation(
                 "validation_passed": request.validation_passed,
                 "validator_agent_id": agent_id,
                 "workflow_action": workflow_action_taken,
-            }
+            },
+            project_id=bcast_project_id,
+            project_name=bcast_project_name,
         )
 
         status = (

@@ -4416,7 +4416,17 @@ class TestGetOrCreateProjectId:
             )
             assert len(matches) == 1
 
-    def test_activating_new_project_deactivates_previous(self, orch_db_env, tmp_path):
+    def test_activating_new_project_does_not_evict_previous_under_cap(
+        self, orch_db_env, tmp_path
+    ):
+        """Regression: this is the real pipeline-launch path (POST /start,
+        AutopilotService.start()), called BEFORE /start's own
+        AutopilotServiceRegistry.try_reserve() cap check. It used to
+        unconditionally evict whatever else was is_active, which silently
+        dropped the other project out of the phase-advancement sweep's
+        coverage regardless of whether max_concurrent_projects was
+        actually exceeded. Both must stay active here since the default
+        cap (2) isn't exceeded by two projects."""
         from src.autopilot.orchestrator import _get_or_create_project_id
         from src.core.database import AutopilotProject
 
@@ -4431,8 +4441,43 @@ class TestGetOrCreateProjectId:
         with orch_db_env.session_scope() as session:
             proj_a = session.query(AutopilotProject).filter_by(id=id_a).first()
             proj_b = session.query(AutopilotProject).filter_by(id=id_b).first()
-            assert proj_a.is_active is False
+            assert proj_a.is_active is True
             assert proj_b.is_active is True
+
+    def test_respects_max_concurrent_projects_cap(self, orch_db_env, tmp_path, monkeypatch):
+        """At the cap, a third project must be left inactive, not evict
+        one of the two already-active ones -- try_reserve() (for the
+        /start path) is the authoritative reject, this just must not
+        silently steal the slot out from under an already-running project."""
+        from unittest.mock import MagicMock
+
+        from src.autopilot.orchestrator import _get_or_create_project_id
+        from src.core.database import AutopilotProject
+
+        mock_config = MagicMock()
+        mock_config.max_concurrent_projects = 2
+        monkeypatch.setattr(
+            "src.core.simple_config.get_config", lambda: mock_config
+        )
+
+        project_a = tmp_path / "project-a"
+        project_a.mkdir()
+        project_b = tmp_path / "project-b"
+        project_b.mkdir()
+        project_c = tmp_path / "project-c"
+        project_c.mkdir()
+
+        id_a = _get_or_create_project_id(str(project_a))
+        id_b = _get_or_create_project_id(str(project_b))
+        id_c = _get_or_create_project_id(str(project_c))
+
+        with orch_db_env.session_scope() as session:
+            proj_a = session.query(AutopilotProject).filter_by(id=id_a).first()
+            proj_b = session.query(AutopilotProject).filter_by(id=id_b).first()
+            proj_c = session.query(AutopilotProject).filter_by(id=id_c).first()
+            assert proj_a.is_active is True
+            assert proj_b.is_active is True
+            assert proj_c.is_active is False
 
     def test_concurrent_insert_race_recovers_instead_of_raising(
         self, orch_db_env, tmp_path

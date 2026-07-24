@@ -15,10 +15,13 @@ interface Project {
 
 interface ProjectContextType {
   projects: Project[];
-  activeProject: Project | null;
+  activeProjects: Project[];
+  selectedProject: Project | null;
   loading: boolean;
   error: Error | null;
+  selectProject: (projectId: string) => void;
   activateProject: (projectId: string) => void;
+  deactivateProject: (projectId: string) => void;
   createProject: (name: string, baseDir: string, isDefault?: boolean) => Promise<Project>;
   deleteProject: (projectId: string) => Promise<void>;
   refetch: () => void;
@@ -26,11 +29,10 @@ interface ProjectContextType {
 
 const ProjectContext = createContext<ProjectContextType | undefined>(undefined);
 
+const SELECTED_PROJECT_KEY = 'selectedProjectId';
+
 export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const queryClient = useQueryClient();
-  const [, setCachedActiveId] = useState<string | null>(() => {
-    return localStorage.getItem('activeProjectId');
-  });
 
   const {
     data: projects = [],
@@ -43,15 +45,39 @@ export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ child
     refetchInterval: 30000,
   });
 
-  const activeProject = projects.find((p: Project) => p.is_active) || null;
+  const activeProjects = projects.filter((p: Project) => p.is_active);
 
-  // Sync localStorage with server state
+  // Which project's data the dashboard is currently showing -- separate
+  // from is_active (which projects have pipelines running). Sticky: once
+  // set, it doesn't move just because another project also becomes
+  // active. Without this separation, selecting project B while project A
+  // stays active (both is_active=true is expected now, not an eviction)
+  // used to make the UI silently snap back to project A a moment later --
+  // `projects.find(p => p.is_active)` picked whichever one came first in
+  // the list, not whichever one was just clicked.
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(() => {
+    return localStorage.getItem(SELECTED_PROJECT_KEY);
+  });
+
+  const selectProject = useCallback((projectId: string) => {
+    setSelectedProjectId(projectId);
+    localStorage.setItem(SELECTED_PROJECT_KEY, projectId);
+  }, []);
+
+  // Fall back when there's no valid selection yet (first load) or the
+  // previously-selected project is gone (deleted): prefer an active
+  // project, then any project, so the dashboard never sits on "no
+  // project" while real projects exist.
   useEffect(() => {
-    if (activeProject) {
-      setCachedActiveId(activeProject.id);
-      localStorage.setItem('activeProjectId', activeProject.id);
-    }
-  }, [activeProject]);
+    if (projects.length === 0) return;
+    const stillExists = projects.some((p: Project) => p.id === selectedProjectId);
+    if (stillExists) return;
+    const fallback = activeProjects[0] || projects[0];
+    if (fallback) selectProject(fallback.id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projects]);
+
+  const selectedProject = projects.find((p: Project) => p.id === selectedProjectId) || null;
 
   const activateMutation = useMutation({
     mutationFn: (projectId: string) => apiService.activateProject(projectId),
@@ -62,10 +88,13 @@ export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ child
       // Snapshot the previous value
       const previousProjects = queryClient.getQueryData<Project[]>(['projects']);
 
-      // Optimistically update to the new value
+      // Optimistically mark just the target project active -- activating
+      // one project no longer deactivates any other (the backend caps
+      // concurrent active projects instead of enforcing exclusivity), so
+      // this must not touch every other project's is_active like it used to.
       queryClient.setQueryData(['projects'], (old: Project[] | undefined) => {
         if (!old) return old;
-        return old.map(p => ({ ...p, is_active: p.id === projectId }));
+        return old.map(p => (p.id === projectId ? { ...p, is_active: true } : p));
       });
 
       return { previousProjects };
@@ -76,7 +105,8 @@ export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ child
         queryClient.setQueryData(['projects'], context.previousProjects);
       }
     },
-    onSuccess: () => {
+    onSuccess: (_data, projectId) => {
+      selectProject(projectId);
       // Invalidate project-scoped queries in background (don't block UI)
       setTimeout(() => {
         queryClient.invalidateQueries({ queryKey: ['autopilot-status'] });
@@ -95,6 +125,29 @@ export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ child
     },
     onSettled: () => {
       // Refetch projects in background
+      setTimeout(() => {
+        queryClient.invalidateQueries({ queryKey: ['projects'] });
+      }, 0);
+    },
+  });
+
+  const deactivateMutation = useMutation({
+    mutationFn: (projectId: string) => apiService.deactivateProject(projectId),
+    onMutate: async (projectId) => {
+      await queryClient.cancelQueries({ queryKey: ['projects'] });
+      const previousProjects = queryClient.getQueryData<Project[]>(['projects']);
+      queryClient.setQueryData(['projects'], (old: Project[] | undefined) => {
+        if (!old) return old;
+        return old.map(p => (p.id === projectId ? { ...p, is_active: false } : p));
+      });
+      return { previousProjects };
+    },
+    onError: (_err, _projectId, context) => {
+      if (context?.previousProjects) {
+        queryClient.setQueryData(['projects'], context.previousProjects);
+      }
+    },
+    onSettled: () => {
       setTimeout(() => {
         queryClient.invalidateQueries({ queryKey: ['projects'] });
       }, 0);
@@ -120,6 +173,10 @@ export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ child
     activateMutation.mutate(projectId);
   }, [activateMutation]);
 
+  const deactivateProject = useCallback((projectId: string) => {
+    deactivateMutation.mutate(projectId);
+  }, [deactivateMutation]);
+
   const createProject = useCallback(async (name: string, baseDir: string, isDefault?: boolean) => {
     return createMutation.mutateAsync({ name, baseDir, isDefault });
   }, [createMutation]);
@@ -132,10 +189,13 @@ export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ child
     <ProjectContext.Provider
       value={{
         projects,
-        activeProject,
+        activeProjects,
+        selectedProject,
         loading: isLoading,
         error: error as Error | null,
+        selectProject,
         activateProject,
+        deactivateProject,
         createProject,
         deleteProject,
         refetch,

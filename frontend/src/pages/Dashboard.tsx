@@ -80,8 +80,8 @@ const Dashboard: React.FC = () => {
   const { subscribe } = useWebSocket();
   const { selectedExecutionId, selectedExecution } = useWorkflow();
   const navigate = useNavigate();
-  const { activeProject } = useProject();
-  const projectId = activeProject?.id || null;
+  const { selectedProject } = useProject();
+  const projectId = selectedProject?.id || null;
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['dashboard-stats', projectId],

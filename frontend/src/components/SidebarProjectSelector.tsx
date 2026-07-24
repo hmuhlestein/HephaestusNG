@@ -9,7 +9,7 @@ interface SidebarProjectSelectorProps {
 }
 
 const SidebarProjectSelector: React.FC<SidebarProjectSelectorProps> = ({ collapsed }) => {
-  const { projects, activeProject, activateProject, createProject } = useProject();
+  const { projects, selectedProject, activateProject, deactivateProject, createProject } = useProject();
   const [open, setOpen] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
   const [newName, setNewName] = useState('');
@@ -26,7 +26,7 @@ const SidebarProjectSelector: React.FC<SidebarProjectSelectorProps> = ({ collaps
 
   if (collapsed) {
     return (
-      <div className="px-4 py-3 flex justify-center" title={activeProject?.name || 'No project'}>
+      <div className="px-4 py-3 flex justify-center" title={selectedProject?.name || 'No project'}>
         <FolderOpen className="w-5 h-5 text-violet-500" />
       </div>
     );
@@ -40,7 +40,7 @@ const SidebarProjectSelector: React.FC<SidebarProjectSelectorProps> = ({ collaps
       >
         <FolderOpen className="w-4 h-4 text-violet-500 flex-shrink-0" />
         <span className="flex-1 text-left truncate font-medium text-gray-700">
-          {activeProject?.name || 'No project'}
+          {selectedProject?.name || 'No project'}
         </span>
         <ChevronDown className={`w-3.5 h-3.5 text-gray-400 transition-transform flex-shrink-0 ${open ? 'rotate-180' : ''}`} />
       </button>
@@ -63,10 +63,15 @@ const SidebarProjectSelector: React.FC<SidebarProjectSelectorProps> = ({ collaps
                 <div
                   key={proj.id}
                   className={`flex items-center gap-3 px-3 py-2.5 cursor-pointer transition-colors ${
-                    proj.id === activeProject?.id ? 'bg-violet-50' : 'hover:bg-gray-50'
+                    proj.id === selectedProject?.id ? 'bg-violet-50' : 'hover:bg-gray-50'
                   }`}
                   onClick={() => { activateProject(proj.id); setOpen(false); }}
+                  title={proj.is_active ? 'Active — click to view' : 'Click to activate and view'}
                 >
+                  <span
+                    className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${proj.is_active ? 'bg-green-500' : 'bg-gray-300'}`}
+                    title={proj.is_active ? 'Active' : 'Inactive'}
+                  />
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-1.5">
                       <span className="text-sm font-medium text-gray-800 truncate">{proj.name}</span>
@@ -74,7 +79,16 @@ const SidebarProjectSelector: React.FC<SidebarProjectSelectorProps> = ({ collaps
                     </div>
                     <span className="text-xs text-gray-400 truncate block">{proj.base_dir}</span>
                   </div>
-                  {proj.id === activeProject?.id && <Check className="w-4 h-4 text-violet-600 flex-shrink-0" />}
+                  {proj.id === selectedProject?.id && <Check className="w-4 h-4 text-violet-600 flex-shrink-0" />}
+                  {proj.is_active && proj.id !== selectedProject?.id && (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); deactivateProject(proj.id); }}
+                      className="p-1 rounded hover:bg-gray-200 text-gray-400 hover:text-gray-600 flex-shrink-0"
+                      title="Deactivate"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  )}
                 </div>
               ))}
             </div>

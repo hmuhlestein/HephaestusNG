@@ -36,8 +36,13 @@ def register(subparsers):
     act.add_argument("project", help="Project ID or name")
     act.set_defaults(func=activate_project)
 
+    # deactivate
+    deact = sub.add_parser("deactivate", help="Deactivate a project")
+    deact.add_argument("project", help="Project ID or name")
+    deact.set_defaults(func=deactivate_project)
+
     # current
-    cur = sub.add_parser("current", help="Show active project")
+    cur = sub.add_parser("current", help="Show active project(s)")
     cur.set_defaults(func=current_project)
 
     # delete
@@ -187,14 +192,37 @@ def activate_project(args):
     if result is None:
         print("Error: Backend not running. Start it with 'heph start' first.")
         return 1
+    if isinstance(result, dict) and "error" in result:
+        print(f"Error: {result.get('detail', result['error'])}")
+        return 1
 
     print(f"Activated: {result['name']} ({result['base_dir']})")
+    return 0
+
+
+def deactivate_project(args):
+    project_id = _resolve_project_id(args, args.project)
+    if not project_id:
+        return 1
+
+    result = api_post(args, f"/api/projects/{project_id}/deactivate", {})
+    if result is None:
+        print("Error: Backend not running. Start it with 'heph start' first.")
+        return 1
+    if isinstance(result, dict) and "error" in result:
+        print(f"Error: {result.get('detail', result['error'])}")
+        return 1
+
+    print(f"Deactivated: {result['name']} ({result['base_dir']})")
     return 0
 
 
 def current_project(args):
     result = api_get(args, "/api/projects/active")
     if result is None:
+        return 1
+    if isinstance(result, dict) and "error" in result:
+        print(f"Error: {result.get('detail', result['error'])}")
         return 1
 
     if not result:
@@ -206,9 +234,10 @@ def current_project(args):
 
         print(json.dumps(result, indent=2))
     else:
-        print(f"Active project: {result['name']}")
-        print(f"  Path:  {result['base_dir']}")
-        print(f"  ID:    {result['id']}")
+        for proj in result:
+            print(f"Active project: {proj['name']}")
+            print(f"  Path:  {proj['base_dir']}")
+            print(f"  ID:    {proj['id']}")
     return 0
 
 

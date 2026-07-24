@@ -25,10 +25,18 @@ def register(subparsers):
 
     # stop
     st = sub.add_parser("stop", help="Stop the autopilot pipeline")
+    st.add_argument(
+        "--project-path", "-p",
+        help="Only stop this project (default: stop every currently running project)",
+    )
     st.set_defaults(func=stop_pipeline)
 
     # status
     stat = sub.add_parser("status", help="Show autopilot status")
+    stat.add_argument(
+        "--project-path", "-p",
+        help="Show status for this project only (default: summary across every running project)",
+    )
     stat.set_defaults(func=pipeline_status)
 
     # queue
@@ -43,6 +51,27 @@ def register(subparsers):
     a.set_defaults(func=add_to_queue)
 
     p.set_defaults(func=lambda a: p.print_help() or 0)
+
+
+def _resolve_project_id_by_path(project_path):
+    """Resolve an AutopilotProject's id from its base_dir (realpath-
+    resolved). Returns None if not found or the backend is unreachable --
+    callers should decide what "not found" means for them (e.g. stop
+    falls back to stopping every running project, matching /stop's own
+    documented behavior when project_id is omitted)."""
+    import requests
+
+    try:
+        resp = requests.get("http://127.0.0.1:8300/api/projects", timeout=5)
+        if resp.status_code != 200:
+            return None
+        resolved = str(Path(project_path).resolve())
+        for proj in resp.json():
+            if str(Path(proj["base_dir"]).resolve()) == resolved:
+                return proj["id"]
+    except Exception:
+        pass
+    return None
 
 
 def start_pipeline(args):
@@ -118,7 +147,20 @@ def start_pipeline(args):
     except KeyboardInterrupt:
         print("\nStopping pipeline...")
         try:
-            requests.post("http://127.0.0.1:8300/api/autopilot/stop", timeout=30)
+            # Scope to just this project -- /stop with no project_id stops
+            # EVERY currently running project (no single global service to
+            # fall back to now that projects run concurrently), which would
+            # silently kill an unrelated project's pipeline Ctrl+C here was
+            # never meant to touch.
+            stop_project_id = _resolve_project_id_by_path(project_path)
+            requests.post(
+                "http://127.0.0.1:8300/api/autopilot/stop",
+                # /stop's clear_state/project_id are bare scalar params, not
+                # a Pydantic body model -- FastAPI binds those from the
+                # query string, not JSON body.
+                params={"project_id": stop_project_id} if stop_project_id else {},
+                timeout=30,
+            )
             print("Pipeline stopped.")
         except Exception as e:
             print(f"Error stopping: {e}")
@@ -128,12 +170,25 @@ def start_pipeline(args):
 def stop_pipeline(args):
     import requests
 
-    print("Stopping autopilot pipeline...")
+    params = {"clear_state": False}
+    project_path = getattr(args, "project_path", None)
+    if project_path:
+        project_id = _resolve_project_id_by_path(project_path)
+        if not project_id:
+            print(f"Error: No registered project found for path: {project_path}")
+            return 1
+        params["project_id"] = project_id
+        print(f"Stopping autopilot pipeline for {project_path}...")
+    else:
+        print("Stopping every running autopilot pipeline...")
 
     try:
+        # /stop's clear_state/project_id are bare scalar params, not a
+        # Pydantic body model -- FastAPI binds those from the query
+        # string, not JSON body.
         resp = requests.post(
             "http://127.0.0.1:8300/api/autopilot/stop",
-            json={"clear_state": False},
+            params=params,
             timeout=30,
         )
         if resp.status_code == 200:
@@ -155,8 +210,19 @@ def stop_pipeline(args):
 def pipeline_status(args):
     import requests
 
+    params = {}
+    project_path = getattr(args, "project_path", None)
+    if project_path:
+        project_id = _resolve_project_id_by_path(project_path)
+        if not project_id:
+            print(f"Error: No registered project found for path: {project_path}")
+            return 1
+        params["project_id"] = project_id
+
     try:
-        resp = requests.get("http://127.0.0.1:8300/api/autopilot/status", timeout=5)
+        resp = requests.get(
+            "http://127.0.0.1:8300/api/autopilot/status", params=params, timeout=5
+        )
         if resp.status_code == 200:
             data = resp.json()
             output(args, data, _print_pipeline_status)
@@ -177,6 +243,16 @@ def _print_pipeline_status(data):
         print(f"Autopilot: RUNNING (pid {data.get('pid', '?')})")
     else:
         print("Autopilot: NOT RUNNING")
+
+    # Only present for the global (no --project-path) status check --
+    # lists EVERY currently running project, not just the one this
+    # response's other fields (current_design, etc.) happen to reflect.
+    running_projects = data.get("running_projects") or []
+    if running_projects:
+        print()
+        print("Running projects:")
+        for proj in running_projects:
+            print(f"  - {proj.get('name') or proj.get('base_dir')}")
 
     run = data.get("latest_run")
     if run:

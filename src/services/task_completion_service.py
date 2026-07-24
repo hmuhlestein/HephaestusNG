@@ -125,7 +125,20 @@ class TaskCompletionService:
                 ),
             }
 
-        feature_dir = _Path(config.project_root) / CONTEXT_DIR_NAME / "features"
+        # Search the task's own project's feature folder, not whichever
+        # project the process-wide singleton currently points at -- with
+        # two projects active simultaneously that can be a different repo,
+        # silently missing a real output or matching a same-named file from
+        # the wrong project.
+        project_base_dir = None
+        if wf and wf.project_id:
+            from src.core.database import AutopilotProject
+
+            proj = session.query(AutopilotProject).filter_by(id=wf.project_id).first()
+            if proj and proj.base_dir:
+                project_base_dir = proj.base_dir
+
+        feature_dir = _Path(project_base_dir or config.project_root) / CONTEXT_DIR_NAME / "features"
         missing = []
         invalid_json = []
         for declared_output in required_files:
@@ -689,13 +702,18 @@ class TaskCompletionService:
                 else:
                     logger.error(f"Task {task_id} not found during validation update")
 
+            from src.core.database import resolve_project_for_workflow
+
+            bcast_project_id, bcast_project_name = resolve_project_for_workflow(task_workflow_id)
             await server_state.broadcast_update(
                 {
                     "type": "validation_started",
                     "task_id": task_id,
                     "validator_id": validator_id,
                     "original_agent_id": agent_id,
-                }
+                },
+                project_id=bcast_project_id,
+                project_name=bcast_project_name,
             )
 
         except Exception as e:
@@ -873,6 +891,9 @@ class TaskCompletionService:
                 )
                 logger.info(f"Commit {merge_commit_sha} linked to ticket {task.ticket_id}")
 
+                from src.core.database import resolve_project_for_workflow
+
+                bcast_project_id, bcast_project_name = resolve_project_for_workflow(task.workflow_id)
                 await server_state.broadcast_update(
                     {
                         "type": "ticket_commit_linked",
@@ -880,7 +901,9 @@ class TaskCompletionService:
                         "task_id": task.id,
                         "agent_id": agent_id,
                         "commit_sha": merge_commit_sha,
-                    }
+                    },
+                    project_id=bcast_project_id,
+                    project_name=bcast_project_name,
                 )
             except Exception as e:
                 logger.error(f"Failed to auto-link commit to ticket: {e}")

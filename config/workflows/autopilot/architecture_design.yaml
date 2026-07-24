@@ -127,7 +127,15 @@ additional_notes: |
   
   DEFAULT: always prefer `src/<module>.py`. Never place source `.py` files at the project
   root. Tests always go in `tests/`. Document the chosen layout in architecture.md.
-  
+
+  PRE-EXISTING TECH DEBT (ticket it, don't fix it, don't let it expand your design):
+  While exploring the existing codebase near what you're about to design for, you
+  will sometimes find tech debt that already exists — dead code, missing tests,
+  inconsistent patterns, known workarounds. That's not this task's job to fix, and
+  it's not a reason to widen the architecture to "clean it up first." File one
+  hephaestus_create_ticket(ticket_type="improvement", tags=["tech-debt"], ...) per
+  distinct item so it's tracked instead of silently dropped, then move on.
+
   ═══════════════════════════════════════════════════════════════════════
   STEP 2: DESIGN SYSTEM ARCHITECTURE
   ═══════════════════════════════════════════════════════════════════════

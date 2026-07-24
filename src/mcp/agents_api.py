@@ -537,6 +537,8 @@ async def terminate_agent_endpoint(
                 task.completed_at = datetime.utcnow()
                 session.commit()
 
+            task_workflow_id = task.workflow_id if task else None
+
         finally:
             session.close()
 
@@ -545,12 +547,19 @@ async def terminate_agent_endpoint(
         asyncio.create_task(process_queue())
 
         # Broadcast update
+        from src.core.database import resolve_project_for_workflow
+
+        bcast_project_id, bcast_project_name = resolve_project_for_workflow(
+            task_workflow_id
+        )
         await server_state.broadcast_update(
             {
                 "type": "agent_terminated_manually",
                 "agent_id": agent_id,
                 "reason": reason,
-            }
+            },
+            project_id=bcast_project_id,
+            project_name=bcast_project_name,
         )
 
         return {
