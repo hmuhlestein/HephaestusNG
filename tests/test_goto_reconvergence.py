@@ -6,7 +6,7 @@ only completes after the final phase.
 """
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from unittest.mock import MagicMock
 
 import pytest
@@ -589,3 +589,53 @@ def test_start_next_phase_honors_action_target_phase_skipping_intermediates(
         db_session.query(PhaseExecution).filter_by(phase_id=phase_ids[3]).first()
     )
     assert target_execution.status == "in_progress"
+
+
+def test_start_next_phase_ignores_goto_tag_from_a_prior_cycle(
+    db_session, db_manager, phase_ids
+):
+    """Regression: a phase revisited via goto reuses the same phase_id
+    across cycles. A synthetic completion (e.g. _cap_out_review_phase's
+    review-run cap) closes the phase via mark_phase_complete WITHOUT ever
+    creating a new Task row for this cycle -- so "the last done task" for
+    that phase_id can be one from cycles ago, carrying a goto tag that has
+    nothing to do with this pass. Observed live: qa_validation hit its
+    review-run cap, scored a clean synthetic pass, but the only "done"
+    task on record was a goto/development tag from 2 days earlier -- the
+    pipeline resumed at development instead of advancing to the next
+    phase by order, even though nothing THIS cycle sent it back."""
+    from src.phases.phase_manager import PhaseManager
+
+    pm = PhaseManager(db_manager)
+    pm.workflow_id = db_session.query(Workflow).first().id
+
+    target_phase_name = db_session.query(Phase).filter_by(id=phase_ids[3]).first().name
+
+    # An old task from a PRIOR cycle, carrying a real goto tag.
+    stale_task = Task(
+        id=str(uuid.uuid4()),
+        phase_id=phase_ids[0],
+        workflow_id=pm.workflow_id,
+        raw_description="Fix per qa_validation findings (old cycle)",
+        done_definition="done",
+        status="done",
+        action="goto",
+        action_target_phase=target_phase_name,
+        created_at=datetime.utcnow() - timedelta(hours=48),
+        completed_at=datetime.utcnow() - timedelta(hours=48),
+    )
+    db_session.add(stale_task)
+
+    # This cycle's own execution started AFTER that stale task -- no new
+    # task was created this time (a synthetic completion), so the stale
+    # task must not be picked up as "this cycle's" goto tag.
+    execution = (
+        db_session.query(PhaseExecution).filter_by(phase_id=phase_ids[0]).first()
+    )
+    execution.started_at = datetime.utcnow() - timedelta(minutes=1)
+    db_session.commit()
+
+    next_phase = pm._start_next_phase(db_session, phase_ids[0])
+
+    assert next_phase is not None
+    assert next_phase.id == phase_ids[1]  # next by order, not phase_ids[3]

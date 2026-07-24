@@ -1394,7 +1394,27 @@ class PhaseManager:
         # not just when the sweep happens to run before a task exists yet.
         # Falls back to next-by-order when no target was supplied (a plain
         # "continue" completion, not a goto/retry return).
+        #
+        # Scoped to Task.created_at >= this cycle's own started_at (reset
+        # whenever the phase (re)starts -- see below and orchestrator.py's
+        # _handle_force_goto). A phase revisited via goto reuses the same
+        # phase_id across cycles, so an unscoped "most recent done task"
+        # lookup can find a task from a PRIOR cycle that never got replaced
+        # this time -- e.g. a synthetic cap-out completion (_cap_out_review_
+        # phase) closes the phase via mark_phase_complete without ever
+        # creating a new Task row, so the "last done task" is still
+        # whatever task last ran, potentially cycles ago. Observed live:
+        # qa_validation capped out and scored a clean pass, but the
+        # "last done task" was a goto/development tag from 2 days earlier
+        # -- the pipeline resumed at development instead of advancing to
+        # product_validation, even though nothing this cycle sent it back.
         from src.core.constants import DIAGNOSTIC_TASK_PREFIX
+
+        current_execution = (
+            session.query(PhaseExecution).filter_by(phase_id=current_phase_id).first()
+        )
+        cycle_start = current_execution.started_at if current_execution else None
+        cycle_filter = (Task.created_at >= cycle_start,) if cycle_start else ()
 
         next_phase = None
         last_task = (
@@ -1403,6 +1423,7 @@ class PhaseManager:
                 Task.phase_id == current_phase_id,
                 Task.status == "done",
                 ~Task.raw_description.like(f"{DIAGNOSTIC_TASK_PREFIX}%"),
+                *cycle_filter,
             )
             .order_by(Task.completed_at.desc())
             .first()
