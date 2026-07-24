@@ -291,6 +291,7 @@ class PhaseManager:
                             else None
                         ),
                         thinking_level=phase_def.thinking_level,
+                        self_review=phase_def.self_review,
                     )
                     session.add(phase)
 
