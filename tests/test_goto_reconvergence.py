@@ -17,6 +17,7 @@ from src.core.database import (
     Base,
     Phase,
     PhaseExecution,
+    Task,
     Workflow,
     WorkflowDefinition,
 )
@@ -458,9 +459,11 @@ def test_start_next_phase_returns_true_for_completed(db_session, db_manager, pha
     )
     db_session.commit()
 
-    # _start_next_phase should return True even though phase 3 was already completed
+    # _start_next_phase should return the started Phase even though phase 3
+    # was already completed
     result = pm._start_next_phase(db_session, phase_ids[1])
-    assert result is True
+    assert result is not None
+    assert result.id == phase_ids[2]
     assert (
         db_session.query(PhaseExecution).filter_by(phase_id=phase_ids[2]).first().status
         == "in_progress"
@@ -490,3 +493,99 @@ def test_start_next_phase_resets_task_creation_claim(db_session, db_manager, pha
     db_session.refresh(next_execution)
     assert next_execution.status == "in_progress"
     assert next_execution.task_creation_claimed_at is None
+
+
+def test_mark_phase_complete_target_phase_id_matches_started_phase(
+    db_session, db_manager, phase_ids
+):
+    """Regression: mark_phase_complete's returned target_phase_id (what
+    orchestrator.py's dispatch uses to create the next Task) must name the
+    SAME phase that was actually flipped to in_progress. Previously
+    _advance_or_complete_with_phase_info recomputed the target via a
+    separate, order-only lookup that didn't know about action_target_phase,
+    so it could report a different phase than the one _start_next_phase
+    actually started -- orchestrator would then dispatch a task for the
+    wrong phase while the right one sat in_progress with no task."""
+    from src.phases.phase_manager import PhaseManager
+
+    pm = PhaseManager(db_manager)
+    pm.workflow_id = db_session.query(Workflow).first().id
+
+    target_phase_name = db_session.query(Phase).filter_by(id=phase_ids[3]).first().name
+
+    task = Task(
+        id=str(uuid.uuid4()),
+        phase_id=phase_ids[0],
+        workflow_id=pm.workflow_id,
+        raw_description="Fix per qa_validation findings",
+        done_definition="done",
+        status="done",
+        action="goto",
+        action_target_phase=target_phase_name,
+        completed_at=datetime.utcnow(),
+    )
+    db_session.add(task)
+    db_session.query(PhaseExecution).filter_by(phase_id=phase_ids[0]).update(
+        {"status": "in_progress"}
+    )
+    db_session.commit()
+
+    result = pm.mark_phase_complete(
+        phase_ids[0], "P1 done", phase_output={"score": 0.8}
+    )
+
+    assert result["target_phase_id"] == phase_ids[3]
+    actually_started = (
+        db_session.query(PhaseExecution).filter_by(phase_id=phase_ids[3]).first()
+    )
+    assert actually_started.status == "in_progress"
+
+
+def test_start_next_phase_honors_action_target_phase_skipping_intermediates(
+    db_session, db_manager, phase_ids
+):
+    """Regression: a task's own action_target_phase (recorded when it was
+    created because an earlier phase goto'd back to it) must be honored on
+    that task's own completion -- resuming directly at the recorded target,
+    not by walking forward one intermediate phase at a time.
+
+    E.g. qa_validation (phase_4) finds an issue and goto's back to
+    development (phase_1) with action_target_phase="phase_4" -- once
+    development's fix is done, the pipeline must jump straight back to
+    phase_4, not re-run phase_2/phase_3 (architectural_review/
+    adversarial_review) from scratch."""
+    from src.phases.phase_manager import PhaseManager
+
+    pm = PhaseManager(db_manager)
+    pm.workflow_id = db_session.query(Workflow).first().id
+
+    target_phase_name = db_session.query(Phase).filter_by(id=phase_ids[3]).first().name
+
+    task = Task(
+        id=str(uuid.uuid4()),
+        phase_id=phase_ids[0],
+        workflow_id=pm.workflow_id,
+        raw_description="Fix per qa_validation findings",
+        done_definition="done",
+        status="done",
+        action="goto",
+        action_target_phase=target_phase_name,
+        completed_at=datetime.utcnow(),
+    )
+    db_session.add(task)
+    db_session.commit()
+
+    next_phase = pm._start_next_phase(db_session, phase_ids[0])
+
+    assert next_phase is not None
+    assert next_phase.id == phase_ids[3]
+
+    # Intermediate phases must be left untouched -- not started.
+    for pid in (phase_ids[1], phase_ids[2]):
+        execution = db_session.query(PhaseExecution).filter_by(phase_id=pid).first()
+        assert execution.status == "pending"
+
+    target_execution = (
+        db_session.query(PhaseExecution).filter_by(phase_id=phase_ids[3]).first()
+    )
+    assert target_execution.status == "in_progress"
