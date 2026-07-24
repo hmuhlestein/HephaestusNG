@@ -16,6 +16,21 @@ const statusColors: Record<string, string> = {
   cancelled: 'bg-gray-500',
 };
 
+const statusLabels: Record<string, string> = {
+  active: 'ACTIVE',
+  paused: 'PAUSED',
+  completed: 'COMPLETED',
+  failed: 'FAILED',
+  cancelled: 'CANCELLED',
+};
+
+const getStatusLabel = (execution: WorkflowExecution): string => {
+  if (execution.status === 'paused' && execution.paused_by === 'budget') {
+    return 'PAUSED: BUDGET LIMIT REACHED';
+  }
+  return statusLabels[execution.status] || execution.status.toUpperCase();
+};
+
 const formatDuration = (startTime: string) => {
   const start = new Date(startTime);
   const now = new Date();
@@ -119,7 +134,7 @@ export default function WorkflowCard({
           <span
             className={`px-2 py-1 rounded text-xs font-medium ${statusColors[execution.status]} text-white`}
           >
-            {execution.status.toUpperCase()}
+            {getStatusLabel(execution)}
           </span>
           <div className="flex items-center gap-2">
             <span className="text-gray-500 text-sm">{execution.definition_name}</span>

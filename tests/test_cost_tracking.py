@@ -710,7 +710,7 @@ class TestSecurityValidation:
         from src.mcp.autopilot_api import CostEntryCreate
 
         for source in ["pi", "claude_code", "opencode", "codex", "openrouter_direct"]:
-            entry = CostEntryCreate(source=source, cost_usd=1.0)
+            entry = CostEntryCreate(source=source, cost_usd=1.0, task_id="task-123")
             assert entry.source == source
 
     def test_reject_negative_token_counts(self):
@@ -743,7 +743,7 @@ class TestSecurityValidation:
         """Test that zero cost is valid (could be free tier or cached)."""
         from src.mcp.autopilot_api import CostEntryCreate
 
-        entry = CostEntryCreate(source="pi", cost_usd=0.0)
+        entry = CostEntryCreate(source="pi", cost_usd=0.0, task_id="task-123")
         assert entry.cost_usd == 0.0
 
     def test_accept_valid_cost_range(self):
@@ -751,5 +751,45 @@ class TestSecurityValidation:
         from src.mcp.autopilot_api import CostEntryCreate
 
         for cost in [0.001, 0.05, 1.0, 50.0, 100.0, 999.0]:
-            entry = CostEntryCreate(source="pi", cost_usd=cost)
+            entry = CostEntryCreate(source="pi", cost_usd=cost, task_id="task-123")
             assert entry.cost_usd == cost
+
+    def test_reject_unlinked_costs(self):
+        """Test that cost entries without entity links are rejected (SEC-04).
+
+        Without task_id or workflow_id, the cost bypasses budget enforcement
+        because no derivation rollup occurs.
+        """
+        from pydantic import ValidationError
+
+        from src.mcp.autopilot_api import CostEntryCreate
+
+        with pytest.raises(ValidationError, match="At least one of task_id or workflow_id"):
+            CostEntryCreate(
+                source="pi",
+                cost_usd=1.0,
+            )
+
+    def test_accept_with_task_id_only(self):
+        """Test that cost entries with only task_id are accepted."""
+        from src.mcp.autopilot_api import CostEntryCreate
+
+        entry = CostEntryCreate(source="pi", cost_usd=1.0, task_id="task-123")
+        assert entry.task_id == "task-123"
+        assert entry.workflow_id is None
+
+    def test_accept_with_workflow_id_only(self):
+        """Test that cost entries with only workflow_id are accepted."""
+        from src.mcp.autopilot_api import CostEntryCreate
+
+        entry = CostEntryCreate(source="pi", cost_usd=1.0, workflow_id="wf-456")
+        assert entry.workflow_id == "wf-456"
+        assert entry.task_id is None
+
+    def test_accept_with_both_ids(self):
+        """Test that cost entries with both task_id and workflow_id are accepted."""
+        from src.mcp.autopilot_api import CostEntryCreate
+
+        entry = CostEntryCreate(source="pi", cost_usd=1.0, task_id="task-123", workflow_id="wf-456")
+        assert entry.task_id == "task-123"
+        assert entry.workflow_id == "wf-456"

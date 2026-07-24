@@ -493,6 +493,8 @@ export interface WorkflowExecution {
   definition_name: string;
   description: string;
   status: 'active' | 'paused' | 'completed' | 'failed';
+  paused_by?: string | null;
+  status_reason?: string | null;
   created_at: string;
   working_directory: string;
   stats: {

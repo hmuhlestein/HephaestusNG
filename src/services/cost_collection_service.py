@@ -71,7 +71,7 @@ class PiJsonlCollector(CostCollector):
     ) -> Tuple[List[dict], int]:
         """Collect cost entries from a pi session JSONL file."""
         entries = []
-        lines_processed = 0
+        lines_processed = checkpoint  # Preserve checkpoint if no new lines
 
         try:
             with open(session_file) as f:
@@ -184,7 +184,7 @@ class ClaudeCodeCollector(CostCollector):
     ) -> Tuple[List[dict], int]:
         """Collect cost entries from a Claude Code session JSONL file."""
         entries = []
-        lines_processed = 0
+        lines_processed = checkpoint  # Preserve checkpoint if no new lines
 
         try:
             with open(session_file) as f:
@@ -358,8 +358,6 @@ def _discover_session_file(session_id: str, cwd: str) -> Optional[Path]:
         Path to session file, or None if not found
     """
     # SECURITY: Sanitize cwd to prevent path traversal
-    # Remove any path traversal sequences and normalize
-
     # Reject paths with obvious traversal attempts
     if ".." in cwd or "~" in cwd:
         logger.warning(f"Rejected session file discovery with suspicious cwd: {cwd}")

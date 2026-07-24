@@ -1,790 +1,552 @@
-# Product Requirements Analysis: Cost Derivation Engine
+# Product Requirements Analysis: Budget Enforcement and Pipeline Throttling
 
-**Feature ID:** cost-derivation-engine
-**Feature Name:** Cost Derivation Engine
-**Status:** Requirements Extracted
-**Date:** 2026-07-21
-**Design Document:** `.hephaestus/design.md` (primary), `docs/COST_TRACKING_DESIGN.md`
-**Related Design Docs:** `design_docs/per_task_cost_tracking.md`, `design_docs/budget_tracking_approval_system.md`
-**Branch:** `feature/des-91c8-cost-derivation`
+**Feature ID:** des-91c8-budget-enforcement  
+**Feature Name:** Budget Enforcement and Pipeline Throttling  
+**Status:** Requirements Extracted  
+**Date:** 2026-07-21  
+**Design Document:** `docs/COST_TRACKING_DESIGN.md` (Budget Enforcement section) + `.hephaestus/design.md`  
+**Related Design Docs:** `design_docs/budget_tracking_approval_system.md`, `design_docs/per_task_cost_tracking.md`  
+**Parent Feature:** Cost Tracking Database Schema (DES-91c8) — already merged
 
 ---
 
 ## 1. Executive Summary
 
-Implement a comprehensive cost derivation engine for HephaestusNG's autopilot pipeline. The engine computes per-task, per-workflow, per-feature, per-design, and per-project cost totals from an append-only `cost_entries` ledger, following the same self-healing derivation pattern already established by `src/core/status_derivation.py`.
+The Cost Tracking Database Schema feature (already merged) established the foundational data model: `cost_entries` ledger table, `SessionCostCheckpoint` for session tracking, `cost_total_usd` rollup columns on all entity models, `cost_limit_usd` on `AutopilotProject`, self-healing cost derivation via `cost_derivation.py`, and a Pi JSONL collector wired into task completion.
 
-**Current State:** The core module `src/core/cost_derivation.py` is already implemented with `record_cost`, `derive_task_cost`, `derive_workflow_cost`, `derive_feature_cost`, `derive_design_cost`, `derive_project_cost`, `check_budget_before_new_work`, and `_pause_project_workflows`. The `CostEntry` and `SessionCostCheckpoint` models exist in `database.py`. The `cost_collection_service.py` implements collectors for pi, Claude Code, OpenCode, and Codex (stub). The `cost_total_usd` rollup columns exist on Task, Feature, Workflow, AutopilotDesign, and AutopilotProject. The `cost_limit_usd` column exists on AutopilotProject.
+**This feature completes the enforcement layer.** The cost data infrastructure exists but the pipeline doesn't yet *react* to it. The orchestrator has no budget guards in its design/feature queue loops, the `paused_by` guards only recognize `"user"` (not `"budget"`), and the UI has no cost visibility or budget configuration. Without this feature, a user can set `cost_limit_usd` on a project and cost data will be tracked and rolled up, but the pipeline will happily continue spending indefinitely — the budget limit is stored but not enforced.
 
-**Target State:** A fully wired cost derivation engine that captures cost data from all LLM sources, derives accurate rollup totals, enforces per-project budgets, and surfaces cost data in the UI — with comprehensive test coverage and documentation.
+**Current State (from Cost Tracking Schema merge):**
+- ✅ `CostEntry` table with all columns and indexes
+- ✅ `SessionCostCheckpoint` table keyed by `session_id`
+- ✅ `cost_total_usd` on `Task`, `Feature`, `Workflow`, `AutopilotDesign`, `AutopilotProject`
+- ✅ `cost_limit_usd` on `AutopilotProject` (nullable, None = no limit)
+- ✅ `cost_derivation.py` with self-healing rollup chain + `_check_budget_enforcement` + `_pause_project_workflows` (Phase 0 fix: matches both `"autopilot"` and `"autopilot-phase0"`)
+- ✅ `check_budget_before_new_work()` guard function (exists but NOT called anywhere in orchestrator)
+- ✅ Pi JSONL collector in `cost_collection_service.py`
+- ✅ `collect_task_cost()` wired into `task_completion_service.py`
+- ✅ `POST /cost-entries` API endpoint with agent authentication
+- ✅ `cost_limit_usd` in `ProjectUpdate`/`ProjectItem` API models
+- ✅ Budget pause clearing logic in `update_project` API (clears `"budget"`-paused workflows when limit raised/cleared)
+- ✅ Tests for cost derivation, budget enforcement, pause idempotency
+
+**Target State (this feature):**
+- Orchestrator blocks new work for over-budget projects (budget guards in `pick_next_design` and `_run_one_feature`)
+- All self-heal/auto-resume guards recognize `"budget"`-paused workflows (generalize `== "user"` to `is not None`)
+- `/autopilot/stop` endpoint refactored to use shared `_pause_project_workflows` (fixing its Phase 0 gap)
+- UI shows cost data and budget configuration
+- Comprehensive integration tests for the full enforcement lifecycle
 
 ---
 
 ## 2. Problem Statement
 
-LLM API calls happen across multiple independent channels:
+### 2.1 Enforcement Gap
 
-1. **pi CLI agent sessions** — persistent interactive tmux sessions with cost data in JSONL transcripts (`message.usage.cost.total`)
-2. **Claude Code sessions** — persistent tmux sessions with token-only transcripts (no dollar cost — requires price table conversion)
-3. **OpenCode sessions** — one-shot invocations with real dollar cost available via stdout/SQLite
-4. **Backend's own OpenRouter calls** — task enrichment, Guardian, Conductor (~9 call sites in `LangChainLLMClient`)
-5. **Codex sessions** — not yet available for inspection (stub only)
+The cost derivation module (`cost_derivation.py`) checks budgets on every `CostEntry` write and calls `_pause_project_workflows` when the limit is exceeded. However, three critical enforcement points are missing:
 
-None of these channels currently records cost data into a unified ledger. The existing `cost_total: float = 0.0` field on reports (`orchestrator.py:183`, surfaced at `autopilot_api.py:2801`) is never populated above 0.0. Dead code exists in `src/interfaces/cost_tracker.py` (queries a LiteLLM proxy that isn't used) and `src/interfaces/openrouter_client.py` (orphaned).
+1. **New work starts despite over-budget status.** `pick_next_design()` in the orchestrator picks the next pending design from the queue without checking whether the project is over budget. If a project has 10 designs and exceeds its budget after design 3, designs 4-10 will still be picked up and processed.
 
-**Business Impact:** No visibility into which tasks consume the most tokens, what total spend per design is, or whether a project has exceeded its budget. A runaway design iteration can consume hundreds of dollars with no visibility until after completion.
+2. **New feature workflows launch despite over-budget status.** `_run_one_feature()` launches new feature workflows via `run_single_workflow` without checking budget. Even if a running workflow was paused for budget, a new feature in the same design could start.
 
----
+3. **Self-heal guards silently resume budget-paused work.** Three places in the orchestrator check `wf.paused_by == "user"` to avoid auto-resuming deliberately paused workflows: `_try_auto_resume_paused_workflow` (line 3749), `_create_corrective_task` (line 5680), and stuck-workflow restart in `attempt_recovery` (line 5864). A `"budget"`-paused workflow passes right through these guards as if it were normal, causing the self-heal system to reactivate work that was deliberately paused for budget reasons.
 
-## 3. Project Context & Vision
+### 2.2 Phase 0 Gap in `/autopilot/stop`
 
-### 3.1 Hephaestus Architecture
+The `/autopilot/stop` endpoint filters `Workflow.definition_id == "autopilot"` but Phase 0 (Feature Architect) launches under `definition_id == "autopilot-phase0"`. A stop/budget-pause that only matches `"autopilot"` leaves Phase 0 running. The `_pause_project_workflows` function in `cost_derivation.py` already fixes this (matches both IDs), but the `/autopilot/stop` endpoint still uses inline logic with the old filter.
 
-Hephaestus is a semi-structured agentic framework where AI agents handle complex software projects through a branching tree of tasks. The autopilot pipeline runs designs through multiple phases (requirements → architecture → development → review → QA → validation → docs → forensics → commit), with agents spawned in tmux sessions using various CLI tools (pi, Claude Code, OpenCode, Codex).
+### 2.3 UI Visibility Gap
 
-**Key Architectural Patterns:**
-- **Self-healing derivation:** `status_derivation.py` derives entity statuses from child entities, recomputing on every access so missed updates never permanently desync. Cost derivation follows this exact pattern.
-- **Append-only ledgers:** Data is accumulated in append-only tables; aggregates are derived, not maintained as mutable running totals.
-- **Session roles:** `SESSION_ROLES` maps multiple phases to one session role (e.g., `architecture_design` and `architectural_review` share the `architect` role), allowing agents to retain conversational context across phases.
-- **Concurrent execution:** Up to `MAX_PARALLEL_FEATURES` (4) features can run concurrently, each with independent cost recording.
-
-### 3.2 Entity Hierarchy
-
-```
-AutopilotProject
-  └── AutopilotDesign (design.md files in the queue)
-        └── Feature (major components of a design)
-              └── Workflow (pipeline execution for a feature)
-                    └── Task (individual work items within a workflow)
-                          └── CostEntry (individual LLM turn/call)
-```
-
-### 3.3 Previously Completed Features
-
-| Feature | Status | Relevance |
-|---------|--------|-----------|
-| Status Derivation Engine | Complete | **Direct pattern model** — `cost_derivation.py` mirrors `status_derivation.py` exactly |
-| Ticket Tracking System | Complete | Uses task-level granularity; cost tracking extends this |
-| Multi-Project Concurrency | Complete | Concurrent features = concurrent CostEntry writes (thread safety) |
-| Workflow Phases Merge | Complete | SESSION_ROLES sharing = checkpoint-by-session_id requirement |
-| Gap Check Self-Loop | Complete | Auto-resume guards that need `paused_by` generalization |
+No frontend component displays cost data, budget limits, or budget-paused status. Users have no visibility into project spend or pipeline pause reasons.
 
 ---
 
-## 4. Functional Requirements
+## 3. Functional Requirements
 
-### FR-1: CostEntry Table (Append-Only Ledger) — IMPLEMENTED
+### FR-1: Budget Guard in `pick_next_design()`
 
-**Requirement:** `CostEntry` SQLAlchemy table — one row per LLM turn/call, not per task.
+**Requirement:** Before picking a pending design from the queue, check whether the project is over budget. If over budget, skip the project and log a message.
 
-**Schema (already in `database.py:1227`):**
+**Location:** `src/autopilot/orchestrator.py`, function `pick_next_design()` (~line 1975)
+
+**Implementation:**
 ```python
-class CostEntry(Base):
-    __tablename__ = "cost_entries"
-    id = Column(String, primary_key=True)              # cost-<uuid8>
-    task_id = Column(String, ForeignKey("tasks.id"), nullable=True)
-    agent_id = Column(String, ForeignKey("agents.id"), nullable=True)
-    workflow_id = Column(String, ForeignKey("workflows.id"), nullable=True)
-    source = Column(String, nullable=False)             # pi|claude_code|opencode|codex|openrouter_direct
-    model = Column(String, nullable=True)               # e.g. "anthropic/claude-sonnet-4"
-    input_tokens = Column(Integer, default=0)
-    output_tokens = Column(Integer, default=0)
-    cache_read_tokens = Column(Integer, default=0)
-    cache_write_tokens = Column(Integer, default=0)
-    reasoning_tokens = Column(Integer, default=0)
-    cost_usd = Column(Float, nullable=False)
-    recorded_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    raw_usage = Column(JSON, nullable=True)
+# After resolving project, before querying for pending designs:
+from src.core.cost_derivation import check_budget_before_new_work
+if not check_budget_before_new_work(db, project.id):
+    logger.info(f"pick_next_design: project '{project.name}' over budget — skipping")
+    return None
 ```
 
-**Indexes:** `ix_cost_entries_task_id`, `ix_cost_entries_workflow_id`, `ix_cost_entries_recorded_at`
+**Behavior:**
+- Returns `None` (no design picked) when project is over budget
+- Logs an info-level message so operators can see why the queue stalled
+- Does NOT modify any state (no side effects)
+- The existing `check_budget_before_new_work()` function handles the `cost_limit_usd is None` (no limit) and `cost_total_usd < cost_limit_usd` (under budget) cases, returning `True` to proceed
 
 **Acceptance Criteria:**
-- [x] Table created on startup via `Base.metadata.create_all`
-- [x] `task_id` is nullable for non-task-scoped calls (guardian, conductor overhead)
-- [x] `source` values are constrained to known sources
-- [x] `raw_usage` preserves original transcript data for debugging
-- [x] Migration function `_migrate_cost_tables` in `database.py`
-
-**Rationale for append-only ledger:** Aggregates are derived from this table, not hand-maintained. Mirrors `status_derivation.py`'s self-healing pattern. A missed update never permanently desyncs the displayed total from the ledger.
+- AC-1.1: When `cost_total_usd >= cost_limit_usd`, `pick_next_design` returns `None`
+- AC-1.2: When `cost_limit_usd is None`, `pick_next_design` proceeds normally
+- AC-1.3: When under budget, `pick_next_design` proceeds normally
+- AC-1.4: Log message includes project name and budget status
 
 ---
 
-### FR-2: SessionCostCheckpoint Table — IMPLEMENTED
+### FR-2: Budget Guard in `_run_one_feature()`
 
-**Requirement:** Track progress through CLI session transcript files, keyed by `session_id` (NOT `Agent.id`).
+**Requirement:** Before launching a new feature workflow via `run_single_workflow`, check whether the project is over budget. If over budget, return early without launching.
 
-**Schema (already in `database.py:1268`):**
+**Location:** `src/autopilot/orchestrator.py`, function `_run_one_feature()` (~line 2673 area)
+
+**Implementation:**
 ```python
-class SessionCostCheckpoint(Base):
-    __tablename__ = "session_cost_checkpoints"
-    session_id = Column(String, primary_key=True)
-    lines_processed = Column(Integer, default=0, nullable=False)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+# Before calling run_single_workflow for a new feature:
+from src.core.cost_derivation import check_budget_before_new_work
+if not check_budget_before_new_work(db, project_id):
+    logger.info(f"_run_one_feature: project over budget — blocking new workflow for feature {feature_id[:8]}")
+    return "budget_blocked"
 ```
 
-**Critical Design Decision:** Checkpoint keyed by `session_id`, NOT `Agent.id`. Rationale: `get_session_id(project_id, design_slug, phase_name)` is a pure function — it has no dependency on which `Agent` row drives it. When an agent dies mid-phase and retries, the new agent gets the same session ID and resumes the same file. A checkpoint on `Agent.id` would start at 0 and double-count every turn the dead agent already ran.
+**Behavior:**
+- Returns a distinct status (`"budget_blocked"`) so callers can distinguish from other early returns
+- Does NOT launch the workflow or create any agents
+- Logs feature ID for traceability
 
 **Acceptance Criteria:**
-- [x] Table created on startup
-- [x] Checkpoint advances correctly across agent retries
-- [ ] No double-counting when agent rows change but session_id stays the same (**needs integration test**)
+- AC-2.1: When over budget, no workflow is launched for the feature
+- AC-2.2: Return value distinguishes budget-blocked from other outcomes
+- AC-2.3: Existing feature (already running workflow) is unaffected — this guard only blocks *new* launches
 
 ---
 
-### FR-3: Denormalized Rollup Columns — IMPLEMENTED
+### FR-3: Generalize `paused_by` Guards to `is not None`
 
-**Requirement:** `cost_total_usd = Column(Float, default=0.0, nullable=False)` on all hierarchy levels.
+**Requirement:** Change all self-heal/auto-resume guards from `wf.paused_by == "user"` to `wf.paused_by is not None` so that `"budget"`-paused workflows are also protected from auto-resume.
 
-| Model | Column | Status |
-|-------|--------|--------|
-| `Task` (database.py:279) | `cost_total_usd` | ✅ Implemented |
-| `Feature` (database.py:452) | `cost_total_usd` | ✅ Implemented |
-| `Workflow` (database.py:1143) | `cost_total_usd` | ✅ Implemented |
-| `AutopilotDesign` (database.py:1104) | `cost_total_usd` | ✅ Implemented |
-| `AutopilotProject` (database.py:1064) | `cost_total_usd` | ✅ Implemented |
+**Affected locations in `src/autopilot/orchestrator.py`:**
+
+1. **`_try_auto_resume_paused_workflow()` (~line 3749):**
+   ```python
+   # BEFORE: if wf.paused_by == "user":
+   # AFTER:  if wf.paused_by is not None:
+   ```
+
+2. **`_create_corrective_task()` (~line 5680):**
+   ```python
+   # BEFORE: if wf.paused_by == "user":
+   # AFTER:  if wf.paused_by is not None:
+   ```
+
+3. **Stuck-workflow restart in `attempt_recovery()` (~line 5864):**
+   ```python
+   # BEFORE: if wf.status == "paused" and wf.paused_by == "user":
+   # AFTER:  if wf.status == "paused" and wf.paused_by is not None:
+   ```
+
+**EXCEPTION — `AutopilotService.start()` (~line 391-399):**
+This location MUST keep `== "user"`. Clicking "play" in the UI should resume user-paused projects but should NOT clear budget-paused projects (the limit is still exceeded; clicking play shouldn't bypass the cap). The existing code at line 398 (`Workflow.paused_by == "user"`) remains unchanged.
+
+**Rationale:** This is a strict generalization — every workflow previously protected by `== "user"` is still protected, and `"budget"`-paused workflows are now also protected. No behavior change for the existing `"user"` case.
 
 **Acceptance Criteria:**
-- [x] All five models have the column
-- [x] Column populated by `cost_derivation.py` on every new `CostEntry` write
-- [ ] Rollup chain verified: `SUM(cost_entries.cost_usd)` grouped by `task_id` → `Feature.workflow_id` → `Feature.design_id` → `AutopilotDesign.project_id` (**needs integration test**)
-- [x] Recomputed on write (not independently maintained)
+- AC-3.1: `_try_auto_resume_paused_workflow` skips `"budget"`-paused workflows
+- AC-3.2: `_create_corrective_task` skips `"budget"`-paused workflows
+- AC-3.3: `attempt_recovery`'s stuck-workflow restart skips `"budget"`-paused workflows
+- AC-3.4: `AutopilotService.start()` still only resumes `"user"`-paused workflows (NOT `"budget"`)
+- AC-3.5: `"user"`-paused workflows continue to be protected (no regression)
 
 ---
 
-### FR-4: Cost Derivation Module — IMPLEMENTED
+### FR-4: Refactor `/autopilot/stop` to Use Shared `_pause_project_workflows`
 
-**Requirement:** New module `src/core/cost_derivation.py` following the pattern of `src/core/status_derivation.py`.
+**Requirement:** Extract the inline pause logic from the `/autopilot/stop` route handler into a call to the shared `_pause_project_workflows()` function from `cost_derivation.py`, which already filters `definition_id.in_(["autopilot", "autopilot-phase0"])`.
 
-**Functions (already implemented):**
+**Location:** `src/mcp/autopilot_api.py`, the `/autopilot/stop` endpoint
 
-| Function | Purpose | Status |
-|----------|---------|--------|
-| `record_cost(db, cost_usd, source, ...)` | Primary entry point: creates CostEntry AND triggers rollup | ✅ |
-| `derive_task_cost(db, task_id, write_back=True)` | SUM cost_entries for task | ✅ |
-| `derive_workflow_cost(db, workflow_id, write_back=True)` | SUM cost_entries for workflow, rolls up to feature/design/project | ✅ |
-| `derive_feature_cost(db, feature_id, write_back=True)` | SUM costs for all workflows in feature | ✅ |
-| `derive_design_cost(db, design_id, write_back=True)` | SUM costs for all features in design | ✅ |
-| `derive_project_cost(db, project_id, write_back=True)` | SUM costs for all designs in project, checks budget enforcement | ✅ |
-| `check_budget_before_new_work(db, project_id)` | Returns True if under budget (safe to proceed) | ✅ |
-
-**Self-healing behavior:** Each function queries `SUM(cost_entries.cost_usd)` and compares against the stored `cost_total_usd`. If they disagree by more than $0.0001, the stored value is corrected. This ensures consistency even if a previous write failed partway through.
-
-**Acceptance Criteria:**
-- [x] Self-healing: missed updates never permanently desync displayed totals
-- [x] Called on every new CostEntry insertion
-- [x] Thread-safe for concurrent writes (WAL mode + SQLAlchemy QueuePool)
-- [ ] Unit tests for each derivation function (**needs tests**)
-- [ ] Integration test: write CostEntry, verify rollup propagates to project (**needs tests**)
-
----
-
-### FR-5: Budget Enforcement Schema — IMPLEMENTED
-
-**Requirement:** `cost_limit_usd = Column(Float, nullable=True)` on `AutopilotProject`.
-
-**Implementation (database.py:1066):**
+**Implementation:**
 ```python
-cost_limit_usd = Column(Float, nullable=True)  # None = no limit
+# Replace inline pause logic with:
+from src.core.cost_derivation import _pause_project_workflows
+paused_count = _pause_project_workflows(db, project_id, paused_by="user")
+db.commit()
 ```
 
+**Side effect fix:** The existing endpoint's `definition_id == "autopilot"` filter misses Phase 0. After refactoring, Phase 0 workflows are also paused when the user clicks stop — this is the correct behavior.
+
 **Acceptance Criteria:**
-- [x] Column exists on AutopilotProject
-- [x] Nullable (no limit when None)
-- [x] `cost_total_usd` (from FR-3) used for comparison (no redundant field)
-- [x] API endpoint `PUT /projects/{project_id}` handles `cost_limit_usd` update (autopilot_api.py:1841-1846)
+- AC-4.1: `/autopilot/stop` pauses both `"autopilot"` and `"autopilot-phase0"` workflows
+- AC-4.2: `/autopilot/stop` sets `paused_by="user"` (not `"budget"`)
+- AC-4.3: Active agents on paused workflows are terminated
+- AC-4.4: Endpoint behavior is unchanged from user perspective (same HTTP response)
 
 ---
 
-### FR-6: Budget Enforcement Logic — IMPLEMENTED
+### FR-5: Budget-Paused Workflow Resume via Limit Increase
 
-**Requirement:** When `project.cost_total_usd >= project.cost_limit_usd`:
+**Requirement:** When a user raises or clears `cost_limit_usd` via `PUT /projects/{id}`, automatically clear `paused_by` on that project's `"budget"`-paused workflows so the next pipeline sweep can resume them.
 
-1. **Pause active workflows** — terminate active agents and mark workflows `paused` with `paused_by = "budget"`
-2. **Block new work** — guard at `pick_next_design` and `_run_one_feature`
-3. **Idempotent pause** — `_pause_project_workflows` naturally idempotent
-
-**Implementation (`cost_derivation.py:_check_budget_enforcement` + `_pause_project_workflows`):**
-
+**Status:** ✅ ALREADY IMPLEMENTED in `autopilot_api.py` (lines 1841-1866). The logic:
 ```python
-def _check_budget_enforcement(db: Session, project: AutopilotProject) -> None:
-    if project.cost_limit_usd is None:
-        return
-    if project.cost_total_usd < project.cost_limit_usd:
-        return
-    _pause_project_workflows(db, project.id, paused_by="budget")
+if proj.cost_limit_usd is None or proj.cost_total_usd < proj.cost_limit_usd:
+    budget_paused = db.query(Workflow).filter(
+        Workflow.project_id == project_id,
+        Workflow.paused_by == "budget",
+    ).all()
+    for wf in budget_paused:
+        wf.paused_by = None
+        wf.status = "active"
 ```
 
-**Critical Gap Fix (from design):** `_pause_project_workflows` filters `Workflow.definition_id.in_(["autopilot", "autopilot-phase0"])` — the original `/autopilot/stop` endpoint only matched `"autopilot"`, missing Phase 0 (Feature Architect) which runs under `"autopilot-phase0"`. This is a real bug the design caught.
+**No implementation work needed.** Verified existing behavior.
 
-**Acceptance Criteria:**
-- [x] Pipeline pauses when budget exceeded
-- [x] Phase 0 workflows included in pause (`definition_id.in_` filter)
-- [ ] No new work starts for over-budget project (**needs `pick_next_design` integration**)
-- [x] Concurrent CostEntry writes don't cause redundant pauses (natural idempotency)
-- [x] Spend lands at-or-slightly-over limit (cost only knowable after the fact)
-- [ ] Integration test: set limit, record cost exceeding it, verify pause (**needs tests**)
+**Acceptance Criteria (verification only):**
+- AC-5.1: Raising `cost_limit_usd` above `cost_total_usd` clears `"budget"` pause
+- AC-5.2: Setting `cost_limit_usd` to `None` (clearing limit) clears `"budget"` pause
+- AC-5.3: Lowering `cost_limit_usd` (still over budget) does NOT clear pause
+- AC-5.4: `"user"`-paused workflows are NOT affected by limit changes
 
 ---
 
-### FR-7: Generalize `paused_by` Guards — IMPLEMENTED
+### FR-6: UI — Budget Configuration in ProjectSettingsModal
 
-**Requirement:** Change self-heal/auto-resume guards from `== "user"` to `is not None`, EXCEPT in `AutopilotService.start()`.
+**Requirement:** Add a `cost_limit_usd` number input to `ProjectSettingsModal.tsx` so users can set/clear the per-project budget limit.
 
-**Current State:** All self-heal guards are generalized to `is not None`:
+**Location:** `frontend/src/components/ProjectSettingsModal.tsx`
 
-| Location | Line | Function | Status |
-|----------|------|----------|--------|
-| `orchestrator.py` | 395 | Resume-on-play logic | ✅ Correctly keeps `== "user"` |
-| `orchestrator.py` | 3531 | `_try_auto_resume_paused_workflow` | ✅ Uses `is not None` |
-| `orchestrator.py` | 5218 | `_create_corrective_task` | ✅ Uses `is not None` |
-| `orchestrator.py` | 5384 | Stuck-workflow restart in `attempt_recovery` | ✅ Uses `is not None` |
-
-**Note:** `AutopilotService.start()` at line 398 correctly keeps `== "user"` — clicking play should resume user-paused but NOT budget-paused.
-
-**When limit raised or cleared:** If new limit is null or higher than `cost_total_usd`, clear `paused_by` on that project's `"budget"`-paused workflows. This logic needs to be added to `PUT /projects/{project_id}` handler.
+**Implementation:**
+- Add optional number input field labeled "Budget Limit (USD)"
+- Placeholder: "No limit" when empty
+- Wire to existing `PUT /projects/{id}` mutation (already supports `cost_limit_usd`)
+- Display current `cost_total_usd` alongside the input as read-only context
+- Validation: must be a positive number if provided, or empty/null for no limit
 
 **Acceptance Criteria:**
-- [x] `_try_auto_resume_paused_workflow` uses `is not None` guard
-- [x] `_create_corrective_task` uses `is not None` guard
-- [x] `attempt_recovery` stuck-workflow restart uses `is not None` guard
-- [x] `AutopilotService.start()` keeps `== "user"` (correct behavior)
-- [x] Raising limit clears budget pause on `PUT /projects/{project_id}`
-- [x] Test: budget-paused workflow doesn't auto-resume through self-heal paths (test_budget_enforcement_integration.py)
+- AC-6.1: Number input field visible in ProjectSettingsModal
+- AC-6.2: Setting a value persists to backend via `PUT /projects/{id}`
+- AC-6.3: Clearing the value sets `cost_limit_usd` to `None` (no limit)
+- AC-6.4: Current spend (`cost_total_usd`) displayed near the input
+- AC-6.5: Input accepts decimal values (e.g., `10.50`)
 
 ---
 
-### FR-8: Pi Extension Collector — IMPLEMENTED
+### FR-7: UI — Cost Display on Autopilot Design Screen
 
-**Requirement:** Pi extension (`extensions/hephaestus-cost-tracker.ts`) hooks `turn_end` events to capture `message.usage.cost.total` in real-time.
+**Requirement:** Show current project spend on the autopilot design screen, with a link to open ProjectSettingsModal for budget configuration.
 
-**Benefits over raw JSONL tailing:**
-1. No file-system access needed — extension runs inside pi process
-2. Real-time TUI display via `ctx.ui.setStatus()`
-3. No checkpoint table needed for pi — POSTs each turn immediately
-4. Falls back to JSONL tailing when extension not loaded
+**Location:** `frontend/src/components/autopilot/DesignQueuePanel.tsx` or `PipelineStatusCard.tsx`
 
-**Data source verified:** Pi session files at `~/.pi/agent/sessions/` contain JSONL with confirmed schema:
-```json
-{
-  "type": "message",
-  "message": {
-    "role": "assistant",
-    "model": "xiaomi/mimo-v2.5",
-    "usage": {
-      "input": 9430, "output": 222, "cacheRead": 512, "cacheWrite": 0,
-      "reasoning": 99, "totalTokens": 10164,
-      "cost": {
-        "input": 0.00099015, "output": 0.00006216,
-        "cacheRead": 0, "cacheWrite": 0, "total": 0.0010523099999999999
-      }
-    }
-  }
-}
-```
+**Implementation:**
+- Display "$current / $limit" when limit is set, or "$current spent" when no limit
+- Small indicator, not dominant in the UI
+- Link/button that opens `ProjectSettingsModal` scoped to the active project
+- Data source: project object already includes `cost_total_usd` and `cost_limit_usd` from API
 
 **Acceptance Criteria:**
-- [x] Extension installed at `~/.pi/agent/extensions/hephaestus-cost-tracker/`
-- [x] POSTs each turn's cost to Hephaestus API immediately
-- [x] Reads agent/task/workflow IDs from environment variables
-- [x] Shows running cost in pi TUI via `ctx.ui.setStatus()`
-- [x] Configurable API URL via `HEPHAESTUS_API_URL` env var
-- [x] JSONL tailing fallback works when extension not loaded
+- AC-7.1: Cost indicator visible on design screen
+- AC-7.2: Shows "$X.XX / $Y.YY" format when limit is set
+- AC-7.3: Shows "$X.XX spent" when no limit is set
+- AC-7.4: Link opens ProjectSettingsModal
+- AC-7.5: Indicator updates when project data refreshes
 
 ---
 
-### FR-9: Pi JSONL Tailing Collector (Fallback) — IMPLEMENTED
+### FR-8: UI — Budget-Paused Status Label
 
-**Requirement:** Collector in `cost_collection_service.py` tails pi session JSONL files.
+**Requirement:** When a workflow is paused with `paused_by == "budget"`, display "Paused: budget limit reached" instead of a generic "Paused" label.
 
-**Implementation:** `PiJsonlCollector` reads `message.usage.cost.total` from assistant turns, advances checkpoint by line count.
+**Location:** Various frontend components that display workflow/feature status
 
-**Session file discovery:**
-- Directory: `~/.pi/agent/sessions/<sanitized_cwd>/` (slashes → dashes, wrapped in `--`)
-- Filename pattern: `*_<session_id>.jsonl`
-- Verification: first line's `{"type": "session", "id": "<session-id>"}` matches
+**Implementation:**
+- Check `paused_by` field in workflow status display components
+- When `paused_by === "budget"`, show "Paused: budget limit reached"
+- When `paused_by === "user"`, show "Paused" (existing behavior)
+- When `paused_by === "system"` or `"system-exhausted"`, show existing labels
 
 **Acceptance Criteria:**
-- [x] Collector discovers session file via glob
-- [x] Correctly handles shared sessions (SESSION_ROLES)
-- [x] No double-counting across agent retries (checkpoint keyed by session_id)
-- [x] Collection triggered on task completion (`collect_task_cost` called from `task_completion_service.py`)
-- [ ] Security: path traversal prevention verified (**needs security review**)
+- AC-8.1: Budget-paused workflows show distinct label
+- AC-8.2: User-paused workflows show existing label (no regression)
+- AC-8.3: Label is human-readable and explains the pause reason
 
 ---
 
-### FR-10: Claude Code Collector — IMPLEMENTED (needs smoke test)
-
-**Requirement:** Token-to-dollar conversion collector for Claude Code sessions.
-
-**Key challenge:** Claude Code transcripts contain only raw tokens, not dollar cost. Requires maintained per-model price table.
-
-**Price table (in `ClaudeCodeCollector.PRICES`):**
-| Model | Input ($/M) | Output ($/M) | Cache Write 1h ($/M) | Cache Write 5m ($/M) | Cache Read ($/M) |
-|-------|-------------|--------------|----------------------|----------------------|------------------|
-| claude-sonnet-4 | 3.00 | 15.00 | 3.75 | 3.00 | 0.30 |
-| claude-opus-4 | 15.00 | 75.00 | 18.75 | 15.00 | 1.50 |
-| claude-haiku-3.5 | 0.80 | 4.00 | 1.00 | 0.80 | 0.08 |
-
-**Session ID fix:** UUID5 derivation from deterministic inputs (`uuid.uuid5(NAMESPACE, f"{project_id}:{design_slug}:{role}")`) — needed because Claude Code requires valid UUID format for `--session-id`. This fix is noted in the design as landed (`cli_interface.py:393-403`).
-
-**Acceptance Criteria:**
-- [x] Price table maintained for Claude models
-- [x] Two cache-write tiers handled (`ephemeral_1h` vs `ephemeral_5m`)
-- [ ] Session ID correlation verified via UUID5 (**needs smoke test**)
-- [ ] Fallback to heuristic if session ID unavailable (**needs implementation**)
-- [ ] Price table update process documented (**needs documentation**)
-
----
-
-### FR-11: OpenCode Collector — IMPLEMENTED (needs smoke test)
-
-**Requirement:** Capture cost from one-shot `opencode run` invocations.
-
-**Key insight:** OpenCode runs one-shot (not persistent tmux). Real dollar cost available. Storage is SQLite at `~/.local/share/opencode/opencode.db`.
-
-**Implementation:** `OpenCodeCollector` reads stdout capture file (JSON format with `cost`, `tokens`, `modelID`).
-
-**Acceptance Criteria:**
-- [x] Collector implemented
-- [ ] Smoke test `opencode run --format json "..."` to verify payload shape (**needs live test**)
-- [x] Cost captured from stdout JSON
-- [x] Collection happens once after process exits (no timer)
-- [ ] Gate: check if OpenCode is actually used in `config/workflows/autopilot/workflow.yaml` (**needs verification**)
-
----
-
-### FR-12: OpenRouter Direct Collector — IMPLEMENTED
-
-**Requirement:** Capture cost from backend's own direct OpenRouter calls (~9 call sites in `LangChainLLMClient`).
-
-**Mechanism:** Add `usage: {include: true}` to `extra_body` in `ChatOpenAI` construction. OpenRouter returns non-standard `usage.cost` field.
-
-**Refactor needed:** Add `_invoke_and_record(model, messages, component, task_id)` helper to avoid duplicating extraction logic across 9 call sites:
-
-| Call Site | task_id Available? | Status |
-|-----------|-------------------|--------|
-| `enrich_task` | No — caller knows but doesn't pass it down | Needs `task_id` param added |
-| `resolve_ticket_clarification` | Unknown | Needs inspection |
-| `analyze_agent_state` | Via `task_info` dict | Needs verification |
-| `analyze_agent_trajectory` | Via `task_info` dict | Needs verification |
-| `analyze_system_coherence` | No (system-wide) | Rolls up to workflow/overhead |
-| `review_qa_report` | Unknown | Needs inspection |
-| `generate_agent_prompt` | Unknown | Needs inspection |
-| `generate_embedding` | N/A (not cost-tracked) | Skip |
-| Others | Unknown | Grep needed |
-
-**Acceptance Criteria:**
-- [x] `usage.include=true` confirmed working — cost extracted from `response_metadata.token_usage.cost.total`
-- [x] `_invoke_and_record` helper wraps all call sites
-- [x] `task_id` threaded into task-scoped methods
-- [x] Non-task-scoped calls roll up to workflow
-- [x] `response_metadata` parsing confirmed for OpenRouter's non-standard fields
-
----
-
-### FR-13: Codex Collector Stub — IMPLEMENTED
-
-**Requirement:** Stub collector that logs "unsupported" rather than silently reporting zero cost.
-
-**Implementation:** `CodexStubCollector` returns empty list and logs warning.
-
-**Acceptance Criteria:**
-- [x] Stub implemented
-- [x] Logs "unsupported" message
-- [x] Does not report zero (which would be misleading)
-
----
-
-### FR-14: UI — Budget Configuration — IMPLEMENTED
-
-**Requirement:** Add `cost_limit_usd` number input to `ProjectSettingsModal.tsx`.
-
-**Backend:** `PUT /projects/{project_id}` handles `cost_limit_usd` update (autopilot_api.py:1841-1846).
-
-**Acceptance Criteria:**
-- [x] Backend API accepts `cost_limit_usd` update
-- [x] `ProjectUpdate` model extended with `cost_limit_usd`
-- [ ] Frontend number input in ProjectSettingsModal (**needs frontend work**)
-- [ ] Validation: non-negative, max reasonable value (**partially done** — validator at autopilot_api.py:1546-1552)
-
----
-
-### FR-15: UI — Cost Display — NOT YET IMPLEMENTED
-
-**Requirement:** Display cost data in multiple UI locations.
-
-**Placements:**
-1. **Autopilot design screen:** "$current / $limit" indicator with link to ProjectSettingsModal
-2. **Feature cards:** `cost_total_usd` display
-3. **Design rows:** `cost_total_usd` display
-4. **Project-level summary:** Aggregate cost in autopilot dashboard
-5. **Budget-paused status:** "Paused: budget limit reached" instead of generic "Paused"
-
-**Acceptance Criteria:**
-- [ ] Design screen shows current spend
-- [ ] Link to settings for limit configuration
-- [ ] Budget-paused workflows clearly labeled ("Paused: budget limit reached")
-- [ ] Feature cards show cost
-- [ ] Project summary shows aggregate cost
-
----
-
-### FR-16: Cost Collection Service — IMPLEMENTED
-
-**Requirement:** Central service orchestrating cost collection from all sources.
-
-**Implementation:** `src/services/cost_collection_service.py` with:
-- `CostCollector` ABC
-- `PiJsonlCollector`, `ClaudeCodeCollector`, `OpenCodeCollector`, `CodexStubCollector`
-- `collect_task_cost(task_id)` entry point
-- `_discover_session_file(session_id, cwd)` for pi session discovery
-- `_extract_session_id(agent, task)` for session ID extraction
-- `_get_agent_cwd(db, agent, task)` for working directory resolution
-
-**Acceptance Criteria:**
-- [x] Entry point `collect_task_cost` called from `task_completion_service.py`
-- [x] Correct collector selected based on `cli_type`
-- [x] Session file discovery with path traversal prevention
-- [x] Checkpoint management (create/update `SessionCostCheckpoint`)
-- [ ] Integration test: end-to-end collection from task completion to CostEntry (**needs tests**)
-
----
-
-## 5. Non-Functional Requirements
+## 4. Non-Functional Requirements
 
 ### NFR-1: Backward Compatibility
-- [x] Existing autopilot pipeline continues without cost tracking enabled
-- [x] No breaking changes to existing database schema (additive only)
-- [x] Budget enforcement is opt-in (disabled when `cost_limit_usd` is None)
-- [x] Dead code in `cost_tracker.py` and `openrouter_client.py` left untouched (no breakage)
+- All changes are additive; no existing behavior is broken
+- Budget enforcement is opt-in (`cost_limit_usd` defaults to `None`)
+- The `paused_by` generalization is a strict superset of existing behavior
 
 ### NFR-2: Performance
-- [x] `CostEntry` writes are < 1ms (SQLite insert)
-- [ ] Cost derivation rollup on write path benchmarks within acceptable limits (**needs benchmarking**)
-- [x] WAL mode enables concurrent reads during writes
-- [x] Up to MAX_PARALLEL_FEATURES (4) concurrent CostEntry writers supported
-- [ ] Index coverage verified for common query patterns (**needs EXPLAIN analysis**)
+- Budget guards add one lightweight DB query per design/feature pick (already in the same DB session)
+- `check_budget_before_new_work()` is a simple column comparison, no aggregation
+- No additional I/O or network calls introduced
 
 ### NFR-3: Reliability
-- [x] Append-only ledger is the source of truth (no mutable running totals)
-- [x] Self-healing derivation ensures consistency after missed updates
-- [x] Budget pause is idempotent (concurrent calls don't cause issues)
-- [x] `_pause_project_workflows` matches `status IN ("active","running")` — second call finds nothing
+- Budget enforcement is idempotent (concurrent calls find nothing to pause after the first)
+- Spend always lands at-or-slightly-over limit (cost only knowable after the fact — enforcement stops the *next* call)
+- Self-healing cost derivation ensures consistency even if budget check misses a beat
 
-### NFR-4: Data Accuracy
-| Source | Accuracy | Mechanism |
-|--------|----------|-----------|
-| pi (extension) | Exact | `message.usage.cost.total` from OpenRouter response |
-| pi (JSONL fallback) | Exact | Same field, read from file |
-| Claude Code | Estimated | Token counts × price table (goes stale on repricing) |
-| OpenCode | Exact | `cost` field from stdout/DB |
-| OpenRouter Direct | Exact | `usage.include=true` response field |
-
-### NFR-5: Security
-- [x] Path traversal prevention in `_discover_session_file` (rejects `..`, `~`)
-- [x] Resolved path verified to be within expected base directory
-- [x] `cost_usd` validation: non-negative, max $1000 per entry (autopilot_api.py:1546-1552)
-- [ ] Input sanitization for API endpoints (**needs security review**)
-
-### NFR-6: Maintainability
-- [ ] Claude Code price table update process documented
-- [ ] New CLI tool collector integration pattern documented
-- [x] Codex stub logs "unsupported" (not zero)
-- [x] Historical backfill NOT supported (documented non-goal)
-
-### NFR-7: Observability
-- [x] `[COST-HEAL]` log prefix for self-heal corrections
-- [x] `[BUDGET]` log prefix for budget enforcement actions
-- [x] `[COST-COLLECT]` log prefix for collection events
-- [ ] Cost summary dashboard in monitoring (**future enhancement**)
+### NFR-4: Observability
+- All budget decisions logged at INFO level or higher
+- Log messages include project ID/name, cost totals, and limit values
+- Budget-paused workflows have `status_reason = "Budget limit reached"` in DB
 
 ---
 
-## 6. Technology Constraints
+## 5. Technology Constraints
 
-| Constraint | Detail | Source |
-|-----------|--------|--------|
-| Language | Python 3.12 | `pyproject.toml` |
-| ORM | SQLAlchemy with StaticPool, `expire_on_commit=False` | `database.py` |
-| Database | SQLite with WAL mode | Existing infrastructure |
-| Migrations | `_migrate_*_column` pattern in `database.py` | Existing pattern |
-| Frontend | React 18, TypeScript, Tailwind CSS | `frontend/` |
-| No new dependencies | Pure extensions of existing patterns | Design constraint |
-| Thread model | Single-threaded orchestrator, thread-safe SQLite via WAL | Architecture |
-
----
-
-## 7. Integration Points
-
-### 7.1 Existing Code (Modify)
-
-| File | Change Required | Status |
-|------|----------------|--------|
-| `src/core/database.py` | Add CostEntry, SessionCostCheckpoint tables; add cost_total_usd columns; add cost_limit_usd; migrations | ✅ Done |
-| `src/core/cost_derivation.py` | Self-healing cost rollup module | ✅ Done |
-| `src/services/cost_collection_service.py` | Per-CLI collectors, session file discovery | ✅ Done |
-| `src/autopilot/orchestrator.py` | Extract `_pause_project_workflows`; add budget checks in `pick_next_design`/`_run_one_feature`; generalize `paused_by` guards | ✅ Done |
-| `src/mcp/autopilot_api.py` | Extend `PUT /projects/{id}` for cost_limit_usd; add cost endpoints | ✅ Done |
-| `src/interfaces/langchain_llm_client.py` | Add `_invoke_and_record` helper; wire all call sites; add `usage.include=true` | ✅ Done |
-| `src/agents/manager.py` | Propagate cost data from CLI agent sessions | ⚠️ Partial |
-| `src/services/task_completion_service.py` | Trigger cost collection on task done | ✅ Done |
-| `src/interfaces/cli_interface.py` | Add `--session-id` to ClaudeCodeAgent; UUID5 derivation | ✅ Done (per design) |
-
-### 7.2 New Files
-
-| File | Purpose | Status |
-|------|---------|--------|
-| `src/core/cost_derivation.py` | Self-healing cost rollup module | ✅ Done |
-| `src/services/cost_collection_service.py` | Per-CLI transcript collectors | ✅ Done |
-| `extensions/hephaestus-cost-tracker/` | Pi extension for real-time cost capture | ✅ Created |
-| `tests/test_cost_tracking.py` | Unit tests for derivation functions (39 tests) | ✅ Created |
-| `tests/test_budget_enforcement_integration.py` | Budget enforcement integration tests (13 tests) | ✅ Created |
-
-### 7.3 External Dependencies
-
-| Dependency | Purpose | Risk |
-|-----------|---------|------|
-| Pi session JSONL format | Cost data source for pi collector | Low — format verified |
-| Claude Code session JSONL format | Token data for Claude Code collector | Medium — format verified but price table may go stale |
-| OpenRouter `usage.include=true` | Cost data for direct calls | Medium — needs smoke test confirmation |
-| OpenCode `--format json` | Cost data for OpenCode collector | Medium — needs smoke test |
+| Constraint | Detail |
+|-----------|--------|
+| Language | Python 3.12 (backend), TypeScript/React 18 (frontend) |
+| ORM | SQLAlchemy with StaticPool, expire_on_commit=False |
+| Database | SQLite with WAL mode |
+| Frontend | React 18, TypeScript, Tailwind CSS |
+| No new dependencies | Pure extensions of existing patterns |
+| API | FastAPI with existing endpoint patterns |
 
 ---
 
-## 8. Component Dependencies Map
+## 6. Component Dependencies and Integration Points
+
+### 6.1 Files to Modify
+
+| File | Change | Status |
+|------|--------|--------|
+| `src/autopilot/orchestrator.py` | Add budget guard in `pick_next_design()`. Add budget guard in `_run_one_feature()`. Generalize `paused_by` guards from `== "user"` to `is not None` (3 locations). | ❌ NOT IMPLEMENTED |
+| `src/mcp/autopilot_api.py` | Refactor `/autopilot/stop` to use shared `_pause_project_workflows()`. | ❌ NOT IMPLEMENTED |
+| `frontend/src/components/ProjectSettingsModal.tsx` | Add `cost_limit_usd` number input. | ❌ NOT IMPLEMENTED |
+| `frontend/src/components/autopilot/DesignQueuePanel.tsx` or `PipelineStatusCard.tsx` | Add cost display indicator. | ❌ NOT IMPLEMENTED |
+| Various frontend status components | Show "Paused: budget limit reached" for budget-paused workflows. | ❌ NOT IMPLEMENTED |
+
+### 6.2 Files Already Complete (No Changes Needed)
+
+| File | What's Done |
+|------|-------------|
+| `src/core/database.py` | CostEntry, SessionCostCheckpoint tables. cost_total_usd on all models. cost_limit_usd on AutopilotProject. Migration functions. |
+| `src/core/cost_derivation.py` | Full rollup chain. `_check_budget_enforcement()`. `_pause_project_workflows()` (Phase 0 fix). `check_budget_before_new_work()`. |
+| `src/services/cost_collection_service.py` | Pi JSONL collector. `collect_task_cost()` entry point. |
+| `src/services/task_completion_service.py` | `collect_task_cost()` wired into task completion handler. |
+| `src/mcp/autopilot_api.py` | `POST /cost-entries` endpoint. `cost_limit_usd` in ProjectUpdate/ProjectItem. Budget pause clearing logic in `update_project`. |
+
+### 6.3 Key Architectural Relationships
 
 ```
-                    ┌─────────────────────────┐
-                    │   task_completion_service │
-                    │   (triggers collection)   │
-                    └───────────┬─────────────┘
-                                │
-                                ▼
-                    ┌─────────────────────────┐
-                    │  cost_collection_service  │
-                    │  collect_task_cost()      │
-                    └───┬───┬───┬───┬─────────┘
-                        │   │   │   │
-           ┌────────────┘   │   │   └────────────┐
-           ▼                ▼   ▼                ▼
-    ┌──────────┐   ┌──────────┐ ┌──────────┐ ┌──────────┐
-    │ PiJsonl  │   │ Claude   │ │ OpenCode │ │ Codex    │
-    │ Collector│   │ Code     │ │ Collector│ │ Stub     │
-    └────┬─────┘   │ Collector│ └────┬─────┘ └──────────┘
-         │         └────┬─────┘      │
-         │              │            │
-         └──────┬───────┴────────────┘
-                │
-                ▼
-    ┌─────────────────────────┐
-    │  cost_derivation.py      │
-    │  record_cost()           │──► Creates CostEntry
-    │  derive_task_cost()      │──► Updates Task.cost_total_usd
-    │  derive_workflow_cost()  │──► Updates Workflow.cost_total_usd
-    │  derive_feature_cost()   │──► Updates Feature.cost_total_usd
-    │  derive_design_cost()    │──► Updates AutopilotDesign.cost_total_usd
-    │  derive_project_cost()   │──► Updates AutopilotProject.cost_total_usd
-    └───────────┬─────────────┘
-                │
-                ▼
-    ┌─────────────────────────┐
-    │  _check_budget_enforcement│
-    │  _pause_project_workflows │
-    └───────────┬─────────────┘
-                │
-                ▼
-    ┌─────────────────────────┐
-    │  orchestrator.py         │
-    │  pick_next_design()      │◄── check_budget_before_new_work()
-    │  _run_one_feature()      │◄── check_budget_before_new_work()
-    └─────────────────────────┘
+                    ┌─────────────────────────────┐
+                    │   AutopilotProject           │
+                    │   .cost_total_usd (derived)  │
+                    │   .cost_limit_usd (config)   │
+                    └──────────┬──────────────────┘
+                               │
+              ┌────────────────┼────────────────┐
+              │                │                │
+              ▼                ▼                ▼
+    ┌──────────────┐  ┌──────────────┐  ┌──────────────────┐
+    │ cost_         │  │ pick_next_   │  │ _run_one_feature │
+    │ derivation.py │  │ design()     │  │ ()               │
+    │               │  │              │  │                  │
+    │ on CostEntry  │  │ BUDGET       │  │ BUDGET           │
+    │ write:        │  │ GUARD (NEW)  │  │ GUARD (NEW)      │
+    │ _check_budget │  │              │  │                  │
+    │ _enforcement()│  │ check_budget │  │ check_budget     │
+    │               │  │ _before_new  │  │ _before_new_work │
+    │ → _pause_     │  │ _work()      │  │ ()               │
+    │  project_     │  └──────────────┘  └──────────────────┘
+    │  workflows()  │
+    └───────────────┘
+              │
+              ▼
+    ┌─────────────────────────────────────────────┐
+    │  Orchestrator Self-Heal Guards (GENERALIZE)  │
+    │                                              │
+    │  _try_auto_resume_paused_workflow():         │
+    │    paused_by == "user" → is not None (NEW)   │
+    │                                              │
+    │  _create_corrective_task():                  │
+    │    paused_by == "user" → is not None (NEW)   │
+    │                                              │
+    │  attempt_recovery() stuck restart:           │
+    │    paused_by == "user" → is not None (NEW)   │
+    │                                              │
+    │  AutopilotService.start() play button:       │
+    │    KEEP == "user" (EXCEPTION)                │
+    └─────────────────────────────────────────────┘
 ```
 
 ---
 
-## 9. Critical Design Decisions
+## 7. Implementation Tasks
 
-### D-1: Append-Only Ledger vs Mutable Totals
-**Decision:** Append-only `cost_entries` table as source of truth; denormalized `cost_total_usd` columns are derived, not maintained independently.
-**Rationale:** Matches existing self-healing pattern in `status_derivation.py`. A missed update never permanently desyncs the displayed total from the ledger.
-**Status:** ✅ Implemented
+### T1: Orchestrator Budget Guards
 
-### D-2: Checkpoint by Session ID vs Agent ID
-**Decision:** `SessionCostCheckpoint` keyed by `session_id`, NOT `Agent.id`.
-**Rationale:** When an agent dies and retries, the new agent gets the same session ID and resumes the same file. A checkpoint on the agent row would double-count.
-**Status:** ✅ Implemented
+**Files:** `src/autopilot/orchestrator.py`  
+**Effort:** Small  
+**Dependencies:** None (uses existing `check_budget_before_new_work()`)
 
-### D-3: Collection on Task Completion vs Timer
-**Decision:** Collect cost on task completion (`update_task_status` handler), not on a timer.
-**Rationale:** Session activity is fully written to disk by the time done lands. No torn-read risk. Avoids separate polling loop.
-**Status:** ✅ Implemented
+**Changes:**
+1. Add import of `check_budget_before_new_work` from `cost_derivation`
+2. In `pick_next_design()`, after project resolution, before querying pending designs:
+   ```python
+   from src.core.cost_derivation import check_budget_before_new_work
+   if not check_budget_before_new_work(db, project.id):
+       logger.info(f"pick_next_design: project '{project.name}' over budget — skipping")
+       return None
+   ```
+3. In `_run_one_feature()`, before calling `run_single_workflow`:
+   ```python
+   if not check_budget_before_new_work(db, project_id):
+       logger.info(f"_run_one_feature: project over budget — blocking feature {feature_id[:8]}")
+       return "budget_blocked"
+   ```
 
-### D-4: Pi Extension vs Raw JSONL Tailing
-**Decision:** Pi extension preferred over raw JSONL tailing for pi sessions.
-**Rationale:** No file-system access needed. Real-time TUI display. No checkpoint table needed for pi. JSONL tailing remains as fallback.
-**Status:** ❌ Extension not yet created; JSONL tailing fallback is implemented
-
-### D-5: Single Shared Pause Function
-**Decision:** Extract `_pause_project_workflows(project_id, paused_by)` from `/autopilot/stop` route handler.
-**Rationale:** Current endpoint misses Phase 0 (only matches `"autopilot"`, not `"autopilot-phase0"`). Shared function fixes both.
-**Status:** ✅ Implemented in `cost_derivation.py`
-
-### D-6: `paused_by` Generalization
-**Decision:** Change guards from `== "user"` to `is not None`, EXCEPT in `AutopilotService.start()`.
-**Rationale:** Any non-null `paused_by` means something deliberately paused this. `start()` keeps `== "user"` because clicking play should resume user-paused but NOT budget-paused.
-**Status:** ❌ Not yet generalized (5 locations still use `== "user"`)
-
-### D-7: Price Table for Claude Code vs Proxy
-**Decision:** Maintain local price table for Claude Code token→dollar conversion.
-**Rationale:** Claude Code transcripts have no dollar cost. LiteLLM proxy not in use. Price table is the only viable option.
-**Status:** ✅ Implemented (goes stale on Anthropic repricing)
+**Acceptance:** Over-budget project's queue stalls. No new features launch. Log messages appear.
 
 ---
 
-## 10. Open Questions
+### T2: `paused_by` Generalization
 
-| # | Question | Status | Recommendation |
-|---|----------|--------|----------------|
-| Q1 | Should standalone tasks (no session_id) be forced to always pass a session ID? | Unresolved | Yes — small change to task creation, eliminates permanent gap |
-| Q2 | Does `usage.include=true` survive LangChain's response parsing into `response_metadata`? | Needs smoke test | Test before implementing FR-12 |
-| Q3 | Does OpenCode's `-s` flag accept caller-chosen new session IDs? | Needs live test | Test before implementing session correlation |
-| Q4 | Is OpenCode actually used in any live phase? | Needs verification | Check `config/workflows/autopilot/workflow.yaml` |
-| Q5 | Should we track cost for non-LLM operations (tool calls, etc.)? | Deferred | Not in scope for this feature |
-| Q6 | Should cost be rounded or stored with full precision? | Resolved | Store full precision (Float column) |
-| Q7 | Do we need cost budgets per design (not just per project)? | Deferred | Per-project only for now |
+**Files:** `src/autopilot/orchestrator.py`  
+**Effort:** Small  
+**Dependencies:** None
 
----
+**Changes:**
+1. Line ~3749 (`_try_auto_resume_paused_workflow`): `== "user"` → `is not None`
+2. Line ~5680 (`_create_corrective_task`): `== "user"` → `is not None`
+3. Line ~5864 (`attempt_recovery` stuck restart): `== "user"` → `is not None`
+4. Line ~391-399 (`AutopilotService.start()`): **KEEP** `== "user"` — no change
 
-## 11. Acceptance Criteria Summary
-
-| ID | Criterion | Verification | Status |
-|----|-----------|--------------|--------|
-| AC-1 | CostEntry table created | `from src.core.database import CostEntry` succeeds | ✅ |
-| AC-2 | SessionCostCheckpoint table created | Table exists in DB | ✅ |
-| AC-3 | cost_total_usd on Task/Feature/Workflow/Design/Project | All five models have column | ✅ |
-| AC-4 | cost_limit_usd on AutopilotProject | Column exists, nullable | ✅ |
-| AC-5 | Pi JSONL collector captures real cost | CostEntry rows populated after pi agent task | ⚠️ Needs integration test |
-| AC-6 | Cost derivation self-heals | Missing updates recovered on next write | ⚠️ Needs unit test |
-| AC-7 | Budget pauses pipeline | Workflows paused when limit exceeded | ⚠️ Needs integration test |
-| AC-8 | Phase 0 included in budget pause | `_pause_project_workflows` matches both definition_ids | ✅ |
-| AC-9 | Budget-paused doesn't auto-resume | Self-heal guards use `is not None` | ✅ |
-| AC-10 | Play button doesn't clear budget pause | `start()` keeps `== "user"` filter | ✅ |
-| AC-11 | Raising limit clears budget pause | `PUT /projects/{id}` clears `"budget"`-paused | ❌ Not implemented |
-| AC-12 | UI shows cost data | Design screen displays spend | ❌ Frontend not done |
-| AC-13 | Budget config works | ProjectSettingsModal has limit input | ❌ Frontend not done |
-| AC-14 | Existing tests pass | All tests green | ⚠️ Needs verification |
-| AC-15 | No new dependencies | Pure SQLAlchemy/stdlib | ✅ |
-| AC-16 | Pi extension provides real-time TUI cost | Extension hooks `turn_end` | ✅ |
-| AC-17 | OpenRouter direct collector wired | `_invoke_and_record` across call sites | ✅ |
-| AC-18 | `paused_by` guards generalized | 3 locations changed from `== "user"` to `is not None` | ✅ |
+**Acceptance:** Budget-paused workflows not auto-resumed by self-heal. User-paused workflows still protected. Play button still resumes user-paused only.
 
 ---
 
-## 12. Risk Assessment
+### T3: Refactor `/autopilot/stop` Endpoint
+
+**Files:** `src/mcp/autopilot_api.py`  
+**Effort:** Small  
+**Dependencies:** None (shared function already exists in `cost_derivation.py`)
+
+**Changes:**
+1. Replace inline pause logic in `/autopilot/stop` with call to `_pause_project_workflows(db, project_id, "user")`
+2. Keep existing response format
+
+**Acceptance:** Phase 0 workflows now paused when user clicks stop. Endpoint response unchanged.
+
+---
+
+### T4: UI — Budget Configuration
+
+**Files:** `frontend/src/components/ProjectSettingsModal.tsx`  
+**Effort:** Small  
+**Dependencies:** None (API already supports `cost_limit_usd`)
+
+**Changes:**
+1. Add `cost_limit_usd` number input field
+2. Wire to existing `PUT /projects/{id}` mutation
+3. Display `cost_total_usd` as read-only context
+
+**Acceptance:** User can set/clear budget limit via settings modal.
+
+---
+
+### T5: UI — Cost Display
+
+**Files:** `frontend/src/components/autopilot/DesignQueuePanel.tsx` or `PipelineStatusCard.tsx`  
+**Effort:** Small  
+**Dependencies:** T4 (settings modal must exist for link target)
+
+**Changes:**
+1. Add cost indicator showing "$current / $limit" or "$current spent"
+2. Link to ProjectSettingsModal
+3. Add "Paused: budget limit reached" label for budget-paused workflows
+
+**Acceptance:** Cost visible on design screen. Budget-paused workflows clearly labeled.
+
+---
+
+### T6: Integration Tests
+
+**Files:** `tests/test_budget_enforcement.py` (new)  
+**Effort:** Medium  
+**Dependencies:** T1, T2, T3
+
+**Test cases:**
+1. End-to-end: set limit → insert cost exceeding limit → verify workflows paused → verify pick_next_design returns None → verify _run_one_feature blocked
+2. Phase 0 inclusion: budget pause includes `autopilot-phase0` workflows
+3. Self-heal guards: budget-paused workflow not auto-resumed by `_try_auto_resume_paused_workflow`, `_create_corrective_task`, or `attempt_recovery`
+4. Play button: budget-paused workflow NOT resumed by `start()`
+5. Limit increase: raising limit clears budget pause, pipeline resumes
+6. Idempotency: concurrent cost entries don't cause double-pause
+7. `/autopilot/stop` refactoring: Phase 0 workflows paused by user stop
+
+---
+
+## 8. Critical Design Decisions
+
+### D-1: Budget Guards as No-Op When No Limit Set
+**Decision:** `check_budget_before_new_work()` returns `True` when `cost_limit_usd is None`.  
+**Rationale:** Budget enforcement is opt-in. Projects without a limit should never be blocked.
+
+### D-2: `paused_by` Generalization (Except `start()`)
+**Decision:** Change `== "user"` to `is not None` everywhere except `AutopilotService.start()`.  
+**Rationale:** Any non-null `paused_by` means deliberate pause. `start()` keeps `== "user"` because play button should resume user-paused but not budget-paused (limit still exceeded).
+
+### D-3: Spend Over-Limit Is Expected
+**Decision:** Don't design for exact-cutoff behavior.  
+**Rationale:** Cost is only knowable after the LLM call completes. Enforcement stops the *next* call, not the one that crossed the limit.
+
+### D-4: Shared `_pause_project_workflows` for All Pause Paths
+**Decision:** Both `/autopilot/stop` (user-initiated) and budget enforcement use the same function.  
+**Rationale:** Prevents the two code paths from drifting apart. Fixes the Phase 0 gap in the endpoint for free.
+
+---
+
+## 9. Acceptance Criteria Summary
+
+| ID | Criterion | Verification |
+|----|-----------|--------------|
+| AC-1 | pick_next_design blocks over-budget projects | Unit test + integration test |
+| AC-2 | _run_one_feature blocks over-budget launches | Unit test + integration test |
+| AC-3 | Self-heal guards protect budget-paused workflows | Unit test for each guard location |
+| AC-4 | Play button does NOT clear budget pause | Integration test |
+| AC-5 | /autopilot/stop pauses Phase 0 | Integration test |
+| AC-6 | Budget config UI works | Manual/frontend test |
+| AC-7 | Cost display visible on design screen | Manual/frontend test |
+| AC-8 | Budget-paused label distinct | Manual/frontend test |
+| AC-9 | Existing tests still pass | CI |
+| AC-10 | No new dependencies | Dependency audit |
+
+---
+
+## 10. Risk Assessment
 
 | Risk | Likelihood | Impact | Mitigation |
 |------|-----------|--------|------------|
-| Claude Code price table goes stale | High | Medium | Document update process; version-check mechanism; fallback to zero with warning |
-| Concurrent CostEntry writes cause contention | Low | Medium | WAL mode handles this; MAX_PARALLEL_FEATURES = 4 |
-| Pi extension not loaded | Medium | Low | JSONL tailing fallback already works |
-| Budget enforcement misses edge case | Medium | High | Comprehensive testing of pause/resume paths; generalize `paused_by` guards |
-| Historical data unavailable | N/A | Low | Documented non-goal; rollups start from deploy |
-| `usage.include=true` doesn't survive LangChain parsing | Medium | Medium | Smoke test before implementing; fallback to token-based estimation |
-| Standalone tasks without session_id have no cost attribution | Low | Low | Force session_id on all tasks (small change) |
+| Budget guard blocks legitimate resume after limit raised | Low | Medium | Limit raise clears `paused_by="budget"` (already implemented) |
+| Generalizing `paused_by` breaks existing user-pause behavior | Low | High | Strict generalization — existing `"user"` case unchanged; comprehensive tests |
+| `/autopilot/stop` refactor changes endpoint behavior | Low | Medium | Same HTTP response format; Phase 0 inclusion is a bug fix, not a behavior change |
+| UI shows stale cost data | Medium | Low | Cost data refreshes on project data poll; not real-time critical |
 
 ---
 
-## 13. Non-Goals (Explicitly Deferred)
+## 11. Open Questions
 
-- **Real-time streaming cost display mid-task for non-pi CLIs.** Pi extension provides real-time cost. Claude Code and OpenCode collection at task completion.
-- **Codex collector implementation.** Stubbed only; needs CLI installed to inspect transcript format.
-- **Historical backfill.** No cost data exists for tasks that already ran before this lands; rollups start from zero at deploy time.
-- **Per-design budget limits.** Per-project only for now; per-design can be added later by extending the rollup chain.
-- **Cost tracking for non-LLM operations.** Tool calls, file I/O, etc. are not tracked.
-
----
-
-## 14. Implementation Phases (from Design)
-
-### Phase 1: Schema ✅
-- `cost_entries` and `session_cost_checkpoints` tables
-- `cost_total_usd` columns on Task/Feature/AutopilotDesign/AutopilotProject
-- `cost_limit_usd` on AutopilotProject
-- Migration following `_migrate_*_column` pattern
-
-### Phase 2: Pi Collector ✅
-- JSONL tailing collector + checkpoint mechanism
-- `cost_derivation.py` rollup
-- Wire into task completion handler
-- Verify against real running pipeline
-
-### Phase 3: Budget Enforcement ✅
-- ✅ `_pause_project_workflows` extraction
-- ✅ Enforcement check in `cost_derivation.py`
-- ✅ `is not None` generalization of `paused_by` guards
-- ✅ Budget checks in `pick_next_design`/`_run_one_feature`
-- ✅ Limit raise clears budget pause
-
-### Phase 4: Claude Code Collector ✅
-- UUID5 session-ID fix
-- Price-table-based collector
-- Needs smoke test verification
-
-### Phase 5: OpenRouter Direct ✅
-- Confirm `usage.include=true` works
-- Wire `_invoke_and_record` across all 9 call sites
-- Thread `task_id` into methods
-
-### Phase 6: OpenCode Collector ✅
-- Gate on actual usage in workflow.yaml
-- Implement stdout capture
-
-### Phase 7: UI ❌
-- Budget config input
-- Cost display on design screen
-- Budget-paused status label
-
-### Phase 8: Codex Collector ✅ Stub
-- Stub implementation (logs "unsupported")
-- Full implementation when CLI available
-
-### Phase 9: Pi Extension ✅
-- Create `extensions/hephaestus-cost-tracker.ts`
-- Hook `turn_end` events
-- POST to Hephaestus API
-- Real-time TUI display
-
-### Phase 10: Tests ✅ (Partial)
-- ✅ Unit tests for `cost_derivation.py` (tests/test_cost_tracking.py, 39 tests)
-- ✅ Budget enforcement tests (tests/test_budget_enforcement_integration.py, 13 tests)
-- ⏳ Integration tests for collection pipeline (not yet created)
-- ⏳ `paused_by` generalization tests (covered in budget enforcement tests)
+| # | Question | Status | Recommendation |
+|---|----------|--------|----------------|
+| Q1 | Should `pick_next_design` log at WARNING level when blocking for budget? | Open | INFO level — budget block is expected behavior, not an anomaly |
+| Q2 | Should the UI show per-phase cost breakdown? | Deferred | Out of scope for this feature; design screen shows project-level total only |
+| Q3 | Should there be a "force resume" button for budget-paused workflows? | Deferred | Raising the limit via settings is the intended "force resume" path |
+| Q4 | Should `status_reason` be surfaced in the API response for paused workflows? | Open | Yes — helps frontend show "Paused: budget limit reached" without guessing from `paused_by` |
 
 ---
 
-## 15. Appendix: File Reference
+## 12. Non-Goals (Explicitly Deferred)
 
-### Core Implementation Files
-| File | Lines | Purpose |
-|------|-------|---------|
-| `src/core/cost_derivation.py` | 287 | Self-healing cost rollup (record, derive, enforce) |
-| `src/core/database.py` | 1270+ | CostEntry, SessionCostCheckpoint models; migrations |
-| `src/services/cost_collection_service.py` | 604 | Per-CLI collectors; session discovery; collection orchestration |
-| `src/mcp/autopilot_api.py` | 1850+ | API endpoints for cost_limit_usd; cost query models |
+- **Per-design or per-phase budget limits.** Per-project only for now (matches design doc scope).
+- **Cost alerting/notifications before limit reached.** Only enforcement at limit, not warnings.
+- **Historical cost backfill.** Rollups start from deploy time.
+- **Claude Code / OpenCode / Codex collectors.** Separate features; Pi collector + OpenRouter direct are in scope for the parent cost tracking feature.
+- **Real-time streaming cost display.** Pi extension provides this for pi sessions; other CLIs collect at task completion.
+- **Approval workflow for budget overruns.** The `budget_tracking_approval_system.md` design doc covers this as a separate feature.
 
-### Reference Files
-| File | Relevance |
-|------|-----------|
-| `src/core/status_derivation.py` | Pattern model for self-healing derivation |
-| `src/interfaces/cli_interface.py` | CLI agent launch commands; session ID generation |
-| `src/agents/manager.py` | Agent lifecycle; session management |
-| `src/services/task_completion_service.py` | Triggers `collect_task_cost` on task done |
-| `src/autopilot/orchestrator.py` | `paused_by` guards; `pick_next_design`; `_run_one_feature` |
+---
 
-### Design Documents
-| File | Content |
-|------|---------|
-| `.hephaestus/design.md` | Primary design (same as `docs/COST_TRACKING_DESIGN.md`) |
-| `design_docs/per_task_cost_tracking.md` | Original per-task cost tracking design |
-| `design_docs/budget_tracking_approval_system.md` | Broader budget/approval system design |
+**Requirements extracted. Ready for Scope Review and Architecture Design.**
