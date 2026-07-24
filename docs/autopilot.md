@@ -196,9 +196,9 @@ and all `scope.md` files are written and validated by the orchestrator.
 
 ---
 
-### Per-Feature Pipeline (Phases 1–10)
+### Per-Feature Pipeline (Phases 1–12)
 
-Each Feature runs its own independent instance of the following 12 phases, in its
+Each Feature runs its own independent instance of the following 12 phases (1–12), in its
 own git worktree.
 
 ---
@@ -251,7 +251,7 @@ Primary input is this feature's `scope.md` and `requirements_analysis.md`.
 
 Produces: `architecture.md` — technical design for this feature only.
 
-### Phase 5: Development
+### Phase 4: Development
 
 **Agent:** Software Developer
 
@@ -263,6 +263,23 @@ Implements components according to this feature's `architecture.md`:
 - Does not modify files owned by other features
 
 Produces: Working source code in `<project-path>/`.
+
+### Phase 5: Architectural Review
+
+**Agent:** Software Architect (re-invoked)
+
+The architect is re-invoked after development completes, with warm context
+about the design decisions, trade-offs, and invariants from Phase 3. Reviews
+the implementation for architecture compliance, design violations, and
+over-engineering:
+- Classifies findings as BLOCKER (architecture violated), FIX (design
+  deviation), or DEFER (nice to have)
+- Reports findings — does **not** edit production code directly
+
+Produces: `architectural_review_report.md` and `architectural_review_result.json`.
+The developer fixes issues based on this report; capped at a max number of
+review runs (`workflow.yaml`'s `max_review_runs`) before the phase reports
+unresolved findings and moves on.
 
 ### Phase 6: Adversarial Code Review
 
@@ -279,7 +296,50 @@ Reviews all code produced by this feature with a critical perspective:
 
 Produces: `review_report.md` documenting what was found and fixed.
 
-### Phase 7: Documentation Review
+### Phase 7: Security Review
+
+**Agent:** Security Reviewer
+
+Focused security assessment:
+- Authentication/authorization mechanisms
+- Input validation across all endpoints
+- Data handling and secret management
+- Dependency vulnerability audit
+- OWASP Top 10 checks
+
+**Fixes** critical and high vulnerabilities directly in the code.
+
+Produces: `security_report.md` with findings and fixes applied.
+
+### Phase 8: QA Validation
+
+**Agent:** QA Engineer
+
+Comprehensive testing:
+- Discovers test locations (doesn't assume `tests/unit/`)
+- Runs existing tests or creates smoke tests
+- Validates requirements compliance with a matrix
+- Verifies security fixes are working
+- Runs end-to-end smoke tests
+
+Produces: `qa_report.md` with pass/fail status and recommendation.
+
+### Phase 9: Product Validation
+
+**Agent:** Product Validator
+
+Final spec compliance check for this feature. Reads both sources:
+- `.hephaestus/features/<feature-id>/scope.md` — the feature's stated scope and boundaries
+- `.hephaestus/design.md` — the original full design doc, to verify the feature's scope was
+  correctly extracted and nothing was silently dropped or added
+
+Compares implementation against every requirement in `scope.md`, validates
+non-functional requirements, checks integration with other features already
+merged, and verifies the feature's scope faithfully represents the original design intent.
+
+Produces: `product_validation.md` with PASS/NEEDS_WORK verdict.
+
+### Phase 10: Documentation Review
 
 **Agent:** Documentation Reviewer
 
@@ -295,64 +355,7 @@ Reviews all documentation against the actual implementation:
 
 Produces: `doc_review_report.md` with findings and fixes applied.
 
-### Phase 8: Security Review
-
-**Agent:** Security Reviewer
-
-Focused security assessment:
-- Authentication/authorization mechanisms
-- Input validation across all endpoints
-- Data handling and secret management
-- Dependency vulnerability audit
-- OWASP Top 10 checks
-
-**Fixes** critical and high vulnerabilities directly in the code.
-
-Produces: `security_report.md` with findings and fixes applied.
-
-### Phase 9: QA Validation
-
-**Agent:** QA Engineer
-
-Comprehensive testing:
-- Discovers test locations (doesn't assume `tests/unit/`)
-- Runs existing tests or creates smoke tests
-- Validates requirements compliance with a matrix
-- Verifies security fixes are working
-- Runs end-to-end smoke tests
-
-Produces: `qa_report.md` with pass/fail status and recommendation.
-
-### Phase 10: Product Validation
-
-**Agent:** Product Validator
-
-Final spec compliance check for this feature. Reads both sources:
-- `.hephaestus/features/<feature-id>/scope.md` — the feature's stated scope and boundaries
-- `.hephaestus/design.md` — the original full design doc, to verify the feature's scope was
-  correctly extracted and nothing was silently dropped or added
-
-Compares implementation against every requirement in `scope.md`, validates
-non-functional requirements, checks integration with other features already
-merged, and verifies the feature's scope faithfully represents the original design intent.
-
-Produces: `product_validation.md` with PASS/NEEDS_WORK verdict.
-
-### Phase 11: Git Commit & Push
-
-**Agent:** Git Operator
-
-Version control workflow for this feature:
-1. Pulls latest from main
-2. Creates feature branch (`feature/<design-name>-<feature-id>`)
-3. Commits all changes within this feature's file scope
-4. Pushes feature branch
-5. Creates pull request (`gh pr create`)
-6. Merges PR (`gh pr merge --merge --delete-branch`)
-7. Checks out main and pulls
-8. Saves commit hash and PR URL to memory
-
-### Phase 12: Forensics Analysis
+### Phase 11: Forensics Analysis
 
 **Agent:** Forensics Analyst
 
@@ -365,6 +368,20 @@ Pipeline self-improvement for this feature run:
 - Saves feature-scoped learnings to memory for future runs
 
 Produces: `forensics_report.md` with evidence-based improvement recommendations.
+
+### Phase 12: Git Commit & Push
+
+**Agent:** Git Operator
+
+Version control workflow for this feature:
+1. Pulls latest from main
+2. Creates feature branch (`feature/<design-name>-<feature-id>`)
+3. Commits all changes within this feature's file scope
+4. Pushes feature branch
+5. Creates pull request (`gh pr create`)
+6. Merges PR (`gh pr merge --merge --delete-branch`)
+7. Checks out main and pulls
+8. Saves commit hash and PR URL to memory
 
 ---
 
@@ -496,10 +513,10 @@ AutopilotDesign
         id, design_id, name, scope, files, depends_on, execution
         status: pending | active | completed | failed | skipped
         │
-        └── Workflow (one per Feature — runs Phases 1–10)
-              id, feature_id, status
+        └── Workflow (one per Feature — runs Phases 1–12)
+              id, feature_id, status, paused_by, cost_total_usd
               │
-              └── Phase (one per pipeline phase, 1–10)
+              └── Phase (one per pipeline phase, 1–12)
                     │
                     └── Task (one per phase execution)
                           │
@@ -596,7 +613,7 @@ outstanding issues across features.
 
 When LiteLLM proxy is configured, LLM calls include a `user` field:
 - Phase 0: `<design-name>/feature-architect`
-- Phases 1–10: `<design-name>/<feature-id>`
+- Phases 1–12: `<design-name>/<feature-id>`
 
 ```bash
 export LITELLM_PROXY_URL=http://deneb-server:4000
@@ -613,6 +630,30 @@ Costs appear in:
 - `design_metrics.json` (`cost_total` field, summed across all features including Phase 0)
 - LiteLLM dashboard (grouped by `user` field)
 
+### Budget Enforcement
+
+Independent of LiteLLM, every agent's task cost is recorded to a `CostEntry`
+ledger (`src/services/cost_collection_service.py`, from the Pi JSONL usage
+log) and rolled up into `cost_total_usd` on `Task`, `Feature`, `Workflow`,
+`AutopilotDesign`, and `AutopilotProject` via `src/core/cost_derivation.py`.
+
+Set a spending cap per project with `cost_limit_usd` (project settings in the
+UI, or `PUT /projects/{id}`). Once a project's `cost_total_usd` reaches its
+`cost_limit_usd`:
+- All of that project's active/running workflows (including Phase 0) are
+  paused with `paused_by="budget"`
+- The orchestrator's `pick_next_design()` and `_run_one_feature()` refuse to
+  start new work for the project
+- Self-heal/auto-resume logic (`_try_auto_resume_paused_workflow`,
+  `_create_corrective_task`, stuck-workflow restart) skips `"budget"`-paused
+  workflows — only raising or clearing `cost_limit_usd` resumes them
+- The dashboard shows a "Paused: budget limit reached" badge on affected
+  workflows and a budget indicator on the project/design screen
+
+A `"user"`-initiated pause (stop button) is independent of budget pauses:
+clicking play resumes `paused_by="user"` workflows but never
+`paused_by="budget"` ones.
+
 ---
 
 ## Vector Database Integration
@@ -622,7 +663,7 @@ cross-feature and cross-design learning.
 
 ### Writing
 - Phase 0: feature decomposition decisions, execution ordering rationale
-- Phase 1–10 (per feature): requirements, architecture, implementation notes,
+- Phase 1–12 (per feature): requirements, architecture, implementation notes,
   review findings, security findings, QA results, validation outcomes,
   commit references, improvement recommendations
 
