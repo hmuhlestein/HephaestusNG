@@ -115,15 +115,34 @@ description: |
   <list of 3-5 acceptance criteria for this feature>
   ```
 
-  ### Step 6: Validate Your Output
+  ### Step 6: Add a Tech Debt Feature (MANDATORY)
+  After decomposing the design, ALWAYS create one final feature called `tech-debt`
+  that addresses any tickets filed during the pipeline run (forensics, adversarial
+  review, security review, etc.). This feature:
+  - `id`: "tech-debt"
+  - `name`: "Tech Debt and Pipeline Improvements"
+  - `scope`: "Addresses tickets and improvement recommendations filed by forensics, adversarial review, security review, and other pipeline phases during this design's execution."
+  - `depends_on`: all other features (it runs last)
+  - `execution`: "sequential"
+  - `files`: [] (empty — it doesn't own files, it fixes existing ones)
+
+  Its scope.md should say: "Review all tickets created during this design's pipeline
+  run. Fix the highest-impact items. Skip items that are out of scope or require
+  design changes — file a follow-up design instead."
+
+  If no tickets were created, still include the feature but note in scope.md:
+  "No tickets were created during this run. Mark as done immediately."
+
+  ### Step 7: Validate Your Output
   Before marking done, verify:
   1. features.json is valid JSON
   2. All feature ids are unique
   3. All depends_on references resolve to existing features
   4. No file paths overlap between features
   5. Each feature has a scope.md file
+  6. A `tech-debt` feature exists and depends on all other features
 
-  ### Step 7: Mark Done
+  ### Step 8: Mark Done
   Mark your task as done with a summary of the features created.
 
   ## Example
