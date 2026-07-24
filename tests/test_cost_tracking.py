@@ -863,6 +863,38 @@ class TestInvokeAndRecord:
         assert response is model.ainvoke.return_value
 
     @pytest.mark.asyncio
+    async def test_null_prompt_tokens_details_still_writes_cost_entry(self, llm_client):
+        """A real, cost-bearing OpenRouter response with prompt_tokens_details: null
+        (a JSON-legal way to encode "no cache stats") must still write a CostEntry --
+        not raise and drop the entry via the None.get() chain."""
+        model = Mock()
+        model.ainvoke = AsyncMock(
+            return_value=Mock(
+                response_metadata={
+                    "token_usage": {
+                        "prompt_tokens": 100,
+                        "completion_tokens": 20,
+                        "prompt_tokens_details": None,
+                        "cost": {"total": 0.01},
+                    },
+                    "model_name": "anthropic/claude-sonnet-4",
+                }
+            )
+        )
+
+        with (
+            patch("src.core.cost_derivation.record_cost") as mock_record_cost,
+            patch("src.core.database.get_db"),
+        ):
+            response = await llm_client._invoke_and_record(model, ["hi"], component="task_enrichment")
+
+        mock_record_cost.assert_called_once()
+        _, kwargs = mock_record_cost.call_args
+        assert kwargs["cost_usd"] == 0.01
+        assert kwargs["cache_read_tokens"] == 0
+        assert response is model.ainvoke.return_value
+
+    @pytest.mark.asyncio
     async def test_non_openrouter_response_writes_no_cost_entry(self, llm_client):
         """token_usage present but cost.total absent/0 (every non-OpenRouter provider) writes no CostEntry."""
         model = Mock()
