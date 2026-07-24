@@ -12,6 +12,7 @@ import QueueStatusWidget from '@/components/QueueStatusWidget';
 import BlockedTasksView from '@/components/BlockedTasksView';
 import { useProject } from '@/context/ProjectContext';
 import { ProjectCostSummary } from '@/components/cost';
+import ProjectSettingsModal from '@/components/ProjectSettingsModal';
 
 const StatCard: React.FC<{
   title: string;
@@ -77,6 +78,7 @@ const ActivityItem: React.FC<{ activity: any; isNew?: boolean }> = ({ activity, 
 const Dashboard: React.FC = () => {
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [recentActivities, setRecentActivities] = useState<any[]>([]);
+  const [showProjectSettings, setShowProjectSettings] = useState(false);
   const { subscribe } = useWebSocket();
   const { selectedExecutionId, selectedExecution } = useWorkflow();
   const navigate = useNavigate();
@@ -285,9 +287,14 @@ const Dashboard: React.FC = () => {
             costTotal={projectCosts.cost_total_usd}
             costLimit={projectCosts.cost_limit_usd}
             isOverBudget={projectCosts.is_over_budget}
+            onConfigureBudget={() => setShowProjectSettings(true)}
           />
         </motion.div>
       )}
+      <ProjectSettingsModal
+        isOpen={showProjectSettings}
+        onClose={() => setShowProjectSettings(false)}
+      />
 
       {/* Blocked Tasks */}
       {blockedTasks && blockedTasks.length > 0 && (
