@@ -103,6 +103,36 @@ const ProjectSettingsModal: React.FC<ProjectSettingsModalProps> = ({ isOpen, onC
     },
   });
 
+  const updateBudgetMutation = useMutation({
+    mutationFn: async ({ projectId, costLimitUsd }: { projectId: string; costLimitUsd: number | null }) => {
+      await apiService.updateAutopilotProject(projectId, { cost_limit_usd: costLimitUsd });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['projects'] });
+      toast.success('Budget limit updated');
+      setEditingBudget(null);
+      setBudgetValue('');
+    },
+    onError: (error: any) => {
+      toast.error(error?.response?.data?.detail || 'Failed to update budget');
+    },
+  });
+
+  const handleUpdateBudget = (projectId: string) => {
+    const value = budgetValue.trim();
+    if (value === '') {
+      // Clear the budget limit
+      updateBudgetMutation.mutate({ projectId, costLimitUsd: null });
+    } else {
+      const parsed = parseFloat(value);
+      if (isNaN(parsed) || parsed < 0) {
+        toast.error('Budget must be a non-negative number');
+        return;
+      }
+      updateBudgetMutation.mutate({ projectId, costLimitUsd: parsed });
+    }
+  };
+
   const handleCreate = () => {
     if (!newProjectName.trim() || !newProjectPath.trim()) {
       toast.error('Name and path are required');
@@ -253,6 +283,54 @@ const ProjectSettingsModal: React.FC<ProjectSettingsModalProps> = ({ isOpen, onC
                           </div>
                           <p className="text-xs text-gray-500 font-mono truncate">{project.base_dir}</p>
                           <p className="text-xs text-gray-400 mt-1">{project.design_count || 0} designs</p>
+                          {/* Budget display */}
+                          <div className="mt-2">
+                            {editingBudget === project.id ? (
+                              <div className="flex items-center gap-2">
+                                <DollarSign className="w-3 h-3 text-gray-400" />
+                                <input
+                                  type="number"
+                                  value={budgetValue}
+                                  onChange={(e) => setBudgetValue(e.target.value)}
+                                  placeholder="No limit"
+                                  min="0"
+                                  step="0.01"
+                                  className="w-24 px-2 py-1 text-xs border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-violet-500"
+                                  autoFocus
+                                />
+                                <button
+                                  onClick={() => handleUpdateBudget(project.id)}
+                                  disabled={updateBudgetMutation.isPending}
+                                  className="px-2 py-1 text-xs bg-violet-600 text-white rounded hover:bg-violet-700 disabled:opacity-50"
+                                >
+                                  Save
+                                </button>
+                                <button
+                                  onClick={() => { setEditingBudget(null); setBudgetValue(''); }}
+                                  className="px-2 py-1 text-xs text-gray-600 hover:bg-gray-100 rounded"
+                                >
+                                  Cancel
+                                </button>
+                              </div>
+                            ) : (
+                              <button
+                                onClick={() => {
+                                  setEditingBudget(project.id);
+                                  setBudgetValue(project.cost_limit_usd?.toString() || '');
+                                }}
+                                className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700"
+                              >
+                                <DollarSign className="w-3 h-3" />
+                                {project.cost_limit_usd != null ? (
+                                  <>
+                                    Budget: ${project.cost_total_usd?.toFixed(2) || '0.00'} / ${project.cost_limit_usd.toFixed(2)}
+                                  </>
+                                ) : (
+                                  <span>Set budget limit</span>
+                                )}
+                              </button>
+                            )}
+                          </div>
                         </div>
                       </div>
 

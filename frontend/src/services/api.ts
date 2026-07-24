@@ -746,7 +746,7 @@ export const apiService = {
     return data;
   },
 
-  updateAutopilotProject: async (projectId: string, updates: { name?: string; base_dir?: string; is_default?: boolean }): Promise<any> => {
+  updateAutopilotProject: async (projectId: string, updates: { name?: string; base_dir?: string; is_default?: boolean; cost_limit_usd?: number | null }): Promise<any> => {
     const { data } = await api.put(`/autopilot/projects/${encodeURIComponent(projectId)}`, updates);
     return data;
   },

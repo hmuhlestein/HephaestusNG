@@ -1844,7 +1844,11 @@ def scan_design_queue(queue_dir: Path, processed_hashes: Set[str]) -> List[Desig
                 try:
                     from src.core.database import (
                         AutopilotDesign as _AD,
+                    )
+                    from src.core.database import (
                         Feature as _Feat,
+                    )
+                    from src.core.database import (
                         get_db as _gdb,
                     )
 
@@ -1934,14 +1938,19 @@ def pick_next_design(
                 logger.info("pick_next_design: no active project found")
                 return None
 
-            # Budget guard: skip this project if over budget
+            # Budget guard: skip project entirely if over budget
             from src.core.cost_derivation import check_budget_before_new_work
 
             if not check_budget_before_new_work(db, project.id):
-                logger.info(f"[BUDGET] pick_next_design: project {project.id[:8]} over budget — skipping")
-                return None  # No designs available from this over-budget project
+                logger.info(
+                    f"pick_next_design: project '{project.name}' ({project.id[:8]}) "
+                    f"over budget (${project.cost_total_usd:.2f} >= ${project.cost_limit_usd:.2f}) — skipping"
+                )
+                return None
 
-            logger.info(f"pick_next_design: searching project '{project.name}' ({project.id[:8]})")
+            logger.info(
+                f"pick_next_design: searching project '{project.name}' ({project.id[:8]})"
+            )
 
             # Get next pending design ordered by ordinal
             design = db.query(AutopilotDesign).filter_by(project_id=project.id, status="pending").order_by(AutopilotDesign.ordinal, AutopilotDesign.filename).first()
@@ -3607,8 +3616,8 @@ def _advance_phases(workflow_id: str, logger: OrchestratorLogger) -> bool:
 def _try_auto_resume_paused_workflow(db, workflow_id: str, wf, logger: OrchestratorLogger) -> None:
     """Auto-resume paused workflow if it has a done task in the stalled phase.
 
-    Skips workflows the user explicitly paused (wf.paused_by == "user", set
-    by the /workflow-executions/{id}/stop endpoint). Without this check, a
+    Skips workflows deliberately paused by anyone/anything (wf.paused_by is
+    not None — "user", "budget", "system", etc.). Without this check, a
     deliberate pause could get silently reverted within one sweep tick
     (~20s) whenever the paused workflow's in-progress phase happens to have
     a done task sitting in it -- a state pausing itself commonly produces
@@ -3619,8 +3628,13 @@ def _try_auto_resume_paused_workflow(db, workflow_id: str, wf, logger: Orchestra
     own.
     """
     if wf.paused_by is not None:
-        return
-    phases = db.query(Phase).filter_by(workflow_id=workflow_id).order_by(Phase.order).all()
+        return  # Respect any deliberate pause ("user", "budget", etc.)
+    phases = (
+        db.query(Phase)
+        .filter_by(workflow_id=workflow_id)
+        .order_by(Phase.order)
+        .all()
+    )
     for phase in phases:
         exec = db.query(PhaseExecution).filter_by(phase_id=phase.id).first()
         if exec and exec.status == "in_progress":
@@ -6375,6 +6389,7 @@ def run_phase0(
         # even if the server crashes before _create_feature_records runs.
         from src.core.database import AutopilotDesign as _ADModel, Workflow as _WfModel
 
+
         with _get_db() as _db:
             _phase0_wf = _db.query(_WfModel).filter_by(design_id=design_entry.db_id, definition_id="feature_architect").order_by(_WfModel.created_at.desc()).first()
             if _phase0_wf:
@@ -6642,6 +6657,20 @@ def _run_one_feature(
                     return "completed"
                 if wf:
                     existing_workflow_id = wf.id
+
+            # Budget guard: block new workflow launches if project is over budget
+            # Uses same DB session to avoid stale reads under concurrent cost recording
+            if project_id:
+                from src.core.cost_derivation import check_budget_before_new_work
+
+                if not check_budget_before_new_work(db, project_id):
+                    logger.info(
+                        f"[BUDGET] Project over budget — blocking new workflow for feature {feature_key}"
+                    )
+                    _update_feature_status(
+                        feature_id, design_entry.db_id, "paused", "Budget limit reached", logger
+                    )
+                    return "budget_blocked"
 
             # Update status to active
             feat_record.status = "active"

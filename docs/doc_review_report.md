@@ -1,143 +1,54 @@
-# Documentation Review Report
+# Documentation Quality Review Report
 
-**Feature:** Cost Derivation Engine (cost-derivation-engine)  
-**Review Date:** 2026-07-21  
-**Reviewer:** Doc Review Agent (Phase 10)  
-**Branch:** `feature/des-91c8-cost-derivation`
-
----
-
-## Summary
-
-Reviewed all project documentation against the actual implementation. Found and fixed **critical inaccuracies** where docs described features as "NOT IMPLEMENTED" or "PARTIALLY IMPLEMENTED" when they were actually complete. The primary documents reviewed were:
-
-1. `docs/architecture.md` — Technical Architecture (Phase 3 output)
-2. `docs/requirements_analysis.md` — Product Requirements (Phase 1 output)
-3. `docs/COST_TRACKING_DESIGN.md` — Original Design Document
+**Reviewer:** Hephaestus Doc Review Agent (Phase 10)
+**Date:** 2026-07-23
+**Feature:** Budget Enforcement and Pipeline Throttling (des-91c8-budget-enforcement)
+**Workflow ID:** 0acbf2fc-fcf5-4b24-ad2d-31b1db62df6d
 
 ---
 
-## Critical Inaccuracies Fixed
+## 1. Executive Summary
 
-### 1. OpenRouter Direct Collection — Marked "PARTIALLY IMPLEMENTED", Actually Complete
+Documentation quality is **GOOD**. `requirements_analysis.md`, `architecture.md`, `qa_validation/qa_report.md`, `security_review/security_report.md`, and `product_validation/product_validation.md` all accurately describe this feature and match the current code. Two categories of problems were found and fixed:
 
-**Location:** `docs/architecture.md` Section 2.4, `docs/requirements_analysis.md` FR-12
+1. **Orphaned files from the prior pipeline run** (Cost Tracking Database Schema feature) were left at the top level of `docs/` alongside this feature's correctly-scoped subfolder reports, creating duplicate/conflicting sources of truth.
+2. **`docs/autopilot.md`**, the main pipeline reference doc, had a stale phase list that predates the `architectural_review` phase (added between the two runs) — it was missing a phase, mislabeled six phase numbers, and had Documentation Review and Security Review in the wrong order relative to the real pipeline. It also had no mention of budget enforcement at all despite this being the feature that added it.
 
-**What docs said:** "❌ Not all 9 call sites routed through `_invoke_and_record()`" and "❌ `task_id` not threaded into all methods"
+## 2. Documentation Inventory
 
-**Actual state:** `_invoke_and_record()` is implemented at `langchain_llm_client.py:323` and ALL major call sites are routed through it:
-- `classify_complexity` (line 409)
-- `enrich_task` (line 466) — with `task_id` parameter
-- `resolve_ticket_clarification` (line 530)
-- `analyze_agent_state` (line 592)
-- `analyze_agent_trajectory` (line 691) — guardian
-- `analyze_system_coherence` (line 750) — conductor
-- `review_qa_report` (line 842) — conductor
+| Document | Path | Status |
+|----------|------|--------|
+| Requirements Analysis | `docs/requirements_analysis.md` | ✅ Accurate, matches implementation |
+| Architecture | `docs/architecture.md` | ✅ Accurate, all tasks marked DONE match code |
+| Security Report | `docs/security_review/security_report.md` | ✅ Accurate (PASS, SEC-04 fixed, 5 pre-existing low findings tracked) |
+| QA Report | `docs/qa_validation/qa_report.md` | ✅ Accurate |
+| Product Validation | `docs/product_validation/product_validation.md` | ✅ Accurate — correctly reports CONDITIONAL PASS with open gap G-2 |
+| Pipeline Reference | `docs/autopilot.md` | ⚠️ Stale phase numbering + missing budget enforcement section — **fixed** |
+| Top-level `docs/product_validation.md` | `docs/product_validation.md` | 🗑️ Orphan from prior feature run — **removed** |
+| Top-level `docs/security_report.md` | `docs/security_report.md` | 🗑️ Orphan from prior feature run — **removed** |
 
-`usage.include=true` is confirmed working at line 243, extracting cost from `response_metadata.token_usage.cost.total`.
+## 3. Inaccuracies Found and Fixed
 
-### 2. Budget Enforcement — Marked "PARTIALLY IMPLEMENTED", Actually Complete
+### 3.1 Stray/orphaned files from the previous feature run (Critical)
 
-**Location:** `docs/architecture.md` Section 2.5
+`docs/product_validation.md` and `docs/security_report.md` were leftovers from the earlier "Cost Tracking Database Schema" pipeline run (dated 2026-07-21, content referencing "Feature Model Implementation" and "Cost Tracking Feature"). This feature's own reports for those phases already exist in the correct location — `docs/product_validation/product_validation.md` and `docs/security_review/security_report.md` — created by the workflow's per-phase output convention. The stale top-level duplicates were deleted (`git rm`) since they no longer reflect the current codebase and would mislead anyone reading `docs/` directly.
 
-**What docs said:** Three items marked "Not Implemented":
-- "❌ `paused_by` guards not generalized (3 locations still use `== "user"`)"
-- "❌ Budget checks not wired into `pick_next_design()` and `_run_one_feature()`"
-- "❌ Limit raise doesn't clear budget pause on `PUT /projects/{id}`"
+### 3.2 `docs/autopilot.md` — stale pipeline phase list (Critical)
 
-**Actual state:** ALL THREE are implemented:
-- `paused_by` guards at lines 3531, 5218, 5384 all use `is not None`
-- `check_budget_before_new_work()` is called in `pick_next_design()` (line 1931) and `_run_one_feature()` (line 6381)
-- `PUT /projects/{id}` clears budget pause when limit raised (lines 1868-1880)
+The pipeline phase section was written before the `architectural_review` phase existed and never updated:
+- Missing Phase 5 (Architectural Review) entirely — the doc jumped from Phase 3 (Architecture) straight to a phase labeled "Phase 5: Development."
+- Phase numbers 6–12 were each off by one, and Documentation Review (labeled Phase 7) and Security Review (labeled Phase 8) were listed in the wrong order — the real pipeline runs Security Review (Phase 7) before Documentation Review (Phase 10), and Forensics Analysis (Phase 11) before Git Commit & Push (Phase 12), the reverse of what the doc said.
 
-### 3. Pi Extension — Marked "NOT IMPLEMENTED", Actually Exists
+Fixed by reconciling the phase list against `config/workflows/autopilot/*.yaml` (the authoritative `id:`/`name:` per phase) and against this workflow's actual phase sequence: Product Requirements(1) → Scope Review(2) → Architecture(3) → Development(4) → Architectural Review(5) → Adversarial Code Review(6) → Security Review(7) → QA Validation(8) → Product Validation(9) → Documentation Review(10) → Forensics Analysis(11) → Git Commit & Push(12). Added a description for the previously-undocumented Architectural Review phase. Fixed the "Phases 1–10" references (appeared 4 times) to "Phases 1–12."
 
-**Location:** `docs/architecture.md` Section 2.6, `docs/requirements_analysis.md` FR-8
+### 3.3 `docs/autopilot.md` — missing budget enforcement documentation (Gap)
 
-**What docs said:** "NOT IMPLEMENTED" with target path `extensions/hephaestus-cost-tracker.ts`
+The "Cost Tracking" section only documented the LiteLLM-proxy-based external cost attribution mechanism, with no mention of the internal `CostEntry`/`cost_derivation.py` ledger or the budget enforcement this feature adds (guards in `pick_next_design()`/`_run_one_feature()`, `paused_by="budget"` semantics, self-heal exclusion, UI badge). Added a "Budget Enforcement" subsection covering the mechanism, the enforcement points, and how it interacts with user-initiated pauses.
 
-**Actual state:** Extension exists at `extensions/hephaestus-cost-tracker/src/index.ts` with full implementation:
-- Hooks `turn_end` events
-- Extracts `message.usage.cost.total`
-- POSTs to `POST /api/autopilot/cost-entries`
-- Shows running cost in TUI via `ctx.ui.setStatus()`
-- Configurable via `HEPHAESTUS_API_URL` env var
+## 4. Known Gap Not Fixed (Out of Scope for Doc Review)
 
-### 4. Tests — Marked "NOT CREATED", Actually Exist
+`docs/product_validation/product_validation.md` (G-2) correctly documents that `BudgetStatusCard.tsx` was built but is never imported/rendered anywhere in the frontend — confirmed still true by grep during this review (`grep -rn "BudgetStatusCard" frontend/src` finds only the component's own definition file). This is an implementation gap, not a documentation gap; the product validation report already reflects it accurately as `CONDITIONAL PASS`. No doc changes were made to paper over it.
 
-**Location:** `docs/architecture.md` Appendix, `docs/requirements_analysis.md` Phase 10
+## 5. Verdict
 
-**What docs said:** Tests "❌ Not created"
-
-**Actual state:**
-- `tests/test_cost_tracking.py` — 39 test functions (755 lines)
-- `tests/test_budget_enforcement_integration.py` — 13 test functions (516 lines)
-
-### 5. API Endpoints — Marked "NOT IMPLEMENTED", Actually Complete
-
-**Location:** `docs/architecture.md` Section 2.7.2
-
-**What docs said:** Cost query endpoints "❌ Not implemented"
-
-**Actual state:** ALL endpoints implemented in `src/mcp/autopilot_api.py`:
-- `POST /cost-entries` (line 1948)
-- `GET /tasks/{id}/costs` (line 2063)
-- `GET /workflows/{id}/costs` (line 2111)
-- `GET /features/{id}/costs` (line 2159)
-- `GET /designs/{id}/costs` (line 2207)
-- `GET /projects/{id}/costs` (line 2255)
-
----
-
-## Other Documentation Issues
-
-### File Organization
-
-- Moved `security_report.md` from project root to `docs/` (pipeline output belongs in docs path)
-
-### Line Number Corrections
-
-Architecture doc referenced incorrect line numbers for `paused_by` guards:
-- `_try_auto_resume_paused_workflow`: doc said 3749, actual is 3531
-- `_create_corrective_task`: doc said 5680, actual is 5218
-- `attempt_recovery`: doc said 5864, actual is 5384
-- `AutopilotService.start()`: doc said 398, actual is 395
-
-### Still Outstanding (Not Fixed — Accurate as Documented)
-
-| Item | Status | Notes |
-|------|--------|-------|
-| Frontend cost components | ❌ Not implemented | Accurately documented as not done |
-| `DESIGN_WORKFLOW_DEFINITION_IDS` constant | ✅ Exists | Used instead of hardcoded list |
-| `SessionCostCheckpoint` keyed by session_id | ✅ Correct | Design rationale still valid |
-| Claude Code price table maintenance | ⚠️ Manual | No automated mechanism — documented correctly |
-| OpenCode actual usage verification | ❓ Unresolved | Needs check of workflow.yaml |
-| Force session_id on standalone tasks | ❓ Unresolved | Design flagged, still open |
-
----
-
-## Files Modified
-
-| File | Changes |
-|------|---------|
-| `docs/architecture.md` | Fixed Sections 2.4, 2.5, 2.6, 2.7.2, Appendix A, Open Questions |
-| `docs/requirements_analysis.md` | Fixed FR-7, FR-8, FR-12, AC-9/11/16/17/18, Phases 3/5/9/10, integration tables |
-| `docs/security_report.md` | Moved from project root to docs/ |
-
----
-
-## Conclusion
-
-The implementation is significantly further along than the documentation indicated. The core cost derivation engine is fully implemented with:
-- ✅ Schema (CostEntry, SessionCostCheckpoint, rollup columns)
-- ✅ Cost derivation module with self-healing
-- ✅ All CLI collectors (pi, Claude Code, OpenCode, Codex stub)
-- ✅ OpenRouter direct collection via `_invoke_and_record`
-- ✅ Budget enforcement (pause, block new work, limit raise clear)
-- ✅ Pi extension for real-time cost display
-- ✅ All API endpoints (7 total)
-- ✅ Tests (52 test functions across 2 files)
-
-**Not yet implemented:** Frontend cost components (UI display, budget config input).
-
-The documentation has been corrected to reflect the actual implementation state.
+**PASS.** Feature-specific documentation was already accurate. The two fixes applied — removing orphaned prior-feature files and correcting `autopilot.md`'s pipeline phase list — address the only inaccuracies found in the broader `docs/` tree.

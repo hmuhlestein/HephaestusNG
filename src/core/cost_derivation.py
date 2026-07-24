@@ -342,6 +342,8 @@ def _pause_project_workflows(db: Session, project_id: str, paused_by: str) -> in
         wf.paused_at = datetime.utcnow()
         if paused_by == "budget":
             wf.status_reason = "Budget limit reached"
+        elif paused_by == "user":
+            wf.status_reason = None  # Clear any stale budget reason
         paused_count += 1
         workflow_ids.append(wf.id)
 

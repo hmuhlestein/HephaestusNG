@@ -71,3 +71,4 @@ ignore = ["E501"]  # line length enforced by black/formatter
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+addopts = "-p no:libtmux"

@@ -1,249 +1,205 @@
 {
   "verdict": "PASS",
-  "date": "2026-07-21",
-  "feature_id": "cost-derivation-engine",
+  "feature": "Budget Enforcement and Pipeline Throttling",
+  "feature_id": "des-91c8-budget-enforcement",
   "design_doc": ".hephaestus/design.md",
   "requirements_doc": "docs/requirements_analysis.md",
-  "summary": "Requirements analysis faithfully captures the design doc scope with high fidelity. All functional requirements (FR-1 through FR-16), non-functional requirements, design decisions, and implementation phases trace directly to the design document. Five minor additions beyond the design doc are identified as advisory (not blockers). No design doc requirements are missing from the requirements analysis. The additions are reasonable extractions or standard requirements-document sections that do not constitute scope creep.",
-  "findings": {
-    "missing_from_requirements": [],
-    "added_beyond_design_doc": [
-      {
-        "id": "ADD-1",
-        "severity": "advisory",
-        "location": "FR-1 (CostEntry schema), line 94",
-        "finding": "requirements_analysis.md includes `reasoning_tokens = Column(Integer, default=0)` on the CostEntry model. The design doc mentions 'reasoning token count is worth capturing alongside input/output even though it has no separate cost line item (rolled into output cost) — useful signal for which phases burn the most reasoning later' but does NOT include reasoning_tokens in its explicit schema definition. The requirements doc promotes this from a design comment to a first-class column.",
-        "recommendation": "Acceptable — this is a reasonable extraction of the design's stated intent. The design explicitly calls out reasoning tokens as worth capturing. Having it as a queryable column rather than only in raw_usage JSON is a defensible schema choice."
-      },
-      {
-        "id": "ADD-2",
-        "severity": "advisory",
-        "location": "FR-3 (Denormalized Rollup Columns), line 143",
-        "finding": "requirements_analysis.md includes `Workflow` (database.py:1143) in the cost_total_usd rollup chain. The design doc's rollup chain is: Task → Feature → AutopilotDesign → AutopilotProject. Workflow is NOT listed as a model receiving cost_total_usd in the design doc's Data Model section. The requirements doc adds it, and it appears in the dependency diagram (line 584) as `derive_workflow_cost() → Updates Workflow.cost_total_usd`.",
-        "recommendation": "Acceptable but flag for architecture review — adding Workflow to the rollup chain is logically sound (workflow contains tasks, so rolling up task costs to workflow level makes sense), but this is a schema addition not in the design. Architecture phase should confirm this doesn't create maintenance overhead or inconsistency."
-      },
-      {
-        "id": "ADD-3",
-        "severity": "advisory",
-        "location": "FR-1 (CostEntry schema), line 100",
-        "finding": "requirements_analysis.md lists index `ix_cost_entries_recorded_at` in addition to `ix_cost_entries_task_id` and `ix_cost_entries_workflow_id`. The design doc only specifies the task_id and workflow_id indexes. The recorded_at index is a reasonable addition for time-range queries but is not in the design.",
-        "recommendation": "Acceptable — performance index for common query patterns. No action needed."
-      },
-      {
-        "id": "ADD-4",
-        "severity": "advisory",
-        "location": "Section 5 (NFR-7 Observability)",
-        "finding": "requirements_analysis.md adds a full NFR-7 Observability section specifying log prefixes: `[COST-HEAL]` for self-heal corrections, `[BUDGET]` for budget enforcement, `[COST-COLLECT]` for collection events, plus a future 'Cost summary dashboard in monitoring' item. The design doc does not have an Observability section or specify log prefix conventions.",
-        "recommendation": "Acceptable — log prefixes are standard practice and the design doc's gap review sections implicitly expect logging. No action needed."
-      },
-      {
-        "id": "ADD-5",
-        "severity": "advisory",
-        "location": "Section 14 (Implementation Phases), phases 9-10",
-        "finding": "requirements_analysis.md lists 10 implementation phases; the design doc lists 8. The requirements doc adds: Phase 9 (Pi Extension as a standalone implementation phase) and Phase 10 (Tests — unit tests for cost_derivation.py, integration tests for collection pipeline, budget enforcement tests, paused_by generalization tests). The design doc mentions the pi extension in its own section ('Pi Extension Collector') but does NOT include it as a separate implementation phase — it is described alongside the collection architecture. Tests are not mentioned as a separate phase in the design doc at all.",
-        "recommendation": "Acceptable for pi extension (it's in the design doc, just not as a standalone phase). The test phase is a natural addition but should be acknowledged as beyond the design's explicit scope. Architecture phase should decide whether tests are part of each component's phase or a separate phase."
-      }
-    ],
-    "potential_omissions": [],
-    "design_decisions_verified": [
-      {
-        "id": "DD-1",
-        "decision": "Append-only ledger vs mutable totals",
-        "design_doc_reference": "Data Model section",
-        "requirements_match": true
-      },
-      {
-        "id": "DD-2",
-        "decision": "Checkpoint keyed by session_id, not Agent.id",
-        "design_doc_reference": "Collection Architecture — Gap review section",
-        "requirements_match": true
-      },
-      {
-        "id": "DD-3",
-        "decision": "Collection on task completion, not timer",
-        "design_doc_reference": "Collection Architecture — 'When to collect' section",
-        "requirements_match": true
-      },
-      {
-        "id": "DD-4",
-        "decision": "Pi extension preferred over raw JSONL tailing",
-        "design_doc_reference": "Pi Extension Collector section",
-        "requirements_match": true
-      },
-      {
-        "id": "DD-5",
-        "decision": "Extract _pause_project_workflows shared function",
-        "design_doc_reference": "Budget Enforcement — Enforcement trigger section",
-        "requirements_match": true
-      },
-      {
-        "id": "DD-6",
-        "decision": "Generalize paused_by guards, EXCEPT AutopilotService.start()",
-        "design_doc_reference": "Budget Enforcement — Generalizing paused_by guard section",
-        "requirements_match": true
-      },
-      {
-        "id": "DD-7",
-        "decision": "Price table for Claude Code token-to-dollar conversion",
-        "design_doc_reference": "Claude Code — verified section",
-        "requirements_match": true
-      }
-    ],
-    "non_goals_verified": [
-      "Real-time streaming for non-pi CLIs — present in both docs",
-      "Codex collector (stub only) — present in both docs",
-      "Historical backfill — present in both docs",
-      "Per-design budget limits — present in both docs (requirements adds as explicit non-goal, design doc implies by scoping to per-project only)"
-    ],
-    "implementation_phases_verified": {
-      "design_doc_phases": 8,
-      "requirements_doc_phases": 10,
-      "alignment": "All 8 design doc phases present and correctly ordered. Requirements doc adds 2 phases: Pi Extension (phase 9) and Tests (phase 10). Pi extension is derived from the design doc's 'Pi Extension Collector' section. Tests phase is new content.",
-      "design_doc_phase_list": [
-        "Phase 1: Schema",
-        "Phase 2: Pi collector + cost_derivation.py",
-        "Phase 3: Budget enforcement",
-        "Phase 4: Claude Code collector",
-        "Phase 5: OpenRouter direct",
-        "Phase 6: OpenCode collector",
-        "Phase 7: UI",
-        "Phase 8: Codex collector"
-      ],
-      "requirements_doc_phase_list": [
-        "Phase 1: Schema",
-        "Phase 2: Pi Collector",
-        "Phase 3: Budget Enforcement",
-        "Phase 4: Claude Code Collector",
-        "Phase 5: OpenRouter Direct",
-        "Phase 6: OpenCode Collector",
-        "Phase 7: UI",
-        "Phase 8: Codex Collector (stub)",
-        "Phase 9: Pi Extension",
-        "Phase 10: Tests"
-      ]
-    },
-    "open_questions_coverage": {
-      "design_doc_open_questions": [
-        "Standalone tasks with no session_id — worth deciding whether to force session ID",
-        "usage.include=true surviving LangChain parsing into response_metadata",
-        "OpenCode -s flag behavior for new sessions (create vs resume)",
-        "OpenCode actual usage check in workflow.yaml"
-      ],
-      "requirements_doc_open_questions": [
-        "Q1: Non-LLM operations tracking (NEW — not in design doc, marked Deferred)",
-        "Q2: usage.include=true LangChain parsing (from design doc)",
-        "Q3: OpenCode -s flag behavior (from design doc)",
-        "Q4: OpenCode actual usage check (from design doc)",
-        "Q5: Non-LLM cost tracking (from design doc)",
-        "Q6: Cost rounding precision (NEW — implementation detail)",
-        "Q7: Per-design budgets (NEW — explicitly deferred)"
-      ],
-      "gap": "Q1, Q6, Q7 are new questions not in design doc. All are reasonable exploratory items and marked as Deferred/Resolved. Q2-Q4 correctly trace to design doc open questions. Design doc's standalone-task session_id question maps to Q7 in requirements doc but is framed differently (design asks 'should we force it'; requirements asks 'should we track per-design budgets' — different question). The standalone-task question appears in the requirements doc's FR-2 acceptance criteria notes but is not captured as an explicit open question."
-    }
-  },
-  "requirement_traceability": {
-    "FR-1_CostEntry_Table": {
-      "design_doc_reference": "Data Model — cost_entries table",
-      "status": "complete",
-      "notes": "Schema, indexes, nullable task_id, source enum, raw_usage — all captured. ADD-1: reasoning_tokens added beyond design schema."
-    },
-    "FR-2_SessionCostCheckpoint": {
-      "design_doc_reference": "Collection Architecture — SessionCostCheckpoint table",
-      "status": "complete",
-      "notes": "Session_id keying, double-count prevention rationale — all captured"
-    },
-    "FR-3_Denormalized_Rollups": {
-      "design_doc_reference": "Data Model — Denormalized rollup columns",
-      "status": "complete_with_addition",
-      "notes": "ADD-2: Workflow model added to rollup chain (not in design doc). Task, Feature, AutopilotDesign, AutopilotProject correctly captured."
-    },
-    "FR-4_Cost_Derivation_Module": {
-      "design_doc_reference": "Data Model — derive_cost_totals module",
-      "status": "complete",
-      "notes": "New module src/core/cost_derivation.py, record_cost, derive_* functions — all captured"
-    },
-    "FR-5_Budget_Schema": {
-      "design_doc_reference": "Budget Enforcement — Schema",
-      "status": "complete",
-      "notes": "cost_limit_usd on AutopilotProject, nullable — all captured"
-    },
-    "FR-6_Budget_Enforcement_Logic": {
-      "design_doc_reference": "Budget Enforcement — Enforcement trigger, Blocking new work",
-      "status": "complete",
-      "notes": "Phase 0 gap fix (definition_id.in_ filter), pick_next_design guard, _run_one_feature guard, idempotency — all captured"
-    },
-    "FR-7_Paused_By_Generalization": {
-      "design_doc_reference": "Budget Enforcement — Generalizing paused_by guard",
-      "status": "complete",
-      "notes": "is not None generalization, AutopilotService.start() exception, limit-raising clears budget pause — all captured"
-    },
-    "FR-8_Pi_Extension_Collector": {
-      "design_doc_reference": "Pi Extension Collector section",
-      "status": "complete",
-      "notes": "turn_end hook, session_id from context, TUI status, POST to API — all captured"
-    },
-    "FR-9_Pi_JSONL_Tailing": {
-      "design_doc_reference": "Collection Architecture — Per-CLI transcript tailing, pi confirmed section",
-      "status": "complete",
-      "notes": "Checkpoint mechanism, session file discovery (sanitized cwd, glob pattern), shared session handling, collection on task completion — all captured"
-    },
-    "FR-10_Claude_Code_Collector": {
-      "design_doc_reference": "Claude Code — verified section",
-      "status": "complete",
-      "notes": "No dollar cost, price table needed (two cache-write tiers), UUID5 fix noted as landed — all captured"
-    },
-    "FR-11_OpenCode_Collector": {
-      "design_doc_reference": "OpenCode — different shape section",
-      "status": "complete",
-      "notes": "One-shot invocation, stdout capture vs DB read, gate on actual usage — all captured"
-    },
-    "FR-12_OpenRouter_Direct": {
-      "design_doc_reference": "Backend's own direct OpenRouter calls section",
-      "status": "complete",
-      "notes": "usage.include=true, _invoke_and_record helper, ~9 call sites, task_id threading table — all captured"
-    },
-    "FR-13_Codex_Stub": {
-      "design_doc_reference": "Codex — unresolved section",
-      "status": "complete",
-      "notes": "Stub logs unsupported — all captured"
-    },
-    "FR-14_UI_Budget_Config": {
-      "design_doc_reference": "Budget Enforcement — UI section",
-      "status": "complete",
-      "notes": "ProjectSettingsModal input, PUT /projects endpoint extension — all captured"
-    },
-    "FR-15_UI_Cost_Display": {
-      "design_doc_reference": "Budget Enforcement — UI section",
-      "status": "complete",
-      "notes": "Design screen indicator, budget-paused label distinction, feature/design/project cost displays — all captured"
-    },
-    "FR-16_Cost_Collection_Service": {
-      "design_doc_reference": "Collection Architecture — cost_collection_service.py",
-      "status": "complete",
-      "notes": "CostCollector ABC, per-CLI collectors, session discovery, entry point — all captured"
-    }
-  },
-  "critical_design_gaps_verified": [
+  "review_date": "2026-07-21",
+  "agent_id": "fcb7093e-b97b-406d-8e02-d3a5dc5aa741",
+  "summary": "The requirements analysis is a faithful, accurate extraction of the design doc's Budget Enforcement section and its associated enforcement requirements. Every functional requirement traces cleanly to a specific section of design.md, and no design doc requirement is missing from the analysis.",
+
+  "requirement_traceability": [
     {
-      "gap": "Phase 0 (autopilot-phase0) missed by /autopilot/stop endpoint",
-      "design_doc_reference": "Budget Enforcement — Enforcement trigger",
-      "requirements_capture": "FR-6 explicitly documents this gap and the definition_id.in_ fix"
+      "requirement_id": "FR-1",
+      "requirement": "Budget Guard in pick_next_design()",
+      "design_doc_reference": "design.md lines 428-434: 'Add the same cost_total_usd >= cost_limit_usd check as a guard at the top of pick_next_design (skip this project's designs entirely while over budget)'",
+      "trace_status": "TRACED",
+      "notes": "Correct implementation detail using existing check_budget_before_new_work() guard function."
     },
     {
-      "gap": "Checkpoint must be keyed by session_id not Agent.id",
-      "design_doc_reference": "Collection Architecture — 'Gap review caught a real bug'",
-      "requirements_capture": "FR-2 explicitly documents this with full rationale"
+      "requirement_id": "FR-2",
+      "requirement": "Budget Guard in _run_one_feature()",
+      "design_doc_reference": "design.md lines 428-434: 'and in _run_one_feature before calling run_single_workflow for a feature that hasn't started yet — cheap checks, already have project_id in scope at both call sites'",
+      "trace_status": "TRACED",
+      "notes": "Correct implementation detail. Return value 'budget_blocked' is a reasonable addition for caller traceability."
     },
     {
-      "gap": "paused_by == 'user' guards miss budget-paused workflows",
-      "design_doc_reference": "Budget Enforcement — Generalizing paused_by guard",
-      "requirements_capture": "FR-7 explicitly documents this with exception for start()"
+      "requirement_id": "FR-3",
+      "requirement": "Generalize paused_by guards to is not None",
+      "design_doc_reference": "design.md lines 391-426: 'Fix: change each of those checks from == \"user\" to is not None'",
+      "trace_status": "TRACED",
+      "notes": "Correctly enumerates all 3 locations (_try_auto_resume_paused_workflow, _create_corrective_task, attempt_recovery) and the DELIBERATE EXCEPTION for AutopilotService.start(). Matches design doc exactly."
     },
     {
-      "gap": "Claude Code has no session ID correlation",
-      "design_doc_reference": "Claude Code — verified, section 2",
-      "requirements_capture": "FR-10 notes UUID5 fix as landed per design doc"
+      "requirement_id": "FR-4",
+      "requirement": "Refactor /autopilot/stop to Use Shared _pause_project_workflows",
+      "design_doc_reference": "design.md lines 352-372: 'extract the actual pause/terminate logic out of the /autopilot/stop route handler into a plain function... that both the HTTP endpoint and _trigger_budget_pause call, filtering Workflow.definition_id.in_([\"autopilot\", \"autopilot-phase0\"])'",
+      "trace_status": "TRACED",
+      "notes": "Correctly identifies this as fixing a real Phase 0 gap, matching the design doc's 'Gap review caught a real hole' language."
+    },
+    {
+      "requirement_id": "FR-5",
+      "requirement": "Budget-Paused Workflow Resume via Limit Increase",
+      "design_doc_reference": "design.md lines 418-426: 'Raising cost_limit_usd (or setting it back to None) is what should clear paused_by == \"budget\", via a one-line check added to the same PUT /projects/{project_id} handler'",
+      "trace_status": "TRACED",
+      "notes": "Correctly identified as ALREADY IMPLEMENTED. No implementation work needed."
+    },
+    {
+      "requirement_id": "FR-6",
+      "requirement": "UI — Budget Configuration in ProjectSettingsModal",
+      "design_doc_reference": "design.md lines 437-441: 'ProjectSettingsModal.tsx: add a cost_limit_usd number input per project (optional — blank/cleared means no limit), wired to the existing PUT /projects/{project_id} mutation'",
+      "trace_status": "TRACED",
+      "notes": "Implementation details match design doc scope. Validation (positive number or empty) is reasonable."
+    },
+    {
+      "requirement_id": "FR-7",
+      "requirement": "UI — Cost Display on Autopilot Design Screen",
+      "design_doc_reference": "design.md lines 442-450: 'a small \"$current / $limit\" indicator (or just \"$current spent\" when no limit is set) with a link that opens ProjectSettingsModal scoped to the active project'",
+      "trace_status": "TRACED",
+      "notes": "Format specifications match design doc exactly."
+    },
+    {
+      "requirement_id": "FR-8",
+      "requirement": "UI — Budget-Paused Status Label",
+      "design_doc_reference": "design.md lines 452-458: 'When a workflow shows paused_by == \"budget\" specifically (vs. \"user\"), surface that distinction in whatever status text/badge already exists for paused workflows — \"Paused: budget limit reached\" reads very differently from a generic \"Paused,\"'",
+      "trace_status": "TRACED",
+      "notes": "Label text matches design doc. FR-8 also mentions paused_by === \"system\" / \"system-exhausted\" but only to confirm existing label behavior, not adding new requirements."
     }
   ],
-  "conclusion": "The requirements analysis is a faithful, complete extraction of the design document scope. All 16 functional requirements trace to specific sections of the design doc. All 7 critical design decisions are captured. All 4 critical gap fixes from the design doc are documented. No design doc requirements are missing from the requirements analysis. Five additions beyond the design doc are identified (reasoning_tokens column, Workflow in rollup chain, recorded_at index, NFR-7 Observability, implementation phases 9-10) — all are reasonable extractions or standard requirements-document sections that do not constitute scope creep. Ready to proceed to architecture design."
+
+  "already_implemented_items": [
+    {
+      "item": "cost_limit_usd column on AutopilotProject",
+      "design_doc_reference": "design.md line 333: 'cost_limit_usd = Column(Float, nullable=True)'",
+      "status": "Already implemented in database.py migration"
+    },
+    {
+      "item": "_check_budget_enforcement in cost_derivation.py",
+      "design_doc_reference": "design.md lines 338-350: enforcement trigger on CostEntry write",
+      "status": "Already implemented in cost_derivation.py"
+    },
+    {
+      "item": "_pause_project_workflows with Phase 0 fix",
+      "design_doc_reference": "design.md lines 352-372: filter definition_id.in_(['autopilot', 'autopilot-phase0'])",
+      "status": "Already implemented in cost_derivation.py"
+    },
+    {
+      "item": "check_budget_before_new_work() guard function",
+      "design_doc_reference": "design.md lines 428-434: budget guard for new work",
+      "status": "Already exists but NOT called in orchestrator — that wiring is the scope of FR-1 and FR-2"
+    },
+    {
+      "item": "Budget pause clearing in PUT /projects/{id}",
+      "design_doc_reference": "design.md lines 418-426: clear paused_by when limit raised",
+      "status": "Already implemented in autopilot_api.py"
+    }
+  ],
+
+  "design_doc_requirements_not_in_requirements": [],
+  "requirements_not_in_design_doc": [],
+
+  "out_of_scope_correctly_deferred": [
+    {
+      "item": "Per-design or per-phase budget limits",
+      "reason": "Design doc specifies per-project only (matching rollup chain)"
+    },
+    {
+      "item": "Cost alerting/notifications before limit reached",
+      "reason": "Design doc only specifies enforcement at the limit, not warnings"
+    },
+    {
+      "item": "Claude Code / OpenCode / Codex collectors",
+      "reason": "Design doc phases 4, 6, 8 — separate features"
+    },
+    {
+      "item": "OpenRouter direct cost capture",
+      "reason": "Design doc phase 5 — separate feature"
+    },
+    {
+      "item": "Historical cost backfill",
+      "reason": "Design doc Non-Goals section explicitly defers this"
+    },
+    {
+      "item": "Approval workflow for budget overruns",
+      "reason": "Separate design doc (budget_tracking_approval_system.md)"
+    },
+    {
+      "item": "Real-time streaming cost display for non-pi CLIs",
+      "reason": "Design doc Non-Goals section: collection at task completion for Claude Code/OpenCode"
+    }
+  ],
+
+  "non_goals_alignment": "The requirements analysis Section 12 (Non-Goals) correctly mirrors the design doc's own Non-Goals section. All deferred items are accurately identified.",
+
+  "nfr_alignment": "Non-functional requirements (backward compatibility, performance, reliability, observability) are reasonable and consistent with design doc's stated constraints (idempotency, the 'spend always lands at-or-slightly-over' nature).",
+
+  "critical_design_decisions_captured": [
+    {
+      "decision": "D-1: Budget Guards as No-Op When No Limit Set",
+      "design_doc_basis": "Implicit from cost_limit_usd = None semantics",
+      "trace_status": "TRACED"
+    },
+    {
+      "decision": "D-2: paused_by Generalization (Except start())",
+      "design_doc_basis": "design.md lines 408-415: explicit per-section treatment",
+      "trace_status": "TRACED"
+    },
+    {
+      "decision": "D-3: Spend Over-Limit Is Expected",
+      "design_doc_basis": "design.md lines 384-389: 'Spend will always land at-or-slightly-over the limit'",
+      "trace_status": "TRACED"
+    },
+    {
+      "decision": "D-4: Shared _pause_project_workflows for All Pause Paths",
+      "design_doc_basis": "design.md lines 368-372: shared function usage",
+      "trace_status": "TRACED"
+    }
+  ],
+
+  "implementation_task_mapping": [
+    {
+      "task_id": "T1",
+      "task": "Orchestrator Budget Guards",
+      "requirements": ["FR-1", "FR-2"],
+      "design_doc_refs": ["design.md lines 428-434 (Blocking new work)"]
+    },
+    {
+      "task_id": "T2",
+      "task": "paused_by Generalization",
+      "requirements": ["FR-3"],
+      "design_doc_refs": ["design.md lines 391-426 (Generalizing the paused_by guard)"]
+    },
+    {
+      "task_id": "T3",
+      "task": "Refactor /autopilot/stop Endpoint",
+      "requirements": ["FR-4"],
+      "design_doc_refs": ["design.md lines 352-372 (Phase 0 fix)"]
+    },
+    {
+      "task_id": "T4",
+      "task": "UI — Budget Configuration",
+      "requirements": ["FR-6"],
+      "design_doc_refs": ["design.md lines 437-441 (ProjectSettingsModal)"]
+    },
+    {
+      "task_id": "T5",
+      "task": "UI — Cost Display",
+      "requirements": ["FR-7", "FR-8"],
+      "design_doc_refs": ["design.md lines 442-458 (Design screen + paused label)"]
+    },
+    {
+      "task_id": "T6",
+      "task": "Integration Tests",
+      "requirements": ["AC-1 through AC-10"],
+      "design_doc_refs": ["Implicit — any feature requires validation tests"]
+    }
+  ],
+
+  "scope_drift_flags": [],
+
+  "notes": [
+    "The requirements analysis Section 1 (Executive Summary) provides a thorough current-state inventory of what's already implemented from the parent Cost Tracking Schema feature. This is context-setting, not scope creep — all items are correctly marked as '✅ ALREADY IMPLEMENTED'.",
+    "The requirements analysis correctly scopes to the ENFORCEMENT LAYER only. The original design doc Budget Enforcement section is one section within a larger cost-tracking design (phases 1-8 in Implementation Phases). Phases 1-2 (schema + pi collector) are merged; this feature covers phase 3 (budget enforcement) plus the UI items from phase 7. This scoping decision is explicitly stated and correct.",
+    "Q4 in Open Questions (status_reason in API response) is a minor mechanism addition not explicitly called out in the design doc, but it's the natural implementation path for the design doc's UI requirement to 'surface that distinction in whatever status text/badge already exists.' Not flagged as scope drift."
+  ]
 }
