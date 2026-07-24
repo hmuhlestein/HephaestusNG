@@ -1167,6 +1167,44 @@ GATE_RESULT_SUBDIR: Dict[str, str] = {
 }
 
 
+def synthetic_clean_result(phase_name: str, run_count: int) -> Dict[str, Any]:
+    """Build a synthetic "clean pass" result in the schema THIS phase's own
+    scorer actually reads, for _cap_out_review_phase's "stop re-reviewing,
+    mark done with caveats" path.
+
+    Each gated phase has a different scorer reading different keys --
+    score_architectural_review/score_adversarial_review read blocker_count,
+    but score_qa reads pass_rate/failed_tests/requirements_met_rate,
+    score_product_validation reads verdict/unmet_requirements, and
+    score_scope_review reads verdict. A single blocker_count-only shape
+    written for every phase is a real bug, not a harmless default: handed
+    to score_qa it reads as total_tests=0 -> pass_rate=0.0%, i.e. the
+    WORST possible score -- the opposite of the clean pass this function
+    exists to produce. Observed live: qa_validation's cap-out wrote
+    {"blocker_count": 0}, scored as a 0% pass rate, and immediately
+    goto'd back to development -- burning through max_total_gotos faster
+    than not capping at all would have.
+    """
+    base = {"capped": True, "capped_after_runs": run_count}
+    if phase_name == "qa_validation":
+        return {
+            **base,
+            "passed_tests": 1,
+            "failed_tests": 0,
+            "total_tests": 1,
+            "pass_rate": 100.0,
+            "critical_issues": 0,
+            "requirements_met": 1,
+            "requirements_total": 1,
+        }
+    if phase_name == "product_validation":
+        return {**base, "verdict": "PASS", "unmet_requirements": []}
+    if phase_name == "scope_review":
+        return {**base, "verdict": "PASS"}
+    # architectural_review, adversarial_review, feature_review: blocker-count schema.
+    return {**base, "blocker_count": 0}
+
+
 def consume_gate_artifacts(phase_name: str, working_directory: Any) -> list:
     """Delete a gated phase's result artifacts after its goto decision has
     been acted on (the findings are already threaded into the corrective

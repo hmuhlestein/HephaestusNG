@@ -5057,7 +5057,7 @@ def _cap_out_review_phase(
     run hit 25 re-entries of security_review with max_review_runs: 4
     configured and doing nothing.
     """
-    from src.autopilot.spec import GATE_RESULT_ARTIFACTS, get_review_findings_history
+    from src.autopilot.spec import GATE_RESULT_ARTIFACTS, get_review_findings_history, synthetic_clean_result
 
     workflow = db.query(Workflow).filter_by(id=workflow_id).first()
     if not workflow or not workflow.working_directory:
@@ -5078,10 +5078,7 @@ def _cap_out_review_phase(
     artifacts = GATE_RESULT_ARTIFACTS.get(phase.name, ())
     if artifacts:
         (docs_dir / artifacts[0]).write_text(
-            json.dumps(
-                {"blocker_count": 0, "capped": True, "capped_after_runs": run_count},
-                indent=2,
-            )
+            json.dumps(synthetic_clean_result(phase.name, run_count), indent=2)
         )
         if len(artifacts) > 1:
             (docs_dir / artifacts[1]).write_text(
