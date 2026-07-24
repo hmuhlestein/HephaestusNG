@@ -1,294 +1,85 @@
-# Forensics Report: Cost Tracking Database Schema
+# Forensics Report: Budget Enforcement and Pipeline Throttling
 
-**Date:** 2026-07-21
-**Workflow ID:** af451d18-d3c7-4a3e-9c58-9c1ed72fc0ad
-**Feature:** Cost Tracking Database Schema (feature/des-91c8/cost-schema)
-**Pipeline Status:** Completed — all phases passed
-**Total Agent Invocations:** 21 across 10 phases
-**Total Wall Time:** ~11.5 hours (00:09 to 11:40 CDT, includes 7.5h overnight gap)
-**Active Pipeline Time:** ~4 hours
+**Date:** 2026-07-23
+**Workflow ID:** 0acbf2fc-fcf5-4b24-ad2d-31b1db62df6d
+**Feature:** Budget Enforcement and Pipeline Throttling (feature/des-91c8/budget-enforcement)
+**Parent Design:** Cost Tracking Design (DES-91c8), run `20260722_035441_COST_TRACKING_DESIGN`
+**Pipeline Status:** Completed through doc_review — one functional gap (FR-7) shipped unresolved
 
----
+## Data quality caveat
 
-## 1. Pipeline Metrics
+No `phase_prompts/` directory or workflow-scoped `pipeline_metrics.json` exists for this run — both are keyed to the parent multi-feature design session, not this sub-feature's workflow_id. All iteration counts below are reconstructed from `git log` on this branch and the phase artifacts under `docs/`. The existing `docs/adversarial_review/` and `docs/architectural_review/` reports are themselves capped-summary stubs (workflow.yaml's `max_review_runs: 4`), so per-run detail was reconstructed from commit messages rather than those files.
 
-| Phase | Runs | Agents | Duration | Verdict |
-|-------|------|--------|----------|---------|
-| product_requirements | 2 | 382dae99, 8814f569 | ~7 min | PASS |
-| scope_review | 1 | c07573ff | ~7 min | PASS |
-| architecture_design | 1 | f1ff3723 | ~13 min | PASS |
-| development | 6 | 1099b9f6, 0fbf885e, 693b21a7, bf7be014, 1838b5f7, f897a332 | ~15 min initial + fix cycles | NEEDS_WORK → PASS |
-| architectural_review | 4 | 4addea62, 9c8fc089, ee910346, 707dd71e | ~20 min total | NOT_READY → PASS (Run 3) |
-| adversarial_review | 3 | 8230b3e0, 9ac44855, aa109fb1 | ~19 min total | 5 BLOCKERs → PASS (Run 3) |
-| security_review | 1 | 9fc7bc2a | ~35 min | COMPLETE (3 vulns fixed) |
-| qa_validation | 1 | 57c5a7af | ~44 min | PASS (39/39) |
-| product_validation | 1 | 1ea6ca05 | ~21 min | NEEDS_WORK (3 unmet FRs) |
-| doc_review | 1 | a8c6a566 | ~30 min | COMPLETE |
+## 1. Commit history → phase/iteration mapping
 
-**Total invocations:** 21 (product_requirements ×2, scope_review ×1, architecture_design ×1, development ×6, architectural_review ×4, adversarial_review ×3, security_review ×1, qa_validation ×1, product_validation ×1, doc_review ×1)
+1. `d6ecd4a` product_requirements, `dca8d5b` scope_review — clean, 1 run each.
+2. `932134a` development run 1 → `93f6127` architectural_review (CONDITIONAL_PASS) → `92b90af` adversarial_review run 1: 2 BLOCKERs (stop endpoint not refactored; race condition in `_run_one_feature`'s budget guard).
+3. `bbe52e7` development run 2 (fixes) → `9e8c332` adversarial run 2: 2 low findings remain → `69a95809` security_review run 1: PASS.
+4. QA churned repeatedly the same day (`2710962` → … → `046daec`) over a pass-rate formatting bug (`b3d1166`, decimal vs. percentage) plus a SEC-04 ticket check each pass.
+5. `044f7bc` adversarial run 3: claims BLOCKER-2 fixed (later shown wrong).
+6. `c05c75b` product_validation run 1: CONDITIONAL PASS, flags 3 frontend gaps (G-1/G-2/G-3, including FR-7).
+7. `b0c74e2` dev adds UI components claiming to close FR-6/7/8 → architectural runs 4-5 PASS → `075a718` adversarial run 4: BLOCKER-2 still present (prior "fixed" claims were wrong) → `3d87c8e` real fix → `93f7401`/`196b68b` adversarial run 5: PASS, 0 blockers.
+8. `09e20d1` security re-verify → `d7f3f26` development: root-causes a false QA failure (libtmux pytest plugin crashing bare `pytest`, reported as pass_rate=0%).
+9. Two days later: `418b812`, `555004f`, `93bddde` — three consecutive development-phase commits, all "no code changes made this pass," re-verifying an already-complete state.
+10. `9194baa` product_validation run 2: re-confirms FR-7/G-2 still unmet (CONDITIONAL_PASS again) → `dc3b2cc` doc_review: PASS, notes the gap remains open.
 
----
+Security review's capped-notice claims "19 runs" but only ~6 `phase(security_review)` commits exist on this branch — the counter almost certainly reads from the shared parent design directory (265 tmux logs across sibling features, only 41 mention budget-enforcement) rather than this workflow_id. Treat that number as unreliable.
 
-## 2. Review-Fix-Verify Cycle Analysis
+## 2. Per-phase summary
 
-The dominant pipeline pattern was the **review-fix-verify cycle**, consuming 13 of 21 invocations (62%):
+| Phase | Runs (this branch) | Verdict progression | Notes |
+|---|---|---|---|
+| product_requirements | 1 | PASS | clean |
+| scope_review | 1 | PASS | clean |
+| architecture_design | 1 | PASS | clean |
+| development | 2 substantive + 1 root-cause fix + 3 no-op re-dispatches | NEEDS_WORK → PASS | see Issue 1 |
+| architectural_review | 5 | CONDITIONAL_PASS → PASS | converged on same DB-session issue adversarial review took longer to close |
+| adversarial_review | 5 | 2 BLOCKERs → false "fixed" (run 2/3) → real fix (run 4) → clean (run 5) | see Issue 3 |
+| security_review | ~6 | PASS (SEC-04 fixed via pydantic validator; 5 pre-existing lows ticketed out of scope) | capped-notice run count unreliable, see Issue 5 |
+| qa_validation | churned same-day | 84/84 pass at final state | churn from tooling/formatting, not real bugs |
+| product_validation | 2 | CONDITIONAL_PASS both times | FR-7 never fixed, shipped unresolved — see Issue 2 |
+| doc_review | 1 | PASS | correctly declined to paper over the open FR-7 gap |
 
-```
-development v1 → architectural_review v1 (5 BLOCKERs, 4 FIXes)
-  → development v2 (fix 5B + 4F) → architectural_review v2 (1B remaining)
-    → development v3 (fix remaining) → architectural_review v3 (CLEAN)
-      → adversarial_review v1 (5 NEW BLOCKERs)
-        → development v4 (fix 5B) → adversarial_review v2 (1B remaining)
-          → development v5 (fix residual) → adversarial_review v3 (CLEAN)
-```
+## 3. Issues and proposed prompt rewrites
 
-**Key insight:** Both review phases found distinct, non-overlapping bugs. The architectural review caught integration gaps (missing wiring, missing endpoints, missing guards) while the adversarial review caught correctness bugs (transaction boundaries, N+1 queries, falsy zero logic). This validates the two-pass review design.
+### Issue 1 — Development phase re-dispatched 3x for zero-diff work
 
----
+**Evidence:** `418b812` (21:17), `555004f` (21:22), `93bddde` (21:51) on 2026-07-23, each stating no code changes were needed — a repeat dispatch of an already-finished task, most likely an orchestrator goto/cycle-scoping bug rather than a prompt issue.
 
-## 3. Agent Performance Assessment
+**Proposed change — `config/workflows/autopilot/development.yaml`:** add a re-dispatch guard as the first step.
+- Before: orientation step unconditionally says "Before writing code, orient yourself with this structured context."
+- After: *"STEP 0 — CHECK FOR RE-DISPATCH: if your task description states this phase already completed successfully and no new blocker/ticket references this feature, run `git log -1 --stat` and compare against the last commit's file list. If nothing changed and no new instruction was given, call `complete_my_task` with a one-line summary immediately — do not re-run the full verification checklist."*
 
-### 3.1 Excellent Performance
+### Issue 2 — Invented, non-schema verdict string bypassed the product_validation gate
 
-| Phase | Agent | Notes |
-|-------|-------|-------|
-| scope_review | c07573ff | Single-pass clean. Faithful comparison against design doc. |
-| architecture_design | f1ff3723 | Comprehensive 12-task breakdown with dependency graph. |
-| qa_validation | 57c5a7af | 39/39 tests pass. Structured qa_result.json on first attempt. |
-| security_review | 9fc7bc2a | Found and fixed 3 real vulnerabilities. Despite MCP issues. |
+**Evidence:** `product_validation.yaml`'s schema only allows `PASS | PASS_WITH_MINOR_GAPS | NEEDS_WORK | ARCHITECTURE`. Both product_validation runs wrote `"verdict": "CONDITIONAL_PASS"` — an undefined fifth value — despite `unmet_requirements` being non-empty (FR-7), which per the yaml's own rule should have forced a return to development. Instead the pipeline advanced through doc_review with FR-7 still broken. This is the highest-value fix: it directly explains why a real functional gap shipped.
 
-### 3.2 Good Performance (needed review cycles, which is expected)
+**Proposed change — `config/workflows/autopilot/product_validation.yaml`:**
+- Before: `verdict is one of: "PASS" | "PASS_WITH_MINOR_GAPS" | "NEEDS_WORK" | "ARCHITECTURE"`.
+- After: *"verdict MUST be exactly one of these four strings — do NOT invent variants like 'CONDITIONAL_PASS'. A partial pass with open functional-requirement gaps is NEEDS_WORK, not a fifth option; PASS_WITH_MINOR_GAPS is only for ≤2 purely cosmetic items. The gate string-matches exactly — an unrecognized value is not guaranteed to trigger a return to development."*
 
-| Phase | Agent | Notes |
-|-------|-------|-------|
-| development (all) | Various | Each fix cycle was targeted and correct. Tests stayed green. |
-| architectural_review | Various | Reviewers were thorough. Finding severity was appropriate. |
-| adversarial_review | Various | Found real bugs (transaction boundaries, N+1, falsy logic). |
+### Issue 3 — Adversarial review's BLOCKER-2 survived 3 runs on false "fixed" claims
 
-### 3.3 Issues Encountered
+**Evidence:** Run 1 flags the race condition (BLOCKER-2). Runs 2 and 3 both claim it's fixed. Run 4 finds it's still present — the earlier "fixed" claims were wrong; the actual fix landed only at that point. Architectural review had independently flagged the same DB-session issue earlier, but the two review phases weren't cross-referencing each other's open findings.
 
-| Phase | Agent | Issue | Impact |
-|-------|-------|-------|--------|
-| product_requirements | 382dae99 | First agent; 8814f569 was the retry | ~3 min delay |
-| security_review | 9fc7bc2a | MCP connection failures — fell back to curl for task update | No data loss, but fragile |
-| doc_review | a8c6a566 | Same MCP connection issue — fell back to curl | No data loss, but fragile |
+**Proposed change — `config/workflows/autopilot/adversarial_review.yaml`:** *"Before writing a new report, read `docs/architectural_review/architectural_review_report.md` for FIX items touching the same code path you're re-checking (DB sessions, race conditions, etc.). If a prior run of THIS phase claimed a BLOCKER was fixed and it still reproduces, don't just update the status — quote the diff hunk you inspected and state why the earlier verification was wrong, so development doesn't get a false all-clear."*
 
----
+### Issue 4 — False QA failure from an uncommitted config fix
 
-## 4. Stuck/Crashed Agents
+**Evidence:** A QA run crashed with 0 tests collected because the libtmux pytest plugin auto-loads and errors on fixture marks, reported upstream as `pass_rate=0%`. A prior pass had already claimed to fix this via a new `pytest.ini` that was never actually committed, so the failure silently reappeared and burned a full QA→development cycle before the real root cause (missing `-p no:libtmux` in the already-tracked `pyproject.toml`) was found.
 
-**No stuck or crashed agents detected.** All 21 invocations completed and updated task status. The overnight gap (00:46 to 08:17) was a scheduled pipeline pause, not a stuck agent.
+**Proposed change — `config/workflows/autopilot/development.yaml`:** *"If a fix depends on a config file (pytest.ini, .flake8, etc.), confirm with `git status`/`git diff --stat` that the file is actually staged/committed before claiming the fix is done. Prefer editing an already-tracked config file (pyproject.toml) over creating a new untracked one when both achieve the same effect."*
 
-**MCP Connection Degradation:** Security review and doc review agents experienced MCP server disconnection mid-run. Both recovered by falling back to direct HTTP calls. Root cause: long-running sessions may lose MCP websocket connection. The agents' self-healing fallback (curl to localhost:8300) worked but is brittle.
+### Issue 5 — Security review capped-notice run count likely cross-feature-contaminated
 
----
+**Evidence:** The capped notice claims "19 runs," but only ~6 security_review commits exist for this feature. The parent design directory ran many sibling features through the same phase machinery, suggesting the run-counter is keyed to the parent design session rather than this feature's workflow_id.
 
-## 5. Common Issue Patterns Cataloged
+**Proposed change (orchestrator, not prompt):** verify that the counter driving `docs/*/​*_capped_notice.md` run-count reporting is keyed by `workflow_id`, not the parent design/session ID, so forensics reports aren't misled about actual per-feature retry counts.
 
-### 5.1 Transaction Boundary Violations (Found by: adversarial_review, 3 occurrences)
+## 4. Summary of recommended actions
 
-**Pattern:** derive_* functions each calling `db.commit()` independently instead of letting the caller control the transaction boundary.
-
-**Root cause:** Development agent followed existing patterns in the codebase (status_derivation.py uses commits) without considering that cost derivation needs atomic multi-table updates.
-
-**Frequency:** This is a recurring pattern in SQLAlchemy codebases. The adversarial reviewer found it on Run 1, and a residual instance in `_pause_project_workflows` on Run 2.
-
-### 5.2 Missing Integration Wiring (Found by: architectural_review, 4 occurrences)
-
-**Pattern:** Core modules implemented in isolation but not connected to the rest of the system:
-- task_completion_service.py not calling collect_task_cost
-- langchain_llm_client.py not routing through _invoke_and_record
-- No POST /cost-entries endpoint
-- Missing budget guards on pick_next_design/_run_one_feature
-
-**Root cause:** Development focused on new files (cost_derivation.py, cost_collection_service.py) but under-invested in modifying existing integration points.
-
-### 5.3 Falsy Zero Bugs (Found by: adversarial_review, 1 occurrence)
-
-**Pattern:** `if proj.cost_total_usd and proj.cost_total_usd < proj.cost_limit_usd` — the first condition is falsy when cost is 0.0, permanently locking zero-spend projects.
-
-**Root cause:** Python truthiness gotcha. Common mistake when guarding against None vs 0.
-
-### 5.4 N+1 Query Patterns (Found by: adversarial_review, 1 occurrence)
-
-**Pattern:** `_pause_project_workflows` querying ALL agents globally then filtering in Python instead of using a JOIN.
-
-**Root cause:** Developer wrote the simplest working code first without considering scale.
-
-### 5.5 Missing Authentication on New Endpoints (Found by: security_review, 1 occurrence)
-
-**Pattern:** New `/cost-entries` endpoint created without `verify_agent_authentication()` check.
-
-**Root cause:** Existing endpoints all had auth, but the development prompt didn't explicitly call out "every new endpoint must have auth."
-
-### 5.6 Nested Session Leaks (Found by: adversarial_review, 1 occurrence)
-
-**Pattern:** `_get_agent_cwd` opening its own `get_db()` session inside a caller that already has one, leaking connections and reading inconsistent snapshots.
-
-**Root cause:** Utility function written in isolation without considering its call context.
-
----
-
-## 6. Prompt Improvement Proposals
-
-### 6.1 Development Prompt — Transaction Boundary Guidance
-
-**Before (current prompt excerpt):**
-```
-Implement all components according to the architecture.
-Reads architecture.md from Phase 2, implements each component following
-the task breakdown, writes tests, and creates working software.
-```
-
-**After (proposed):**
-```
-Implement all components according to the architecture.
-
-CRITICAL PATTERN — TRANSACTION BOUNDARIES:
-When modifying multiple tables in a single operation (e.g., cost derivation
-that writes to cost_entries AND updates task/feature/project rollups), the
-CALLER must control the transaction. Do NOT put db.commit() inside individual
-derive/helper functions. The pattern is:
-  1. Caller opens session via get_db()
-  2. Caller passes session to all helper functions
-  3. Caller calls db.commit() once at the end
-  4. On any exception, the entire operation rolls back atomically
-
-This follows the existing pattern in status_derivation.py — study it before implementing.
-```
-
-**Rationale:** Would have prevented 3 of 5 adversarial BLOCKERs (cascading commits, nested sessions, residual commit in _pause_project_workflows).
-
-### 6.2 Development Prompt — Integration Wiring Checklist
-
-**Before:** No explicit instruction about wiring new modules.
-
-**After (proposed addition):**
-```
-INTEGRATION WIRING CHECKLIST (verify before marking done):
-- [ ] Every new endpoint has authentication (verify_agent_authentication or equivalent)
-- [ ] Every new module is called from the appropriate lifecycle hook (task completion, workflow start, etc.)
-- [ ] Every new Pydantic model has input validation (ranges, enums, non-negative checks)
-- [ ] Budget/cost guard functions are called BEFORE dispatching new work, not just after
-```
-
-**Rationale:** Would have prevented missing auth on /cost-entries, missing task_completion wiring, and missing budget guards.
-
-### 6.3 Security Review Prompt — New Endpoint Checklist
-
-**Before (current prompt):**
-```
-Perform focused security review and fix vulnerabilities found.
-Analyzes the codebase for security vulnerabilities, authentication issues,
-authorization bypasses, data handling problems, and FIXES critical security
-issues before they ship.
-```
-
-**After (proposed):**
-```
-Perform focused security review and fix vulnerabilities found.
-
-MANDATORY FIRST STEP — NEW ENDPOINT AUDIT:
-Before running any automated scans, grep for new route definitions added in
-this feature. For EACH new endpoint, verify:
-  1. Authentication check exists (verify_agent_authentication or equivalent)
-  2. Input validation via Pydantic model with appropriate constraints
-  3. No raw SQL or string interpolation in queries
-  4. Rate limiting considered (at minimum, document if omitted)
-If any endpoint lacks auth, FIX IT — this is a CRITICAL finding.
-```
-
-**Rationale:** The security agent found the missing auth, but a more structured checklist would make this faster and more reliable.
-
-### 6.4 Adversarial Review Prompt — Already Excellent
-
-The adversarial review prompt is already well-calibrated. No changes proposed. It found real, non-trivial bugs that the developer and architectural reviewer both missed. The "assume the code is broken" framing is effective.
-
-### 6.5 Product Requirements Prompt — Duplicate Agent Prevention
-
-**Before:** No instruction about checking if work was already done.
-
-**After (proposed addition):**
-```
-FIRST STEP: Check if requirements_analysis.md already exists in docs/.
-If it does and appears complete (>500 lines, has FR-1 through FR-N),
-read it and verify completeness rather than regenerating from scratch.
-```
-
-**Rationale:** Product requirements ran twice (agents 382dae99 and 8814f569). The second agent appears to be a retry. Checking for existing work first would save time.
-
----
-
-## 7. Methodology Refinements
-
-### 7.1 Review-Fix-Verify Cycle Efficiency
-
-The architectural review took 3 runs and adversarial review took 3 runs. Each run found new issues because the fix cycle introduced new code. This is **expected and healthy** — it's the purpose of iterative review.
-
-**Improvement:** Consider running adversarial review immediately after architectural review passes, before the developer marks done on the full feature. Currently, the developer fixes arch review findings, then adversarial review finds different bugs. Running both reviewers in parallel on the initial implementation would reduce total cycles from 6 to 3-4.
-
-### 7.2 MCP Connection Resilience
-
-Two agents (security_review, doc_review) lost MCP connection mid-task. Both recovered via curl fallback, but this is fragile. 
-
-**Recommendation:** Add a "MCP health check" at the start of each phase, and if connection fails, automatically fall back to HTTP API calls. Or, implement automatic MCP reconnection in the agent harness.
-
-### 7.3 Overnight Gap
-
-The 7.5-hour gap between architectural review v1 (00:46) and development v2 (08:17) suggests the pipeline paused overnight. This is fine for cost optimization but means the total wall time is misleading. Active time was ~4 hours.
-
-**Recommendation:** Track active vs. idle time separately in pipeline_metrics.json (which was not generated for this run).
-
-### 7.4 pipeline_metrics.json Not Generated
-
-The forensics phase expects `pipeline_metrics.json` but it was not created. This means timing data had to be reconstructed from git log timestamps and tmux file modification times.
-
-**Recommendation:** The orchestrator should generate pipeline_metrics.json automatically when each phase completes, recording: phase name, agent ID, start time, end time, and verdict.
-
-### 7.5 QA Result JSON Schema Mismatch
-
-The QA agent initially wrote qa_result.json in a non-standard schema. The pipeline flagged this and the agent rewrote it in the documented shape. The prompt should include the expected JSON schema inline to prevent this.
-
----
-
-## 8. Positive Patterns Worth Preserving
-
-1. **Self-healing derivation pattern:** cost_derivation.py mirrors status_derivation.py exactly. The architecture agent correctly identified this pattern and the developer implemented it faithfully.
-
-2. **Session-id keyed checkpoints:** SessionCostCheckpoint uses session_id (not Agent.id) to prevent double-counting on retries. This was identified in requirements and preserved through all phases.
-
-3. **Paused-by generalization:** The nuanced rule (is_not_none everywhere EXCEPT start() keeps ==user) was correctly specified, implemented, and verified across all review cycles.
-
-4. **Two-pass review design:** Architectural review catches integration gaps; adversarial review catches correctness bugs. They found non-overlapping issues. This is the right design.
-
-5. **Security agent self-healing:** When MCP failed, the security agent fell back to curl and still completed its task. Good resilience pattern, though it should be formalized.
-
----
-
-## 9. Actionable Findings Summary
-
-| # | Finding | Severity | Proposed Fix | Phase |
-|---|---------|----------|--------------|-------|
-| 1 | Transaction boundary violations in derive functions | HIGH | Add explicit guidance to development prompt | development |
-| 2 | Missing integration wiring (auth, task hooks, guards) | HIGH | Add integration checklist to development prompt | development |
-| 3 | MCP connection loss in long-running agents | MEDIUM | Add MCP health check + auto-reconnect | infrastructure |
-| 4 | pipeline_metrics.json not generated | MEDIUM | Orchestrator should auto-generate on phase completion | orchestrator |
-| 5 | QA result JSON schema mismatch | LOW | Include expected schema in qa_validation.yaml prompt | qa_validation |
-| 6 | Duplicate product_requirements agent | LOW | Check for existing work before regenerating | product_requirements |
-| 7 | No rate limiting on new endpoints | LOW | Document in security review findings | security_review |
-
----
-
-## 10. Pipeline Efficiency Summary
-
-| Metric | Value |
-|--------|-------|
-| Total phases | 10 (of 12, excluding forensics and git_commit_push) |
-| Total agent invocations | 21 |
-| Average invocations per phase | 2.1 |
-| Most iterated phase | development (6 runs) |
-| Least iterated phase | scope_review, architecture_design, security_review, qa_validation, product_validation, doc_review (1 run each) |
-| Review-fix-verify cycles | 6 (3 architectural + 3 adversarial) |
-| Bugs found by review | 10 BLOCKERs + 4 FIXes (architectural) + 5 BLOCKERs (adversarial) + 3 vulnerabilities (security) |
-| Active pipeline time | ~4 hours |
-| Wall time (including overnight gap) | ~11.5 hours |
+1. Add a re-dispatch guard to `development.yaml` (Issue 1).
+2. Tighten the verdict enum instruction in `product_validation.yaml` to forbid invented values (Issue 2) — highest priority, directly caused a shipped gap (FR-7 / BudgetStatusCard.tsx built but never mounted).
+3. Require cross-referencing prior review findings in `adversarial_review.yaml` before declaring a blocker fixed (Issue 3).
+4. Require config-file fixes be verified as committed before being claimed done (Issue 4).
+5. Fix run-counter scoping so capped-notice reporting is per-workflow, not per-parent-session (Issue 5, orchestrator-side).
