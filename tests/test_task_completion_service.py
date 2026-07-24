@@ -532,6 +532,29 @@ class TestVerifyNoOpenTickets:
         assert result["status"] == "failed"
         assert "1 open bug ticket" in result["message"]
 
+    def test_failure_message_includes_the_full_ticket_id(self):
+        """Regression: the message shows the id truncated to 8 chars
+        ("ticket-a" from "ticket-abc123def"), which reads as a plausible
+        complete id since real ids already start with "ticket-" -- but
+        it isn't a real, resolvable id. This message instructs the agent
+        to call change_ticket_status/resolve_ticket with it directly.
+        Observed live: an agent tried to resolve a ticket using exactly
+        this kind of truncated-looking id and got "Ticket not found"."""
+        phase = Mock(name="development", id="phase-1")
+        phase.name = "development"
+        task = Mock(phase_id="phase-1", workflow_id="wf-1")
+        mock_ticket = Mock(id="ticket-abc123def-4567-89ab", title="Database connection leak")
+        mock_session = Mock()
+        mock_session.query.return_value.filter.return_value.all.return_value = [mock_ticket]
+
+        result = TaskCompletionService.verify_no_open_tickets(
+            session=mock_session, task=task, phase=phase
+        )
+
+        assert "ticket-abc123def-4567-89ab" in result["message"]
+        assert task.failure_reason is not None
+        assert "ticket-abc123def-4567-89ab" in task.failure_reason
+
     def test_returns_none_when_no_workflow_id(self):
         phase = Mock(name="development", id="phase-1")
         task = Mock(phase_id="phase-1", workflow_id=None)

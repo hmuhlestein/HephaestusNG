@@ -314,7 +314,14 @@ class TaskCompletionService:
         if not open_tickets:
             return None
 
-        titles = [f"{t.id[:8]}: {t.title}" for t in open_tickets[:5]]
+        # Full ticket id, not a truncated prefix -- this message instructs
+        # the agent to call change_ticket_status/resolve_ticket with it
+        # directly. A truncated id (e.g. "ticket-6" from "ticket-6805c19f-
+        # ...") reads as a plausible complete id since real ids already
+        # start with "ticket-", but it isn't a real, resolvable id.
+        # Observed live: an agent tried to resolve a ticket using exactly
+        # this kind of truncated-looking id and got "Ticket not found".
+        titles = [f"{t.id}: {t.title}" for t in open_tickets[:5]]
         logger.warning(f"Agent claimed done on {phase.name} but {len(open_tickets)} bug ticket(s) remain unresolved — rejecting")
         task.status = "failed"
         task.failure_reason = f"{len(open_tickets)} open bug ticket(s) not yet resolved: " + "; ".join(titles)
