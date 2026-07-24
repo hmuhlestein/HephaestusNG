@@ -4085,22 +4085,43 @@ def _case_in_progress_complete(db, workflow_id: str, in_progress: list, logger: 
         cycle_filter = (Task.created_at >= cycle_start,) if cycle_start else ()
 
         orphan_cutoff = datetime.utcnow() - timedelta(minutes=1)
-        orphaned_pending = (
+        stale_pending_candidates = (
             db.query(Task)
             .filter(
                 Task.phase_id == phase.id,
                 Task.status == "pending",
-                Task.assigned_agent_id.is_(None),
                 Task.created_at < orphan_cutoff,
                 ~Task.raw_description.like(f"{DIAGNOSTIC_TASK_PREFIX}%"),
                 *cycle_filter,
             )
             .all()
         )
-        for orphan in orphaned_pending:
-            logger.info(f"[PHASE-ADVANCE] {phase.name} has an orphaned pending task {orphan.id[:8]} (never dispatched, stale >1min) -- marking failed so it becomes eligible for retry")
+        # A stale pending task is orphaned either way: never dispatched
+        # (assigned_agent_id NULL), or dispatched to an agent that died
+        # since (killed mid-launch by a backend restart, or manually
+        # terminated as stuck-agent cleanup) before ever flipping the task
+        # to in_progress. assigned_agent_id being non-null used to be
+        # enough to treat this as "still being worked" forever -- this is
+        # the actual gate the periodic sweep uses (unlike _create_phase_
+        # task's own orphan check, which only ever gets reached once a
+        # phase has zero tasks or all-failed tasks; a lone "pending" task
+        # here short-circuits every case before that check is ever hit).
+        # Observed live: a security_review task sat "pending", pointing at
+        # an agent terminated hours earlier, and never self-healed.
+        orphaned_pending = []
+        for t in stale_pending_candidates:
+            if not t.assigned_agent_id:
+                orphaned_pending.append((t, "never dispatched to an agent"))
+                continue
+            agent = db.query(Agent).filter_by(id=t.assigned_agent_id).first()
+            if agent is None or agent.status not in ("working", "idle", "starting"):
+                orphaned_pending.append(
+                    (t, f"assigned agent {t.assigned_agent_id[:8]} is no longer active")
+                )
+        for orphan, reason in orphaned_pending:
+            logger.info(f"[PHASE-ADVANCE] {phase.name} has an orphaned pending task {orphan.id[:8]} ({reason}, stale >1min) -- marking failed so it becomes eligible for retry")
             orphan.status = "failed"
-            orphan.failure_reason = "Orphaned: never dispatched to an agent"
+            orphan.failure_reason = f"Orphaned: {reason}"
         if orphaned_pending:
             db.commit()
 
@@ -4308,13 +4329,25 @@ def _maybe_retry_failed_tasks(db, phase, logger: OrchestratorLogger, cycle_start
             # single retry (the exact scenario this cap exists for) never
             # reach max_retry_count at all.
             task.retry_count = (task.retry_count or 0) + 1
-            # This row is reused (not recreated) for the retry -- without
-            # clearing these too, a task previously tagged action="goto"/
-            # "retry" by _tag_completing_task keeps showing that stale
-            # badge (and a now-meaningless action_target_phase) on what is
-            # now an unrelated fresh attempt.
-            task.action = ""
-            task.action_target_phase = None
+            # Deliberately NOT clearing task.action/action_target_phase here.
+            # This row is reused (not recreated) for the retry, but a task
+            # that's "failed" (never reached "done") can only have gotten
+            # those fields from _create_phase_task's CREATION-time tagging
+            # (see its action_target_phase= assignment) -- the field means
+            # "I exist because an earlier phase goto'd/retried back to me,
+            # and _start_next_phase should resume AT that target once I'm
+            # done." _tag_completing_task, the only other writer, tags a
+            # task only AFTER it completes and gets evaluated -- a failed
+            # task never reached that point, so there is no stale post-
+            # completion badge to clear here. Previously this cleared both
+            # fields unconditionally, silently discarding that resume
+            # target on every retry -- observed live: a development task
+            # that goto'd back from qa_validation got stuck (CLI session
+            # limit) and retried here, losing action_target_phase=
+            # "qa_validation" entirely, so its eventual completion fell back
+            # to next-phase-by-order and re-ran the entire architectural_
+            # review -> adversarial_review -> security_review chain from
+            # scratch even though none of it had been invalidated.
             reset_task_ids.append(task.id)
         db.commit()
 
@@ -5159,18 +5192,42 @@ def _create_phase_task(
                 # task; it does nothing to stop this check from
                 # misjudging one that already exists.
                 orphan_cutoff = datetime.utcnow() - timedelta(minutes=1)
+                # A "pending" task can also be orphaned the OTHER way: it WAS
+                # dispatched (assigned_agent_id set), but that agent later
+                # died/got terminated (killed mid-launch by a backend
+                # restart, or manually terminated as a stuck-agent cleanup)
+                # before ever flipping the task to "in_progress" or creating
+                # a replacement. assigned_agent_id alone doesn't mean "still
+                # being worked" -- check whether that agent is actually
+                # still active. Observed live: a task sat "pending" pointing
+                # at a terminated agent indefinitely, since this check only
+                # ever looked at assigned_agent_id being NULL.
+                assigned_agent = (
+                    db.query(Agent).filter_by(id=existing.assigned_agent_id).first()
+                    if existing.assigned_agent_id
+                    else None
+                )
+                agent_is_dead = existing.assigned_agent_id and (
+                    assigned_agent is None
+                    or assigned_agent.status not in ("working", "idle", "starting")
+                )
                 if (
                     existing.status == "pending"
-                    and not existing.assigned_agent_id
+                    and (not existing.assigned_agent_id or agent_is_dead)
                     and existing.created_at < orphan_cutoff
                 ):
+                    reason = (
+                        "never dispatched to an agent"
+                        if not existing.assigned_agent_id
+                        else f"assigned agent {existing.assigned_agent_id[:8]} is no longer active"
+                    )
                     logger.info(
                         f"[PHASE-TASK] {phase_name} has an orphaned pending task "
-                        f"{existing.id[:8]} (never dispatched, stale >1min) -- "
+                        f"{existing.id[:8]} ({reason}, stale >1min) -- "
                         "marking failed and creating a fresh one"
                     )
                     existing.status = "failed"
-                    existing.failure_reason = "Orphaned: never dispatched to an agent"
+                    existing.failure_reason = f"Orphaned: {reason}"
                     db.commit()
                 else:
                     logger.info(f"[PHASE-TASK] {phase_name} already has active task {existing.id[:8]}, skipping")

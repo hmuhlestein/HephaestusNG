@@ -4,7 +4,7 @@ These tests address the critical test coverage gap identified in ARCHITECTURE_RE
 "_advance_phases has no test referencing it anywhere in tests/"
 """
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from unittest.mock import ANY, MagicMock, patch
 
 import pytest
@@ -789,6 +789,85 @@ class TestCaseInProgressComplete:
                 )
             )
 
+    def _seed_pending_task_with_agent(
+        self, db_manager, agent_status, phase_id="phase-1", workflow_id="wf-1"
+    ):
+        from src.core.database import Agent
+
+        with db_manager.session_scope() as session:
+            session.add(
+                Agent(id="agent-x", system_prompt="p", status=agent_status, cli_type="pi")
+            )
+            session.add(
+                Task(
+                    id="task-pending-1",
+                    workflow_id=workflow_id,
+                    phase_id=phase_id,
+                    raw_description="r",
+                    done_definition="d",
+                    status="pending",
+                    assigned_agent_id="agent-x",
+                    created_at=datetime.utcnow() - timedelta(minutes=5),
+                )
+            )
+
+    @patch("src.autopilot.orchestrator.create_agent_for_task_direct")
+    def test_pending_task_pointing_at_dead_agent_is_marked_failed(
+        self, mock_create_agent, db_manager, sample_workflow
+    ):
+        """Regression: this is the actual gate the periodic sweep uses to
+        decide a phase has real active work -- unlike _create_phase_task's
+        own orphan check (only reached once a phase has zero tasks or all-
+        failed tasks), a single stale "pending" task here short-circuits
+        every case before that check ever runs. Previously only checked
+        assigned_agent_id IS NULL, so a task dispatched to an agent that
+        later died (killed mid-launch by a backend restart, or manually
+        terminated) stayed "pending" forever, invisible to every self-heal
+        path. Observed live: a security_review task sat this way for
+        hours. Once marked failed here, the SAME sweep pass immediately
+        sees "all tasks failed" and retries it via _maybe_retry_failed_tasks
+        -- mocking create_agent_for_task_direct lets that full, real,
+        one-pass self-heal (orphan -> failed -> retried -> in_progress with
+        a fresh agent) actually succeed instead of erroring on a missing
+        live agent manager."""
+        from src.autopilot.orchestrator import _case_in_progress_complete, _get_phase_statuses
+        from src.core.database import Agent, Task as _Task
+
+        self._seed_pending_task_with_agent(db_manager, agent_status="terminated")
+        with db_manager.session_scope() as session:
+            session.add(Agent(id="fresh-agent", system_prompt="p", status="working", cli_type="pi"))
+        mock_create_agent.return_value = {"agent_id": "fresh-agent"}
+
+        with db_manager.session_scope() as session:
+            phase_statuses = _get_phase_statuses(session, "wf-1")
+            in_progress = [p for p in phase_statuses if p["status"] == "in_progress"]
+            _case_in_progress_complete(session, "wf-1", in_progress, MagicMock())
+
+        with db_manager.session_scope() as session:
+            task = session.query(_Task).filter_by(id="task-pending-1").first()
+            assert task.status == "in_progress"
+            assert task.assigned_agent_id == "fresh-agent"
+
+    def test_pending_task_pointing_at_working_agent_is_left_alone(
+        self, db_manager, sample_workflow
+    ):
+        """A task assigned to a genuinely still-working agent is real
+        active work, not an orphan -- must not be touched."""
+        from src.autopilot.orchestrator import _case_in_progress_complete, _get_phase_statuses
+        from src.core.database import Task as _Task
+
+        self._seed_pending_task_with_agent(db_manager, agent_status="working")
+
+        with db_manager.session_scope() as session:
+            phase_statuses = _get_phase_statuses(session, "wf-1")
+            in_progress = [p for p in phase_statuses if p["status"] == "in_progress"]
+            _case_in_progress_complete(session, "wf-1", in_progress, MagicMock())
+
+        with db_manager.session_scope() as session:
+            task = session.query(_Task).filter_by(id="task-pending-1").first()
+            assert task.status == "pending"
+            assert task.failure_reason is None
+
     @patch("src.autopilot.orchestrator._fire_phase_transition")
     def test_fires_transition_when_claim_succeeds(self, mock_fire, db_manager, sample_workflow):
         from src.autopilot.orchestrator import _case_in_progress_complete, _get_phase_statuses
@@ -1281,7 +1360,7 @@ class TestReleaseStaleTaskCreationClaims:
         self._seed_done_task(db_manager)
         with db_manager.session_scope() as session:
             execution = session.query(PhaseExecution).filter_by(phase_id="phase-1").first()
-            execution.task_creation_claimed_at = datetime.now() - timedelta(minutes=1)
+            execution.task_creation_claimed_at = datetime.utcnow() - timedelta(minutes=1)
 
         with db_manager.session_scope() as session:
             _release_stale_task_creation_claims(session, "wf-1", MagicMock())
