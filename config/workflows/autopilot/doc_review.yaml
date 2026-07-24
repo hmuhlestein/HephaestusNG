@@ -142,13 +142,17 @@ additional_notes: |
   - How it connects to other components
 
   Include an "Architecture Context" subsection that explains:
+  - WHY this feature exists — the problem it solves, the gap it fills
   - The overall design pattern (e.g. event-driven, layered, plugin-based)
   - How data flows through the system end-to-end
   - Key design decisions and their trade-offs
   - What was intentionally NOT built (and why)
+  - How this feature fits into the broader system — what it enables downstream
 
-  This section should let an engineer form a mental model of the change
-  architecture without reading every file.
+  Don't just describe the code — explain the reasoning. An engineer should
+  understand not just WHAT was built, but WHY it was built this way and what
+  alternatives were considered. This section should let someone form a mental
+  model of the change architecture without reading every file.
 
   Also write this section as a standalone `<Docs Path>/code_summary.md` file
   so it can be referenced independently of the HTML report.
