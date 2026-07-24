@@ -18,6 +18,7 @@ done_definitions:
 outputs:
   - "doc_review_report.md"
   - "feature_report.html"
+  - "code_summary.md"
 additional_notes: |
   OUTPUT STYLE: Terse. Drop filler (just/really/basically/actually). Fragments OK. 
   Technical terms exact. No pleasantries (sure/certainly/happy to). 
@@ -116,6 +117,56 @@ additional_notes: |
   - Requirements listed as missing that are actually implemented
 
   Fix anything critical directly. Skip minor style or formatting issues.
+
+  ═══════════════════════════════════════════════════════════════════════
+  STEP 3B: BUILD CODE-LEVEL CHANGE SUMMARY (MANDATORY)
+  ═══════════════════════════════════════════════════════════════════════
+
+  Before writing the HTML report, you MUST build a concrete summary of what
+  code was actually written. This is the section engineers will read to
+  understand what was delivered without cloning the branch.
+
+  Run these commands and incorporate the results into the HTML report's
+  "SUBSYSTEMS CREATED" and "CHANGELOG" sections:
+
+  ```bash
+  # 1. Files changed vs main branch (or prior commit if no branch)
+  git diff --stat HEAD~$(git rev-list --count main..HEAD 2>/dev/null || echo 1)..HEAD 2>/dev/null || git diff --stat HEAD~10..HEAD
+
+  # 2. New files created (not on main)
+  git diff --name-only --diff-filter=A main..HEAD 2>/dev/null || git diff --name-only --diff-filter=A HEAD~10..HEAD
+
+  # 3. Key class/function signatures in new files
+  for f in $(git diff --name-only --diff-filter=A main..HEAD 2>/dev/null | grep '\.py$'); do
+    echo "=== $f ==="
+    grep -n '^class \|^def \|^async def ' "$f" 2>/dev/null
+  done
+
+  # 4. Database model changes (new tables, new columns)
+  grep -rn '__tablename__\|Column(' src/core/database.py 2>/dev/null | head -20
+
+  # 5. New API endpoints
+  grep -rn '@app\.@\|@router\.\|def.*endpoint\|async def.*request' src/mcp/ 2>/dev/null | grep -v __pycache__ | head -20
+
+  # 6. New test files and test count
+  find tests/ -name '*.py' -newer src/core/database.py 2>/dev/null | while read f; do
+    count=$(grep -c 'def test_' "$f" 2>/dev/null || echo 0)
+    echo "$f: $count tests"
+  done
+  ```
+
+  For each new source file, include in the report:
+  - File path
+  - Purpose (one line)
+  - Key classes/functions with signatures
+  - Lines of code (wc -l)
+  - What it depends on and what depends on it
+
+  This section should let an engineer form a mental model of the change
+  architecture without reading every file.
+
+  Also write this section as a standalone `<Docs Path>/code_summary.md` file
+  so it can be referenced independently of the HTML report.
 
   ═══════════════════════════════════════════════════════════════════════
   STEP 4: WRITE HTML FEATURE REPORT (MANDATORY — PRIMARY DELIVERABLE)
