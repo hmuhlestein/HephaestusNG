@@ -1,38 +1,5 @@
 {
-  "phase": "adversarial_review",
-  "feature": "des-91c8-openrouter-direct",
-  "run": 2,
-  "blocker_count": 0,
-  "warning_count": 0,
-  "nit_count": 2,
-  "resolved_from_prior_run": [
-    {
-      "id": "B1",
-      "file": "src/interfaces/langchain_llm_client.py",
-      "lines": "361-393",
-      "summary": "prompt_tokens_details (and cost/token_usage) explicit null previously raised AttributeError after cost_usd>0 was established, silently dropping a legitimate CostEntry.",
-      "verification": "Confirmed fixed: all three .get(key, {}) calls now use .get(key) or {}, correctly handling both missing keys and explicit null values. Re-ran the exact Run 1 failure sequence -- no exception, record_cost() reached. New regression test tests/test_cost_tracking.py::TestInvokeAndRecord::test_null_prompt_tokens_details_still_writes_cost_entry asserts a CostEntry is still written. Full suite: 48 passed (was 47)."
-    }
-  ],
-  "findings": [
-    {
-      "severity": "NIT",
-      "id": "N1",
-      "file": "src/interfaces/langchain_llm_client.py",
-      "lines": "385",
-      "summary": "model=metadata.get(\"model_name\", component) falls back to the component name rather than None/'unknown' if model_name is ever absent from a cost-bearing response.",
-      "recommended_fix": "Unreachable in practice given OpenRouter always includes model_name. No action requested."
-    },
-    {
-      "severity": "NIT",
-      "id": "N2",
-      "file": "src/interfaces/langchain_llm_client.py",
-      "lines": "provider dispatch (_create_model_for_provider)",
-      "summary": "Provider selection is an if/elif chain mixing low-level per-provider details into one method rather than a per-provider strategy object.",
-      "recommended_fix": "Not touched by this feature (explicitly out of scope per architecture.md); no action requested."
-    }
-  ],
-  "tests_run": "pytest tests/test_cost_tracking.py",
-  "tests_result": "48 passed",
-  "scope_note": "Verification-only run against Run 1's single surviving BLOCKER. Confirmed fixed via code inspection, manual reproduction of the original failure sequence, and the new regression test. No new issues found in a fresh trace of the same code path."
+  "blocker_count": 2,
+  "warning_count": 2,
+  "nit_count": 2
 }
