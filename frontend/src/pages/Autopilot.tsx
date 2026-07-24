@@ -17,6 +17,7 @@ import MessageCenter from '@/components/autopilot/MessageCenter';
 import AddDesignModal from '@/components/autopilot/AddDesignModal';
 import LoadDesignModal from '@/components/autopilot/LoadDesignModal';
 import HumanInputBanner from '@/components/autopilot/HumanInputBanner';
+import ProjectSettingsModal from '@/components/ProjectSettingsModal';
 import { useProject } from '@/context/ProjectContext';
 import toast from 'react-hot-toast';
 
@@ -210,6 +211,14 @@ const Autopilot: React.FC = () => {
     enabled: !!projectId,
   });
 
+  const { data: projectCosts } = useQuery({
+    queryKey: ['project-costs', projectId],
+    queryFn: () => apiService.getProjectCosts(projectId!),
+    refetchInterval: 30000,
+    enabled: !!projectId,
+  });
+  const [showProjectSettings, setShowProjectSettings] = useState(false);
+
   const tabs: { id: Tab; label: string; icon: React.ElementType; badge?: number }[] = [
     { id: 'queue', label: 'Design Queue', icon: ListOrdered, badge: status?.queue_depth },
     { id: 'features', label: 'Completed', icon: History },
@@ -276,6 +285,9 @@ const Autopilot: React.FC = () => {
           }
         }}
         loading={togglePipeline.isPending}
+        costTotal={projectCosts?.cost_total_usd}
+        costLimit={projectCosts?.cost_limit_usd}
+        onBudgetClick={() => setShowProjectSettings(true)}
       />
 
       {/* Tab Navigation */}
@@ -348,6 +360,10 @@ const Autopilot: React.FC = () => {
         open={showLoadDesign}
         projectId={projectId}
         onClose={() => setShowLoadDesign(false)}
+      />
+      <ProjectSettingsModal
+        isOpen={showProjectSettings}
+        onClose={() => setShowProjectSettings(false)}
       />
     </div>
   );

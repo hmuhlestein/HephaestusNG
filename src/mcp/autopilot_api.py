@@ -3066,6 +3066,7 @@ async def get_project_design_status(project_id: str, filename: str):
                     "created_at": feat.created_at.isoformat() if feat.created_at else None,
                     "completed_at": feat.completed_at.isoformat() if feat.completed_at else None,
                     "has_report": has_report,
+                    "cost_total_usd": feat.cost_total_usd or 0.0,
                 }
             )
 
@@ -3106,6 +3107,7 @@ async def get_project_design_status(project_id: str, filename: str):
                         "tasks": phase0_tasks,
                         "created_at": phase0_wf.created_at.isoformat() if phase0_wf.created_at else None,
                         "completed_at": None,
+                        "cost_total_usd": 0.0,
                     },
                 )
 
@@ -3123,6 +3125,7 @@ async def get_project_design_status(project_id: str, filename: str):
                     "tasks": [],
                     "created_at": None,
                     "completed_at": None,
+                    "cost_total_usd": 0.0,
                 }
             )
 
@@ -3167,6 +3170,7 @@ async def get_project_design_status(project_id: str, filename: str):
             "branches": branch_names,
             "feature_folder": feature_folder,
             "features": features,
+            "cost_total_usd": sum(f["cost_total_usd"] for f in features),
         }
 
 

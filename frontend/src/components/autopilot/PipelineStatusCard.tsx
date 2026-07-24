@@ -2,6 +2,7 @@ import React from 'react';
 import { motion } from 'framer-motion';
 import { CheckCircle2, XCircle, Clock, Play, Pause, Activity, Users, AlertTriangle } from 'lucide-react';
 import { formatTime } from '@/pages/Autopilot';
+import { CostDisplay } from '@/components/cost';
 
 interface PipelineStatusCardProps {
   status: any;
@@ -10,9 +11,12 @@ interface PipelineStatusCardProps {
   onToggle?: () => void;
   onMetricClick?: (metric: string) => void;
   loading?: boolean;
+  costTotal?: number;
+  costLimit?: number | null;
+  onBudgetClick?: () => void;
 }
 
-const PipelineStatusCard: React.FC<PipelineStatusCardProps> = ({ status, pendingAgents, projectName, onToggle, onMetricClick, loading }) => {
+const PipelineStatusCard: React.FC<PipelineStatusCardProps> = ({ status, pendingAgents, projectName, onToggle, onMetricClick, loading, costTotal, costLimit, onBudgetClick }) => {
   const running = status?.running ?? false;
   const currentDesign = status?.current_design;
   const designsProcessed = status?.designs_processed ?? 0;
@@ -120,6 +124,23 @@ const PipelineStatusCard: React.FC<PipelineStatusCardProps> = ({ status, pending
                 <p className="text-2xl font-bold text-white">{metric.value}</p>
               </button>
             ))}
+
+            {costTotal !== undefined && (
+              <button
+                onClick={onBudgetClick}
+                className={`text-center px-3 py-2 rounded-lg transition-all border border-transparent ${
+                  onBudgetClick
+                    ? 'cursor-pointer hover:bg-white/15 hover:border-white/20 hover:underline active:scale-95'
+                    : 'cursor-default'
+                }`}
+                title="View budget"
+              >
+                <div className="flex items-center justify-center gap-1 mb-1">
+                  <span className="text-xs text-white/60 uppercase tracking-wider">Budget</span>
+                </div>
+                <CostDisplay currentCost={costTotal} costLimit={costLimit} showProgress={false} />
+              </button>
+            )}
 
             {status?.total_elapsed > 0 && (
               <div className="text-center pl-4 border-l border-white/20">

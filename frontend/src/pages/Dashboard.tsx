@@ -11,7 +11,7 @@ import { formatDistanceToNow } from 'date-fns';
 import QueueStatusWidget from '@/components/QueueStatusWidget';
 import BlockedTasksView from '@/components/BlockedTasksView';
 import { useProject } from '@/context/ProjectContext';
-import { ProjectCostSummary, BudgetPausedLabel } from '@/components/cost';
+import { ProjectCostSummary } from '@/components/cost';
 
 const StatCard: React.FC<{
   title: string;
