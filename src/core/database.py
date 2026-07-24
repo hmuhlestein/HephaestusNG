@@ -1777,6 +1777,15 @@ class DatabaseManager:
                     conn.execute(text("ALTER TABLE tasks ADD COLUMN self_review_started_commit VARCHAR"))
                 except Exception:
                     pass  # Column already exists
+                # Populate self_review for development phases that were created
+                # before the fix that passes self_review from YAML to DB.
+                try:
+                    conn.execute(text(
+                        "UPDATE phases SET self_review = '{\"enabled\": true}' "
+                        "WHERE name = 'development' AND self_review IS NULL"
+                    ))
+                except Exception:
+                    pass  # Already populated or table empty
                 conn.commit()
                 logger.info("Migrated tasks.self_review_done / phases.self_review columns")
         except Exception as e:
