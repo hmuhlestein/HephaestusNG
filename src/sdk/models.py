@@ -44,6 +44,8 @@ class Phase:
     thinking_level: Optional[str] = (
         None  # pi reasoning budget: off|minimal|low|medium|high|xhigh
     )
+    fallback_cli_tool: Optional[str] = None  # Fallback CLI tool when primary fails
+    fallback_cli_model: Optional[str] = None  # Fallback model for the fallback tool
 
     def to_yaml_dict(self) -> Dict[str, Any]:
         """Convert Phase to YAML-compatible dictionary."""

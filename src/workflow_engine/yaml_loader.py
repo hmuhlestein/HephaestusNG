@@ -87,13 +87,15 @@ def load_workflow_from_dir(workflow_dir: Path) -> dict:
     return cfg
 
 
-def build_phase(phase_cfg: dict, default_model: str, default_thinking: str) -> Phase:
+def build_phase(phase_cfg: dict, default_model: str, default_thinking: str, default_fallback_tool: str = None, default_fallback_model: str = None) -> Phase:
     """Build a Phase (sdk) from a phase config dict.
 
     Args:
         phase_cfg: Parsed YAML dict for a single phase.
         default_model: Default model string inherited from workflow.yaml.
         default_thinking: Default thinking_level string inherited from workflow.yaml.
+        default_fallback_tool: Default fallback CLI tool from workflow.yaml.
+        default_fallback_model: Default fallback CLI model from workflow.yaml.
 
     Returns:
         Phase dataclass instance.
@@ -125,6 +127,8 @@ def build_phase(phase_cfg: dict, default_model: str, default_thinking: str) -> P
         next_steps=phase_cfg.get("next_steps", []),
         validation=validation,
         self_review=self_review,
+        fallback_cli_tool=phase_cfg.get("fallback_cli_tool") or default_fallback_tool,
+        fallback_cli_model=phase_cfg.get("fallback_cli_model") or default_fallback_model,
     )
 
 
@@ -142,6 +146,8 @@ def build_phase_list(cfg: dict) -> list:
             pc,
             cfg.get("default_model", "xiaomi/mimo-v2.5"),
             cfg.get("default_thinking_level", "low"),
+            cfg.get("fallback_cli_tool"),
+            cfg.get("fallback_cli_model"),
         )
         for pc in cfg["phases"]
     }
