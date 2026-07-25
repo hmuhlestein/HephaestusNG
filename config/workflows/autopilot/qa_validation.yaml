@@ -50,9 +50,9 @@ additional_notes: |
   YOUR MISSION: Run comprehensive tests and validate against requirements
 
   Do NOT edit existing source/production code. If you find bugs in the
-  application, file a ticket (STEP 7) — the developer fixes it, not you.
+  application, file a ticket (STEP 8) — the developer fixes it, not you.
   You MAY write tests: new test files, smoke tests, or validation for
-  uncovered requirements (STEP 3/STEP 4) — that's expected, not an exception
+  uncovered requirements (STEP 4/STEP 5) — that's expected, not an exception
   to the rule above.
 
   ═══════════════════════════════════════════════════════════════════════
@@ -92,12 +92,12 @@ additional_notes: |
     5. **Check acceptance criteria** — verify every item in TESTING.md's
        "Acceptance Criteria" section. Mark each PASS or FAIL explicitly.
 
-    → Skip to STEP 7 (Create Report) after completing all 5 steps above.
+    → Skip to STEP 9 (Create Report) after completing all 5 steps above.
     → The fallback steps below are ONLY for when TESTING.md does not exist.
   
   If TESTING.md DOES NOT EXIST:
     → Note in your report: "TESTING.md not found - using fallback instructions"
-    → Continue with the fallback steps below (STEP 1 through STEP 7).
+    → Continue with the fallback steps below (STEP 1 through STEP 8).
   
   ═══════════════════════════════════════════════════════════════════════
   FALLBACK STEPS (only if TESTING.md does not exist)
@@ -152,7 +152,7 @@ additional_notes: |
   - Any startup issues encountered
   
   ═══════════════════════════════════════════════════════════════════════
-  STEP 2.5: VERIFY RESOLVED TICKETS FROM PREVIOUS QA RUNS
+  STEP 3: VERIFY RESOLVED TICKETS FROM PREVIOUS QA RUNS
   ═══════════════════════════════════════════════════════════════════════
 
   Before running new tests, check if there are resolved bug tickets from
@@ -186,7 +186,7 @@ additional_notes: |
   truly addressed.
 
   ═══════════════════════════════════════════════════════════════════════
-  STEP 3: DISCOVER AND RUN TESTS
+  STEP 4: DISCOVER AND RUN TESTS
   ═══════════════════════════════════════════════════════════════════════
   
   First, discover where tests actually live:
@@ -218,7 +218,7 @@ additional_notes: |
   
   
   ═══════════════════════════════════════════════════════════════════════
-  STEP 4: REQUIREMENTS COMPLIANCE CHECK
+  STEP 5: REQUIREMENTS COMPLIANCE CHECK
   ═══════════════════════════════════════════════════════════════════════
   
   For EACH functional requirement from requirements_analysis.md:
@@ -236,7 +236,7 @@ additional_notes: |
   | FR-3: [desc] | test_fr3.py | FAIL | [error] |
   
   ═══════════════════════════════════════════════════════════════════════
-  STEP 5: VALIDATE SECURITY FIXES
+  STEP 6: VALIDATE SECURITY FIXES
   ═══════════════════════════════════════════════════════════════════════
   
   For each critical security fix from security_report.md:
@@ -245,7 +245,7 @@ additional_notes: |
   - Ensure the fix doesn't break functionality
   
   ═══════════════════════════════════════════════════════════════════════
-  STEP 6: RUN SMOKE TESTS
+  STEP 7: RUN SMOKE TESTS
   ═══════════════════════════════════════════════════════════════════════
   
   Run quick end-to-end validation:
@@ -255,7 +255,7 @@ additional_notes: |
   - Check error handling
   
   ═══════════════════════════════════════════════════════════════════════
-  STEP 7: CREATE TICKETS FOR ISSUES FOUND
+  STEP 8: CREATE TICKETS FOR ISSUES FOUND
   ═══════════════════════════════════════════════════════════════════════
   
   For EACH issue found (Critical, Major, Minor), create a ticket using create_ticket.
@@ -318,7 +318,7 @@ additional_notes: |
   ```
   
   ═══════════════════════════════════════════════════════════════════════
-  STEP 8: CREATE QA REPORT
+  STEP 9: CREATE QA REPORT
   ═══════════════════════════════════════════════════════════════════════
   
   Write qa_report.md with:
@@ -392,7 +392,7 @@ additional_notes: |
   2. [Problem 2]
   
   ═══════════════════════════════════════════════════════════════════════
-  STEP 8.5: EMIT STRUCTURED QA RESULT (REQUIRED — drives the pipeline gate)
+  STEP 10: EMIT STRUCTURED QA RESULT (REQUIRED — drives the pipeline gate)
   ═══════════════════════════════════════════════════════════════════════
   
   In addition to qa_report.md, write a machine-readable ./docs/qa_result.json.
@@ -437,7 +437,7 @@ additional_notes: |
     reason to leave a failing test unreported.
   
   ═══════════════════════════════════════════════════════════════════════
-  STEP 9: SAVE TO MEMORY
+  STEP 11: SAVE TO MEMORY
   ═══════════════════════════════════════════════════════════════════════
   
   Save QA findings to memory:
