@@ -109,6 +109,15 @@ const RealTimeAgentOutput: React.FC<RealTimeAgentOutputProps> = ({
   } = useRealTimeAgentOutput(agent?.id || null, {
     enabled: !isPaused && !!agent,
     updateInterval: 1000,
+    // This is the full single-agent detail/fullscreen viewer, where
+    // scrollback matters most -- unlike Observability's multi-agent grid
+    // (useMultiAgentOutput, which keeps the 2000-line default since it
+    // polls several agents at once), so it requests much more history.
+    // The backend reads+filters the whole transcript file once per
+    // change (cached by mtime/size) and only tails it to `lines`
+    // afterward, so this doesn't add backend read/filter cost -- only
+    // more text over the wire and more DOM content.
+    lines: 20000,
   });
 
   // Auto-scroll to bottom when new content arrives

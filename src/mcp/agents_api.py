@@ -306,7 +306,11 @@ async def get_agent_output(agent_id: str, lines: int = 200, request: Request = N
         if agent.status == 'terminated':
             lines = 0
         else:
-            lines = min(lines, 5000)
+            # _read_transcript_log reads and filters the whole transcript
+            # file once per change (cached by file mtime/size) and only
+            # tails it to `lines` afterward -- raising this cap doesn't add
+            # backend read/filter cost, only more text over the wire.
+            lines = min(lines, 30000)
 
         try:
             output = server_state.agent_manager.get_agent_output(agent_id, lines=lines)

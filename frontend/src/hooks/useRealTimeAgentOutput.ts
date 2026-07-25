@@ -14,6 +14,7 @@ interface UseRealTimeAgentOutputOptions {
   updateInterval?: number; // milliseconds
   maxRetries?: number;
   enabled?: boolean;
+  lines?: number; // how much scrollback to request from the backend
 }
 
 export const useRealTimeAgentOutput = (
@@ -23,7 +24,8 @@ export const useRealTimeAgentOutput = (
   const {
     updateInterval = 1000, // 1 second
     maxRetries = 3,
-    enabled = true
+    enabled = true,
+    lines = 2000
   } = options;
 
   const [data, setData] = useState<AgentOutputData>({
@@ -52,7 +54,7 @@ export const useRealTimeAgentOutput = (
         setData(prev => ({ ...prev, isLoading: true, error: null }));
       }
 
-      const result = await apiService.getAgentOutput(agentId);
+      const result = await apiService.getAgentOutput(agentId, lines);
 
       if (!mountedRef.current) return;
 
@@ -94,7 +96,7 @@ export const useRealTimeAgentOutput = (
       // on "Failed to connect" after every restart until a manual Retry;
       // the next successful poll clears the error on its own.
     }
-  }, [agentId, enabled, maxRetries]);
+  }, [agentId, enabled, maxRetries, lines]);
 
   const startPolling = useCallback(() => {
     if (intervalRef.current) {
