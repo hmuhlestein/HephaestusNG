@@ -1,0 +1,64 @@
+{
+  "feature": "des-91c8-opencode-collector",
+  "design_doc": ".hephaestus/design.md",
+  "requirements_doc": "docs/requirements_analysis.md",
+  "verdict": "PASS",
+  "summary": "Second pass. The prior FAIL was returned because FR1 silently overrode the design's explicit build/defer gate (design.md:695-699) instead of surfacing the conflict. product_requirements corrected this (commit 4b4cd75): FR1 now reports the gate check factually (zero cli_type/phase_cli_tool/opencode matches across every file in config/workflows/autopilot/, plus hephaestus_config.yaml default_cli_tool=claude and simple_config.py fallback=pi -- the design's own deferral condition is met) and explicitly flags the resulting conflict as a blocking decision for scope_review rather than resolving it in the requirements phase. That is exactly the right handling. scope_review now rules on it explicitly below.",
+  "blocking_decision_ruling": {
+    "conflict": "design.md:695-699 says defer indefinitely if no live deployment uses cli_type:opencode; requirements_analysis.md FR1 confirms that condition is met.",
+    "ruling": "PROCEED. This pipeline was explicitly commissioned as its own workflow named 'OpenCode Cost Collector' (see workflow description). That is out-of-band authorization stronger than the design doc's generic pre-build gate -- the gate exists to stop speculative work nobody asked for; here, someone deliberately asked for exactly this feature by name. Overriding the design's deferral criterion on that basis is a legitimate scope_review judgment call, not a silent unauthorized expansion, because it is being made explicitly, at the correct phase, with the conflict and its resolution recorded here rather than buried in a requirements-extraction step.",
+    "authorized_by": "scope_review phase, this review, 2026-07-25",
+    "consequence": "FR2-FR5 in requirements_analysis.md are authorized to proceed to architecture_design."
+  },
+  "requirements_traced": [
+    {
+      "requirement": "FR1 - Design's build/defer gate, checked and reported factually with the resulting conflict flagged for scope_review",
+      "design_lines": "695-699",
+      "status": "TRACED",
+      "detail": "Correctly performs the exact check the design specifies (workflow YAML / phase_cli_tool overrides), reports the result honestly (deferral condition met), and escalates the conflict instead of resolving it unilaterally. Ruled on above: PROCEED."
+    },
+    {
+      "requirement": "FR2 - Correlate completed task to OpenCode session row via directory + time window",
+      "design_lines": "213-221, 562-571",
+      "status": "TRACED"
+    },
+    {
+      "requirement": "FR3 - Rewrite OpenCodeCollector to query the session table's pre-aggregated columns instead of a stdout JSON blob",
+      "design_lines": "195-211, 540-571",
+      "status": "TRACED",
+      "detail": "Design's option 2 fallback anticipated needing to map message/part rows; requirements doc found (via direct DB inspection) that the session table already carries pre-aggregated cost/token columns, filling in the design's own flagged open question rather than adding new scope."
+    },
+    {
+      "requirement": "FR4 - Wire the collect_task_cost() opencode branch to run the FR2/FR3 logic instead of a bare `pass`",
+      "design_lines": "695-705",
+      "status": "TRACED",
+      "detail": "Design directed option 1 (stdout capture) with SQLite fallback. Verified fact (OpenCodeAgent now launches with -i, cli_interface.py:465-485) makes option 1 impossible under interactive mode, so going straight to the SQLite/session-table path is a justified consequence of that finding, not scope creep."
+    },
+    {
+      "requirement": "FR5 - Checkpointing / re-collection safety",
+      "design_lines": "540-548",
+      "status": "TRACED",
+      "detail": "Design assumed no checkpoint needed at all, premised on one-shot invocation. Requirements doc adjusts for the -i finding but independently confirms each session row still maps 1:1 to one agent launch, so the existing SessionCostCheckpoint guard remains sufficient. No new tables/columns, consistent with design's NFR."
+    },
+    {
+      "requirement": "NFR - No new tables/columns; read-only DB access; path safety under ~/.local/share/opencode/; graceful absence; no timer-based collection",
+      "design_lines": "540-577",
+      "status": "TRACED"
+    },
+    {
+      "requirement": "Codex out of scope",
+      "design_lines": "223-232, 712",
+      "status": "TRACED"
+    },
+    {
+      "requirement": "Backend direct OpenRouter calls (task enrichment/guardian/conductor usage.include)",
+      "design_lines": "234-249, 579-587, 692-694",
+      "status": "OUT_OF_SCOPE_CORRECTLY_EXCLUDED",
+      "detail": "Design lists this as a separate implementation-phase item (#5) from the OpenCode collector (#6). Requirements doc correctly excludes it from this feature."
+    }
+  ],
+  "missing_from_requirements": [],
+  "additions_beyond_design": [],
+  "action": "PROCEED_TO_ARCHITECTURE_DESIGN",
+  "correction_requested": null
+}
