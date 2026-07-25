@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Feature Report: Budget Enforcement and Pipeline Throttling</title>
+    <title>Feature Report: Backend OpenRouter Direct Cost Capture</title>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body {
@@ -43,282 +43,90 @@
             border-radius: 8px;
             overflow: hidden;
             box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-            margin-bottom: 2rem;
         }
-        th, td { padding: 1rem; text-align: left; border-bottom: 1px solid #e2e8f0; }
-        th { background: #f8fafc; font-weight: 600; color: #475569; }
-        tr:hover { background: #f8fafc; }
-        .status {
-            display: inline-block;
-            padding: 0.25rem 0.75rem;
-            border-radius: 9999px;
-            font-size: 0.875rem;
-            font-weight: 500;
-        }
-        .status.complete { background: #dcfce7; color: #166534; }
-        .status.pass { background: #dcfce7; color: #166534; }
-        .status.partial { background: #fef3c7; color: #92400e; }
-        .status.deferred { background: #e2e8f0; color: #475569; }
-        .status.missing { background: #fee2e2; color: #991b1b; }
-        .section {
-            background: white;
-            border-radius: 8px;
-            padding: 1.5rem;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-            margin-bottom: 2rem;
-        }
-        .section h3 { margin-bottom: 1rem; color: #1e293b; }
-        ul { margin-left: 1.5rem; margin-bottom: 1rem; }
-        li { margin-bottom: 0.5rem; }
+        th, td { text-align: left; padding: 0.75rem 1rem; border-bottom: 1px solid #e2e8f0; }
+        th { background: #f1f5f9; font-size: 0.85rem; text-transform: uppercase; color: #64748b; }
+        tr:last-child td { border-bottom: none; }
         .badge {
             display: inline-block;
-            padding: 0.125rem 0.5rem;
-            border-radius: 4px;
-            font-size: 0.75rem;
+            padding: 0.15rem 0.6rem;
+            border-radius: 999px;
+            font-size: 0.8rem;
             font-weight: 600;
         }
-        .badge.new { background: #dbeafe; color: #1e40af; }
-        .badge.modified { background: #fef3c7; color: #92400e; }
-        .badge.security { background: #fee2e2; color: #991b1b; }
-        footer {
-            margin-top: 3rem;
-            padding-top: 1rem;
-            border-top: 1px solid #e2e8f0;
-            color: #64748b;
-            font-size: 0.875rem;
-            text-align: center;
-        }
+        .badge.pass { background: #dcfce7; color: #15803d; }
+        .badge.none { background: #dcfce7; color: #15803d; }
+        .badge.low { background: #fef9c3; color: #854d0e; }
+        code { background: #f1f5f9; padding: 0.15rem 0.4rem; border-radius: 4px; font-size: 0.9em; }
+        ul { margin-left: 1.5rem; margin-bottom: 0.5rem; }
+        p { margin-bottom: 0.75rem; }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>Feature Report: Budget Enforcement and Pipeline Throttling</h1>
-        <p class="meta">Generated: 2026-07-23 | Feature ID: des-91c8-budget-enforcement | Workflow ID: 0acbf2fc-fcf5-4b24-ad2d-31b1db62df6d</p>
+        <h1>Backend OpenRouter Direct Cost Capture</h1>
+        <div class="meta">Feature ID: des-91c8-openrouter-direct &middot; Branch: feature/des-91c8/openrouter-direct &middot; Report generated 2026-07-24</div>
 
         <div class="summary-grid">
             <div class="summary-card">
-                <h3>Functional Reqs</h3>
-                <div class="value warning">7/8</div>
-                <small>1 unmounted (G-2)</small>
-            </div>
-            <div class="summary-card">
-                <h3>Tests</h3>
-                <div class="value success">80/80</div>
-                <small>Feature tests; 388/390 broader regression (2 skipped)</small>
-            </div>
-            <div class="summary-card">
-                <h3>Security</h3>
-                <div class="value success">PASS</div>
-                <small>0 critical/high open</small>
-            </div>
-            <div class="summary-card">
                 <h3>Verdict</h3>
-                <div class="value warning">CONDITIONAL</div>
-                <small>Backend complete, UI gap open</small>
+                <div class="value success">Pass</div>
+            </div>
+            <div class="summary-card">
+                <h3>Critical / High findings</h3>
+                <div class="value success">0</div>
+            </div>
+            <div class="summary-card">
+                <h3>Files changed</h3>
+                <div class="value info">2</div>
+            </div>
+            <div class="summary-card">
+                <h3>New tests</h3>
+                <div class="value success">4</div>
             </div>
         </div>
 
-        <h2>Implementation Status</h2>
+        <h2>Summary</h2>
+        <p>
+            Requirements analysis found that the direct OpenRouter cost-capture
+            mechanism &mdash; intercepting orchestrator LLM calls, extracting
+            token/cost usage, and writing <code>CostEntry</code> rows &mdash;
+            was already built by earlier features on this branch. This feature's
+            actual scope narrowed to closing the two gaps that analysis found:
+            no test coverage of the extraction logic, and an over-broad
+            exception handler that logged real bugs at <code>debug</code>
+            level (invisible by default).
+        </p>
+
+        <h2>Changes</h2>
         <table>
-            <thead>
-                <tr>
-                    <th>Component</th>
-                    <th>Description</th>
-                    <th>Status</th>
-                </tr>
-            </thead>
-            <tbody>
-                <tr>
-                    <td>FR-1</td>
-                    <td>Budget guard in <code>pick_next_design()</code></td>
-                    <td><span class="status complete">✅ Complete</span></td>
-                </tr>
-                <tr>
-                    <td>FR-2</td>
-                    <td>Budget guard in <code>_run_one_feature()</code></td>
-                    <td><span class="status complete">✅ Complete</span></td>
-                </tr>
-                <tr>
-                    <td>FR-3</td>
-                    <td>Generalize <code>paused_by == "user"</code> guards to <code>is not None</code> (3 self-heal call sites)</td>
-                    <td><span class="status complete">✅ Complete</span></td>
-                </tr>
-                <tr>
-                    <td>FR-4</td>
-                    <td>Refactor <code>/autopilot/stop</code> to use shared <code>_pause_project_workflows</code> (fixes Phase 0 gap)</td>
-                    <td><span class="status complete">✅ Complete</span></td>
-                </tr>
-                <tr>
-                    <td>FR-5</td>
-                    <td>Budget-paused workflow resume via limit increase/clear</td>
-                    <td><span class="status complete">✅ Complete</span></td>
-                </tr>
-                <tr>
-                    <td>FR-6</td>
-                    <td>UI — Budget configuration in <code>ProjectSettingsModal</code></td>
-                    <td><span class="status complete">✅ Complete</span></td>
-                </tr>
-                <tr>
-                    <td>FR-7</td>
-                    <td>UI — Cost indicator on the design/pipeline screen</td>
-                    <td><span class="status missing">❌ Built but not mounted (G-2)</span></td>
-                </tr>
-                <tr>
-                    <td>FR-8</td>
-                    <td>UI — "Paused: budget limit reached" label on <code>WorkflowCard</code></td>
-                    <td><span class="status complete">✅ Complete</span></td>
-                </tr>
-            </tbody>
+            <tr><th>File</th><th>Change</th></tr>
+            <tr>
+                <td><code>src/interfaces/langchain_llm_client.py</code></td>
+                <td>Null-safety fix in <code>_invoke_and_record()</code>: <code>.get(key, {})</code> &rarr; <code>.get(key) or {}</code> for <code>token_usage</code>, <code>cost</code>, and <code>prompt_tokens_details</code>, so an explicit JSON <code>null</code> doesn't crash the chain. Log level on extraction failure raised from <code>debug</code> to <code>warning</code>.</td>
+            </tr>
+            <tr>
+                <td><code>tests/test_cost_tracking.py</code></td>
+                <td>New <code>TestInvokeAndRecord</code> class: happy path, no-cost path (non-OpenRouter shape), missing <code>response_metadata</code>, and malformed/null metadata fields.</td>
+            </tr>
         </table>
 
-        <h2>Files Changed</h2>
+        <h2>Pipeline results</h2>
         <table>
-            <thead>
-                <tr>
-                    <th>File</th>
-                    <th>Action</th>
-                    <th>Status</th>
-                </tr>
-            </thead>
-            <tbody>
-                <tr>
-                    <td><code>src/autopilot/orchestrator.py</code></td>
-                    <td>Budget guards in <code>pick_next_design</code>/<code>_run_one_feature</code>; generalized <code>paused_by</code> checks in self-heal, corrective-task, and stuck-workflow-restart paths</td>
-                    <td><span class="status complete">✅ Done</span></td>
-                </tr>
-                <tr>
-                    <td><code>src/core/cost_derivation.py</code></td>
-                    <td>Fixed SEC-04 (unlinked costs bypassing budget check)</td>
-                    <td><span class="status complete">✅ Done</span></td>
-                </tr>
-                <tr>
-                    <td><code>src/mcp/autopilot_api.py</code></td>
-                    <td><code>/autopilot/stop</code> refactored onto shared <code>_pause_project_workflows</code>; budget-pause clearing on <code>PUT /projects/{id}</code>; <code>CostEntryCreate</code> entity-link validator</td>
-                    <td><span class="status complete">✅ Done</span></td>
-                </tr>
-                <tr>
-                    <td><code>frontend/src/components/ProjectSettingsModal.tsx</code></td>
-                    <td><code>cost_limit_usd</code> input, current spend display</td>
-                    <td><span class="status complete">✅ Done</span></td>
-                </tr>
-                <tr>
-                    <td><code>frontend/src/components/BudgetStatusCard.tsx</code></td>
-                    <td><span class="badge new">NEW</span> Cost indicator component</td>
-                    <td><span class="status missing">❌ Never imported/rendered</span></td>
-                </tr>
-                <tr>
-                    <td><code>frontend/src/components/workflow/WorkflowCard.tsx</code></td>
-                    <td>"Paused: budget limit reached" label for <code>paused_by === 'budget'</code></td>
-                    <td><span class="status complete">✅ Done</span></td>
-                </tr>
-                <tr>
-                    <td><code>frontend/src/services/api.ts</code></td>
-                    <td><code>cost_limit_usd</code> in <code>updateAutopilotProject</code></td>
-                    <td><span class="status complete">✅ Done</span></td>
-                </tr>
-                <tr>
-                    <td><code>tests/test_budget_enforcement.py</code></td>
-                    <td><span class="badge new">NEW</span> Budget guard + pause-idempotency tests</td>
-                    <td><span class="status complete">✅ Done</span></td>
-                </tr>
-                <tr>
-                    <td><code>tests/test_cost_collection_service.py</code></td>
-                    <td><span class="badge new">NEW</span> Cost collection tests</td>
-                    <td><span class="status complete">✅ Done</span></td>
-                </tr>
-            </tbody>
+            <tr><th>Phase</th><th>Result</th></tr>
+            <tr><td>Scope review</td><td><span class="badge pass">Pass</span></td></tr>
+            <tr><td>Architectural review</td><td><span class="badge pass">Pass</span></td></tr>
+            <tr><td>Adversarial review</td><td><span class="badge pass">Pass</span></td></tr>
+            <tr><td>Security review</td><td><span class="badge pass">Pass &mdash; 0 critical/high, 1 low (ticketed, out of scope)</span></td></tr>
+            <tr><td>QA validation</td><td><span class="badge pass">Pass</span></td></tr>
+            <tr><td>Product validation</td><td><span class="badge pass">Pass</span></td></tr>
         </table>
 
-        <div class="section">
-            <h3>Key Implementation Details</h3>
-            <ul>
-                <li><strong>Two enforcement points:</strong> <code>pick_next_design()</code> skips over-budget projects when picking the next queued design; <code>_run_one_feature()</code> blocks new workflow launches (returns <code>"budget_blocked"</code>) for an over-budget project</li>
-                <li><strong>Self-heal exclusion:</strong> <code>_try_auto_resume_paused_workflow</code>, <code>_create_corrective_task</code>, and stuck-workflow restart all now skip any workflow with <code>paused_by is not None</code> — a deliberate pause of any kind (<code>"user"</code>, <code>"budget"</code>, <code>"system"</code>) is respected, not just user pauses</li>
-                <li><strong>Play-button exception preserved:</strong> <code>AutopilotService.start()</code> deliberately keeps <code>== "user"</code> so clicking play resumes user-paused work but never auto-resumes budget-paused work</li>
-                <li><strong>Phase 0 coverage:</strong> <code>/autopilot/stop</code> now shares <code>_pause_project_workflows</code>, which matches both <code>"autopilot"</code> and <code>"autopilot-phase0"</code> definition IDs — closing a gap where Phase 0 workflows kept running through a stop/budget-pause</li>
-                <li><strong>Limit-raise resume:</strong> raising or clearing <code>cost_limit_usd</code> via <code>PUT /projects/{id}</code> clears <code>paused_by == "budget"</code> on that project's workflows</li>
-            </ul>
-        </div>
+        <h2>Out of scope</h2>
+        <p>Budget enforcement guards, Claude Code/OpenCode/Codex collector implementations, Pi extension changes, UI budget configuration, and any change to <code>CostEntry</code> schema or rollup derivation &mdash; all pre-existing and unaffected by this feature.</p>
 
-        <div class="section">
-            <h3>Security Findings</h3>
-            <ul>
-                <li><span class="badge security">MEDIUM</span> SEC-04 <strong>FIXED</strong> — Cost entries with no <code>task_id</code>/<code>workflow_id</code> bypassed budget enforcement; <code>CostEntryCreate</code> now rejects unlinked entries via a <code>model_validator</code></li>
-                <li><span class="badge security">LOW</span> SEC-05 <strong>FIXED</strong> — Phase 0 gap in <code>/autopilot/stop</code> closed by the shared-pause-function refactor</li>
-                <li><span class="badge security">LOW</span> SEC-06 <strong>FIXED</strong> — <code>_pause_project_workflows</code> agent-status filter now includes <code>"starting"</code></li>
-                <li>5 pre-existing LOW findings (SEC-01, 02, 03, 08, 11) are unrelated to this feature and already tracked in open tickets</li>
-                <li><strong>Overall rating: PASS</strong> — no critical or high-severity vulnerabilities blocking merge</li>
-            </ul>
-        </div>
-
-        <h2>Documentation Review</h2>
-        <table>
-            <thead>
-                <tr>
-                    <th>Document</th>
-                    <th>Status</th>
-                </tr>
-            </thead>
-            <tbody>
-                <tr>
-                    <td>Requirements Analysis (docs/requirements_analysis.md)</td>
-                    <td><span class="status pass">✅ Accurate</span></td>
-                </tr>
-                <tr>
-                    <td>Architecture (docs/architecture.md)</td>
-                    <td><span class="status pass">✅ Accurate</span></td>
-                </tr>
-                <tr>
-                    <td>Security Report (docs/security_review/security_report.md)</td>
-                    <td><span class="status pass">✅ Accurate</span></td>
-                </tr>
-                <tr>
-                    <td>QA Report (docs/qa_validation/qa_report.md)</td>
-                    <td><span class="status pass">✅ Accurate</span></td>
-                </tr>
-                <tr>
-                    <td>Product Validation (docs/product_validation/product_validation.md)</td>
-                    <td><span class="status pass">✅ Accurate (correctly flags G-2)</span></td>
-                </tr>
-                <tr>
-                    <td>Pipeline Reference (docs/autopilot.md)</td>
-                    <td><span class="status partial">⚠️ Fixed — stale phase numbering + missing budget section</span></td>
-                </tr>
-                <tr>
-                    <td>Orphaned prior-feature files (docs/product_validation.md, docs/security_report.md)</td>
-                    <td><span class="status missing">🗑️ Removed</span></td>
-                </tr>
-            </tbody>
-        </table>
-
-        <h2>Open Gap (Not Fixed — Requires Code Change)</h2>
-        <table>
-            <thead>
-                <tr>
-                    <th>ID</th>
-                    <th>Description</th>
-                    <th>Impact</th>
-                </tr>
-            </thead>
-            <tbody>
-                <tr>
-                    <td>G-2</td>
-                    <td><code>BudgetStatusCard.tsx</code> was built but is never imported or rendered in <code>DesignQueuePanel.tsx</code>, <code>PipelineStatusCard.tsx</code>, or <code>Autopilot.tsx</code></td>
-                    <td>Users cannot see project spend vs. limit without opening Project Settings — the exact gap FR-7 was meant to close</td>
-                </tr>
-            </tbody>
-        </table>
-
-        <div class="section">
-            <h3>Verdict</h3>
-            <p><strong>CONDITIONAL PASS</strong> — Budget enforcement backend logic (FR-1 through FR-5) and budget configuration/pause-label UI (FR-6, FR-8) are complete and verified by 330 passing tests. Security review found no unresolved critical/high issues. Documentation was largely accurate; the pipeline reference doc had stale phase numbering that has been corrected.</p>
-            <p><strong>Condition for full PASS:</strong> Mount <code>BudgetStatusCard</code> on the autopilot design/pipeline screen (G-2), passing <code>project.cost_total_usd</code> / <code>project.cost_limit_usd</code>.</p>
-        </div>
-
-        <footer>
-            <p>Hephaestus Autopilot — Feature Report</p>
-            <p>Workflow ID: 0acbf2fc-fcf5-4b24-ad2d-31b1db62df6d | Generated: 2026-07-23</p>
-        </footer>
+        <h2>Open items</h2>
+        <p>One low-severity finding from security review: <code>record_cost()</code> doesn't enforce the <code>raw_usage</code>/<code>model</code> size caps at the function level (only the HTTP endpoint's Pydantic validator does). Filed as <code>ticket-c07312d3-3243-4650-bf52-e5773c7ce738</code>, not currently exploitable since the data originates from OpenRouter (a trusted source), not attacker input.</p>
     </div>
 </body>
 </html>
