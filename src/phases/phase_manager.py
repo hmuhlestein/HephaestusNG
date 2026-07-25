@@ -292,6 +292,8 @@ class PhaseManager:
                         ),
                         thinking_level=phase_def.thinking_level,
                         self_review=phase_def.self_review,
+                        fallback_cli_tool=phase_def.fallback_cli_tool,
+                        fallback_cli_model=phase_def.fallback_cli_model,
                     )
                     session.add(phase)
 
