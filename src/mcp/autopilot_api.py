@@ -5,6 +5,7 @@ import collections
 import hashlib
 import json
 import logging
+import math
 import os
 import re
 import subprocess
@@ -1624,6 +1625,24 @@ class ProjectUpdate(BaseModel):
     cost_limit_usd: Optional[float] = None
     clear_cost_limit: bool = False  # Explicit signal to clear the budget
 
+    @field_validator("cost_limit_usd")
+    @classmethod
+    def validate_cost_limit_usd(cls, v: Optional[float]) -> Optional[float]:
+        """Validate cost_limit_usd is a reasonable value.
+
+        SECURITY: Prevents setting absurdly large or invalid budget limits
+        that could bypass budget enforcement or cause floating-point issues.
+        """
+        if v is None:
+            return v
+        if math.isnan(v) or math.isinf(v):
+            raise ValueError("cost_limit_usd must be a finite number")
+        if v < 0:
+            raise ValueError("cost_limit_usd must be non-negative")
+        if v > 1_000_000:  # $1M max budget
+            raise ValueError("cost_limit_usd exceeds maximum allowed value of $1,000,000")
+        return v
+
 
 class CostEntryCreate(BaseModel):
     """Request model for creating a cost entry."""
@@ -1901,7 +1920,18 @@ async def list_projects():
 
 
 @router.post("/projects", response_model=ProjectItem)
-async def create_project(req: ProjectCreate):
+async def create_project(
+    req: ProjectCreate,
+    agent_id: str = Header("ui-user", alias="X-Agent-ID"),
+):
+    # SECURITY: Verify agent authentication before allowing project creation
+    if not await verify_agent_authentication(agent_id):
+        logger.warning(f"Unauthenticated project creation attempt from agent {agent_id}")
+        raise HTTPException(
+            status_code=401,
+            detail="Agent not authenticated. Provide valid X-Agent-ID header.",
+        )
+
     from src.core.database import AutopilotProject, get_db
 
     resolved = _validate_base_dir(req.base_dir)
@@ -1964,7 +1994,19 @@ async def get_project(project_id: str):
 
 
 @router.put("/projects/{project_id}", response_model=ProjectItem)
-async def update_project(project_id: str, req: ProjectUpdate):
+async def update_project(
+    project_id: str,
+    req: ProjectUpdate,
+    agent_id: str = Header("ui-user", alias="X-Agent-ID"),
+):
+    # SECURITY: Verify agent authentication before allowing project modifications
+    if not await verify_agent_authentication(agent_id):
+        logger.warning(f"Unauthenticated project update attempt from agent {agent_id}")
+        raise HTTPException(
+            status_code=401,
+            detail="Agent not authenticated. Provide valid X-Agent-ID header.",
+        )
+
     from src.core.database import AutopilotDesign, AutopilotProject, Workflow, get_db
 
     with get_db() as db:
@@ -2032,7 +2074,18 @@ async def update_project(project_id: str, req: ProjectUpdate):
 
 
 @router.delete("/projects/{project_id}")
-async def delete_project(project_id: str):
+async def delete_project(
+    project_id: str,
+    agent_id: str = Header("ui-user", alias="X-Agent-ID"),
+):
+    # SECURITY: Verify agent authentication before allowing project deletion
+    if not await verify_agent_authentication(agent_id):
+        logger.warning(f"Unauthenticated project deletion attempt from agent {agent_id}")
+        raise HTTPException(
+            status_code=401,
+            detail="Agent not authenticated. Provide valid X-Agent-ID header.",
+        )
+
     from src.core.database import AutopilotProject, get_db
 
     replacement_base_dir = None
@@ -2928,6 +2981,17 @@ async def get_project_design_status(project_id: str, filename: str):
         # design that's since recovered.
         design_error = _design_raw_error if overall_status == "failed" else None
 
+        # Surface *why* a paused workflow is paused -- "paused" alone is
+        # ambiguous between a user-initiated pause and a budget-enforcement
+        # pause, and the latter is the one users most need to notice.
+        design_paused_by = None
+        design_status_reason = None
+        if overall_status == "paused":
+            paused_wf = next((wf for wf in matching_workflows if wf.status == "paused" and wf.paused_by), None)
+            if paused_wf:
+                design_paused_by = paused_wf.paused_by
+                design_status_reason = paused_wf.status_reason
+
         # Find feature folder
         feature_folder = None
         for wf in matching_workflows:
@@ -3066,6 +3130,7 @@ async def get_project_design_status(project_id: str, filename: str):
                     "created_at": feat.created_at.isoformat() if feat.created_at else None,
                     "completed_at": feat.completed_at.isoformat() if feat.completed_at else None,
                     "has_report": has_report,
+                    "cost_total_usd": feat.cost_total_usd or 0.0,
                 }
             )
 
@@ -3106,6 +3171,7 @@ async def get_project_design_status(project_id: str, filename: str):
                         "tasks": phase0_tasks,
                         "created_at": phase0_wf.created_at.isoformat() if phase0_wf.created_at else None,
                         "completed_at": None,
+                        "cost_total_usd": 0.0,
                     },
                 )
 
@@ -3123,6 +3189,7 @@ async def get_project_design_status(project_id: str, filename: str):
                     "tasks": [],
                     "created_at": None,
                     "completed_at": None,
+                    "cost_total_usd": 0.0,
                 }
             )
 
@@ -3153,12 +3220,16 @@ async def get_project_design_status(project_id: str, filename: str):
             "status": overall_status,
             "error": design_error,
             "warning": warning,
+            "paused_by": design_paused_by,
+            "status_reason": design_status_reason,
             "workflows": [
                 {
                     "id": wf.id,
                     "status": wf.status,
                     "created_at": wf.created_at.isoformat() if wf.created_at else None,
                     "error": next((e for e in workflow_errors if wf.id[:8] in e), None) if wf.status == "failed" else None,
+                    "paused_by": wf.paused_by,
+                    "status_reason": wf.status_reason,
                 }
                 for wf in matching_workflows
             ],
@@ -3167,6 +3238,7 @@ async def get_project_design_status(project_id: str, filename: str):
             "branches": branch_names,
             "feature_folder": feature_folder,
             "features": features,
+            "cost_total_usd": sum(f["cost_total_usd"] for f in features),
         }
 
 

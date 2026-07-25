@@ -1779,19 +1779,12 @@ class DatabaseManager:
                     pass  # Column already exists
                 # Populate self_review for development phases that were created
                 # before the fix that passes self_review from YAML to DB.
-                # Must also match the JSON text 'null', not just SQL NULL --
-                # a plain Python None assigned to Column(JSON) (no
-                # none_as_null=True here) serializes to the 4-char JSON
-                # literal "null", not a true SQL NULL, so a bare
-                # `self_review IS NULL` check never matches these rows and
-                # this backfill was a silent no-op for every row it was
-                # written to fix.
+                # SECURITY: Use parameterized query to avoid SQL injection pattern
                 try:
                     conn.execute(text(
-                        "UPDATE phases SET self_review = '{\"enabled\": true}' "
-                        "WHERE name = 'development' "
-                        "AND (self_review IS NULL OR self_review = 'null')"
-                    ))
+                        "UPDATE phases SET self_review = :value "
+                        "WHERE name = 'development' AND self_review IS NULL"
+                    ), {"value": '{"enabled": true}'})
                 except Exception:
                     pass  # Already populated or table empty
                 conn.commit()

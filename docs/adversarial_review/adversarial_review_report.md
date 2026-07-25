@@ -1,77 +1,63 @@
-# Adversarial Review — Backend OpenRouter Direct Cost Capture (Run 2)
+# Adversarial Review — Cost Tracking UI (re-verification pass)
 
-**Scope:** verification pass on the single BLOCKER that survived Run 1, plus a fresh
-pass over `src/interfaces/langchain_llm_client.py::_invoke_and_record` and its write
-path (`src/core/cost_derivation.py::record_cost`, `src/core/database.py::get_db`) to
-confirm nothing new regressed alongside the fix.
+This run verifies the fixes applied in commit `57c3a14` against the 2
+blockers that survived the prior adversarial_review run. Both are
+confirmed fixed by direct diff inspection, `npx tsc --noEmit`, and running
+the relevant tests — not re-reviewed from scratch per instructions.
 
----
+## B1 — Dashboard's "Set budget limit" button was a silent no-op — FIXED
 
-## Verification of Run 1 finding
+`frontend/src/pages/Dashboard.tsx` now imports `ProjectSettingsModal`,
+adds `showProjectSettings` state, passes
+`onConfigureBudget={() => setShowProjectSettings(true)}` to
+`ProjectCostSummary`, and renders `<ProjectSettingsModal isOpen=... onClose=.../>`
+right after it — same pattern `Autopilot.tsx` already used for
+`PipelineStatusCard`. The gear icon and "Set budget limit" button now both
+open the modal.
 
-### B1 (Run 1) — `prompt_tokens_details: null` silently dropped a cost-bearing CostEntry
+## B2 — Budget-triggered pause was indistinguishable from a manual pause — FIXED
 
-**Status: FIXED.**
+`src/mcp/autopilot_api.py`'s `get_project_design_status` now derives
+`design_paused_by`/`design_status_reason` from the paused workflow and
+includes `paused_by`/`status_reason` both at the design level and on each
+entry in `workflows[]`. `DesignQueuePanel.tsx` threads `pausedBy` through
+`designStatuses` → `SortableDesignItem` → `StatusBadge`, which renders
+`"Paused: budget limit reached"` when `status === 'paused' && pausedBy ===
+'budget'` — the same label text `WorkflowCard.tsx` already used elsewhere,
+now consistent across both surfaces.
 
-`src/interfaces/langchain_llm_client.py:361-393` now reads:
+Verified via `git show 57c3a14` diff inspection (backend + frontend wiring
+match exactly what the finding asked for) and by running the new/updated
+tests:
 
-```python
-metadata = getattr(response, "response_metadata", {}) or {}
-usage = metadata.get("token_usage") or {}
-cost_data = usage.get("cost") or {}
-cost_usd = cost_data.get("total", 0)
-...
-token_details = usage.get("prompt_tokens_details") or {}
-cache_read = token_details.get("cached_tokens", 0)
+```
+tests/test_autopilot_api.py::TestProjectDesigns::test_design_status_includes_cost_total PASSED
+tests/test_autopilot_api.py::TestProjectDesigns::test_design_status_surfaces_budget_pause_reason PASSED
 ```
 
-Every level in the chain (`token_usage`, `cost`, `prompt_tokens_details`) now uses
-`.get(key) or {}` instead of `.get(key, {})`, which correctly falls back to `{}`
-whether the key is *missing* or *present with an explicit `None`*. Re-ran the exact
-failure sequence from Run 1:
+## Previously-reported WARNING/NIT items — also fixed in the same commit
 
-```python
-usage = {"prompt_tokens": 100, "completion_tokens": 20,
-         "prompt_tokens_details": None, "cost": {"total": 0.01}}
-cost_data = usage.get("cost") or {}          # {"total": 0.01}
-cost_usd = cost_data.get("total", 0)          # 0.01
-token_details = usage.get("prompt_tokens_details") or {}   # {} (no AttributeError)
-cache_read = token_details.get("cached_tokens", 0)          # 0
-```
+Not required for this re-verification pass (only the 2 blockers carried
+forward), but confirmed while reading the diff:
 
-No exception; `record_cost()` is reached and the `CostEntry` is written. This also
-resolves Run 1's WARNING (W1) about the debug/warning split misfiring on the expected
-"no cost" path — since `cost_data` can no longer be `None`, the silent `else` branch
-is reachable exactly when it should be.
+- **W1** (silent `$0` on cost-fetch failure): `DesignQueuePanel.tsx`'s
+  catch block now logs `console.error` and sets `costUnavailable: true`,
+  rendered as a "—" instead of a misleading `$0.00`.
+- **W2** (hardcoded $5 "expensive" threshold): `FeatureCostBadge.tsx` no
+  longer color-codes by an absolute dollar constant; always renders the
+  neutral blue badge.
+- **N2** (divide-by-zero on a $0 budget): `CostDisplay.tsx`'s
+  `progressPercent` now special-cases `costLimit === 0` to `100` instead of
+  computing `currentCost / 0`.
 
-A regression test was added: `TestInvokeAndRecord::test_null_prompt_tokens_details_still_writes_cost_entry`
-(`tests/test_cost_tracking.py:866`), asserting a `CostEntry` **is** still written when
-`prompt_tokens_details` is explicitly `None`. Full suite: 48 tests, all pass (up from
-47 in Run 1, the delta being this new test).
+## New issues found this pass
 
-## New findings this run
+None. `npx tsc --noEmit` shows only the same 6 pre-existing unused-import
+errors unrelated to this feature (`BudgetStatusCard.tsx`,
+`CostDisplay.tsx`'s unused `TrendingUp`, `DesignCostRow.tsx` x2,
+`ProjectCostSummary.tsx`, `Dashboard.tsx`'s unused `DollarSign`) — cosmetic
+lint noise, not logic defects, and pre-dating this phase's changes.
 
-None. Re-traced `_invoke_and_record` end-to-end (exception propagation, the
-`get_db()`/`record_cost()` transactional scope for leaks, the `set_log_context`
-contextvar usage for concurrency) and re-checked the previously-noted out-of-scope
-items (the `cost_derivation.record_cost` $1000 cap, the `model_name` fallback, the
-provider-dispatch conditional chain) — all unchanged from Run 1, all still correctly
-out of scope for this feature, no new issues found.
-
----
-
-## Summary
-
-`blocker_count: 0`, `warning_count: 0` (the one from Run 1 was resolved by the same
-fix), `nit_count: 2` carried forward for awareness only (no action requested, out of
-scope — see below).
-
-### NIT (carried forward, out of scope, unchanged)
-
-- **N1** — `model=metadata.get("model_name", component)` falls back to the component
-  string rather than `None`/`"unknown"` if `model_name` is ever absent from a
-  cost-bearing response. Unreachable in practice (OpenRouter always includes
-  `model_name` in `usage.include=true` responses).
-- **N2** — `_create_model_for_provider`'s `if/elif` chain across providers mixes
-  low-level per-provider details into one method rather than a per-provider strategy
-  object. Not touched by this feature; explicitly out of scope per `docs/architecture.md`.
+`DesignCostRow.tsx` remains unused dead code (previously flagged as NIT
+N1) — not re-raised as a blocking issue since it wasn't in the carried-
+forward findings and has no runtime impact.
