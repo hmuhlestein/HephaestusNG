@@ -364,7 +364,21 @@ def _pause_project_workflows(db: Session, project_id: str, paused_by: str) -> in
             agent.status = "terminated"
             agent.terminated_at = datetime.utcnow()
             agent.current_task_id = None
-            logger.info(f"[BUDGET] Terminated agent {agent.id[:8]}")
+            logger.info(f"[PAUSE] Terminated agent {agent.id[:8]}")
+
+        # Reset in-progress tasks back to pending so they get re-dispatched on resume
+        tasks_to_reset = (
+            db.query(Task)
+            .filter(
+                Task.workflow_id.in_(workflow_ids),
+                Task.status == "in_progress",
+            )
+            .all()
+        )
+        for task in tasks_to_reset:
+            task.status = "pending"
+            task.assigned_agent_id = None
+            logger.info(f"[PAUSE] Reset task {task.id[:8]} to pending")
 
         logger.info(f"[BUDGET] Paused {paused_count} workflows for project {project_id[:8]}")
     # No db.commit() here — caller handles transaction boundary
