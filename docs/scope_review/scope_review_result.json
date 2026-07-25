@@ -1,53 +1,66 @@
 {
-  "verdict": "PASS",
-  "feature": "Cost Tracking UI",
-  "feature_id": "des-91c8-cost-ui",
+  "feature": "des-91c8-opencode-collector",
   "design_doc": ".hephaestus/design.md",
-  "design_doc_sections_reviewed": [
-    "UI (lines 438-457)",
-    "Implementation Phase 7 - UI (lines 706-711)"
-  ],
   "requirements_doc": "docs/requirements_analysis.md",
-  "traceability": [
+  "verdict": "FAIL",
+  "summary": "Requirements correctly identify that the design's OpenCode section is technically stale (OpenCode now launches with -i, invalidating the stdout-JSON-capture mechanism the design preferred). That correction is well-supported by direct code verification and is not scope drift. However, FR1 silently overrides the design's explicit build/defer gate (design.md:695-699) despite the requirements doc's own verification confirming the gate condition for deferral is met. That is an unauthorized scope expansion, not a requirements-extraction error, so this is returned for correction rather than passed.",
+  "requirements_traced": [
     {
-      "requirement": "FR-1: Budget Indicator on Pipeline Status Surface",
-      "design_doc_lines": "445-452",
-      "status": "traced",
-      "notes": "Matches design's '$current / $limit' indicator with link to ProjectSettingsModal on the project-level status surface."
+      "requirement": "FR1 - Discover whether OpenCode is in use",
+      "design_lines": "695-699",
+      "status": "SCOPE_VIOLATION",
+      "detail": "Design phase 6 states: 'check config/workflows/autopilot/workflow.yaml and any phase_cli_tool overrides for whether cli_type: opencode is set on any live phase; if nothing in the current deployment uses it, this phase is dead weight and should stay deferred indefinitely rather than land speculatively.' The requirements doc's own verification (docs/requirements_analysis.md FR1) found zero cli_type/opencode overrides in any workflow YAML, and this repo's hephaestus_config.yaml default_cli_tool is 'claude', not 'opencode' -- i.e. the design's own stated deferral condition is met. FR1 then reinterprets 'in use' as 'configurable' and concludes 'Build it -- this is not gated on a workflow-file finding,' directly overriding the design's explicit instruction with no escalation or sign-off recorded. This expands scope beyond what the design doc authorizes."
     },
     {
-      "requirement": "FR-2: Per-Feature Cost Badge in Design Queue Panel",
-      "design_doc_lines": "706-711",
-      "status": "traced",
-      "notes": "Matches 'surfacing cost_total_usd on feature cards' from Implementation Phase 7."
+      "requirement": "FR2 - Correlate completed task to OpenCode session row via directory + time window",
+      "design_lines": "213-221, 562-571",
+      "status": "TRACED"
     },
     {
-      "requirement": "FR-3: Design-Level Cost Row (Deferred Judgment)",
-      "design_doc_lines": "706-711",
-      "status": "traced",
-      "notes": "Matches 'design rows' from Implementation Phase 7. Correctly deferred to architecture_design as a judgment call rather than forcing a new UI surface, consistent with CLAUDE.md 'no abstractions beyond what was asked'."
+      "requirement": "FR3 - Rewrite OpenCodeCollector to query the session table's pre-aggregated columns instead of a stdout JSON blob",
+      "design_lines": "195-211, 540-571",
+      "status": "TRACED",
+      "detail": "Design's option 2 fallback anticipated needing to map message/part rows; requirements doc found (via direct DB inspection) that the session table already carries pre-aggregated cost/token columns, making this simpler than the design's fallback envisioned. This is filling in the design's own flagged open question ('messier... needs the DB schema mapped out, which wasn't done in this research pass'), not new scope."
     },
     {
-      "requirement": "FR-4: Feature Cost in Design-Status API Response",
-      "design_doc_lines": "706-711",
-      "status": "traced",
-      "notes": "Design doc claims the field 'already flows through autopilot_api.py's existing report shape at line 2801' -- verified this is inaccurate: the feature dict built at autopilot_api.py:3055-3069 (within the get_project_design_status function starting line 2760, which does span line 2801) omits cost_total_usd. Design doc's intent (surface feature-level cost via existing plumbing, no new endpoint) is still correctly captured by FR-4; only the doc's factual aside about current state was wrong, not the requirement's scope."
+      "requirement": "FR4 - Wire the collect_task_cost() opencode branch to run the FR2/FR3 logic instead of a bare `pass`",
+      "design_lines": "695-705",
+      "status": "TRACED",
+      "detail": "Design directed implementing option 1 (stdout capture) with SQLite as fallback. Requirements doc's Critical Finding 0 (verified: OpenCodeAgent.get_launch_command now passes -i, cli_interface.py:465-485) shows option 1 is impossible under interactive mode -- a -i session never exits after one exchange, so there is no terminal stdout JSON blob. Going straight to the SQLite/session-table path is a justified consequence of that verified fact, not an addition to scope."
     },
     {
-      "requirement": "FR-5: Resolve BudgetPausedLabel Duplication",
-      "design_doc_lines": "453-457",
-      "status": "traced",
-      "notes": "Matches design's call to surface paused_by == 'budget' distinctly from generic 'Paused'. Requirements doc's claim that BudgetPausedLabel is 'never imported outside components/cost/' is inaccurate -- it IS imported in Dashboard.tsx:14 but never rendered there (dead import), so the underlying orphan/duplication problem the requirement addresses still holds. Does not change scope."
+      "requirement": "FR5 - Checkpointing / re-collection safety",
+      "design_lines": "540-548",
+      "status": "TRACED",
+      "detail": "Design assumed no checkpoint mechanism was needed at all, premised on one-shot invocation. Requirements doc correctly notes this premise is also affected by Finding 0, but independently confirms OpenCodeAgent never resumes a session (no session-id flag passed), so each session row still maps 1:1 to one agent launch and the existing SessionCostCheckpoint guard remains sufficient. No new tables/columns introduced, consistent with the design's 'no schema changes' NFR."
+    },
+    {
+      "requirement": "NFR - No new tables/columns; read-only DB access; path safety under ~/.local/share/opencode/; graceful absence; no timer-based collection",
+      "design_lines": "540-577, and general collector conventions established for pi/Claude Code earlier in the doc",
+      "status": "TRACED"
+    },
+    {
+      "requirement": "Codex out of scope",
+      "design_lines": "223-232, 712",
+      "status": "TRACED",
+      "detail": "Requirements doc correctly excludes Codex as an explicit non-goal, matching the design doc."
+    },
+    {
+      "requirement": "Backend direct OpenRouter calls (task enrichment/guardian/conductor usage.include)",
+      "design_lines": "234-249, 579-587, 692-694",
+      "status": "OUT_OF_SCOPE_CORRECTLY_EXCLUDED",
+      "detail": "Design lists this as a separate implementation-phase item (#5) from the OpenCode collector (#6). Requirements doc scopes this feature to OpenCode only and does not attempt this work -- correct, no drift."
     }
   ],
-  "design_requirements_not_covered": [],
-  "requirements_out_of_scope": [],
-  "verification_notes": [
-    "Confirmed via grep that FeatureCostBadge and DesignCostRow are unused outside components/cost/, as claimed.",
-    "Confirmed WorkflowCard.tsx:28 has inline paused_by === 'budget' logic, as claimed.",
-    "Confirmed ProjectSettingsModal.tsx already has working cost_limit_usd input wired to PUT /projects/{id} (lines 42, 304-356), as claimed -- correctly excluded from this feature's scope.",
-    "Confirmed autopilot_api.py's design-status feature dict (line ~3055-3069) omits cost_total_usd, as claimed by FR-4.",
-    "One inaccuracy found in requirements_analysis.md's narrative (BudgetPausedLabel import claim) -- factual error only, does not add or remove any requirement relative to design.md and does not affect the FR-5 scope statement."
+  "missing_from_requirements": [],
+  "additions_beyond_design": [
+    {
+      "item": "FR1's decision to build the OpenCode collector unconditionally, reframing the design's explicit workflow-config usage gate as non-binding.",
+      "design_reference": "design.md:695-699",
+      "severity": "high",
+      "recommendation": "Either (a) obtain explicit product/user sign-off to override the design's deferral instruction, recording that decision and its rationale, or (b) mark this feature deferred per the design's own gate criteria, since the requirements doc's own grep confirmed the deferral condition (cli_type: opencode unused in any workflow override, config default is claude) is currently met."
+    }
   ],
-  "summary": "All 5 functional requirements trace directly to the design doc's UI section (lines 438-457) and Implementation Phase 7 (lines 706-711). No requirements were invented beyond the design doc's scope, and no design doc UI requirements were dropped. The Non-Goals section correctly excludes task/workflow-level cost UI and a standalone cost dashboard, neither of which the design doc's UI section calls for. FR-3 and FR-5 are appropriately flagged as judgment calls for architecture_design rather than force-resolved here, consistent with the design doc's own ambiguity (either DesignQueuePanel or PipelineStatusCard for the indicator; BudgetPausedLabel not explicitly named in the design doc's UI section). Verdict: PASS -- scope has not drifted."
+  "action": "RETURN_TO_PRODUCT_REQUIREMENTS",
+  "correction_requested": "Resolve the FR1 gate conflict: docs/requirements_analysis.md must either document explicit sign-off to proceed despite the design's deferral condition being met, or revise the requirements to mark the feature deferred per design.md:695-699. All other requirements (FR2-FR5, NFRs, dependencies, exclusions) trace cleanly to the design doc and need no changes."
 }
