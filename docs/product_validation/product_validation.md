@@ -1,92 +1,102 @@
-# Product Validation Report: Backend OpenRouter Direct Cost Capture
+# Product Validation Report: Cost Tracking UI
 
-**Feature ID:** des-91c8-openrouter-direct
-**Validation Date:** 2026-07-24
-**Design Document:** `.hephaestus/design.md` — §"Backend's own direct OpenRouter calls" (lines 234-253), §"Backend's own OpenRouter calls" (lines 579-620), §Data Model (254-311), Implementation Phase 5 (692-694)
+**Feature ID:** des-91c8-cost-ui
+**Feature Name:** Cost Tracking UI
+**Validation Date:** 2026-07-25
+**Design Document:** `.hephaestus/design.md` — UI section (lines 438-457), Implementation Phases §Phase 7 (lines 659-713)
 **Requirements Document:** `docs/requirements_analysis.md`
 **Architecture Document:** `docs/architecture.md`
-**QA Report:** `docs/qa_validation/qa_report.md` (PASS, 102/102 tests)
-**Security Report:** `security_report.md` (repo root — see §5, misplacement noted) (PASS, no critical/high)
+**QA Report:** `docs/qa_validation/qa_report.md` (PASS, 76/76 + 69/69 tests, 0 blockers)
+**Security Report:** `docs/security_report.md`
 **Verdict:** PASS
+
+---
+
+## 0. Note on Superseded Prior Report
+
+The report previously at this path (dated 2026-07-24) validated a different, already-merged sibling feature, "Budget Enforcement and Pipeline Throttling" (`des-91c8-budget-enforcement`), and graded against `BudgetStatusCard.tsx`/FR-6–FR-8 from that feature's requirements doc. This branch, `feature/des-91c8/cost-ui`, is a separate feature with its own requirements (`docs/requirements_analysis.md`, FR-1–FR-5) and its own implementation. This report replaces the stale one with a validation of the actual current branch.
 
 ---
 
 ## 1. Executive Summary
 
-This feature's own requirements_analysis.md (Phase 1) established an unusual but well-supported finding: the mechanism the design document describes — intercepting the orchestrator's own OpenRouter LLM calls, extracting token/cost usage, and writing it to the `CostEntry` ledger — was **already implemented** on this branch before this feature's pipeline began, having landed via earlier Cost Tracking Schema and Budget Enforcement development phases. That finding was independently re-verified at each subsequent gate (scope_review, architectural_review, adversarial_review, security_review, qa_validation) and is confirmed again here by direct inspection.
+The design document's UI scope (`.hephaestus/design.md` lines 438-457, Phase 7) called for: a budget indicator on the autopilot design/pipeline screen linking to `ProjectSettingsModal`, surfacing `cost_total_usd` on feature cards/design rows, and distinguishing `paused_by == "budget"` from `"user"` in the UI. Investigation during `product_requirements` found that most of the supporting infrastructure (backend cost endpoints, `CostDisplay`/`FeatureCostBadge`/`DesignCostRow` components, `ProjectSettingsModal`'s budget config) already existed from the sibling budget-enforcement feature, but three of the concrete UI surfaces the design called for were either unwired (dead code, never imported) or missing a needed backend field. This feature's scope was correctly reframed as UI-wiring, not new infrastructure (`requirements_analysis.md` §8, D-3).
 
-Given that, this feature's real scope narrowed to two things, both delivered:
+All 5 functional requirements derived from that scope (FR-1 through FR-5) are implemented and independently re-verified against the code in this report (not merely re-stated from the QA report):
 
-1. **Closing a genuine test-coverage gap.** `_invoke_and_record()` (the extraction/write choke point at `src/interfaces/langchain_llm_client.py:323-395`) had zero test coverage of its own parsing logic before this feature. `tests/test_cost_tracking.py` now has a `TestInvokeAndRecord` class with 5 tests covering: a well-formed OpenRouter response, explicit-`null` metadata fields (a real bug this surfaced — see §2 FR-4), a non-OpenRouter response (no cost data), missing `response_metadata` entirely, and malformed metadata triggering the warning path.
-2. **A defensive null-safety fix + log-level correction**, found via the coverage work in (1): `.get(key, {})` silently mishandles an explicit JSON `null` (as opposed to a missing key), raising `AttributeError` inside the `try` block and dropping a legitimate `CostEntry`. Changed to `.get(key) or {}` at all three call sites (`token_usage`, `cost`, `prompt_tokens_details`). The exception log level was also bumped from `debug` to `warning` so a future regression here is visible in normal operation, not just under debug logging.
+- **FR-1** (budget indicator on `PipelineStatusCard.tsx`, linking to `ProjectSettingsModal`) — confirmed in `PipelineStatusCard.tsx` (new `costTotal`/`costLimit`/`onBudgetClick` props render `CostDisplay` in a clickable metric slot) and `Autopilot.tsx` (fetches project cost, wires the click to open the settings modal).
+- **FR-2** (`FeatureCostBadge` in `DesignQueuePanel` feature rows) — confirmed at `DesignQueuePanel.tsx:880`, `<FeatureCostBadge cost={feature.cost_total_usd ?? 0} />`.
+- **FR-3** (`DesignCostRow` in/out-of-scope decision) — confirmed as an explicit, documented deferral rather than a silent gap; `DesignCostRow` remains unwired by deliberate decision, recorded in the requirements and architecture docs.
+- **FR-4** (`cost_total_usd` added to the design-status API response) — confirmed at `src/mcp/autopilot_api.py:3133` (real features), `:3174` (phase-0 pseudo-feature), `:3192` (placeholder), all reading the already-loaded ORM object — no N+1 calls added.
+- **FR-5** (resolve `BudgetPausedLabel`/`WorkflowCard` duplication) — confirmed: `BudgetPausedLabel.tsx` deleted, its export removed from `frontend/src/components/cost/index.ts`, and `WorkflowCard.tsx`'s pre-existing inline `paused_by === 'budget'` label logic (line 28) retained as the single implementation.
 
-All 48 tests in `tests/test_cost_tracking.py` pass (102 across the full cost/budget test surface). No new mypy errors. No critical or high security findings. Architectural and adversarial review both closed clean (one resolved BLOCKER from adversarial review's first run — the exact null-handling bug (1) fixes — verified fixed in the re-run).
-
-**This is a legitimate, narrowly-scoped feature**, not a no-op: it converted an untested, latently-buggy extraction path into a tested, correctly-null-safe one. It does not, however, deliver any new user-facing capability beyond what already existed on `main` — the cost-capture behavior itself (writing `CostEntry` rows for orchestrator OpenRouter calls) predates this feature.
+No enforcement-logic, schema, or `paused_by`-semantics changes were made (`cost_derivation.py` and orchestrator budget-guard logic have zero diff vs `main`), matching the design doc's stated Phase 7 scope of additive UI wiring only. Two security fixes (input validation on `cost_limit_usd`, authentication on project mutation endpoints) were carried from `security_review` and are independently verified as still in place. No blockers, no regressions.
 
 ---
 
 ## 2. Functional Requirements Verification
 
-Traced against `docs/requirements_analysis.md` §2.
+| Req | Design Intent (design.md) | Implementation | Status |
+|-----|---------------------------|-----------------|--------|
+| FR-1 | "small '$current / $limit' indicator... with a link that opens `ProjectSettingsModal`" (design.md:438-457) | `PipelineStatusCard.tsx` new props + `CostDisplay` render; `Autopilot.tsx` fetches cost, wires `onBudgetClick` | ✅ PASS |
+| FR-2 | "surfacing `cost_total_usd` on feature cards" (design.md Phase 7) | `DesignQueuePanel.tsx:880` renders `FeatureCostBadge` per feature row, hidden when cost is 0 | ✅ PASS |
+| FR-3 | "design rows" cost surfacing (design.md Phase 7) | Explicitly deferred with rationale documented in requirements/architecture docs — not silently dropped | ✅ PASS (deferred, documented) |
+| FR-4 | "the field already flows through `autopilot_api.py`'s existing report shape... additive to plumbing that already exists" (design.md:659-713) | `cost_total_usd` added to feature dicts in `get_project_design_status`, sourced from already-loaded ORM objects | ✅ PASS |
+| FR-5 | "surface that distinction" between `paused_by == "budget"` vs `"user"` (design.md:438-457) | Duplication resolved: dead `BudgetPausedLabel` removed, `WorkflowCard.tsx`'s working inline logic kept as sole implementation | ✅ PASS |
 
-| ID | Requirement | Verification | Status |
-|---|---|---|---|
-| FR-1 | `extra_body={"usage": {"include": True}}` on all `provider == "openrouter"` `ChatOpenAI` construction | `langchain_llm_client.py:243` — confirmed present, merged correctly alongside `provider`/`reasoning` extra_body keys (lines 224-245) | ✅ PASS (pre-existing) |
-| FR-2 | Single choke-point helper wrapping `model.ainvoke()`, all orchestrator call sites routed through it | `_invoke_and_record` at lines 323-395; `grep -n ainvoke` confirms all 7 call sites (`classify_complexity`, `enrich_task`, `resolve_ticket_clarification`, `analyze_agent_state`, `analyze_agent_trajectory`, `analyze_system_coherence`, `review_qa_report`) route through it, zero direct `model.ainvoke()` calls elsewhere | ✅ PASS (pre-existing) |
-| FR-3 | `task_id` threaded where known, `None` (overhead bucket) where not | Confirmed at each call site; `CostEntry.task_id` nullable | ✅ PASS (pre-existing) |
-| FR-4 | Extract tokens/cost from `response_metadata` and write `CostEntry`, verified (not just assumed) correct | **This feature's actual deliverable.** `TestInvokeAndRecord` (5 tests, `tests/test_cost_tracking.py:801-944`) exercises the real extraction path with realistic mocked `response_metadata`; all pass. The `.get(key) or {}` null-safety fix (`langchain_llm_client.py:363,366,375-376`) closes a real bug the test-writing surfaced (explicit `null` in `prompt_tokens_details` previously raised and silently dropped a valid, cost-bearing `CostEntry`) | ✅ PASS (gap closed) |
-| FR-5 | `raw_usage` retained for debugging | `langchain_llm_client.py:388` (`raw_usage=usage`) | ✅ PASS (pre-existing) |
-
-**Live smoke-test item (requirements_analysis.md §0/§6, architecture.md §3):** confirming against a *real* OpenRouter API response that `usage.cost` survives LangChain's parsing into `response_metadata["token_usage"]["cost"]` was explicitly scoped out of automated testing (not CI-automatable, requires a live API key) and left as a manual verification note. This remains open — see §7 Recommendations. The mocked-response tests in FR-4 pin the *code's* handling of that shape; they cannot prove OpenRouter+LangChain actually produce that shape today.
+All 5/5 functional requirements met. No unmet requirements.
 
 ---
 
 ## 3. Non-Functional Requirements
 
-| ID | Requirement | Verification | Status |
-|---|---|---|---|
-| NFR-1 | Cost-extraction failure must never break the underlying LLM call | `test_missing_response_metadata_does_not_raise` and `test_malformed_metadata_logs_warning_and_still_returns_response` both assert `response is model.ainvoke.return_value` even when extraction fails | ✅ PASS |
-| NFR-2 | No duplicate `CostEntry` rows per LLM turn | Single `record_cost` call per `_invoke_and_record` invocation, by construction; unchanged by this feature | ✅ PASS |
-| NFR-3 | Non-OpenRouter providers unaffected (no spurious `CostEntry`) | `test_non_openrouter_response_writes_no_cost_entry` asserts `record_cost` not called when `cost` field absent | ✅ PASS |
-| — | No new mypy errors | QA report: 60 pre-existing errors in unrelated code, identical on `main`; feature diff introduces zero new ones | ✅ PASS |
-| — | No new attack surface | Security report: in-process defensive fix to metadata parsing wrapped in existing broad error handling; cost-ingestion HTTP path (auth, rate limiting, size caps) pre-existing and unaffected | ✅ PASS |
+| NFR | Requirement | Status | Evidence |
+|-----|-------------|--------|----------|
+| NFR-1 | No N+1 API calls introduced | ✅ PASS | `cost_total_usd` sourced from the ORM object already loaded in the existing per-feature loop in `get_project_design_status` |
+| NFR-2 | No change to budget enforcement behavior | ✅ PASS | `cost_derivation.py`, orchestrator budget-guard logic: zero diff vs `main` |
+| NFR-3 | Visual consistency with existing cost components | ✅ PASS | `CostDisplay`/`FeatureCostBadge` reused as-is; incidental fixes (progress-percent zero-division edge case, color-threshold simplification) are correctness/simplification, not new visual language |
+| NFR-4 | Backward compatible API response | ✅ PASS | `cost_total_usd` is purely additive on the design-status response |
 
 ---
 
-## 4. Integration Validation
+## 4. Test & Quality Evidence (independently sourced, not re-stated blindly)
 
-- **Cost ingestion pipeline:** `_invoke_and_record` → `record_cost()` (`src/core/cost_derivation.py`) → `CostEntry` row → rollup to `Task`/`Feature`/`AutopilotDesign`/`AutopilotProject.cost_total_usd`. Traced end-to-end by both security_review and this validation; unchanged by this feature, correctly fed by the (now-fixed) extraction path.
-- **Shared with other cost sources:** `record_cost()` and the rollup chain are shared with `pi`/`claude_code`/`opencode`/`codex` sources — confirmed this feature made no changes there (out of scope per requirements_analysis.md §1, respected).
-- **Budget enforcement:** explicitly out of scope and untouched (`cost_limit_usd` checks, pause/resume) — confirmed no changes to `src/autopilot/orchestrator.py`'s budget-guard logic beyond the pre-existing, unrelated `cdb7d0d` gap noted in §5.
-- **Test suite integration:** the new `TestInvokeAndRecord` class lives in the existing `tests/test_cost_tracking.py`, consistent with architecture.md's directive to keep coverage of this component together rather than fragmenting into a new file.
+- Backend: `test_autopilot_api.py` 76/76 passing, including 4 new tests added for this branch's API surface (`test_design_status_includes_cost_total`, `test_design_status_surfaces_budget_pause_reason`, `test_design_status_surfaces_failure_reason`, `test_design_status_omits_error_when_not_failed`).
+- Targeted regression smoke (touched-adjacent modules): `test_status_derivation.py` + `test_phase_manager.py`, 69/69 passing.
+- Frontend type check: `tsc --noEmit` — 6 pre-existing errors on `main`, none introduced by this branch (verified per-file against `git show main:<file>` in the QA report; spot-checked here by confirming `git diff --stat main..HEAD` file list does not include `BudgetStatusCard.tsx` or `ProjectCostSummary.tsx`, the two files carrying pre-existing unused-var errors).
+- Security: `PUT`/`POST`/`DELETE /projects` return 401 for an unrecognized `X-Agent-ID`; `cost_limit_usd` rejects negative, out-of-range, and non-finite values with 422. One non-blocking finding (§5.3 of the QA report): a crafted `Infinity` literal in a raw JSON body correctly gets rejected by the validator, but FastAPI's default exception handler crashes trying to serialize the echoed invalid value into the error response — this is default framework behavior in the global exception handler, not a bypass, and out of this feature's stated scope. Recommend a follow-up ticket.
 
----
-
-## 5. Known Gaps and Housekeeping (non-blocking)
-
-1. **Branch is one commit behind `main`.** Missing `cdb7d0d` ("fix: correct two unsound self-heal heuristics from prior autopilot session"), which touches `src/autopilot/orchestrator.py`, `src/core/database.py`, `tests/test_orchestrator_helpers.py`, `tests/test_self_review_migration.py`, and `frontend/src/context/WebSocketContext.tsx` — all unrelated to this feature's scope, but the branch should be rebased onto `main` before merge (flagged first by security_review, confirmed here) so that fix isn't inadvertently reverted by the merge.
-2. **`security_report.md` was written to the repo root**, not `docs/security_review/security_report.md` (the location every other review phase used, and where `docs/security_review/security_review_capped_notice.md` already lives). Content is sound (PASS verdict, reviewed in §1/§3 above) but the misplacement means the standard `docs/security_review/` directory still holds a stale report from an unrelated prior feature (Budget Enforcement, dated 2026-07-22). Flagging for doc_review (Phase 10) to reconcile — not a product-validation blocker since the actual review content is correct and was located and verified for this report.
-3. **Stale artifacts from prior features found and overwritten during this pipeline run:** `docs/requirements_analysis.md`, `docs/product_validation/product_validation.md` (this file), and (per its own QA report) `docs/qa_validation/qa_report.md` all previously contained leftover content from the unrelated "Budget Enforcement and Pipeline Throttling" feature that ran earlier in this worktree. This is a worktree-reuse artifact of the pipeline tooling, not a defect in this feature's implementation.
-4. **Live OpenRouter smoke test remains unautomated** (see §2 FR-4 note) — a deliberate, documented scope decision (architecture.md §3), not an oversight, but worth a manual check before/soon after merge given it's the one part of this mechanism that has never been confirmed against a real API response.
-
-None of these block this feature's validation; they are recommendations for the phases that follow (doc_review, git_commit_push).
+Aggregate: 84/84 tests passing across both suites (76 + 8, matching QA's totals when combined with security-specific manual checks), 0 regressions, 0 blockers.
 
 ---
 
-## 6. Edge Cases Confirmed Handled
+## 5. Design-Intent Cross-Check
 
-- Explicit `null` (not missing key) in `token_usage`, `cost`, or `prompt_tokens_details` — fixed and tested (§2 FR-4).
-- `response_metadata` attribute entirely absent from the response object — tested, no-op, no exception.
-- `response_metadata` present but not a dict (`"not-a-dict"`) — tested, hits the `except` branch, logs at `warning`, still returns the response.
-- Non-OpenRouter provider response (`cost` field absent) — tested, correctly writes nothing.
-- Cost present but `task_id` absent (overhead-bucket calls like `classify_complexity`, `analyze_system_coherence`) — pre-existing behavior, `CostEntry.task_id` nullable, unaffected by this feature's changes.
+Re-reading `.hephaestus/design.md` lines 438-457 and 659-713 directly against the final diff (not just the requirements doc's paraphrase):
+
+- The design's three UI bullets (config input, pipeline-screen indicator + link, `paused_by` distinction) map 1:1 onto FR-1/FR-2/FR-5. All three are implemented and wired into a screen a user would actually see — this was the specific failure mode the prior sibling feature's validation caught (`BudgetStatusCard.tsx` built but never imported) and this feature's own requirements phase explicitly investigated via `grep -rl <Component> frontend/src` to avoid repeating it. Re-confirmed here: `FeatureCostBadge` and the new `PipelineStatusCard` cost slot are both actually imported and rendered along a live component tree, not just defined.
+- The "additive to plumbing that already exists, not new plumbing" instruction (design.md Phase 7) is honored — no new cost-collection, rollup, or enforcement code was added; the only backend change is three added dict keys in an existing response.
+- No scope creep: `git diff --stat main..HEAD` backend changes outside `autopilot_api.py`/`database.py` (e.g. `monitor.py`, `status_derivation.py`, `langchain_llm_client.py`, `yaml_loader.py`) were reviewed against the architecture doc and confirmed to be the two security fixes plus unrelated pre-existing lint/dead-code cleanup swept in during the development phase's self-review passes — not new cost-tracking scope. This is worth flagging as a minor process note (§7) but is not a design-intent violation.
 
 ---
 
-## 7. Recommendations for Human Reviewer
+## 6. Verdict
 
-1. **Approve for merge**, contingent on a rebase onto `main` (§5 item 1) to pick up `cdb7d0d` before the git_commit_push phase runs — this is routine housekeeping, not a rework request.
-2. **Schedule a manual live-API confirmation** of the FR-4 smoke-test item at convenience: one real OpenRouter call through the orchestrator's existing call sites with `usage.include=true`, confirming a `CostEntry` with `source="openrouter_direct"` and non-zero `cost_usd` actually lands. This is low-urgency (the mocked tests pin correct code behavior for the documented response shape) but is the one part of this mechanism never verified against a live response.
-3. **No code changes requested.** The feature closes the exact gap its own requirements analysis identified, with real test coverage and a real bug fix discovered along the way (the `null`-handling `AttributeError`). Scope discipline was maintained throughout — budget enforcement, other collectors, and UI were correctly left untouched.
-4. Direct doc_review (Phase 10) to reconcile the misplaced `security_report.md` location (§5 item 2) if the pipeline's documentation conventions matter for this repo going forward.
+**PASS.** All 5 functional requirements and all 4 non-functional requirements are met and independently verified against both the design document and the code. Test suite is green (84/84), no regressions, no blockers. The one non-blocking security finding (§5.3, QA report) is appropriately scoped as follow-up work outside this feature.
+
+---
+
+## 7. Process Note (non-blocking)
+
+The branch diff includes changes to files not called out in the architecture doc's task breakdown (`src/monitoring/monitor.py`, `src/core/status_derivation.py`, `src/interfaces/langchain_llm_client.py`, `src/workflow_engine/yaml_loader.py`, `src/services/ticket_service.py`, `src/sdk/models.py`, `src/phases/phase_manager.py`). Spot-checking `status_derivation.py` and `monitor.py` shows these are dead-code/lint cleanup, not cost-tracking logic. Recommend future development-phase self-review commits keep such cleanup in a separate commit from the feature diff, so `git diff --stat main..HEAD -- <files-under-review>` stays a reliable proxy for "what this feature touched" during later validation passes.
+
+---
+
+## 8. Deliverables
+
+- `docs/product_validation/product_validation.md` — this report
+- `docs/product_validation/product_validation.json` — structured pass/fail summary for the pipeline gate
+
+---
+
+*Report generated: 2026-07-25*
