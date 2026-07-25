@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Feature Report: Backend OpenRouter Direct Cost Capture</title>
+    <title>Feature Report: Cost Tracking UI</title>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body {
@@ -31,102 +31,97 @@
             letter-spacing: 0.05em;
             margin-bottom: 0.5rem;
         }
-        .summary-card .value { font-size: 2rem; font-weight: 700; }
-        .summary-card .value.success { color: #22c55e; }
-        .summary-card .value.warning { color: #f59e0b; }
-        .summary-card .value.info { color: #3b82f6; }
-        .summary-card .value.danger { color: #ef4444; }
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            background: white;
-            border-radius: 8px;
-            overflow: hidden;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-        }
+        .summary-card .value { font-size: 1.75rem; font-weight: 700; color: #0f172a; }
+        .pass { color: #16a34a; }
+        .fail { color: #dc2626; }
+        table { width: 100%; border-collapse: collapse; background: white; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
         th, td { text-align: left; padding: 0.75rem 1rem; border-bottom: 1px solid #e2e8f0; }
         th { background: #f1f5f9; font-size: 0.85rem; text-transform: uppercase; color: #64748b; }
         tr:last-child td { border-bottom: none; }
-        .badge {
-            display: inline-block;
-            padding: 0.15rem 0.6rem;
-            border-radius: 999px;
-            font-size: 0.8rem;
-            font-weight: 600;
-        }
-        .badge.pass { background: #dcfce7; color: #15803d; }
-        .badge.none { background: #dcfce7; color: #15803d; }
-        .badge.low { background: #fef9c3; color: #854d0e; }
+        .badge { display: inline-block; padding: 0.2rem 0.6rem; border-radius: 999px; font-size: 0.8rem; font-weight: 600; }
+        .badge-pass { background: #dcfce7; color: #166534; }
+        .badge-deferred { background: #fef9c3; color: #854d0e; }
         code { background: #f1f5f9; padding: 0.15rem 0.4rem; border-radius: 4px; font-size: 0.9em; }
-        ul { margin-left: 1.5rem; margin-bottom: 0.5rem; }
-        p { margin-bottom: 0.75rem; }
+        ul { margin-left: 1.5rem; margin-bottom: 1rem; }
+        .note { background: #eff6ff; border-left: 4px solid #3b82f6; padding: 1rem; border-radius: 4px; margin-bottom: 1.5rem; }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>Backend OpenRouter Direct Cost Capture</h1>
-        <div class="meta">Feature ID: des-91c8-openrouter-direct &middot; Branch: feature/des-91c8/openrouter-direct &middot; Report generated 2026-07-24</div>
+        <h1>Feature Report: Cost Tracking UI</h1>
+        <p class="meta">Generated: 2026-07-25 | Feature ID: des-91c8-cost-ui | Workflow ID: 33f63b4c-1641-4a06-b42d-d3bf1db28958 | Branch: feature/des-91c8/cost-ui</p>
 
         <div class="summary-grid">
             <div class="summary-card">
                 <h3>Verdict</h3>
-                <div class="value success">Pass</div>
+                <div class="value pass">PASS</div>
             </div>
             <div class="summary-card">
-                <h3>Critical / High findings</h3>
-                <div class="value success">0</div>
+                <h3>Functional Requirements</h3>
+                <div class="value">5 / 5</div>
             </div>
             <div class="summary-card">
-                <h3>Files changed</h3>
-                <div class="value info">2</div>
+                <h3>Tests Passing</h3>
+                <div class="value">76/76 + 69/69</div>
             </div>
             <div class="summary-card">
-                <h3>New tests</h3>
-                <div class="value success">4</div>
+                <h3>Blockers</h3>
+                <div class="value pass">0</div>
             </div>
+        </div>
+
+        <div class="note">
+            This feature wires four already-built cost display components — built but never imported by the
+            sibling <strong>Budget Enforcement</strong> feature — into three live screens, and adds one
+            additive backend field. No new cost computation, schema, or enforcement logic was added.
         </div>
 
         <h2>Summary</h2>
         <p>
-            Requirements analysis found that the direct OpenRouter cost-capture
-            mechanism &mdash; intercepting orchestrator LLM calls, extracting
-            token/cost usage, and writing <code>CostEntry</code> rows &mdash;
-            was already built by earlier features on this branch. This feature's
-            actual scope narrowed to closing the two gaps that analysis found:
-            no test coverage of the extraction logic, and an over-broad
-            exception handler that logged real bugs at <code>debug</code>
-            level (invisible by default).
+            The design document's UI scope called for a budget indicator on the autopilot pipeline screen linking
+            to <code>ProjectSettingsModal</code>, surfacing <code>cost_total_usd</code> on feature cards, and
+            distinguishing <code>paused_by == "budget"</code> from <code>"user"</code> in the UI. All three were
+            found unwired or missing a supporting backend field, despite the underlying components and endpoints
+            already existing from the merged Budget Enforcement feature. This feature closes that visibility gap.
         </p>
 
-        <h2>Changes</h2>
+        <h2>Functional Requirements</h2>
         <table>
-            <tr><th>File</th><th>Change</th></tr>
-            <tr>
-                <td><code>src/interfaces/langchain_llm_client.py</code></td>
-                <td>Null-safety fix in <code>_invoke_and_record()</code>: <code>.get(key, {})</code> &rarr; <code>.get(key) or {}</code> for <code>token_usage</code>, <code>cost</code>, and <code>prompt_tokens_details</code>, so an explicit JSON <code>null</code> doesn't crash the chain. Log level on extraction failure raised from <code>debug</code> to <code>warning</code>.</td>
-            </tr>
-            <tr>
-                <td><code>tests/test_cost_tracking.py</code></td>
-                <td>New <code>TestInvokeAndRecord</code> class: happy path, no-cost path (non-OpenRouter shape), missing <code>response_metadata</code>, and malformed/null metadata fields.</td>
-            </tr>
+            <tr><th>Req</th><th>Description</th><th>Status</th></tr>
+            <tr><td>FR-1</td><td>Budget indicator on <code>PipelineStatusCard.tsx</code>, linking to <code>ProjectSettingsModal</code></td><td><span class="badge badge-pass">PASS</span></td></tr>
+            <tr><td>FR-2</td><td><code>FeatureCostBadge</code> wired into <code>DesignQueuePanel</code> feature rows</td><td><span class="badge badge-pass">PASS</span></td></tr>
+            <tr><td>FR-3</td><td>Design-level cost row — evaluated, explicitly deferred (no matching UI surface)</td><td><span class="badge badge-deferred">DEFERRED</span></td></tr>
+            <tr><td>FR-4</td><td><code>cost_total_usd</code> added to the design-status API response</td><td><span class="badge badge-pass">PASS</span></td></tr>
+            <tr><td>FR-5</td><td>Resolve <code>BudgetPausedLabel</code>/<code>WorkflowCard</code> duplication</td><td><span class="badge badge-pass">PASS</span></td></tr>
         </table>
 
-        <h2>Pipeline results</h2>
+        <h2>Key Changes</h2>
+        <ul>
+            <li><code>PipelineStatusCard.tsx</code> — new <code>costTotal</code>/<code>costLimit</code>/<code>onBudgetClick</code> props render <code>CostDisplay</code> in a clickable metric slot.</li>
+            <li><code>Autopilot.tsx</code> — fetches project cost, wires the click to open the settings modal.</li>
+            <li><code>DesignQueuePanel.tsx</code> — renders <code>FeatureCostBadge</code> per feature row, sourced from the design-status response (no per-row fetch).</li>
+            <li><code>autopilot_api.py</code> (<code>get_project_design_status</code>) — adds <code>cost_total_usd</code> to feature dicts and a derived design-level sum, from already-loaded ORM data.</li>
+            <li><code>BudgetPausedLabel.tsx</code> deleted — dead code, superseded by <code>WorkflowCard.tsx</code>'s existing inline label logic.</li>
+        </ul>
+
+        <h2>Quality Gates</h2>
         <table>
-            <tr><th>Phase</th><th>Result</th></tr>
-            <tr><td>Scope review</td><td><span class="badge pass">Pass</span></td></tr>
-            <tr><td>Architectural review</td><td><span class="badge pass">Pass</span></td></tr>
-            <tr><td>Adversarial review</td><td><span class="badge pass">Pass</span></td></tr>
-            <tr><td>Security review</td><td><span class="badge pass">Pass &mdash; 0 critical/high, 1 low (ticketed, out of scope)</span></td></tr>
-            <tr><td>QA validation</td><td><span class="badge pass">Pass</span></td></tr>
-            <tr><td>Product validation</td><td><span class="badge pass">Pass</span></td></tr>
+            <tr><th>Gate</th><th>Result</th></tr>
+            <tr><td>Backend tests (<code>test_autopilot_api.py</code>)</td><td>76/76 passing (4 new)</td></tr>
+            <tr><td>Regression smoke (<code>test_status_derivation.py</code>, <code>test_phase_manager.py</code>)</td><td>69/69 passing</td></tr>
+            <tr><td>Frontend type check (<code>tsc --noEmit</code>)</td><td>No new errors (6 pre-existing on <code>main</code>, unrelated files)</td></tr>
+            <tr><td>Security review</td><td>PASS — input validation + auth fixes verified in place</td></tr>
+            <tr><td>Product validation</td><td>PASS — design-intent cross-check confirmed</td></tr>
+            <tr><td>Documentation review</td><td>PASS — this report</td></tr>
         </table>
 
-        <h2>Out of scope</h2>
-        <p>Budget enforcement guards, Claude Code/OpenCode/Codex collector implementations, Pi extension changes, UI budget configuration, and any change to <code>CostEntry</code> schema or rollup derivation &mdash; all pre-existing and unaffected by this feature.</p>
-
-        <h2>Open items</h2>
-        <p>One low-severity finding from security review: <code>record_cost()</code> doesn't enforce the <code>raw_usage</code>/<code>model</code> size caps at the function level (only the HTTP endpoint's Pydantic validator does). Filed as <code>ticket-c07312d3-3243-4650-bf52-e5773c7ce738</code>, not currently exploitable since the data originates from OpenRouter (a trusted source), not attacker input.</p>
+        <h2>Non-Goals</h2>
+        <ul>
+            <li>No new cost computation, schema, or enforcement logic (owned by the merged Budget Enforcement feature)</li>
+            <li>No task-level or workflow-level cost UI</li>
+            <li>No standalone cost/spend analytics dashboard</li>
+            <li>No real-time/streaming cost updates</li>
+        </ul>
     </div>
 </body>
 </html>
