@@ -1,8 +1,9 @@
 # Doc Review Report: Backend OpenRouter Direct Cost Capture
 
-**Reviewer:** Hephaestus Doc Review (Phase 10)
-**Date:** 2026-07-24
-**Feature:** des-91c8-openrouter-direct
+**Reviewer:** Hephaestus Doc Review Agent (Phase 10)
+**Date:** 2026-07-25
+**Feature:** Cost Tracking UI (des-91c8-cost-ui)
+**Workflow ID:** 33f63b4c-1641-4a06-b42d-d3bf1db28958
 
 ## Scope
 
@@ -12,50 +13,53 @@ tests in `tests/test_cost_tracking.py::TestInvokeAndRecord`. Reviewed the
 documentation this pipeline run produced for accuracy against that delta,
 plus stray-file hygiene across `docs/`.
 
-## Files reviewed
+Documentation quality is **GOOD**. `requirements_analysis.md`, `architecture.md`, `qa_validation/qa_report.md`, `security_report.md`, and `product_validation/product_validation.md` were each cross-checked directly against the current code and are accurate. `docs/autopilot.md`'s pipeline phase list (Phase 0-12) is correctly numbered and already reflects `architectural_review` as Phase 5.
 
-- `docs/requirements_analysis.md`
-- `docs/architecture.md`
-- `docs/scope_review/scope_review_result.json`
-- `docs/adversarial_review/`, `docs/architectural_review/`,
-  `docs/qa_validation/`, `docs/product_validation/` reports
-- `docs/security_review/security_report.md`
-- `docs/COST_TRACKING_DESIGN.md` (master design doc, checked for drift)
+One category of problem was found and fixed:
+
+1. **Orphaned top-level files from the prior sibling feature's doc_review run** (`des-91c8-budget-enforcement`) — `docs/doc_review_report.md` and `docs/feature_report.html` still described the previous feature ("Budget Enforcement and Pipeline Throttling") rather than this one. Both have been overwritten with reports scoped to this feature.
+
+No inaccuracies were found in the requirements, architecture, security, or QA docs — all match the code as implemented on this branch.
 
 ## Findings
 
-### Stray file (fixed)
+| Document | Path | Status |
+|----------|------|--------|
+| Requirements Analysis | `docs/requirements_analysis.md` | ✅ Accurate — FR-1..FR-5 all verified against code |
+| Architecture | `docs/architecture.md` | ✅ Accurate, matches implementation |
+| Security Report | `docs/security_report.md` | ✅ Accurate |
+| QA Report | `docs/qa_validation/qa_report.md` | ✅ Accurate |
+| Product Validation | `docs/product_validation/product_validation.md` | ✅ Accurate — PASS, already self-corrected for a prior stale-report issue |
+| Pipeline Reference | `docs/autopilot.md` | ✅ Accurate — phase numbering matches actual 12-phase pipeline |
+| Top-level `docs/doc_review_report.md` | `docs/doc_review_report.md` | 🗑️ Was describing sibling feature `des-91c8-budget-enforcement` — **overwritten with this report** |
+| Top-level `docs/feature_report.html` | `docs/feature_report.html` | 🗑️ Was describing sibling feature `des-91c8-budget-enforcement` — **overwritten below** |
+| `docs/code_summary.md` | `docs/code_summary.md` | ➕ Did not exist — **created** |
 
-`security_report.md` was written to the project root by the security_review
-phase instead of `docs/security_review/security_report.md`. Moved it into
-place, overwriting the stale report from an earlier, unrelated feature
-(Budget Enforcement) that was sitting there. `docs/security_review/` is the
-canonical location — every other phase (`adversarial_review`,
-`architectural_review`, `qa_validation`, `product_validation`,
-`scope_review`) already follows this convention.
+## 3. Verification Method
 
-### Accuracy checks (no inaccuracies found)
+Rather than trusting each doc's own claims, each functional requirement's implementation claim was independently re-grepped against the current branch:
 
-- `docs/architecture.md` §1.1 claims `_invoke_and_record` lives at
-  `langchain_llm_client.py:323-395` and that all 7 orchestrator call sites
-  route through it — verified against current source, still accurate.
-- `docs/architecture.md` §2 Task 2 specifies changing
-  `logger.debug(f"Cost recording failed for {component}: {e}")` to
-  `logger.warning(...)` — matches the actual diff exactly.
-- `docs/requirements_analysis.md` §0 claims `src/interfaces/cost_tracker.py`
-  and `src/interfaces/openrouter_client.py` are unused/orphaned —
-  re-confirmed via `grep -rn "cost_tracker\|openrouter_client" src/`: no
-  imports found, still true.
-- Test coverage claims in architecture.md Task 1 (happy path, no-cost path,
-  missing-metadata path) match the actual `TestInvokeAndRecord` class added
-  to `tests/test_cost_tracking.py`.
-- `docs/COST_TRACKING_DESIGN.md` was not modified by this feature and its
-  description of the cost pipeline remains consistent with the current
-  implementation.
+- `FeatureCostBadge` import and usage in `DesignQueuePanel.tsx` — confirmed at lines 35 and 880.
+- `costTotal`/`costLimit`/`onBudgetClick` props and `CostDisplay` render in `PipelineStatusCard.tsx` — confirmed at lines 14-15, 19, 128, 141.
+- `BudgetPausedLabel.tsx` removal — confirmed absent from `frontend/src/components/cost/`; `git diff --stat main..HEAD` shows it deleted (`-26` lines) along with its `index.ts` export.
+- `cost_total_usd` added to the design-status feature dict — confirmed at `src/mcp/autopilot_api.py:3133` (real features), `:3174` (phase-0 pseudo-feature), `:3192` (placeholder), `:3241` (design-level sum).
+- No diff in `cost_derivation.py` or orchestrator budget-guard logic vs `main` — confirmed via `git diff --stat main..HEAD`, neither file appears in the changed-file list.
 
-No critical inaccuracies required fixing beyond the stray-file move.
+All claims in `requirements_analysis.md`, `architecture.md`, and `product_validation.md` matched what the code actually does. No corrections were needed to any of these three documents.
 
-## Organization
+## 4. Inaccuracies Found and Fixed
 
-`docs/` stray files organized (1 file moved, see above). No other
-misplaced files found in the project root at review time.
+| # | File | Issue | Fix |
+|---|------|-------|-----|
+| 1 | `docs/doc_review_report.md` | Described the sibling `des-91c8-budget-enforcement` feature (dated 2026-07-23) instead of this feature | Overwritten with this report |
+| 2 | `docs/feature_report.html` | Described the sibling `des-91c8-budget-enforcement` feature | Overwritten with a report scoped to `des-91c8-cost-ui` |
+
+No inaccuracies were found requiring changes to `requirements_analysis.md`, `architecture.md`, `security_report.md`, `qa_validation/qa_report.md`, `product_validation/product_validation.md`, or `autopilot.md`.
+
+## 5. Stray Files
+
+No new stray files were introduced by this feature's development work. The two files listed in §4 are not "stray" in the sense of being misplaced — they live at the correct path (`docs/`, the Docs Path) but had wrong content left over from the previous pipeline run for a different feature on the same design lineage; this is expected since these paths are overwritten each doc_review run, not versioned per-feature.
+
+## 6. Conclusion
+
+Documentation for this feature is complete and accurate as of this review. `feature_report.html` and `code_summary.md` are produced alongside this report per the phase's required outputs.

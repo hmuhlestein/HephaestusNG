@@ -1,54 +1,41 @@
-# Code Summary: Backend OpenRouter Direct Cost Capture
+# Code Summary: Cost Tracking UI
 
-**Feature ID:** des-91c8-openrouter-direct
-**Date:** 2026-07-24
+**Feature ID:** des-91c8-cost-ui
+**Branch:** `feature/des-91c8/cost-ui`
 
-## What changed
+## What this feature does
 
-The direct OpenRouter cost-capture mechanism (intercepting orchestrator LLM
-calls, extracting token/cost usage, writing `CostEntry` rows) already existed
-on this branch from earlier features. This feature closed the two gaps
-identified in `docs/requirements_analysis.md` §0: missing test coverage and
-an over-broad exception handler.
+Wires four already-built, previously-orphaned cost display components into three live screens, and adds one additive backend field to unblock per-feature cost display. No new cost computation, schema, or enforcement logic — the data pipeline was built and merged by the sibling "Budget Enforcement" feature; this feature is display-only wiring.
 
-### `src/interfaces/langchain_llm_client.py`
+## Changed files
 
-`_invoke_and_record()` — the single choke point wrapping every orchestrator
-`model.ainvoke()` call:
+### Backend
 
-- `metadata.get("token_usage", {})` → `metadata.get("token_usage") or {}`,
-  and the same pattern for `usage.get("cost", {})` and
-  `usage.get("prompt_tokens_details", {})`. Fixes a bug where an explicit
-  JSON `null` (as opposed to a missing key) in OpenRouter's response would
-  crash the `.get()` chain — `{}.get(...)` on `None` raises `AttributeError`,
-  which the surrounding `try/except` swallows silently.
-- `logger.debug(...)` → `logger.warning(...)` on extraction/write failure, so
-  a real bug (e.g. a LangChain response-shape change) surfaces in normal
-  logs instead of only under debug logging.
+- **`src/mcp/autopilot_api.py`** — `get_project_design_status` (feeds `DesignQueuePanel`) now includes `cost_total_usd` on each feature dict (real features, phase-0 pseudo-feature, and placeholder rows) and a derived design-level `cost_total_usd` sum. Sourced from the already-loaded ORM object — no new query. Also carries two security fixes from `security_review`: input validation on `cost_limit_usd` and authentication on project mutation endpoints.
+- **`src/core/database.py`** — minor supporting change for the above (no schema change).
 
-### `tests/test_cost_tracking.py`
+### Frontend
 
-New `TestInvokeAndRecord` class covering `_invoke_and_record`'s extraction
-logic directly (previously only `CostEntry`/`record_cost`/rollup were
-tested, never the extraction path itself):
+- **`frontend/src/components/autopilot/PipelineStatusCard.tsx`** — new `costTotal`/`costLimit`/`onBudgetClick` props render a `CostDisplay` in a clickable metric slot alongside the existing Agents/Pending/Processed/Succeeded/Failed row.
+- **`frontend/src/pages/Autopilot.tsx`** — fetches project cost via the existing `getProjectCosts` client call and wires the click-through to open `ProjectSettingsModal`.
+- **`frontend/src/components/autopilot/DesignQueuePanel.tsx`** — imports and renders `FeatureCostBadge` per feature row (`feature.cost_total_usd ?? 0`), hidden when cost is 0.
+- **`frontend/src/components/cost/CostDisplay.tsx`** — incidental fix: progress-percent zero-division edge case, color-threshold simplification.
+- **`frontend/src/components/cost/FeatureCostBadge.tsx`** — incidental small fix (no behavior change).
+- **`frontend/src/components/cost/BudgetPausedLabel.tsx`** — deleted. It duplicated `WorkflowCard.tsx`'s existing inline `paused_by === 'budget'` label logic and was never imported anywhere; the inline implementation was kept as the single source of truth.
+- **`frontend/src/components/cost/index.ts`** — removed the `BudgetPausedLabel` export following its deletion.
 
-- Happy path: realistic `response_metadata` shape → exactly one `CostEntry`
-  with correct `cost_usd`, `input_tokens`, `output_tokens`,
-  `cache_read_tokens`, `model`, `task_id`.
-- No-cost path (non-OpenRouter provider shape): no `CostEntry` written.
-- Missing `response_metadata`: does not raise, response still returned.
-- Malformed/`null` metadata fields: logs a warning, still returns the
-  response, doesn't crash the call site.
+### Tests
 
-## Why
+- **`tests/test_autopilot_api.py`** — 4 new tests covering the design-status endpoint's cost fields: `test_design_status_includes_cost_total`, `test_design_status_surfaces_budget_pause_reason`, `test_design_status_surfaces_failure_reason`, `test_design_status_omits_error_when_not_failed`.
 
-Requirements analysis found the cost-capture mechanism itself was already
-built by prior features; this feature's actual job was verification and
-hardening — proving the extraction logic works via tests, and making
-extraction failures visible instead of silent. No schema, API, or new-file
-changes beyond the one test file.
+## Explicitly out of scope (by design)
 
-## Out of scope (unchanged)
+- `DesignCostRow` — evaluated during architecture, left unwired; no existing per-design collapsed-header surface matched its shape without inventing a new UI element.
+- Any change to `cost_derivation.py`, orchestrator budget-guard logic, or `paused_by` semantics — zero diff vs `main`.
 
-Budget enforcement guards, Claude Code/OpenCode/Codex collectors, Pi
-extension changes, UI budget configuration, `CostEntry` schema/rollup logic.
+## Verification
+
+- Backend: `test_autopilot_api.py` 76/76 passing.
+- Targeted regression: `test_status_derivation.py` + `test_phase_manager.py`, 69/69 passing.
+- Frontend: `tsc --noEmit` — no new type errors introduced (6 pre-existing errors on `main`, unrelated files).
+- Security: authentication and input-validation fixes verified in place (see `docs/security_report.md`).

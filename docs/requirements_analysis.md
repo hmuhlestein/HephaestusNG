@@ -1,126 +1,234 @@
-# Product Requirements Analysis: Backend OpenRouter Direct Cost Capture
+# Product Requirements Analysis: Cost Tracking UI
 
-**Feature ID:** des-91c8-openrouter-direct
-**Feature Name:** Backend OpenRouter Direct Cost Capture
+**Feature ID:** des-91c8-cost-ui
+**Feature Name:** Cost Tracking UI
 **Status:** Requirements Extracted
 **Date:** 2026-07-24
-**Design Document:** `.hephaestus/design.md` — §"Backend's own direct OpenRouter calls" (lines 234-253), §"Backend's own OpenRouter calls (task enrichment, guardian, conductor)" (lines 579-620), §Data Model (lines 254-311), §Implementation Phases item 5 (lines 692-694)
-**Scope Document:** `.hephaestus/features/openrouter-direct/scope.md` — **does not exist in this worktree** (directory `.hephaestus/features/openrouter-direct/` is empty). Scope below is taken from the task assignment's explicit in-scope/out-of-scope statement, cross-checked against design.md Implementation Phase 5. This gap is flagged in §6.
+**Design Document:** `.hephaestus/design.md` (UI section, lines 438-457; Implementation Phase 7, lines 706-711)
+**Parent Feature:** Budget Enforcement and Pipeline Throttling (DES-91c8) — already merged (`199ff5a`, `b0c74e2`)
 
 ---
 
 ## 0. Critical Finding: This Scope Appears Already Implemented
 
-Before extracting requirements, source inspection of this worktree found that the mechanism described in scope — direct interception of the orchestrator's own OpenRouter calls, extraction of token/cost usage, and writing to the `CostEntry` ledger — **already exists on this branch** (which is currently even with `main`, 0 commits ahead). It landed via prior `phase(development)` commits (visible in `git log`, e.g. `b426b21`, `15242e5`) associated with earlier features in this same design (Cost Tracking Schema, Budget Enforcement), not via a dedicated openrouter-direct development phase on this branch.
+The Budget Enforcement feature (already merged to `main`) delivered the full cost data pipeline — `cost_entries` ledger, self-healing `cost_total_usd` rollups on `Task`/`Feature`/`Workflow`/`AutopilotDesign`/`AutopilotProject`, `cost_limit_usd` enforcement, and a family of `GET .../costs` REST endpoints (task/workflow/feature/design/project level). That same merge also landed a set of UI building blocks — `ProjectCostSummary`, `CostDisplay`, `FeatureCostBadge`, `DesignCostRow`, `BudgetPausedLabel` (`frontend/src/components/cost/`) — plus working budget-limit configuration in `ProjectSettingsModal.tsx` and a project-level cost summary already rendered on the Dashboard.
 
-Verified present:
+**This feature closes the remaining visibility gap.** Two of the five cost components built in the prior merge — `FeatureCostBadge` and `DesignCostRow` — are exported from `components/cost/index.ts` but are never imported anywhere else in the app: they were built but never wired into the screens the design calls out. Likewise, four of the five cost-fetching API client functions (`getDesignCosts`, `getFeatureCosts`, `getWorkflowCosts`, `getTaskCosts`) exist in `services/api.ts` but have zero callers outside that file. The `paused_by === 'budget'` distinction is separately (and correctly) surfaced in `WorkflowCard.tsx` via inline logic, but `BudgetPausedLabel` — the dedicated component built for that exact purpose — is unused, a duplication worth resolving while touching this code.
 
-| Requirement area | File:Line | State |
-|---|---|---|
-| `usage: {include: true}` opt-in on OpenRouter requests | `src/interfaces/langchain_llm_client.py:243` | Done |
-| Single choke-point helper wrapping `model.ainvoke()` | `src/interfaces/langchain_llm_client.py:323-395` (`_invoke_and_record`) | Done |
-| All LLM call sites routed through the helper | `langchain_llm_client.py:417, 474, 538, 600, 699, 758, 850` (7 call sites: `classify_complexity`, `enrich_task`, `resolve_ticket_clarification`, `analyze_agent_state`, `analyze_agent_trajectory`, `analyze_system_coherence`, `review_qa_report`) | Done |
-| `task_id` threaded to call sites where available | Same call sites; `enrich_task`, `analyze_agent_state`, `analyze_agent_trajectory`, `review_qa_report` pass `task_id`; `classify_complexity`, `resolve_ticket_clarification`, `analyze_system_coherence` have no task context and correctly omit it (rolls up as overhead per design.md:296-298) | Done |
-| `CostEntry` ledger write with `source="openrouter_direct"` | `langchain_llm_client.py:368-389` calling `src/core/cost_derivation.py:38` (`record_cost`) | Done |
-| `CostEntry` table schema | `src/core/database.py:1230` | Done, matches design.md:266-293 |
-| Rollup to `Task`/`Feature`/`AutopilotDesign`/`AutopilotProject.cost_total_usd` | `src/core/cost_derivation.py` | Done (shared with other sources, not openrouter-specific) |
+**Current State (from Budget Enforcement merge):**
+- ✅ `GET /projects/{id}/costs`, `/designs/{id}/costs`, `/features/{id}/costs`, `/workflows/{id}/costs`, `/tasks/{id}/costs` — all five cost-summary endpoints implemented (`src/mcp/autopilot_api.py:2190-2432`)
+- ✅ `apiService.getProjectCosts/getDesignCosts/getFeatureCosts/getWorkflowCosts/getTaskCosts` — all five client wrappers exist (`frontend/src/services/api.ts:842-874`)
+- ✅ `ProjectSettingsModal.tsx` — budget (`cost_limit_usd`) configuration UI, fully wired to `PUT /projects/{id}`
+- ✅ `Dashboard.tsx` — renders `ProjectCostSummary` using `getProjectCosts` data (project-level, already live)
+- ✅ `WorkflowCard.tsx` — shows "PAUSED: BUDGET LIMIT REACHED" for `paused_by === 'budget'` (inline logic, not using `BudgetPausedLabel`)
+- ✅ `frontend/src/components/cost/{CostDisplay,FeatureCostBadge,DesignCostRow,ProjectCostSummary,BudgetPausedLabel}.tsx` — all five components built and exported
+- ⚠️ `FeatureCostBadge` — built, never imported outside `components/cost/`
+- ⚠️ `DesignCostRow` — built, never imported outside `components/cost/`
+- ⚠️ `BudgetPausedLabel` — built, never imported outside `components/cost/`; `WorkflowCard.tsx` duplicates its logic inline instead
+- ❌ `PipelineStatusCard.tsx` — no cost/budget indicator (design calls for a "$current / $limit" metric alongside its existing Agents/Pending/Processed/Succeeded/Failed row)
+- ❌ `DesignQueuePanel.tsx` feature rows (~line 700-870) — render `feature.name`, `feature.feature_key`, `FeatureStatusBadge`, task list, but no cost
+- ❌ `GET /projects/{project_id}/designs/{filename}/status` (`autopilot_api.py:2760`, feeding `DesignQueuePanel` via `getAutopilotProjectDesignStatus`) — the `features` list it returns (`autopilot_api.py:3056-3070`) does not include `cost_total_usd`, even though `Feature.cost_total_usd` exists on the model; the frontend has no way to render a per-feature cost badge in this panel without either a backend change or N supplemental `getFeatureCosts` calls
 
-**Not yet done / genuinely open:**
-
-1. **Live smoke-test confirmation.** Design.md:245-252 explicitly flags that whether OpenRouter's `usage.cost` field actually survives LangChain's `ChatOpenAI` response parsing into `response_metadata["token_usage"]["cost"]["total"]` (the exact path `_invoke_and_record` reads at `langchain_llm_client.py:361-366`) has not been confirmed against a real API response — LangChain guarantees promotion of *known* OpenAI usage fields but not provider-specific extensions. No test in the repo exercises this path with a real or realistically-shaped mocked response.
-2. **No test coverage of `_invoke_and_record`'s extraction logic.** `tests/test_cost_tracking.py` covers `CostEntry`/`record_cost`/rollup with `source="openrouter_direct"` as a literal string, but never invokes `_invoke_and_record` itself or asserts it correctly parses a `response_metadata` shape. A regression that changes the metadata key path (e.g. a LangChain upgrade) would silently degrade to `cost_usd=0` and pass every existing test (see the `except Exception` swallow at `langchain_llm_client.py:392-393`, which only logs at `debug` level).
-
-This changes the shape of this phase's requirements: the primary deliverable is **verification and test-hardening of an existing mechanism**, not net-new construction. Architecture/development phases should confirm this finding before planning new implementation work.
+**Target State (this feature):**
+- `PipelineStatusCard.tsx` (or the design-screen surface it renders inside `Autopilot.tsx`) shows a "$current / $limit" budget indicator with a link into `ProjectSettingsModal`, matching the design's stated integration point
+- `DesignQueuePanel.tsx` feature rows show `FeatureCostBadge` next to each feature's cost, once cost data is available to the row
+- `WorkflowCard.tsx` uses `BudgetPausedLabel` instead of its duplicated inline label logic (or `BudgetPausedLabel` is removed if truly redundant — see Open Questions)
+- The backend design-status endpoint feeding `DesignQueuePanel` carries per-feature `cost_total_usd` so the frontend doesn't need a per-row network waterfall
+- No new backend cost computation, schema, or enforcement logic — this feature is UI wiring plus the one small backend field addition needed to unblock it
 
 ---
 
 ## 1. Scope Boundary (from task assignment)
 
-**In scope:**
-- OpenRouter direct API call interception in the orchestrator
-- Token count and cost extraction from OpenRouter response headers/body
-- Writing cost entries to the `CostEntry` ledger
-- Wiring into the existing cost tracking pipeline
+### 2.1 Built-but-orphaned components
 
-**Explicitly out of scope (do not touch):**
-- Budget enforcement guards (`cost_limit_usd` checks, pause/resume logic) — separate feature, already delivered per `git log` (`Merge branch 'feature/des-91c8/budget-enforcement'`)
-- Claude Code / OpenCode / Codex collector implementations
-- Pi extension changes
-- UI budget configuration
+`FeatureCostBadge.tsx` and `DesignCostRow.tsx` were implemented as part of the Budget Enforcement feature (commit `b0c74e2`, "feat(ui): Add budget configuration and display components (FR-6, FR-7, FR-8)") but never connected to a live data source or rendered anywhere. They pass a basic grep for "does the component exist" but fail any real usage check — `grep -rl FeatureCostBadge frontend/src` and `grep -rl DesignCostRow frontend/src` both return only the component's own file and the barrel `index.ts`. Same for `BudgetPausedLabel.tsx`. This is dead code sitting in the tree, and the design's own UI section (lines 445-452) explicitly calls for exactly this wiring ("surfacing `cost_total_usd` on feature cards / design rows").
+
+### 2.2 Missing project-level indicator on the pipeline status surface
+
+The design (lines 445-452) specifies: *"Autopilot design screen (`DesignQueuePanel.tsx` or `PipelineStatusCard.tsx` — whichever already renders project-level status) : a small '$current / $limit' indicator... with a link that opens `ProjectSettingsModal`."* Neither component currently does this. `PipelineStatusCard.tsx` is the better fit — it already renders a metrics row (Agents/Pending/Processed/Succeeded/Failed, `PipelineStatusCard.tsx:99-104`) and a project name header, matching the "project-level status" description precisely.
+
+### 2.3 Backend field gap for feature-row cost
+
+`GET /projects/{project_id}/designs/{filename}/status` (`autopilot_api.py:2760-3070`) is the endpoint that feeds `DesignQueuePanel`'s expandable feature rows via `apiService.getAutopilotProjectDesignStatus`. Its `features` list construction (`autopilot_api.py:3056-3070`) builds each feature dict from `feat.id`, `feat.name`, `feat.feature_key`, `feat.status`, `feat.scope`, tasks, `feat.depends_on`, timestamps, and `has_report` — but omits `feat.cost_total_usd`, even though that column already exists and is self-healingly maintained on the `Feature` model. Without this field, wiring `FeatureCostBadge` into the row requires either a backend addition (cheap — one more field in an existing dict literal) or N extra `getFeatureCosts(feature.id)` calls per expanded design (a real N+1 the design's "additive to plumbing that already exists, not new plumbing" framing (line 711) argues against).
 
 ---
 
 ## 2. Functional Requirements
 
-### FR-1: Enable OpenRouter usage/cost data on all orchestrator LLM calls
-**Source:** design.md:234-243
-**Status:** Already satisfied — `langchain_llm_client.py:243`
-**Acceptance criteria:**
-- Every `ChatOpenAI` instance built for `provider == "openrouter"` includes `extra_body={"usage": {"include": True}}` (or equivalent merged `extra_body`).
-- Verify no regression: confirm this survives alongside the existing `provider` and `reasoning` `extra_body` keys built at `langchain_llm_client.py:224-245` (they are merged into one dict, not overwritten).
+### FR-1: Budget Indicator on Pipeline Status Surface
 
-### FR-2: Single choke point for cost extraction across all orchestrator LLM call sites
-**Source:** design.md:589-600
-**Status:** Already satisfied — `_invoke_and_record` at `langchain_llm_client.py:323-395`
-**Acceptance criteria:**
-- A single helper wraps `model.ainvoke()`, extracts usage from the response, and writes a `CostEntry`.
-- All orchestrator-side LLM call sites (task enrichment, ticket clarification, complexity classification, Guardian agent-state/trajectory analysis, Conductor system-coherence analysis, QA review) call this helper rather than `model.ainvoke()` directly.
-- Verify count: confirm no `model.ainvoke(` call sites remain outside `_invoke_and_record` itself (checked: none do, per `grep -n ainvoke`).
+**Requirement:** `PipelineStatusCard.tsx` displays project cost-so-far, and the project's budget limit if one is set, using data already available via `apiService.getProjectCosts(projectId)`.
 
-### FR-3: Attribute cost entries to task/agent/workflow where known, else overhead bucket
-**Source:** design.md:296-298, 602-614
-**Status:** Already satisfied
-**Acceptance criteria:**
-- Call sites with a known `task_id` (enrich_task, analyze_agent_state, analyze_agent_trajectory, review_qa_report) pass it through.
-- Call sites with no task context (classify_complexity, resolve_ticket_clarification, analyze_system_coherence) write `task_id=None`, and the entry still gets recorded (not silently dropped) — `CostEntry.task_id` is nullable per schema.
+**Acceptance Criteria:**
+- When no `cost_limit_usd` is set, show `"$current spent"` (matches design wording, line 448)
+- When `cost_limit_usd` is set, show `"$current / $limit"`
+- Indicator is a clickable link/button that opens `ProjectSettingsModal` scoped to the active project (reuses the existing modal — no new settings surface)
+- Indicator sits alongside the existing metrics row (Agents/Pending/Processed/Succeeded/Failed) rather than replacing any of them
+- Uses the existing `ProjectCostSummary` or `CostDisplay` component rather than a new one-off rendering, consistent with "Touch only what you must" and the existing component library
+- No new data fetch if `Dashboard.tsx`'s existing `getProjectCosts` query can be reasonably reused/shared for the active project; otherwise a scoped `useQuery` calling the existing `apiService.getProjectCosts`
 
-### FR-4: Extract token counts and cost from OpenRouter response and write to `CostEntry`
-**Source:** design.md:616-619, 254-293
-**Status:** Mechanism present but **unverified against a live response** (§0)
-**Acceptance criteria:**
-- `_invoke_and_record` reads `response.response_metadata["token_usage"]` and extracts `cost.total`, `prompt_tokens`, `completion_tokens`, `prompt_tokens_details.cached_tokens`.
-- On a real OpenRouter call with `usage.include=true`, the written `CostEntry` has `source="openrouter_direct"`, non-zero `cost_usd`, and populated `input_tokens`/`output_tokens`.
-- **Gap to close in this feature:** run (or write an automated test simulating) one confirmatory call and assert the extraction path produces a non-zero `CostEntry`. Currently, a failure here is silent (caught by a bare `except Exception` at `debug` log level, `langchain_llm_client.py:392-393`) and covered by zero tests.
+### FR-2: Per-Feature Cost Badge in Design Queue Panel
 
-### FR-5: Raw usage payload retained for debugging
-**Source:** design.md:284-288
-**Status:** Already satisfied — `raw_usage=usage` passed at `langchain_llm_client.py:388`
+**Requirement:** Each feature row in `DesignQueuePanel.tsx` (the block rendering `feature.name`/`feature.feature_key`/`FeatureStatusBadge`, `autopilot_api.py`-fed via `getAutopilotProjectDesignStatus`) shows a `FeatureCostBadge` next to the feature's status badge.
+
+**Acceptance Criteria:**
+- `FeatureCostBadge` renders using `feature.cost_total_usd` (new field, see FR-4) sourced from the design-status response — no per-row supplemental fetch
+- Badge is hidden when cost is `0` or absent (matches `FeatureCostBadge`'s existing `if (cost <= 0) return null` behavior — no change needed there)
+- Phase-0 pseudo-feature and placeholder rows (`id` starting with `phase0-`/`placeholder-`) either omit the badge or pass `cost_total_usd: 0` (they have no `Feature` DB row to source cost from)
+- Badge placement doesn't break existing row layout/wrapping at typical viewport widths
+
+### FR-3: Design-Level Cost Row (Deferred Judgment)
+
+**Requirement:** Evaluate whether `DesignCostRow` has a real integration point in this feature's scope, or whether design-level cost is already adequately covered by the project-level indicator (FR-1) plus per-feature badges (FR-2) summing to the same information.
+
+**Acceptance Criteria:**
+- If `DesignQueuePanel.tsx` has a per-design summary line (collapsed/header state of each design entry, separate from its expanded feature rows) that plausibly matches `DesignCostRow`'s shape (design name + cost), wire it there
+- If no such surface exists and inventing one isn't clearly asked for by the design doc, leave `DesignCostRow` unwired and flag this explicitly rather than building a new UI surface to justify using an existing component — matches "No abstractions/features beyond what was asked"
+- This is a judgment call for architecture_design to resolve with a concrete look at `DesignQueuePanel`'s collapsed-row markup, not something to force in requirements
+
+### FR-4: Feature Cost in Design-Status API Response
+
+**Requirement:** `GET /projects/{project_id}/designs/{filename}/status` includes `cost_total_usd` on each feature dict it returns.
+
+**Acceptance Criteria:**
+- `autopilot_api.py:3056-3070` feature dict literal gains `"cost_total_usd": feat.cost_total_usd or 0.0`
+- Phase-0 pseudo-feature dict (`autopilot_api.py:~3100-3109`) and the placeholder dict (`~3116-3127`) either include `"cost_total_usd": 0.0` for type consistency or the frontend treats the field as optional — pick one and apply consistently
+- No change to response caching behavior, no new query — `feat` is already loaded in this loop, this is a zero-cost field addition
+- Existing consumers of this endpoint (if any beyond `DesignQueuePanel`) are unaffected by the additive field
+
+### FR-5: Resolve `BudgetPausedLabel` Duplication
+
+**Requirement:** `WorkflowCard.tsx`'s inline `getStatusLabel` budget-paused text (`WorkflowCard.tsx:26-30`, `"PAUSED: BUDGET LIMIT REACHED"`) and the standalone `BudgetPausedLabel` component (badge-styled, `"Paused: budget limit reached"`) currently do the same job in two different ways in two different places, with only one actually wired up.
+
+**Acceptance Criteria:**
+- Either: replace `WorkflowCard.tsx`'s inline label rendering with `<BudgetPausedLabel />` where it currently renders the plain status text, or
+- Determine `BudgetPausedLabel` is redundant with `WorkflowCard`'s existing status-badge system (it already has `statusColors`/`statusLabels` dictionaries driving a colored dot + text) and remove the unused component instead
+- Do not ship both a used inline implementation and an unused duplicate component — pick one, this is exactly the kind of orphan cleanup CLAUDE.md calls for ("Do clean up orphans created by your own changes")
+- This is the smallest-scoped item in this feature; if architecture_design judges it out of scope for a "UI" feature strictly about cost *display*, it may be deferred, but it should be an explicit decision, not silence
 
 ---
 
-## 3. Non-Functional Requirements
+## 4. Non-Functional Requirements
 
-- **NFR-1 (reliability):** A failure to extract cost data must never break the underlying LLM call. Already satisfied — extraction is wrapped in `try/except` and the response is returned regardless (`langchain_llm_client.py:357-395`). This is correct per design intent but currently over-broad: it also swallows genuine extraction bugs silently (see FR-4 gap) rather than distinguishing "no cost data present" (expected for non-OpenRouter providers) from "cost data present but malformed" (a real bug worth surfacing above `debug`).
-- **NFR-2 (no double-instrumentation):** Cost capture must not duplicate `CostEntry` rows for a single LLM turn. Single call to `record_cost` per `_invoke_and_record` invocation — satisfied by construction.
-- **NFR-3 (non-OpenRouter providers unaffected):** Call sites route through `_invoke_and_record` regardless of provider; for non-OpenRouter models (Groq, Azure, Google), `response_metadata["token_usage"]["cost"]` will simply be absent, `cost_usd` defaults to `0`, and no `CostEntry` is written (`langchain_llm_client.py:368` guards on `cost_usd > 0`). This is existing, correct behavior — no change needed, but worth an explicit test since it's load-bearing.
+### NFR-1: No New Network Waterfalls
 
----
+Per the design's own framing (line 711: "this is additive to plumbing that already exists, not new plumbing"), per-feature cost must not require one HTTP request per visible feature row. FR-4 (embedding cost in the existing design-status response) exists specifically to satisfy this — a `getFeatureCosts(feature.id)` call per row in `DesignQueuePanel`'s `.map()` would be an N+1 anti-pattern the design implicitly rules out.
 
-## 4. Integration Points
+### NFR-2: No Behavior Change to Enforcement
 
-- `src/interfaces/langchain_llm_client.py` — `LangChainLLMClient._invoke_and_record`, all 7 call sites, and the `ChatOpenAI` construction branch for `provider == "openrouter"`.
-- `src/core/cost_derivation.py` — `record_cost()`, shared with `pi`/`claude_code`/`opencode`/`codex` sources; not modified by this feature, only called.
-- `src/core/database.py` — `CostEntry` model (line 1230); not modified by this feature.
-- Callers one level up that don't yet thread `task_id` into `enrich_task` were flagged in design.md:602-606 as needing a check — verified already fixed (`enrich_task(..., task_id=task_id)` present at call site and signature, `langchain_llm_client.py:439-445, 474`).
+This feature must not touch `cost_derivation.py`, budget-guard logic in `orchestrator.py`, or the `paused_by` semantics established by the merged Budget Enforcement feature. Those are done and tested; this feature is display-only plus the one additive API field.
+
+### NFR-3: Visual Consistency
+
+New/wired-up cost UI must match the existing Tailwind styling conventions already established by `CostDisplay`/`FeatureCostBadge`/`ProjectCostSummary` (color-coded by magnitude, `DollarSign` icon from `lucide-react`) rather than introducing a new visual language for cost display.
+
+### NFR-4: Backward Compatibility
+
+Adding `cost_total_usd` to the design-status feature dict is purely additive — no existing field is renamed or removed, so no frontend consumer of that endpoint (beyond `DesignQueuePanel`) can break from this change.
 
 ---
 
 ## 5. Technology Constraints
 
-- LangChain's `ChatOpenAI` / `langchain_openai` response metadata shape is the single point of fragility — it's an implicit contract with a third-party library that is not guaranteed to preserve non-standard OpenRouter fields across LangChain version bumps. Any test added for FR-4 should pin against the actual installed `langchain_openai` version's behavior, not assume the shape is stable.
-- OpenRouter API: `usage.include=true` request param and `usage.cost.total` response field are OpenRouter-specific, undocumented in the OpenAI-compatible spec LangChain models against.
+- **Backend**: Python 3.12, FastAPI, SQLAlchemy — matches existing stack, no new dependencies. `Feature.cost_total_usd` column already exists (`src/core/database.py:1107` per Budget Enforcement merge).
+- **Frontend**: React 18, TypeScript, Tailwind CSS, `@tanstack/react-query` for data fetching, `lucide-react` for icons — all components to be wired already follow these conventions.
+- No new frontend libraries needed; all required components (`FeatureCostBadge`, `DesignCostRow`, `BudgetPausedLabel`, `CostDisplay`, `ProjectCostSummary`) and API client functions already exist.
 
 ---
 
 ## 6. Open Issue: Missing scope.md
 
-`.hephaestus/features/openrouter-direct/scope.md` does not exist — the directory was created but is empty. This requirements analysis was scoped from the task assignment's inline description instead, which is internally consistent with design.md Implementation Phase 5. If a scope.md is expected to exist by the next pipeline phase (scope_review), that phase will need to either source it from this document or have it created upstream — flagging so it isn't mistaken for this phase having skipped a required input.
+### 6.1 Files Likely to Change
+
+- `frontend/src/components/autopilot/PipelineStatusCard.tsx` — add budget indicator (FR-1)
+- `frontend/src/components/autopilot/DesignQueuePanel.tsx` — wire `FeatureCostBadge` into feature rows (FR-2), possibly `DesignCostRow` into a design-summary row (FR-3, pending architecture judgment)
+- `frontend/src/components/workflow/WorkflowCard.tsx` — resolve `BudgetPausedLabel` duplication (FR-5)
+- `src/mcp/autopilot_api.py` (`get_project_design_status`, ~line 3056-3127) — add `cost_total_usd` to feature dicts (FR-4)
+- `frontend/src/pages/Autopilot.tsx` — only if `PipelineStatusCard` needs a new prop (e.g. `costLimit`/`costTotal`) threaded down from a query already live at the page level, rather than duplicating the query inside the card
+
+### 6.2 Files Already Complete (No Changes Needed)
+
+- `frontend/src/components/cost/CostDisplay.tsx`
+- `frontend/src/components/cost/FeatureCostBadge.tsx`
+- `frontend/src/components/cost/DesignCostRow.tsx`
+- `frontend/src/components/cost/ProjectCostSummary.tsx`
+- `frontend/src/components/cost/BudgetPausedLabel.tsx` (used or removed per FR-5, not modified)
+- `frontend/src/components/ProjectSettingsModal.tsx`
+- `frontend/src/services/api.ts` (`getProjectCosts`/`getDesignCosts`/`getFeatureCosts`/`getWorkflowCosts`/`getTaskCosts` all already implemented)
+- `frontend/src/pages/Dashboard.tsx` (project-level summary already live)
+- `src/core/cost_derivation.py`, `src/core/database.py` (schema/rollup — untouched by this feature)
+- `src/mcp/autopilot_api.py` cost-summary endpoints (`/costs` routes, lines 2190-2432 — untouched; only the unrelated design-status endpoint at line 2760 gets the additive field)
+
+### 6.3 Key Architectural Relationships
+
+```
+AutopilotProject.cost_total_usd / cost_limit_usd
+        │
+        ├─ GET /projects/{id}/costs ──► apiService.getProjectCosts ──► Dashboard.tsx (LIVE)
+        │                                                          └─► PipelineStatusCard.tsx (FR-1, NEW)
+        │
+Feature.cost_total_usd
+        │
+        ├─ GET /features/{id}/costs ──► apiService.getFeatureCosts (UNUSED — not needed if FR-4 lands)
+        │
+        └─ GET /projects/{id}/designs/{filename}/status
+                  └─ features[].cost_total_usd (FR-4, NEW FIELD)
+                          └─► DesignQueuePanel.tsx feature rows ──► FeatureCostBadge (FR-2, NEW WIRING)
+
+Workflow.paused_by == "budget"
+        └─► WorkflowCard.tsx (inline label, LIVE) ──vs──► BudgetPausedLabel (FR-5, orphaned)
+```
 
 ---
 
-## 7. Recommendation for Next Phase
+## 7. Acceptance Criteria Summary
 
-Given §0's finding, the architecture_design phase should treat this feature as **verify-and-harden**, not build-from-scratch:
-1. Add a smoke test (or manual confirmatory call, logged) proving `usage.cost` survives into `response_metadata["token_usage"]`.
-2. Add unit test coverage for `_invoke_and_record`'s extraction logic using a realistic mocked `response_metadata`.
-3. Consider narrowing the `except Exception: logger.debug(...)` in `_invoke_and_record` (langchain_llm_client.py:392-393) to distinguish "no cost fields present" (expected, silent) from "cost fields present but extraction raised" (a real bug, should log at `warning`).
+- [ ] Pipeline status surface shows current spend, and limit when set, with a working link to `ProjectSettingsModal`
+- [ ] `DesignQueuePanel` feature rows show cost via `FeatureCostBadge` for features with nonzero cost
+- [ ] Design-status backend endpoint includes `cost_total_usd` per feature, no N+1 calls introduced
+- [ ] `BudgetPausedLabel` duplication with `WorkflowCard`'s inline label resolved one way or the other, explicitly
+- [ ] No changes to budget enforcement logic, schema, or `paused_by` semantics
+- [ ] `DesignCostRow` usage decided explicitly (wired or deliberately deferred) rather than left silently orphaned
+- [ ] `npm run type-check` passes; no new backend endpoints needed, existing `/costs` endpoints untouched
+
+---
+
+## 8. Critical Design Decisions
+
+### D-1: Fix the Backend Field Gap Rather Than Add Per-Row Fetches
+
+`DesignQueuePanel` needs feature-level cost, and the cleanest source is the endpoint it already calls (`getAutopilotProjectDesignStatus`), not the separate `getFeatureCosts` endpoint. Adding one field to an existing dict is cheaper and avoids N+1 — directly following the design doc's own "additive to plumbing that already exists" framing.
+
+### D-2: `PipelineStatusCard` Over `DesignQueuePanel` for the Project-Level Indicator
+
+The design doc offers either component as the target for the "$current/$limit" indicator. `PipelineStatusCard` already renders project-level aggregate metrics (Agents/Pending/Processed/etc.) with no per-design granularity, making it the closer semantic match for a single project-wide budget number. `DesignQueuePanel` is oriented around individual designs/features, which is where the per-feature badge (FR-2) belongs instead.
+
+### D-3: This Is a UI-Wiring Feature, Not New Cost Infrastructure
+
+Every backend piece needed for this feature already exists except one additive field. Scope creep risk is architecture inventing new cost endpoints, new rollup logic, or new schema — none of that is needed or asked for.
+
+---
+
+## 9. Risk Assessment
+
+- **Low risk overall** — this is UI wiring against a stable, already-tested backend. The only backend change (FR-4) is a one-line additive field in an existing response.
+- **Main risk**: scope drift into "improving" the cost components' styling/behavior beyond wiring them up, or inventing new UI surfaces (e.g., a dedicated cost dashboard page) not asked for by the design doc's UI section.
+- **Secondary risk**: FR-5 (`BudgetPausedLabel` cleanup) is adjacent-but-not-strictly-cost-display; architecture_design should make an explicit in/out-of-scope call rather than let it default either way.
+
+---
+
+## 10. Open Questions
+
+1. Does `DesignQueuePanel` have a collapsed/header row per design (not just per feature) where `DesignCostRow` would plausibly fit? Needs a direct look at the component during architecture_design — not resolved here to avoid inventing a UI surface speculatively.
+2. Is `BudgetPausedLabel` in scope for this feature, or should it be flagged as pre-existing dead code for a separate cleanup pass? Leaning toward in-scope since it's a one-line swap in a file already visited for FR-2's neighboring badge work, but flagging for scope_review.
+3. Should `PipelineStatusCard`'s budget indicator fetch its own `getProjectCosts` data, or should `Autopilot.tsx` (the page-level parent) fetch once and pass down as props, avoiding a duplicate query alongside whatever `Dashboard.tsx` already does? Architecture-level call, not a requirements-level one.
+
+---
+
+## 11. Non-Goals (Explicitly Deferred)
+
+- Any new cost computation, schema, or enforcement logic (fully owned by the merged Budget Enforcement feature)
+- Task-level or workflow-level cost UI (the `getTaskCosts`/`getWorkflowCosts` endpoints exist but nothing in the design doc's UI section calls for surfacing them in a screen — out of scope unless scope_review says otherwise)
+- A dedicated standalone cost/spend analytics page or dashboard beyond the existing `Dashboard.tsx` summary and the two new integration points (FR-1, FR-2)
+- Real-time/streaming cost updates mid-task (explicitly deferred in the design doc itself, line 650-651, as a pi-extension-only side effect, unrelated to this feature)
