@@ -3597,7 +3597,7 @@ async def list_feature_record_docs(feature_id: str):
     pipeline). This one reads from a Feature row's own workflow's
     working_directory/docs -- the storage location every current multi-
     feature design pipeline actually writes to (architecture.md,
-    qa_result.json, etc., same files task_completion_service verifies).
+    qa_report.md, etc., same files task_completion_service verifies).
     """
     from src.core.database import AutopilotDesign, Feature, Workflow, get_db
 
@@ -4218,15 +4218,15 @@ async def stop_pipeline(clear_state: bool = False, project_id: Optional[str] = N
         result = {"stopped": stopped_any, **aggregate} if stopped_any else {"stopped": True, "message": "Pipeline was not running"}
 
     # Terminate autopilot agents and pause workflows
-    # Uses shared _pause_project_workflows which includes Phase 0 workflows
+    # Uses shared pause_project_workflows which includes Phase 0 workflows
     # (definition_id in ["autopilot", "autopilot-phase0"]).
     terminated_count = 0
     try:
-        from src.core.cost_derivation import _pause_project_workflows
+        from src.autopilot.orchestrator import pause_project_workflows
 
         with get_db() as db:
             for pid in stopped_project_ids:
-                paused = _pause_project_workflows(db, pid, paused_by="user")
+                paused = pause_project_workflows(db, pid, paused_by="user")
                 terminated_count += paused
             db.commit()
     except Exception as e:

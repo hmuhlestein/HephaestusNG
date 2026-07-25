@@ -822,6 +822,86 @@ def fail_workflow_direct(workflow_id: str) -> bool:
         return False
 
 
+def pause_project_workflows(db, project_id: str, paused_by: str, definition_ids: tuple = None) -> int:
+    """Pause all active workflows for a project and terminate their agents.
+
+    Resets in-progress tasks back to pending so they get re-dispatched
+    on resume. Called from both the user stop-button path
+    (autopilot_api.py) and the budget-enforcement path
+    (cost_derivation.py).
+
+    Args:
+        db: Database session
+        project_id: Project ID to pause workflows for
+        paused_by: Who/what paused ('user', 'budget', 'system')
+        definition_ids: Workflow definition IDs to match. Defaults to
+            DESIGN_WORKFLOW_DEFINITION_IDS (autopilot + phase0 + feature_architect).
+
+    Returns:
+        Number of workflows paused.
+    """
+    from src.core.constants import DESIGN_WORKFLOW_DEFINITION_IDS
+    from src.core.database import Agent, Task
+
+    if definition_ids is None:
+        definition_ids = DESIGN_WORKFLOW_DEFINITION_IDS
+
+    active_workflows = (
+        db.query(Workflow)
+        .filter(
+            Workflow.project_id == project_id,
+            Workflow.definition_id.in_(definition_ids),
+            Workflow.status.in_(["active", "running"]),
+        )
+        .all()
+    )
+
+    paused_count = 0
+    workflow_ids = []
+    for wf in active_workflows:
+        wf.status = "paused"
+        wf.paused_by = paused_by
+        wf.paused_at = datetime.utcnow()
+        if paused_by == "budget":
+            wf.status_reason = "Budget limit reached"
+        elif paused_by == "user":
+            wf.status_reason = None
+        paused_count += 1
+        workflow_ids.append(wf.id)
+
+    if paused_count > 0:
+        agents_to_terminate = (
+            db.query(Agent)
+            .join(Task, Agent.current_task_id == Task.id)
+            .filter(
+                Task.workflow_id.in_(workflow_ids),
+                Agent.status.in_(["working", "starting", "idle"]),
+            )
+            .all()
+        )
+        for agent in agents_to_terminate:
+            agent.status = "terminated"
+            agent.terminated_at = datetime.utcnow()
+            agent.current_task_id = None
+            logger.info(f"[PAUSE] Terminated agent {agent.id[:8]}")
+
+        tasks_to_reset = (
+            db.query(Task)
+            .filter(
+                Task.workflow_id.in_(workflow_ids),
+                Task.status == "in_progress",
+            )
+            .all()
+        )
+        for task in tasks_to_reset:
+            task.status = "pending"
+            task.assigned_agent_id = None
+            logger.info(f"[PAUSE] Reset task {task.id[:8]} to pending")
+
+        logger.info(f"[PAUSE] Paused {paused_count} workflows for project {project_id[:8]}")
+    return paused_count
+
+
 def create_agent_for_task_direct(
     task_id: str,
     workflow_id: str,
@@ -3354,9 +3434,9 @@ _SWEEP_REPORT_NAMES = {
     "architecture.md",
     "run_health.json",
     "pipeline_metrics.json",
-    "qa_result.json",
-    "product_validation.json",
-    "scope_review_result.json",
+    "qa_report.md",
+    "product_validation.md",
+    "scope_review_result.md",
     "arbitration_result.json",
 }
 _STRAY_DIRS: set = set()  # no directories swept until re-validated
@@ -3549,24 +3629,23 @@ def generate_product_validation_report(
     """
     validation_path = _report_path(project_path, "product_validation.md")
 
-    # Read existing structured result from Phase 8 (preferred)
-    structured_path = _report_path(project_path, "product_validation.json")
-    if structured_path.exists():
-        try:
-            result = json.loads(structured_path.read_text())
-            verdict = result.get("verdict", "").upper()
-            meets_spec = verdict == "PASS" and qa_passed
-            logger.info(f"Using structured product_validation.json: verdict={verdict}")
-            return meets_spec, structured_path.read_text()
-        except Exception:
-            pass
-
-    # Fallback: read existing markdown report from Phase 8
     if validation_path.exists():
+        from src.autopilot.okf import read_okf
+
+        parsed = read_okf(validation_path)
+        if parsed:
+            frontmatter, _ = parsed
+            verdict = str(frontmatter.get("verdict", "")).upper()
+            meets_spec = verdict == "PASS" and qa_passed
+            logger.info(f"Using structured product_validation.md frontmatter: verdict={verdict}")
+            return meets_spec, validation_path.read_text()
+
+        # Fallback: no parseable frontmatter -- fall back to a raw text scan
+        # of the whole file (pre-OKF reports, or a malformed write).
         try:
             existing = validation_path.read_text()
             meets_spec = qa_passed and ("PASS" in existing or "pass" in existing.lower())
-            logger.info("Using existing product validation from Phase 8")
+            logger.info("Using existing product validation from Phase 8 (no frontmatter)")
             return meets_spec, existing
         except Exception:
             pass
@@ -4526,7 +4605,7 @@ def _fire_phase_transition(workflow_id: str, phase_id: str, phase_name: str, log
             spec_gate = metadata.get("spec_gate", {})
             feedback = spec_gate.get("reason") or result.get("reason") or None
 
-            # A "result_missing" gate reason ("no <phase>_result.json
+            # A "result_missing" gate reason ("no <phase>_report.md
             # found") only means build_phase_output's file read came up
             # empty right at this evaluation instant -- it says nothing
             # about whether the agent that just finished this phase
@@ -4536,7 +4615,7 @@ def _fire_phase_transition(workflow_id: str, phase_id: str, phase_name: str, log
             # phase's corrective task should see THAT, not a reason that
             # contradicts the real work already done (observed live: a
             # developer task was told "WHY YOU'RE HERE: no
-            # adversarial_review_result.json found" while the adversarial
+            # adversarial_review_report.md found" while the adversarial
             # review that sent it there had, per its own completion_notes,
             # found and reported 3 concrete BLOCKERs -- the agent had to
             # rediscover them itself instead of being told directly).
@@ -4634,10 +4713,11 @@ change case): {phase_list_text}
 
 WHAT TO DO:
 1. Read whatever evidence is relevant -- the latest gate output file(s) in
-   ./docs/ (e.g. qa_result.json, qa_report.md, adversarial_review_report.md,
-   security_report.md -- whichever exist for this workflow), and the
-   phase's own recent deliverables, to understand exactly what's blocking
-   progress.
+   ./docs/ (e.g. qa_report.md, adversarial_review_report.md,
+   security_report.md -- whichever exist for this workflow; each starts
+   with a YAML frontmatter block giving its structured verdict/counts,
+   followed by the full narrative report), and the phase's own recent
+   deliverables, to understand exactly what's blocking progress.
 2. Decide ONE of:
    - "continue": the blocker is not a real defect worth another cycle --
      e.g. a single pre-existing/unrelated/flaky test failure, a cosmetic
@@ -5123,6 +5203,7 @@ def _cap_out_review_phase(
     run hit 25 re-entries of security_review with max_review_runs: 4
     configured and doing nothing.
     """
+    from src.autopilot.okf import write_okf
     from src.autopilot.spec import GATE_RESULT_ARTIFACTS, get_review_findings_history, synthetic_clean_result
 
     workflow = db.query(Workflow).filter_by(id=workflow_id).first()
@@ -5140,26 +5221,18 @@ def _cap_out_review_phase(
 
     history = get_review_findings_history(workflow_id, phase.name)
     caveats = "\n".join(f"- Run {h['run_number']}: {h['blocker_count']} blocker(s) -- {h['summary'][:200]}" for h in history) or "(no findings history recorded)"
+    body = (
+        f"# {phase.name} -- capped after {run_count} runs\n\n"
+        f"Stopped re-reviewing after {max_runs} runs without a clean "
+        "pass (workflow.yaml's max_review_runs). Unresolved findings "
+        f"from prior runs:\n\n{caveats}\n"
+    )
 
     artifacts = GATE_RESULT_ARTIFACTS.get(phase.name, ())
     if artifacts:
-        (docs_dir / artifacts[0]).write_text(
-            json.dumps(synthetic_clean_result(phase.name, run_count), indent=2)
-        )
-        if len(artifacts) > 1:
-            (docs_dir / artifacts[1]).write_text(
-                f"# {phase.name} -- capped after {run_count} runs\n\n"
-                f"Stopped re-reviewing after {max_runs} runs without a clean "
-                "pass (workflow.yaml's max_review_runs). Unresolved findings "
-                f"from prior runs:\n\n{caveats}\n"
-            )
+        write_okf(docs_dir / artifacts[0], synthetic_clean_result(phase.name, run_count), body)
     else:
-        (docs_dir / f"{phase.name}_capped_notice.md").write_text(
-            f"# {phase.name} -- capped after {run_count} runs\n\n"
-            f"Stopped re-reviewing after {max_runs} runs without a clean "
-            "pass (workflow.yaml's max_review_runs). Unresolved findings "
-            f"from prior runs:\n\n{caveats}\n"
-        )
+        (docs_dir / f"{phase.name}_capped_notice.md").write_text(body)
 
     logger.warning(f"[PHASE-TASK] {phase.name} hit its review-run cap ({run_count}/{max_runs}) -- marking done with caveats instead of re-reviewing again")
     return _fire_phase_transition(workflow_id, phase.id, phase.name, logger)
@@ -6556,10 +6629,9 @@ def run_phase0(
         # goto ever fired, so the report text never got embedded in a
         # corrective task's description either) leaves no audit trail at
         # all of what the reviewer actually checked and confirmed was fine.
-        for review_file in ("feature_review_report.md", "feature_review_result.json"):
-            review_src = features_json_path.parent / review_file
-            if review_src.exists():
-                shutil.copy2(review_src, designs_folder / review_file)
+        review_src = features_json_path.parent / "feature_review_report.md"
+        if review_src.exists():
+            shutil.copy2(review_src, designs_folder / review_src.name)
 
         # Persist designs_folder BEFORE creating feature records so recovery is possible
         # if _create_feature_records raises (e.g. disk full). Also persist

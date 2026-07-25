@@ -22,7 +22,6 @@ from typing import Optional
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from src.core.constants import DESIGN_WORKFLOW_DEFINITION_IDS
 from src.core.database import (
     AutopilotDesign,
     AutopilotProject,
@@ -304,86 +303,8 @@ def _check_budget_enforcement(db: Session, project: AutopilotProject) -> None:
 
     # Over budget - pause active workflows
     logger.warning(f"[BUDGET] Project {project.id[:8]} over budget: ${project.cost_total_usd:.2f} >= ${project.cost_limit_usd:.2f}")
-    _pause_project_workflows(db, project.id, paused_by="budget")
-
-
-def _pause_project_workflows(db: Session, project_id: str, paused_by: str) -> int:
-    """Pause all active workflows for a project and terminate their agents.
-
-    This is idempotent - calling it when workflows are already paused
-    simply finds nothing to pause and returns 0.
-
-    Args:
-        db: Database session
-        project_id: Project ID to pause workflows for
-        paused_by: Who/what paused the workflows ('user', 'budget', 'system')
-
-    Returns:
-        Number of workflows paused
-    """
-    from src.core.database import Agent
-
-    # Find active workflows for this project (including phase0)
-    active_workflows = (
-        db.query(Workflow)
-        .filter(
-            Workflow.project_id == project_id,
-            Workflow.definition_id.in_(DESIGN_WORKFLOW_DEFINITION_IDS),
-            Workflow.status.in_(["active", "running"]),
-        )
-        .all()
-    )
-
-    paused_count = 0
-    workflow_ids = []
-    for wf in active_workflows:
-        wf.status = "paused"
-        wf.paused_by = paused_by
-        wf.paused_at = datetime.utcnow()
-        if paused_by == "budget":
-            wf.status_reason = "Budget limit reached"
-        elif paused_by == "user":
-            wf.status_reason = None  # Clear any stale budget reason
-        paused_count += 1
-        workflow_ids.append(wf.id)
-
-    if paused_count > 0:
-        # Terminate active agents on these workflows (single query, not N+1)
-        from src.core.database import Agent, Task
-
-        agents_to_terminate = (
-            db.query(Agent)
-            .join(Task, Agent.current_task_id == Task.id)
-            .filter(
-                Task.workflow_id.in_(workflow_ids),
-                Agent.status.in_(["working", "starting", "idle"]),
-            )
-            .all()
-        )
-        for agent in agents_to_terminate:
-            agent.status = "terminated"
-            agent.terminated_at = datetime.utcnow()
-            agent.current_task_id = None
-            logger.info(f"[PAUSE] Terminated agent {agent.id[:8]}")
-
-        # Reset in-progress tasks back to pending so they get re-dispatched on resume
-        tasks_to_reset = (
-            db.query(Task)
-            .filter(
-                Task.workflow_id.in_(workflow_ids),
-                Task.status == "in_progress",
-            )
-            .all()
-        )
-        for task in tasks_to_reset:
-            task.status = "pending"
-            task.assigned_agent_id = None
-            logger.info(f"[PAUSE] Reset task {task.id[:8]} to pending")
-
-        logger.info(f"[BUDGET] Paused {paused_count} workflows for project {project_id[:8]}")
-    # No db.commit() here — caller handles transaction boundary
-
-    return paused_count
+    from src.autopilot.orchestrator import pause_project_workflows
+    pause_project_workflows(db, project.id, paused_by="budget")
 
 
 def check_budget_before_new_work(db: Session, project_id: str) -> bool:
