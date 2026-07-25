@@ -288,8 +288,8 @@ COMPLETION CRITERIA:
                                 "resolve before marking done:\n"
                                 + "\n".join(lines)
                                 + "\n\nFor each: fix the underlying issue, then call "
-                                'hephaestus_resolve_ticket(ticket_id="...", '
-                                'resolution_comment="...", commit_sha="<sha>") to mark '
+                                'hephaestus_update_ticket_status(ticket_id="...", '
+                                'new_status="shipped") to mark '
                                 "it resolved. complete_my_task(status=\"done\") will be "
                                 "REJECTED while any remain unresolved."
                             )

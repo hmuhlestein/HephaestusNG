@@ -206,12 +206,38 @@ def derive_design_status(db: Session, design_id: str, write_back: bool = True) -
     # (they were intentionally excluded, not left incomplete)
     non_skipped_statuses = feature_statuses - {FeatureStatus.SKIPPED}
 
-    # Check if any workflow for this design has failed
+    # Check if any workflow for this design has failed -- excludes
+    # workflows with NO feature linking to them at all (orphaned, e.g. a
+    # failed Feature Architect retry attempt superseded by a later
+    # successful one). Unscoped, an orphan like that would keep a design
+    # with every real feature actually completed stuck showing "active"
+    # forever: pick_next_design clears an orphan's design_id once it
+    # processes this design's active-designs loop, but this function is
+    # called far more often (every status poll, from read-only callers
+    # too) and has no such cleanup step of its own.
+    #
+    # Deliberately NOT also requiring the linked feature to be
+    # "incomplete" (unlike pick_next_design's analogous failed_wf check):
+    # this branch only matters when every feature has ALREADY derived to
+    # "completed" (see the elif below), and derive_feature_status refuses
+    # to call a feature "completed" while ITS OWN linked workflow is
+    # "failed" (returns "active" instead, specifically to keep retry
+    # logic engaged) -- so a failed workflow linked to a still-incomplete
+    # feature could never coexist with non_skipped_statuses == COMPLETED
+    # in the first place. Requiring that here would make this branch
+    # unreachable for its actual purpose (e.g. a diagnostic task that
+    # failed after its feature's own tasks otherwise finished).
     from src.core.database import Workflow
-    has_failed_wf = db.query(Workflow).filter(
-        Workflow.design_id == design_id,
-        Workflow.status == "failed",
-    ).first() is not None
+    has_failed_wf = (
+        db.query(Workflow)
+        .filter(
+            Workflow.design_id == design_id,
+            Workflow.status == "failed",
+            db.query(Feature).filter(Feature.workflow_id == Workflow.id).exists(),
+        )
+        .first()
+        is not None
+    )
 
     if feature_statuses == {FeatureStatus.COMPLETED}:
         derived = FeatureStatus.COMPLETED

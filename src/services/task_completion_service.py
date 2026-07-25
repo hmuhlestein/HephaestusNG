@@ -328,7 +328,7 @@ class TaskCompletionService:
             return None
 
         # Full ticket id, not a truncated prefix -- this message instructs
-        # the agent to call change_ticket_status/resolve_ticket with it
+        # the agent to call update_ticket_status(new_status='shipped') with it
         # directly. A truncated id (e.g. "ticket-6" from "ticket-6805c19f-
         # ...") reads as a plausible complete id since real ids already
         # start with "ticket-", but it isn't a real, resolvable id.
@@ -346,7 +346,7 @@ class TaskCompletionService:
         # failed task) rather than assuming the rejected agent itself can act
         # on it.
         fix_instruction = (
-            "Fix the underlying issue for each, then call change_ticket_status/resolve_ticket before retrying update_task_status(done)."
+            "Fix the underlying issue for each, then call update_ticket_status(new_status='shipped') before retrying update_task_status(done)."
             if phase.name == "development"
             else ("This phase cannot fix code itself — the workflow needs to route back to development to resolve these before git_commit_push can proceed.")
         )

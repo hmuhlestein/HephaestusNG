@@ -130,11 +130,11 @@ additional_notes: |
   problems and filed tickets for them (tagged "qa-finding" or similar,
   ticket_type="bug"). Check before assuming this is a first-time build:
 
-    hephaestus_get_tickets(workflow_id="<your workflow id>", status="open", ticket_type="bug")
+    hephaestus_search_tickets(workflow_id="<your workflow id>", status="open", ticket_type="bug")
 
   If open bug tickets exist: fixing them is your priority for this pass —
   read each one, fix the underlying issue, then change its status to
-  resolved (hephaestus_change_ticket_status or hephaestus_resolve_ticket) referencing the commit
+  resolved (hephaestus_update_ticket_status with new_status="shipped") referencing the commit
   that fixed it. Do this INSTEAD OF re-implementing components from
   scratch; only fall through to normal implementation for genuinely new
   work not covered by an open ticket.
