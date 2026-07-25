@@ -816,6 +816,33 @@ class MonitoringLoop:
                                 stuck_task.status = "pending"
                                 stuck_task.assigned_agent_id = None
                                 stuck_task.failure_reason = None
+
+                                # Clear a stale pause from an EARLIER limit hit on
+                                # this same workflow (e.g. a prior agent hit the
+                                # limit before a fallback was available/found,
+                                # pausing the workflow via the elif branch below --
+                                # this later fallback attempt is about to
+                                # successfully re-dispatch the task, so nothing
+                                # should still be blocking the workflow). Without
+                                # this, the workflow stays "paused" forever even
+                                # after the task completes: _retry_exhausted_
+                                # paused_workflows (orchestrator.py) only resumes
+                                # a paused_by="system" workflow that still has a
+                                # FAILED task sitting in it -- once this fallback
+                                # succeeds, there's no longer a failed task to
+                                # trigger that recovery.
+                                if stuck_task.workflow_id:
+                                    stale_wf = (
+                                        session.query(Workflow)
+                                        .filter_by(id=stuck_task.workflow_id)
+                                        .first()
+                                    )
+                                    if stale_wf and stale_wf.status == "paused":
+                                        stale_wf.status = "active"
+                                        stale_wf.paused_by = None
+                                        stale_wf.status_reason = None
+                                        stale_wf.paused_at = None
+
                                 session.commit()
 
                                 new_agent = await self.agent_manager.create_agent_for_task(

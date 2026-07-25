@@ -1764,6 +1764,49 @@ class TestSessionLimitPause:
         mock_agent_manager.terminate_agent.assert_called_once()
 
     @pytest.mark.asyncio
+    async def test_successful_fallback_clears_a_stale_pause(
+        self, make_monitoring_loop, mock_agent_manager, mock_db
+    ):
+        """Regression (live incident): an earlier agent on this same
+        workflow hit the limit before a fallback was available/found and
+        paused the workflow (paused_by="system"). A LATER agent's
+        successful fallback dispatch must clear that stale pause -- left
+        alone, the workflow stays "paused" forever even after the task
+        completes, since _retry_exhausted_paused_workflows
+        (orchestrator.py) only resumes a paused_by="system" workflow that
+        still has a FAILED task sitting in it; once the fallback succeeds
+        there's no longer one to trigger that recovery."""
+        agent = Agent(id="a1", cli_type="claude")
+        mock_agent_manager.get_agent_output.return_value = (
+            "You've hit your session limit"
+        )
+        mock_agent_manager.terminate_agent = AsyncMock()
+        mock_agent_manager.get_project_context = AsyncMock(return_value="ctx")
+        new_agent = Mock(id="a2")
+        mock_agent_manager.create_agent_for_task = AsyncMock(return_value=new_agent)
+
+        task = Mock(
+            id="t1", status="in_progress", phase_id="p1", workflow_id="wf1",
+            enriched_description="do the thing", done_definition="done",
+        )
+        phase = Mock(fallback_cli_tool="pi", fallback_cli_model=None)
+        workflow = Mock(
+            status="paused", paused_by="system",
+            status_reason="CLI monthly spend limit hit (claude), no fallback configured",
+            paused_at=datetime.utcnow(),
+        )
+        mock_db.session_scope = self._session_with(task, phase, workflow)
+
+        await make_monitoring_loop._mechanical_recovery_for_agent(agent)
+        await make_monitoring_loop._mechanical_recovery_for_agent(agent)
+
+        mock_agent_manager.create_agent_for_task.assert_called_once()
+        assert workflow.status == "active"
+        assert workflow.paused_by is None
+        assert workflow.status_reason is None
+        assert workflow.paused_at is None
+
+    @pytest.mark.asyncio
     async def test_does_not_false_positive_on_bare_youve_hit(
         self, make_monitoring_loop, mock_agent_manager, mock_db
     ):
