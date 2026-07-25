@@ -1,11 +1,15 @@
 {
-  "passed_tests": 102,
+  "passed_tests": 145,
   "failed_tests": 0,
-  "total_tests": 102,
+  "total_tests": 145,
   "pass_rate": 100.0,
   "critical_issues": 0,
-  "requirements_met": 8,
-  "requirements_total": 8,
-  "new_mypy_errors": 0,
+  "non_blocking_issues": 1,
+  "requirements_met": 5,
+  "requirements_total": 5,
+  "security_fixes_verified": 2,
+  "security_fixes_total": 2,
+  "frontend_typecheck_new_errors": 0,
+  "status": "PASS",
   "recommendation": "done"
 }
