@@ -17,11 +17,11 @@ done_definitions:
   - "OWASP Top 10 considerations addressed"
   - "Critical and high vulnerabilities FIXED in the code"
   - "Tickets created for unresolved medium/low vulnerabilities"
-  - "security_report.md created with findings and fixes applied"
+  - "docs/security_review/security_report.md created with findings and fixes applied"
   - "Memory saved with security findings"
   - "Task marked as done"
 outputs:
-  - "security_report.md"
+  - "security_review/security_report.md"
 additional_notes: |
   OUTPUT STYLE: Terse. Drop filler (just/really/basically/actually). Fragments OK. 
   Technical terms exact. No pleasantries (sure/certainly/happy to). 
@@ -77,7 +77,7 @@ additional_notes: |
   - "Project Path" = your working directory (.).  "Docs Path" = ./docs/ (create it if missing).
   - Read the design document and prior inputs from ./.hephaestus/ (design.md, context.md, qa_spec.json).
   - Do NOT use absolute paths outside your working directory. Do NOT write into ./.hephaestus/ (it is never merged to main).
-  - ALL docs/reports go in "Docs Path:" (security_report.md, etc.).
+  - ALL docs/reports go in "Docs Path:" under a phase-named subdirectory: docs/security_review/security_report.md, etc. (same docs/<phase_name>/ convention used by architectural_review, qa_validation, adversarial_review, and product_validation).
   - Code fixes go in "Project Path:" (src/, tests/, etc.).
   - Your task description contains the exact paths — copy them exactly.
   
