@@ -536,6 +536,97 @@ class TestDeriveDesignStatus:
             result = derive_design_status(session, "design-1")
         assert result == "active"
 
+    def test_orphaned_failed_workflow_does_not_block_completion(self, db_manager):
+        """Regression: a failed workflow linked to the design (design_id
+        set) but to no feature at all -- e.g. a failed Feature Architect
+        retry attempt superseded by a later successful one -- used to keep
+        has_failed_wf True forever, even once every real feature was
+        genuinely completed. That kept the design stuck showing "active"
+        in the UI indefinitely, since nothing but pick_next_design's own
+        active-designs loop (a different, much less frequently invoked
+        code path) ever clears the orphan's design_id.
+
+        A second, skipped feature is required to actually reach the
+        has_failed_wf-dependent branch: the plain
+        `feature_statuses == {COMPLETED}` check earlier in the if/elif
+        chain fires unconditionally when the only feature is "completed",
+        before has_failed_wf is ever consulted."""
+        with db_manager.session_scope() as session:
+            _create_design(session, "design-1")
+
+            wf_done = Workflow(id="wf-done", name="Test", status="completed", phases_folder_path="/tmp")
+            session.add(wf_done)
+            wf_orphaned = Workflow(
+                id="wf-orphaned", name="Feature Architect", status="failed",
+                phases_folder_path="/tmp", design_id="design-1",
+            )
+            session.add(wf_orphaned)
+
+            feature = Feature(
+                id="feat-1", design_id="design-1", feature_key="feature-1",
+                name="Feature 1", scope="Scope 1", workflow_id="wf-done",
+                status="completed",
+            )
+            session.add(feature)
+            skipped = Feature(
+                id="feat-2", design_id="design-1", feature_key="feature-2",
+                name="Feature 2", scope="Scope 2", status="skipped",
+            )
+            session.add(skipped)
+
+            task = Task(
+                id="task-1", workflow_id="wf-done", raw_description="Task",
+                done_definition="Done", status="done",
+            )
+            session.add(task)
+
+        with db_manager.session_scope() as session:
+            result = derive_design_status(session, "design-1")
+        assert result == "completed"
+
+    def test_failed_workflow_linked_to_a_feature_keeps_active(self, db_manager):
+        """Companion to the orphan regression above: the scoping fix must
+        not swallow a GENUINE failure just because it excludes true
+        orphans. A feature with no tasks yet for its linked workflow
+        returns its raw persisted status untouched (derive_feature_status's
+        "no tasks yet" branch) -- so a feature marked "completed" whose
+        linked workflow subsequently failed (e.g. a lightweight feature
+        with no per-task tracking) must still keep the design "active" for
+        retry, not roll up to "completed" just because every non-skipped
+        Feature.status happens to already read "completed". A second,
+        skipped feature is required to reach this branch at all: the plain
+        `feature_statuses == {COMPLETED}` check earlier in the if/elif
+        chain fires unconditionally otherwise, before has_failed_wf is
+        ever consulted -- has_failed_wf only matters when non_skipped_
+        statuses differs from feature_statuses (i.e. a skipped feature is
+        also present)."""
+        with db_manager.session_scope() as session:
+            _create_design(session, "design-1")
+
+            wf_failed = Workflow(
+                id="wf-failed", name="Test", status="failed", phases_folder_path="/tmp",
+                design_id="design-1",
+            )
+            session.add(wf_failed)
+
+            # No Task rows for wf-failed -- derive_feature_status returns
+            # feature.status as-is instead of deriving from tasks.
+            feature = Feature(
+                id="feat-1", design_id="design-1", feature_key="feature-1",
+                name="Feature 1", scope="Scope 1", workflow_id="wf-failed",
+                status="completed",
+            )
+            session.add(feature)
+            skipped = Feature(
+                id="feat-2", design_id="design-1", feature_key="feature-2",
+                name="Feature 2", scope="Scope 2", status="skipped",
+            )
+            session.add(skipped)
+
+        with db_manager.session_scope() as session:
+            result = derive_design_status(session, "design-1")
+        assert result == "active"
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

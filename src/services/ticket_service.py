@@ -888,6 +888,12 @@ class TicketService:
             )
             if new_status == last_column_id:
                 ticket.completed_at = datetime.utcnow()
+                ticket.is_resolved = True
+                ticket.resolved_at = datetime.utcnow()
+            elif ticket.is_resolved and new_status != last_column_id:
+                # Reopening a resolved ticket — clear resolution
+                ticket.is_resolved = False
+                ticket.resolved_at = None
 
             # Create status change comment automatically
             status_comment_id = f"comment-{uuid.uuid4()}"

@@ -152,6 +152,40 @@ additional_notes: |
   - Any startup issues encountered
   
   ═══════════════════════════════════════════════════════════════════════
+  STEP 2.5: VERIFY RESOLVED TICKETS FROM PREVIOUS QA RUNS
+  ═══════════════════════════════════════════════════════════════════════
+
+  Before running new tests, check if there are resolved bug tickets from
+  previous QA/security_review runs that need verification:
+
+  1. Search for all tickets for this workflow:
+     hephaestus_search_tickets(workflow_id="<your workflow id>", ticket_type="bug")
+
+  2. For each ticket that is resolved or in "validated"/"shipped" status:
+     - Read the ticket's description and reproduction steps
+     - Verify the fix actually works:
+       a. Run the specific reproduction steps from the ticket
+       b. Check the related code changes
+       c. Run any tests related to the ticket's area
+     - If the fix works — move ticket to "shipped":
+       hephaestus_update_ticket_status(
+         ticket_id="<ticket id>",
+         new_status="shipped",
+       )
+     - If the fix does NOT work (issue still present) — reopen to "in-progress":
+       hephaestus_update_ticket_status(
+         ticket_id="<ticket id>",
+         new_status="in-progress",
+       )
+
+  3. Summary: After verification, note in your report how many tickets were
+     verified vs reopened.
+
+  This step closes the loop: QA creates tickets → developer resolves → QA
+  verifies the fix actually works before the pipeline considers the issue
+  truly addressed.
+
+  ═══════════════════════════════════════════════════════════════════════
   STEP 3: DISCOVER AND RUN TESTS
   ═══════════════════════════════════════════════════════════════════════
   
