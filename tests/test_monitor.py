@@ -1697,11 +1697,20 @@ class TestSessionLimitPause:
         workflow = Mock(status="active", paused_by=None, paused_at=None)
         mock_db.session_scope = self._session_with(task, phase, workflow)
 
-        # First call only sets the frozen-signature baseline (real check
-        # requires an unchanged signature across two consecutive polls,
-        # matching TestMechanicalRecovery's frozen-detection pattern).
-        await make_monitoring_loop._mechanical_recovery_for_agent(agent)
-        await make_monitoring_loop._mechanical_recovery_for_agent(agent)
+        # No fallback anywhere -- phase.fallback_cli_tool=None above, and
+        # the global config default must also be unset here, or this
+        # "no fallback configured" scenario silently depends on whatever
+        # hephaestus_config.yaml happens to contain on the machine running
+        # the test (the make_monitoring_loop fixture's own get_config patch
+        # only stays active during MonitoringLoop.__init__, not here).
+        with patch("src.monitoring.monitor.get_config") as mock_cfg:
+            mock_cfg.return_value = Mock(default_fallback_cli_tool=None)
+
+            # First call only sets the frozen-signature baseline (real check
+            # requires an unchanged signature across two consecutive polls,
+            # matching TestMechanicalRecovery's frozen-detection pattern).
+            await make_monitoring_loop._mechanical_recovery_for_agent(agent)
+            await make_monitoring_loop._mechanical_recovery_for_agent(agent)
 
         assert task.status == "failed"
         assert workflow.status == "paused"
@@ -1713,23 +1722,43 @@ class TestSessionLimitPause:
     async def test_no_pause_when_fallback_configured(
         self, make_monitoring_loop, mock_agent_manager, mock_db
     ):
+        """Regression: create_agent_for_task requires memories and
+        project_context (no defaults) -- the fallback dispatch used to
+        omit both entirely, so it ALWAYS raised, was caught by the
+        surrounding try/except, and silently left the task "failed"
+        instead of successfully re-dispatching to the fallback tool. A
+        bare Mock() agent_manager doesn't enforce the real signature, so
+        this only surfaces when create_agent_for_task is asserted to have
+        actually been called with the required kwargs and to have
+        produced a "pending" (re-dispatched), not "failed", task."""
         agent = Agent(id="a1", cli_type="claude")
         mock_agent_manager.get_agent_output.return_value = (
             "You've hit your session limit"
         )
         mock_agent_manager.terminate_agent = AsyncMock()
+        mock_agent_manager.get_project_context = AsyncMock(return_value="ctx")
+        new_agent = Mock(id="a2")
+        mock_agent_manager.create_agent_for_task = AsyncMock(return_value=new_agent)
 
         task = Mock(
-            id="t1", status="in_progress", phase_id="p1", workflow_id="wf1"
+            id="t1", status="in_progress", phase_id="p1", workflow_id="wf1",
+            enriched_description="do the thing", done_definition="done",
         )
-        phase = Mock(fallback_cli_tool="pi")
+        phase = Mock(fallback_cli_tool="pi", fallback_cli_model=None)
         workflow = Mock(status="active", paused_by=None, paused_at=None)
         mock_db.session_scope = self._session_with(task, phase, workflow)
 
         await make_monitoring_loop._mechanical_recovery_for_agent(agent)
         await make_monitoring_loop._mechanical_recovery_for_agent(agent)
 
-        assert task.status == "failed"
+        mock_agent_manager.create_agent_for_task.assert_called_once()
+        call_kwargs = mock_agent_manager.create_agent_for_task.call_args.kwargs
+        assert call_kwargs["memories"] == []
+        assert call_kwargs["project_context"] == "ctx"
+        assert call_kwargs["cli_type"] == "pi"
+
+        assert task.status == "pending"
+        assert task.assigned_agent_id is None
         assert workflow.status == "active"
         assert workflow.paused_by is None
         mock_agent_manager.terminate_agent.assert_called_once()
@@ -1771,8 +1800,10 @@ class TestSessionLimitPause:
         workflow = Mock(status="active", paused_by=None, paused_at=None)
         mock_db.session_scope = self._session_with(task, phase, workflow)
 
-        await make_monitoring_loop._mechanical_recovery_for_agent(agent)
-        await make_monitoring_loop._mechanical_recovery_for_agent(agent)
+        with patch("src.monitoring.monitor.get_config") as mock_cfg:
+            mock_cfg.return_value = Mock(default_fallback_cli_tool=None)
+            await make_monitoring_loop._mechanical_recovery_for_agent(agent)
+            await make_monitoring_loop._mechanical_recovery_for_agent(agent)
 
         assert task.status == "failed"
         assert task.failure_reason == "CLI monthly spend limit reached"
@@ -1785,24 +1816,36 @@ class TestSessionLimitPause:
         self, make_monitoring_loop, mock_agent_manager, mock_db
     ):
         """A configured fallback_cli_tool should get a chance to run
-        instead of leaving the workflow paused."""
+        instead of leaving the workflow paused -- and must actually
+        succeed in dispatching a new agent (see the companion
+        test_no_pause_when_fallback_configured for why this needs
+        explicit assertions on create_agent_for_task's call)."""
         agent = Agent(id="a1", cli_type="claude")
         mock_agent_manager.get_agent_output.return_value = (
             "You've hit your monthly spend limit."
         )
         mock_agent_manager.terminate_agent = AsyncMock()
+        mock_agent_manager.get_project_context = AsyncMock(return_value="ctx")
+        new_agent = Mock(id="a2")
+        mock_agent_manager.create_agent_for_task = AsyncMock(return_value=new_agent)
 
         task = Mock(
-            id="t1", status="in_progress", phase_id="p1", workflow_id="wf1"
+            id="t1", status="in_progress", phase_id="p1", workflow_id="wf1",
+            enriched_description="do the thing", done_definition="done",
         )
-        phase = Mock(fallback_cli_tool="pi")
+        phase = Mock(fallback_cli_tool="pi", fallback_cli_model=None)
         workflow = Mock(status="active", paused_by=None, paused_at=None)
         mock_db.session_scope = self._session_with(task, phase, workflow)
 
         await make_monitoring_loop._mechanical_recovery_for_agent(agent)
         await make_monitoring_loop._mechanical_recovery_for_agent(agent)
 
-        assert task.status == "failed"
+        mock_agent_manager.create_agent_for_task.assert_called_once()
+        call_kwargs = mock_agent_manager.create_agent_for_task.call_args.kwargs
+        assert call_kwargs["memories"] == []
+        assert call_kwargs["project_context"] == "ctx"
+
+        assert task.status == "pending"
         assert workflow.status == "active"
         assert workflow.paused_by is None
         mock_agent_manager.terminate_agent.assert_called_once()

@@ -763,9 +763,15 @@ class MonitoringLoop:
                                 fallback_tool = getattr(phase, "fallback_cli_tool", None)
                                 fallback_model = getattr(phase, "fallback_cli_model", None)
 
-                        # Fall back to global config defaults
+                        # Fall back to global config defaults. Uses the
+                        # module-level get_config (imported at the top of
+                        # this file) rather than a fresh local import --
+                        # a local `from ... import get_config` re-resolves
+                        # directly from src.core.simple_config every call,
+                        # bypassing any patch("src.monitoring.monitor.get_config")
+                        # a caller (e.g. a test) applied to this module's
+                        # own binding.
                         if not fallback_tool:
-                            from src.core.config import get_config
                             cfg = get_config()
                             if cfg.default_fallback_cli_tool and cfg.default_fallback_cli_tool != agent.cli_type:
                                 fallback_tool = cfg.default_fallback_cli_tool
@@ -781,8 +787,32 @@ class MonitoringLoop:
                             await self.agent_manager.terminate_agent(agent.id)
                             self._stuck_state.pop(agent.id, None)
 
-                            # Create new agent with fallback tool for the same task
+                            # Create new agent with fallback tool for the same task.
+                            # memories/project_context are required (no defaults) --
+                            # see _recreate_agent_with_new_approach above for the
+                            # same pattern; an empty enriched_data would also have
+                            # left the fallback agent with no task description at
+                            # all (missing enriched_description/completion_criteria).
                             try:
+                                fallback_context = (
+                                    f"Previous agent ({agent.cli_type}) hit a "
+                                    f"{limit_kind} mid-task. Continuing with a "
+                                    "different CLI tool."
+                                )
+                                memories = await self.rag_system.retrieve_for_task(
+                                    task_description=f"{stuck_task.enriched_description} {fallback_context}",
+                                    requesting_agent_id="monitor",
+                                    limit=15,
+                                )
+                                enriched_data = {
+                                    "enriched_description": stuck_task.enriched_description,
+                                    "completion_criteria": [stuck_task.done_definition],
+                                    "agent_prompt": fallback_context,
+                                    "required_capabilities": [],
+                                    "estimated_complexity": 5,
+                                }
+                                project_context = await self.agent_manager.get_project_context()
+
                                 stuck_task.status = "pending"
                                 stuck_task.assigned_agent_id = None
                                 stuck_task.failure_reason = None
@@ -790,7 +820,9 @@ class MonitoringLoop:
 
                                 new_agent = await self.agent_manager.create_agent_for_task(
                                     task=stuck_task,
-                                    enriched_data={},
+                                    enriched_data=enriched_data,
+                                    memories=memories,
+                                    project_context=project_context,
                                     cli_type=fallback_tool,
                                     phase_cli_tool=fallback_tool,
                                     phase_cli_model=fallback_model,
