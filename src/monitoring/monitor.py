@@ -751,18 +751,69 @@ class MonitoringLoop:
                             f"phase will be retried"
                         )
 
-                        has_fallback = False
+                        fallback_tool = None
+                        fallback_model = None
                         if stuck_task.phase_id:
                             phase = (
                                 session.query(_Phase)
                                 .filter_by(id=stuck_task.phase_id)
                                 .first()
                             )
-                            has_fallback = bool(
-                                phase and getattr(phase, "fallback_cli_tool", None)
-                            )
+                            if phase:
+                                fallback_tool = getattr(phase, "fallback_cli_tool", None)
+                                fallback_model = getattr(phase, "fallback_cli_model", None)
 
-                        if not has_fallback and stuck_task.workflow_id:
+                        # Fall back to global config defaults
+                        if not fallback_tool:
+                            from src.core.config import get_config
+                            cfg = get_config()
+                            if cfg.default_fallback_cli_tool and cfg.default_fallback_cli_tool != agent.cli_type:
+                                fallback_tool = cfg.default_fallback_cli_tool
+                                fallback_model = cfg.default_fallback_cli_model
+
+                        if fallback_tool and fallback_tool != agent.cli_type:
+                            # Kill current agent and re-dispatch with fallback
+                            logger.warning(
+                                f"[SESSION-LIMIT] Re-dispatching with fallback: "
+                                f"{fallback_tool}/{fallback_model or 'default'}"
+                            )
+                            session.commit()  # Save task failure before terminate
+                            await self.agent_manager.terminate_agent(agent.id)
+                            self._stuck_state.pop(agent.id, None)
+
+                            # Create new agent with fallback tool for the same task
+                            try:
+                                stuck_task.status = "pending"
+                                stuck_task.assigned_agent_id = None
+                                stuck_task.failure_reason = None
+                                session.commit()
+
+                                new_agent = await self.agent_manager.create_agent_for_task(
+                                    task=stuck_task,
+                                    enriched_data={},
+                                    cli_type=fallback_tool,
+                                    phase_cli_tool=fallback_tool,
+                                    phase_cli_model=fallback_model,
+                                )
+                                logger.info(
+                                    f"[SESSION-LIMIT] Fallback agent {new_agent.id[:8]} "
+                                    f"created for task {stuck_task.id[:8]}"
+                                )
+                            except Exception as fallback_err:
+                                logger.error(
+                                    f"[SESSION-LIMIT] Fallback agent creation failed: "
+                                    f"{fallback_err}"
+                                )
+                                stuck_task.status = "failed"
+                                stuck_task.failure_reason = (
+                                    f"Primary hit {limit_kind}, fallback also failed: "
+                                    f"{fallback_err}"
+                                )
+                                session.commit()
+                            # Agent already terminated above; return early
+                            # to avoid the second terminate_agent call below.
+                            return True
+                        elif stuck_task.workflow_id:
                             workflow = (
                                 session.query(Workflow)
                                 .filter_by(id=stuck_task.workflow_id)
