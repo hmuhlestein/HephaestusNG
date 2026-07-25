@@ -5,6 +5,7 @@ import collections
 import hashlib
 import json
 import logging
+import math
 import os
 import re
 import subprocess
@@ -1624,6 +1625,24 @@ class ProjectUpdate(BaseModel):
     cost_limit_usd: Optional[float] = None
     clear_cost_limit: bool = False  # Explicit signal to clear the budget
 
+    @field_validator("cost_limit_usd")
+    @classmethod
+    def validate_cost_limit_usd(cls, v: Optional[float]) -> Optional[float]:
+        """Validate cost_limit_usd is a reasonable value.
+
+        SECURITY: Prevents setting absurdly large or invalid budget limits
+        that could bypass budget enforcement or cause floating-point issues.
+        """
+        if v is None:
+            return v
+        if math.isnan(v) or math.isinf(v):
+            raise ValueError("cost_limit_usd must be a finite number")
+        if v < 0:
+            raise ValueError("cost_limit_usd must be non-negative")
+        if v > 1_000_000:  # $1M max budget
+            raise ValueError("cost_limit_usd exceeds maximum allowed value of $1,000,000")
+        return v
+
 
 class CostEntryCreate(BaseModel):
     """Request model for creating a cost entry."""
@@ -1901,7 +1920,18 @@ async def list_projects():
 
 
 @router.post("/projects", response_model=ProjectItem)
-async def create_project(req: ProjectCreate):
+async def create_project(
+    req: ProjectCreate,
+    agent_id: str = Header("ui-user", alias="X-Agent-ID"),
+):
+    # SECURITY: Verify agent authentication before allowing project creation
+    if not await verify_agent_authentication(agent_id):
+        logger.warning(f"Unauthenticated project creation attempt from agent {agent_id}")
+        raise HTTPException(
+            status_code=401,
+            detail="Agent not authenticated. Provide valid X-Agent-ID header.",
+        )
+
     from src.core.database import AutopilotProject, get_db
 
     resolved = _validate_base_dir(req.base_dir)
@@ -1964,7 +1994,19 @@ async def get_project(project_id: str):
 
 
 @router.put("/projects/{project_id}", response_model=ProjectItem)
-async def update_project(project_id: str, req: ProjectUpdate):
+async def update_project(
+    project_id: str,
+    req: ProjectUpdate,
+    agent_id: str = Header("ui-user", alias="X-Agent-ID"),
+):
+    # SECURITY: Verify agent authentication before allowing project modifications
+    if not await verify_agent_authentication(agent_id):
+        logger.warning(f"Unauthenticated project update attempt from agent {agent_id}")
+        raise HTTPException(
+            status_code=401,
+            detail="Agent not authenticated. Provide valid X-Agent-ID header.",
+        )
+
     from src.core.database import AutopilotDesign, AutopilotProject, Workflow, get_db
 
     with get_db() as db:
@@ -2032,7 +2074,18 @@ async def update_project(project_id: str, req: ProjectUpdate):
 
 
 @router.delete("/projects/{project_id}")
-async def delete_project(project_id: str):
+async def delete_project(
+    project_id: str,
+    agent_id: str = Header("ui-user", alias="X-Agent-ID"),
+):
+    # SECURITY: Verify agent authentication before allowing project deletion
+    if not await verify_agent_authentication(agent_id):
+        logger.warning(f"Unauthenticated project deletion attempt from agent {agent_id}")
+        raise HTTPException(
+            status_code=401,
+            detail="Agent not authenticated. Provide valid X-Agent-ID header.",
+        )
+
     from src.core.database import AutopilotProject, get_db
 
     replacement_base_dir = None
