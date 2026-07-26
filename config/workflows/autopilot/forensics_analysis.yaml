@@ -26,10 +26,18 @@ done_definitions:
 outputs:
   - "forensics_report.md"
 additional_notes: |
-  OUTPUT STYLE: Terse. Drop filler (just/really/basically/actually). Fragments OK. 
-  Technical terms exact. No pleasantries (sure/certainly/happy to). 
+  OUTPUT STYLE: Terse. Drop filler (just/really/basically/actually). Fragments OK.
+  Technical terms exact. No pleasantries (sure/certainly/happy to).
   Not: "I'll now proceed to analyze forensics." Yes: "Analyze commit history, diff."
-  
+
+  Start forensics_report.md with this frontmatter block, then the report
+  immediately after:
+  ```
+  ---
+  type: forensics_report
+  ---
+  ```
+
   ═══════════════════════════════════════════════════════════════════════
   YOU ARE A FORENSICS ANALYST - IMPROVE THE PIPELINE
   ═══════════════════════════════════════════════════════════════════════
@@ -53,7 +61,7 @@ additional_notes: |
 
   PHASE ARTIFACTS (requirements, architecture, reports, QA results):
     Read from: ./docs/ (your worktree-relative path — this is where agents wrote them)
-    Example: ./docs/requirements_analysis.md, ./docs/qa_result.json
+    Example: ./docs/requirements_analysis.md, ./docs/qa_validation/qa_report.md
 
   PHASE PROMPTS (the YAML files that instructed each agent):
     Read from: <Docs Path (absolute)>/phase_prompts/
@@ -151,10 +159,8 @@ additional_notes: |
   - ./docs/doc_review_report.md
   - ./docs/security_report.md
   - ./docs/qa_report.md
-  - ./docs/qa_result.json
   - ./docs/product_validation.md
-  - ./docs/product_validation.json
-  - ./docs/scope_review_result.json
+  - ./docs/scope_review_result.md
 
   Also read the original design document at ./.hephaestus/design.md.
 

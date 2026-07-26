@@ -17,6 +17,10 @@ def strict_spec():
     return dict(S.DEFAULT_SPEC)  # 0 failed, 0 critical, 100% pass, 100% reqs
 
 
+def _okf(frontmatter_yaml: str, body: str = "# Report\n") -> str:
+    return f"---\n{frontmatter_yaml}\n---\n\n{body}"
+
+
 # ── score bands map onto the evaluation-point thresholds ──────────────
 
 
@@ -230,7 +234,7 @@ def test_product_missing_json_falls_back_to_report_text():
 def test_product_missing_json_no_report_text():
     score, meta = S.score_product_validation(None, S.DEFAULT_SPEC)
     assert 0.3 <= score < 0.7
-    assert meta["reason"] == "no product_validation.json found"
+    assert meta["reason"] == "no product_validation.md found"
 
 
 def test_product_pass_with_minor_gaps_accepted_within_cap():
@@ -288,26 +292,25 @@ def test_non_gated_phase_returns_empty():
 def test_build_phase_output_reads_docs_dir(tmp_path):
     docs = tmp_path / "docs"
     docs.mkdir()
-    (docs / "qa_result.json").write_text(
-        json.dumps(
-            {
-                "failed_tests": 0,
-                "passed_tests": 5,
-                "total_tests": 5,
-                "critical_issues": 0,
-                "agent_score": 1.0,
-            }
-        )
-    )
+    (docs / "qa_report.md").write_text(_okf(
+        "type: qa_validation_result\n"
+        "failed_tests: 0\n"
+        "passed_tests: 5\n"
+        "total_tests: 5\n"
+        "critical_issues: 0\n"
+        "agent_score: 1.0"
+    ))
     out = S.build_phase_output("qa_validation", tmp_path, spec=dict(S.DEFAULT_SPEC))
     assert out["score"] >= 0.7
     assert out["spec_gate"]["gate"] == "qa"
 
 
 def test_build_phase_output_root_fallback(tmp_path):
-    (tmp_path / "product_validation.json").write_text(
-        json.dumps({"verdict": "NEEDS_WORK", "unmet_requirements": ["x"]})
-    )
+    (tmp_path / "product_validation.md").write_text(_okf(
+        "type: product_validation_result\n"
+        "verdict: NEEDS_WORK\n"
+        "unmet_requirements: [\"x\"]"
+    ))
     out = S.build_phase_output(
         "product_validation", tmp_path, spec=dict(S.DEFAULT_SPEC)
     )
@@ -338,13 +341,11 @@ class TestConsumeGateArtifacts:
     def test_deletes_result_and_report_from_docs(self, tmp_path):
         docs = tmp_path / "docs"
         docs.mkdir()
-        (docs / "adversarial_review_result.json").write_text("{}")
         (docs / "adversarial_review_report.md").write_text("# report")
 
         deleted = S.consume_gate_artifacts("adversarial_review", tmp_path)
 
-        assert len(deleted) == 2
-        assert not (docs / "adversarial_review_result.json").exists()
+        assert len(deleted) == 1
         assert not (docs / "adversarial_review_report.md").exists()
 
     def test_unknown_phase_is_a_noop(self, tmp_path):
@@ -381,13 +382,11 @@ class TestConsumeGateArtifacts:
         results there too, not just flat docs/."""
         sub = tmp_path / "docs" / "adversarial_review"
         sub.mkdir(parents=True)
-        (sub / "adversarial_review_result.json").write_text("{}")
         (sub / "adversarial_review_report.md").write_text("# report")
 
         deleted = S.consume_gate_artifacts("adversarial_review", tmp_path)
 
-        assert len(deleted) == 2
-        assert not (sub / "adversarial_review_result.json").exists()
+        assert len(deleted) == 1
         assert not (sub / "adversarial_review_report.md").exists()
 
     def test_does_not_delete_a_different_phases_subdirectory_file(self, tmp_path):
@@ -399,12 +398,12 @@ class TestConsumeGateArtifacts:
         docs = tmp_path / "docs"
         other = docs / "some_other_feature"
         other.mkdir(parents=True)
-        (other / "adversarial_review_result.json").write_text("{}")
+        (other / "adversarial_review_report.md").write_text("# report")
 
         deleted = S.consume_gate_artifacts("adversarial_review", tmp_path)
 
         assert deleted == []
-        assert (other / "adversarial_review_result.json").exists()
+        assert (other / "adversarial_review_report.md").exists()
 
 
 class TestValidateGateResultSchema:
@@ -417,6 +416,7 @@ class TestValidateGateResultSchema:
 
     def test_accepts_the_documented_qa_schema(self):
         result = {
+            "type": "qa_validation_result",
             "failed_tests": 0,
             "passed_tests": 1410,
             "total_tests": 1410,
@@ -438,7 +438,7 @@ class TestValidateGateResultSchema:
         """Any one of the required keys is enough -- doesn't demand all of
         them, just evidence the agent used the right schema shape."""
         assert S.validate_gate_result_schema(
-            "qa_validation", {"critical_issues": 2}
+            "qa_validation", {"type": "qa_validation_result", "critical_issues": 2}
         ) is None
 
     def test_scope_review_accepts_documented_nested_variant(self):
@@ -446,17 +446,36 @@ class TestValidateGateResultSchema:
         the schema check must not reject a shape the scorer already
         tolerates."""
         assert S.validate_gate_result_schema(
-            "scope_review", {"scope_review": {"verdict": "PASS"}}
+            "scope_review",
+            {"type": "scope_review_result", "scope_review": {"verdict": "PASS"}},
         ) is None
 
     def test_architectural_review_rejects_missing_blocker_count(self):
         error = S.validate_gate_result_schema(
-            "architectural_review", {"summary": "looks fine"}
+            "architectural_review",
+            {"type": "architectural_review_result", "summary": "looks fine"},
         )
         assert error is not None
 
     def test_unmapped_phase_is_a_noop(self):
         assert S.validate_gate_result_schema("development", {"anything": True}) is None
+
+    def test_rejects_wrong_type_even_with_correct_required_keys(self):
+        """type is OKF's one always-required field -- a report with all the
+        right keys but a wrong/missing type still looks like an
+        incompatible or malformed frontmatter block, not the documented
+        one, and must be rejected just as much as missing keys would be."""
+        error = S.validate_gate_result_schema(
+            "qa_validation",
+            {"type": "wrong_type", "failed_tests": 0, "critical_issues": 0},
+        )
+        assert error is not None
+        assert "qa_validation" in error
+
+        error_no_type = S.validate_gate_result_schema(
+            "qa_validation", {"failed_tests": 0, "critical_issues": 0}
+        )
+        assert error_no_type is not None
 
     def test_none_result_is_a_noop(self):
         """A missing/unparseable file is verify_output_artifact's job --

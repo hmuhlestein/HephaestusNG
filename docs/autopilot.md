@@ -233,9 +233,11 @@ scope — nothing added, nothing dropped.
 - Reads `requirements_analysis.md` — what Phase 1 produced
 - Traces every requirement back to a line in `scope.md` and ultimately to `design.md`
 
-Produces: `scope_review_result.json` with verdict PASS or FAIL. On FAIL, returns
-to Phase 1 with specific correction instructions. This is a binary gate — no
-architecture starts until scope is clean.
+Produces: `scope_review_result.md` — a YAML frontmatter block (OKF format:
+`type` first, then verdict PASS or FAIL and supporting fields) followed by
+the narrative report. On FAIL, returns to Phase 1 with specific correction
+instructions. This is a binary gate — no architecture starts until scope is
+clean.
 
 ### Phase 3: Architecture & Design
 
@@ -276,10 +278,11 @@ over-engineering:
   deviation), or DEFER (nice to have)
 - Reports findings — does **not** edit production code directly
 
-Produces: `architectural_review_report.md` and `architectural_review_result.json`.
-The developer fixes issues based on this report; capped at a max number of
-review runs (`workflow.yaml`'s `max_review_runs`) before the phase reports
-unresolved findings and moves on.
+Produces: `architectural_review_report.md` — a YAML frontmatter block (OKF
+format, `blocker_count`/`fix_count`/`defer_count` etc.) followed by the
+narrative report. The developer fixes issues based on this report; capped
+at a max number of review runs (`workflow.yaml`'s `max_review_runs`) before
+the phase reports unresolved findings and moves on.
 
 ### Phase 6: Adversarial Code Review
 
@@ -764,7 +767,7 @@ The `CostTracker` module (`src/interfaces/cost_tracker.py`) queries:
 |-------|-------|-----------|-----------|
 | 0  | Design  | design.md, AGENTS.md, designs/, vector DB | features.json, features/\<id\>/scope.md (per feature) |
 | 1  | Feature | scope.md, AGENTS.md, features/, vector DB | requirements_analysis.md |
-| 2  | Feature | scope.md, design.md, requirements_analysis.md | scope_review_result.json |
+| 2  | Feature | scope.md, design.md, requirements_analysis.md | scope_review_result.md |
 | 3  | Feature | scope.md, requirements_analysis.md | architecture.md |
 | 4  | Feature | architecture.md, AGENTS.md | Source code, tests |
 | 5  | Feature | architecture.md, requirements_analysis.md | review_report.md, code fixes |

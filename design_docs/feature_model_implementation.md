@@ -36,7 +36,7 @@ These are Run B failures documented in §11.2 of the architecture review:
 ### 2.1 Spec gate must fire on QA completion
 
 **Problem:** `_build_spec_phase_output` is not called when `qa_validation` completes.
-QA agent marks done with no `qa_result.json` → pipeline continues, spec gate never
+QA agent marks done with no `qa_report.md` → pipeline continues, spec gate never
 scores.
 
 **Fix (two complementary approaches):**
@@ -50,16 +50,16 @@ Add `[SPEC-GATE]` log statements. Verify with a seeded failing test.
 (`src/mcp/server.py` around line 1794), when a phase agent marks a task done, check
 whether the phase's declared output artifact exists on disk in the worktree. If it does
 not exist, reject the `done` status: send the agent a message ("Your declared output
-`qa_result.json` is missing — produce it, then mark done"). This catches hallucinated
+`qa_report.md` is missing — produce it, then mark done"). This catches hallucinated
 completions mechanically, at the source.
 
 Output artifact declarations per phase (add to `workflow.yaml` or phase YAML):
 ```yaml
-required_output: qa_result.json      # qa_validation
-required_output: product_validation.json  # product_validation
+required_output: qa_report.md         # qa_validation
+required_output: product_validation.md  # product_validation
 required_output: architecture.md     # architecture_design
 required_output: requirements_analysis.md  # product_requirements
-required_output: scope_review_result.json  # scope_review
+required_output: scope_review_result.md  # scope_review
 ```
 
 Implement both A and B; they are complementary. B is the general fix; A makes the
@@ -1091,9 +1091,7 @@ still run the current flow for backward compatibility).
             doc_review_report.md
             security_report.md
             qa_report.md
-            qa_result.json
             product_validation.md
-            product_validation.json
             forensics_report.md
             pipeline_metrics.json
             phase_prompts/

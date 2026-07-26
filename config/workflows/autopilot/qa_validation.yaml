@@ -14,7 +14,10 @@ description: |
   CRITICAL PATH RULE: Your current working directory IS the project root (an isolated git worktree).
   - "Project Path" = your working directory (.).  "Docs Path" = ./docs/ (create it if missing).
   - Write ALL reports to "Docs Path" (./docs/) — NOT the project root.
-  - Write qa_report.md and qa_result.json to ./docs/qa_validation/.
+  - Write ONE file, qa_report.md, to ./docs/qa_validation/ — a YAML
+    frontmatter block (structured pass/fail counts, the gate input) followed
+    by the full narrative report, in a single file. See STEP 10 below for
+    the exact frontmatter schema.
   - Use exactly that subdirectory name (./docs/qa_validation/) — the
     pipeline only looks for that one exact name; anything else is invisible
     to it.
@@ -30,14 +33,12 @@ done_definitions:
   - "End-to-end validation performed"
   - "Requirements compliance verified"
   - "Security fixes validated"
-  - "qa_report.md created with comprehensive results"
-  - "./docs/qa_result.json created with structured pass/fail counts (gate input)"
+  - "qa_report.md created with a YAML frontmatter block (structured pass/fail counts, gate input) followed by the comprehensive narrative report"
   - "Memory saved with QA findings"
   - "Iteration recommendation provided (done/needs_work)"
   - "Task marked as done"
 outputs:
   - "qa_report.md"
-  - "qa_result.json"
 additional_notes: |
   OUTPUT STYLE: Terse. Drop filler (just/really/basically/actually). Fragments OK. 
   Technical terms exact. No pleasantries (sure/certainly/happy to). 
@@ -392,30 +393,37 @@ additional_notes: |
   2. [Problem 2]
   
   ═══════════════════════════════════════════════════════════════════════
-  STEP 10: EMIT STRUCTURED QA RESULT (REQUIRED — drives the pipeline gate)
+  STEP 10: PREPEND STRUCTURED QA RESULT (REQUIRED — drives the pipeline gate)
   ═══════════════════════════════════════════════════════════════════════
-  
-  In addition to qa_report.md, write a machine-readable ./docs/qa_result.json.
-  The pipeline scores this against the project spec to decide whether to continue,
-  return to development, or return to architecture. Use REAL numbers from your run.
-  
-  Write ./docs/qa_result.json with EXACTLY this schema:
-  
-  ```json
-  {
-    "failed_tests": 0,
-    "failed_test_names": [],
-    "passed_tests": 0,
-    "total_tests": 0,
-    "pass_rate": 100,
-    "critical_issues": 0,
-    "major_issues": 0,
-    "requirements_total": 0,
-    "requirements_met": 0,
-    "agent_score": 0.0,
-    "verdict": "PASS",
-    "summary": "one-line summary"
-  }
+
+  qa_report.md is ONE file: a YAML frontmatter block (machine-readable,
+  scored against the project spec to decide whether to continue, return to
+  development, or return to architecture) followed immediately by the full
+  narrative report from the steps above. Use REAL numbers from your run.
+
+  Prepend this frontmatter block to the very top of ./docs/qa_validation/qa_report.md,
+  with EXACTLY this schema (type first, then a closing `---`, then the
+  narrative report immediately after):
+
+  ```
+  ---
+  type: qa_validation_result
+  failed_tests: 0
+  failed_test_names: []
+  passed_tests: 0
+  total_tests: 0
+  pass_rate: 100
+  critical_issues: 0
+  major_issues: 0
+  requirements_total: 0
+  requirements_met: 0
+  agent_score: 0.0
+  verdict: PASS
+  summary: "one-line summary"
+  ---
+
+  # QA Validation Report
+  ...(the narrative report from the steps above)...
   ```
 
   Field rules:

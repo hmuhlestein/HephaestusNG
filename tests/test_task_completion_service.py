@@ -113,7 +113,8 @@ class TestVerifyOutputArtifact:
         mock_session = Mock()
 
         with patch("src.autopilot.spec.get_phase_required_files", return_value=["docs/output.md"]), \
-             patch("pathlib.Path.exists", return_value=True):
+             patch("pathlib.Path.exists", return_value=True), \
+             patch("src.autopilot.okf_markdown.read_okf", return_value=({"type": "test"}, "body")):
             result = TaskCompletionService.verify_output_artifact(
                 session=mock_session, task=task, phase=phase
             )
@@ -144,7 +145,7 @@ class TestVerifyOutputArtifact:
 
         sub = tmp_path / "docs" / "qa_validation"
         sub.mkdir(parents=True)
-        (sub / "qa_report.md").write_text("# QA Report")
+        (sub / "qa_report.md").write_text("---\ntype: qa_validation_result\n---\n\n# QA Report")
 
         mock_session = Mock()
         mock_session.query.return_value.filter_by.return_value.first.return_value = (
@@ -221,7 +222,8 @@ class TestVerifyOutputArtifact:
         mock_session.query.return_value.filter_by.return_value.first.return_value = Mock(working_directory="/path/to/project", project_id=None)
 
         with patch("src.autopilot.spec.get_phase_required_files", return_value=["docs/output.md"]), \
-             patch("pathlib.Path.exists", return_value=True):
+             patch("pathlib.Path.exists", return_value=True), \
+             patch("src.autopilot.okf_markdown.read_okf", return_value=({"type": "test"}, "body")):
             result = TaskCompletionService.verify_output_artifact(
                 session=mock_session, task=task, phase=phase
             )
@@ -244,10 +246,10 @@ class TestVerifyOutputArtifact:
             )
             assert result is None
 
-    def test_rejects_when_json_output_exists_but_is_malformed(self, tmp_path):
-        """Regression: a truncated/malformed JSON write used to pass this
-        floor (the file exists) and only surface much later, at gate-scoring
-        time, as a confusing 'not found' -- read_result's bare
+    def test_rejects_when_md_output_exists_but_has_no_valid_frontmatter(self, tmp_path):
+        """Regression: a truncated/malformed write used to pass this floor
+        (the file exists) and only surface much later, at gate-scoring
+        time, as a confusing 'not found' -- read_okf's bare
         except-return-None makes a malformed file indistinguishable from a
         missing one downstream. This floor must catch it here instead."""
         phase = Mock(name="product_validation", id="phase-1")
@@ -256,7 +258,7 @@ class TestVerifyOutputArtifact:
 
         sub = tmp_path / "docs" / "product_validation"
         sub.mkdir(parents=True)
-        (sub / "product_validation.json").write_text("{not valid json")
+        (sub / "product_validation.md").write_text("no frontmatter block here")
 
         mock_session = Mock()
         mock_session.query.return_value.filter_by.return_value.first.return_value = (
@@ -265,23 +267,25 @@ class TestVerifyOutputArtifact:
 
         with patch(
             "src.autopilot.spec.get_phase_required_files",
-            return_value=["product_validation.json"],
+            return_value=["product_validation.md"],
         ), patch("src.autopilot.spec.load_optional_phases", return_value=[]):
             result = TaskCompletionService.verify_output_artifact(
                 session=mock_session, task=task, phase=phase
             )
             assert result is not None
             assert result["status"] == "failed"
-            assert "not valid json" in result["message"].lower()
+            assert "okf" in result["message"].lower()
 
-    def test_passes_when_json_output_is_well_formed(self, tmp_path):
+    def test_passes_when_md_output_has_valid_frontmatter(self, tmp_path):
         phase = Mock(name="product_validation", id="phase-1")
         phase.name = "product_validation"
         task = Mock(phase_id="phase-1", workflow_id="wf-1", id="task-1")
 
         sub = tmp_path / "docs" / "product_validation"
         sub.mkdir(parents=True)
-        (sub / "product_validation.json").write_text('{"verdict": "PASS"}')
+        (sub / "product_validation.md").write_text(
+            "---\ntype: product_validation_result\nverdict: PASS\n---\n\n# Report"
+        )
 
         mock_session = Mock()
         mock_session.query.return_value.filter_by.return_value.first.return_value = (
@@ -290,7 +294,7 @@ class TestVerifyOutputArtifact:
 
         with patch(
             "src.autopilot.spec.get_phase_required_files",
-            return_value=["product_validation.json"],
+            return_value=["product_validation.md"],
         ):
             result = TaskCompletionService.verify_output_artifact(
                 session=mock_session, task=task, phase=phase
@@ -312,7 +316,7 @@ class TestVerifyOutputArtifact:
         project_dir = tmp_path / "project-a"
         feature_docs = project_dir / ".hephaestus" / "features" / "feat-1" / "docs"
         feature_docs.mkdir(parents=True)
-        (feature_docs / "output.md").write_text("content")
+        (feature_docs / "output.md").write_text("---\ntype: test\n---\n\ncontent")
 
         wf = Mock(working_directory=str(workdir), project_id="proj-a")
         project = Mock(base_dir=str(project_dir))
@@ -454,11 +458,16 @@ class TestVerifyGateResultSchema:
         phase.name = "qa_validation"
         task = Mock(phase_id="phase-1", workflow_id="wf-1", id="task-1")
 
-        docs = tmp_path / "docs"
-        docs.mkdir()
-        (docs / "qa_result.json").write_text(
-            '{"overall_status": "PASS", "test_results": '
-            '{"main_suite": {"total": 1410, "passed": 1410}}}'
+        sub = tmp_path / "docs" / "qa_validation"
+        sub.mkdir(parents=True)
+        (sub / "qa_report.md").write_text(
+            "---\n"
+            "overall_status: PASS\n"
+            "test_results:\n"
+            "  main_suite:\n"
+            "    total: 1410\n"
+            "    passed: 1410\n"
+            "---\n\n# QA Report"
         )
 
         mock_session = Mock()
@@ -481,10 +490,15 @@ class TestVerifyGateResultSchema:
         phase.name = "qa_validation"
         task = Mock(phase_id="phase-1", workflow_id="wf-1", id="task-1")
 
-        docs = tmp_path / "docs"
-        docs.mkdir()
-        (docs / "qa_result.json").write_text(
-            '{"failed_tests": 0, "passed_tests": 1410, "critical_issues": 0}'
+        sub = tmp_path / "docs" / "qa_validation"
+        sub.mkdir(parents=True)
+        (sub / "qa_report.md").write_text(
+            "---\n"
+            "type: qa_validation_result\n"
+            "failed_tests: 0\n"
+            "passed_tests: 1410\n"
+            "critical_issues: 0\n"
+            "---\n\n# QA Report"
         )
 
         mock_session = Mock()
@@ -526,8 +540,8 @@ class TestVerifyGateResultSchema:
 
         internal_dir = tmp_path / CONTEXT_DIR_NAME
         internal_dir.mkdir()
-        (internal_dir / "feature_review_result.json").write_text(
-            '{"summary": "no counts here"}'
+        (internal_dir / "feature_review_report.md").write_text(
+            "---\ntype: feature_review_result\nsummary: no counts here\n---\n\n# Report"
         )
 
         mock_session = Mock()

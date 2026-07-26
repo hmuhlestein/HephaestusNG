@@ -58,16 +58,14 @@ workflow:
 # other pipeline phase gets (update_task_status rejects 'done' when the
 # artifact is missing). Both phases write to .hephaestus/, since Phase 0's
 # artifacts (Feature Architect's features.json/scope.md, feature_review's
-# report/result) are internal orchestration state, never a git-tracked
-# project deliverable, unlike the main autopilot pipeline's review reports
+# report) are internal orchestration state, never a git-tracked project
+# deliverable, unlike the main autopilot pipeline's review reports
 # (architectural_review, adversarial_review) which live in docs/. The
-# spec-gate scorer's read_result/read_report_text calls for feature_review
-# pass subdir=CONTEXT_DIR_NAME explicitly to match.
+# spec-gate scorer's read_okf_report call for feature_review passes
+# subdir=CONTEXT_DIR_NAME explicitly to match.
 required_output:
   Feature Architect: features.json
-  feature_review:
-    - feature_review_report.md
-    - feature_review_result.json
+  feature_review: feature_review_report.md
 
 launch_template:
   parameters:

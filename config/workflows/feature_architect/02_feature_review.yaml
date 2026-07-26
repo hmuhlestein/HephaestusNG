@@ -21,12 +21,10 @@ done_definitions:
   - "depends_on graph checked for cycles and unnecessary coupling"
   - "All BLOCKER and FIX findings documented with the exact design section and recommended fix"
   - "DEFER issues documented"
-  - "feature_review_report.md created with BLOCKER/FIX/DEFER findings"
-  - "feature_review_result.json written with blocker_count/fix_count/defer_count"
+  - "feature_review_report.md created with a YAML frontmatter block (blocker_count/fix_count/defer_count, gate input) followed by the BLOCKER/FIX/DEFER findings"
   - "Task marked as done"
 outputs:
   - "feature_review_report.md"
-  - "feature_review_result.json"
 next_steps:
   - "On any BLOCKER or FIX finding, the engine sends this report back to the Feature Architect for re-decomposition"
   - "On pass, per-feature pipelines are launched from features.json as-is"
@@ -146,25 +144,31 @@ additional_notes: |
   [What the decomposition got right]
 
   ═══════════════════════════════════════════════════════════════════════
-  STEP 5: WRITE feature_review_result.json (NOT OPTIONAL)
+  STEP 5: PREPEND STRUCTURED RESULT TO feature_review_report.md (NOT OPTIONAL)
   ═══════════════════════════════════════════════════════════════════════
 
-  The report above is for the Feature Architect to read. This file is ALSO
-  what drives the pipeline: if ANY BLOCKER or FIX is found, the pipeline
-  sends the FULL feature_review_report.md straight back to the Feature
-  Architect as its next task — without a nonzero blocker_count or fix_count
-  here, the pipeline can't tell any findings were found at all and will
-  launch per-feature pipelines regardless. Only a report with zero BLOCKERs
-  and zero FIX items (DEFER-only, or clean) passes.
-  Write it to ./.hephaestus/feature_review_result.json — NOT ./docs/, same
-  reason as Step 4.
+  feature_review_report.md is ONE file: a YAML frontmatter block followed
+  by the full report above, written to ./.hephaestus/feature_review_report.md
+  — NOT ./docs/, same reason as Step 4. The frontmatter is what drives the
+  pipeline: if ANY BLOCKER or FIX is found, the pipeline sends the FULL
+  report straight back to the Feature Architect as its next task — without
+  a nonzero blocker_count or fix_count here, the pipeline can't tell any
+  findings were found at all and will launch per-feature pipelines
+  regardless. Only a report with zero BLOCKERs and zero FIX items
+  (DEFER-only, or clean) passes.
 
-  {
-    "blocker_count": <int>,
-    "fix_count": <int>,
-    "defer_count": <int>,
-    "overall": "PASS" | "NEEDS_WORK" | "FAIL"
-  }
+  Prepend this to the very top of the file (type first, then a closing
+  `---`, then the report from the steps above immediately after):
+
+  ```
+  ---
+  type: feature_review_result
+  blocker_count: <int>
+  fix_count: <int>
+  defer_count: <int>
+  overall: PASS | NEEDS_WORK | FAIL
+  ---
+  ```
 
   Counts must match the report's own Summary section exactly.
 

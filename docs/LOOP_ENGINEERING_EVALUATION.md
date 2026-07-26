@@ -136,8 +136,8 @@ re-injection by the orchestrator between phases.
   `features/` directory, prior feature docs. Call `search_memory()` with four queries:
   technology decisions, architecture patterns, constraints, completed features. Grep all
   `.md` files for keywords from the current design.
-- **Step 0.5 (CRITICAL ON RETRY):** Check `./docs/scope_review_result.json`. If it
-  exists with `"verdict": "FAIL"`, read `correction_instructions`, `out_of_scope`, and
+- **Step 0.5 (CRITICAL ON RETRY):** Check `./docs/scope_review_result.md`. If its
+  frontmatter has `verdict: FAIL`, read `correction_instructions`, `out_of_scope`, and
   `missing` lists and follow them exactly — these override the agent's own judgment.
 - **Step 1:** Read `./.hephaestus/design.md` (the scope authority).
 - **Step 2:** For each requirement: is it new or overlapping with existing code? What
@@ -174,16 +174,21 @@ in `requirements_analysis.md` must be explicitly traceable to a line in `design.
 - `OUT-OF-SCOPE` — added by the requirements agent, not in `design.md`
 - `MISSING` — in `design.md` but absent from `requirements_analysis.md`
 
-**Output (required_output — hard floor):** `./docs/scope_review_result.json`
+**Output (required_output — hard floor):** `./docs/scope_review_result.md` — a YAML
+frontmatter block (OKF format: `type` first) followed by the narrative report.
 
-```json
-{
-  "verdict": "PASS",
-  "out_of_scope": [],
-  "missing": [],
-  "correction_instructions": "",
-  "summary": "one-line summary"
-}
+```markdown
+---
+type: scope_review_result
+verdict: PASS
+out_of_scope: []
+missing: []
+correction_instructions: ""
+summary: "one-line summary"
+---
+
+# Scope Review Report
+...
 ```
 
 `verdict` is `"PASS"` only if both `out_of_scope` and `missing` are empty arrays.
@@ -284,8 +289,8 @@ dependency graph encoding parallelism.
 | 6 | `adversarial_review` | `adversarial_review_report.md` | ✅ | goto arch < 0.3, goto dev < 0.6 |
 | 7 | `doc_review` | Updated docs | None | goto arch < 0.3, goto dev < 0.6 |
 | 8 | `security_review` | Security report | None | goto arch < 0.3, goto dev < 0.7 |
-| 9 | `qa_validation` | `qa_result.json` | ✅ | goto arch < 0.3, goto dev < 0.7 |
-| 10 | `product_validation` | `product_validation.json` | ✅ | goto arch < 0.3, goto dev < 0.7 |
+| 9 | `qa_validation` | `qa_report.md` | ✅ | goto arch < 0.3, goto dev < 0.7 |
+| 10 | `product_validation` | `product_validation.md` | ✅ | goto arch < 0.3, goto dev < 0.7 |
 | 11 | `forensics_analysis` | Forensics report | None (optional phase) | Always continue |
 | 12 | `git_commit_push` | Git commit | None (optional phase) | Always continue |
 
@@ -437,14 +442,14 @@ is genuinely absent.
 **Status: High fidelity for gated phases; low fidelity for development phase.**
 
 The `scope_review` gate is binary and fully objective. The QA gate reads actual test
-metrics from structured JSON. The `product_validation` gate checks the `verdict` field
-and rejects `"PASS"` if `unmet_requirements` is non-empty — a hard override that prevents
-a PASS verdict from covering up unmet requirements.
+metrics from structured YAML frontmatter. The `product_validation` gate checks the
+`verdict` field and rejects `"PASS"` if `unmet_requirements` is non-empty — a hard
+override that prevents a PASS verdict from covering up unmet requirements.
 
 However, the system never independently re-runs the test suite. The QA agent runs tests,
-writes the results to `qa_result.json`, and the spec gate reads that file. An agent that
-writes a plausible-looking `qa_result.json` with `"failed_tests": 0, "pass_rate": 100`
-but never actually ran tests would pass the gate. Anthropic's evaluator used Playwright
+writes the results into `qa_report.md`'s frontmatter, and the spec gate reads that file.
+An agent that writes a plausible-looking frontmatter block with `failed_tests: 0,
+pass_rate: 100` but never actually ran tests would pass the gate. Anthropic's evaluator used Playwright
 to *actually navigate the running application* — the evaluator couldn't be fooled by a
 self-report because it was independently exercising the system.
 
@@ -498,9 +503,9 @@ counter or trigger a GOTO.
 
 ### Enhancement 1: Independent test re-run at the QA gate (highest leverage)
 
-**Current state:** `score_qa()` reads `qa_result.json` that the QA agent wrote.  
-**Risk:** An agent that writes a plausible JSON but never ran tests passes the gate.  
-**Fix:** After the QA phase completes and `qa_result.json` exists, run the test suite
+**Current state:** `score_qa()` reads the frontmatter in `qa_report.md` that the QA agent wrote.  
+**Risk:** An agent that writes plausible frontmatter but never ran tests passes the gate.  
+**Fix:** After the QA phase completes and `qa_report.md` exists, run the test suite
 independently and compare the result against the agent's claimed metrics.
 
 ```python
@@ -642,7 +647,7 @@ All three enhancements were implemented:
 
 **Measurable impact:** Closes the biggest verification fidelity gap. The QA gate now
 verifies test results against reality instead of trusting agent self-report. An agent
-that writes plausible `qa_result.json` without running tests will be caught.
+that writes a plausible `qa_report.md` frontmatter block without running tests will be caught.
 
 ### Enhancement 4: MonitorSignal → Orchestrator Feedback Channel
 

@@ -630,8 +630,9 @@ class TestEvaluationGotoConsumesGateArtifacts:
 
         docs = tmp_path / "docs"
         docs.mkdir()
-        (docs / "adversarial_review_result.json").write_text('{"blocker_count": 4}')
-        (docs / "adversarial_review_report.md").write_text("# stale report")
+        (docs / "adversarial_review_report.md").write_text(
+            "---\ntype: adversarial_review_result\nblocker_count: 4\n---\n\n# stale report"
+        )
 
         with real_db.session_scope() as session:
             session.add(
@@ -682,7 +683,6 @@ class TestEvaluationGotoConsumesGateArtifacts:
 
         assert result["action"] == "goto"
         assert result["target_phase"] == "development"
-        assert not (docs / "adversarial_review_result.json").exists()
         assert not (docs / "adversarial_review_report.md").exists()
 
 
@@ -699,7 +699,9 @@ class TestForceGotoConsumesGateArtifacts:
 
         docs = tmp_path / "docs"
         docs.mkdir()
-        (docs / "qa_result.json").write_text('{"failed_tests": 3}')
+        (docs / "qa_report.md").write_text(
+            "---\ntype: qa_validation_result\nfailed_tests: 3\n---\n\n# stale report"
+        )
 
         with real_db.session_scope() as session:
             session.add(
@@ -740,7 +742,7 @@ class TestForceGotoConsumesGateArtifacts:
 
         assert result["action"] == "goto"
         assert result["target_phase"] == "architecture_design"
-        assert not (docs / "qa_result.json").exists()
+        assert not (docs / "qa_report.md").exists()
 
 
 class TestGetOrchestratorPhaseOrderMap:
