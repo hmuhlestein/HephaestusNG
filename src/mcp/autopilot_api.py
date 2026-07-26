@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, TypeVar
 
-from fastapi import APIRouter, Header, HTTPException, Query
+from fastapi import APIRouter, Header, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel, Field, field_validator, model_validator, validator
 from sqlalchemy import func as sqlfunc
@@ -2144,6 +2144,7 @@ async def delete_project(
 @router.post("/cost-entries")
 async def create_cost_entry(
     req: CostEntryCreate,
+    request: Request,
     agent_id: str = Header(..., alias="X-Agent-ID"),
 ):
     """Create a cost entry and trigger cost derivation rollup.
@@ -2159,9 +2160,15 @@ async def create_cost_entry(
             detail="Agent not authenticated. Provide valid X-Agent-ID header.",
         )
 
-    # SECURITY: Rate limiting to prevent cost entry flooding
-    if not _check_rate_limit(f"cost_entry:{agent_id}", max_requests=60):
-        logger.warning(f"Rate limit exceeded for cost entries from agent {agent_id}")
+    # SECURITY: Rate limit by client IP, not X-Agent-ID. The header is
+    # caller-supplied and several prefixes (sdk-*, mcp-*) are trusted
+    # unconditionally by verify_agent_authentication, so a caller could
+    # otherwise reset the rate-limit bucket on every request just by
+    # rotating the header value. The server binds 0.0.0.0 (hephaestus_config.yaml),
+    # so this endpoint is reachable beyond localhost.
+    client_host = request.client.host if request.client else "unknown"
+    if not _check_rate_limit(f"cost_entry:{client_host}", max_requests=60):
+        logger.warning(f"Rate limit exceeded for cost entries from {client_host} (agent {agent_id})")
         raise HTTPException(
             status_code=429,
             detail="Rate limit exceeded. Maximum 60 cost entries per minute.",

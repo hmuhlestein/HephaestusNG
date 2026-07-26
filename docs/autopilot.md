@@ -636,9 +636,15 @@ Costs appear in:
 ### Budget Enforcement
 
 Independent of LiteLLM, every agent's task cost is recorded to a `CostEntry`
-ledger (`src/services/cost_collection_service.py`, from the Pi JSONL usage
-log) and rolled up into `cost_total_usd` on `Task`, `Feature`, `Workflow`,
-`AutopilotDesign`, and `AutopilotProject` via `src/core/cost_derivation.py`.
+ledger via `POST /cost-entries` and rolled up into `cost_total_usd` on `Task`,
+`Feature`, `Workflow`, `AutopilotDesign`, and `AutopilotProject` via
+`src/core/cost_derivation.py`. Two collectors feed this ledger:
+`ClaudeCodeCollector` (Claude Code sessions) and, for Pi, either the
+real-time `hephaestus-cost-tracker` pi extension (installed/built
+automatically by `scripts/install.sh` when `pi` is detected, posting costs
+on `turn_end`) or, if the extension isn't built (e.g. `npm` unavailable), a
+JSONL-tailing fallback in `src/services/cost_collection_service.py` that
+picks up the same costs at task-completion time instead of in real time.
 
 Set a spending cap per project with `cost_limit_usd` (project settings in the
 UI, or `PUT /projects/{id}`). Once a project's `cost_total_usd` reaches its

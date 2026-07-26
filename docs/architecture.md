@@ -1,364 +1,252 @@
-# Architecture: Cost Tracking UI
+---
+type: architecture
+feature_id: des-91c8-cost-collectors
+status: complete
+---
 
-**Feature ID:** des-91c8-cost-ui
+# Architecture: CLI Cost Collectors (Pi + Claude Code)
+
+**Feature ID:** des-91c8-cost-collectors
 **Status:** Architecture Complete
-**Date:** 2026-07-24
-**Requirements:** `docs/requirements_analysis.md` (5 FRs, PASSED scope review — `docs/scope_review/scope_review_result.json`)
+**Date:** 2026-07-25
+**Input:** `docs/requirements_analysis.md` (PASS per `docs/scope_review/scope_review_result.md`)
 
----
+## 1. Scope Recap
 
-## 1. Summary
+This feature is packaging/deployment only. The collector runtime logic
+(`PiJsonlCollector`, `ClaudeCodeCollector`, checkpointing, the `/cost-entries`
+API, the pi extension's TypeScript source) is already implemented and merged.
+Nothing here touches `src/services/cost_collection_service.py`,
+`src/core/cost_derivation.py`, the DB schema, or budget enforcement.
 
-This feature wires four already-built cost components into three screens and adds one additive
-backend field. No new components, endpoints, schema, or cost computation. All work is either a
-prop addition to an existing component, a new (small) local usage of an existing component, or a
-one-line dict-literal addition in an existing endpoint handler.
+Three concrete gaps, all inside `scripts/install.sh` and
+`extensions/hephaestus-cost-tracker/README.md`:
 
-Five tasks below, one per FR, in dependency order (backend field before the frontend rows that
-consume it).
+1. `scripts/install.sh` never copies/builds the pi extension → dead code in
+   practice (JSONL-tailing fallback still collects the cost, just not in
+   real time).
+2. `install.sh --update` doesn't refresh an already-installed extension.
+3. `README.md` documents the wrong default API URL (`8000` vs. actual `8300`).
 
----
+No architecture diagram beyond this is warranted — there is one script, one
+doc file, and one one-way data flow (install-time file copy + build), not a
+running system with components that talk to each other at runtime.
 
-## 2. System Architecture
+## 2. Design Decision: Where the install step goes
 
-No new services, processes, or data stores. This is UI wiring against the existing Budget
-Enforcement data pipeline (merged, untouched):
+`scripts/install.sh` already has a pi-detection block at line 569:
 
-```
-AutopilotProject.cost_total_usd / cost_limit_usd  (existing column, self-healing rollup)
-        │
-        └─ GET /projects/{id}/costs  (existing endpoint, unmodified)
-                 │
-                 ├─► apiService.getProjectCosts  (existing, unmodified)
-                 │        │
-                 │        ├─► Dashboard.tsx  (LIVE, unmodified)
-                 │        └─► Autopilot.tsx  (NEW query, same queryFn/pattern as Dashboard.tsx)
-                 │                 └─► PipelineStatusCard.tsx  (NEW props: costTotal, costLimit, onBudgetClick)
-                 │                          └─► CostDisplay  (existing component, reused as-is)
-                 │
-Feature.cost_total_usd  (existing column, self-healing rollup)
-        │
-        └─ GET /projects/{id}/designs/{filename}/status  (existing endpoint — MODIFIED, additive field only)
-                 │  autopilot_api.py: get_project_design_status
-                 │  features[].cost_total_usd            ◄── NEW FIELD (FR-4)
-                 │  cost_total_usd (design-level sum)     ◄── NEW FIELD (derived, FR-3)
-                 │
-                 └─► DesignQueuePanel.tsx
-                          ├─► FeatureRow (expanded)   ──► FeatureCostBadge  (existing component, NEW wiring, FR-2)
-                          └─► SortableDesignItem (collapsed header) ──► CostDisplay  (existing component, NEW wiring, FR-3)
-
-Workflow.paused_by == "budget"  (existing, unmodified)
-        └─► WorkflowCard.tsx  (existing inline statusColors/statusLabels system — KEPT; BudgetPausedLabel REMOVED, FR-5)
-```
-
----
-
-## 3. Component Interfaces
-
-### 3.1 `PipelineStatusCard.tsx` — new props (FR-1)
-
-```ts
-interface PipelineStatusCardProps {
-  // ...existing props unchanged...
-  costTotal?: number;
-  costLimit?: number | null;
-  onBudgetClick?: () => void;
-}
-```
-
-Rendering: inside the existing "Right: Metrics" flex group (`PipelineStatusCard.tsx:97-133`), add
-one more item using `CostDisplay` (`frontend/src/components/cost/CostDisplay.tsx`, unmodified),
-wrapped in a `<button onClick={onBudgetClick}>` matching the existing per-metric button style
-(`PipelineStatusCard.tsx:106-121`) so it visually matches Agents/Pending/Processed/etc. rather than
-introducing a new visual language. `CostDisplay` already renders `"$current"` alone when
-`costLimit` is `undefined`/`null` and `"$current / $limit"` when set — satisfies FR-1's two display
-states with zero new formatting logic. Card renders nothing extra when `costTotal` is `undefined`
-(project not yet loaded) — omit the button, don't render a `$0.00` placeholder.
-
-### 3.2 `Autopilot.tsx` — new query + modal instance (FR-1)
-
-```ts
-const { data: projectCosts } = useQuery({
-  queryKey: ['project-costs', projectId],
-  queryFn: () => apiService.getProjectCosts(projectId!),
-  refetchInterval: 30000,
-  enabled: !!projectId,
-});
-const [showProjectSettings, setShowProjectSettings] = useState(false);
-```
-
-This duplicates Dashboard.tsx's existing `project-costs` query verbatim (same queryKey, same
-queryFn, same interval) rather than lifting shared state into a context. React Query dedupes by
-queryKey across mounted components, so when Dashboard and Autopilot are both mounted (they aren't —
-they're separate routes) or on remount, this is a cache hit, not a duplicate network call in
-practice — and even in the worst case it's one extra lightweight `/costs` GET on route entry, not
-a waterfall. Introducing a shared cost context/provider to avoid this would be a bigger structural
-change than a UI-wiring feature justifies (see requirements doc §11 Non-Goals).
-
-`ProjectSettingsModal` (`frontend/src/components/ProjectSettingsModal.tsx`) takes only
-`{ isOpen, onClose }` — it is not project-scoped by prop (it lists/manages all projects
-internally). `Layout.tsx` already owns one instance with its own local `showProjectSettings` state
-for the sidebar settings icon; that state is private to `Layout` and not exposed via context, so
-`Autopilot.tsx` gets its **own independent instance** of the same component with its own local
-`showProjectSettings` state, wired to `PipelineStatusCard`'s `onBudgetClick`. Two independent modal
-instances (Layout's, Autopilot's) is fine — only one renders at a time since each is gated by its
-own boolean, and `ProjectSettingsModal` has no shared mutable state beyond React Query's cache
-(which is safely shared/deduped already).
-
-### 3.3 `DesignQueuePanel.tsx` — `FeatureRow` (FR-2)
-
-Feature row right-side badge cluster (`DesignQueuePanel.tsx:850-858`, immediately before
-`FeatureStatusBadge`):
-
-```tsx
-<FeatureCostBadge cost={feature.cost_total_usd ?? 0} />
-<FeatureStatusBadge status={feature.status} />
-```
-
-`FeatureCostBadge` already no-ops on `cost <= 0` internally (`FeatureCostBadge.tsx:17`) — no extra
-guard needed at the call site. Phase-0 pseudo-feature and placeholder entries get
-`cost_total_usd: 0.0` from the backend (§4), so `?? 0` is a defensive fallback only, not the
-primary mechanism.
-
-### 3.4 `DesignQueuePanel.tsx` — `SortableDesignItem` collapsed header (FR-3)
-
-**Decision: wire a cost total into the collapsed per-design header using `CostDisplay`, not
-`DesignCostRow`.**
-
-`DesignCostRow`'s shape (`designId`, `designName`, `costTotal` — a standalone name+cost list row,
-`DesignCostRow.tsx:16-34`) is built for a *list of designs*, not for embedding inside a header that
-already renders the design name prominently in an `<h4>` (`DesignQueuePanel.tsx:631-636`) alongside
-a drag handle, filename, size, timestamp, status badge, and action icons. Forcing `DesignCostRow` in
-there would duplicate the design name and doesn't fit the existing dense single-row flex layout.
-`CostDisplay` (the primitive `DesignCostRow` itself wraps internally) is the right piece to reuse
-directly: small, inline, no name duplication.
-
-Placement: in the collapsed header's action cluster (`DesignQueuePanel.tsx:654-657`, next to
-`StatusBadge`):
-
-```tsx
-{costTotal > 0 && <CostDisplay currentCost={costTotal} showProgress={false} className="text-xs" />}
-{status && status !== 'pending' && <StatusBadge status={status} />}
-```
-
-Data source: the top-level `designStatuses` React Query (`DesignQueuePanel.tsx:60-85`) already
-calls `getAutopilotProjectDesignStatus` for **every** design (not just expanded ones) every 10s to
-populate status badges — it already fetches the response but discards everything except
-status/workflowId/error. Extend the returned map to also carry the new design-level sum:
-
-```ts
-statuses[d.filename] = {
-  status: status.status || 'pending',
-  workflowId: status.workflows?.[0]?.id,
-  error: status.error || null,
-  costTotal: status.cost_total_usd ?? 0,  // NEW — from the response's design-level sum, §4
-};
-```
-
-Then thread `designStatuses[item.filename]?.costTotal` down as a new `costTotal` prop on
-`SortableDesignItem`. **Zero new network calls** — this reuses data the component already fetches
-for every design, satisfying NFR-1 the same way FR-2/FR-4 do.
-
-`DesignCostRow` remains **unwired** after this feature. It is not deleted (requirements doc §6.2
-lists it as "no changes needed", and speculative deletion of a working, tested component beyond
-what FR-5 explicitly calls out for `BudgetPausedLabel` is scope creep). Flag it for a follow-up
-cleanup pass if a genuine "list of designs with cost" surface (e.g., a cross-project cost view) is
-ever built — no such surface exists today and inventing one is out of scope (requirements doc §11
-Non-Goals).
-
-### 3.5 `WorkflowCard.tsx` — remove `BudgetPausedLabel` duplication (FR-5)
-
-**Decision: keep the existing inline `getStatusLabel`/`statusColors` system, delete
-`BudgetPausedLabel.tsx`.**
-
-`WorkflowCard.tsx:11-32` already has a unified badge system (`statusColors`/`statusLabels` driving
-one consistently-styled pill, `WorkflowCard.tsx:135-137`) that correctly special-cases the
-budget-paused label (`getStatusLabel`, lines 27-31). Swapping in `BudgetPausedLabel` — a
-differently-styled standalone badge (red bg + `AlertCircle` icon vs. the plain colored pill used
-for every other status) — for only the budget-paused case would make that one status visually
-inconsistent with `active`/`completed`/`failed`/etc., which all share one pill style. That's a
-regression in visual consistency (NFR-3) to eliminate an unused component, not an improvement.
-
-Changes:
-- Delete `frontend/src/components/cost/BudgetPausedLabel.tsx`
-- Remove its export from `frontend/src/components/cost/index.ts`
-- Remove the dead `BudgetPausedLabel` import from `Dashboard.tsx:14` (confirmed by scope review:
-  imported, never rendered)
-
-No change to `WorkflowCard.tsx` itself — its existing logic already does the right thing.
-
----
-
-## 4. Backend Change: `autopilot_api.py::get_project_design_status`
-
-**File:** `src/mcp/autopilot_api.py`, function starting line 2761.
-
-### 4.1 Per-feature field (FR-4)
-
-Real-feature dict (line 3056-3070):
-```python
-features.append(
-    {
-        "id": feat.id,
-        "name": feat.name,
-        "feature_key": feat.feature_key,
-        "workflow_id": feat.workflow_id,
-        "status": feat_status,
-        "scope": feat.scope or "",
-        "tasks": feat_tasks,
-        "depends_on": feat.depends_on or [],
-        "created_at": feat.created_at.isoformat() if feat.created_at else None,
-        "completed_at": feat.completed_at.isoformat() if feat.completed_at else None,
-        "has_report": has_report,
-        "cost_total_usd": feat.cost_total_usd or 0.0,   # NEW
-    }
-)
-```
-
-Phase-0 pseudo-feature dict (line 3097-3110) and placeholder dict (line 3116-3127): both add
-`"cost_total_usd": 0.0` for type consistency across all three dict shapes returned in `features`
-(neither has a backing `Feature` row to source a real cost from).
-
-### 4.2 Design-level total (FR-3 data source)
-
-At the return statement (line 3149-3170), add one derived field — no new query, `features` is
-already fully built in memory at this point:
-
-```python
-return {
-    "filename": filename,
-    "name": design_name,
+```bash
+if command -v pi >/dev/null 2>&1 || [ -d "$HOME/.pi" ]; then
+    log "Pi detected — configuring MCP tools"
     ...
-    "cost_total_usd": sum(f["cost_total_usd"] for f in features),   # NEW
-    "features": features,
-}
+    log "Restart Pi after installation for MCP tools to take effect"
+    ...
+else
+    log "Pi not detected — skipping MCP tool configuration"
+fi
 ```
 
-This is what §3.4 reads via `status.cost_total_usd` for the collapsed-header total.
+This is the FR-1 hook point the requirements doc asked architecture to
+confirm — it exists, matching the same `command -v pi / [ -d ~/.pi ]` check
+used everywhere else in the script for CLI-presence detection. **Decision:**
+add a new step inside this existing `if` block (after the pi-mcp-adapter
+install, before the "Restart Pi" log line), rather than adding a second
+top-level `if command -v pi` block. One pi-detection branch, one place a
+future reader looks for "what happens when pi is present."
 
-### 4.3 No other backend changes
+The step must run on both fresh install and `--update` (FR-2) — unlike the
+venv/frontend/node_modules steps elsewhere in the script, there's no
+"skip if already present" gate here: `npm install && npm run build` is
+idempotent and cheap (single-package extension, no lockfile-heavy deps), so
+it always re-runs. This also satisfies the idempotent-reinstall NFR without
+extra branching.
 
-`cost_derivation.py`, `orchestrator.py` budget-guard logic, and the `/costs` endpoints
-(lines 2190-2432) are untouched, per NFR-2.
+## 3. Component: pi extension install/build step in `scripts/install.sh`
 
----
+**Location:** inside the existing `if command -v pi ... ; then` block
+(current lines 569–790), after the "Generating Hephaestus pi agents" step
+and before `log "Restart Pi after installation..."`.
+
+**Logic** (matches existing script style: `log`/`ok`/`warn` helpers, no
+fatal exit for this optional step):
+
+```bash
+# Install/update the real-time cost tracking extension
+EXT_SRC_DIR="$PREFIX/extensions/hephaestus-cost-tracker"
+EXT_DEST_DIR="$HOME/.pi/agent/extensions/hephaestus-cost-tracker"
+
+if [ -d "$EXT_SRC_DIR" ]; then
+    log "Installing Hephaestus cost tracker extension..."
+    if command -v npm >/dev/null 2>&1; then
+        if ! rm -rf "$EXT_DEST_DIR" 2>/dev/null || ! mkdir -p "$EXT_DEST_DIR" 2>/dev/null || ! cp -r "$EXT_SRC_DIR"/* "$EXT_DEST_DIR/" 2>/dev/null; then
+            warn "Could not write to $EXT_DEST_DIR — skipping cost tracker extension"
+            warn "Cost data will still be collected via task-completion fallback"
+        else
+            if EXT_BUILD_OUTPUT=$(cd "$EXT_DEST_DIR" && npm install --silent 2>&1 && npm run build 2>&1); then
+                ok "Cost tracker extension installed"
+            else
+                warn "Cost tracker extension build failed — real-time cost tracking disabled"
+                warn "Cost data will still be collected via task-completion fallback"
+                echo "$EXT_BUILD_OUTPUT" | tail -6
+            fi
+        fi
+    else
+        warn "npm not found — skipping cost tracker extension (fallback collection still works)"
+    fi
+else
+    warn "Extension source not found at $EXT_SRC_DIR — skipping"
+fi
+```
+
+(This matches the implemented block verbatim — development hardened the
+directory-write step with an explicit `rm -rf`/`mkdir -p`/`cp -r` failure
+check, added a fresh `$EXT_DEST_DIR` on each run instead of overwriting in
+place, and captured build output in `$EXT_BUILD_OUTPUT` to print the last 6
+lines on failure instead of piping through `tail` mid-pipeline.)
+
+**Interfaces:**
+- Input: `$PREFIX/extensions/hephaestus-cost-tracker/` (source tree, already
+  in the repo, contains `src/`, `package.json`, `tsconfig.json`, `README.md`).
+- Output: `$HOME/.pi/agent/extensions/hephaestus-cost-tracker/dist/index.js`
+  (built artifact pi loads on next launch), plus copied `package.json`,
+  `node_modules/` from the local `npm install`.
+- No network calls beyond `npm install` resolving `typescript` from the
+  configured npm registry (existing script already assumes npm registry
+  access for the frontend `npm install` step at line 448).
+
+**Failure handling:** every failure path is `warn`, not `err` — matches
+FR-1's acceptance criterion ("reports success/failure without aborting the
+rest of install") and the existing script's pattern for the pi-mcp-adapter
+install a few lines above it, which uses the same non-fatal `warn` on
+failure.
+
+**Idempotency:** `cp -r` overwrites existing files in `$EXT_DEST_DIR`;
+`npm install`/`npm run build` are naturally idempotent. No pre-check for
+"already installed" needed — re-running always produces a fresh `dist/`
+from current `src/`, which is exactly what FR-2 (`--update` refreshes the
+build) requires. `--update` needs no special-case code: the same block
+already runs unconditionally for both fresh and `--update` invocations.
+
+## 4. Component: `README.md` fix
+
+`extensions/hephaestus-cost-tracker/README.md` has two lines with the wrong
+default, both to change from `8000` to `8300`:
+
+- Line 30: `# Hephaestus API URL (default: http://localhost:8000)`
+- Line 31: `export HEPHAESTUS_API_URL=http://localhost:8000`
+
+No other change to this file. `src/index.ts` (already correct at `8300`)
+and `hephaestus_config.yaml` (`port: 8300`) are untouched — they're the
+source of truth this doc is being corrected to match.
 
 ## 5. Data Flow
 
-1. **Project-level (FR-1):** `Autopilot.tsx` mounts → fires `getProjectCosts(projectId)` (30s
-   poll, same pattern as `Dashboard.tsx`) → passes `costTotal`/`costLimit` to `PipelineStatusCard`
-   → user clicks the new budget metric button → `onBudgetClick` opens Autopilot's local
-   `ProjectSettingsModal` instance.
-2. **Feature-level (FR-2, FR-4):** `DesignQueuePanel`'s per-design `fetchFeatures()` (fires on
-   expand + 10s poll while expanded, `DesignQueuePanel.tsx:533-551`) now receives
-   `features[].cost_total_usd` from the modified endpoint → `FeatureRow` renders
-   `FeatureCostBadge` directly from that field, no extra fetch.
-3. **Design-level (FR-3):** `DesignQueuePanel`'s existing all-designs `designStatuses` query
-   (`DesignQueuePanel.tsx:60-85`, already calls the same endpoint per design every 10s regardless
-   of expand state) now also captures the response's new `cost_total_usd` sum →
-   `SortableDesignItem` renders it via `CostDisplay` in the collapsed header, no extra fetch.
-4. **Workflow-level (FR-5):** No data flow change — `WorkflowCard` already reads
-   `execution.paused_by` and `execution.status` from its existing props.
+```
+scripts/install.sh (pi detected)
+  └─ copy extensions/hephaestus-cost-tracker/{src,package.json,tsconfig.json}
+       → ~/.pi/agent/extensions/hephaestus-cost-tracker/
+  └─ npm install && npm run build (in dest dir)
+       → ~/.pi/agent/extensions/hephaestus-cost-tracker/dist/index.js
 
----
+pi launches an agent session (unrelated to this feature, pre-existing)
+  └─ loads dist/index.js as an extension
+  └─ on turn_end: reads HEPHAESTUS_AGENT_ID / TASK_ID / WORKFLOW_ID (env,
+     already set by manager.py:481-484)
+  └─ POSTs to http://localhost:8300/cost-entries (already implemented,
+     now correctly documented)
+```
+
+Nothing in this flow is new at the API/schema level — the diagram exists
+only to confirm the install step lands the artifact in the exact path the
+already-implemented `POST /cost-entries` consumer expects it.
 
 ## 6. Infrastructure Requirements
 
-None. No new env vars, no new dependencies, no migration (the `cost_total_usd` columns this
-feature reads already exist and are already maintained by the merged Budget Enforcement feature).
-
----
+- No new infrastructure. Reuses `npm`/`node`, already a prerequisite check
+  for the frontend build step (`install.sh` line 148-155). This feature
+  does not add a second Node/npm detection block earlier in the script —
+  it checks `command -v npm` independently inside the new step, since the
+  pi-detection block can run even when `--skip-frontend` skipped the
+  earlier Node check.
+- No `--skip-pi-extension` flag: per requirements FR-1 risk note, this is
+  only warranted if the step is "heavy or risky enough to need one." A
+  single-package `npm install && tsc build` (no runtime deps, per
+  `package.json`) is neither — it already degrades gracefully via `warn` on
+  any failure. Not adding the flag; noting this as a deliberate
+  architecture decision so development doesn't add one unprompted.
 
 ## 7. Task Breakdown
 
-Five tasks, matching the five FRs. Frontend tasks that consume the new backend field (T3, T4)
-block on the backend task (T1) landing first; the rest are independent of each other.
+### Task 1: Add pi extension install/build step to `scripts/install.sh`
+**Blocks:** Task 3 (verification)
+**Blocked by:** none
 
-### T1 — Backend: add `cost_total_usd` to design-status response (FR-4, §4)
-**Blocks:** T3, T4
-**Files:** `src/mcp/autopilot_api.py`
+- Add the install/build block (Section 3 above) inside the existing
+  `if command -v pi ...` block in `scripts/install.sh`, after the
+  "Hephaestus pi agents" generation step and before the "Restart Pi"
+  log line.
+- Use `$PREFIX/extensions/hephaestus-cost-tracker` as source (matches how
+  `PI_AGENTS_DIR` copying already resolves paths relative to `$PREFIX` a
+  few lines above).
+- Use the existing `log`/`ok`/`warn` helpers only — no new logging function.
+
 **Acceptance criteria:**
-- Real-feature dict includes `"cost_total_usd": feat.cost_total_usd or 0.0`
-- Phase-0 pseudo-feature dict and placeholder dict both include `"cost_total_usd": 0.0`
-- Top-level response includes `"cost_total_usd": sum(f["cost_total_usd"] for f in features)`
-- No new DB query added — `feat` and `features` are already loaded/built at these points
-- Existing endpoint tests (if any cover this function) still pass; response is purely additive,
-  no field renamed or removed
+- On a machine with `pi` installed (`command -v pi` or `~/.pi` present) and
+  `npm` available, running `./scripts/install.sh` results in
+  `~/.pi/agent/extensions/hephaestus-cost-tracker/dist/index.js` existing.
+- On a machine without `pi` detected, the step does not run at all (stays
+  inside the existing `if` block) and install completes normally.
+- On a machine with `pi` but without `npm`, install completes with a `warn`
+  and no `dist/` directory — install does not abort.
+- Running `./scripts/install.sh --update` on a machine that already has the
+  extension installed re-runs the copy/build and produces a `dist/index.js`
+  reflecting the current `src/index.ts` (verify by touching a comment in
+  `src/index.ts`, running `--update`, and confirming the built `dist/`
+  changed).
+- Re-running `install.sh` twice in a row (fresh, no `--update`) does not
+  error — `cp -r` and `npm install`/`build` overwrite cleanly.
 
-### T2 — Frontend: budget indicator on `PipelineStatusCard` (FR-1, §3.1–3.2)
+### Task 2: Fix `HEPHAESTUS_API_URL` default in `extensions/hephaestus-cost-tracker/README.md`
+**Blocks:** Task 3 (verification)
+**Blocked by:** none
+
+- Change both occurrences of `http://localhost:8000` to `http://localhost:8300`
+  in the "Configuration" section (lines 30-31).
+- No other edits to the file.
+
+**Acceptance criteria:**
+- `README.md`'s documented default is `http://localhost:8300`, matching
+  `src/index.ts`'s actual default and `hephaestus_config.yaml`'s `port: 8300`.
+
+### Task 3: Regression check on existing collector tests (verification only)
 **Blocks:** none
-**Files:** `frontend/src/components/autopilot/PipelineStatusCard.tsx`, `frontend/src/pages/Autopilot.tsx`
+**Blocked by:** Task 1, Task 2 (run after, to confirm the install-script
+change didn't touch anything the tests exercise — it shouldn't, since
+`cost_collection_service.py` is untouched by this feature)
+
+- Run `pytest tests/test_cost_collection_service.py` and confirm it passes
+  unchanged. No new tests are expected — FR-4 is explicit that this is
+  verification only, not re-implementation, and this feature makes no
+  changes to Python collector code.
+- Do not add install-script tests unless development finds `install.sh`
+  already has a test harness (bats, shellcheck, etc.) to extend — check
+  `tests/` and the repo root for an existing shell-test runner before
+  deciding whether one is warranted. If none exists, manual verification
+  per Task 1's acceptance criteria is sufficient — do not introduce a new
+  shell-testing framework for a ~15-line script change.
+
 **Acceptance criteria:**
-- `PipelineStatusCard` accepts `costTotal?`, `costLimit?`, `onBudgetClick?` props
-- When `costTotal` is defined, renders a `CostDisplay`-based button in the existing metrics row
-  showing `"$current"` (no limit set) or `"$current / $limit"` (limit set), styled consistent with
-  the other metric buttons (`hover:bg-white/15` etc.)
-- When `costTotal` is `undefined`, the budget metric is omitted entirely (no `$0.00` flash)
-- Clicking the budget metric calls `onBudgetClick`
-- `Autopilot.tsx` adds a `project-costs` query (same shape as `Dashboard.tsx`'s), a local
-  `showProjectSettings` boolean, and its own `<ProjectSettingsModal>` instance wired to
-  `onBudgetClick`/`onClose`
-- No changes to `Dashboard.tsx`'s existing cost query or `ProjectCostSummary` usage
+- `tests/test_cost_collection_service.py` passes with no modifications.
+- If a shell-test harness for `install.sh` already exists, extend it to
+  cover Task 1's acceptance criteria; if none exists, this criterion is
+  satisfied by manual verification (documented in the development phase's
+  summary), no new framework introduced.
 
-### T3 — Frontend: `FeatureCostBadge` in `DesignQueuePanel` feature rows (FR-2, §3.3)
-**Blocks on:** T1
-**Files:** `frontend/src/components/autopilot/DesignQueuePanel.tsx`
-**Acceptance criteria:**
-- `FeatureRow` renders `<FeatureCostBadge cost={feature.cost_total_usd ?? 0} />` immediately before
-  `FeatureStatusBadge` in the row's right-side badge cluster
-- Badge is invisible (renders nothing) for zero/absent cost, per `FeatureCostBadge`'s own existing
-  `cost <= 0` guard — no new guard logic added at the call site
-- Row layout/wrapping is unaffected at typical viewport widths (visual check, not a new test)
-- No new network call introduced — reads `feature.cost_total_usd` from data already fetched by
-  `fetchFeatures()`
+## 8. Non-Goals (carried from requirements, restated for development phase)
 
-### T4 — Frontend: design-level cost in collapsed header (FR-3, §3.4)
-**Blocks on:** T1
-**Files:** `frontend/src/components/autopilot/DesignQueuePanel.tsx`
-**Acceptance criteria:**
-- `designStatuses` query's per-design result map gains a `costTotal` field sourced from the
-  response's new top-level `cost_total_usd`
-- `SortableDesignItem` receives `costTotal` as a prop and renders it via
-  `<CostDisplay currentCost={costTotal} showProgress={false} className="text-xs" />` next to
-  `StatusBadge` in the collapsed header, only when `costTotal > 0`
-- No new network call — reuses the existing per-design status fetch that already runs for every
-  design (expanded or not)
-- `DesignCostRow` is explicitly left unwired (not deleted, not force-fit) — this is a deliberate
-  decision, not silence, matching requirements FR-3's acceptance criteria
-
-### T5 — Frontend: resolve `BudgetPausedLabel` duplication (FR-5, §3.5)
-**Blocks:** none
-**Files:** `frontend/src/components/cost/BudgetPausedLabel.tsx` (deleted),
-`frontend/src/components/cost/index.ts`, `frontend/src/pages/Dashboard.tsx`
-**Acceptance criteria:**
-- `BudgetPausedLabel.tsx` deleted
-- Its export removed from `components/cost/index.ts`
-- Its dead import removed from `Dashboard.tsx`
-- `WorkflowCard.tsx` unchanged — its existing `getStatusLabel`/`statusColors` system already
-  correctly renders the budget-paused case and is kept as the single source of truth for workflow
-  status styling
-- `npm run type-check` passes (no dangling references to the deleted component/export)
-
----
-
-## 8. Cross-Cutting Acceptance Criteria
-
-- `npm run type-check` passes after all five tasks land
-- No changes to `cost_derivation.py`, `orchestrator.py` budget-guard logic, or `/costs` endpoints
-  (NFR-2)
-- No per-row or per-design supplemental network calls introduced anywhere (NFR-1) — verified by
-  T1 being the sole backend change and T3/T4 both reading fields from data already fetched
-- All new/wired cost UI uses `CostDisplay`/`FeatureCostBadge` as-is, no new visual styling (NFR-3)
-- `cost_total_usd` additions to the design-status response are purely additive; no existing field
-  renamed/removed (NFR-4)
-
----
-
-## 9. Explicit Non-Goals (carried from requirements doc §11)
-
-- No new cost computation, schema, or enforcement logic
-- No task-level or workflow-level cost UI
-- No standalone cost/spend analytics page
-- No real-time/streaming cost updates
-- No deletion of `DesignCostRow` (unlike `BudgetPausedLabel`, it isn't asked to be removed by any
-  FR — it's simply left unwired, an explicit and documented decision per §3.4)
+- No changes to `PiJsonlCollector`, `ClaudeCodeCollector`, `CostEntry`
+  schema, checkpoint semantics, or `POST /cost-entries`.
+- No `--skip-pi-extension` flag (Section 6).
+- No OpenCode/Codex collector work.
+- No historical cost backfill.

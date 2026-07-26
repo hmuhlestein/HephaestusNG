@@ -1,41 +1,71 @@
-# Code Summary: Cost Tracking UI
+---
+type: code_summary
+feature_id: des-91c8-cost-collectors
+---
 
-**Feature ID:** des-91c8-cost-ui
-**Branch:** `feature/des-91c8/cost-ui`
+# Code Summary: CLI Cost Collectors (Pi + Claude Code)
 
-## What this feature does
+**Feature ID:** des-91c8-cost-collectors
 
-Wires four already-built, previously-orphaned cost display components into three live screens, and adds one additive backend field to unblock per-feature cost display. No new cost computation, schema, or enforcement logic — the data pipeline was built and merged by the sibling "Budget Enforcement" feature; this feature is display-only wiring.
+This feature closes the gap between the already-implemented real-time pi
+cost-tracker extension (source code merged by an earlier feature) and it
+actually being installed and correctly configured. It's packaging work, not
+new collection logic — the `PiJsonlCollector`/`ClaudeCodeCollector` runtime,
+the `CostEntry` schema, and `POST /cost-entries` were untouched.
 
-## Changed files
+## `scripts/install.sh`
 
-### Backend
+Adds a new step inside the existing pi-detection block (`if command -v pi ...
+|| [ -d ~/.pi ]`), placed after the pi-mcp-adapter install and before the
+"Restart Pi" log line — the same branch every other pi-specific install step
+already lives in, so there's one place to look for "what happens when pi is
+present."
 
-- **`src/mcp/autopilot_api.py`** — `get_project_design_status` (feeds `DesignQueuePanel`) now includes `cost_total_usd` on each feature dict (real features, phase-0 pseudo-feature, and placeholder rows) and a derived design-level `cost_total_usd` sum. Sourced from the already-loaded ORM object — no new query. Also carries two security fixes from `security_review`: input validation on `cost_limit_usd` and authentication on project mutation endpoints.
-- **`src/core/database.py`** — minor supporting change for the above (no schema change).
+The step copies `extensions/hephaestus-cost-tracker/` to
+`~/.pi/agent/extensions/hephaestus-cost-tracker/` and runs `npm install &&
+npm run build` there, producing `dist/index.js`, the file pi loads as an
+extension on next launch. It always re-runs on both fresh install and
+`--update` (no "already installed" skip-gate), which is what makes
+`--update` refresh a stale build. Every failure path (`npm` missing, write
+failure, build failure) degrades to a `warn` and continues install rather
+than aborting — the JSONL-tailing fallback in
+`cost_collection_service.py` still collects the same cost data, just not in
+real time, so a broken extension build was never meant to be fatal.
 
-### Frontend
+## `extensions/hephaestus-cost-tracker/README.md`
 
-- **`frontend/src/components/autopilot/PipelineStatusCard.tsx`** — new `costTotal`/`costLimit`/`onBudgetClick` props render a `CostDisplay` in a clickable metric slot alongside the existing Agents/Pending/Processed/Succeeded/Failed row.
-- **`frontend/src/pages/Autopilot.tsx`** — fetches project cost via the existing `getProjectCosts` client call and wires the click-through to open `ProjectSettingsModal`.
-- **`frontend/src/components/autopilot/DesignQueuePanel.tsx`** — imports and renders `FeatureCostBadge` per feature row (`feature.cost_total_usd ?? 0`), hidden when cost is 0.
-- **`frontend/src/components/cost/CostDisplay.tsx`** — incidental fix: progress-percent zero-division edge case, color-threshold simplification.
-- **`frontend/src/components/cost/FeatureCostBadge.tsx`** — incidental small fix (no behavior change).
-- **`frontend/src/components/cost/BudgetPausedLabel.tsx`** — deleted. It duplicated `WorkflowCard.tsx`'s existing inline `paused_by === 'budget'` label logic and was never imported anywhere; the inline implementation was kept as the single source of truth.
-- **`frontend/src/components/cost/index.ts`** — removed the `BudgetPausedLabel` export following its deletion.
+Fixed the documented default `HEPHAESTUS_API_URL` from `http://localhost:8000`
+to `http://localhost:8300`, matching both the extension's actual code
+default (`src/index.ts`) and `hephaestus_config.yaml`'s `port: 8300`. The old
+value would have pointed a correctly-installed extension at the wrong port,
+silently dropping every cost POST.
 
-### Tests
+## `extensions/hephaestus-cost-tracker/package.json`
 
-- **`tests/test_autopilot_api.py`** — 4 new tests covering the design-status endpoint's cost fields: `test_design_status_includes_cost_total`, `test_design_status_surfaces_budget_pause_reason`, `test_design_status_surfaces_failure_reason`, `test_design_status_omits_error_when_not_failed`.
+Added `@types/node` to `devDependencies`. Without it, `tsc` fails on
+`process.env`, `console`, and `fetch` type references — a real
+build-breaking bug caught by QA, not a style fix. This is what made the new
+`install.sh` build step (above) actually able to succeed.
 
-## Explicitly out of scope (by design)
+## `src/mcp/autopilot_api.py`
 
-- `DesignCostRow` — evaluated during architecture, left unwired; no existing per-design collapsed-header surface matched its shape without inventing a new UI element.
-- Any change to `cost_derivation.py`, orchestrator budget-guard logic, or `paused_by` semantics — zero diff vs `main`.
+`POST /cost-entries`'s rate limiter was keyed on the caller-supplied
+`X-Agent-ID` header. `verify_agent_authentication()` trusts any
+`sdk-`/`mcp-`-prefixed ID unconditionally (it's an identity check, not a
+secret), and the server binds `0.0.0.0`, so a caller could reset the
+60/minute rate-limit bucket on every request just by rotating the header
+value. Since each cost entry can carry `cost_usd` up to $1000 and drives
+budget-pause rollups, an attacker with a real `task_id`/`workflow_id` could
+have forced premature budget pausing; against unknown IDs, unbounded DB
+writes. Fixed by keying the rate limit on `request.client.host` instead,
+which required adding a `request: Request` parameter to the endpoint. Found
+and fixed during security review, scoped appropriately since this new
+extension is the endpoint's new traffic source.
 
-## Verification
+## Tests
 
-- Backend: `test_autopilot_api.py` 76/76 passing.
-- Targeted regression: `test_status_derivation.py` + `test_phase_manager.py`, 69/69 passing.
-- Frontend: `tsc --noEmit` — no new type errors introduced (6 pre-existing errors on `main`, unrelated files).
-- Security: authentication and input-validation fixes verified in place (see `docs/security_report.md`).
+No new tests were added — this feature explicitly doesn't touch collector
+logic. `tests/test_cost_collection_service.py` (20/20) and the broader
+budget/cost-tracking suite (`tests/test_budget_enforcement_integration.py`,
+`tests/test_cost_tracking.py`, 56/56) were run as regression checks and pass
+unchanged.

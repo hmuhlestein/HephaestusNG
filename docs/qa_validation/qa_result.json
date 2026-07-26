@@ -1,15 +1,11 @@
 {
-  "passed_tests": 145,
+  "type": "qa_validation_result",
+  "passed_tests": 56,
   "failed_tests": 0,
-  "total_tests": 145,
+  "total_tests": 56,
   "pass_rate": 100.0,
   "critical_issues": 0,
-  "non_blocking_issues": 1,
-  "requirements_met": 5,
-  "requirements_total": 5,
-  "security_fixes_verified": 2,
-  "security_fixes_total": 2,
-  "frontend_typecheck_new_errors": 0,
-  "status": "PASS",
+  "requirements_met": 2,
+  "requirements_total": 2,
   "recommendation": "done"
 }
