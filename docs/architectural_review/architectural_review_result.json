@@ -1,5 +1,7 @@
 {
-  "capped": true,
-  "capped_after_runs": 4,
-  "blocker_count": 0
+  "verdict": "PASS",
+  "blocker_count": 0,
+  "fix_count": 0,
+  "defer_count": 0,
+  "findings": []
 }
