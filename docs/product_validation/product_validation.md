@@ -1,102 +1,97 @@
-# Product Validation Report: Cost Tracking UI
-
-**Feature ID:** des-91c8-cost-ui
-**Feature Name:** Cost Tracking UI
-**Validation Date:** 2026-07-25
-**Design Document:** `.hephaestus/design.md` — UI section (lines 438-457), Implementation Phases §Phase 7 (lines 659-713)
-**Requirements Document:** `docs/requirements_analysis.md`
-**Architecture Document:** `docs/architecture.md`
-**QA Report:** `docs/qa_validation/qa_report.md` (PASS, 76/76 + 69/69 tests, 0 blockers)
-**Security Report:** `docs/security_report.md`
-**Verdict:** PASS
-
+---
+type: product_validation_result
+feature_id: des-91c8-cost-collectors
+verdict: PASS
+blocker_count: 0
+requirements_met: 4
+requirements_total: 4
 ---
 
-## 0. Note on Superseded Prior Report
+# Product Validation Report: CLI Cost Collectors (Pi + Claude Code)
 
-The report previously at this path (dated 2026-07-24) validated a different, already-merged sibling feature, "Budget Enforcement and Pipeline Throttling" (`des-91c8-budget-enforcement`), and graded against `BudgetStatusCard.tsx`/FR-6–FR-8 from that feature's requirements doc. This branch, `feature/des-91c8/cost-ui`, is a separate feature with its own requirements (`docs/requirements_analysis.md`, FR-1–FR-5) and its own implementation. This report replaces the stale one with a validation of the actual current branch.
+**Feature ID:** des-91c8-cost-collectors
+**Feature Name:** CLI Cost Collectors (Pi + Claude Code)
+**Validation Date:** 2026-07-25
+**Design Documents:** `.hephaestus/design.md` / `docs/COST_TRACKING_DESIGN.md` ("Collection Architecture", "Pi Extension Collector" sections)
+**Requirements Document:** `docs/requirements_analysis.md`
+**Architecture Document:** `docs/architecture.md`
+**QA Report:** `docs/qa_validation/qa_report.md` (56/56 targeted tests, PASS)
+**Security Report:** `docs/security_review/security_report.md` (1 High found and fixed, ACCEPTABLE)
+**Prior Run:** None — first product_validation pass for this feature.
+**Verdict:** **PASS** — 0 blockers, 4/4 requirements met, no regressions.
 
 ---
 
 ## 1. Executive Summary
 
-The design document's UI scope (`.hephaestus/design.md` lines 438-457, Phase 7) called for: a budget indicator on the autopilot design/pipeline screen linking to `ProjectSettingsModal`, surfacing `cost_total_usd` on feature cards/design rows, and distinguishing `paused_by == "budget"` from `"user"` in the UI. Investigation during `product_requirements` found that most of the supporting infrastructure (backend cost endpoints, `CostDisplay`/`FeatureCostBadge`/`DesignCostRow` components, `ProjectSettingsModal`'s budget config) already existed from the sibling budget-enforcement feature, but three of the concrete UI surfaces the design called for were either unwired (dead code, never imported) or missing a needed backend field. This feature's scope was correctly reframed as UI-wiring, not new infrastructure (`requirements_analysis.md` §8, D-3).
+This feature's premise (established during `product_requirements`, re-confirmed here) is that the underlying Pi and Claude Code cost collectors — `PiJsonlCollector`, `ClaudeCodeCollector`, `SessionCostCheckpoint`, the UUID5 Claude Code session-ID fix, and `POST /cost-entries` — were **already implemented, wired into `task_completion_service.py`, and tested** by prior merged features (Cost Tracking Database Schema → Cost Derivation Engine → Budget Enforcement and Pipeline Throttling). This feature's actual scope was narrower: make the design-specified real-time pi extension (`extensions/hephaestus-cost-tracker/`) actually installed and runnable, and fix two concrete defects found in the pre-existing extension source.
 
-All 5 functional requirements derived from that scope (FR-1 through FR-5) are implemented and independently re-verified against the code in this report (not merely re-stated from the QA report):
+Diff vs. merge-base (`c3622c9`) confirms the implementation stayed inside that scope:
+- `scripts/install.sh` — 28 new lines, gated inside the existing `if command -v pi ... || [ -d ~/.pi ]` block, installing/building the extension with graceful degradation on missing npm or build failure.
+- `extensions/hephaestus-cost-tracker/package.json` — added missing `@types/node` devDependency (a real build-breaking bug QA caught: `tsc` failed on `process.env`/`console`/`fetch` symbols without it).
+- `extensions/hephaestus-cost-tracker/README.md` — corrected the documented default `HEPHAESTUS_API_URL` from `8000` to `8300`, matching both the extension's actual code default and `hephaestus_config.yaml:3`.
+- `src/mcp/autopilot_api.py` — one incidental, appropriately-scoped fix from security review: `POST /cost-entries`'s rate limit was keyed on the caller-supplied `X-Agent-ID` header (spoofable, since `verify_agent_authentication` trusts `sdk-`/`mcp-`-prefixed IDs unconditionally), letting an attacker reset the rate-limit bucket by rotating the header. Now keyed on `request.client.host`.
 
-- **FR-1** (budget indicator on `PipelineStatusCard.tsx`, linking to `ProjectSettingsModal`) — confirmed in `PipelineStatusCard.tsx` (new `costTotal`/`costLimit`/`onBudgetClick` props render `CostDisplay` in a clickable metric slot) and `Autopilot.tsx` (fetches project cost, wires the click to open the settings modal).
-- **FR-2** (`FeatureCostBadge` in `DesignQueuePanel` feature rows) — confirmed at `DesignQueuePanel.tsx:880`, `<FeatureCostBadge cost={feature.cost_total_usd ?? 0} />`.
-- **FR-3** (`DesignCostRow` in/out-of-scope decision) — confirmed as an explicit, documented deferral rather than a silent gap; `DesignCostRow` remains unwired by deliberate decision, recorded in the requirements and architecture docs.
-- **FR-4** (`cost_total_usd` added to the design-status API response) — confirmed at `src/mcp/autopilot_api.py:3133` (real features), `:3174` (phase-0 pseudo-feature), `:3192` (placeholder), all reading the already-loaded ORM object — no N+1 calls added.
-- **FR-5** (resolve `BudgetPausedLabel`/`WorkflowCard` duplication) — confirmed: `BudgetPausedLabel.tsx` deleted, its export removed from `frontend/src/components/cost/index.ts`, and `WorkflowCard.tsx`'s pre-existing inline `paused_by === 'budget'` label logic (line 28) retained as the single implementation.
-
-No enforcement-logic, schema, or `paused_by`-semantics changes were made (`cost_derivation.py` and orchestrator budget-guard logic have zero diff vs `main`), matching the design doc's stated Phase 7 scope of additive UI wiring only. Two security fixes (input validation on `cost_limit_usd`, authentication on project mutation endpoints) were carried from `security_review` and are independently verified as still in place. No blockers, no regressions.
-
----
+No other files were touched. No collector logic, schema, or derivation code was modified — consistent with the requirements' explicit non-goal of not touching that already-shipped code.
 
 ## 2. Functional Requirements Verification
 
-| Req | Design Intent (design.md) | Implementation | Status |
-|-----|---------------------------|-----------------|--------|
-| FR-1 | "small '$current / $limit' indicator... with a link that opens `ProjectSettingsModal`" (design.md:438-457) | `PipelineStatusCard.tsx` new props + `CostDisplay` render; `Autopilot.tsx` fetches cost, wires `onBudgetClick` | ✅ PASS |
-| FR-2 | "surfacing `cost_total_usd` on feature cards" (design.md Phase 7) | `DesignQueuePanel.tsx:880` renders `FeatureCostBadge` per feature row, hidden when cost is 0 | ✅ PASS |
-| FR-3 | "design rows" cost surfacing (design.md Phase 7) | Explicitly deferred with rationale documented in requirements/architecture docs — not silently dropped | ✅ PASS (deferred, documented) |
-| FR-4 | "the field already flows through `autopilot_api.py`'s existing report shape... additive to plumbing that already exists" (design.md:659-713) | `cost_total_usd` added to feature dicts in `get_project_design_status`, sourced from already-loaded ORM objects | ✅ PASS |
-| FR-5 | "surface that distinction" between `paused_by == "budget"` vs `"user"` (design.md:438-457) | Duplication resolved: dead `BudgetPausedLabel` removed, `WorkflowCard.tsx`'s working inline logic kept as sole implementation | ✅ PASS |
+| Requirement | Implementation | Status |
+|---|---|---|
+| FR-1: Pi extension installed automatically by `scripts/install.sh` when pi is detected | `scripts/install.sh:781-806`, inside the pre-existing `command -v pi \|\| [ -d ~/.pi ]` branch (line 569). Copies `extensions/hephaestus-cost-tracker/` to `~/.pi/agent/extensions/hephaestus-cost-tracker/`, runs `npm install --silent && npm run build`. Skips (with `warn`, not `err`) if npm is absent or the source dir is missing; does not abort the rest of install on build failure. | ✅ PASS |
+| FR-2: `--update` path also refreshes the extension | The install block is unconditional (not gated on the `UPDATE` flag, unlike e.g. the venv/frontend-node_modules skip checks at lines 209/443) — every invocation of `install.sh`, including `--update`, re-runs `rm -rf` + copy + `npm install && npm run build`, so a `git pull` touching `index.ts` reaches an already-provisioned machine on the next install/update run. | ✅ PASS |
+| FR-3: Fix `HEPHAESTUS_API_URL` default mismatch | `README.md` now documents `8300`; `index.ts:9`'s actual default is `8300`; `hephaestus_config.yaml:3` confirms `port: 8300`. All three agree. | ✅ PASS |
+| FR-4: Existing collector behavior unchanged, still covered by tests | `git diff c3622c9..HEAD` touches zero lines in `src/services/cost_collection_service.py`, `src/core/cost_derivation.py` (collection logic), or the `cost_entries`/`session_cost_checkpoints` schema. `tests/test_cost_collection_service.py` — 20/20 pass, unmodified. | ✅ PASS |
 
-All 5/5 functional requirements met. No unmet requirements.
+**4 of 4 requirements met. 0 unmet.**
 
----
+## 3. Non-Functional Requirements Verification
 
-## 3. Non-Functional Requirements
+- **No blocking on install failure**: confirmed — every failure branch in the new `install.sh` block (missing npm, missing source dir, failed `rm -rf`/`mkdir`/`cp`, failed `npm install`/`npm run build`) calls `warn`, not `err`/`exit`, and explicitly logs "Cost data will still be collected via task-completion fallback." Script continues to the MCP-tools-restart message afterward.
+- **No behavior change to existing collectors**: confirmed via diff — zero lines changed in the collector/derivation/schema files.
+- **Idempotent re-install**: the block does `rm -rf "$EXT_DEST_DIR"` then `mkdir -p` then `cp -r` before building, so re-running against a machine that already has the extension installed cleanly replaces it rather than erroring on "already exists."
 
-| NFR | Requirement | Status | Evidence |
-|-----|-------------|--------|----------|
-| NFR-1 | No N+1 API calls introduced | ✅ PASS | `cost_total_usd` sourced from the ORM object already loaded in the existing per-feature loop in `get_project_design_status` |
-| NFR-2 | No change to budget enforcement behavior | ✅ PASS | `cost_derivation.py`, orchestrator budget-guard logic: zero diff vs `main` |
-| NFR-3 | Visual consistency with existing cost components | ✅ PASS | `CostDisplay`/`FeatureCostBadge` reused as-is; incidental fixes (progress-percent zero-division edge case, color-threshold simplification) are correctness/simplification, not new visual language |
-| NFR-4 | Backward compatible API response | ✅ PASS | `cost_total_usd` is purely additive on the design-status response |
+## 4. Security Verification
 
----
+Security review found and fixed one High-severity issue introduced risk surface: the new `POST /cost-entries` traffic pattern (this endpoint is what the new pi extension calls on every LLM turn) made an existing rate-limit weakness materially more exploitable — keyed on a spoofable header, reachable off localhost (server binds `0.0.0.0`). Fixed by keying on `request.client.host` instead. Verified in code (`src/mcp/autopilot_api.py:2075-2103`) and via the security report's OWASP walkthrough (ACCEPTABLE posture, 0 open critical/medium findings). Two pre-existing, out-of-scope gaps were correctly ticketed rather than fixed inline (unauthenticated project-mutation endpoints — `ticket-6b452476`; missing rate limit on cost-query GETs — `ticket-5c041735`) — appropriate scope discipline, not a validation gap for this feature.
 
-## 4. Test & Quality Evidence (independently sourced, not re-stated blindly)
+## 5. Integration With Existing System
 
-- Backend: `test_autopilot_api.py` 76/76 passing, including 4 new tests added for this branch's API surface (`test_design_status_includes_cost_total`, `test_design_status_surfaces_budget_pause_reason`, `test_design_status_surfaces_failure_reason`, `test_design_status_omits_error_when_not_failed`).
-- Targeted regression smoke (touched-adjacent modules): `test_status_derivation.py` + `test_phase_manager.py`, 69/69 passing.
-- Frontend type check: `tsc --noEmit` — 6 pre-existing errors on `main`, none introduced by this branch (verified per-file against `git show main:<file>` in the QA report; spot-checked here by confirming `git diff --stat main..HEAD` file list does not include `BudgetStatusCard.tsx` or `ProjectCostSummary.tsx`, the two files carrying pre-existing unused-var errors).
-- Security: `PUT`/`POST`/`DELETE /projects` return 401 for an unrecognized `X-Agent-ID`; `cost_limit_usd` rejects negative, out-of-range, and non-finite values with 422. One non-blocking finding (§5.3 of the QA report): a crafted `Infinity` literal in a raw JSON body correctly gets rejected by the validator, but FastAPI's default exception handler crashes trying to serialize the echoed invalid value into the error response — this is default framework behavior in the global exception handler, not a bypass, and out of this feature's stated scope. Recommend a follow-up ticket.
+- The extension reads `HEPHAESTUS_AGENT_ID`/`HEPHAESTUS_TASK_ID`/`HEPHAESTUS_WORKFLOW_ID` from environment variables already set by `src/agents/manager.py:481-484,1696-1699` when launching pi tmux sessions — no new plumbing needed on the Python side, confirmed present and unmodified.
+- POSTs to `POST /cost-entries`, an endpoint that already existed and already fed the merged Cost Derivation Engine / Budget Enforcement rollup chain — the extension is purely an additional producer into an existing, tested consumer path. `SessionCostCheckpoint`-based JSONL tailing (`PiJsonlCollector`) remains as the fallback path when the extension isn't loaded, per the design's explicit "complementary, not exclusive" framing — verified this fallback is untouched.
+- `scripts/install.sh`'s new block reuses the file's existing `log`/`ok`/`warn` helper conventions and sits inside the pre-existing pi-detection branch rather than adding a parallel detection mechanism.
 
-Aggregate: 84/84 tests passing across both suites (76 + 8, matching QA's totals when combined with security-specific manual checks), 0 regressions, 0 blockers.
+## 6. User Experience / Operational Flow
 
----
+- **Developer with pi installed, runs `./scripts/install.sh`**: extension is copied, built, and ready on next pi launch; sees `ok "Cost tracker extension installed"`. Verified against real `tsc` output in QA (after the `@types/node` fix) — build actually succeeds now, not just "doesn't error at the shell level."
+- **Developer without pi**: no extension activity at all (branch never entered), matching the "cost tracking is a nice-to-have" non-functional requirement.
+- **Developer with pi but no npm**: gets a clear `warn` explaining real-time tracking is skipped and that the fallback still collects cost data — no silent data loss, no confusing failure.
+- **pi TUI user during a session**: per the (unmodified, previously-reviewed) extension source, sees a live `💰 $X.XX` status update per turn — this is the actual product value this feature was building toward; nothing in this pass altered that behavior, only made it reachable via normal install.
 
-## 5. Design-Intent Cross-Check
+## 7. Edge Cases From Design Doc
 
-Re-reading `.hephaestus/design.md` lines 438-457 and 659-713 directly against the final diff (not just the requirements doc's paraphrase):
+- **"Extension not loaded" fallback** (design doc, Pi Extension Collector section): explicitly still works — `PiJsonlCollector` untouched, its own test suite (`TestPiJsonlCollector`, 6 tests) unmodified and passing.
+- **Build failure shouldn't break `heph install`**: covered (see NFR section above) — verified by reading every exit path in the new bash block, all `warn`+continue, no `exit`.
+- **Re-running install shouldn't corrupt an existing extension install**: covered by the `rm -rf` + `mkdir -p` + `cp -r` sequence before build.
 
-- The design's three UI bullets (config input, pipeline-screen indicator + link, `paused_by` distinction) map 1:1 onto FR-1/FR-2/FR-5. All three are implemented and wired into a screen a user would actually see — this was the specific failure mode the prior sibling feature's validation caught (`BudgetStatusCard.tsx` built but never imported) and this feature's own requirements phase explicitly investigated via `grep -rl <Component> frontend/src` to avoid repeating it. Re-confirmed here: `FeatureCostBadge` and the new `PipelineStatusCard` cost slot are both actually imported and rendered along a live component tree, not just defined.
-- The "additive to plumbing that already exists, not new plumbing" instruction (design.md Phase 7) is honored — no new cost-collection, rollup, or enforcement code was added; the only backend change is three added dict keys in an existing response.
-- No scope creep: `git diff --stat main..HEAD` backend changes outside `autopilot_api.py`/`database.py` (e.g. `monitor.py`, `status_derivation.py`, `langchain_llm_client.py`, `yaml_loader.py`) were reviewed against the architecture doc and confirmed to be the two security fixes plus unrelated pre-existing lint/dead-code cleanup swept in during the development phase's self-review passes — not new cost-tracking scope. This is worth flagging as a minor process note (§7) but is not a design-intent violation.
+## 8. Test Results
 
----
+```
+python -m pytest tests/test_cost_collection_service.py -q
+20 passed
 
-## 6. Verdict
+python -m pytest tests/ -k "cost_entr or rate_limit" -q
+7 passed, 2076 deselected
+```
 
-**PASS.** All 5 functional requirements and all 4 non-functional requirements are met and independently verified against both the design document and the code. Test suite is green (84/84), no regressions, no blockers. The one non-blocking security finding (§5.3, QA report) is appropriately scoped as follow-up work outside this feature.
+27/27 targeted tests pass, 0 failures, no regressions. Consistent with QA's own run (`tests/test_budget_enforcement_integration.py tests/test_cost_tracking.py`, 56/56 passed) — different but overlapping test selection, same result: no failures anywhere in the cost-tracking test surface.
 
----
+## 9. Recommendations for Human Reviewer
 
-## 7. Process Note (non-blocking)
+1. **No code changes needed before merge.** All 4 requirements met, security finding fixed, QA-caught build bug fixed, tests green.
+2. **Manual smoke test worth doing once, not automatable in this pipeline**: run `./scripts/install.sh` on a real machine with `pi` and `npm` installed, confirm `~/.pi/agent/extensions/hephaestus-cost-tracker/dist/index.js` is produced and pi picks it up on next launch (shows `💰 Cost tracker active` in the status bar). This was verified in isolation during QA (`npm install && npm run build` succeeds) but not verified end-to-end through the actual `install.sh` invocation against a real pi installation — reasonable to defer to a human with a pi environment handy rather than block the pipeline on it.
+3. **Two tickets already filed and out of this feature's scope** (`ticket-6b452476` — unauthenticated project-mutation endpoints, High priority; `ticket-5c041735` — missing rate limit on cost-query GETs, Low) — worth prioritizing `ticket-6b452476` in a near-term follow-up given it touches the same `cost_limit_usd` field this feature's traffic ultimately feeds into, but that's a separate feature, not a blocker here.
 
-The branch diff includes changes to files not called out in the architecture doc's task breakdown (`src/monitoring/monitor.py`, `src/core/status_derivation.py`, `src/interfaces/langchain_llm_client.py`, `src/workflow_engine/yaml_loader.py`, `src/services/ticket_service.py`, `src/sdk/models.py`, `src/phases/phase_manager.py`). Spot-checking `status_derivation.py` and `monitor.py` shows these are dead-code/lint cleanup, not cost-tracking logic. Recommend future development-phase self-review commits keep such cleanup in a separate commit from the feature diff, so `git diff --stat main..HEAD -- <files-under-review>` stays a reliable proxy for "what this feature touched" during later validation passes.
+## 10. Verdict
 
----
-
-## 8. Deliverables
-
-- `docs/product_validation/product_validation.md` — this report
-- `docs/product_validation/product_validation.json` — structured pass/fail summary for the pipeline gate
-
----
-
-*Report generated: 2026-07-25*
+**PASS.** 0 blockers, 4/4 functional requirements met, all non-functional requirements verified, security finding resolved, no regressions in 27 targeted tests. Ready to proceed to `doc_review`.

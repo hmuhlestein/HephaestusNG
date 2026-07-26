@@ -1,13 +1,13 @@
 {
   "verdict": "PASS",
   "blocker_count": 0,
-  "requirements_met": 5,
-  "requirements_total": 5,
+  "requirements_met": 4,
+  "requirements_total": 4,
   "unmet_requirements": [],
   "test_results": {
-    "passed": 84,
+    "passed": 27,
     "failed": 0,
-    "total": 84,
+    "total": 27,
     "pass_rate": 100.0
   },
   "regressions_found": false,
