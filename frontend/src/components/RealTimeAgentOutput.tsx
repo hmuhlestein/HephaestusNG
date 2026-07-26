@@ -40,6 +40,7 @@ const RealTimeAgentOutput: React.FC<RealTimeAgentOutputProps> = ({
   const [isFullscreen, setIsFullscreen] = useState(initialFullscreen);
   const [searchTerm, setSearchTerm] = useState('');
   const [isPaused, setIsPaused] = useState(false);
+  const [isSelectionPaused, setIsSelectionPaused] = useState(false);
   const [autoScroll, setAutoScroll] = useState(true);
   const [currentStatus, setCurrentStatus] = useState(agent?.status || 'working');
 
@@ -120,16 +121,28 @@ const RealTimeAgentOutput: React.FC<RealTimeAgentOutputProps> = ({
     lines: 20000,
   });
 
-  // Auto-scroll to bottom when new content arrives
+  // Auto-scroll to bottom when new content arrives -- and, when the user has
+  // scrolled away from the bottom to read earlier output, explicitly pin
+  // scrollTop back to where they left it (lastScrollPosition, updated by
+  // handleScroll below) on every poll instead. dangerouslySetInnerHTML
+  // replaces the pane's entire content on every update (new output arrives
+  // every ~1s from a live agent); nothing was restoring scroll position in
+  // the !autoScroll case, so the browser's own post-replace scroll behavior
+  // -- not consistently "leave scrollTop alone" -- effectively dragged the
+  // view back toward the bottom, making it impossible to read scrollback
+  // while an agent was still actively producing output. Only reachable
+  // once the agent finished and updates stopped arriving.
   useEffect(() => {
-    if (autoScroll && outputRef.current && lastUpdateTime) {
-      // Use requestAnimationFrame to ensure DOM has updated before scrolling
-      requestAnimationFrame(() => {
-        if (outputRef.current) {
-          outputRef.current.scrollTop = outputRef.current.scrollHeight;
-        }
-      });
-    }
+    if (!outputRef.current || !lastUpdateTime) return;
+    // Use requestAnimationFrame to ensure DOM has updated before scrolling
+    requestAnimationFrame(() => {
+      if (!outputRef.current) return;
+      if (autoScroll) {
+        outputRef.current.scrollTop = outputRef.current.scrollHeight;
+      } else {
+        outputRef.current.scrollTop = lastScrollPosition.current;
+      }
+    });
   }, [output, autoScroll, lastUpdateTime]);
 
   // Handle scroll events to determine if user is at bottom
@@ -144,6 +157,7 @@ const RealTimeAgentOutput: React.FC<RealTimeAgentOutputProps> = ({
 
   // Handle text selection to pause updates
   const handleMouseDown = useCallback(() => {
+    setIsSelectionPaused(true);
     setPauseUpdates(true);
   }, [setPauseUpdates]);
 
@@ -155,7 +169,30 @@ const RealTimeAgentOutput: React.FC<RealTimeAgentOutputProps> = ({
       return;
     }
     // No text selected, resume updates
+    setIsSelectionPaused(false);
     setPauseUpdates(false);
+  }, [setPauseUpdates]);
+
+  // Safety net for handleMouseUp: that handler only re-checks the selection
+  // once, right at mouseup, and only for mouseups inside this pane. Select
+  // text and just release the mouse to read/copy it (never clicking again
+  // with an empty selection) left updates paused indefinitely -- silently,
+  // since this pause has no visual indicator of its own -- so the viewer
+  // looked frozen at whatever it showed at that moment while the agent kept
+  // working, until the whole component remounted (e.g. closing and
+  // reopening after the agent finished) and a fresh fetch caught it up all
+  // at once. Losing the selection ANY way (click elsewhere on the page,
+  // arrow keys, Escape, programmatic clear) now resumes updates promptly.
+  useEffect(() => {
+    const handleSelectionChange = () => {
+      const sel = window.getSelection();
+      if (!sel || sel.toString().length === 0) {
+        setIsSelectionPaused(false);
+        setPauseUpdates(false);
+      }
+    };
+    document.addEventListener('selectionchange', handleSelectionChange);
+    return () => document.removeEventListener('selectionchange', handleSelectionChange);
   }, [setPauseUpdates]);
 
   // Copy to clipboard functionality
@@ -574,6 +611,11 @@ const RealTimeAgentOutput: React.FC<RealTimeAgentOutputProps> = ({
             <div className="flex items-center space-x-2">
               <span>Auto-scroll: {autoScroll ? 'ON' : 'OFF'}</span>
               {isPaused && <span className="text-yellow-500">• PAUSED</span>}
+              {!isPaused && isSelectionPaused && (
+                <span className="text-yellow-500" title="Updates paused while text is selected -- click elsewhere to resume">
+                  • PAUSED (text selected)
+                </span>
+              )}
             </div>
           </div>
         </motion.div>
