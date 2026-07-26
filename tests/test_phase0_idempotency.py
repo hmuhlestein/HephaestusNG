@@ -440,10 +440,8 @@ class TestRunPhase0Tiers:
             json.dumps(features_json_content)
         )
         (worktree / ".hephaestus" / "feature_review_report.md").write_text(
+            "---\ntype: feature_review_result\nblocker_count: 0\nfix_count: 0\ndefer_count: 0\n---\n\n"
             "# Feature Review Report\n\nClean pass."
-        )
-        (worktree / ".hephaestus" / "feature_review_result.json").write_text(
-            json.dumps({"blocker_count": 0, "fix_count": 0, "defer_count": 0})
         )
 
         def fake_run_single_workflow(*args, **kwargs):
@@ -479,8 +477,6 @@ class TestRunPhase0Tiers:
             )
 
         assert (designs_folder / "feature_review_report.md").read_text() == (
+            "---\ntype: feature_review_result\nblocker_count: 0\nfix_count: 0\ndefer_count: 0\n---\n\n"
             "# Feature Review Report\n\nClean pass."
         )
-        assert json.loads(
-            (designs_folder / "feature_review_result.json").read_text()
-        ) == {"blocker_count": 0, "fix_count": 0, "defer_count": 0}

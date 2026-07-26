@@ -15,8 +15,9 @@ description: |
   CRITICAL PATH RULE: Your current working directory IS the project root (an isolated git worktree).
   - "Project Path" = your working directory (.).  "Docs Path" = ./docs/ (create it if missing).
   - Write ALL reports to "Docs Path" (./docs/) — NOT the project root.
-  - Write product_validation.md and product_validation.json to
-    ./docs/product_validation/.
+  - Write ONE file, product_validation.md, to ./docs/product_validation/ — a
+    YAML frontmatter block (structured verdict + unmet_requirements, the
+    gate input) followed by the full narrative report, in a single file.
   - Use exactly that subdirectory name (./docs/product_validation/) — the
     pipeline only looks for that one exact name; anything else is invisible
     to it.
@@ -27,14 +28,12 @@ done_definitions:
   - "Integration with existing system validated"
   - "User experience flows verified"
   - "Edge cases from design doc confirmed handled"
-  - "product_validation.md created with verdict"
-  - "./docs/product_validation.json created with structured verdict + unmet_requirements (gate input)"
+  - "product_validation.md created with a YAML frontmatter block (structured verdict + unmet_requirements, gate input) followed by the validation report"
   - "Validation report includes recommendations for human reviewer"
   - "Memory saved with validation outcome"
   - "Task marked as done"
 outputs:
   - "product_validation.md"
-  - "product_validation.json"
 additional_notes: |
   OUTPUT STYLE: Terse. Drop filler (just/really/basically/actually). Fragments OK. 
   Technical terms exact. No pleasantries (sure/certainly/happy to). 
@@ -175,24 +174,31 @@ additional_notes: |
   [NEEDS_WORK: [specific issues that need addressing]]
   
   ═══════════════════════════════════════════════════════════════════════
-  STEP 6.5: EMIT STRUCTURED VALIDATION RESULT (REQUIRED — drives the pipeline gate)
+  STEP 6.5: PREPEND STRUCTURED VALIDATION RESULT (REQUIRED — drives the pipeline gate)
   ═══════════════════════════════════════════════════════════════════════
-  
-  In addition to product_validation.md, write a machine-readable
-  ./docs/product_validation.json. The pipeline scores this to decide whether to
-  ship, return to development, or return to architecture.
-  
-  Write ./docs/product_validation.json with EXACTLY this schema:
-  
-  ```json
-  {
-    "verdict": "PASS",
-    "unmet_requirements": [],
-    "agent_score": 0.0,
-    "summary": "one-line summary"
-  }
+
+  product_validation.md is ONE file: a YAML frontmatter block (machine-
+  readable, scored to decide whether to ship, return to development, or
+  return to architecture) followed immediately by the full narrative
+  report from the steps above.
+
+  Prepend this frontmatter block to the very top of ./docs/product_validation/product_validation.md,
+  with EXACTLY this schema (type first, then a closing `---`, then the
+  narrative report immediately after):
+
   ```
-  
+  ---
+  type: product_validation_result
+  verdict: PASS
+  unmet_requirements: []
+  agent_score: 0.0
+  summary: "one-line summary"
+  ---
+
+  # Product Validation Report
+  ...(the narrative report from the steps above)...
+  ```
+
   Field rules:
   - verdict is one of:
     - "PASS" — every design requirement is met; ready for human review.

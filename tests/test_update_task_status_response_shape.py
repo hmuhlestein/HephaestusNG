@@ -207,7 +207,7 @@ def _seed_qa_validation(test_db, tmp_path):
         Phase(
             id=phase_id, workflow_id=workflow_id, order=8,
             name="qa_validation", description="d", done_definitions=["done"],
-            outputs=json.dumps(["qa_result.json"]),
+            outputs=json.dumps(["qa_report.md"]),
         )
     )
     session.add(
@@ -226,25 +226,24 @@ def _seed_qa_validation(test_db, tmp_path):
 
 class TestGateResultSchemaFloor:
     """End-to-end regression for the live incident: a QA agent wrote
-    docs/qa_result.json in its own nested shape ({"overall_status": ...,
+    docs/qa_report.md in its own nested shape ({"overall_status": ...,
     "test_results": {"main_suite": {...}}}) instead of the documented flat
     schema. The declared-output floor passed (the file existed) but
     score_qa's field reads all silently defaulted to "everything passed"
     -- this floor catches the shape mismatch at completion time instead."""
 
     def test_incompatible_qa_shape_is_rejected_not_500(self, test_db, test_client, tmp_path):
-        import json
-
         task_id, agent_id = _seed_qa_validation(test_db, tmp_path)
         docs = tmp_path / "docs"
         docs.mkdir()
-        (docs / "qa_result.json").write_text(
-            json.dumps(
-                {
-                    "overall_status": "PASS",
-                    "test_results": {"main_suite": {"total": 1410, "passed": 1410}},
-                }
-            )
+        (docs / "qa_report.md").write_text(
+            "---\n"
+            "overall_status: PASS\n"
+            "test_results:\n"
+            "  main_suite:\n"
+            "    total: 1410\n"
+            "    passed: 1410\n"
+            "---\n\n# QA Report"
         )
 
         resp = test_client.post(
@@ -264,13 +263,16 @@ class TestGateResultSchemaFloor:
         assert "qa_validation" in task.failure_reason
 
     def test_documented_qa_shape_still_succeeds(self, test_db, test_client, tmp_path):
-        import json
-
         task_id, agent_id = _seed_qa_validation(test_db, tmp_path)
         docs = tmp_path / "docs"
         docs.mkdir()
-        (docs / "qa_result.json").write_text(
-            json.dumps({"failed_tests": 0, "passed_tests": 1410, "critical_issues": 0})
+        (docs / "qa_report.md").write_text(
+            "---\n"
+            "type: qa_validation_result\n"
+            "failed_tests: 0\n"
+            "passed_tests: 1410\n"
+            "critical_issues: 0\n"
+            "---\n\n# QA Report"
         )
 
         resp = test_client.post(

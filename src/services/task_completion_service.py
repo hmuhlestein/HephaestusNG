@@ -140,7 +140,7 @@ class TaskCompletionService:
 
         feature_dir = _Path(project_base_dir or config.project_root) / CONTEXT_DIR_NAME / "features"
         missing = []
-        invalid_json = []
+        invalid_frontmatter = []
         for declared_output in required_files:
             found_path = None
             # 1. Check the workflow's shared worktree (task.workflow_id can
@@ -179,35 +179,33 @@ class TaskCompletionService:
                 missing.append(declared_output)
                 continue
 
-            # Existence alone isn't enough for a declared .json output: a
-            # truncated/malformed write passes this check, then silently
-            # reads back as None everywhere downstream (read_result's bare
-            # except-return-None) -- indistinguishable from never having
+            # Existence alone isn't enough for a declared .md (OKF) output: a
+            # truncated/malformed frontmatter block passes this check, then
+            # silently reads back as None everywhere downstream (okf_markdown.read_okf's
+            # bare except-return-None) -- indistinguishable from never having
             # been written at all, surfacing much later as a confusing
             # "not found" at gate-scoring time instead of a clear rejection
             # here, at the one place that actually knows the file exists.
-            if declared_output.endswith(".json"):
-                try:
-                    import json as _json
+            if declared_output.endswith(".md"):
+                from src.autopilot.okf_markdown import read_okf
 
-                    _json.loads(found_path.read_text())
-                except Exception as e:
-                    invalid_json.append(f"{declared_output} ({e})")
+                if read_okf(found_path) is None:
+                    invalid_frontmatter.append(f"{declared_output} (no valid OKF frontmatter block)")
 
-        if not missing and not invalid_json:
+        if not missing and not invalid_frontmatter:
             return None
 
         # Optional phases may complete without their declared output(s).
         optional_phases = load_optional_phases(task.workflow_id)
         if phase.name in optional_phases:
-            logger.info(f"Agent completed optional phase {phase.name} without {missing or invalid_json} — allowing")
+            logger.info(f"Agent completed optional phase {phase.name} without {missing or invalid_frontmatter} — allowing")
             return None
 
         problems = []
         if missing:
             problems.append(f"missing: {', '.join(missing)}")
-        if invalid_json:
-            problems.append(f"not valid JSON: {', '.join(invalid_json)}")
+        if invalid_frontmatter:
+            problems.append(f"not valid OKF: {', '.join(invalid_frontmatter)}")
         summary = "; ".join(problems)
 
         logger.warning(f"Agent claimed done on {phase.name} but {summary} — rejecting")
@@ -238,7 +236,7 @@ class TaskCompletionService:
             GATE_RESULT_ARTIFACTS,
             GATE_RESULT_SUBDIR,
             GATED_PHASES,
-            read_result,
+            read_okf_report,
             validate_gate_result_schema,
         )
         from src.core.database import Phase
@@ -251,7 +249,7 @@ class TaskCompletionService:
         artifacts = GATE_RESULT_ARTIFACTS.get(phase.name)
         if not artifacts:
             return None
-        json_filename = artifacts[0]  # JSON result is always listed first.
+        report_filename = artifacts[0]
 
         wf = None
         if task.workflow_id:
@@ -261,9 +259,9 @@ class TaskCompletionService:
         if not (wf and wf.working_directory):
             return None  # verify_output_artifact already surfaces this case.
 
-        result = read_result(
+        result, _ = read_okf_report(
             wf.working_directory,
-            json_filename,
+            report_filename,
             subdir=GATE_RESULT_SUBDIR.get(phase.name),
             phase_name=phase.name,
         )
@@ -271,7 +269,7 @@ class TaskCompletionService:
         if not error:
             return None
 
-        logger.warning(f"Agent claimed done on {phase.name} but {json_filename} doesn't match the documented schema — rejecting: {error}")
+        logger.warning(f"Agent claimed done on {phase.name} but {report_filename} doesn't match the documented schema — rejecting: {error}")
         task.status = "failed"
         task.failure_reason = error
         session.commit()

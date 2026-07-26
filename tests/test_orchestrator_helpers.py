@@ -2373,13 +2373,13 @@ class TestSweepStrayFiles:
         docs.mkdir()
 
         # Create report file directly in project root (not in a subdirectory)
-        stray = tmp_path / "qa_result.json"
-        stray.write_text("{}")
+        stray = tmp_path / "qa_report.md"
+        stray.write_text("# QA Report")
 
         with patch("src.autopilot.orchestrator.SWEEP_ENABLED", True):
             _sweep_stray_files(tmp_path, feature, docs, logger)
         assert not stray.exists()
-        assert (docs / "qa_result.json").exists()
+        assert (docs / "qa_report.md").exists()
 
     def test_copies_report_docs(self, tmp_path):
         from unittest.mock import patch
@@ -2395,11 +2395,11 @@ class TestSweepStrayFiles:
         # Create report in project docs/ dir
         proj_docs = tmp_path / "docs"
         proj_docs.mkdir()
-        (proj_docs / "qa_result.json").write_text("{}")
+        (proj_docs / "qa_report.md").write_text("# QA Report")
 
         with patch("src.autopilot.orchestrator.SWEEP_ENABLED", True):
             _sweep_stray_files(tmp_path, feature, docs, logger)
-        assert (docs / "qa_result.json").exists()
+        assert (docs / "qa_report.md").exists()
 
 class TestCheckApiCredits:
     @patch("src.autopilot.orchestrator.get_tasks")
@@ -5045,9 +5045,12 @@ class TestCreatePhaseTaskReviewCap:
             count = session.query(Task).filter(Task.phase_id == "phase-cap").count()
             assert count == 3
 
-        result_json = tmp_path / "docs" / "architectural_review" / "architectural_review_result.json"
-        assert result_json.exists()
-        assert json.loads(result_json.read_text())["blocker_count"] == 0
+        result_md = tmp_path / "docs" / "architectural_review" / "architectural_review_report.md"
+        assert result_md.exists()
+        from src.autopilot.okf_markdown import read_okf
+
+        frontmatter, _ = read_okf(result_md)
+        assert frontmatter["blocker_count"] == 0
 
     @patch("src.autopilot.orchestrator._fire_phase_transition")
     @patch("src.autopilot.orchestrator.create_agent_for_task_direct")

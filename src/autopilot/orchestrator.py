@@ -3630,7 +3630,7 @@ def generate_product_validation_report(
     validation_path = _report_path(project_path, "product_validation.md")
 
     if validation_path.exists():
-        from src.autopilot.okf import read_okf
+        from src.autopilot.okf_markdown import read_okf
 
         parsed = read_okf(validation_path)
         if parsed:
@@ -5203,7 +5203,7 @@ def _cap_out_review_phase(
     run hit 25 re-entries of security_review with max_review_runs: 4
     configured and doing nothing.
     """
-    from src.autopilot.okf import write_okf
+    from src.autopilot.okf_markdown import write_okf
     from src.autopilot.spec import GATE_RESULT_ARTIFACTS, get_review_findings_history, synthetic_clean_result
 
     workflow = db.query(Workflow).filter_by(id=workflow_id).first()

@@ -10,7 +10,7 @@ from src.autopilot.spec import (
     _pass_with_subjective,
     build_phase_output,
     load_spec,
-    read_result,
+    read_okf_report,
     score_adversarial_review,
     score_architectural_review,
     score_feature_review,
@@ -366,27 +366,34 @@ class TestScoreProductValidation:
         assert meta["band"] == "development"
 
 
-class TestReadResult:
+def _okf(frontmatter_yaml: str, body: str = "# Report\n") -> str:
+    return f"---\n{frontmatter_yaml}\n---\n\n{body}"
+
+
+class TestReadOkfReport:
     def test_reads_from_docs(self, tmp_path):
         docs = tmp_path / "docs"
         docs.mkdir()
-        (docs / "qa_result.json").write_text('{"passed": true}')
-        result = read_result(tmp_path, "qa_result.json")
+        (docs / "qa_report.md").write_text(_okf("passed: true"))
+        result, body = read_okf_report(tmp_path, "qa_report.md")
         assert result == {"passed": True}
+        assert body == "# Report\n"
 
     def test_reads_from_root(self, tmp_path):
-        (tmp_path / "qa_result.json").write_text('{"passed": true}')
-        result = read_result(tmp_path, "qa_result.json")
+        (tmp_path / "qa_report.md").write_text(_okf("passed: true"))
+        result, _ = read_okf_report(tmp_path, "qa_report.md")
         assert result == {"passed": True}
 
     def test_missing_file(self, tmp_path):
-        result = read_result(tmp_path, "nonexistent.json")
+        result, body = read_okf_report(tmp_path, "nonexistent.md")
         assert result is None
+        assert body is None
 
-    def test_corrupt_json(self, tmp_path):
-        (tmp_path / "qa_result.json").write_text("not json")
-        result = read_result(tmp_path, "qa_result.json")
+    def test_no_frontmatter_block(self, tmp_path):
+        (tmp_path / "qa_report.md").write_text("not okf, just text")
+        result, body = read_okf_report(tmp_path, "qa_report.md")
         assert result is None
+        assert body is None
 
     def test_reads_from_phase_scoped_subdirectory(self, tmp_path):
         """Regression: agents are now told to write to the one sanctioned
@@ -394,8 +401,8 @@ class TestReadResult:
         PATH RULE) -- this must be checked, not just flat docs/."""
         sub = tmp_path / "docs" / "qa_validation"
         sub.mkdir(parents=True)
-        (sub / "qa_result.json").write_text('{"passed": true}')
-        result = read_result(tmp_path, "qa_result.json", phase_name="qa_validation")
+        (sub / "qa_report.md").write_text(_okf("passed: true"))
+        result, _ = read_okf_report(tmp_path, "qa_report.md", phase_name="qa_validation")
         assert result == {"passed": True}
 
     def test_phase_scoped_subdirectory_wins_over_stale_flat_docs_file(self, tmp_path):
@@ -404,12 +411,12 @@ class TestReadResult:
         in docs/ from an earlier attempt, not the other way around."""
         docs = tmp_path / "docs"
         docs.mkdir()
-        (docs / "qa_result.json").write_text('{"passed": false, "stale": true}')
+        (docs / "qa_report.md").write_text(_okf("passed: false\nstale: true"))
         sub = docs / "qa_validation"
         sub.mkdir()
-        (sub / "qa_result.json").write_text('{"passed": true, "stale": false}')
+        (sub / "qa_report.md").write_text(_okf("passed: true\nstale: false"))
 
-        result = read_result(tmp_path, "qa_result.json", phase_name="qa_validation")
+        result, _ = read_okf_report(tmp_path, "qa_report.md", phase_name="qa_validation")
         assert result == {"passed": True, "stale": False}
 
     def test_no_phase_name_does_not_search_other_subdirectories(self, tmp_path):
@@ -421,9 +428,9 @@ class TestReadResult:
         docs.mkdir()
         other = docs / "some_other_feature"
         other.mkdir()
-        (other / "qa_result.json").write_text('{"passed": true}')
+        (other / "qa_report.md").write_text(_okf("passed: true"))
 
-        result = read_result(tmp_path, "qa_result.json")
+        result, _ = read_okf_report(tmp_path, "qa_report.md")
         assert result is None
 
 
@@ -440,16 +447,13 @@ class TestBuildPhaseOutput:
     def test_qa_validation_with_result(self, tmp_path):
         docs = tmp_path / "docs"
         docs.mkdir()
-        (docs / "qa_result.json").write_text(
-            json.dumps(
-                {
-                    "failed_tests": 0,
-                    "passed_tests": 50,
-                    "pass_rate": 100.0,
-                    "critical_issues": 0,
-                }
-            )
-        )
+        (docs / "qa_report.md").write_text(_okf(
+            "type: qa_validation_result\n"
+            "failed_tests: 0\n"
+            "passed_tests: 50\n"
+            "pass_rate: 100.0\n"
+            "critical_issues: 0"
+        ))
         result = build_phase_output("qa_validation", tmp_path)
         assert result["score"] >= 0.7
 
@@ -468,18 +472,24 @@ class TestBuildPhaseOutput:
     def test_adversarial_review_with_blockers(self, tmp_path):
         docs = tmp_path / "docs"
         docs.mkdir()
-        (docs / "adversarial_review_result.json").write_text(
-            json.dumps({"blocker_count": 6, "warning_count": 6, "nit_count": 5})
-        )
+        (docs / "adversarial_review_report.md").write_text(_okf(
+            "type: adversarial_review_result\n"
+            "blocker_count: 6\n"
+            "warning_count: 6\n"
+            "nit_count: 5"
+        ))
         result = build_phase_output("adversarial_review", tmp_path)
         assert result["score"] < 0.6
 
     def test_architectural_review_with_blockers(self, tmp_path):
         docs = tmp_path / "docs"
         docs.mkdir()
-        (docs / "architectural_review_result.json").write_text(
-            json.dumps({"blocker_count": 2, "fix_count": 0, "defer_count": 0})
-        )
+        (docs / "architectural_review_report.md").write_text(_okf(
+            "type: architectural_review_result\n"
+            "blocker_count: 2\n"
+            "fix_count: 0\n"
+            "defer_count: 0"
+        ))
         result = build_phase_output("architectural_review", tmp_path)
         assert result["score"] < 0.6
 
@@ -502,12 +512,13 @@ class TestBuildPhaseOutput:
 
         heph_dir = tmp_path / CONTEXT_DIR_NAME
         heph_dir.mkdir()
-        (heph_dir / "feature_review_result.json").write_text(
-            json.dumps({"blocker_count": 0, "fix_count": 1, "defer_count": 0})
-        )
-        (heph_dir / "feature_review_report.md").write_text(
-            "# Feature Review Report\n\n### [FIX] Ownership overlap"
-        )
+        (heph_dir / "feature_review_report.md").write_text(_okf(
+            "type: feature_review_result\n"
+            "blocker_count: 0\n"
+            "fix_count: 1\n"
+            "defer_count: 0",
+            body="# Feature Review Report\n\n### [FIX] Ownership overlap",
+        ))
         result = build_phase_output("feature_review", tmp_path)
         assert result["score"] < 0.3
         assert "Ownership overlap" in result["spec_gate"]["reason"]

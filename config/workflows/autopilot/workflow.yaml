@@ -25,19 +25,11 @@ session_roles:
 # the artifact is missing (catches hallucinated completions at the source).
 required_output:
   architecture_design: architecture.md
-  scope_review: scope_review_result.json
-  architectural_review:
-    - architectural_review_report.md
-    - architectural_review_result.json
-  adversarial_review:
-    - adversarial_review_report.md
-    - adversarial_review_result.json
-  qa_validation:
-    - qa_report.md
-    - qa_result.json
-  product_validation:
-    - product_validation.md
-    - product_validation.json
+  scope_review: scope_review_result.md
+  architectural_review: architectural_review_report.md
+  adversarial_review: adversarial_review_report.md
+  qa_validation: qa_report.md
+  product_validation: product_validation.md
 
 # Optional phases that can fail without blocking the pipeline.
 # All other phases are required — if they fail after MAX_PHASE_ATTEMPTS,

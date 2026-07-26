@@ -940,8 +940,7 @@ class PhaseManager:
                 GATE_RESULT_ARTIFACTS,
                 consume_gate_artifacts,
                 get_max_review_runs,
-                read_report_text,
-                read_result,
+                read_okf_report,
                 record_review_finding,
             )
 
@@ -958,19 +957,12 @@ class PhaseManager:
                 # everywhere else, keeping this inert by default.
                 if get_max_review_runs(phase.workflow_id, phase.name) is not None:
                     artifacts = GATE_RESULT_ARTIFACTS.get(phase.name, ())
-                    result = (
-                        read_result(
+                    result, report_text = (
+                        read_okf_report(
                             workflow.working_directory, artifacts[0], phase_name=phase.name
                         )
                         if artifacts
-                        else None
-                    )
-                    report_text = (
-                        read_report_text(
-                            workflow.working_directory, artifacts[1], phase_name=phase.name
-                        )
-                        if len(artifacts) > 1
-                        else None
+                        else (None, None)
                     )
                     record_review_finding(
                         phase.workflow_id,

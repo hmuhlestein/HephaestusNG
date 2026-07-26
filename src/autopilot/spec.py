@@ -6,7 +6,7 @@ judgement to produce the `score` that drives the engine's evaluation points
 
 The spec lives at ~/.hephaestus/autopilot/qa_spec.json (per-project) and is also
 copied into each worktree's .hephaestus/ so agents can read it. Phase 7/8 agents
-emit structured JSON (qa_result.json / product_validation.json) which this module
+emit an OKF report (qa_report.md / product_validation.md) which this module
 scores against the spec.
 
 Score bands map onto the autopilot evaluation_points thresholds:
@@ -23,6 +23,7 @@ from typing import Any, Dict, Optional, Tuple
 
 import yaml
 
+from src.autopilot.okf_markdown import read_okf
 from src.core.constants import AUTOPILOT_STATE_DIR, CONTEXT_DIR_NAME
 
 logger = logging.getLogger(__name__)
@@ -558,7 +559,7 @@ def verify_qa_against_independent(
 def score_scope_review(
     result: Optional[Dict[str, Any]],
 ) -> Tuple[float, Dict[str, Any]]:
-    """Score a scope_review_result.json. Binary: PASS=1.0, FAIL=0.2, missing=0.4.
+    """Score a scope_review_result.md. Binary: PASS=1.0, FAIL=0.2, missing=0.4.
 
     Accepts both the canonical flat schema and the nested schema agents sometimes
     write ({"scope_review": {"verdict": ...}, "out_of_scope_items": [...], ...}).
@@ -566,7 +567,7 @@ def score_scope_review(
     if not result:
         return 0.4, {
             "gate": "scope_review",
-            "reason": "no scope_review_result.json found",
+            "reason": "no scope_review_result.md found",
             "result_missing": True,
         }
 
@@ -660,7 +661,7 @@ def score_qa(
     if not result:
         return _DEV, {
             "gate": "qa",
-            "reason": "no qa_result.json found",
+            "reason": "no qa_report.md found",
             "result_missing": True,
         }
 
@@ -696,7 +697,7 @@ def score_qa(
                 ind_failed = independent_result.get("failed", 0)
                 ind_total = independent_result.get("total", 0)
                 if total == 0 and ind_total > 0:
-                    # agent's qa_result.json didn't populate the documented
+                    # agent's qa_report.md didn't populate the documented
                     # top-level failed_tests/passed_tests/total_tests/pass_rate
                     # fields at all (e.g. it wrote its own nested report shape
                     # instead of the prompt's "EXACTLY this schema" — a real
@@ -820,10 +821,10 @@ def score_product_validation(
         # score_feature_review: always the failing band, report text is
         # context for the developer, never a route to a pass.
         reason = (
-            f"no product_validation.json found, but a report was "
+            f"no product_validation.md frontmatter found, but a report was "
             f"written:\n\n{report_text}"
             if report_text
-            else "no product_validation.json found"
+            else "no product_validation.md found"
         )
         return _DEV, {
             "gate": "product",
@@ -890,7 +891,7 @@ def score_adversarial_review(
     result: Optional[Dict[str, Any]],
     report_text: Optional[str] = None,
 ) -> Tuple[float, Dict[str, Any]]:
-    """Score an adversarial_review_result.json by BLOCKER/WARNING/NIT counts.
+    """Score an adversarial_review_report.md by BLOCKER/WARNING/NIT counts.
 
     adversarial_review.yaml's report classifies findings as BLOCKER (process
     death, silent data corruption, unrecoverable state), WARNING (fails under
@@ -911,10 +912,10 @@ def score_adversarial_review(
         # forgot) to also emit the structured JSON -- don't discard real
         # findings just because the JSON is missing.
         reason = (
-            f"no adversarial_review_result.json found, but a report was "
+            f"no adversarial_review_report.md frontmatter found, but a report was "
             f"written:\n\n{report_text}"
             if report_text
-            else "no adversarial_review_result.json found"
+            else "no adversarial_review_report.md found"
         )
         return 0.4, {
             "gate": "adversarial_review",
@@ -956,7 +957,7 @@ def score_architectural_review(
     result: Optional[Dict[str, Any]],
     report_text: Optional[str] = None,
 ) -> Tuple[float, Dict[str, Any]]:
-    """Score an architectural_review_result.json by BLOCKER/FIX/DEFER counts.
+    """Score an architectural_review_report.md by BLOCKER/FIX/DEFER counts.
 
     architectural_review.yaml's report classifies findings as BLOCKER
     (architecture violated), FIX (design deviation), or DEFER. Same dead-gate
@@ -970,10 +971,10 @@ def score_architectural_review(
         # forgot) to also emit the structured JSON -- don't discard real
         # findings just because the JSON is missing.
         reason = (
-            f"no architectural_review_result.json found, but a report was "
+            f"no architectural_review_report.md frontmatter found, but a report was "
             f"written:\n\n{report_text}"
             if report_text
-            else "no architectural_review_result.json found"
+            else "no architectural_review_report.md found"
         )
         return 0.4, {
             "gate": "architectural_review",
@@ -1011,7 +1012,7 @@ def score_feature_review(
     result: Optional[Dict[str, Any]],
     report_text: Optional[str] = None,
 ) -> Tuple[float, Dict[str, Any]]:
-    """Score a feature_review_result.json by BLOCKER/FIX/DEFER counts.
+    """Score a feature_review_report.md by BLOCKER/FIX/DEFER counts.
 
     02_feature_review.yaml's report classifies findings as BLOCKER (feature
     decomposition contradicts or omits part of the design), FIX (scope
@@ -1029,10 +1030,10 @@ def score_feature_review(
         # forgot) to also emit the structured JSON -- don't discard real
         # findings just because the JSON is missing.
         reason = (
-            f"no feature_review_result.json found, but a report was "
+            f"no feature_review_report.md frontmatter found, but a report was "
             f"written:\n\n{report_text}"
             if report_text
-            else "no feature_review_result.json found"
+            else "no feature_review_report.md found"
         )
         return 0.4, {
             "gate": "feature_review",
@@ -1060,13 +1061,13 @@ def score_feature_review(
     return 0.9, {"gate": "feature_review", "band": "pass", "reason": "clean"}
 
 
-def read_result(
+def read_okf_report(
     working_directory: Any,
     filename: str,
     subdir: Optional[str] = None,
     phase_name: Optional[str] = None,
-) -> Optional[Dict[str, Any]]:
-    """Read a structured result file an agent wrote.
+) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    """Read a phase's OKF report (frontmatter + body) an agent wrote.
 
     Agents write to ./docs/ (merged from their worktree to <project>/docs/);
     fall back to the project root. Does NOT iterate worktrees (too slow for
@@ -1087,6 +1088,9 @@ def read_result(
     retry/goto pass of this same phase, since filesystem iteration order
     isn't "most recent." Root docs/ and the project root remain as fallback
     locations for older agent behavior.
+
+    Returns (frontmatter, body) -- either or both None if the file is
+    missing or has no parseable frontmatter block (see okf_markdown.read_okf).
     """
     base = Path(working_directory)
     if subdir is not None:
@@ -1098,70 +1102,29 @@ def read_result(
         candidates += [base / "docs" / filename, base / filename]
     for candidate in candidates:
         if candidate.exists():
-            try:
-                return json.loads(candidate.read_text())
-            except Exception:
-                return None
-    return None
+            parsed = read_okf(candidate)
+            return parsed if parsed else (None, None)
+    return None, None
 
 
-def read_report_text(
-    working_directory: Any,
-    filename: str,
-    subdir: Optional[str] = None,
-    phase_name: Optional[str] = None,
-) -> Optional[str]:
-    """Read a markdown report an agent wrote, same search path as
-    read_result (including the subdir override and phase_name-scoped
-    location) but returning raw text instead of parsed JSON -- used to
-    quote a review's full report into the corrective task sent back to
-    development, rather than just a score/count.
-    """
-    base = Path(working_directory)
-    if subdir is not None:
-        candidates = (base / subdir / filename,)
-    else:
-        candidates = []
-        if phase_name:
-            candidates.append(base / "docs" / phase_name / filename)
-        candidates += [base / "docs" / filename, base / filename]
-    for candidate in candidates:
-        if candidate.exists():
-            try:
-                return candidate.read_text()
-            except Exception:
-                return None
-    return None
-
-
-# The result/report files each gated phase's score is computed from --
-# mirrors the filenames build_phase_output reads below (keep in sync).
-# Used by consume_gate_artifacts when a gate's goto decision fires, and by
-# verify_gate_result_schema's output-schema floor. JSON result is always
-# listed first (both callers assume artifacts[0] is the JSON one).
+# The single OKF report file each gated phase's score is computed from --
+# mirrors the filename build_phase_output reads below (keep in sync). Used
+# by consume_gate_artifacts when a gate's goto decision fires, and by
+# verify_gate_result_schema's output-schema floor.
 GATE_RESULT_ARTIFACTS: Dict[str, Tuple[str, ...]] = {
-    "scope_review": ("scope_review_result.json",),
-    "architectural_review": (
-        "architectural_review_result.json",
-        "architectural_review_report.md",
-    ),
-    "adversarial_review": (
-        "adversarial_review_result.json",
-        "adversarial_review_report.md",
-    ),
-    "qa_validation": ("qa_result.json",),
-    "product_validation": ("product_validation.json",),
-    "feature_review": (
-        "feature_review_result.json",
-        "feature_review_report.md",
-    ),
+    "scope_review": ("scope_review_result.md",),
+    "architectural_review": ("architectural_review_report.md",),
+    "adversarial_review": ("adversarial_review_report.md",),
+    "qa_validation": ("qa_report.md",),
+    "product_validation": ("product_validation.md",),
+    "feature_review": ("feature_review_report.md",),
 }
 
 # Override for the (rare) gated phase whose result lives somewhere other
 # than docs/<file> or <root>/<file> -- feature_review writes to the
 # git-excluded .hephaestus/ dir, like its sibling Feature Architect, since
 # Phase 0's artifacts are internal orchestration state rather than a
-# git-tracked deliverable (see read_result's own subdir parameter).
+# git-tracked deliverable (see read_okf_report's own subdir parameter).
 GATE_RESULT_SUBDIR: Dict[str, str] = {
     "feature_review": CONTEXT_DIR_NAME,
 }
@@ -1185,7 +1148,10 @@ def synthetic_clean_result(phase_name: str, run_count: int) -> Dict[str, Any]:
     goto'd back to development -- burning through max_total_gotos faster
     than not capping at all would have.
     """
-    base = {"capped": True, "capped_after_runs": run_count}
+    # type: matches validate_gate_result_schema's expected `type` for this
+    # phase -- without it this synthetic result would fail the very check
+    # a real agent's report has to pass.
+    base = {"type": f"{phase_name}_result", "capped": True, "capped_after_runs": run_count}
     if phase_name == "qa_validation":
         return {
             **base,
@@ -1288,28 +1254,45 @@ GATE_RESULT_REQUIRED_KEYS: Dict[str, Tuple[str, ...]] = {
 def validate_gate_result_schema(
     phase_name: str, result: Optional[Dict[str, Any]]
 ) -> Optional[str]:
-    """Check a gated phase's structured JSON result has at least one of its
-    required top-level keys actually present (not just defaulted).
+    """Check a gated phase's OKF frontmatter declares the right `type` and
+    has at least one of its required top-level keys actually present (not
+    just defaulted).
 
     Returns an error message describing the gap if the schema looks wrong,
-    else None. A missing/unparseable result file is a separate, already-
-    handled case -- each score_* function treats result=None as its own
-    "result_missing" band -- so this only fires once a file exists but
+    else None. A missing/unparseable report is a separate, already-handled
+    case -- each score_* function treats result=None as its own
+    "result_missing" band -- so this only fires once a report exists but
     doesn't resemble the documented schema at all.
+
+    `type` is OKF's one always-required field (see okf_markdown.py's module
+    docstring) and is checked first: an agent that writes the wrong shape
+    almost always gets `type` wrong too (it's the first line of the
+    documented example), so this catches the "incompatible schema" case
+    more directly than key-presence alone ever could.
     """
     required = GATE_RESULT_REQUIRED_KEYS.get(phase_name)
     if not required or result is None:
         return None
+    expected_type = f"{phase_name}_result"
+    actual_type = result.get("type")
+    if actual_type != expected_type:
+        return (
+            f"{phase_name}'s report has frontmatter type: {actual_type!r}, "
+            f"expected type: {expected_type!r} -- this looks like an "
+            f"incompatible or missing frontmatter block, not the one "
+            f"documented in {phase_name}.yaml. Rewrite it in the exact "
+            "documented shape so the pipeline gate can read your findings."
+        )
     if any(key in result for key in required):
         return None
     return (
-        f"{phase_name}'s result JSON has none of the required keys "
-        f"{required} -- this looks like an incompatible schema, not the "
-        f"one documented in {phase_name}.yaml. Rewrite it in the exact "
-        "documented shape so the pipeline gate can read your findings "
-        "(silently defaulting missing fields would mask real issues, e.g. "
-        "blocker/critical-issue counts reading as 0 when they weren't "
-        "actually checked)."
+        f"{phase_name}'s report has the right type but none of the "
+        f"required fields {required} -- this looks like an incompatible "
+        f"schema, not the one documented in {phase_name}.yaml. Rewrite it "
+        "in the exact documented shape so the pipeline gate can read your "
+        "findings (silently defaulting missing fields would mask real "
+        "issues, e.g. blocker/critical-issue counts reading as 0 when they "
+        "weren't actually checked)."
     )
 
 
@@ -1332,28 +1315,22 @@ def build_phase_output(
     spec = spec if spec is not None else load_spec()
 
     if phase_name == "scope_review":
-        result = read_result(
-            working_directory, "scope_review_result.json", phase_name=phase_name
+        result, _ = read_okf_report(
+            working_directory, "scope_review_result.md", phase_name=phase_name
         )
         score, meta = score_scope_review(result)
     elif phase_name == "architectural_review":
-        result = read_result(
-            working_directory, "architectural_review_result.json", phase_name=phase_name
-        )
-        report_text = read_report_text(
+        result, report_text = read_okf_report(
             working_directory, "architectural_review_report.md", phase_name=phase_name
         )
         score, meta = score_architectural_review(result, report_text=report_text)
     elif phase_name == "adversarial_review":
-        result = read_result(
-            working_directory, "adversarial_review_result.json", phase_name=phase_name
-        )
-        report_text = read_report_text(
+        result, report_text = read_okf_report(
             working_directory, "adversarial_review_report.md", phase_name=phase_name
         )
         score, meta = score_adversarial_review(result, report_text=report_text)
     elif phase_name == "qa_validation":
-        result = read_result(working_directory, "qa_result.json", phase_name=phase_name)
+        result, _ = read_okf_report(working_directory, "qa_report.md", phase_name=phase_name)
         # Enhancement 1: Pass working_directory for independent test verification
         wd = None if skip_independent_verification else working_directory
         score, meta = score_qa(result, spec, working_directory=wd)
@@ -1361,18 +1338,12 @@ def build_phase_output(
         # .hephaestus/, not docs/ -- matches Feature Architect (the phase it
         # reviews), whose own outputs already live there. Phase 0 artifacts
         # are internal orchestration state, never a git-tracked deliverable.
-        result = read_result(
-            working_directory, "feature_review_result.json", subdir=CONTEXT_DIR_NAME
-        )
-        report_text = read_report_text(
+        result, report_text = read_okf_report(
             working_directory, "feature_review_report.md", subdir=CONTEXT_DIR_NAME
         )
         score, meta = score_feature_review(result, report_text=report_text)
     else:  # product_validation
-        result = read_result(
-            working_directory, "product_validation.json", phase_name=phase_name
-        )
-        report_text = read_report_text(
+        result, report_text = read_okf_report(
             working_directory, "product_validation.md", phase_name=phase_name
         )
         score, meta = score_product_validation(result, spec, report_text=report_text)

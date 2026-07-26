@@ -38,6 +38,14 @@ additional_notes: |
 
   ═══ STEP 3: WRITE CODE SUMMARY (code_summary.md) ═══
 
+  Start code_summary.md with this frontmatter block, then the content
+  immediately after:
+  ```
+  ---
+  type: code_summary
+  ---
+  ```
+
   Explore the actual code changes (git diff, read new/modified files) and write
   a standalone code_summary.md that explains to an engineer:
 
@@ -65,6 +73,14 @@ additional_notes: |
   reading source code.
 
   ═══ STEP 5: WRITE DOC REVIEW REPORT (doc_review_report.md) ═══
+
+  Start doc_review_report.md with this frontmatter block, then the content
+  immediately after:
+  ```
+  ---
+  type: doc_review_report
+  ---
+  ```
 
   Brief: documents reviewed, critical issues fixed, scratch files deleted,
   overall quality rating.

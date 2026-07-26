@@ -916,7 +916,7 @@ what's actually still open.
 | Agent worktree wiring | `AgentManager._gather_worktree_context` copies design doc / project context / `qa_spec.json` into each worktree's `.hephaestus/`. All 10 phase prompts + `phases.py` template + `run_single_design` description use worktree-relative paths. `.gitignore` no longer modified (uses `info/exclude`). |
 | Report collection | `_report_path()` + `docs/` sweep so HTML report / forensics read merged `<project>/docs/`. |
 | Repair flow | Slimmed to workflow recovery only (branch reconciliation removed). |
-| Hybrid spec gate (§9.1) | `src/autopilot/spec.py` (floors + judgement → score bands); `Monitor._build_spec_phase_output` feeds the engine; phases 7/8 emit `qa_result.json` / `product_validation.json`. |
+| Hybrid spec gate (§9.1) | `src/autopilot/spec.py` (floors + judgement → score bands); `Monitor._build_spec_phase_output` feeds the engine; phases 7/8 emit `qa_report.md` / `product_validation.md` (single-file OKF: YAML frontmatter + narrative body). |
 | Tier 0 — single control authority (P1) | Outer `for iteration` loop removed; engine evaluation is sole iteration authority (`max_total_gotos`). `--max-iterations` maps to `max_total_gotos` (**C0.2 done**). |
 | Tier 1 — scheduling out of orchestrator (P2) | ~150 lines of duplicated scheduler/nudge removed; Monitor owns agent spawn. |
 | 3b — phase-transition authority | `mark_phase_complete` returns the `EvaluationResult`; `Monitor._create_phase_task_and_agent` creates task+agent for the resolved target (continue/goto/retry). |

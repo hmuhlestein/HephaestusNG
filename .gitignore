@@ -58,7 +58,6 @@ logs/
 htmlcov/
 .tox/
 .coverage.*
-docs/qa_result.json
 .ruffcache/
 .mypy_cache/
 

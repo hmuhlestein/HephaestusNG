@@ -19,8 +19,9 @@ description: |
   CRITICAL PATH RULE: Your current working directory IS the project root (an isolated git worktree).
   - "Project Path" = your working directory (.).  "Docs Path" = ./docs/ (create it if missing).
   - Write ALL reports to "Docs Path" (./docs/) — NOT the project root.
-  - Write adversarial_review_report.md and adversarial_review_result.json to
-    ./docs/adversarial_review/.
+  - Write ONE file, adversarial_review_report.md, to ./docs/adversarial_review/ —
+    a YAML frontmatter block (blocker_count/warning_count/nit_count, the
+    gate input) followed by the full BLOCKER/WARNING/NIT findings report.
   - Use exactly that subdirectory name (./docs/adversarial_review/) — the
     pipeline only looks for that one exact name; anything else is invisible
     to it.
@@ -34,13 +35,11 @@ done_definitions:
   - "Code composition verified — high-level classes don't leak low-level details"
   - "Polymorphism used over conditionals where appropriate"
   - "Complex logic pushed down into lower-level files, classes, and functions"
-  - "adversarial_review_report.md written with BLOCKER/WARNING/NIT findings"
+  - "adversarial_review_report.md written with a YAML frontmatter block (blocker_count/warning_count/nit_count, gate input) followed by the BLOCKER/WARNING/NIT findings"
   - "Each BLOCKER includes exact failure sequence and specific recommended fix"
-  - "adversarial_review_result.json written with blocker_count/warning_count/nit_count"
   - "Task marked as done"
 outputs:
   - "adversarial_review_report.md"
-  - "adversarial_review_result.json"
 next_steps:
   - "Phase 7 doc review reads adversarial_review_report.md"
   - "Phase 8 security review reads adversarial_review_report.md for security concerns"
@@ -233,22 +232,28 @@ additional_notes: |
   [Failure modes with no test — state the scenario and the missing assertion]
 
   ═══════════════════════════════════════════════════════════════════════
-  STEP 5: WRITE adversarial_review_result.json (NOT OPTIONAL)
+  STEP 5: PREPEND STRUCTURED RESULT TO adversarial_review_report.md (NOT OPTIONAL)
   ═══════════════════════════════════════════════════════════════════════
 
-  The report above is for the developer to read. This file is ALSO what
-  drives the pipeline: if BLOCKERs are found, the pipeline sends the
-  FULL adversarial_review_report.md straight to the developer agent as its
-  next task -- without a nonzero blocker_count here, the pipeline can't
-  tell BLOCKERs were found at all and will silently continue regardless.
-  Write it to the same Docs Path as the report:
+  adversarial_review_report.md is ONE file: a YAML frontmatter block
+  followed by the full report above. The frontmatter is what drives the
+  pipeline: if BLOCKERs are found, the pipeline sends the FULL report
+  straight to the developer agent as its next task -- without a nonzero
+  blocker_count here, the pipeline can't tell BLOCKERs were found at all
+  and will silently continue regardless.
 
-  {
-    "blocker_count": <int>,
-    "warning_count": <int>,
-    "nit_count": <int>,
-    "overall": "PASS" | "NEEDS_WORK" | "FAIL"
-  }
+  Prepend this to the very top of the file (type first, then a closing
+  `---`, then the report from the steps above immediately after):
+
+  ```
+  ---
+  type: adversarial_review_result
+  blocker_count: <int>
+  warning_count: <int>
+  nit_count: <int>
+  overall: PASS | NEEDS_WORK | FAIL
+  ---
+  ```
 
   Counts must match the report's own Summary section exactly.
 

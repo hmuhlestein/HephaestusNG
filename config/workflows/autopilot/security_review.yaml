@@ -23,10 +23,18 @@ done_definitions:
 outputs:
   - "security_review/security_report.md"
 additional_notes: |
-  OUTPUT STYLE: Terse. Drop filler (just/really/basically/actually). Fragments OK. 
-  Technical terms exact. No pleasantries (sure/certainly/happy to). 
+  OUTPUT STYLE: Terse. Drop filler (just/really/basically/actually). Fragments OK.
+  Technical terms exact. No pleasantries (sure/certainly/happy to).
   Not: "I'll now proceed to review security." Yes: "Review auth and input validation."
-  
+
+  Start security_report.md with this frontmatter block, then the report
+  immediately after:
+  ```
+  ---
+  type: security_review_report
+  ---
+  ```
+
   ═══════════════════════════════════════════════════════════════════════
   YOU ARE A SECURITY REVIEWER - FIND AND FIX VULNERABILITIES
   ═══════════════════════════════════════════════════════════════════════

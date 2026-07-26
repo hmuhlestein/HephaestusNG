@@ -6,9 +6,14 @@ This test verifies that:
 3. Optional phases can fail without blocking the pipeline
 """
 
-import json
-
 import pytest
+import yaml
+
+
+def _write_qa_report(docs_dir, qa_result):
+    frontmatter = {"type": "qa_validation_result", **qa_result}
+    text = "---\n" + yaml.safe_dump(frontmatter, sort_keys=False) + "---\n\n# QA Report\n"
+    (docs_dir / "qa_report.md").write_text(text)
 
 
 class TestSpecGateFiring:
@@ -18,7 +23,7 @@ class TestSpecGateFiring:
         """Test that the spec gate fires when qa_validation phase completes."""
         from src.autopilot.spec import build_phase_output
 
-        # Create a failing qa_result.json
+        # Create a failing qa_report.md
         docs = tmp_path / "docs"
         docs.mkdir()
         qa_result = {
@@ -28,7 +33,7 @@ class TestSpecGateFiring:
             "critical_issues": 0,
             "agent_score": 1.0,
         }
-        (docs / "qa_result.json").write_text(json.dumps(qa_result))
+        _write_qa_report(docs, qa_result)
 
         # Build phase output
         phase_output = build_phase_output("qa_validation", tmp_path)
@@ -43,7 +48,7 @@ class TestSpecGateFiring:
         """Test that a low score causes a GOTO action."""
         from src.autopilot.spec import build_phase_output
 
-        # Create a qa_result.json with critical issues (architecture band)
+        # Create a qa_report.md with critical issues (architecture band)
         docs = tmp_path / "docs"
         docs.mkdir()
         qa_result = {
@@ -53,7 +58,7 @@ class TestSpecGateFiring:
             "critical_issues": 3,  # Critical issues trigger architecture band
             "agent_score": 1.0,
         }
-        (docs / "qa_result.json").write_text(json.dumps(qa_result))
+        _write_qa_report(docs, qa_result)
 
         # Build phase output
         phase_output = build_phase_output("qa_validation", tmp_path)
@@ -66,7 +71,7 @@ class TestSpecGateFiring:
         """Test that a good result passes the gate."""
         from src.autopilot.spec import build_phase_output
 
-        # Create a passing qa_result.json
+        # Create a passing qa_report.md
         docs = tmp_path / "docs"
         docs.mkdir()
         qa_result = {
@@ -76,7 +81,7 @@ class TestSpecGateFiring:
             "critical_issues": 0,
             "agent_score": 1.0,
         }
-        (docs / "qa_result.json").write_text(json.dumps(qa_result))
+        _write_qa_report(docs, qa_result)
 
         # Build phase output
         phase_output = build_phase_output("qa_validation", tmp_path)

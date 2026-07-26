@@ -14,7 +14,7 @@ unrelated new feature work — reviewed separately here.
 `verify_qa_against_independent`, `score_qa`)
 
 **What it does:** At the QA-gated phase, instead of trusting the agent's
-self-reported `qa_result.json` verbatim, re-runs `python -m pytest
+self-reported `qa_report.md` verbatim, re-runs `python -m pytest
 --json-report ...` in the agent's worktree and overrides the agent's reported
 failure count if the independent run found *more* failures (one-directional:
 never overrides toward a better result, so an agent can't game it by

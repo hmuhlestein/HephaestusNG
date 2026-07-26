@@ -13,7 +13,9 @@ description: |
   CRITICAL PATH RULE: Your current working directory IS the project root (an isolated git worktree).
   - "Project Path" = your working directory (.).  "Docs Path" = ./docs/ (create it if missing).
   - Write ALL reports to "Docs Path" (./docs/) — NOT the project root.
-  - Write scope_review_result.json to ./docs/scope_review/scope_review_result.json.
+  - Write ONE file, scope_review_result.md, to ./docs/scope_review/ — a
+    YAML frontmatter block (structured verdict + out-of-scope/missing
+    items, the gate input) followed by a short narrative summary.
   - Use exactly that subdirectory name (./docs/scope_review/) — the
     pipeline only looks for that one exact name; anything else is invisible
     to it.
@@ -23,10 +25,10 @@ done_definitions:
   - "Every requirement in ./docs/requirements_analysis.md traced to a line in design.md"
   - "Any requirement NOT in design.md flagged as out-of-scope"
   - "Any design doc requirement missing from ./docs/requirements_analysis.md flagged"
-  - "scope_review_result.json written to ./docs/"
+  - "scope_review_result.md written to ./docs/scope_review/"
   - "Task marked as done with verdict PASS or FAIL"
 outputs:
-  - "scope_review_result.json"
+  - "scope_review_result.md"
 additional_notes: |
   OUTPUT STYLE: Terse. Drop filler (just/really/basically/actually). Fragments OK. 
   Technical terms exact. No pleasantries (sure/certainly/happy to). 
@@ -78,25 +80,39 @@ additional_notes: |
   - MISSING: In design.md but absent from requirements_analysis.md
 
   ═══════════════════════════════════════════════════════════════════════
-  STEP 3: WRITE scope_review_result.json
+  STEP 3: WRITE scope_review_result.md
   ═══════════════════════════════════════════════════════════════════════
 
-  Write ./docs/scope_review_result.json with EXACTLY this schema — no
-  nesting, no extra top-level keys, "verdict" MUST be at the root level:
+  scope_review_result.md is ONE file: a YAML frontmatter block (machine-
+  readable, "verdict" MUST be at the frontmatter's top level, no nesting)
+  followed by a short narrative summary.
 
-  ```json
-  {
-    "verdict": "PASS",
-    "out_of_scope": [],
-    "missing": [],
-    "correction_instructions": "",
-    "summary": "one-line summary"
-  }
+  Write ./docs/scope_review/scope_review_result.md with EXACTLY this
+  schema (type first, then a closing `---`, then a short summary
+  immediately after):
+
+  ```
+  ---
+  type: scope_review_result
+  verdict: PASS
+  out_of_scope: []
+  missing: []
+  correction_instructions: ""
+  summary: "one-line summary"
+  ---
+
+  # Scope Review
+
+  [1-2 paragraph summary of the comparison and, if FAIL, what drifted.]
   ```
 
   WRONG (do NOT write this):
-  ```json
-  { "scope_review": { "verdict": "PASS" }, "tracing": [...] }
+  ```
+  ---
+  scope_review:
+    verdict: PASS
+  tracing: [...]
+  ---
   ```
 
   Field rules:
