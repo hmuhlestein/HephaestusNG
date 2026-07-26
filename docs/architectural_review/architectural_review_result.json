@@ -1,19 +1,36 @@
 {
-  "verdict": "PASS",
-  "feature": "Cost Tracking UI",
-  "feature_id": "des-91c8-cost-ui",
-  "commit_reviewed": "2f8fcb3",
-  "blocker_count": 0,
-  "fix_count": 0,
+  "verdict": "NEEDS_WORK",
+  "feature": "OpenCode Cost Collector",
+  "feature_id": "des-91c8-opencode-collector",
+  "commit_reviewed": "edd0031",
+  "blocker_count": 1,
+  "fix_count": 1,
   "defer_count": 1,
   "findings": [
     {
+      "id": "B-1",
+      "severity": "BLOCKER",
+      "title": "SessionCostCheckpoint key is shared across independent OpenCode launches, so only the first task in a session_role ever gets its cost recorded",
+      "file": "src/services/cost_collection_service.py",
+      "lines": "515-517, 554-561, 293-294, 609-619",
+      "notes": "get_session_id() deterministically shares one Hephaestus session_id across every phase mapped to the same session_role (e.g. architecture_design + architectural_review both map to 'architect') and across same-phase retries. pi/Claude Code correctly resume the same on-disk transcript when this happens, so the line-count checkpoint still advances correctly. OpenCode has no resumption mechanism (-s <id> is resume-only, confirmed live by the developer's Task 1 test) -- every OpenCode launch mints a brand-new, unrelated opencode.db session row regardless of whether it shares a Hephaestus session_id with an earlier task. The 0/1 'already collected' checkpoint conflates 'already collected for this session_id' with 'already collected for this OpenCode session' -- once the first task sharing a role sets checkpoint=1, every subsequent task sharing that role never queries opencode.db again, silently losing its real cost. Recommended fix: key the opencode checkpoint by the discovered opencode_session_row_id (unique per launch) instead of the shared session_id variable."
+    },
+    {
+      "id": "F-1",
+      "severity": "FIX",
+      "title": "sqlite3 connections leak on the query-exception path",
+      "file": "src/services/cost_collection_service.py",
+      "lines": "299-309, 452-462",
+      "notes": "conn.close() is only reached on the success path in both OpenCodeCollector.collect() and _discover_opencode_session(); if execute()/fetchone()/fetchall() raises sqlite3.Error, the connection is never closed. Low severity (CPython GC reclaims it promptly) but a real leak on every exception path in both new functions. Wrap in try/finally or contextlib.closing()."
+    },
+    {
       "id": "D-1",
       "severity": "DEFER",
-      "title": "BudgetStatusCard.tsx is a second, unrelated piece of dead cost-UI code, pre-dating this feature",
-      "file": "frontend/src/components/BudgetStatusCard.tsx",
-      "notes": "Introduced in the original Budget Enforcement merge (b0c74e2), zero references anywhere in frontend/src. Not named in requirements_analysis.md or architecture.md, so out of scope for this feature. Flagged for a future cleanup pass."
+      "title": "opencode.db URI path isn't percent-encoded for '?'/'#' characters",
+      "file": "src/services/cost_collection_service.py",
+      "lines": "300, 453",
+      "notes": "sqlite3.connect(f\"file:{session_file}?mode=ro\", uri=True) embeds Path.home()-derived paths unescaped. SQLite's URI parser tolerates unescaped spaces but a literal '?' or '#' in a home directory name would corrupt the path. Theoretical -- real-world home directory names essentially never contain these characters. Ticketed for tracking."
     }
   ],
-  "summary": "Implementation matches docs/architecture.md exactly across all five tasks (T1-T5). Both architectural judgment calls (FR-3: DesignCostRow left unwired in favor of CostDisplay in the collapsed design header; FR-5: BudgetPausedLabel deleted rather than wired into WorkflowCard) were implemented exactly as specified, including the documented rationale. No new network calls introduced (NFR-1), no enforcement logic touched (NFR-2), visual consistency maintained via reuse of existing CostDisplay/FeatureCostBadge components (NFR-3), all backend changes additive (NFR-4). npm run type-check shows 6 pre-existing errors unrelated to this diff (verified against the pre-development commit). Backend tests pass including new coverage for the additive cost_total_usd field."
+  "summary": "Implementation matches docs/architecture.md's Tasks 1-5 closely: Task 1's live -s <id> spike correctly resolved to resume-only, retaining time-window matching; the rewritten OpenCodeCollector, _discover_opencode_session helper, and collect_task_cost() wiring all match the architecture's specified interfaces, column mappings, and tie-break policy line-for-line. Diff confined to src/services/cost_collection_service.py and its test file, zero scope creep. 81 targeted tests pass, ruff clean, 2 remaining mypy errors are pre-existing/untouched. One BLOCKER found: the checkpoint-key design (inherited from architecture.md, which I authored) doesn't account for get_session_id()'s intentional session_id sharing across phases in the same session_role -- this causes silent, permanent cost loss for any OpenCode-driven project once a role (e.g. 'architect') is invoked more than once. Requires a re-scope of Task 4's checkpoint keying before this can proceed; not a simple patch."
 }
