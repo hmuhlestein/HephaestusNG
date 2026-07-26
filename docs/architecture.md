@@ -79,13 +79,17 @@ EXT_DEST_DIR="$HOME/.pi/agent/extensions/hephaestus-cost-tracker"
 if [ -d "$EXT_SRC_DIR" ]; then
     log "Installing Hephaestus cost tracker extension..."
     if command -v npm >/dev/null 2>&1; then
-        mkdir -p "$EXT_DEST_DIR"
-        cp -r "$EXT_SRC_DIR"/* "$EXT_DEST_DIR/"
-        if (cd "$EXT_DEST_DIR" && npm install --silent 2>&1 | tail -3 && npm run build 2>&1 | tail -3); then
-            ok "Cost tracker extension installed"
-        else
-            warn "Cost tracker extension build failed — real-time cost tracking disabled"
+        if ! rm -rf "$EXT_DEST_DIR" 2>/dev/null || ! mkdir -p "$EXT_DEST_DIR" 2>/dev/null || ! cp -r "$EXT_SRC_DIR"/* "$EXT_DEST_DIR/" 2>/dev/null; then
+            warn "Could not write to $EXT_DEST_DIR — skipping cost tracker extension"
             warn "Cost data will still be collected via task-completion fallback"
+        else
+            if EXT_BUILD_OUTPUT=$(cd "$EXT_DEST_DIR" && npm install --silent 2>&1 && npm run build 2>&1); then
+                ok "Cost tracker extension installed"
+            else
+                warn "Cost tracker extension build failed — real-time cost tracking disabled"
+                warn "Cost data will still be collected via task-completion fallback"
+                echo "$EXT_BUILD_OUTPUT" | tail -6
+            fi
         fi
     else
         warn "npm not found — skipping cost tracker extension (fallback collection still works)"
@@ -94,6 +98,12 @@ else
     warn "Extension source not found at $EXT_SRC_DIR — skipping"
 fi
 ```
+
+(This matches the implemented block verbatim — development hardened the
+directory-write step with an explicit `rm -rf`/`mkdir -p`/`cp -r` failure
+check, added a fresh `$EXT_DEST_DIR` on each run instead of overwriting in
+place, and captured build output in `$EXT_BUILD_OUTPUT` to print the last 6
+lines on failure instead of piping through `tail` mid-pipeline.)
 
 **Interfaces:**
 - Input: `$PREFIX/extensions/hephaestus-cost-tracker/` (source tree, already

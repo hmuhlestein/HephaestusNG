@@ -1,54 +1,89 @@
+---
+type: doc_review_result
+feature_id: des-91c8-cost-collectors
+verdict: PASS
+---
+
 # Documentation Quality Review Report
 
 **Reviewer:** Hephaestus Doc Review Agent (Phase 10)
-**Date:** 2026-07-23
-**Feature:** Budget Enforcement and Pipeline Throttling (des-91c8-budget-enforcement)
-**Workflow ID:** 0acbf2fc-fcf5-4b24-ad2d-31b1db62df6d
+**Date:** 2026-07-25
+**Feature:** CLI Cost Collectors (Pi + Claude Code) (des-91c8-cost-collectors)
+**Workflow ID:** 263e9b05-29ab-4e8d-962e-722c4ff24511
 
 ---
 
 ## 1. Executive Summary
 
-Documentation quality is **GOOD**. `requirements_analysis.md`, `architecture.md`, `qa_validation/qa_report.md`, `security_review/security_report.md`, and `product_validation/product_validation.md` all accurately describe this feature and match the current code. Two categories of problems were found and fixed:
+Documentation quality is **GOOD**. `requirements_analysis.md`,
+`qa_validation/qa_report.md`, `security_review/security_report.md`, and
+`product_validation/product_validation.md` were checked against
+`git diff main...HEAD` and match the actual shipped code exactly — no
+inaccuracies found in any of them. Two problems were found and fixed:
 
-1. **Orphaned files from the prior pipeline run** (Cost Tracking Database Schema feature) were left at the top level of `docs/` alongside this feature's correctly-scoped subfolder reports, creating duplicate/conflicting sources of truth.
-2. **`docs/autopilot.md`**, the main pipeline reference doc, had a stale phase list that predates the `architectural_review` phase (added between the two runs) — it was missing a phase, mislabeled six phase numbers, and had Documentation Review and Security Review in the wrong order relative to the real pipeline. It also had no mention of budget enforcement at all despite this being the feature that added it.
+1. **`docs/architecture.md`'s Section 3 code sample was stale** — it showed
+   the pre-development draft of the `install.sh` block, not what was
+   actually implemented (development hardened the write step's error
+   handling and changed how build failures are reported).
+2. **`docs/autopilot.md`'s Cost Tracking section didn't mention the
+   real-time pi extension at all** — it only described the JSONL-tailing
+   fallback, even though making the extension actually installable is this
+   feature's entire purpose.
+
+No stray files were found at the project root or outside `docs/` — `git
+status` is clean and no orphaned reports from a prior pipeline run exist at
+the `docs/` top level for this feature.
 
 ## 2. Documentation Inventory
 
 | Document | Path | Status |
 |----------|------|--------|
 | Requirements Analysis | `docs/requirements_analysis.md` | ✅ Accurate, matches implementation |
-| Architecture | `docs/architecture.md` | ✅ Accurate, all tasks marked DONE match code |
-| Security Report | `docs/security_review/security_report.md` | ✅ Accurate (PASS, SEC-04 fixed, 5 pre-existing low findings tracked) |
-| QA Report | `docs/qa_validation/qa_report.md` | ✅ Accurate |
-| Product Validation | `docs/product_validation/product_validation.md` | ✅ Accurate — correctly reports CONDITIONAL PASS with open gap G-2 |
-| Pipeline Reference | `docs/autopilot.md` | ⚠️ Stale phase numbering + missing budget enforcement section — **fixed** |
-| Top-level `docs/product_validation.md` | `docs/product_validation.md` | 🗑️ Orphan from prior feature run — **removed** |
-| Top-level `docs/security_report.md` | `docs/security_report.md` | 🗑️ Orphan from prior feature run — **removed** |
+| Architecture | `docs/architecture.md` | ⚠️ Section 3 code sample stale — **fixed** |
+| Security Report | `docs/security_review/security_report.md` | ✅ Accurate (ACCEPTABLE, 1 High fixed, 2 low pre-existing/ticketed) |
+| QA Report | `docs/qa_validation/qa_report.md` | ✅ Accurate (56/56 targeted tests) |
+| Product Validation | `docs/product_validation/product_validation.md` | ✅ Accurate (PASS, 4/4 requirements met) |
+| Pipeline Reference | `docs/autopilot.md` | ⚠️ Cost Tracking section missing real-time extension — **fixed** |
 
 ## 3. Inaccuracies Found and Fixed
 
-### 3.1 Stray/orphaned files from the previous feature run (Critical)
+### 3.1 `docs/architecture.md` — stale install.sh code sample (Critical)
 
-`docs/product_validation.md` and `docs/security_report.md` were leftovers from the earlier "Cost Tracking Database Schema" pipeline run (dated 2026-07-21, content referencing "Feature Model Implementation" and "Cost Tracking Feature"). This feature's own reports for those phases already exist in the correct location — `docs/product_validation/product_validation.md` and `docs/security_review/security_report.md` — created by the workflow's per-phase output convention. The stale top-level duplicates were deleted (`git rm`) since they no longer reflect the current codebase and would mislead anyone reading `docs/` directly.
+Section 3's `bash` code block was the pre-development design sketch for the
+extension-install step. The implemented version in `scripts/install.sh`
+differs in three ways the doc didn't reflect: it does an explicit `rm -rf`
+before `mkdir -p`/`cp -r` (so `--update` starts from a clean destination
+directory rather than overwriting in place) and checks each of those three
+commands for failure before proceeding; and it captures combined
+`npm install`/`npm run build` output into `$EXT_BUILD_OUTPUT` to print the
+last 6 lines on failure, instead of piping each command through `tail`
+independently. A reader relying on the architecture doc to understand the
+shipped install step would get a subtly wrong picture of its failure
+handling. Fixed by replacing the code block with the actual implemented
+block (verified byte-for-byte against `scripts/install.sh`) and adding a
+one-line note calling out what changed during development.
 
-### 3.2 `docs/autopilot.md` — stale pipeline phase list (Critical)
+### 3.2 `docs/autopilot.md` — Cost Tracking section missing the real-time extension (Gap)
 
-The pipeline phase section was written before the `architectural_review` phase existed and never updated:
-- Missing Phase 5 (Architectural Review) entirely — the doc jumped from Phase 3 (Architecture) straight to a phase labeled "Phase 5: Development."
-- Phase numbers 6–12 were each off by one, and Documentation Review (labeled Phase 7) and Security Review (labeled Phase 8) were listed in the wrong order — the real pipeline runs Security Review (Phase 7) before Documentation Review (Phase 10), and Forensics Analysis (Phase 11) before Git Commit & Push (Phase 12), the reverse of what the doc said.
+The "Budget Enforcement" subsection described `CostEntry` ingestion as
+coming "from the Pi JSONL usage log" — true of the fallback path, but this
+feature's whole purpose is making a second, real-time path
+(`hephaestus-cost-tracker` pi extension, installed by `scripts/install.sh`)
+actually functional. A reader of this doc would have no idea the extension
+exists or how it relates to the fallback. Added two sentences naming both
+collectors (`ClaudeCodeCollector` for Claude Code, and for Pi: the
+extension when built, else the JSONL fallback) and pointing at the install
+step. No other content in this section needed changes — the budget
+enforcement semantics it describes are unaffected by this feature.
 
-Fixed by reconciling the phase list against `config/workflows/autopilot/*.yaml` (the authoritative `id:`/`name:` per phase) and against this workflow's actual phase sequence: Product Requirements(1) → Scope Review(2) → Architecture(3) → Development(4) → Architectural Review(5) → Adversarial Code Review(6) → Security Review(7) → QA Validation(8) → Product Validation(9) → Documentation Review(10) → Forensics Analysis(11) → Git Commit & Push(12). Added a description for the previously-undocumented Architectural Review phase. Fixed the "Phases 1–10" references (appeared 4 times) to "Phases 1–12."
+## 4. Stray Files
 
-### 3.3 `docs/autopilot.md` — missing budget enforcement documentation (Gap)
-
-The "Cost Tracking" section only documented the LiteLLM-proxy-based external cost attribution mechanism, with no mention of the internal `CostEntry`/`cost_derivation.py` ledger or the budget enforcement this feature adds (guards in `pick_next_design()`/`_run_one_feature()`, `paused_by="budget"` semantics, self-heal exclusion, UI badge). Added a "Budget Enforcement" subsection covering the mechanism, the enforcement points, and how it interacts with user-initiated pauses.
-
-## 4. Known Gap Not Fixed (Out of Scope for Doc Review)
-
-`docs/product_validation/product_validation.md` (G-2) correctly documents that `BudgetStatusCard.tsx` was built but is never imported/rendered anywhere in the frontend — confirmed still true by grep during this review (`grep -rn "BudgetStatusCard" frontend/src` finds only the component's own definition file). This is an implementation gap, not a documentation gap; the product validation report already reflects it accurately as `CONDITIONAL PASS`. No doc changes were made to paper over it.
+None found. `git status` is clean; no top-level `docs/` files left over from
+a different feature's pipeline run.
 
 ## 5. Verdict
 
-**PASS.** Feature-specific documentation was already accurate. The two fixes applied — removing orphaned prior-feature files and correcting `autopilot.md`'s pipeline phase list — address the only inaccuracies found in the broader `docs/` tree.
+**PASS.** All phase reports (requirements, security, QA, product validation)
+were already accurate against the actual code diff. The two fixes applied —
+correcting `architecture.md`'s stale code sample and filling a coverage gap
+in `autopilot.md`'s Cost Tracking section — address the only issues found.
