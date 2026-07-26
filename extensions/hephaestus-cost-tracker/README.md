@@ -27,8 +27,8 @@ A pi extension that provides real-time cost tracking for LLM API calls made thro
 Set environment variables before launching pi:
 
 ```bash
-# Hephaestus API URL (default: http://localhost:8000)
-export HEPHAESTUS_API_URL=http://localhost:8000
+# Hephaestus API URL (default: http://localhost:8300)
+export HEPHAESTUS_API_URL=http://localhost:8300
 
 # Agent/Task/Workflow IDs for cost attribution (optional)
 export HEPHAESTUS_AGENT_ID=your-agent-id
