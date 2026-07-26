@@ -1038,12 +1038,25 @@ class AgentManager:
             # Keep: SGR color sequences (\x1b[...m) and \r (for spinner collapsing)
             # Strip: everything else aggressively
             _ansi_strip = (
+                r"BEGIN{$|=1} "  # Autoflush -- see comment below.
                 r"s/\x1b\][^\x07]*\x07//g; "  # OSC with BEL
                 r"s/\x1b\][^\x1b]*\x1b\\//g; "  # OSC with ST (single backslash)
                 r"s/\x1b\[[?]?[0-9;]*[^0-9;m]//g; "  # All CSI/DEC except m (color)
                 r"s/\x1b[()][A-Za-z0-9]//g; "  # Charset selection
                 r"s/\x1b[^\x1b\x5b\x5d]//g; "  # Any other bare ESC sequences
             )
+            # Perl fully block-buffers STDOUT whenever it isn't a TTY --
+            # true here since it's redirected to transcript_path via `>>` --
+            # so without BEGIN{$|=1} (autoflush) every byte pipe-pane feeds
+            # perl sits in an internal buffer and only actually reaches disk
+            # in unpredictable chunks, flushing fully only when the buffer
+            # fills or perl exits (i.e. when the tmux session is killed at
+            # agent termination). Observed live: a live agent's transcript
+            # file sat at 0 bytes on disk while the agent was actively
+            # producing output the whole time, then jumped to its full size
+            # the instant it terminated -- making all the scrollback the
+            # user had just watched scroll by unreadable (nothing to scroll
+            # back to) until the agent finished.
             pipe_cmd = f"perl -pe {shlex.quote(_ansi_strip)} >> {shlex.quote(str(transcript_path))}"
             session.attached_window.attached_pane.cmd("pipe-pane", "-o", pipe_cmd)
         except Exception as e:

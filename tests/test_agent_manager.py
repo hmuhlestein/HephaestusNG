@@ -156,6 +156,61 @@ class TestCreateAgentForTask:
             assert saved_agent.current_task_id == "task-1"
 
     @pytest.mark.asyncio
+    async def test_pipe_pane_transcript_command_autoflushes(
+        self, mock_agent_manager, sample_task, db_manager
+    ):
+        """Regression: perl fully block-buffers its STDOUT whenever it isn't
+        a TTY (true here -- pipe-pane redirects it to transcript_path via
+        `>>`), so without BEGIN{$|=1} every byte pipe-pane feeds perl sat in
+        an internal buffer and only reached disk in unpredictable chunks,
+        flushing fully only when the buffer filled or perl exited (i.e. when
+        the tmux session was killed at agent termination). Observed live: a
+        live agent's transcript file sat at 0 bytes while the agent was
+        actively producing output the whole time, making all the scrollback
+        the user had just watched scroll by unreadable until it finished."""
+        mock_agent_manager.branch_manager.create_agent_branch = MagicMock(
+            return_value={
+                "working_directory": "/tmp/test-project-agent",
+                "branch_name": "agent-test-branch",
+            }
+        )
+        mock_agent_manager.branch_manager.switch_to_branch = MagicMock()
+        mock_agent_manager.llm_provider.generate_agent_prompt = AsyncMock(
+            return_value="You are an AI agent."
+        )
+
+        mock_session = MagicMock()
+        mock_session.name = "agent-session-1"
+        mock_agent_manager.tmux_server.new_session.return_value = mock_session
+        mock_session.attached_window.attached_pane = MagicMock()
+
+        with patch("src.agents.manager.get_cli_agent") as mock_get_cli, \
+             patch("src.agents.manager.asyncio.sleep", new_callable=AsyncMock):
+            mock_cli = MagicMock()
+            mock_cli.get_launch_command.return_value = ["pi", "--task", "test"]
+            mock_cli.default_model = "sonnet"
+            mock_get_cli.return_value = mock_cli
+
+            await mock_agent_manager.create_agent_for_task(
+                task=sample_task,
+                enriched_data={"description": "Implement feature X"},
+                memories=[],
+                project_context="Test project context",
+                cli_type="pi",
+                working_directory="/tmp/test-project",
+            )
+
+        pipe_pane_calls = [
+            call
+            for call in mock_session.attached_window.attached_pane.cmd.call_args_list
+            if call.args and call.args[0] == "pipe-pane"
+        ]
+        assert len(pipe_pane_calls) == 1
+        pipe_cmd = pipe_pane_calls[0].args[-1]
+        assert "perl" in pipe_cmd
+        assert "BEGIN{$|=1}" in pipe_cmd
+
+    @pytest.mark.asyncio
     async def test_session_id_uses_feature_model_launch_params(
         self, mock_agent_manager, sample_task, db_manager
     ):
