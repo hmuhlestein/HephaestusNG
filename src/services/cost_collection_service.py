@@ -298,12 +298,14 @@ class OpenCodeCollector(CostCollector):
 
         try:
             conn = sqlite3.connect(f"file:{session_file}?mode=ro", uri=True)
-            conn.row_factory = sqlite3.Row
-            row = conn.execute(
-                "SELECT cost, tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, tokens_cache_write, model FROM session WHERE id = ?",
-                (self.session_row_id,),
-            ).fetchone()
-            conn.close()
+            try:
+                conn.row_factory = sqlite3.Row
+                row = conn.execute(
+                    "SELECT cost, tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, tokens_cache_write, model FROM session WHERE id = ?",
+                    (self.session_row_id,),
+                ).fetchone()
+            finally:
+                conn.close()
         except sqlite3.Error as e:
             logger.error(f"Error reading opencode.db for session {self.session_row_id}: {e}")
             return entries, checkpoint
@@ -451,12 +453,14 @@ def _discover_opencode_session(cwd: str, agent_created_at: datetime) -> Optional
 
     try:
         conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
-        conn.row_factory = sqlite3.Row
-        rows = conn.execute(
-            "SELECT id, time_created FROM session WHERE directory = ? AND time_created >= ? AND time_created <= ? ORDER BY time_created DESC",
-            (cwd, start_ms, end_ms),
-        ).fetchall()
-        conn.close()
+        try:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                "SELECT id, time_created FROM session WHERE directory = ? AND time_created >= ? AND time_created <= ? ORDER BY time_created DESC",
+                (cwd, start_ms, end_ms),
+            ).fetchall()
+        finally:
+            conn.close()
     except sqlite3.Error as e:
         logger.error(f"Error querying opencode.db for cwd {cwd}: {e}")
         return None
@@ -512,10 +516,6 @@ def collect_task_cost(task_id: str) -> None:
             logger.debug(f"[COST-COLLECT] No session ID for task {task_id[:8]} agent {agent.id[:8]} — skipping")
             return
 
-        # Get or create checkpoint
-        checkpoint_row = db.query(SessionCostCheckpoint).filter_by(session_id=session_id).first()
-        checkpoint = checkpoint_row.lines_processed if checkpoint_row else 0
-
         # Discover session file based on CLI type
         cli_type = agent.cli_type or "pi"
         session_file = None
@@ -566,6 +566,21 @@ def collect_task_cost(task_id: str) -> None:
             logger.debug(f"[COST-COLLECT] No session file found for {cli_type} session {session_id[:8]} — skipping")
             return
 
+        # Checkpoint key: normally the shared Hephaestus session_id (correct for
+        # pi/claude_code, which resume the same transcript across retries/shared
+        # roles). OpenCode never resumes -- every launch mints a fresh opencode.db
+        # session row even when it shares a Hephaestus session_id with a prior task
+        # (e.g. same session_role reused across phases per get_session_id()) -- so
+        # its checkpoint must be keyed by the per-launch session_row_id instead, or
+        # a second launch under the same session_id would find the first launch's
+        # checkpoint already at 1 and skip collection entirely, silently dropping
+        # its cost.
+        checkpoint_key = opencode_session_row_id if cli_type == "opencode" and opencode_session_row_id else session_id
+
+        # Get or create checkpoint
+        checkpoint_row = db.query(SessionCostCheckpoint).filter_by(session_id=checkpoint_key).first()
+        checkpoint = checkpoint_row.lines_processed if checkpoint_row else 0
+
         # Select collector
         collectors = {
             "pi": PiJsonlCollector(),
@@ -612,7 +627,7 @@ def collect_task_cost(task_id: str) -> None:
             checkpoint_row.updated_at = datetime.utcnow()
         else:
             checkpoint_row = SessionCostCheckpoint(
-                session_id=session_id,
+                session_id=checkpoint_key,
                 lines_processed=new_checkpoint,
                 updated_at=datetime.utcnow(),
             )

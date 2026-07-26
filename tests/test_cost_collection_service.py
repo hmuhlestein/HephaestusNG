@@ -7,6 +7,7 @@ import tempfile
 import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
+from unittest.mock import patch
 
 from src.services.cost_collection_service import (
     ClaudeCodeCollector,
@@ -417,6 +418,28 @@ def _make_opencode_db(rows: list[dict]) -> Path:
     return _write_session_rows(Path(path), rows)
 
 
+def _append_session_row(path: Path, row: dict) -> None:
+    """Insert one more row into an existing opencode.db-shaped SQLite file."""
+    conn = sqlite3.connect(str(path))
+    conn.execute(
+        "INSERT INTO session (id, directory, time_created, model, cost, tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, tokens_cache_write) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            row["id"],
+            row["directory"],
+            row["time_created"],
+            row.get("model"),
+            row.get("cost", 0),
+            row.get("tokens_input", 0),
+            row.get("tokens_output", 0),
+            row.get("tokens_reasoning", 0),
+            row.get("tokens_cache_read", 0),
+            row.get("tokens_cache_write", 0),
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+
 def _ms(dt: datetime) -> int:
     return int(dt.timestamp() * 1000)
 
@@ -644,7 +667,7 @@ class TestCollectTaskCostOpenCode:
             id=f"agent-{uuid.uuid4().hex[:8]}",
             system_prompt="test",
             cli_type="opencode",
-            tmux_session_name="hephaestus-proj-design-role-testsession",
+            tmux_session_name=f"hephaestus-proj-design-role-testsession-{uuid.uuid4().hex[:8]}",
             created_at=datetime.utcnow() - timedelta(minutes=5),
         )
         workflow = Workflow(
@@ -703,7 +726,10 @@ class TestCollectTaskCostOpenCode:
         assert entries[0].source == "opencode"
         assert entries[0].cost_usd == 0.42
 
-        checkpoint = session.query(SessionCostCheckpoint).filter_by(session_id="proj-design-role-testsession").first()
+        # Checkpoint is keyed by the discovered opencode session_row_id, not the
+        # shared Hephaestus session_id -- see test_shared_hephaestus_session_id_
+        # does_not_drop_second_launch for why.
+        checkpoint = session.query(SessionCostCheckpoint).filter_by(session_id="ses_int1").first()
         assert checkpoint is not None
         assert checkpoint.lines_processed == 1
         session.close()
@@ -745,4 +771,55 @@ class TestCollectTaskCostOpenCode:
         session = db_manager.get_session()
         entries = session.query(CostEntry).filter_by(task_id=task_id).all()
         assert len(entries) == 0
+        session.close()
+
+    def test_shared_hephaestus_session_id_does_not_drop_second_launch(self, db_manager, tmp_path, monkeypatch):
+        """Two independent OpenCode launches sharing a Hephaestus session_id (e.g.
+        the same session_role reused across phases, per get_session_id()) must
+        each get their own checkpoint -- OpenCode never resumes, so every launch
+        mints a fresh, unrelated opencode.db session row. If the checkpoint were
+        keyed by the shared session_id (as pi/claude_code correctly are), the
+        second launch's collection would find the checkpoint already at 1 from
+        the first launch and skip querying its own session row entirely, silently
+        losing its cost.
+
+        Session rows are written sequentially (launch 1's collection runs while
+        only its own row exists) so directory+time-window discovery deterministically
+        resolves each task to its own row -- isolating the checkpoint-key bug from
+        the separate, already-covered multi-match tie-break behavior.
+        """
+        from src.core.database import CostEntry
+
+        cwd = "/proj"
+        task1_id, _ = self._seed(db_manager, cwd)
+        task2_id, _ = self._seed(db_manager, cwd)
+
+        opencode_dir = tmp_path / ".local" / "share" / "opencode"
+        opencode_dir.mkdir(parents=True)
+        db_path = opencode_dir / "opencode.db"
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+        base = datetime.utcnow()
+        _write_session_rows(
+            db_path,
+            [{"id": "ses_launch1", "directory": cwd, "time_created": _ms(base - timedelta(seconds=2)), "cost": 0.10}],
+        )
+
+        with patch(
+            "src.services.cost_collection_service._extract_session_id",
+            return_value="shared-session-id",
+        ):
+            collect_task_cost(task1_id)
+
+            _append_session_row(
+                db_path,
+                {"id": "ses_launch2", "directory": cwd, "time_created": _ms(base - timedelta(seconds=1)), "cost": 0.20},
+            )
+            collect_task_cost(task2_id)
+
+        session = db_manager.get_session()
+        entries = session.query(CostEntry).filter(CostEntry.task_id.in_([task1_id, task2_id])).all()
+        assert len(entries) == 2
+        costs = sorted(e.cost_usd for e in entries)
+        assert costs == [0.10, 0.20]
         session.close()
