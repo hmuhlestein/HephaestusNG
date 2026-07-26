@@ -7,6 +7,11 @@
 > **Parent Document:** See [docs/ARCHITECTURE_REVIEW.md](./ARCHITECTURE_REVIEW.md) for system architecture.  
 > **Design Documents:** See [config/workflows/autopilot/](./config/workflows/autopilot/) for phase definitions.
 
+> **Do not run the full test suite (`pytest tests/`) by default.** It's slow and touches
+> unrelated modules. Run only targeted tests for the files you actually changed
+> (`pytest tests/test_<module>.py`, or `-k <pattern>`). Only run the full suite if the
+> user explicitly asks for it.
+
 ---
 
 ## Table of Contents
@@ -142,6 +147,9 @@ python -m pytest tests/test_phase_manager.py tests/test_status_derivation.py tes
 ```
 
 ### Full Test Suite
+
+Avoid this unless explicitly requested — prefer the targeted commands above for the
+files you're actually working on.
 
 ```bash
 # Run all tests (may take several minutes)
@@ -446,7 +454,14 @@ def create_test_task(session, **kwargs):
 
 ## Quick Reference
 
-### Run All Tests
+### Run Targeted Tests (default)
+
+```bash
+# Backend: only the test file(s) for what you touched
+python -m pytest tests/test_<module>.py -p no:libtmux -q
+```
+
+### Run All Tests (only when explicitly requested)
 
 ```bash
 # Backend (with libtmux disabled)
