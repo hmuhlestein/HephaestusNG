@@ -619,8 +619,24 @@ async def get_pipeline_status(
         running_project_path=running_project_path,
         running_project_name=running_project_name,
         # Compute self-conflict server-side using realpath to handle
-        # symlink resolution (/tmp -> /private/tmp on macOS).
-        is_self_conflict=(running_project_path is not None and project_path is not None and os.path.realpath(running_project_path) == os.path.realpath(project_path)),
+        # symlink resolution (/tmp -> /private/tmp on macOS). Checks BOTH
+        # the single running_project_path (correct when project_id was
+        # given above -- that's this project's own service) AND membership
+        # in running_projects_list (needed when project_id was omitted --
+        # running_project_path there is just running_services[0]'s path,
+        # arbitrary order, so a caller whose own project is running but
+        # isn't index 0 would otherwise be missed entirely and get told to
+        # stop itself to start itself).
+        is_self_conflict=(
+            project_path is not None
+            and (
+                (running_project_path is not None and os.path.realpath(running_project_path) == os.path.realpath(project_path))
+                or any(
+                    p.get("base_dir") and os.path.realpath(p["base_dir"]) == os.path.realpath(project_path)
+                    for p in running_projects_list
+                )
+            )
+        ),
         running_projects=running_projects_list,
     )
     return _store(cache_key, result)

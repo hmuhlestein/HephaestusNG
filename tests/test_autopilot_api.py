@@ -927,6 +927,97 @@ class TestPipelineStatus:
         assert resp.status_code == 200
         assert resp.json()["running_projects"][0]["id"] is None
 
+    def test_self_conflict_detected_even_when_not_first_in_running_list(
+        self, client, autopilot_dirs, monkeypatch
+    ):
+        """Regression: is_self_conflict only compared project_path against
+        running_project_path, which (with no project_id given, exactly how
+        the frontend's self-conflict check calls this endpoint) is just
+        running_services[0]'s path -- arbitrary registry order. A caller
+        whose own project IS running but isn't index 0 in that list got
+        is_self_conflict=False, so the UI's 409 handler treated it as a
+        genuine cross-project conflict and offered to "stop X and start X"."""
+        import src.mcp.autopilot_api as api_mod
+
+        api_mod._cache.clear()
+
+        class FakeService:
+            def __init__(self, project_id, project_path):
+                self.running = True
+                self.project_id = project_id
+                self._project_path = project_path
+
+            def status(self):
+                return {
+                    "running": True,
+                    "project_path": self._project_path,
+                    "current_design": None,
+                    "designs_processed": 0,
+                    "designs_succeeded": 0,
+                    "designs_failed": 0,
+                    "elapsed_seconds": 0,
+                    "error": None,
+                }
+
+        fake_registry = Mock()
+        fake_registry.running.return_value = [
+            FakeService("proj-a", "/Users/test/project-a"),
+            FakeService("proj-b", "/Users/test/project-b"),
+        ]
+        monkeypatch.setattr(
+            "src.autopilot.service.get_registry", lambda: fake_registry
+        )
+
+        resp = client.get(
+            "/api/autopilot/status",
+            params={"project_path": "/Users/test/project-b"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["is_self_conflict"] is True
+
+    def test_self_conflict_false_for_a_genuinely_different_project(
+        self, client, autopilot_dirs, monkeypatch
+    ):
+        """Sanity check the fix isn't overbroad: a project_path that matches
+        none of the running projects must still report is_self_conflict=False."""
+        import src.mcp.autopilot_api as api_mod
+
+        api_mod._cache.clear()
+
+        class FakeService:
+            def __init__(self, project_id, project_path):
+                self.running = True
+                self.project_id = project_id
+                self._project_path = project_path
+
+            def status(self):
+                return {
+                    "running": True,
+                    "project_path": self._project_path,
+                    "current_design": None,
+                    "designs_processed": 0,
+                    "designs_succeeded": 0,
+                    "designs_failed": 0,
+                    "elapsed_seconds": 0,
+                    "error": None,
+                }
+
+        fake_registry = Mock()
+        fake_registry.running.return_value = [
+            FakeService("proj-a", "/Users/test/project-a"),
+            FakeService("proj-b", "/Users/test/project-b"),
+        ]
+        monkeypatch.setattr(
+            "src.autopilot.service.get_registry", lambda: fake_registry
+        )
+
+        resp = client.get(
+            "/api/autopilot/status",
+            params={"project_path": "/Users/test/project-c"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["is_self_conflict"] is False
+
 
 # ── Messages ─────────────────────────────────────────────────────
 

@@ -99,6 +99,21 @@ export const apiService = {
     return data;
   },
 
+  // Same recovery as recoverWorkflow, scoped to every workflow in a project
+  // instead of one -- used by the project-level Play button when the
+  // service is already running (self-conflict): the service loop being up
+  // doesn't by itself re-drive a workflow stuck on an individually-paused
+  // ("blocked") task, so Play needs to cascade into this instead of a bare
+  // no-op "already running" toast.
+  recoverProject: async (
+    projectId: string
+  ): Promise<{ recovered: boolean; resumed_agents: number; workflows: string[] }> => {
+    const { data } = await api.post('/autopilot/recover', null, {
+      params: { project_id: projectId },
+    });
+    return data;
+  },
+
   pauseWorkflow: async (workflowId: string): Promise<{ status: string }> => {
     const { data } = await api.post(`/workflow-executions/${workflowId}/stop`);
     return data;

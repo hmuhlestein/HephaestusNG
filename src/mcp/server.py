@@ -546,7 +546,11 @@ def _tmux_session_alive(session_name: str) -> bool:
         return False
 
 
-async def _resume_interrupted_workflows(workflow_id: Optional[str] = None, reactivate: bool = False):
+async def _resume_interrupted_workflows(
+    workflow_id: Optional[str] = None,
+    project_id: Optional[str] = None,
+    reactivate: bool = False,
+):
     """Re-drive workflows that were mid-flight when the server last stopped.
 
     Completed phases are durable (committed to the integration branch) and the DB
@@ -558,8 +562,14 @@ async def _resume_interrupted_workflows(workflow_id: Optional[str] = None, react
     auto-commits, and the worktree dir survives a crash regardless.
 
     Runs on startup (all interrupted workflows) and on demand via the recover
-    endpoint (optionally scoped to one workflow_id; reactivate=True flips a
-    paused/failed workflow back to active first — the UI "Retry" path).
+    endpoint: scoped to one workflow_id (a design row's own Resume button), or
+    to every workflow in project_id (the project-level Play button's "already
+    running" self-conflict path -- see start_pipeline -- cascading into the
+    same recovery instead of a bare no-op, since the service loop being up
+    doesn't by itself re-drive a workflow stuck on an individually-blocked
+    task). reactivate=True flips a paused/failed workflow back to active
+    first and resets its failed/blocked tasks too -- the on-demand "Retry"
+    behavior, as opposed to the passive startup-wide scan.
 
     Returns {"resumed": int, "workflows": [ids]}.
     """
@@ -576,6 +586,8 @@ async def _resume_interrupted_workflows(workflow_id: Optional[str] = None, react
         q = session.query(Workflow).filter(Workflow.status.in_(statuses))
         if workflow_id:
             q = q.filter(Workflow.id == workflow_id)
+        elif project_id:
+            q = q.filter(Workflow.project_id == project_id)
         active = q.all()
         if not active:
             return result
@@ -593,14 +605,19 @@ async def _resume_interrupted_workflows(workflow_id: Optional[str] = None, react
         for wf in active:
             # On-demand retry only (never the passive startup-wide scan, which
             # runs with reactivate=False): also reset tasks that outright
-            # failed, not just ones whose agent process died mid-flight.
-            # Without this, clicking Resume/Rerun on a workflow with a genuinely
-            # failed task flips the workflow back to "active" but leaves the
-            # failed task untouched — status derivation then flips it straight
-            # back to "failed" and nothing appears to have happened.
+            # failed or were individually paused ("blocked", via
+            # /api/tasks/{id}/pause), not just ones whose agent process died
+            # mid-flight. Without this, clicking Resume/Rerun on a workflow
+            # with a genuinely failed or blocked task flips the workflow back
+            # to "active" but leaves that task untouched -- status derivation
+            # then flips it straight back and nothing appears to have
+            # happened (observed live: a task blocked by a per-task pause
+            # left the whole workflow re-pausing immediately on every Resume
+            # click, since a lone "blocked" task is invisible to both this
+            # reset and the orphaned-agent scan below).
             if reactivate:
-                failed_tasks = session.query(Task).filter(Task.workflow_id == wf.id, Task.status == "failed").all()
-                for t in failed_tasks:
+                stuck_tasks = session.query(Task).filter(Task.workflow_id == wf.id, Task.status.in_(["failed", "blocked"])).all()
+                for t in stuck_tasks:
                     t.status = "pending"
                     t.failure_reason = None
                     t.assigned_agent_id = None
@@ -610,10 +627,10 @@ async def _resume_interrupted_workflows(workflow_id: Optional[str] = None, react
                     # per-phase failed-task retry).
                     t.action = ""
                     t.action_target_phase = None
-                if failed_tasks:
+                if stuck_tasks:
                     session.commit()
-                    logger.info(f"[RESUME] Workflow {wf.id[:8]}: resetting {len(failed_tasks)} failed task(s) for on-demand retry")
-                for t in failed_tasks:
+                    logger.info(f"[RESUME] Workflow {wf.id[:8]}: resetting {len(stuck_tasks)} failed/blocked task(s) for on-demand retry")
+                for t in stuck_tasks:
                     try:
                         if server_state.queue_service.should_queue_task():
                             server_state.queue_service.enqueue_task(t.id)
@@ -634,7 +651,7 @@ async def _resume_interrupted_workflows(workflow_id: Optional[str] = None, react
                             AgentDispatchService.mark_assigned(t.id, agent.id, status="assigned")
                         resumed += 1
                     except Exception as e:
-                        logger.warning(f"[RESUME] Failed to restart failed task {t.id[:8]}: {e}")
+                        logger.warning(f"[RESUME] Failed to restart stuck task {t.id[:8]}: {e}")
 
             # Only tasks that still need work — a 'done' task advances via the
             # monitor's phase-completion check, not by restarting its old agent.
@@ -4153,17 +4170,24 @@ async def resume_workflow(workflow_id: str, request: Request):
 
 
 @app.post("/api/autopilot/recover")
-async def recover_workflows(workflow_id: Optional[str] = None):
-    """Recover interrupted runs on demand (the UI 'Retry' action).
+async def recover_workflows(workflow_id: Optional[str] = None, project_id: Optional[str] = None):
+    """Recover interrupted runs on demand (the UI 'Retry' action, and the
+    project-level Play button's self-conflict cascade).
 
     Re-drives workflows whose in-flight phase agent died (crash / sleep / restart):
     restarts each orphaned agent on its existing worktree branch so the run continues
-    from the last committed state. With workflow_id, scopes to that run and flips a
-    paused/failed workflow back to 'active' first. Without it, recovers all
-    interrupted active/paused workflows.
+    from the last committed state. With workflow_id, scopes to that one run and flips
+    a paused/failed workflow back to 'active' first (also resetting its failed/blocked
+    tasks). With project_id instead, does the same across every one of that project's
+    workflows. With neither, recovers all interrupted active/paused workflows
+    (orphaned-agent restart only, no reactivate -- the passive startup-wide scan).
     """
     try:
-        summary = await _resume_interrupted_workflows(workflow_id=workflow_id, reactivate=bool(workflow_id))
+        summary = await _resume_interrupted_workflows(
+            workflow_id=workflow_id,
+            project_id=project_id,
+            reactivate=bool(workflow_id or project_id),
+        )
         return {
             "recovered": True,
             "resumed_agents": summary.get("resumed", 0),
