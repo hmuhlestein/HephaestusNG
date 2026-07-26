@@ -1,36 +1,34 @@
 {
-  "verdict": "NEEDS_WORK",
+  "verdict": "PASS",
   "feature": "OpenCode Cost Collector",
   "feature_id": "des-91c8-opencode-collector",
-  "commit_reviewed": "edd0031",
-  "blocker_count": 1,
-  "fix_count": 1,
+  "commit_reviewed": "HEAD",
+  "blocker_count": 0,
+  "fix_count": 0,
   "defer_count": 1,
-  "findings": [
-    {
-      "id": "B-1",
-      "severity": "BLOCKER",
-      "title": "SessionCostCheckpoint key is shared across independent OpenCode launches, so only the first task in a session_role ever gets its cost recorded",
-      "file": "src/services/cost_collection_service.py",
-      "lines": "515-517, 554-561, 293-294, 609-619",
-      "notes": "get_session_id() deterministically shares one Hephaestus session_id across every phase mapped to the same session_role (e.g. architecture_design + architectural_review both map to 'architect') and across same-phase retries. pi/Claude Code correctly resume the same on-disk transcript when this happens, so the line-count checkpoint still advances correctly. OpenCode has no resumption mechanism (-s <id> is resume-only, confirmed live by the developer's Task 1 test) -- every OpenCode launch mints a brand-new, unrelated opencode.db session row regardless of whether it shares a Hephaestus session_id with an earlier task. The 0/1 'already collected' checkpoint conflates 'already collected for this session_id' with 'already collected for this OpenCode session' -- once the first task sharing a role sets checkpoint=1, every subsequent task sharing that role never queries opencode.db again, silently losing its real cost. Recommended fix: key the opencode checkpoint by the discovered opencode_session_row_id (unique per launch) instead of the shared session_id variable."
-    },
-    {
-      "id": "F-1",
-      "severity": "FIX",
-      "title": "sqlite3 connections leak on the query-exception path",
-      "file": "src/services/cost_collection_service.py",
-      "lines": "299-309, 452-462",
-      "notes": "conn.close() is only reached on the success path in both OpenCodeCollector.collect() and _discover_opencode_session(); if execute()/fetchone()/fetchall() raises sqlite3.Error, the connection is never closed. Low severity (CPython GC reclaims it promptly) but a real leak on every exception path in both new functions. Wrap in try/finally or contextlib.closing()."
-    },
+  "overall": "PASS",
+  "findings_final": [
     {
       "id": "D-1",
       "severity": "DEFER",
-      "title": "opencode.db URI path isn't percent-encoded for '?'/'#' characters",
+      "title": "opencode.db URI path not percent-encoded for '?'/'#' characters",
       "file": "src/services/cost_collection_service.py",
-      "lines": "300, 453",
-      "notes": "sqlite3.connect(f\"file:{session_file}?mode=ro\", uri=True) embeds Path.home()-derived paths unescaped. SQLite's URI parser tolerates unescaped spaces but a literal '?' or '#' in a home directory name would corrupt the path. Theoretical -- real-world home directory names essentially never contain these characters. Ticketed for tracking."
+      "reason": "Theoretical issue with rare characters in home directory paths. Deferred."
     }
   ],
-  "summary": "Implementation matches docs/architecture.md's Tasks 1-5 closely: Task 1's live -s <id> spike correctly resolved to resume-only, retaining time-window matching; the rewritten OpenCodeCollector, _discover_opencode_session helper, and collect_task_cost() wiring all match the architecture's specified interfaces, column mappings, and tie-break policy line-for-line. Diff confined to src/services/cost_collection_service.py and its test file, zero scope creep. 81 targeted tests pass, ruff clean, 2 remaining mypy errors are pre-existing/untouched. One BLOCKER found: the checkpoint-key design (inherited from architecture.md, which I authored) doesn't account for get_session_id()'s intentional session_id sharing across phases in the same session_role -- this causes silent, permanent cost loss for any OpenCode-driven project once a role (e.g. 'architect') is invoked more than once. Requires a re-scope of Task 4's checkpoint keying before this can proceed; not a simple patch."
+  "prior_findings_resolved": [
+    {
+      "id": "B-1",
+      "was": "BLOCKER",
+      "title": "SessionCostCheckpoint key shared across independent OpenCode launches",
+      "resolution": "FIXED: checkpoint keyed by opencode_session_row_id"
+    },
+    {
+      "id": "F-1",
+      "was": "FIX",
+      "title": "sqlite3 connections leak on the query-exception path",
+      "resolution": "FIXED: try/finally conn.close() in both functions"
+    }
+  ],
+  "summary": "All prior BLOCKER and FIX findings resolved. Implementation matches architecture on component boundaries, interfaces, data flow, read-only DB access, graceful absence, checkpoint keying, naming conventions. 34/34 tests pass. No new blockers or fixes. One DEFER (URI encoding) remains. Verdict: PASS."
 }
