@@ -1,41 +1,49 @@
-# Code Summary: Cost Tracking UI
+---
+type: code_summary
+feature_id: des-91c8-opencode-collector
+---
 
-**Feature ID:** des-91c8-cost-ui
-**Branch:** `feature/des-91c8/cost-ui`
+# Code Summary: OpenCode Cost Collector
+
+**Feature ID:** des-91c8-opencode-collector
+**Branch:** `feature/des-91c8/opencode-collector`
 
 ## What this feature does
 
-Wires four already-built, previously-orphaned cost display components into three live screens, and adds one additive backend field to unblock per-feature cost display. No new cost computation, schema, or enforcement logic — the data pipeline was built and merged by the sibling "Budget Enforcement" feature; this feature is display-only wiring.
+Makes `collect_task_cost()` produce correct `CostEntry` rows for
+`cli_type == "opencode"` tasks by reading OpenCode's own SQLite DB
+(`~/.local/share/opencode/opencode.db`) instead of the dead
+stdout-JSON-capture code path that never actually ran. No schema changes,
+no new call sites, no UI changes — `source="opencode"` was already a
+first-class value everywhere downstream (rollups, budget enforcement, UI).
 
 ## Changed files
 
 ### Backend
 
-- **`src/mcp/autopilot_api.py`** — `get_project_design_status` (feeds `DesignQueuePanel`) now includes `cost_total_usd` on each feature dict (real features, phase-0 pseudo-feature, and placeholder rows) and a derived design-level `cost_total_usd` sum. Sourced from the already-loaded ORM object — no new query. Also carries two security fixes from `security_review`: input validation on `cost_limit_usd` and authentication on project mutation endpoints.
-- **`src/core/database.py`** — minor supporting change for the above (no schema change).
-
-### Frontend
-
-- **`frontend/src/components/autopilot/PipelineStatusCard.tsx`** — new `costTotal`/`costLimit`/`onBudgetClick` props render a `CostDisplay` in a clickable metric slot alongside the existing Agents/Pending/Processed/Succeeded/Failed row.
-- **`frontend/src/pages/Autopilot.tsx`** — fetches project cost via the existing `getProjectCosts` client call and wires the click-through to open `ProjectSettingsModal`.
-- **`frontend/src/components/autopilot/DesignQueuePanel.tsx`** — imports and renders `FeatureCostBadge` per feature row (`feature.cost_total_usd ?? 0`), hidden when cost is 0.
-- **`frontend/src/components/cost/CostDisplay.tsx`** — incidental fix: progress-percent zero-division edge case, color-threshold simplification.
-- **`frontend/src/components/cost/FeatureCostBadge.tsx`** — incidental small fix (no behavior change).
-- **`frontend/src/components/cost/BudgetPausedLabel.tsx`** — deleted. It duplicated `WorkflowCard.tsx`'s existing inline `paused_by === 'budget'` label logic and was never imported anywhere; the inline implementation was kept as the single source of truth.
-- **`frontend/src/components/cost/index.ts`** — removed the `BudgetPausedLabel` export following its deletion.
+- **`src/services/cost_collection_service.py`** — the only file changed:
+  - `_discover_opencode_session(cwd, agent_created_at)` (new) — correlates a completed task's agent to an OpenCode `session` row by matching `session.directory == cwd` within a `[agent.created_at, now]` time window (OpenCode has no deterministic session ID Hephaestus controls), returning the most recent in-window match. Opens the DB read-only, verifies the resolved path stays under `~/.local/share/opencode/`, and both time bounds are converted to epoch-ms with explicit `tzinfo=timezone.utc` before calling `.timestamp()`.
+  - `OpenCodeCollector.collect()` (rewritten) — no longer parses `session_file` as a JSON blob; queries the `session` table by row ID and maps its pre-aggregated `cost`/`tokens_*`/`model` columns directly onto a `CostEntry` dict. `checkpoint` is a 0/1 "already collected" flag, not a line count.
+  - `collect_task_cost()`'s `opencode` branch — replaced the `pass` stub with a call to `_discover_opencode_session()`, then `OpenCodeCollector(session_row_id=...)`. The `SessionCostCheckpoint` key for OpenCode is `opencode_session_row_id`, not the shared Hephaestus `session_id` — because OpenCode never resumes a session, a launch sharing `session_id` with a prior task would otherwise find the prior checkpoint already at 1 and silently drop its own cost.
 
 ### Tests
 
-- **`tests/test_autopilot_api.py`** — 4 new tests covering the design-status endpoint's cost fields: `test_design_status_includes_cost_total`, `test_design_status_surfaces_budget_pause_reason`, `test_design_status_surfaces_failure_reason`, `test_design_status_omits_error_when_not_failed`.
+- **`tests/test_cost_collection_service.py`** — three new test classes:
+  - `TestOpenCodeCollector` — column mapping, zero-cost handling, missing row, malformed `model` JSON, `session_row_id=None`.
+  - `TestDiscoverOpencodeSession` — no DB file, empty result, single/multiple matches (tie-break), directory mismatch, time-window boundaries, path-safety guard.
+  - `TestCollectTaskCostOpenCode` — end-to-end: `CostEntry` written with correct `source`/`cost_usd`/tokens, checkpoint prevents double-recording, no `opencode.db` present is a silent no-op, and the shared-`session_id`-doesn't-drop-second-launch regression test for the checkpoint-key fix.
 
 ## Explicitly out of scope (by design)
 
-- `DesignCostRow` — evaluated during architecture, left unwired; no existing per-design collapsed-header surface matched its shape without inventing a new UI element.
-- Any change to `cost_derivation.py`, orchestrator budget-guard logic, or `paused_by` semantics — zero diff vs `main`.
+- Codex collection (`CodexStubCollector` untouched).
+- Any UI surfacing of OpenCode-specific data — `source="opencode"` was already handled everywhere.
+- `AutopilotProject.cli_tool` UI exposure — configuring OpenCode as a project's CLI is a separate feature.
+- OpenCode DB schema versioning/migration — graceful-failure-on-unexpected-shape only.
 
 ## Verification
 
-- Backend: `test_autopilot_api.py` 76/76 passing.
-- Targeted regression: `test_status_derivation.py` + `test_phase_manager.py`, 69/69 passing.
-- Frontend: `tsc --noEmit` — no new type errors introduced (6 pre-existing errors on `main`, unrelated files).
-- Security: authentication and input-validation fixes verified in place (see `docs/security_report.md`).
+- Targeted: `pytest tests/test_cost_collection_service.py tests/test_cost_tracking.py` — 83/83 passing (confirmed by direct collection during this review).
+- Two BLOCKERs found and fixed mid-pipeline, both re-verified against the live code by this review:
+  - `af59ac8` (adversarial_review, B-1) — naive-datetime `.timestamp()` misread as local time, silently dropping all OpenCode costs on non-UTC hosts. Fixed with explicit `tzinfo=timezone.utc`.
+  - `adae90b` (architectural_review, B-1) — `SessionCostCheckpoint` originally spec'd to key on the shared Hephaestus `session_id`; fixed to key on `opencode_session_row_id` instead, since OpenCode never resumes a session.
+- Security: `docs/security_review/security_report.md` — PASS, 0 issues found.

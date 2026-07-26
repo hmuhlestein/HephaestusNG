@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Feature Report: Cost Tracking UI</title>
+    <title>Feature Report: OpenCode Cost Collector</title>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body {
@@ -40,7 +40,7 @@
         tr:last-child td { border-bottom: none; }
         .badge { display: inline-block; padding: 0.2rem 0.6rem; border-radius: 999px; font-size: 0.8rem; font-weight: 600; }
         .badge-pass { background: #dcfce7; color: #166534; }
-        .badge-deferred { background: #fef9c3; color: #854d0e; }
+        .badge-fixed { background: #fef9c3; color: #854d0e; }
         code { background: #f1f5f9; padding: 0.15rem 0.4rem; border-radius: 4px; font-size: 0.9em; }
         ul { margin-left: 1.5rem; margin-bottom: 1rem; }
         .note { background: #eff6ff; border-left: 4px solid #3b82f6; padding: 1rem; border-radius: 4px; margin-bottom: 1.5rem; }
@@ -48,8 +48,8 @@
 </head>
 <body>
     <div class="container">
-        <h1>Feature Report: Cost Tracking UI</h1>
-        <p class="meta">Generated: 2026-07-25 | Feature ID: des-91c8-cost-ui | Workflow ID: 33f63b4c-1641-4a06-b42d-d3bf1db28958 | Branch: feature/des-91c8/cost-ui</p>
+        <h1>Feature Report: OpenCode Cost Collector</h1>
+        <p class="meta">Generated: 2026-07-26 | Feature ID: des-91c8-opencode-collector | Workflow ID: b0087459-85b3-4937-a50e-faee96194a7e | Branch: feature/des-91c8/opencode-collector</p>
 
         <div class="summary-grid">
             <div class="summary-card">
@@ -62,65 +62,74 @@
             </div>
             <div class="summary-card">
                 <h3>Tests Passing</h3>
-                <div class="value">76/76 + 69/69</div>
+                <div class="value">83/83</div>
             </div>
             <div class="summary-card">
-                <h3>Blockers</h3>
-                <div class="value pass">0</div>
+                <h3>Blockers Fixed</h3>
+                <div class="value pass">2</div>
             </div>
         </div>
 
         <div class="note">
-            This feature wires four already-built cost display components — built but never imported by the
-            sibling <strong>Budget Enforcement</strong> feature — into three live screens, and adds one
-            additive backend field. No new cost computation, schema, or enforcement logic was added.
+            Makes <code>collect_task_cost()</code> produce correct <code>CostEntry</code> rows for
+            <code>cli_type == "opencode"</code> tasks by reading OpenCode's own SQLite DB
+            (<code>opencode.db</code>) instead of a dead stdout-JSON code path that never actually ran.
+            No schema, call-site, or UI changes — <code>source="opencode"</code> was already
+            first-class everywhere downstream.
         </div>
 
         <h2>Summary</h2>
         <p>
-            The design document's UI scope called for a budget indicator on the autopilot pipeline screen linking
-            to <code>ProjectSettingsModal</code>, surfacing <code>cost_total_usd</code> on feature cards, and
-            distinguishing <code>paused_by == "budget"</code> from <code>"user"</code> in the UI. All three were
-            found unwired or missing a supporting backend field, despite the underlying components and endpoints
-            already existing from the merged Budget Enforcement feature. This feature closes that visibility gap.
+            The design document assumed OpenCode ran one-shot with a capturable stdout JSON blob — that
+            assumption was stale; OpenCode is launched as a persistent <code>-i</code> session with no
+            deterministic session ID. <code>scope_review</code> authorized proceeding despite the
+            design's own "stay deferred" gate. The shipped fix correlates a completed task to its
+            OpenCode session row by directory + time window, then reads the row's pre-aggregated
+            <code>cost</code>/<code>tokens_*</code> columns directly — no per-turn tailing needed.
         </p>
 
         <h2>Functional Requirements</h2>
         <table>
             <tr><th>Req</th><th>Description</th><th>Status</th></tr>
-            <tr><td>FR-1</td><td>Budget indicator on <code>PipelineStatusCard.tsx</code>, linking to <code>ProjectSettingsModal</code></td><td><span class="badge badge-pass">PASS</span></td></tr>
-            <tr><td>FR-2</td><td><code>FeatureCostBadge</code> wired into <code>DesignQueuePanel</code> feature rows</td><td><span class="badge badge-pass">PASS</span></td></tr>
-            <tr><td>FR-3</td><td>Design-level cost row — evaluated, explicitly deferred (no matching UI surface)</td><td><span class="badge badge-deferred">DEFERRED</span></td></tr>
-            <tr><td>FR-4</td><td><code>cost_total_usd</code> added to the design-status API response</td><td><span class="badge badge-pass">PASS</span></td></tr>
-            <tr><td>FR-5</td><td>Resolve <code>BudgetPausedLabel</code>/<code>WorkflowCard</code> duplication</td><td><span class="badge badge-pass">PASS</span></td></tr>
+            <tr><td>FR-1</td><td>Design's build/defer gate explicitly ruled on by scope_review (proceed authorized)</td><td><span class="badge badge-pass">PASS</span></td></tr>
+            <tr><td>FR-2</td><td>Correlate a completed task's agent to its OpenCode session row (<code>_discover_opencode_session</code>)</td><td><span class="badge badge-pass">PASS</span></td></tr>
+            <tr><td>FR-3</td><td>Replace stdout-JSON <code>OpenCodeCollector</code> with a <code>session</code>-table query</td><td><span class="badge badge-pass">PASS</span></td></tr>
+            <tr><td>FR-4</td><td>Wire the <code>collect_task_cost()</code> opencode branch to actually run</td><td><span class="badge badge-pass">PASS</span></td></tr>
+            <tr><td>FR-5</td><td>Checkpointing / re-collection safety</td><td><span class="badge badge-pass">PASS</span></td></tr>
         </table>
 
         <h2>Key Changes</h2>
         <ul>
-            <li><code>PipelineStatusCard.tsx</code> — new <code>costTotal</code>/<code>costLimit</code>/<code>onBudgetClick</code> props render <code>CostDisplay</code> in a clickable metric slot.</li>
-            <li><code>Autopilot.tsx</code> — fetches project cost, wires the click to open the settings modal.</li>
-            <li><code>DesignQueuePanel.tsx</code> — renders <code>FeatureCostBadge</code> per feature row, sourced from the design-status response (no per-row fetch).</li>
-            <li><code>autopilot_api.py</code> (<code>get_project_design_status</code>) — adds <code>cost_total_usd</code> to feature dicts and a derived design-level sum, from already-loaded ORM data.</li>
-            <li><code>BudgetPausedLabel.tsx</code> deleted — dead code, superseded by <code>WorkflowCard.tsx</code>'s existing inline label logic.</li>
+            <li><code>_discover_opencode_session()</code> (new) — matches <code>session.directory == cwd</code> within <code>[agent.created_at, now]</code>, read-only SQLite, path-safety guard, most-recent tie-break.</li>
+            <li><code>OpenCodeCollector.collect()</code> (rewritten) — queries the <code>session</code> row by ID, maps pre-aggregated <code>cost</code>/<code>tokens_*</code>/<code>model</code> columns onto <code>CostEntry</code>.</li>
+            <li><code>collect_task_cost()</code>'s <code>opencode</code> branch — wired end-to-end; <code>SessionCostCheckpoint</code> keyed by <code>opencode_session_row_id</code>, not the shared Hephaestus <code>session_id</code>.</li>
         </ul>
+
+        <h2>Blockers Found &amp; Fixed</h2>
+        <table>
+            <tr><th>ID</th><th>Phase</th><th>Issue</th><th>Status</th></tr>
+            <tr><td>B-1</td><td>adversarial_review</td><td>Naive-datetime <code>.timestamp()</code> misread as local time — silently dropped 100% of OpenCode costs on non-UTC hosts</td><td><span class="badge badge-fixed">FIXED</span></td></tr>
+            <tr><td>B-1</td><td>architectural_review</td><td><code>SessionCostCheckpoint</code> originally spec'd keyed by shared <code>session_id</code>; corrected to <code>opencode_session_row_id</code> since OpenCode never resumes</td><td><span class="badge badge-fixed">FIXED</span></td></tr>
+        </table>
 
         <h2>Quality Gates</h2>
         <table>
             <tr><th>Gate</th><th>Result</th></tr>
-            <tr><td>Backend tests (<code>test_autopilot_api.py</code>)</td><td>76/76 passing (4 new)</td></tr>
-            <tr><td>Regression smoke (<code>test_status_derivation.py</code>, <code>test_phase_manager.py</code>)</td><td>69/69 passing</td></tr>
-            <tr><td>Frontend type check (<code>tsc --noEmit</code>)</td><td>No new errors (6 pre-existing on <code>main</code>, unrelated files)</td></tr>
-            <tr><td>Security review</td><td>PASS — input validation + auth fixes verified in place</td></tr>
-            <tr><td>Product validation</td><td>PASS — design-intent cross-check confirmed</td></tr>
-            <tr><td>Documentation review</td><td>PASS — this report</td></tr>
+            <tr><td>Targeted tests (<code>test_cost_collection_service.py</code>, <code>test_cost_tracking.py</code>)</td><td>83/83 passing</td></tr>
+            <tr><td>Architectural review</td><td>PASS — 1 BLOCKER found &amp; fixed, re-verified</td></tr>
+            <tr><td>Adversarial review</td><td>PASS — 1 BLOCKER found &amp; fixed, re-verified</td></tr>
+            <tr><td>Security review</td><td>PASS — 0 issues found</td></tr>
+            <tr><td>QA validation</td><td>PASS — both carried-forward BLOCKER fixes re-confirmed</td></tr>
+            <tr><td>Product validation</td><td>PASS — 5/5 FR + 5/5 NFR met</td></tr>
+            <tr><td>Documentation review</td><td>PASS — 2 stale descriptions in <code>architecture.md</code> found &amp; fixed (this report)</td></tr>
         </table>
 
         <h2>Non-Goals</h2>
         <ul>
-            <li>No new cost computation, schema, or enforcement logic (owned by the merged Budget Enforcement feature)</li>
-            <li>No task-level or workflow-level cost UI</li>
-            <li>No standalone cost/spend analytics dashboard</li>
-            <li>No real-time/streaming cost updates</li>
+            <li>Codex collection (<code>CodexStubCollector</code> untouched)</li>
+            <li>Any UI surfacing of OpenCode-specific data — already handled everywhere</li>
+            <li><code>AutopilotProject.cli_tool</code> UI exposure — separate feature</li>
+            <li>OpenCode DB schema versioning/migration handling</li>
         </ul>
     </div>
 </body>
