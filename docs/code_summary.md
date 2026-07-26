@@ -1,71 +1,49 @@
 ---
 type: code_summary
-feature_id: des-91c8-cost-collectors
+feature_id: des-91c8-opencode-collector
 ---
 
-# Code Summary: CLI Cost Collectors (Pi + Claude Code)
+# Code Summary: OpenCode Cost Collector
 
-**Feature ID:** des-91c8-cost-collectors
+**Feature ID:** des-91c8-opencode-collector
+**Branch:** `feature/des-91c8/opencode-collector`
 
-This feature closes the gap between the already-implemented real-time pi
-cost-tracker extension (source code merged by an earlier feature) and it
-actually being installed and correctly configured. It's packaging work, not
-new collection logic — the `PiJsonlCollector`/`ClaudeCodeCollector` runtime,
-the `CostEntry` schema, and `POST /cost-entries` were untouched.
+## What this feature does
 
-## `scripts/install.sh`
+Makes `collect_task_cost()` produce correct `CostEntry` rows for
+`cli_type == "opencode"` tasks by reading OpenCode's own SQLite DB
+(`~/.local/share/opencode/opencode.db`) instead of the dead
+stdout-JSON-capture code path that never actually ran. No schema changes,
+no new call sites, no UI changes — `source="opencode"` was already a
+first-class value everywhere downstream (rollups, budget enforcement, UI).
 
-Adds a new step inside the existing pi-detection block (`if command -v pi ...
-|| [ -d ~/.pi ]`), placed after the pi-mcp-adapter install and before the
-"Restart Pi" log line — the same branch every other pi-specific install step
-already lives in, so there's one place to look for "what happens when pi is
-present."
+## Changed files
 
-The step copies `extensions/hephaestus-cost-tracker/` to
-`~/.pi/agent/extensions/hephaestus-cost-tracker/` and runs `npm install &&
-npm run build` there, producing `dist/index.js`, the file pi loads as an
-extension on next launch. It always re-runs on both fresh install and
-`--update` (no "already installed" skip-gate), which is what makes
-`--update` refresh a stale build. Every failure path (`npm` missing, write
-failure, build failure) degrades to a `warn` and continues install rather
-than aborting — the JSONL-tailing fallback in
-`cost_collection_service.py` still collects the same cost data, just not in
-real time, so a broken extension build was never meant to be fatal.
+### Backend
 
-## `extensions/hephaestus-cost-tracker/README.md`
+- **`src/services/cost_collection_service.py`** — the only file changed:
+  - `_discover_opencode_session(cwd, agent_created_at)` (new) — correlates a completed task's agent to an OpenCode `session` row by matching `session.directory == cwd` within a `[agent.created_at, now]` time window (OpenCode has no deterministic session ID Hephaestus controls), returning the most recent in-window match. Opens the DB read-only, verifies the resolved path stays under `~/.local/share/opencode/`, and both time bounds are converted to epoch-ms with explicit `tzinfo=timezone.utc` before calling `.timestamp()`.
+  - `OpenCodeCollector.collect()` (rewritten) — no longer parses `session_file` as a JSON blob; queries the `session` table by row ID and maps its pre-aggregated `cost`/`tokens_*`/`model` columns directly onto a `CostEntry` dict. `checkpoint` is a 0/1 "already collected" flag, not a line count.
+  - `collect_task_cost()`'s `opencode` branch — replaced the `pass` stub with a call to `_discover_opencode_session()`, then `OpenCodeCollector(session_row_id=...)`. The `SessionCostCheckpoint` key for OpenCode is `opencode_session_row_id`, not the shared Hephaestus `session_id` — because OpenCode never resumes a session, a launch sharing `session_id` with a prior task would otherwise find the prior checkpoint already at 1 and silently drop its own cost.
 
-Fixed the documented default `HEPHAESTUS_API_URL` from `http://localhost:8000`
-to `http://localhost:8300`, matching both the extension's actual code
-default (`src/index.ts`) and `hephaestus_config.yaml`'s `port: 8300`. The old
-value would have pointed a correctly-installed extension at the wrong port,
-silently dropping every cost POST.
+### Tests
 
-## `extensions/hephaestus-cost-tracker/package.json`
+- **`tests/test_cost_collection_service.py`** — three new test classes:
+  - `TestOpenCodeCollector` — column mapping, zero-cost handling, missing row, malformed `model` JSON, `session_row_id=None`.
+  - `TestDiscoverOpencodeSession` — no DB file, empty result, single/multiple matches (tie-break), directory mismatch, time-window boundaries, path-safety guard.
+  - `TestCollectTaskCostOpenCode` — end-to-end: `CostEntry` written with correct `source`/`cost_usd`/tokens, checkpoint prevents double-recording, no `opencode.db` present is a silent no-op, and the shared-`session_id`-doesn't-drop-second-launch regression test for the checkpoint-key fix.
 
-Added `@types/node` to `devDependencies`. Without it, `tsc` fails on
-`process.env`, `console`, and `fetch` type references — a real
-build-breaking bug caught by QA, not a style fix. This is what made the new
-`install.sh` build step (above) actually able to succeed.
+## Explicitly out of scope (by design)
 
-## `src/mcp/autopilot_api.py`
+- Codex collection (`CodexStubCollector` untouched).
+- Any UI surfacing of OpenCode-specific data — `source="opencode"` was already handled everywhere.
+- `AutopilotProject.cli_tool` UI exposure — configuring OpenCode as a project's CLI is a separate feature.
+- OpenCode DB schema versioning/migration — graceful-failure-on-unexpected-shape only.
 
-`POST /cost-entries`'s rate limiter was keyed on the caller-supplied
-`X-Agent-ID` header. `verify_agent_authentication()` trusts any
-`sdk-`/`mcp-`-prefixed ID unconditionally (it's an identity check, not a
-secret), and the server binds `0.0.0.0`, so a caller could reset the
-60/minute rate-limit bucket on every request just by rotating the header
-value. Since each cost entry can carry `cost_usd` up to $1000 and drives
-budget-pause rollups, an attacker with a real `task_id`/`workflow_id` could
-have forced premature budget pausing; against unknown IDs, unbounded DB
-writes. Fixed by keying the rate limit on `request.client.host` instead,
-which required adding a `request: Request` parameter to the endpoint. Found
-and fixed during security review, scoped appropriately since this new
-extension is the endpoint's new traffic source.
+## Verification
 
-## Tests
-
-No new tests were added — this feature explicitly doesn't touch collector
-logic. `tests/test_cost_collection_service.py` (20/20) and the broader
-budget/cost-tracking suite (`tests/test_budget_enforcement_integration.py`,
-`tests/test_cost_tracking.py`, 56/56) were run as regression checks and pass
-unchanged.
+- Targeted: `pytest tests/test_cost_collection_service.py tests/test_cost_tracking.py` — 83/83 passing (confirmed by direct collection during this review).
+- Two BLOCKERs found and fixed mid-pipeline, both re-verified against the live code by this review:
+  - `af59ac8` (adversarial_review, B-1) — naive-datetime `.timestamp()` misread as local time, silently dropping all OpenCode costs on non-UTC hosts. Fixed with explicit `tzinfo=timezone.utc`.
+  - `adae90b` (architectural_review, B-1) — `SessionCostCheckpoint` originally spec'd to key on the shared Hephaestus `session_id`; fixed to key on `opencode_session_row_id` instead, since OpenCode never resumes a session.
+- Security: `docs/security_review/security_report.md` — PASS, 0 issues found.

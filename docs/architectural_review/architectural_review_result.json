@@ -1,7 +1,34 @@
 {
   "verdict": "PASS",
+  "feature": "OpenCode Cost Collector",
+  "feature_id": "des-91c8-opencode-collector",
+  "commit_reviewed": "HEAD",
   "blocker_count": 0,
   "fix_count": 0,
-  "defer_count": 0,
-  "findings": []
+  "defer_count": 1,
+  "overall": "PASS",
+  "findings_final": [
+    {
+      "id": "D-1",
+      "severity": "DEFER",
+      "title": "opencode.db URI path not percent-encoded for '?'/'#' characters",
+      "file": "src/services/cost_collection_service.py",
+      "reason": "Theoretical issue with rare characters in home directory paths. Deferred."
+    }
+  ],
+  "prior_findings_resolved": [
+    {
+      "id": "B-1",
+      "was": "BLOCKER",
+      "title": "SessionCostCheckpoint key shared across independent OpenCode launches",
+      "resolution": "FIXED: checkpoint keyed by opencode_session_row_id"
+    },
+    {
+      "id": "F-1",
+      "was": "FIX",
+      "title": "sqlite3 connections leak on the query-exception path",
+      "resolution": "FIXED: try/finally conn.close() in both functions"
+    }
+  ],
+  "summary": "All prior BLOCKER and FIX findings resolved. Implementation matches architecture on component boundaries, interfaces, data flow, read-only DB access, graceful absence, checkpoint keying, naming conventions. 34/34 tests pass. No new blockers or fixes. One DEFER (URI encoding) remains. Verdict: PASS."
 }

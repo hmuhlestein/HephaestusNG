@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Feature Report: CLI Cost Collectors (Pi + Claude Code)</title>
+    <title>Feature Report: OpenCode Cost Collector</title>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body {
@@ -31,223 +31,106 @@
             letter-spacing: 0.05em;
             margin-bottom: 0.5rem;
         }
-        .summary-card .value { font-size: 2rem; font-weight: 700; }
-        .summary-card .value.success { color: #22c55e; }
-        .summary-card .value.warning { color: #f59e0b; }
-        .summary-card .value.info { color: #3b82f6; }
-        .summary-card .value.danger { color: #ef4444; }
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            background: white;
-            border-radius: 8px;
-            overflow: hidden;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-            margin-bottom: 2rem;
-        }
-        th, td { padding: 1rem; text-align: left; border-bottom: 1px solid #e2e8f0; }
-        th { background: #f8fafc; font-weight: 600; color: #475569; }
-        tr:hover { background: #f8fafc; }
-        .status {
-            display: inline-block;
-            padding: 0.25rem 0.75rem;
-            border-radius: 9999px;
-            font-size: 0.875rem;
-            font-weight: 500;
-        }
-        .status.complete { background: #dcfce7; color: #166534; }
-        .status.pass { background: #dcfce7; color: #166534; }
-        .status.partial { background: #fef3c7; color: #92400e; }
-        .status.deferred { background: #e2e8f0; color: #475569; }
-        .status.missing { background: #fee2e2; color: #991b1b; }
-        .section {
-            background: white;
-            border-radius: 8px;
-            padding: 1.5rem;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-            margin-bottom: 2rem;
-        }
-        .section h3 { margin-bottom: 1rem; color: #1e293b; }
+        .summary-card .value { font-size: 1.75rem; font-weight: 700; color: #0f172a; }
+        .pass { color: #16a34a; }
+        .fail { color: #dc2626; }
+        table { width: 100%; border-collapse: collapse; background: white; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+        th, td { text-align: left; padding: 0.75rem 1rem; border-bottom: 1px solid #e2e8f0; }
+        th { background: #f1f5f9; font-size: 0.85rem; text-transform: uppercase; color: #64748b; }
+        tr:last-child td { border-bottom: none; }
+        .badge { display: inline-block; padding: 0.2rem 0.6rem; border-radius: 999px; font-size: 0.8rem; font-weight: 600; }
+        .badge-pass { background: #dcfce7; color: #166534; }
+        .badge-fixed { background: #fef9c3; color: #854d0e; }
+        code { background: #f1f5f9; padding: 0.15rem 0.4rem; border-radius: 4px; font-size: 0.9em; }
         ul { margin-left: 1.5rem; margin-bottom: 1rem; }
-        li { margin-bottom: 0.5rem; }
-        .badge {
-            display: inline-block;
-            padding: 0.125rem 0.5rem;
-            border-radius: 4px;
-            font-size: 0.75rem;
-            font-weight: 600;
-        }
-        .badge.new { background: #dbeafe; color: #1e40af; }
-        .badge.modified { background: #fef3c7; color: #92400e; }
-        .badge.security { background: #fee2e2; color: #991b1b; }
-        footer {
-            margin-top: 3rem;
-            padding-top: 1rem;
-            border-top: 1px solid #e2e8f0;
-            color: #64748b;
-            font-size: 0.875rem;
-            text-align: center;
-        }
+        .note { background: #eff6ff; border-left: 4px solid #3b82f6; padding: 1rem; border-radius: 4px; margin-bottom: 1.5rem; }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>Feature Report: CLI Cost Collectors (Pi + Claude Code)</h1>
-        <p class="meta">Generated: 2026-07-25 | Feature ID: des-91c8-cost-collectors | Workflow ID: 263e9b05-29ab-4e8d-962e-722c4ff24511</p>
+        <h1>Feature Report: OpenCode Cost Collector</h1>
+        <p class="meta">Generated: 2026-07-26 | Feature ID: des-91c8-opencode-collector | Workflow ID: b0087459-85b3-4937-a50e-faee96194a7e | Branch: feature/des-91c8/opencode-collector</p>
 
         <div class="summary-grid">
             <div class="summary-card">
-                <h3>Functional Reqs</h3>
-                <div class="value success">4/4</div>
-                <small>All met</small>
-            </div>
-            <div class="summary-card">
-                <h3>Tests</h3>
-                <div class="value success">56/56</div>
-                <small>Targeted cost/budget suite, no regressions</small>
-            </div>
-            <div class="summary-card">
-                <h3>Security</h3>
-                <div class="value success">ACCEPTABLE</div>
-                <small>1 High found &amp; fixed, 0 critical open</small>
-            </div>
-            <div class="summary-card">
                 <h3>Verdict</h3>
-                <div class="value success">PASS</div>
-                <small>0 blockers</small>
+                <div class="value pass">PASS</div>
+            </div>
+            <div class="summary-card">
+                <h3>Functional Requirements</h3>
+                <div class="value">5 / 5</div>
+            </div>
+            <div class="summary-card">
+                <h3>Tests Passing</h3>
+                <div class="value">83/83</div>
+            </div>
+            <div class="summary-card">
+                <h3>Blockers Fixed</h3>
+                <div class="value pass">2</div>
             </div>
         </div>
 
-        <h2>Implementation Status</h2>
-        <table>
-            <thead>
-                <tr>
-                    <th>Component</th>
-                    <th>Description</th>
-                    <th>Status</th>
-                </tr>
-            </thead>
-            <tbody>
-                <tr>
-                    <td>FR-1</td>
-                    <td>Install/build the <code>hephaestus-cost-tracker</code> pi extension during <code>scripts/install.sh</code>, gated inside the existing pi-detection block, degrading gracefully on missing <code>npm</code> or build failure</td>
-                    <td><span class="status complete">✅ Complete</span></td>
-                </tr>
-                <tr>
-                    <td>FR-2</td>
-                    <td><code>install.sh --update</code> refreshes an already-installed extension build</td>
-                    <td><span class="status complete">✅ Complete</span></td>
-                </tr>
-                <tr>
-                    <td>FR-3</td>
-                    <td>Fix documented default <code>HEPHAESTUS_API_URL</code> (8000 → 8300) in extension README</td>
-                    <td><span class="status complete">✅ Complete</span></td>
-                </tr>
-                <tr>
-                    <td>FR-4</td>
-                    <td>No regression to existing <code>PiJsonlCollector</code>/<code>ClaudeCodeCollector</code> logic or schema</td>
-                    <td><span class="status complete">✅ Complete</span></td>
-                </tr>
-            </tbody>
-        </table>
-
-        <h2>Files Changed</h2>
-        <table>
-            <thead>
-                <tr>
-                    <th>File</th>
-                    <th>Action</th>
-                    <th>Status</th>
-                </tr>
-            </thead>
-            <tbody>
-                <tr>
-                    <td><code>scripts/install.sh</code></td>
-                    <td>New step inside the pi-detection block: copies and builds the cost-tracker extension into <code>~/.pi/agent/extensions/hephaestus-cost-tracker</code>, non-fatal on failure</td>
-                    <td><span class="status complete">✅ Done</span></td>
-                </tr>
-                <tr>
-                    <td><code>extensions/hephaestus-cost-tracker/README.md</code></td>
-                    <td>Fixed documented default API URL (8000 → 8300)</td>
-                    <td><span class="status complete">✅ Done</span></td>
-                </tr>
-                <tr>
-                    <td><code>extensions/hephaestus-cost-tracker/package.json</code></td>
-                    <td>Added missing <code>@types/node</code> devDependency (build-breaking bug caught by QA)</td>
-                    <td><span class="status complete">✅ Done</span></td>
-                </tr>
-                <tr>
-                    <td><code>src/mcp/autopilot_api.py</code></td>
-                    <td><code>POST /cost-entries</code> rate-limit key changed from spoofable <code>X-Agent-ID</code> header to <code>request.client.host</code> (security fix)</td>
-                    <td><span class="status complete">✅ Done</span></td>
-                </tr>
-            </tbody>
-        </table>
-
-        <div class="section">
-            <h3>Key Implementation Details</h3>
-            <ul>
-                <li><strong>Packaging only:</strong> the collector runtime (<code>PiJsonlCollector</code>, <code>ClaudeCodeCollector</code>, checkpointing, <code>POST /cost-entries</code>, the extension's TypeScript source) was already implemented and merged by prior features — this feature makes the already-written extension actually installable and correctly configured</li>
-                <li><strong>One pi-detection branch:</strong> the install/build step lives inside the script's existing <code>if command -v pi ... ; then</code> block rather than a second top-level check, matching the script's existing style for CLI-presence detection</li>
-                <li><strong>Always re-runs, no skip-gate:</strong> <code>rm -rf</code>/<code>cp -r</code>/<code>npm install &amp;&amp; npm run build</code> run unconditionally on every install, which is what makes <code>--update</code> work with no special-case code</li>
-                <li><strong>Graceful degradation:</strong> every failure path (<code>npm</code> missing, write failure, build failure) is a <code>warn</code>, not a fatal error — the JSONL-tailing fallback in <code>cost_collection_service.py</code> still collects the same cost data if the real-time extension can't be built</li>
-            </ul>
+        <div class="note">
+            Makes <code>collect_task_cost()</code> produce correct <code>CostEntry</code> rows for
+            <code>cli_type == "opencode"</code> tasks by reading OpenCode's own SQLite DB
+            (<code>opencode.db</code>) instead of a dead stdout-JSON code path that never actually ran.
+            No schema, call-site, or UI changes — <code>source="opencode"</code> was already
+            first-class everywhere downstream.
         </div>
 
-        <div class="section">
-            <h3>Security Findings</h3>
-            <ul>
-                <li><span class="badge security">HIGH</span> <strong>FIXED</strong> — <code>POST /cost-entries</code> rate limit was keyed on the caller-supplied <code>X-Agent-ID</code> header, which <code>verify_agent_authentication()</code> trusts unconditionally for <code>sdk-</code>/<code>mcp-</code>-prefixed IDs; an attacker could reset the 60/min bucket by rotating the header. Rekeyed on <code>request.client.host</code></li>
-                <li>2 pre-existing LOW findings, unrelated to this feature's scope, already ticketed</li>
-                <li><strong>Overall rating: ACCEPTABLE</strong> — no critical or unresolved high-severity vulnerabilities</li>
-            </ul>
-        </div>
+        <h2>Summary</h2>
+        <p>
+            The design document assumed OpenCode ran one-shot with a capturable stdout JSON blob — that
+            assumption was stale; OpenCode is launched as a persistent <code>-i</code> session with no
+            deterministic session ID. <code>scope_review</code> authorized proceeding despite the
+            design's own "stay deferred" gate. The shipped fix correlates a completed task to its
+            OpenCode session row by directory + time window, then reads the row's pre-aggregated
+            <code>cost</code>/<code>tokens_*</code> columns directly — no per-turn tailing needed.
+        </p>
 
-        <h2>Documentation Review</h2>
+        <h2>Functional Requirements</h2>
         <table>
-            <thead>
-                <tr>
-                    <th>Document</th>
-                    <th>Status</th>
-                </tr>
-            </thead>
-            <tbody>
-                <tr>
-                    <td>Requirements Analysis (docs/requirements_analysis.md)</td>
-                    <td><span class="status pass">✅ Accurate</span></td>
-                </tr>
-                <tr>
-                    <td>Architecture (docs/architecture.md)</td>
-                    <td><span class="status partial">⚠️ Fixed — Section 3 code sample was stale vs. shipped code</span></td>
-                </tr>
-                <tr>
-                    <td>Security Report (docs/security_review/security_report.md)</td>
-                    <td><span class="status pass">✅ Accurate</span></td>
-                </tr>
-                <tr>
-                    <td>QA Report (docs/qa_validation/qa_report.md)</td>
-                    <td><span class="status pass">✅ Accurate</span></td>
-                </tr>
-                <tr>
-                    <td>Product Validation (docs/product_validation/product_validation.md)</td>
-                    <td><span class="status pass">✅ Accurate</span></td>
-                </tr>
-                <tr>
-                    <td>Pipeline Reference (docs/autopilot.md)</td>
-                    <td><span class="status partial">⚠️ Fixed — Cost Tracking section didn't mention the real-time pi extension</span></td>
-                </tr>
-            </tbody>
+            <tr><th>Req</th><th>Description</th><th>Status</th></tr>
+            <tr><td>FR-1</td><td>Design's build/defer gate explicitly ruled on by scope_review (proceed authorized)</td><td><span class="badge badge-pass">PASS</span></td></tr>
+            <tr><td>FR-2</td><td>Correlate a completed task's agent to its OpenCode session row (<code>_discover_opencode_session</code>)</td><td><span class="badge badge-pass">PASS</span></td></tr>
+            <tr><td>FR-3</td><td>Replace stdout-JSON <code>OpenCodeCollector</code> with a <code>session</code>-table query</td><td><span class="badge badge-pass">PASS</span></td></tr>
+            <tr><td>FR-4</td><td>Wire the <code>collect_task_cost()</code> opencode branch to actually run</td><td><span class="badge badge-pass">PASS</span></td></tr>
+            <tr><td>FR-5</td><td>Checkpointing / re-collection safety</td><td><span class="badge badge-pass">PASS</span></td></tr>
         </table>
 
-        <div class="section">
-            <h3>Verdict</h3>
-            <p><strong>PASS</strong> — All 4 functional requirements met, 56/56 targeted tests pass with no regressions, security review found 1 High issue and fixed it, and documentation (after this phase's two fixes) accurately describes the shipped implementation.</p>
-        </div>
+        <h2>Key Changes</h2>
+        <ul>
+            <li><code>_discover_opencode_session()</code> (new) — matches <code>session.directory == cwd</code> within <code>[agent.created_at, now]</code>, read-only SQLite, path-safety guard, most-recent tie-break.</li>
+            <li><code>OpenCodeCollector.collect()</code> (rewritten) — queries the <code>session</code> row by ID, maps pre-aggregated <code>cost</code>/<code>tokens_*</code>/<code>model</code> columns onto <code>CostEntry</code>.</li>
+            <li><code>collect_task_cost()</code>'s <code>opencode</code> branch — wired end-to-end; <code>SessionCostCheckpoint</code> keyed by <code>opencode_session_row_id</code>, not the shared Hephaestus <code>session_id</code>.</li>
+        </ul>
 
-        <footer>
-            <p>Hephaestus Autopilot — Feature Report</p>
-            <p>Workflow ID: 263e9b05-29ab-4e8d-962e-722c4ff24511 | Generated: 2026-07-25</p>
-        </footer>
+        <h2>Blockers Found &amp; Fixed</h2>
+        <table>
+            <tr><th>ID</th><th>Phase</th><th>Issue</th><th>Status</th></tr>
+            <tr><td>B-1</td><td>adversarial_review</td><td>Naive-datetime <code>.timestamp()</code> misread as local time — silently dropped 100% of OpenCode costs on non-UTC hosts</td><td><span class="badge badge-fixed">FIXED</span></td></tr>
+            <tr><td>B-1</td><td>architectural_review</td><td><code>SessionCostCheckpoint</code> originally spec'd keyed by shared <code>session_id</code>; corrected to <code>opencode_session_row_id</code> since OpenCode never resumes</td><td><span class="badge badge-fixed">FIXED</span></td></tr>
+        </table>
+
+        <h2>Quality Gates</h2>
+        <table>
+            <tr><th>Gate</th><th>Result</th></tr>
+            <tr><td>Targeted tests (<code>test_cost_collection_service.py</code>, <code>test_cost_tracking.py</code>)</td><td>83/83 passing</td></tr>
+            <tr><td>Architectural review</td><td>PASS — 1 BLOCKER found &amp; fixed, re-verified</td></tr>
+            <tr><td>Adversarial review</td><td>PASS — 1 BLOCKER found &amp; fixed, re-verified</td></tr>
+            <tr><td>Security review</td><td>PASS — 0 issues found</td></tr>
+            <tr><td>QA validation</td><td>PASS — both carried-forward BLOCKER fixes re-confirmed</td></tr>
+            <tr><td>Product validation</td><td>PASS — 5/5 FR + 5/5 NFR met</td></tr>
+            <tr><td>Documentation review</td><td>PASS — 2 stale descriptions in <code>architecture.md</code> found &amp; fixed (this report)</td></tr>
+        </table>
+
+        <h2>Non-Goals</h2>
+        <ul>
+            <li>Codex collection (<code>CodexStubCollector</code> untouched)</li>
+            <li>Any UI surfacing of OpenCode-specific data — already handled everywhere</li>
+            <li><code>AutopilotProject.cli_tool</code> UI exposure — separate feature</li>
+            <li>OpenCode DB schema versioning/migration handling</li>
+        </ul>
     </div>
 </body>
 </html>
