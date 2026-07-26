@@ -1318,6 +1318,7 @@ ${taskDetails.child_tasks.map((t: any) => `- ${t.description} (${t.status})`).jo
             last_activity: taskDetails.agent_info.last_activity,
           }}
           onClose={() => setShowAgentOutput(false)}
+          fallbackPhaseName={taskDetails.phase_info?.name}
         />
       )}
 

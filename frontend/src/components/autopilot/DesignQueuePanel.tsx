@@ -1060,7 +1060,7 @@ const TaskRow: React.FC<{
         pending={actionPending}
       />
       {tmuxAgent && (
-        <RealTimeAgentOutput agent={tmuxAgent} onClose={() => setTmuxAgent(null)} />
+        <RealTimeAgentOutput agent={tmuxAgent} onClose={() => setTmuxAgent(null)} fallbackPhaseName={task.phase_name} />
       )}
     </div>
   );
