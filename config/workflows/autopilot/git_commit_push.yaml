@@ -103,36 +103,19 @@ additional_notes: |
   ```
   
   ═══════════════════════════════════════════════════════════════════════
-  STEP 4: CREATE AND MERGE PULL REQUEST
+  STEP 4: MERGE TO MAIN
   ═══════════════════════════════════════════════════════════════════════
-  
-  Preferred: use GitHub CLI.
-  ```bash
-  gh pr create --title "feat: <feature name>" --body "## Summary
-  - Change 1
-  - Change 2
-  
-  ## Test Plan
-  - [ ] All tests pass
-  - [ ] Manual verification completed
-  
-  Autopilot validated: $(date -u +%Y-%m-%d)"
-  
-  gh pr merge --merge --delete-branch
-  ```
-  
-  `--delete-branch` removes only the REMOTE branch after merge.
-  STOP after this command. Do NOT delete the local branch (`git branch -d`).
-  The local branch is checked out by the active worktree and cannot be deleted —
-  attempting to delete it will prompt you to remove the worktree, which you MUST NOT do.
-  
-  If `gh` is unavailable OR there is no remote, do a local merge from the main repo:
+
+  ALWAYS merge locally into main. This is the primary path — do not skip
+  it in favor of a PR-only merge.
+
   ```bash
   # Navigate to the main repo root (not the worktree)
   MAIN_REPO=$(git rev-parse --git-common-dir | sed 's|/\.git.*||')
   cd "$MAIN_REPO"
   git status  # confirm clean main branch
 
+  # Merge feature branch into main
   git merge --no-ff $FEATURE_BRANCH -m "Merge $FEATURE_BRANCH into main
 
   Autopilot validated: $(date -u +%Y-%m-%d)"
@@ -146,9 +129,14 @@ additional_notes: |
   git merge --no-ff $FEATURE_BRANCH -m "Merge $FEATURE_BRANCH into main"
   ```
 
-  If remote exists, push main after merging:
+  Push main after merging:
   ```bash
   git push $REMOTE $DEFAULT_BRANCH  # skip if no remote
+  ```
+
+  Optionally create a PR for visibility (does not replace local merge):
+  ```bash
+  gh pr create --title "feat: <feature name>" --body "..." 2>/dev/null || true
   ```
   
   ═══════════════════════════════════════════════════════════════════════
@@ -168,8 +156,8 @@ additional_notes: |
   
   DO:
   - Stage and commit all un-committed changes
-  - Push the feature branch before creating the PR
-  - Use --no-ff for merge commits to preserve branch history
+  - Push the feature branch before merging
+  - Merge into main locally (gh PR is optional, not a substitute)
   - Use --no-verify for automated pipeline commits
   - Record the commit hash
   
