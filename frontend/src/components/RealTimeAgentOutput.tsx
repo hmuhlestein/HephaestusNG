@@ -30,12 +30,21 @@ interface RealTimeAgentOutputProps {
   agent: Agent | null;
   onClose: () => void;
   isFullscreen?: boolean;
+  // The caller's own already-known phase name (e.g. the task row's
+  // task.phase_name), preferred over agent.current_task?.phase_info?.name
+  // in the title -- that field comes from a separately, freshly-polled
+  // fetch of the agent and goes null whenever agent.current_task_id is
+  // transiently unset (e.g. between task handoffs on a reused CLI
+  // session), silently falling back to the generic agent_type ("phase")
+  // + id and losing the actual phase name from the title bar.
+  fallbackPhaseName?: string;
 }
 
 const RealTimeAgentOutput: React.FC<RealTimeAgentOutputProps> = ({
   agent,
   onClose,
   isFullscreen: initialFullscreen = false,
+  fallbackPhaseName,
 }) => {
   const [isFullscreen, setIsFullscreen] = useState(initialFullscreen);
   const [searchTerm, setSearchTerm] = useState('');
@@ -387,7 +396,7 @@ const RealTimeAgentOutput: React.FC<RealTimeAgentOutputProps> = ({
                   isConnected ? 'bg-green-500 animate-pulse' : 'bg-red-500'
                 }`} />
                 <h3 className="text-lg font-semibold text-gray-800 dark:text-white">
-                  {agent.current_task?.phase_info?.name || agent.agent_type || 'Agent'} {agent.id.substring(0, 8)} - Output
+                  {agent.current_task?.phase_info?.name || fallbackPhaseName || agent.agent_type || 'Agent'} {agent.id.substring(0, 8)} - Output
                 </h3>
                 {isConnected ? (
                   <Wifi className="w-4 h-4 text-green-500" />
