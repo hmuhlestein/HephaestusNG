@@ -1,142 +1,88 @@
-# Product Validation Report: Budget Enforcement and Pipeline Throttling
+# Product Validation Report: CLI Cost Collectors (Pi + Claude Code)
 
-**Feature ID:** des-91c8-budget-enforcement
-**Feature Name:** Budget Enforcement and Pipeline Throttling
-**Validation Date:** 2026-07-23
-**Design Documents:** `docs/COST_TRACKING_DESIGN.md` (Budget Enforcement section), `design_docs/budget_tracking_approval_system.md` (superseded — see Section 2 note)
+**Feature ID:** des-91c8-cost-collectors
+**Feature Name:** CLI Cost Collectors (Pi + Claude Code)
+**Validation Date:** 2026-07-25
+**Design Documents:** `.hephaestus/design.md` / `docs/COST_TRACKING_DESIGN.md` ("Collection Architecture", "Pi Extension Collector" sections)
 **Requirements Document:** `docs/requirements_analysis.md`
-**QA Report:** `docs/qa_validation/qa_report.md`
-**Prior Run:** Run 1 — CONDITIONAL PASS (0 blockers, 3 important gaps: G-1/G-2/G-3 frontend UI)
-**Verdict:** CONDITIONAL PASS — backend complete; one UI gap (G-2) remains unresolved despite a follow-up commit claiming to fix it
+**Architecture Document:** `docs/architecture.md`
+**QA Report:** `docs/qa_validation/qa_report.md` (56/56 targeted tests, PASS)
+**Security Report:** `docs/security_review/security_report.md` (1 High found and fixed, ACCEPTABLE)
+**Prior Run:** None — first product_validation pass for this feature.
+**Verdict:** **PASS** — 0 blockers, 4/4 requirements met, no regressions.
 
 ---
 
 ## 1. Executive Summary
 
-This is a re-verification pass following Run 1's CONDITIONAL PASS. Since Run 1, commit `b0c74e2` ("Add budget configuration and display components (FR-6, FR-7, FR-8)") was merged, followed by architectural review, adversarial review, security review, and additional development/QA fix commits. The backend enforcement logic is unchanged in behavior and remains fully correct: all 84 targeted tests (`test_budget_enforcement.py`, `test_cost_tracking.py`, `test_cost_collection_service.py`) pass.
+This feature's premise (established during `product_requirements`, re-confirmed here) is that the underlying Pi and Claude Code cost collectors — `PiJsonlCollector`, `ClaudeCodeCollector`, `SessionCostCheckpoint`, the UUID5 Claude Code session-ID fix, and `POST /cost-entries` — were **already implemented, wired into `task_completion_service.py`, and tested** by prior merged features (Cost Tracking Database Schema → Cost Derivation Engine → Budget Enforcement and Pipeline Throttling). This feature's actual scope was narrower: make the design-specified real-time pi extension (`extensions/hephaestus-cost-tracker/`) actually installed and runnable, and fix two concrete defects found in the pre-existing extension source.
 
-Of the three frontend gaps flagged in Run 1:
+Diff vs. merge-base (`c3622c9`) confirms the implementation stayed inside that scope:
+- `scripts/install.sh` — 28 new lines, gated inside the existing `if command -v pi ... || [ -d ~/.pi ]` block, installing/building the extension with graceful degradation on missing npm or build failure.
+- `extensions/hephaestus-cost-tracker/package.json` — added missing `@types/node` devDependency (a real build-breaking bug QA caught: `tsc` failed on `process.env`/`console`/`fetch` symbols without it).
+- `extensions/hephaestus-cost-tracker/README.md` — corrected the documented default `HEPHAESTUS_API_URL` from `8000` to `8300`, matching both the extension's actual code default and `hephaestus_config.yaml:3`.
+- `src/mcp/autopilot_api.py` — one incidental, appropriately-scoped fix from security review: `POST /cost-entries`'s rate limit was keyed on the caller-supplied `X-Agent-ID` header (spoofable, since `verify_agent_authentication` trusts `sdk-`/`mcp-`-prefixed IDs unconditionally), letting an attacker reset the rate-limit bucket by rotating the header. Now keyed on `request.client.host`.
 
-- **G-1 (budget config input in `ProjectSettingsModal.tsx`)** — **FIXED.** The modal now has a `cost_limit_usd` input wired to `PUT /projects/{id}`, and displays `Budget: $current / $limit`.
-- **G-3 (budget-paused status label)** — **FIXED.** `WorkflowCard.tsx` now renders `PAUSED: BUDGET LIMIT REACHED` when `execution.paused_by === 'budget'`.
-- **G-2 (cost indicator on the design/pipeline screen)** — **STILL NOT MET.** Commit `b0c74e2` added a new `BudgetStatusCard.tsx` component intended to satisfy this, but the component is never imported or rendered anywhere in the app (confirmed via exhaustive grep — the only reference to `BudgetStatusCard` in the codebase is its own definition file). `DesignQueuePanel.tsx`, `PipelineStatusCard.tsx`, and `Autopilot.tsx` contain zero cost/budget references. The commit message claims "Fixes: FR-6, FR-7, FR-8," but FR-7 is not actually wired into any screen a user would see.
-
-**Note on design document:** `design_docs/budget_tracking_approval_system.md` describes a much larger, unbuilt system (a standalone `BudgetManager`/`CostInterceptor`/SQLite ledger with human-in-the-loop approval gates for CLI-agent and monitoring-process costs). None of that architecture exists in this codebase (`src/autopilot/budget.py`, `budget_config.py`, `cost_interceptor.py` do not exist). What was actually implemented — and what `docs/requirements_analysis.md` and the actual commit history describe — is a narrower, project-level `cost_limit_usd`/`cost_total_usd` enforcement gate built into the existing `cost_derivation.py` rollup path. This narrower scope is what QA and prior product_validation runs graded against, and it is the correct scope: the approval-system doc is aspirational/future-work, explicitly listed as a "future enhancement" in Run 1's own report (Section 11.3). This validation grades against the implemented (project-level enforcement) scope, consistent with Run 1.
-
----
+No other files were touched. No collector logic, schema, or derivation code was modified — consistent with the requirements' explicit non-goal of not touching that already-shipped code.
 
 ## 2. Functional Requirements Verification
 
 | Requirement | Implementation | Status |
-|-------------|----------------|--------|
-| FR-1: Budget guard in `pick_next_design()` | `src/autopilot/orchestrator.py:2022-2024` calls `check_budget_before_new_work()`, returns `None` if over budget | ✅ PASS |
-| FR-2: Budget guard in `_run_one_feature()` | `src/autopilot/orchestrator.py:7064-7066` calls `check_budget_before_new_work()`, returns `"budget_blocked"`, sets feature status to "paused" | ✅ PASS |
-| FR-3: Generalize `paused_by` guards (`is not None`, except `start()`) | Verified at 3 call sites; `AutopilotService.start()` retains `== "user"` | ✅ PASS |
-| FR-4: Refactor `/autopilot/stop` to use shared `_pause_project_workflows()` | `src/mcp/autopilot_api.py:3686-3690` | ✅ PASS |
-| FR-5: Budget-paused resume via limit increase | `src/mcp/autopilot_api.py:1841-1866` (pre-existing, unchanged) | ✅ PASS |
-| FR-6: UI — budget config input in `ProjectSettingsModal.tsx` | `cost_limit_usd` input present, wired to `updateAutopilotProject`; displays current spend | ✅ PASS (fixed since Run 1) |
-| FR-7: UI — "$current / $limit" cost indicator on design/pipeline screen | `BudgetStatusCard.tsx` exists but is not imported/rendered by any page or panel component | ❌ STILL FAILING |
-| FR-8: UI — budget-paused status label | `WorkflowCard.tsx:28-31` renders `PAUSED: BUDGET LIMIT REACHED` when `paused_by === 'budget'` | ✅ PASS (fixed since Run 1) |
+|---|---|---|
+| FR-1: Pi extension installed automatically by `scripts/install.sh` when pi is detected | `scripts/install.sh:781-806`, inside the pre-existing `command -v pi \|\| [ -d ~/.pi ]` branch (line 569). Copies `extensions/hephaestus-cost-tracker/` to `~/.pi/agent/extensions/hephaestus-cost-tracker/`, runs `npm install --silent && npm run build`. Skips (with `warn`, not `err`) if npm is absent or the source dir is missing; does not abort the rest of install on build failure. | ✅ PASS |
+| FR-2: `--update` path also refreshes the extension | The install block is unconditional (not gated on the `UPDATE` flag, unlike e.g. the venv/frontend-node_modules skip checks at lines 209/443) — every invocation of `install.sh`, including `--update`, re-runs `rm -rf` + copy + `npm install && npm run build`, so a `git pull` touching `index.ts` reaches an already-provisioned machine on the next install/update run. | ✅ PASS |
+| FR-3: Fix `HEPHAESTUS_API_URL` default mismatch | `README.md` now documents `8300`; `index.ts:9`'s actual default is `8300`; `hephaestus_config.yaml:3` confirms `port: 8300`. All three agree. | ✅ PASS |
+| FR-4: Existing collector behavior unchanged, still covered by tests | `git diff c3622c9..HEAD` touches zero lines in `src/services/cost_collection_service.py`, `src/core/cost_derivation.py` (collection logic), or the `cost_entries`/`session_cost_checkpoints` schema. `tests/test_cost_collection_service.py` — 20/20 pass, unmodified. | ✅ PASS |
 
-### FR-7 detail (the unresolved gap)
+**4 of 4 requirements met. 0 unmet.**
 
-`frontend/src/components/BudgetStatusCard.tsx` (92 lines, added in `b0c74e2`) implements exactly what the design calls for — a `$current / $limit` display with a progress bar, over-budget/near-budget styling, and a "Configure" callback. It is well-built. But:
+## 3. Non-Functional Requirements Verification
 
-```
-$ grep -rln "BudgetStatusCard" frontend/src --include="*.tsx" --include="*.ts"
-frontend/src/components/BudgetStatusCard.tsx
-```
+- **No blocking on install failure**: confirmed — every failure branch in the new `install.sh` block (missing npm, missing source dir, failed `rm -rf`/`mkdir`/`cp`, failed `npm install`/`npm run build`) calls `warn`, not `err`/`exit`, and explicitly logs "Cost data will still be collected via task-completion fallback." Script continues to the MCP-tools-restart message afterward.
+- **No behavior change to existing collectors**: confirmed via diff — zero lines changed in the collector/derivation/schema files.
+- **Idempotent re-install**: the block does `rm -rf "$EXT_DEST_DIR"` then `mkdir -p` then `cp -r` before building, so re-running against a machine that already has the extension installed cleanly replaces it rather than erroring on "already exists."
 
-No other file imports it. `DesignQueuePanel.tsx`, `PipelineStatusCard.tsx`, and `Autopilot.tsx` (the design/pipeline screens named in the original design requirement) have no `cost`, `budget`, or `Budget` references at all. A user viewing the autopilot pipeline/design screen still cannot see project spend vs. limit without opening the project settings modal — the original complaint in Run 1 (AC-7.1 through AC-7.5) is unchanged in practice.
+## 4. Security Verification
 
----
+Security review found and fixed one High-severity issue introduced risk surface: the new `POST /cost-entries` traffic pattern (this endpoint is what the new pi extension calls on every LLM turn) made an existing rate-limit weakness materially more exploitable — keyed on a spoofable header, reachable off localhost (server binds `0.0.0.0`). Fixed by keying on `request.client.host` instead. Verified in code (`src/mcp/autopilot_api.py:2075-2103`) and via the security report's OWASP walkthrough (ACCEPTABLE posture, 0 open critical/medium findings). Two pre-existing, out-of-scope gaps were correctly ticketed rather than fixed inline (unauthenticated project-mutation endpoints — `ticket-6b452476`; missing rate limit on cost-query GETs — `ticket-5c041735`) — appropriate scope discipline, not a validation gap for this feature.
 
-## 3. Non-Functional Requirements
+## 5. Integration With Existing System
 
-| ID | Requirement | Status | Evidence |
-|----|-------------|--------|----------|
-| NFR-1 | Backward compatibility | ✅ PASS | `cost_limit_usd` defaults to `None`; `check_budget_before_new_work()` no-ops when unset |
-| NFR-2 | Performance | ✅ PASS | Guard is a single column comparison per design/feature pick; no added queries |
-| NFR-3 | Reliability | ✅ PASS | `_pause_project_workflows()` idempotent; re-verified via `TestPauseProjectWorkflows` |
-| NFR-4 | Observability | ✅ PASS | Budget decisions logged at INFO with project name/ID/amounts; `status_reason` set on pause |
-| NFR-5 | Security | ✅ PASS | Cost-entry endpoint auth unchanged; negative/excessive cost values still rejected by Pydantic validators (unchanged since security_review phase) |
+- The extension reads `HEPHAESTUS_AGENT_ID`/`HEPHAESTUS_TASK_ID`/`HEPHAESTUS_WORKFLOW_ID` from environment variables already set by `src/agents/manager.py:481-484,1696-1699` when launching pi tmux sessions — no new plumbing needed on the Python side, confirmed present and unmodified.
+- POSTs to `POST /cost-entries`, an endpoint that already existed and already fed the merged Cost Derivation Engine / Budget Enforcement rollup chain — the extension is purely an additional producer into an existing, tested consumer path. `SessionCostCheckpoint`-based JSONL tailing (`PiJsonlCollector`) remains as the fallback path when the extension isn't loaded, per the design's explicit "complementary, not exclusive" framing — verified this fallback is untouched.
+- `scripts/install.sh`'s new block reuses the file's existing `log`/`ok`/`warn` helper conventions and sits inside the pre-existing pi-detection branch rather than adding a parallel detection mechanism.
 
----
+## 6. User Experience / Operational Flow
 
-## 4. Integration Verification
+- **Developer with pi installed, runs `./scripts/install.sh`**: extension is copied, built, and ready on next pi launch; sees `ok "Cost tracker extension installed"`. Verified against real `tsc` output in QA (after the `@types/node` fix) — build actually succeeds now, not just "doesn't error at the shell level."
+- **Developer without pi**: no extension activity at all (branch never entered), matching the "cost tracking is a nice-to-have" non-functional requirement.
+- **Developer with pi but no npm**: gets a clear `warn` explaining real-time tracking is skipped and that the fallback still collects cost data — no silent data loss, no confusing failure.
+- **pi TUI user during a session**: per the (unmodified, previously-reviewed) extension source, sees a live `💰 $X.XX` status update per turn — this is the actual product value this feature was building toward; nothing in this pass altered that behavior, only made it reachable via normal install.
 
-Re-checked all call sites cited in Run 1 against the current HEAD — all still present and unchanged in behavior:
+## 7. Edge Cases From Design Doc
 
-- `src/autopilot/orchestrator.py:2022-2027` (pick_next_design guard)
-- `src/autopilot/orchestrator.py:7064-7068` (`_run_one_feature` guard)
-- `src/mcp/autopilot_api.py:3682-3690` (`/autopilot/stop` refactor)
-- `src/core/cost_derivation.py:291,294,359` (`_pause_project_workflows`, `check_budget_before_new_work`)
-- `frontend/src/types/index.ts:496-497` (`paused_by`, `status_reason` added to `WorkflowExecution`)
+- **"Extension not loaded" fallback** (design doc, Pi Extension Collector section): explicitly still works — `PiJsonlCollector` untouched, its own test suite (`TestPiJsonlCollector`, 6 tests) unmodified and passing.
+- **Build failure shouldn't break `heph install`**: covered (see NFR section above) — verified by reading every exit path in the new bash block, all `warn`+continue, no `exit`.
+- **Re-running install shouldn't corrupt an existing extension install**: covered by the `rm -rf` + `mkdir -p` + `cp -r` sequence before build.
 
-No regressions introduced by the intervening architectural/adversarial/security review commits — those touched other parts of the diff (per commit messages: QA pass-rate formatting, security fixes elsewhere in the branch), not the budget guard code paths.
-
----
-
-## 5. Test Results
+## 8. Test Results
 
 ```
-$ python -m pytest tests/test_budget_enforcement.py tests/test_cost_tracking.py tests/test_cost_collection_service.py -q
-84 passed, 326 warnings in 6.78s
+python -m pytest tests/test_cost_collection_service.py -q
+20 passed
+
+python -m pytest tests/ -k "cost_entr or rate_limit" -q
+7 passed, 2076 deselected
 ```
 
-Same 84/84 pass rate as Run 1 — no regressions. Frontend `tsc --noEmit` could not be run (no `node_modules` installed in this worktree); `BudgetStatusCard.tsx` and `WorkflowCard.tsx` were reviewed by manual inspection and match existing component patterns and prop typing in the codebase.
+27/27 targeted tests pass, 0 failures, no regressions. Consistent with QA's own run (`tests/test_budget_enforcement_integration.py tests/test_cost_tracking.py`, 56/56 passed) — different but overlapping test selection, same result: no failures anywhere in the cost-tracking test surface.
 
----
+## 9. Recommendations for Human Reviewer
 
-## 6. Edge Cases
+1. **No code changes needed before merge.** All 4 requirements met, security finding fixed, QA-caught build bug fixed, tests green.
+2. **Manual smoke test worth doing once, not automatable in this pipeline**: run `./scripts/install.sh` on a real machine with `pi` and `npm` installed, confirm `~/.pi/agent/extensions/hephaestus-cost-tracker/dist/index.js` is produced and pi picks it up on next launch (shows `💰 Cost tracker active` in the status bar). This was verified in isolation during QA (`npm install && npm run build` succeeds) but not verified end-to-end through the actual `install.sh` invocation against a real pi installation — reasonable to defer to a human with a pi environment handy rather than block the pipeline on it.
+3. **Two tickets already filed and out of this feature's scope** (`ticket-6b452476` — unauthenticated project-mutation endpoints, High priority; `ticket-5c041735` — missing rate limit on cost-query GETs, Low) — worth prioritizing `ticket-6b452476` in a near-term follow-up given it touches the same `cost_limit_usd` field this feature's traffic ultimately feeds into, but that's a separate feature, not a blocker here.
 
-Re-verified against current code (unchanged from Run 1, all still hold):
+## 10. Verdict
 
-- No limit set → guard is a no-op (`check_budget_before_new_work` returns `True`)
-- Cost equals exact limit → blocked (`>=` comparison)
-- Limit raised while budget-paused → clears `paused_by="budget"`, resumes
-- Phase 0 workflows included in budget pause (`definition_id.in_(["autopilot", "autopilot-phase0"])`)
-- User pause after budget pause → `AutopilotService.start()` still gates on `== "user"` only, correctly preventing budget-paused projects from being resumed by the general "play" action
-
----
-
-## 7. Gap Analysis
-
-### Blockers (must fix before PASS)
-
-**None.** No functional regressions; backend enforcement remains fully correct.
-
-### Important Gap (carried over from Run 1, not fixed)
-
-| ID | Gap | Impact | Recommended Fix |
-|----|-----|--------|------------------|
-| G-2 | `BudgetStatusCard.tsx` was built but never mounted — no cost indicator appears on the design/pipeline screen | Users still cannot see project spend vs. limit without opening Project Settings; this is the exact user-facing gap Run 1 flagged | Import and render `<BudgetStatusCard>` in `DesignQueuePanel.tsx` or `PipelineStatusCard.tsx`, passing `project.cost_total_usd` / `project.cost_limit_usd` from existing project data, with `onConfigureBudget` opening `ProjectSettingsModal` |
-
----
-
-## 8. Recommendations for Human Reviewer
-
-1. **Wire up `BudgetStatusCard`.** The component is complete and correct — this is a one-line integration gap (add an import + JSX usage in the pipeline/design screen), not a design or implementation problem. Recommend routing this back to a short development task rather than re-running the full pipeline.
-2. **Workaround in the meantime:** budget status is visible via `ProjectSettingsModal.tsx` (`Budget: $current / $limit`), so the capability exists, just not on the primary pipeline screen.
-3. Treat this as the final blocking condition before a full PASS — everything else (backend enforcement, FR-1–FR-6, FR-8, NFRs, security, tests) is verified correct.
-
----
-
-## 9. Verdict
-
-**CONDITIONAL PASS**
-
-Backend budget enforcement (FR-1–FR-5) and two of three UI requirements (FR-6, FR-8) are correctly implemented and verified. FR-7 (cost indicator on the design screen) remains unmet: the component built to satisfy it (`BudgetStatusCard.tsx`) is not rendered anywhere in the application. All 84 backend tests pass; no regressions found in re-verification.
-
-**Condition for full PASS:** Mount `BudgetStatusCard` on the autopilot design/pipeline screen (G-2).
-
----
-
-## 10. Deliverables
-
-- `docs/product_validation/product_validation.md` — this report
-- `docs/product_validation/product_validation.json` — structured verdict for pipeline gate
-
----
-
-*Report generated: 2026-07-23*
+**PASS.** 0 blockers, 4/4 functional requirements met, all non-functional requirements verified, security finding resolved, no regressions in 27 targeted tests. Ready to proceed to `doc_review`.
