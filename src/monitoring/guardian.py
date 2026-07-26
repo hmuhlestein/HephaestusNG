@@ -1,6 +1,7 @@
 """Guardian monitoring system with trajectory thinking for individual agents."""
 
 import asyncio
+import json
 import logging
 from datetime import datetime, timedelta
 from enum import Enum
@@ -636,6 +637,7 @@ class Guardian:
             Phase context dictionary or None
         """
         with self.db_manager.session_scope() as session:
+            from src.autopilot.spec import load_phase_output_artifacts
             from src.core.database import Phase, Workflow
 
             # Get the phase
@@ -654,6 +656,32 @@ class Guardian:
                 .all()
             )
 
+            # Prefer workflow.yaml's required_output override when this
+            # phase has one -- phase.outputs is a per-workflow-instance
+            # snapshot taken at workflow-creation time from whatever
+            # workflow.yaml said then, and never refreshed afterward. A
+            # workflow created before an output-format change (e.g. the
+            # OKF single-file refactor) otherwise keeps telling Guardian --
+            # and, through it, the agent -- to produce the OLD file(s) for
+            # its entire remaining run, not just its next retry.
+            # load_phase_output_artifacts reads the override fresh from
+            # disk. Phases with no override fall back to phase.outputs
+            # (parsed, since it's a Text column holding a JSON-encoded
+            # string, not a native list) so non-file descriptive text like
+            # "source code in project path" is preserved as before.
+            override = load_phase_output_artifacts(workflow_id).get(phase.name)
+            if override:
+                phase_outputs = override if isinstance(override, list) else [override]
+            else:
+                phase_outputs = phase.outputs
+                if isinstance(phase_outputs, str):
+                    try:
+                        parsed = json.loads(phase_outputs)
+                        if isinstance(parsed, list):
+                            phase_outputs = parsed
+                    except Exception:
+                        pass
+
             return {
                 "phase_id": phase.id,
                 "phase_number": phase.order,
@@ -661,7 +689,7 @@ class Guardian:
                 "phase_description": phase.description,
                 "done_definitions": phase.done_definitions or [],
                 "additional_notes": phase.additional_notes,
-                "outputs": phase.outputs,
+                "outputs": phase_outputs,
                 "next_steps": phase.next_steps,
                 "working_directory": phase.working_directory,
                 "workflow_context": {

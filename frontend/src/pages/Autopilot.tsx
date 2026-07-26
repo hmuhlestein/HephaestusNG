@@ -84,7 +84,25 @@ const Autopilot: React.FC = () => {
         // Try to start; a 409 means max_concurrent_projects is already
         // reached -- find out what's running before deciding what to do.
         try {
-          return await apiService.startAutopilot(selectedProject.base_dir);
+          // Starting the continuous pipeline only picks up NEW work off
+          // the design queue -- it doesn't by itself retry an existing
+          // workflow stuck on an individually-blocked task. Cascade the
+          // same recovery the per-design Resume button uses so Play
+          // always also un-sticks this project's own stalled work, not
+          // just in the self-conflict fallback below. Fired concurrently
+          // with (not after) startAutopilot -- recover's own DB commit
+          // that flips a stuck workflow back to "active" happens almost
+          // immediately, before any of its slower agent-creation work, so
+          // running it in parallel (rather than awaiting start first)
+          // closes most of the window where a design-status poll could
+          // still observe the real, pre-recovery "paused" state and flash
+          // it in the UI. Best-effort: a failed recovery attempt must not
+          // fail the start itself.
+          const [startResult] = await Promise.all([
+            apiService.startAutopilot(selectedProject.base_dir),
+            apiService.recoverProject(selectedProject.id).catch(() => {}),
+          ]);
+          return startResult;
         } catch (err: any) {
           const is409 = err?.response?.status === 409 || err?.status === 409;
           if (!is409) throw err;

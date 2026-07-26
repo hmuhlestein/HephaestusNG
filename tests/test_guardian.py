@@ -605,5 +605,110 @@ class TestSteerAgentGating:
         assert "agent-drift4" not in guardian._consecutive_flags
 
 
+class TestGuardianPhaseContextUsesLiveRequiredOutput:
+    """Regression: _get_phase_context fed the LLM (and, through its nudge
+    message, the agent) the raw Phase.outputs column -- a per-workflow-
+    instance snapshot taken at workflow-creation time from whatever
+    workflow.yaml said then, and never refreshed afterward. A workflow
+    created before an output-format change (e.g. the OKF single-file
+    refactor collapsing a phase's json+md pair into one .md) kept telling
+    Guardian to have the agent produce the OLD file(s) for its entire
+    remaining run, not just its next retry. Must use
+    load_phase_output_artifacts's required_output override, which IS read
+    fresh from disk on every call, while still falling back to phase.outputs
+    (preserving non-file descriptive text) for phases with no override."""
+
+    @pytest.fixture
+    def real_db_with_override(self, tmp_path, monkeypatch):
+        from src.core.database import (
+            DatabaseManager,
+            Phase,
+            Workflow,
+            WorkflowDefinition,
+        )
+
+        db_path = tmp_path / "test.db"
+        real_db = DatabaseManager(str(db_path))
+        real_db.create_tables()
+        monkeypatch.setattr(
+            "src.core.database.DatabaseManager", lambda *a, **kw: real_db
+        )
+
+        workflows_dir = tmp_path / "workflows"
+        (workflows_dir / "guardian_test_def").mkdir(parents=True)
+        (workflows_dir / "guardian_test_def" / "workflow.yaml").write_text(
+            "required_output:\n"
+            "  architectural_review: architectural_review_report.md\n"
+        )
+        monkeypatch.setattr("src.workflow_registry._WORKFLOWS_DIR", workflows_dir)
+
+        session = real_db.get_session()
+        session.add(WorkflowDefinition(id="guardian_test_def", name="t"))
+        session.add(
+            Workflow(
+                id="wf-1", name="t", phases_folder_path="/tmp",
+                definition_id="guardian_test_def",
+            )
+        )
+        import json as _json
+
+        session.add(
+            Phase(
+                id="phase-1", workflow_id="wf-1", order=5,
+                name="architectural_review", description="d",
+                done_definitions=["x"],
+                # The stale snapshot: this workflow was created back when
+                # the phase still wrote a json+md pair.
+                outputs=_json.dumps(
+                    [
+                        "architectural_review_report.md",
+                        "architectural_review_result.json",
+                    ]
+                ),
+            )
+        )
+        session.add(
+            Phase(
+                id="phase-2", workflow_id="wf-1", order=4,
+                name="development", description="d",
+                done_definitions=["x"],
+                # No required_output override for this phase -- non-file
+                # descriptive text like this must survive unchanged.
+                outputs=_json.dumps(["source code in project path"]),
+            )
+        )
+        session.commit()
+        session.close()
+        return real_db
+
+    @pytest.mark.asyncio
+    async def test_outputs_reflects_the_current_required_output_override(
+        self, real_db_with_override, mock_agent_manager, mock_llm_provider
+    ):
+        guardian = Guardian(
+            db_manager=real_db_with_override,
+            agent_manager=mock_agent_manager,
+            llm_provider=mock_llm_provider,
+        )
+        context = await guardian._get_phase_context("phase-1", "wf-1")
+        assert context["outputs"] == ["architectural_review_report.md"]
+
+    @pytest.mark.asyncio
+    async def test_non_file_outputs_survive_for_a_phase_with_no_override(
+        self, real_db_with_override, mock_agent_manager, mock_llm_provider
+    ):
+        """Sanity check the fix isn't overbroad: a phase with no
+        required_output override (e.g. development) must keep its
+        non-file descriptive text, not have it dropped by a strict
+        required-files check."""
+        guardian = Guardian(
+            db_manager=real_db_with_override,
+            agent_manager=mock_agent_manager,
+            llm_provider=mock_llm_provider,
+        )
+        context = await guardian._get_phase_context("phase-2", "wf-1")
+        assert context["outputs"] == ["source code in project path"]
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
