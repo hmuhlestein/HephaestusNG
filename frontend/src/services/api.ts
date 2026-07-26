@@ -757,17 +757,27 @@ export const apiService = {
   },
 
   createAutopilotProject: async (name: string, baseDir: string, isDefault: boolean = false): Promise<any> => {
-    const { data } = await api.post('/autopilot/projects', { name, base_dir: baseDir, is_default: isDefault });
+    const { data } = await api.post(
+      '/autopilot/projects',
+      { name, base_dir: baseDir, is_default: isDefault },
+      { headers: { 'X-Agent-ID': 'ui-user' } }
+    );
     return data;
   },
 
   updateAutopilotProject: async (projectId: string, updates: { name?: string; base_dir?: string; is_default?: boolean; cost_limit_usd?: number | null }): Promise<any> => {
-    const { data } = await api.put(`/autopilot/projects/${encodeURIComponent(projectId)}`, updates);
+    const { data } = await api.put(
+      `/autopilot/projects/${encodeURIComponent(projectId)}`,
+      updates,
+      { headers: { 'X-Agent-ID': 'ui-user' } }
+    );
     return data;
   },
 
   deleteAutopilotProject: async (projectId: string): Promise<void> => {
-    await api.delete(`/autopilot/projects/${encodeURIComponent(projectId)}`);
+    await api.delete(`/autopilot/projects/${encodeURIComponent(projectId)}`, {
+      headers: { 'X-Agent-ID': 'ui-user' },
+    });
   },
 
   syncAutopilotProject: async (projectId: string): Promise<any[]> => {
