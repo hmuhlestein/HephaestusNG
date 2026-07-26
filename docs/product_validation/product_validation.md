@@ -1,97 +1,63 @@
 ---
 type: product_validation_result
-feature_id: des-91c8-cost-collectors
+feature_id: des-91c8-pi-extension
 verdict: PASS
-blocker_count: 0
-requirements_met: 4
-requirements_total: 4
+unmet_requirements: []
 ---
 
-# Product Validation Report: CLI Cost Collectors (Pi + Claude Code)
+# Product Validation Report: Pi Cost Tracker Extension (des-91c8-pi-extension)
 
-**Feature ID:** des-91c8-cost-collectors
-**Feature Name:** CLI Cost Collectors (Pi + Claude Code)
-**Validation Date:** 2026-07-25
-**Design Documents:** `.hephaestus/design.md` / `docs/COST_TRACKING_DESIGN.md` ("Collection Architecture", "Pi Extension Collector" sections)
-**Requirements Document:** `docs/requirements_analysis.md`
-**Architecture Document:** `docs/architecture.md`
-**QA Report:** `docs/qa_validation/qa_report.md` (56/56 targeted tests, PASS)
-**Security Report:** `docs/security_review/security_report.md` (1 High found and fixed, ACCEPTABLE)
-**Prior Run:** None — first product_validation pass for this feature.
-**Verdict:** **PASS** — 0 blockers, 4/4 requirements met, no regressions.
+## 1. Design Intent Re-Read
 
----
+`.hephaestus/design.md`'s "Pi Extension Collector" section (lines 621-647) describes a pi extension that hooks `turn_end`, captures `message.usage.cost.total` in real time, shows a running cost in the pi TUI, and POSTs each turn's cost to Hephaestus's API — as a real-time complement to (not replacement for) the JSONL-tailing fallback, with the two paths described as "complementary, not exclusive."
 
-## 1. Executive Summary
+That extension, its install/build wiring, and the API endpoint it posts to were all already implemented and merged before this feature's requirements phase began (`git log main..HEAD` was empty at that point — confirmed in `docs/requirements_analysis.md`). This feature's actual, narrower design intent (`docs/architecture.md`) was: fix one wrong line in `extensions/hephaestus-cost-tracker/README.md` (documented `POST /cost-entries`, real route is `POST /api/autopilot/cost-entries`), and verify — not re-implement — the existing collection pipeline.
 
-This feature's premise (established during `product_requirements`, re-confirmed here) is that the underlying Pi and Claude Code cost collectors — `PiJsonlCollector`, `ClaudeCodeCollector`, `SessionCostCheckpoint`, the UUID5 Claude Code session-ID fix, and `POST /cost-entries` — were **already implemented, wired into `task_completion_service.py`, and tested** by prior merged features (Cost Tracking Database Schema → Cost Derivation Engine → Budget Enforcement and Pipeline Throttling). This feature's actual scope was narrower: make the design-specified real-time pi extension (`extensions/hephaestus-cost-tracker/`) actually installed and runnable, and fix two concrete defects found in the pre-existing extension source.
+## 2. What Actually Happened (Scope Supersession, Documented and Justified)
 
-Diff vs. merge-base (`c3622c9`) confirms the implementation stayed inside that scope:
-- `scripts/install.sh` — 28 new lines, gated inside the existing `if command -v pi ... || [ -d ~/.pi ]` block, installing/building the extension with graceful degradation on missing npm or build failure.
-- `extensions/hephaestus-cost-tracker/package.json` — added missing `@types/node` devDependency (a real build-breaking bug QA caught: `tsc` failed on `process.env`/`console`/`fetch` symbols without it).
-- `extensions/hephaestus-cost-tracker/README.md` — corrected the documented default `HEPHAESTUS_API_URL` from `8000` to `8300`, matching both the extension's actual code default and `hephaestus_config.yaml:3`.
-- `src/mcp/autopilot_api.py` — one incidental, appropriately-scoped fix from security review: `POST /cost-entries`'s rate limit was keyed on the caller-supplied `X-Agent-ID` header (spoofable, since `verify_agent_authentication` trusts `sdk-`/`mcp-`-prefixed IDs unconditionally), letting an attacker reset the rate-limit bucket by rotating the header. Now keyed on `request.client.host`.
+Adversarial review, exercising the pipeline's "assume it's broken, prove it" mandate against the pre-existing `collect_task_cost` function that this feature's README documents, found two BLOCKER data-integrity bugs the design's own "complementary, not exclusive" claim did not actually hold for in code:
 
-No other files were touched. No collector logic, schema, or derivation code was modified — consistent with the requirements' explicit non-goal of not touching that already-shipped code.
+- **B-1 (double-counting):** the real-time extension path and the JSONL fallback both wrote cost data unconditionally — every turn was recorded twice whenever the extension was active, directly contradicting the design's "complementary" framing and the README's now-corrected "prevents double-counting" claim.
+- **B-2 (batch loss):** a single bad `CostEntry` in a task's batch rolled back every entry already recorded in that batch, with no retry path — silent, permanent cost data loss.
 
-## 2. Functional Requirements Verification
+Per this pipeline's gate rules (open bug tickets must be resolved, not just filed), both were fixed in-branch rather than deferred, superseding `docs/architecture.md`'s original "README-only" scope boundary. I verified this supersession is real and justified, not scope creep dressed up as necessity: both bugs are genuine defects in code this feature's own deliverable (the README) documents, both have passing regression tests, and the fixes are narrowly targeted at exactly the two defects found — no unrelated refactoring rode along.
 
-| Requirement | Implementation | Status |
-|---|---|---|
-| FR-1: Pi extension installed automatically by `scripts/install.sh` when pi is detected | `scripts/install.sh:781-806`, inside the pre-existing `command -v pi \|\| [ -d ~/.pi ]` branch (line 569). Copies `extensions/hephaestus-cost-tracker/` to `~/.pi/agent/extensions/hephaestus-cost-tracker/`, runs `npm install --silent && npm run build`. Skips (with `warn`, not `err`) if npm is absent or the source dir is missing; does not abort the rest of install on build failure. | ✅ PASS |
-| FR-2: `--update` path also refreshes the extension | The install block is unconditional (not gated on the `UPDATE` flag, unlike e.g. the venv/frontend-node_modules skip checks at lines 209/443) — every invocation of `install.sh`, including `--update`, re-runs `rm -rf` + copy + `npm install && npm run build`, so a `git pull` touching `index.ts` reaches an already-provisioned machine on the next install/update run. | ✅ PASS |
-| FR-3: Fix `HEPHAESTUS_API_URL` default mismatch | `README.md` now documents `8300`; `index.ts:9`'s actual default is `8300`; `hephaestus_config.yaml:3` confirms `port: 8300`. All three agree. | ✅ PASS |
-| FR-4: Existing collector behavior unchanged, still covered by tests | `git diff c3622c9..HEAD` touches zero lines in `src/services/cost_collection_service.py`, `src/core/cost_derivation.py` (collection logic), or the `cost_entries`/`session_cost_checkpoints` schema. `tests/test_cost_collection_service.py` — 20/20 pass, unmodified. | ✅ PASS |
+Security review then found a High-severity consequence of the B-1 fix itself: the "does any `source=\"pi\"` entry exist for this task" check didn't verify the entry belonged to the task's own assigned agent, so a forged `CostEntry` under an unrelated `agent_id` (both `task_id` and `agent_id` are enumerable via existing unauthenticated `GET` endpoints) could permanently suppress a victim task's real cost collection. This was also fixed in-branch (`agent_id=agent.id` added to the filter) with a dedicated regression test, and the deeper systemic root cause (the POST endpoint not binding caller-supplied IDs to the authenticated identity) was correctly ticketed rather than silently absorbed into this feature's scope, since fixing it would require touching `autopilot_api.py`, outside this feature's file boundary.
 
-**4 of 4 requirements met. 0 unmet.**
+## 3. Functional Requirements Verified Against Working Code
 
-## 3. Non-Functional Requirements Verification
+- **FR-1 (README POST path fix):** verified directly — `extensions/hephaestus-cost-tracker/README.md:44` now reads `POST /api/autopilot/cost-entries`, matching `index.ts:123` and the real FastAPI route (`/api/autopilot` prefix + `@router.post("/cost-entries")` in `autopilot_api.py:2144`). DONE.
+- **FR-2 (live pi-install verification):** correctly downgraded to an accepted, explicitly documented risk — no `pi` binary is available in this sandboxed worktree, a constraint noted consistently across `docs/requirements_analysis.md` §10, `docs/architecture.md` §6, and `docs/implementation_status.md` Task 2. Not fabricated as "done"; static inspection of `index.ts`'s `initialize(ctx)`/`turn_end(ctx, turn)` shape against pi's documented extension hooks found no inconsistency, which is the correct ceiling for what can be verified without the actual binary.
+- **FR-3 (regression check):** verified myself, independent of trusting the QA report's own count — ran `python -m pytest tests/test_cost_collection_service.py -p no:libtmux -q`: **24 passed, 0 failed**. The one pre-existing, unrelated `tests/test_cost_tracking.py` collection failure (`ImportError` on a function renamed in a prior merged feature) is correctly identified as present on `main` too, not a regression.
 
-- **No blocking on install failure**: confirmed — every failure branch in the new `install.sh` block (missing npm, missing source dir, failed `rm -rf`/`mkdir`/`cp`, failed `npm install`/`npm run build`) calls `warn`, not `err`/`exit`, and explicitly logs "Cost data will still be collected via task-completion fallback." Script continues to the MCP-tools-restart message afterward.
-- **No behavior change to existing collectors**: confirmed via diff — zero lines changed in the collector/derivation/schema files.
-- **Idempotent re-install**: the block does `rm -rf "$EXT_DEST_DIR"` then `mkdir -p` then `cp -r` before building, so re-running against a machine that already has the extension installed cleanly replaces it rather than erroring on "already exists."
+## 4. Non-Functional Requirements
 
-## 4. Security Verification
-
-Security review found and fixed one High-severity issue introduced risk surface: the new `POST /cost-entries` traffic pattern (this endpoint is what the new pi extension calls on every LLM turn) made an existing rate-limit weakness materially more exploitable — keyed on a spoofable header, reachable off localhost (server binds `0.0.0.0`). Fixed by keying on `request.client.host` instead. Verified in code (`src/mcp/autopilot_api.py:2075-2103`) and via the security report's OWASP walkthrough (ACCEPTABLE posture, 0 open critical/medium findings). Two pre-existing, out-of-scope gaps were correctly ticketed rather than fixed inline (unauthenticated project-mutation endpoints — `ticket-6b452476`; missing rate limit on cost-query GETs — `ticket-5c041735`) — appropriate scope discipline, not a validation gap for this feature.
+- **Performance:** no change — this feature touches only a per-task existence check (indexed query pattern already used elsewhere in the file) and a doc line; no new hot path introduced.
+- **Security:** the one High finding was fixed in code this pass (agent-ownership check), not just documented as accepted risk; the residual systemic gap (spoofable `X-Agent-ID` not bound to caller-supplied `task_id`/`agent_id`) is correctly ticketed (`ticket-5a75167a-27d3-4a9a-bb01-0409bd128cd7`) as out of this feature's file scope rather than either ignored or scope-crept into an endpoint rewrite. This is the right call: `autopilot_api.py` is untouched by this feature's diff, and expanding scope to fix it would itself be an unreviewed scope violation.
+- **No new test tooling:** confirmed no JS/TS test framework was introduced — consistent with the requirements doc's explicit NFR that this would be inconsistent with the rest of the repo (no test tooling exists for `frontend/` either).
 
 ## 5. Integration With Existing System
 
-- The extension reads `HEPHAESTUS_AGENT_ID`/`HEPHAESTUS_TASK_ID`/`HEPHAESTUS_WORKFLOW_ID` from environment variables already set by `src/agents/manager.py:481-484,1696-1699` when launching pi tmux sessions — no new plumbing needed on the Python side, confirmed present and unmodified.
-- POSTs to `POST /cost-entries`, an endpoint that already existed and already fed the merged Cost Derivation Engine / Budget Enforcement rollup chain — the extension is purely an additional producer into an existing, tested consumer path. `SessionCostCheckpoint`-based JSONL tailing (`PiJsonlCollector`) remains as the fallback path when the extension isn't loaded, per the design's explicit "complementary, not exclusive" framing — verified this fallback is untouched.
-- `scripts/install.sh`'s new block reuses the file's existing `log`/`ok`/`warn` helper conventions and sits inside the pre-existing pi-detection branch rather than adding a parallel detection mechanism.
+Traced the full call path and confirmed no breakage: `task_completion_service.py::collect_cost_on_completion` → `cost_collection_service.py::collect_task_cost` → `cost_derivation.py::record_cost` → DB rollup. `tests/test_task_completion_service.py` (47 tests) and `tests/test_budget_enforcement_integration.py` (13 tests) are reported passing in `docs/qa_validation/qa_report.md`, exercising the caller and the downstream budget-enforcement consumer respectively — both are unaffected-by-diff regression checks, not new coverage invented to look thorough.
 
-## 6. User Experience / Operational Flow
+## 6. User Experience Flows
 
-- **Developer with pi installed, runs `./scripts/install.sh`**: extension is copied, built, and ready on next pi launch; sees `ok "Cost tracker extension installed"`. Verified against real `tsc` output in QA (after the `@types/node` fix) — build actually succeeds now, not just "doesn't error at the shell level."
-- **Developer without pi**: no extension activity at all (branch never entered), matching the "cost tracking is a nice-to-have" non-functional requirement.
-- **Developer with pi but no npm**: gets a clear `warn` explaining real-time tracking is skipped and that the fallback still collects cost data — no silent data loss, no confusing failure.
-- **pi TUI user during a session**: per the (unmodified, previously-reviewed) extension source, sees a live `💰 $X.XX` status update per turn — this is the actual product value this feature was building toward; nothing in this pass altered that behavior, only made it reachable via normal install.
+No user-facing UI in this feature's scope — the pi extension's own UX (TUI status bar cost display, `💰 $X.XX`) is unchanged by this diff (`index.ts` is untouched). The only user-facing artifact touched is the README a developer would read when installing/debugging the extension, which now describes the real endpoint and the real (fixed) fallback-skip behavior instead of a false claim.
 
-## 7. Edge Cases From Design Doc
+## 7. Edge Cases From Design Doc Confirmed Handled
 
-- **"Extension not loaded" fallback** (design doc, Pi Extension Collector section): explicitly still works — `PiJsonlCollector` untouched, its own test suite (`TestPiJsonlCollector`, 6 tests) unmodified and passing.
-- **Build failure shouldn't break `heph install`**: covered (see NFR section above) — verified by reading every exit path in the new bash block, all `warn`+continue, no `exit`.
-- **Re-running install shouldn't corrupt an existing extension install**: covered by the `rm -rf` + `mkdir -p` + `cp -r` sequence before build.
+- **"Complementary, not exclusive" fallback behavior** (design.md lines 640-642): now actually true in code for the common case (extension active → fallback correctly skipped; extension inactive → fallback correctly runs), verified by `test_skips_jsonl_fallback_when_realtime_pi_entries_exist` and `test_jsonl_fallback_still_runs_when_no_realtime_entries_exist`.
+- **Forged/unrelated-agent entry does not suppress a victim task's real costs:** verified by `test_unrelated_agent_entry_does_not_suppress_fallback`.
+- **One bad entry in a batch does not discard the rest:** verified by `test_bad_entry_does_not_discard_rest_of_batch`.
+- **Residual edge case, correctly not silently ignored:** adversarial review's W-1 (a partial-session real-time POST failure — some turns' POSTs succeed, one fails — now causes the *entire* task's JSONL fallback to be skipped since the check is "any entry exists," not per-turn) is real, was surfaced honestly, assessed as lower severity than the bug it replaces, and left open rather than blocking the gate or being fixed with an out-of-scope schema change (`CostEntry` has no per-turn identifier today). This is the correct call for this pass, not a gap being hidden.
 
-## 8. Test Results
+## 8. Verdict
 
-```
-python -m pytest tests/test_cost_collection_service.py -q
-20 passed
-
-python -m pytest tests/ -k "cost_entr or rate_limit" -q
-7 passed, 2076 deselected
-```
-
-27/27 targeted tests pass, 0 failures, no regressions. Consistent with QA's own run (`tests/test_budget_enforcement_integration.py tests/test_cost_tracking.py`, 56/56 passed) — different but overlapping test selection, same result: no failures anywhere in the cost-tracking test surface.
+**PASS.** All three requirements from `docs/requirements_analysis.md` are met — two fully done (FR-1, FR-3), one correctly downgraded to an explicit, non-fabricated accepted risk (FR-2) rather than either skipped silently or falsely claimed complete. Two BLOCKER-severity pre-existing bugs and one High-severity security finding, all found during this feature's own review chain, were fixed in-branch with passing regression tests rather than deferred past the gate. No unmet requirements.
 
 ## 9. Recommendations for Human Reviewer
 
-1. **No code changes needed before merge.** All 4 requirements met, security finding fixed, QA-caught build bug fixed, tests green.
-2. **Manual smoke test worth doing once, not automatable in this pipeline**: run `./scripts/install.sh` on a real machine with `pi` and `npm` installed, confirm `~/.pi/agent/extensions/hephaestus-cost-tracker/dist/index.js` is produced and pi picks it up on next launch (shows `💰 Cost tracker active` in the status bar). This was verified in isolation during QA (`npm install && npm run build` succeeds) but not verified end-to-end through the actual `install.sh` invocation against a real pi installation — reasonable to defer to a human with a pi environment handy rather than block the pipeline on it.
-3. **Two tickets already filed and out of this feature's scope** (`ticket-6b452476` — unauthenticated project-mutation endpoints, High priority; `ticket-5c041735` — missing rate limit on cost-query GETs, Low) — worth prioritizing `ticket-6b452476` in a near-term follow-up given it touches the same `cost_limit_usd` field this feature's traffic ultimately feeds into, but that's a separate feature, not a blocker here.
-
-## 10. Verdict
-
-**PASS.** 0 blockers, 4/4 functional requirements met, all non-functional requirements verified, security finding resolved, no regressions in 27 targeted tests. Ready to proceed to `doc_review`.
+1. **No action required to merge this feature.** The scope supersession (README-only → README + two data-integrity fixes + one security fix) is well-documented, narrowly targeted, and each fix has a dedicated passing regression test — worth a quick skim of `docs/implementation_status.md` and `docs/security_review/security_report.md` to confirm you're comfortable with that supersession, but it does not need re-litigating from scratch.
+2. **Track `ticket-5a75167a-27d3-4a9a-bb01-0409bd128cd7`** (High priority, systemic `POST /api/autopilot/cost-entries` identity-binding gap) — it's correctly out of scope here but is the actual root cause behind this pass's High finding and deserves its own future feature/pass rather than falling off the radar.
+3. **FR-2 (live pi-install smoke test) is still genuinely unverified end-to-end** — if there's ever an environment with a real `pi` binary available to this pipeline, it would be worth spending 10 minutes confirming the extension actually loads and posts successfully, since that's the one claim in the whole feature that's verified only by static code reading, not execution.
+4. **W-1 (partial-session POST failure drops a fallback for the whole task)** is a reasonable, low-severity residual gap to leave open, but if pi extension usage becomes widespread and mid-session API restarts turn out to be non-rare in practice, revisit adding a per-turn identifier to `CostEntry` to make the fallback's coverage check granular instead of a per-task boolean.
