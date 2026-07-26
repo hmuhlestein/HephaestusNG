@@ -1901,7 +1901,15 @@ async def list_projects():
 
 
 @router.post("/projects", response_model=ProjectItem)
-async def create_project(req: ProjectCreate):
+async def create_project(
+    req: ProjectCreate,
+    agent_id: str = Header(..., alias="X-Agent-ID"),
+):
+    if not await verify_agent_authentication(agent_id):
+        raise HTTPException(
+            status_code=401,
+            detail="Agent not authenticated. Provide valid X-Agent-ID header.",
+        )
     from src.core.database import AutopilotProject, get_db
 
     resolved = _validate_base_dir(req.base_dir)
@@ -1964,7 +1972,16 @@ async def get_project(project_id: str):
 
 
 @router.put("/projects/{project_id}", response_model=ProjectItem)
-async def update_project(project_id: str, req: ProjectUpdate):
+async def update_project(
+    project_id: str,
+    req: ProjectUpdate,
+    agent_id: str = Header(..., alias="X-Agent-ID"),
+):
+    if not await verify_agent_authentication(agent_id):
+        raise HTTPException(
+            status_code=401,
+            detail="Agent not authenticated. Provide valid X-Agent-ID header.",
+        )
     from src.core.database import AutopilotDesign, AutopilotProject, Workflow, get_db
 
     with get_db() as db:
@@ -2032,7 +2049,15 @@ async def update_project(project_id: str, req: ProjectUpdate):
 
 
 @router.delete("/projects/{project_id}")
-async def delete_project(project_id: str):
+async def delete_project(
+    project_id: str,
+    agent_id: str = Header(..., alias="X-Agent-ID"),
+):
+    if not await verify_agent_authentication(agent_id):
+        raise HTTPException(
+            status_code=401,
+            detail="Agent not authenticated. Provide valid X-Agent-ID header.",
+        )
     from src.core.database import AutopilotProject, get_db
 
     replacement_base_dir = None
@@ -2197,6 +2222,7 @@ class ProjectCostSummary(BaseModel):
 @router.get("/tasks/{task_id}/costs", response_model=TaskCostSummary)
 async def get_task_costs(
     task_id: str,
+    request: Request,
     agent_id: str = Header(..., alias="X-Agent-ID"),
 ):
     """Get cost breakdown for a single task.
@@ -2208,6 +2234,12 @@ async def get_task_costs(
         raise HTTPException(
             status_code=401,
             detail="Agent not authenticated. Provide valid X-Agent-ID header.",
+        )
+    client_host = request.client.host if request.client else "unknown"
+    if not _check_rate_limit(f"cost_query:{client_host}", max_requests=60):
+        raise HTTPException(
+            status_code=429,
+            detail="Rate limit exceeded. Maximum 60 cost queries per minute.",
         )
     from src.core.cost_derivation import derive_task_cost
     from src.core.database import CostEntry, Task, get_db
@@ -2245,6 +2277,7 @@ async def get_task_costs(
 @router.get("/workflows/{workflow_id}/costs", response_model=WorkflowCostSummary)
 async def get_workflow_costs(
     workflow_id: str,
+    request: Request,
     agent_id: str = Header(..., alias="X-Agent-ID"),
 ):
     """Get cost breakdown for a workflow.
@@ -2256,6 +2289,12 @@ async def get_workflow_costs(
         raise HTTPException(
             status_code=401,
             detail="Agent not authenticated. Provide valid X-Agent-ID header.",
+        )
+    client_host = request.client.host if request.client else "unknown"
+    if not _check_rate_limit(f"cost_query:{client_host}", max_requests=60):
+        raise HTTPException(
+            status_code=429,
+            detail="Rate limit exceeded. Maximum 60 cost queries per minute.",
         )
     from src.core.cost_derivation import derive_workflow_cost
     from src.core.database import CostEntry, Task, Workflow, get_db
@@ -2293,6 +2332,7 @@ async def get_workflow_costs(
 @router.get("/features/{feature_id}/costs", response_model=FeatureCostSummary)
 async def get_feature_costs(
     feature_id: str,
+    request: Request,
     agent_id: str = Header(..., alias="X-Agent-ID"),
 ):
     """Get cost breakdown for a feature.
@@ -2304,6 +2344,12 @@ async def get_feature_costs(
         raise HTTPException(
             status_code=401,
             detail="Agent not authenticated. Provide valid X-Agent-ID header.",
+        )
+    client_host = request.client.host if request.client else "unknown"
+    if not _check_rate_limit(f"cost_query:{client_host}", max_requests=60):
+        raise HTTPException(
+            status_code=429,
+            detail="Rate limit exceeded. Maximum 60 cost queries per minute.",
         )
     from src.core.cost_derivation import derive_feature_cost, derive_workflow_cost
     from src.core.database import Feature, Workflow, get_db
@@ -2341,6 +2387,7 @@ async def get_feature_costs(
 @router.get("/designs/{design_id}/costs", response_model=DesignCostSummary)
 async def get_design_costs(
     design_id: str,
+    request: Request,
     agent_id: str = Header(..., alias="X-Agent-ID"),
 ):
     """Get cost breakdown for a design.
@@ -2352,6 +2399,12 @@ async def get_design_costs(
         raise HTTPException(
             status_code=401,
             detail="Agent not authenticated. Provide valid X-Agent-ID header.",
+        )
+    client_host = request.client.host if request.client else "unknown"
+    if not _check_rate_limit(f"cost_query:{client_host}", max_requests=60):
+        raise HTTPException(
+            status_code=429,
+            detail="Rate limit exceeded. Maximum 60 cost queries per minute.",
         )
     from src.core.cost_derivation import derive_design_cost, derive_feature_cost
     from src.core.database import AutopilotDesign, Feature, get_db
@@ -2389,6 +2442,7 @@ async def get_design_costs(
 @router.get("/projects/{project_id}/costs", response_model=ProjectCostSummary)
 async def get_project_costs(
     project_id: str,
+    request: Request,
     agent_id: str = Header(..., alias="X-Agent-ID"),
 ):
     """Get cost breakdown for a project.
@@ -2400,6 +2454,12 @@ async def get_project_costs(
         raise HTTPException(
             status_code=401,
             detail="Agent not authenticated. Provide valid X-Agent-ID header.",
+        )
+    client_host = request.client.host if request.client else "unknown"
+    if not _check_rate_limit(f"cost_query:{client_host}", max_requests=60):
+        raise HTTPException(
+            status_code=429,
+            detail="Rate limit exceeded. Maximum 60 cost queries per minute.",
         )
     from src.core.cost_derivation import derive_design_cost, derive_project_cost
     from src.core.database import AutopilotDesign, AutopilotProject, get_db
