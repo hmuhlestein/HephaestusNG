@@ -14,6 +14,7 @@ Usage:
 import json
 import logging
 import re
+import sqlite3
 import uuid
 from abc import ABC, abstractmethod
 from datetime import datetime
@@ -261,11 +262,17 @@ class ClaudeCodeCollector(CostCollector):
 
 
 class OpenCodeCollector(CostCollector):
-    """Collector for OpenCode one-shot invocations.
+    """Collector for OpenCode sessions via opencode.db.
 
-    OpenCode runs as one-shot (not persistent session), so each run
-    corresponds to exactly one task. Cost is captured from stdout or DB.
+    OpenCode's `session` table stores pre-aggregated cost/token totals
+    per session row -- no per-turn tailing needed. Each agent launch
+    mints exactly one fresh session row (OpenCodeAgent never resumes),
+    so checkpoint is a simple 0/1 "already collected" guard, not a
+    line count.
     """
+
+    def __init__(self, session_row_id: Optional[str] = None):
+        self.session_row_id = session_row_id
 
     def collect(
         self,
@@ -276,49 +283,59 @@ class OpenCodeCollector(CostCollector):
         session_file: Path,
         checkpoint: int,
     ) -> Tuple[List[dict], int]:
-        """Collect cost entry from OpenCode.
+        """Collect a cost entry from opencode.db.
 
-        For OpenCode, session_file is actually the stdout capture file.
-        Each file contains one JSON object with cost data.
+        For OpenCode, session_file is the opencode.db path and
+        checkpoint is 0 (not yet collected) or 1 (already collected).
         """
-        entries = []
+        entries: List[dict] = []
+
+        if checkpoint >= 1:
+            return entries, checkpoint
+
+        if not self.session_row_id:
+            return entries, checkpoint
 
         try:
-            if not session_file.exists():
-                return entries, 0
+            conn = sqlite3.connect(f"file:{session_file}?mode=ro", uri=True)
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                "SELECT cost, tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, tokens_cache_write, model FROM session WHERE id = ?",
+                (self.session_row_id,),
+            ).fetchone()
+            conn.close()
+        except sqlite3.Error as e:
+            logger.error(f"Error reading opencode.db for session {self.session_row_id}: {e}")
+            return entries, checkpoint
 
-            with open(session_file) as f:
-                data = json.load(f)
+        if not row or (row["cost"] or 0) <= 0:
+            return entries, 1
 
-            # Extract cost data from OpenCode JSON output
-            cost_usd = data.get("cost", 0)
-            if cost_usd <= 0:
-                return entries, 1
+        model = None
+        if row["model"]:
+            try:
+                model = json.loads(row["model"]).get("id")
+            except json.JSONDecodeError:
+                model = row["model"]
 
-            model = data.get("modelID")
-            tokens = data.get("tokens", {})
-
-            entries.append(
-                {
-                    "id": f"cost-{uuid.uuid4().hex[:8]}",
-                    "task_id": task_id,
-                    "agent_id": agent_id,
-                    "workflow_id": workflow_id,
-                    "source": "opencode",
-                    "model": model,
-                    "input_tokens": tokens.get("input", 0),
-                    "output_tokens": tokens.get("output", 0),
-                    "cache_read_tokens": tokens.get("cache", {}).get("read", 0),
-                    "cache_write_tokens": tokens.get("cache", {}).get("write", 0),
-                    "reasoning_tokens": tokens.get("reasoning", 0),
-                    "cost_usd": cost_usd,
-                    "recorded_at": datetime.utcnow(),
-                    "raw_usage": data,
-                }
-            )
-
-        except Exception as e:
-            logger.error(f"Error collecting OpenCode costs: {e}")
+        entries.append(
+            {
+                "id": f"cost-{uuid.uuid4().hex[:8]}",
+                "task_id": task_id,
+                "agent_id": agent_id,
+                "workflow_id": workflow_id,
+                "source": "opencode",
+                "model": model,
+                "input_tokens": row["tokens_input"] or 0,
+                "output_tokens": row["tokens_output"] or 0,
+                "cache_read_tokens": row["tokens_cache_read"] or 0,
+                "cache_write_tokens": row["tokens_cache_write"] or 0,
+                "reasoning_tokens": row["tokens_reasoning"] or 0,
+                "cost_usd": row["cost"],
+                "recorded_at": datetime.utcnow(),
+                "raw_usage": dict(row),
+            }
+        )
 
         return entries, 1
 
@@ -401,6 +418,60 @@ def _discover_session_file(session_id: str, cwd: str) -> Optional[Path]:
     return None
 
 
+def _discover_opencode_session(cwd: str, agent_created_at: datetime) -> Optional[Tuple[Path, str]]:
+    """Discover the OpenCode session row matching an agent's cwd and launch time.
+
+    OpenCode assigns no deterministic session ID Hephaestus controls (unlike
+    pi's --session-id / Claude Code's uuid5): `opencode run -s <id>` errors
+    with "Session not found" for an ID that doesn't already exist, so it
+    can't be used to create-with-ID. Correlation is by directory
+    (session.directory is a literal, unsanitized path) and a time window
+    bounded by [agent_created_at, now].
+
+    Returns (db_path, session.id) for the most recent in-window match, or
+    None if the DB doesn't exist or no session matches.
+    """
+    db_path = Path.home() / ".local" / "share" / "opencode" / "opencode.db"
+
+    # SECURITY: Verify the resolved path is within expected directory
+    try:
+        resolved = db_path.resolve()
+        base = (Path.home() / ".local" / "share" / "opencode").resolve()
+        if not str(resolved).startswith(str(base)):
+            logger.warning(f"OpenCode DB path escapes base directory: {resolved}")
+            return None
+    except (OSError, ValueError):
+        return None
+
+    if not db_path.exists():
+        return None
+
+    start_ms = int(agent_created_at.timestamp() * 1000)
+    end_ms = int(datetime.utcnow().timestamp() * 1000)
+
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT id, time_created FROM session WHERE directory = ? AND time_created >= ? AND time_created <= ? ORDER BY time_created DESC",
+            (cwd, start_ms, end_ms),
+        ).fetchall()
+        conn.close()
+    except sqlite3.Error as e:
+        logger.error(f"Error querying opencode.db for cwd {cwd}: {e}")
+        return None
+
+    if not rows:
+        logger.debug(f"No OpenCode session found for cwd {cwd} in window [{start_ms}, {end_ms}]")
+        return None
+
+    if len(rows) > 1:
+        discarded = [row["id"] for row in rows[1:]]
+        logger.debug(f"Multiple OpenCode sessions matched cwd {cwd}; using most recent, discarded: {discarded}")
+
+    return db_path, rows[0]["id"]
+
+
 def collect_task_cost(task_id: str) -> None:
     """Entry point for cost collection on task completion.
 
@@ -448,6 +519,7 @@ def collect_task_cost(task_id: str) -> None:
         # Discover session file based on CLI type
         cli_type = agent.cli_type or "pi"
         session_file = None
+        opencode_session_row_id = None
 
         if cli_type == "pi":
             # Discover pi session file
@@ -480,9 +552,13 @@ def collect_task_cost(task_id: str) -> None:
                     except (OSError, ValueError):
                         pass
         elif cli_type == "opencode":
-            # OpenCode uses one-shot capture, not session tailing
-            # This path would need stdout capture file
-            pass
+            cwd = _get_agent_cwd(db, agent, task)
+            if cwd:
+                result = _discover_opencode_session(cwd, agent.created_at)
+                if result:
+                    db_path, session_row_id = result
+                    session_file = db_path
+                    opencode_session_row_id = session_row_id
         elif cli_type == "codex":
             pass  # Stub
 
@@ -494,7 +570,7 @@ def collect_task_cost(task_id: str) -> None:
         collectors = {
             "pi": PiJsonlCollector(),
             "claude_code": ClaudeCodeCollector(),
-            "opencode": OpenCodeCollector(),
+            "opencode": OpenCodeCollector(session_row_id=opencode_session_row_id),
             "codex": CodexStubCollector(),
         }
         collector = collectors.get(cli_type)
