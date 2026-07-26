@@ -1,5 +1,8 @@
 {
-  "capped": true,
-  "capped_after_runs": 4,
-  "blocker_count": 0
+  "type": "adversarial_review_result",
+  "feature_id": "des-91c8-cost-collectors",
+  "verdict": "BLOCKERS_FOUND",
+  "blocker_count": 2,
+  "warning_count": 1,
+  "nit_count": 1
 }
