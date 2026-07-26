@@ -1,82 +1,69 @@
 ---
 type: security_review_result
-feature_id: des-91c8-cost-collectors
+feature_id: des-91c8-pi-extension
 verdict: ACCEPTABLE
 critical_count: 0
-high_count_found: 1
-high_count_fixed: 1
-medium_count_open: 0
-low_count_open: 2
+high_count_found: 0
+medium_count_open: 1
+low_count_open: 0
 ---
 
-# Security Review Report: CLI Cost Collectors (Pi + Claude Code)
+# Security Review Report: Pi Cost Tracker Extension
 
-**Feature:** des-91c8-cost-collectors
-**Feature Type: DATA_SERVICE** (internal cost-ingestion pipeline + one new authenticated HTTP endpoint; no end-user auth flow introduced by this feature — Step 2 covers only the auth check the new endpoint relies on)
-**Scope reviewed:** `src/services/cost_collection_service.py`, `src/core/cost_derivation.py`, `src/mcp/autopilot_api.py` (cost-entries + cost query endpoints), `src/mcp/server.py::verify_agent_authentication`/`_check_rate_limit`, `extensions/hephaestus-cost-tracker/src/index.ts`, `extensions/hephaestus-cost-tracker/package.json`, `scripts/install.sh` (extension install block), cost UI components (`frontend/src/components/cost/*`, `BudgetStatusCard.tsx`, `ProjectSettingsModal.tsx`).
+**Feature:** des-91c8-pi-extension
+**Feature Type: DATA_SERVICE** (internal cost-ingestion consumer; this feature adds no new HTTP endpoint and no new auth flow — it only changes fallback-collection logic and a README on top of the already-reviewed `POST /api/autopilot/cost-entries` endpoint)
+**Scope reviewed (this feature's actual diff vs. `main`):** `extensions/hephaestus-cost-tracker/README.md`, `src/services/cost_collection_service.py` (`collect_task_cost`), `tests/test_cost_collection_service.py`. Also re-traced, without re-litigating, the security-relevant paths this diff sits on top of: `POST /api/autopilot/cost-entries` (`src/mcp/autopilot_api.py:2144`), `verify_agent_authentication`/`_check_rate_limit` (`src/mcp/server.py`), `record_cost` (`src/core/cost_derivation.py`), and `extensions/hephaestus-cost-tracker/src/index.ts` — all unchanged by this feature and already covered by the prior `des-91c8-cost-collectors` security review (same file, superseded by this run).
 
 ## Automated Scan Results
-`./.hephaestus/ash_results.txt` contents: **"SCAN TIMED OUT after 300s"**. No automated findings available for this pass; review below is manual.
+`.hephaestus/ash_results.txt`: scan completed (not timed out), 542 actionable findings — but this is a whole-repo scan (`source-dir: '.'`), not scoped to this feature's 3-file diff, and the detailed per-file SARIF/JSON reports were not persisted in this worktree (`.ash/ash_output/` absent) to cross-reference. By category: bandit 305 medium (whole `src/`), checkov 2 critical (IaC — this feature adds no IaC), detect-secrets 50 critical (whole repo; manually grepped this feature's changed files for secret/token/credential patterns — only `*_tokens` LLM-usage-count fields matched, no actual secrets), npm-audit 181 critical/medium/low (frontend `node_modules` — this feature's only TS file, `extensions/hephaestus-cost-tracker/src/index.ts`, has zero runtime dependencies, confirmed via `package.json`, unchanged by this diff), semgrep 4 critical (whole repo). None of these categories apply to this feature's actual changes; treated as pre-existing/out-of-scope, consistent with the prior sibling review's treatment of ash noise.
 
 ## Summary
 - Critical vulnerabilities found: 0
-- Critical vulnerabilities FIXED: 0
-- High vulnerabilities found: 1 (rate-limit bypass via spoofed identity on `POST /cost-entries`)
-- High vulnerabilities FIXED: 1
-- Medium vulnerabilities: 0 open (prior SEC-04 unlinked-cost gap already fixed via `validate_entity_link`, confirmed present)
-- Low vulnerabilities: 2 (ticketed, not fixed — see below)
-- Overall security posture: **ACCEPTABLE** — one high finding fixed in this pass; remaining findings are either pre-existing/out-of-scope or low severity, all ticketed.
+- High vulnerabilities found: 0
+- Medium vulnerabilities: 1 (new, found this pass — ticketed, not fixed; see below)
+- Low vulnerabilities: 0 new (prior findings from `des-91c8-cost-collectors` — ticket-6b452476, ticket-5c041735 — unchanged, not re-litigated)
+- Overall security posture: **ACCEPTABLE** — no critical/high findings; one new medium-severity data-integrity/budget-bypass gap identified and ticketed, consistent with this feature's narrow, docs-and-fallback-logic scope.
 
-## Vulnerabilities Found and Fixed
+## Medium Vulnerability Found (ticketed, not fixed this pass)
 
-### 1. Rate limit on `POST /cost-entries` keyed on attacker-controlled header
-- **Type:** Rate-limit bypass / DoS
-- **File:** `src/mcp/autopilot_api.py:2075-2103` (`create_cost_entry`)
-- **Description:** The endpoint rate-limited with `_check_rate_limit(f"cost_entry:{agent_id}")`, where `agent_id` comes straight from the caller-supplied `X-Agent-ID` header. `verify_agent_authentication()` (`src/mcp/server.py`) trusts any ID starting with `sdk-`/`mcp-`, or in `KNOWN_SYSTEM_AGENTS`, unconditionally — it is an identity check, not a secret. The server binds `0.0.0.0` (`hephaestus_config.yaml:2`), so it's reachable off localhost. A caller could pass auth and reset the rate-limit bucket on every request simply by varying the header value (e.g. `sdk-1`, `sdk-2`, ...), making the "60/min" limit meaningless.
-- **Impact:** Unbounded `POST /cost-entries` flooding — each entry can carry `cost_usd` up to $1000 and drives `derive_task_cost`/`derive_workflow_cost`/budget-pause rollups. Against a target whose real `task_id`/`workflow_id` is known, this could force premature budget-based pausing of active workflows and termination of their agents (`_pause_project_workflows`); against unknown IDs it's still unbounded DB-write flooding.
-- **Fix Applied:** Rate-limit key changed to the request's client IP (`request.client.host`) instead of the spoofable `X-Agent-ID` header, so rotating the header no longer resets the limit window. Added `request: Request` parameter to the endpoint. See `src/mcp/autopilot_api.py:2075-2103`.
-- **Status:** FIXED
-
-## Medium Vulnerabilities
-None open. Verified `CostEntryCreate.validate_entity_link` (`src/mcp/autopilot_api.py:1696-1706`) still rejects cost entries with both `task_id` and `workflow_id` unset — the previously-fixed SEC-04 gap (unlinked costs bypassing budget enforcement) remains fixed.
-
-## Low Vulnerabilities / Findings (ticketed, not fixed this pass)
-
-| Finding | File(s) | Ticket | Why not fixed here |
-|---|---|---|---|
-| `POST/PUT/DELETE /projects` have no `X-Agent-ID` auth at all, letting any caller null a project's `cost_limit_usd` or delete the project outright | `src/mcp/autopilot_api.py:1904,1967,2035` | ticket-6b452476 (**High** priority, filed as low-effort-to-fix-but-out-of-scope) | Pre-existing endpoints, not touched by the CLI Cost Collectors diff (`git log` confirms `create_project`/`update_project`/`delete_project` predate this feature); fixing them means changing shared project-management endpoints beyond this feature's boundary. Flagged because it's the same underlying weakness class as the fix above and materially affects cost/budget security. |
-| Cost query GET endpoints (`/tasks,.../costs` etc.) have auth but no rate limit | `src/mcp/autopilot_api.py:2191,2239,2287,2335,2383` | ticket-5c041735 (Low) | Read-only, no budget-pause side effects; lower severity than the POST path already fixed. |
-
-Note: `X-Agent-ID` being a self-reported, spoofable identifier (rather than a signed token) is a known, already-tracked systemic issue (see stale `docs/security_review/security_report.md` SEC-03 from an earlier, unrelated feature pass, recommending HMAC-signed agent tokens for network-exposed deployments). Not re-fixed here — it's infrastructure shared by ~10+ endpoints across the codebase, well outside this feature's diff.
+### 1. Fake `source="pi"` `CostEntry` can suppress real JSONL fallback cost tracking for any task
+- **Type:** Broken access control → cost-visibility / budget-enforcement bypass
+- **File:** `src/services/cost_collection_service.py:447-451` (`collect_task_cost`) — new code from this feature's B-1 fix (adversarial review, commit `2f9fc73`)
+- **Description:** The B-1 fix checks `db.query(CostEntry).filter_by(task_id=task_id, source="pi").first()` to decide whether the pi extension already posted real-time costs for a task, and if so permanently skips the JSONL fallback tailer for that task. This check only tests "does any such row exist," not whether it actually originated from the extension instance running for that task's assigned agent. `POST /api/autopilot/cost-entries` accepts `task_id`, `agent_id`, and `source` as caller-supplied body fields, gated only by `verify_agent_authentication` (`src/mcp/server.py:475`) — an identity check that trusts any `sdk-`/`mcp-`-prefixed ID or `KNOWN_SYSTEM_AGENTS` unconditionally and does not require the header's identity to match the body's `task_id`/`agent_id`. Any caller that clears that identity check can POST one minimal entry (`{"source": "pi", "task_id": "<victim-task>", "cost_usd": 0.01}`) for a task it doesn't own, permanently and silently suppressing all further real cost collection — and the budget rollups derived from it — for that task.
+- **Impact:** Cost-visibility / budget-enforcement bypass, scoped to one task at a time. Same pre-existing weak-identity trust model already tracked as SEC-03 in this file's prior revision and `ticket-6b452476` (unauthenticated project mutation) — this is a new consequence of that known gap, not a new trust boundary. Rated Medium, not High: requires the caller to already clear identity check and know the target `task_id`, and the effect is under-counting for one task rather than the unbounded flooding/DoS the prior sibling review's High finding covered.
+- **Fix status:** Not fixed this pass — out of this feature's scope per `docs/architecture.md` (explicitly excludes changes to budget enforcement / `cost_derivation.py`), and the minimal correct fix (per-turn provenance tracking, per adversarial review's own W-1 recommendation) is a larger design change than this feature's boundary allows. **Ticketed:** `ticket-9259ff95-51d2-4662-8b79-9923e44a01b1` (medium priority).
 
 ## Authentication Review
-`POST /cost-entries` and all 5 cost-query GETs require `X-Agent-ID` and call `verify_agent_authentication()`. That function trusts known system-agent strings and `sdk-`/`mcp-`-prefixed IDs unconditionally, and otherwise checks the DB for an active `Agent` row. This is an identity check, not a cryptographic authentication mechanism — acceptable for a local-first, single-operator tool, weaker if the server is reachable beyond localhost (it is, per `host: 0.0.0.0`). See Low findings above.
+No new endpoint, no new auth code in this diff. `collect_task_cost` runs server-side on task completion (not directly caller-triggered); its new existence-check reads `CostEntry` rows written through the already-reviewed, unchanged `verify_agent_authentication` gate on `POST /api/autopilot/cost-entries`. See Medium finding above for the one new consequence of that pre-existing identity model surfaced by this feature's fix.
 
 ## Authorization Review
-No per-project or per-workflow authorization scoping exists on cost queries — any authenticated agent can read any entity's cost breakdown. Consistent with the rest of this single-tenant system; not flagged as a new issue.
+Unchanged from prior review: no per-project/per-workflow authorization scoping on cost data; any authenticated agent can read or write any entity's cost rows. This feature does not add or remove any authorization boundary — it only changes which of two existing collection paths (real-time POST vs. JSONL tail) writes the data for a given task.
 
 ## Input Validation Review
-`CostEntryCreate` (`src/mcp/autopilot_api.py:1628-1706`) validates: `source` against an enum, `cost_usd` non-negative and capped at $1000, all token counts non-negative and capped at 10M, `raw_usage` capped at 10KB serialized, `model` capped at 200 chars, and requires at least one of `task_id`/`workflow_id`. `record_cost()` (`src/core/cost_derivation.py:38-116`) re-validates `cost_usd` bounds server-side (defense in depth, not solely relying on the Pydantic layer). `_discover_session_file` and the Claude Code session-path branch in `collect_task_cost` (`src/services/cost_collection_service.py:347-401,457-481`) both reject `..`/`~` in `cwd` and re-verify the resolved path stays under the expected base directory before globbing — path traversal is covered on both the pi and Claude Code discovery paths.
+This feature's diff does not touch `CostEntryCreate` (`src/mcp/autopilot_api.py:1663-1720`, unchanged) — `source` enum, `cost_usd` bounds (0–$1000), token-count bounds (0–10M), and `raw_usage` size cap all still apply as verified in the prior review. The JSONL-fallback path (`collect_task_cost`'s `record_cost()` calls) doesn't go through `CostEntryCreate` at all — it calls `record_cost()` directly, which re-validates `cost_usd` bounds server-side independent of the Pydantic layer (`src/core/cost_derivation.py:76-81`), so the fallback path isn't a validation-bypass route.
 
 ## Data Handling Review
-Cost entries are an append-only ledger (`CostEntry` rows); no deletion path. `raw_usage` (potentially containing prompt/response metadata) is size-capped but not redacted — acceptable, this is operational telemetry not user PII, and stays local to the SQLite DB. No sensitive data observed logged at non-debug level beyond agent/task ID prefixes (already truncated to 8 chars in log lines throughout).
+`collect_task_cost`'s new per-entry try/except (B-2 fix, lines 535-556) logs failures at `logger.error` with the exception string and an 8-char-truncated `task_id` — consistent with the rest of the codebase's truncated-ID logging convention, no raw cost/token data or secrets logged. The broad `except Exception` only catches `Exception` (not `BaseException`), so it can't mask `KeyboardInterrupt`/`SystemExit`; each failure is logged individually rather than silently swallowed, which is an improvement over the pre-fix behavior (whole-batch silent rollback with only a `logger.warning` at the caller).
+
+## Secret Management Review
+Grepped this feature's 3 changed files (`cost_collection_service.py`, `index.ts`, `test_cost_collection_service.py`, `README.md`) for `password|secret|api[_-]?key|token|credential` — only matches are LLM `*_tokens` usage-count fields (input/output/cache/reasoning token counts), not credentials. No hardcoded secrets introduced.
 
 ## Dependency Audit
-`extensions/hephaestus-cost-tracker/package.json`: zero runtime dependencies (`"dependencies": {}`), one devDependency (`typescript@^5.0.0`, build-time only, not shipped). No supply-chain surface introduced by this feature beyond what's already reviewed. Did not re-run `pip audit`/`npm audit` against the whole repo (out of this feature's diff; ash timed out — see above).
+No `package.json`/`requirements`/lockfile changes in this diff. `extensions/hephaestus-cost-tracker/package.json` unchanged: zero runtime dependencies, one build-time devDependency (`typescript@^5.0.0`). No new supply-chain surface.
 
 ## OWASP Top 10 Considerations
 | Category | Status | Notes |
 |---|---|---|
-| A01 Broken Access Control | ⚠️ Partial | Project mutation endpoints unauthenticated (ticket-6b452476, pre-existing, out of diff) |
-| A02 Cryptographic Failures | N/A | No crypto introduced by this feature |
-| A03 Injection | ✅ | ORM-only queries in cost_derivation.py; no string-built SQL |
-| A04 Insecure Design | ✅ | Append-only ledger with self-healing rollups |
-| A05 Security Misconfiguration | ⚠️ | Server binds `0.0.0.0`; magnifies A01/A07 above |
-| A06 Vulnerable Components | ✅ | Zero runtime deps in the new extension |
-| A07 Identity & Auth Failures | ⚠️ Fixed-in-part | Spoofable identity is pre-existing/ticketed; rate-limit bypass exploiting it on the new POST endpoint is fixed this pass |
-| A08 Software & Data Integrity | ✅ | Self-healing derivation, checkpointed collectors (no double-counting across runs) |
-| A09 Security Logging Failures | ✅ | Auth rejections and rate-limit hits logged with agent ID/IP |
-| A10 SSRF | ✅ | No user-controlled URLs in this feature's code paths |
+| A01 Broken Access Control | ⚠️ New consequence, ticketed | Medium finding above — task-scoped cost-tracking suppression via the pre-existing weak-identity model |
+| A02 Cryptographic Failures | N/A | No crypto in this diff |
+| A03 Injection | ✅ | ORM-only query (`filter_by`), no string-built SQL |
+| A04 Insecure Design | ⚠️ Noted | Per-task (not per-turn) provenance check is coarse by design; tracked in the ticket above and adversarial review's W-1 |
+| A05 Security Misconfiguration | N/A | Unchanged by this diff |
+| A06 Vulnerable Components | ✅ | No dependency changes |
+| A07 Identity & Auth Failures | ⚠️ Pre-existing, surfaced | Spoofable `X-Agent-ID` is the known systemic issue (SEC-03/ticket-6b452476) this finding builds on |
+| A08 Software & Data Integrity | ⚠️ Partial | B-1/B-2 fixes improve integrity (no more double-counting, no more whole-batch loss) but introduce the narrower single-task suppression gap above |
+| A09 Security Logging Failures | ✅ | Per-entry failures now logged individually (`logger.error`), an improvement over pre-fix silent batch rollback |
+| A10 SSRF | N/A | No user-controlled URLs in this diff |
 
 ## Verdict
-**ACCEPTABLE — approved to proceed.** One high-severity gap (spoofable rate-limit key on the new cost-ingestion endpoint) found and fixed in code this pass. Two pre-existing/out-of-scope gaps ticketed (one High — unauthenticated project mutation, one Low — missing rate limit on cost-query GETs). No critical findings, no unresolved medium findings.
+**ACCEPTABLE — approved to proceed.** No critical or high findings. One new medium-severity finding (task-scoped cost-tracking suppression, a narrower side effect of this feature's own B-1 double-counting fix) identified, documented, and ticketed (`ticket-9259ff95-51d2-4662-8b79-9923e44a01b1`); not fixed in this pass because the correct fix requires per-turn provenance tracking, which is a larger design change than this feature's docs-and-fallback-logic scope permits per `docs/architecture.md`. No regressions to the authentication, rate-limiting, or input-validation controls reviewed and fixed in the prior `des-91c8-cost-collectors` pass — all confirmed still present and unchanged.
