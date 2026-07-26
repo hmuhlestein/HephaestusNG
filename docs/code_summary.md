@@ -1,71 +1,40 @@
 ---
 type: code_summary
-feature_id: des-91c8-cost-collectors
+feature_id: des-91c8-pi-extension
 ---
 
-# Code Summary: CLI Cost Collectors (Pi + Claude Code)
+# Code Summary: Pi Cost Tracker Extension
 
-**Feature ID:** des-91c8-cost-collectors
+**Feature ID:** des-91c8-pi-extension
 
-This feature closes the gap between the already-implemented real-time pi
-cost-tracker extension (source code merged by an earlier feature) and it
-actually being installed and correctly configured. It's packaging work, not
-new collection logic — the `PiJsonlCollector`/`ClaudeCodeCollector` runtime,
-the `CostEntry` schema, and `POST /cost-entries` were untouched.
-
-## `scripts/install.sh`
-
-Adds a new step inside the existing pi-detection block (`if command -v pi ...
-|| [ -d ~/.pi ]`), placed after the pi-mcp-adapter install and before the
-"Restart Pi" log line — the same branch every other pi-specific install step
-already lives in, so there's one place to look for "what happens when pi is
-present."
-
-The step copies `extensions/hephaestus-cost-tracker/` to
-`~/.pi/agent/extensions/hephaestus-cost-tracker/` and runs `npm install &&
-npm run build` there, producing `dist/index.js`, the file pi loads as an
-extension on next launch. It always re-runs on both fresh install and
-`--update` (no "already installed" skip-gate), which is what makes
-`--update` refresh a stale build. Every failure path (`npm` missing, write
-failure, build failure) degrades to a `warn` and continues install rather
-than aborting — the JSONL-tailing fallback in
-`cost_collection_service.py` still collects the same cost data, just not in
-real time, so a broken extension build was never meant to be fatal.
+This feature's diff (`main..HEAD`) touches exactly one non-test file. The
+real-time pi extension, its install/build wiring, and the API endpoint it
+posts to were all already implemented and merged by earlier sibling
+features — nothing here changes collection logic.
 
 ## `extensions/hephaestus-cost-tracker/README.md`
 
-Fixed the documented default `HEPHAESTUS_API_URL` from `http://localhost:8000`
-to `http://localhost:8300`, matching both the extension's actual code
-default (`src/index.ts`) and `hephaestus_config.yaml`'s `port: 8300`. The old
-value would have pointed a correctly-installed extension at the wrong port,
-silently dropping every cost POST.
+Fixed FR-1: the "How It Works" step 4 documented the POST target as
+`/cost-entries`, but the extension (`src/index.ts:123`) actually posts to
+`${apiUrl}/api/autopilot/cost-entries` — the real route, given the router's
+`/api/autopilot` prefix (`autopilot_api.py:37`) plus the `@router.post
+("/cost-entries")` decorator (`autopilot_api.py:2144`). A developer testing
+the endpoint by hand against the documented path would have hit a 404. Now
+reads `POST /api/autopilot/cost-entries`.
 
-## `extensions/hephaestus-cost-tracker/package.json`
+## `src/services/cost_collection_service.py`
 
-Added `@types/node` to `devDependencies`. Without it, `tsc` fails on
-`process.env`, `console`, and `fetch` type references — a real
-build-breaking bug caught by QA, not a style fix. This is what made the new
-`install.sh` build step (above) actually able to succeed.
-
-## `src/mcp/autopilot_api.py`
-
-`POST /cost-entries`'s rate limiter was keyed on the caller-supplied
-`X-Agent-ID` header. `verify_agent_authentication()` trusts any
-`sdk-`/`mcp-`-prefixed ID unconditionally (it's an identity check, not a
-secret), and the server binds `0.0.0.0`, so a caller could reset the
-60/minute rate-limit bucket on every request just by rotating the header
-value. Since each cost entry can carry `cost_usd` up to $1000 and drives
-budget-pause rollups, an attacker with a real `task_id`/`workflow_id` could
-have forced premature budget pausing; against unknown IDs, unbounded DB
-writes. Fixed by keying the rate limit on `request.client.host` instead,
-which required adding a `request: Request` parameter to the endpoint. Found
-and fixed during security review, scoped appropriately since this new
-extension is the endpoint's new traffic source.
+Fixed a High-severity security finding from this feature's security review:
+the JSONL-fallback suppression check only matched on `task_id`, so a
+caller-forged `source="pi"` cost entry (task_id/agent_id are both
+enumerable via unauthenticated `GET /api/tasks`/`GET /api/agents`) could
+permanently suppress a victim task's real cost collection. The check now
+also requires the entry's `agent_id` to match the task's assigned agent.
 
 ## Tests
 
-No new tests were added — this feature explicitly doesn't touch collector
-logic. `tests/test_cost_collection_service.py` (20/20) and the broader
-budget/cost-tracking suite (`tests/test_budget_enforcement_integration.py`,
-`tests/test_cost_tracking.py`, 56/56) were run as regression checks and pass
-unchanged.
+`tests/test_cost_collection_service.py` gained
+`test_unrelated_agent_entry_does_not_suppress_fallback` (24/24 passing) to
+cover the fix above. No JS/TS test framework was introduced — this repo has
+none anywhere, including `frontend/`, and the extension's own logic
+(`index.ts`) is unchanged by this feature.
