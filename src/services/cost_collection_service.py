@@ -438,14 +438,20 @@ def collect_task_cost(task_id: str) -> None:
 
         # The pi extension posts costs to /api/autopilot/cost-entries in
         # real time as turns complete (source="pi" CostEntry rows). If any
-        # such rows already exist for this task, the extension was active
-        # for this session and is the source of truth — tailing the JSONL
-        # transcript here as well would re-record the same turns a second
-        # time (they were never checkpointed by the real-time POST path).
-        # Trust the extension exclusively once it's proven active, rather
-        # than double-counting.
+        # such rows already exist for this task's assigned agent, the
+        # extension was active for this session and is the source of truth
+        # — tailing the JSONL transcript here as well would re-record the
+        # same turns a second time (they were never checkpointed by the
+        # real-time POST path). Trust the extension exclusively once it's
+        # proven active, rather than double-counting. Scoped to this task's
+        # assigned agent (not just task_id) so a cost entry posted for an
+        # unrelated agent can't be mistaken for proof this task's own
+        # session already reported in, which would suppress its real cost
+        # data entirely.
         if cli_type == "pi":
-            has_realtime_entries = db.query(CostEntry).filter_by(task_id=task_id, source="pi").first() is not None
+            has_realtime_entries = (
+                db.query(CostEntry).filter_by(task_id=task_id, agent_id=agent.id, source="pi").first() is not None
+            )
             if has_realtime_entries:
                 logger.debug(f"[COST-COLLECT] Task {task_id[:8]} already has real-time pi cost entries — skipping JSONL fallback to avoid double-counting")
                 return

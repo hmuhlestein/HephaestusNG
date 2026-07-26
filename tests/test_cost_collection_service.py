@@ -562,6 +562,49 @@ class TestCollectTaskCostRealtimeVsFallback:
         assert len(entries) == 2
         assert {e.source for e in entries} == {"pi"}
 
+    def test_unrelated_agent_entry_does_not_suppress_fallback(self, cost_db_session):
+        """A source='pi' CostEntry for this task_id posted under an agent_id
+        that isn't the task's assigned agent must not be treated as proof
+        the real-time extension reported in for this task's own session --
+        otherwise a mismatched/forged entry would silently suppress this
+        task's real cost data instead of just being ignored.
+        """
+        task, agent, _ = _make_task_agent_workflow(cost_db_session)
+
+        cost_db_session.add(
+            Agent(id="agent-other", system_prompt="test", cli_type="pi", tmux_session_name="hephaestus-other")
+        )
+        cost_db_session.add(
+            CostEntry(
+                id="cost-forged",
+                task_id=task.id,
+                agent_id="agent-other",
+                workflow_id=task.workflow_id,
+                source="pi",
+                cost_usd=0.0,
+                recorded_at=datetime.utcnow(),
+            )
+        )
+        cost_db_session.commit()
+
+        lines = [_make_assistant_message(0.01), _make_assistant_message(0.02)]
+        session_file = _make_temp_jsonl(lines)
+
+        with (
+            patch("src.core.database.get_db") as mock_get_db,
+            patch(
+                "src.services.cost_collection_service._discover_session_file",
+                return_value=session_file,
+            ),
+        ):
+            mock_get_db.return_value.__enter__ = lambda self: cost_db_session
+            mock_get_db.return_value.__exit__ = lambda self, *a: False
+
+            collect_task_cost(task.id)
+
+        entries = cost_db_session.query(CostEntry).filter_by(task_id=task.id, agent_id=agent.id).all()
+        assert len(entries) == 2, "fallback was suppressed by an unrelated agent's cost entry"
+
 
 class TestCollectTaskCostPartialFailure:
     """B-2: one bad entry must not discard the rest of the batch."""
