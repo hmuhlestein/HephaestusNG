@@ -87,7 +87,7 @@ def _discover_opencode_session(cwd: str, agent_created_at: datetime) -> Optional
      AND time_created <= ?
    ORDER BY time_created DESC
    ```
-   Params: `cwd`, `int(agent_created_at.timestamp() * 1000)` (epoch-ms, per requirements §1's confirmed schema), `int(datetime.utcnow().timestamp() * 1000)`.
+   Params: `cwd`, `int(agent_created_at.replace(tzinfo=timezone.utc).timestamp() * 1000)` (epoch-ms, per requirements §1's confirmed schema), `int(datetime.utcnow().replace(tzinfo=timezone.utc).timestamp() * 1000)`. Both bounds must attach `tzinfo=timezone.utc` before calling `.timestamp()` — `agent_created_at` and `datetime.utcnow()` are naive datetimes whose wall-clock reading is UTC, but naive `.timestamp()` assumes *local* time, so on any non-UTC host the window silently shifts and never overlaps a real session (found and fixed as adversarial_review BLOCKER B-1).
 5. Zero rows → log at debug, return `None` (FR2 "log and skip").
 6. One or more rows → take the first (`ORDER BY time_created DESC` already puts the most recent first) — this is the explicit tie-break policy for FR2's multiple-match case and Open Question 2: **most recent `time_created` in-window wins.** Log at debug when `len(rows) > 1` noting the discarded candidate IDs, so a misattribution is traceable after the fact.
 7. Return `(db_path, row["id"])`.
@@ -218,7 +218,7 @@ No change to the `if not session_file: ... return` guard, the collector-dispatch
 4. `_discover_opencode_session(cwd, agent.created_at)` opens `~/.local/share/opencode/opencode.db` read-only, matches `session.directory == cwd` within `[agent.created_at, now]`, returns the most recent match's `(db_path, id)`.
 5. `OpenCodeCollector(session_row_id=id).collect(..., session_file=db_path, checkpoint=<0 or 1 from SessionCostCheckpoint>)` re-queries the same row by `id`, maps its pre-aggregated columns to a single `CostEntry` dict, returns checkpoint `1`.
 6. `record_cost()` writes the `CostEntry` row and triggers the existing rollup chain (Task → Feature → AutopilotDesign → AutopilotProject `cost_total_usd`) — unchanged.
-7. `SessionCostCheckpoint` row is created/updated with `lines_processed=1`, keyed by Hephaestus's own internal `session_id` (from `_extract_session_id`, unrelated to OpenCode's `session.id` — this is the existing tmux-session-name-derived ID used uniformly across all four `cli_type`s for checkpoint bookkeeping only). This prevents a second `collect_task_cost()` call for the same Hephaestus session (e.g. a retry) from double-recording the same OpenCode session's total.
+7. `SessionCostCheckpoint` row is created/updated with `lines_processed=1`, keyed by `opencode_session_row_id` (OpenCode's own `session.id`), not by Hephaestus's internal `session_id` as this section originally specified. OpenCode never resumes — every launch mints a fresh `opencode.db` session row even when it shares a Hephaestus `session_id` with a prior task (e.g. the same `session_role` reused across phases per `get_session_id()`) — so keying by the shared `session_id` would let a second launch find the first launch's checkpoint already at 1 and silently skip collection, dropping its cost. This was found and fixed as architectural_review BLOCKER B-1; the implementation's `opencode_session_row_id` keying is correct and this doc's original `session_id`-keyed design was the error.
 
 **No polling, no timer** — same single trigger point as every other collector (NFR "No timer-based collection").
 
